@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { PermissionRequest, QuestionRequest, Session } from "@slopcode-ai/sdk/v2/client"
-import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
+import { sessionPermissionRequest, sessionPermissionRequests, sessionQuestionRequest } from "./session-request-tree"
 
 const session = (input: { id: string; parentID?: string }) =>
   ({
@@ -76,6 +76,35 @@ describe("sessionPermissionRequest", () => {
     }
 
     expect(sessionPermissionRequest(sessions, permissions, "root", () => false)).toBeUndefined()
+  })
+})
+
+describe("sessionPermissionRequests", () => {
+  test("returns all matching permissions in tree order", () => {
+    const sessions = [session({ id: "root" }), session({ id: "child", parentID: "root" }), session({ id: "grand", parentID: "child" })]
+    const permissions = {
+      root: [permission("perm-root", "root")],
+      child: [permission("perm-child", "child")],
+      grand: [permission("perm-grand", "grand")],
+    }
+
+    expect(sessionPermissionRequests(sessions, permissions, "root").map((item) => item.id)).toEqual([
+      "perm-root",
+      "perm-child",
+      "perm-grand",
+    ])
+  })
+
+  test("returns filtered permission subsets", () => {
+    const sessions = [session({ id: "root" }), session({ id: "child", parentID: "root" })]
+    const permissions = {
+      root: [permission("perm-root", "root")],
+      child: [permission("perm-child", "child")],
+    }
+
+    expect(sessionPermissionRequests(sessions, permissions, "root", (item) => item.id === "perm-child").map((item) => item.id)).toEqual([
+      "perm-child",
+    ])
   })
 })
 

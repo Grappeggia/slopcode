@@ -43,6 +43,11 @@ export namespace PermissionNext {
   })
   export type Ruleset = z.infer<typeof Ruleset>
 
+  export const Kind = z.enum(["blocking", "forecast"]).meta({
+    ref: "PermissionKind",
+  })
+  export type Kind = z.infer<typeof Kind>
+
   export function fromConfig(permission: Config.Permission) {
     const ruleset: Ruleset = []
     for (const [key, value] of Object.entries(permission)) {
@@ -73,6 +78,8 @@ export namespace PermissionNext {
       patterns: z.string().array(),
       metadata: z.record(z.string(), z.any()),
       always: z.string().array(),
+      kind: Kind.optional(),
+      reason: z.string().optional(),
       tool: z
         .object({
           messageID: z.string(),
@@ -85,6 +92,15 @@ export namespace PermissionNext {
     })
 
   export type Request = z.infer<typeof Request>
+
+  export const Candidate = z.object({
+    permission: z.string(),
+    patterns: z.string().array(),
+    always: z.string().array().optional(),
+    metadata: z.record(z.string(), z.any()).optional(),
+    reason: z.string().optional(),
+  })
+  export type Candidate = z.infer<typeof Candidate>
 
   export const Reply = z.enum(["once", "always", "reject"])
   export type Reply = z.infer<typeof Reply>
@@ -122,12 +138,47 @@ export namespace PermissionNext {
         reject: (e: any) => void
       }
     > = {}
+    const forecast: Record<string, Request[]> = {}
+    const granted: Array<{
+      sessionID: string
+      permission: string
+      pattern: string
+    }> = []
 
     return {
       pending,
+      forecast,
+      granted,
       approved: stored,
     }
   })
+
+  function consume(
+    granted: Array<{
+      sessionID: string
+      permission: string
+      pattern: string
+    }>,
+    sessionID: string,
+    permission: string,
+    patterns: string[],
+  ) {
+    const match = patterns.map((pattern) =>
+      granted.findIndex(
+        (item) =>
+          item.sessionID === sessionID &&
+          Wildcard.match(permission, item.permission) &&
+          Wildcard.match(pattern, item.pattern),
+      ),
+    )
+    if (match.some((item) => item === -1)) return false
+    Array.from(new Set(match))
+      .toSorted((a, b) => b - a)
+      .forEach((item) => {
+        granted.splice(item, 1)
+      })
+    return true
+  }
 
   export const ask = fn(
     Request.partial({ id: true }).extend({
@@ -136,28 +187,112 @@ export namespace PermissionNext {
     async (input) => {
       const s = await state()
       const { ruleset, ...request } = input
+      const patterns = [] as string[]
       for (const pattern of request.patterns ?? []) {
         const rule = evaluate(request.permission, pattern, ruleset, s.approved)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny")
           throw new DeniedError(ruleset.filter((r) => Wildcard.match(request.permission, r.permission)))
-        if (rule.action === "ask") {
-          const id = input.id ?? Identifier.ascending("permission")
-          return new Promise<void>((resolve, reject) => {
-            const info: Request = {
-              id,
-              ...request,
-            }
-            s.pending[id] = {
-              info,
-              resolve,
-              reject,
-            }
-            Bus.publish(Event.Asked, { ...info, viewID: Instance.viewID })
-          })
-        }
-        if (rule.action === "allow") continue
+        if (rule.action === "ask") patterns.push(pattern)
       }
+      if (patterns.length === 0) return
+      if (consume(s.granted, request.sessionID, request.permission, patterns)) return
+      const id = input.id ?? Identifier.ascending("permission")
+      return new Promise<void>((resolve, reject) => {
+        const info: Request = {
+          id,
+          ...request,
+          patterns,
+          kind: request.kind ?? "blocking",
+        }
+        s.pending[id] = {
+          info,
+          resolve,
+          reject,
+        }
+        Bus.publish(Event.Asked, { ...info, viewID: Instance.viewID })
+      })
+    },
+  )
+
+  export const forecast = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+      ruleset: Ruleset,
+      requests: Candidate.array(),
+    }),
+    async (input) => {
+      const s = await state()
+      const list = s.forecast[input.sessionID] ?? []
+      const next = input.requests.flatMap((item) => {
+        const patterns = item.patterns.filter(
+          (pattern) => evaluate(item.permission, pattern, input.ruleset, s.approved).action === "ask",
+        )
+        if (patterns.length === 0) return []
+        const always = (item.always ?? patterns).filter((pattern, index, array) => array.indexOf(pattern) === index)
+        return [
+          {
+            id: Identifier.ascending("permission"),
+            sessionID: input.sessionID,
+            permission: item.permission,
+            patterns,
+            always,
+            metadata: item.metadata ?? {},
+            kind: "forecast" as const,
+            reason: item.reason,
+          } as Request,
+        ]
+      })
+      for (const item of next) {
+        const key = JSON.stringify([item.permission, item.patterns, item.always, item.reason])
+        const index = list.findIndex(
+          (existing) => JSON.stringify([existing.permission, existing.patterns, existing.always, existing.reason]) === key,
+        )
+        if (index === -1) {
+          list.push(item)
+          continue
+        }
+        list[index] = {
+          ...item,
+          id: list[index].id,
+        }
+      }
+      if (list.length === 0) {
+        delete s.forecast[input.sessionID]
+        return [] as Request[]
+      }
+      s.forecast[input.sessionID] = list
+      return list
+    },
+  )
+
+  export const review = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+      tool: Request.shape.tool.optional(),
+    }),
+    async (input) => {
+      const s = await state()
+      const list = s.forecast[input.sessionID] ?? []
+      if (list.length === 0) return false
+      delete s.forecast[input.sessionID]
+      await Promise.all(
+        list.map(
+          (info) =>
+            new Promise<void>((resolve, reject) => {
+              s.pending[info.id] = {
+                info: {
+                  ...info,
+                  tool: input.tool,
+                },
+                resolve,
+                reject,
+              }
+              Bus.publish(Event.Asked, { ...info, tool: input.tool, viewID: Instance.viewID })
+            }).catch(() => undefined),
+        ),
+      )
+      return true
     },
   )
 
@@ -181,6 +316,10 @@ export namespace PermissionNext {
         viewID: Instance.viewID,
       })
       if (input.reply === "reject") {
+        if (existing.info.kind === "forecast") {
+          existing.reject(input.message ? new CorrectedError(input.message) : new RejectedError())
+          return true
+        }
         existing.reject(input.message ? new CorrectedError(input.message) : new RejectedError())
         // Reject all other pending permissions for this session
         const sessionID = existing.info.sessionID
@@ -199,11 +338,20 @@ export namespace PermissionNext {
         return true
       }
       if (input.reply === "once") {
+        if (existing.info.kind === "forecast") {
+          existing.info.patterns.forEach((pattern) => {
+            s.granted.push({
+              sessionID: existing.info.sessionID,
+              permission: existing.info.permission,
+              pattern,
+            })
+          })
+        }
         existing.resolve()
         return true
       }
       if (input.reply === "always") {
-        for (const pattern of existing.info.always) {
+        for (const pattern of existing.info.always.length > 0 ? existing.info.always : existing.info.patterns) {
           s.approved.push({
             permission: existing.info.permission,
             pattern,

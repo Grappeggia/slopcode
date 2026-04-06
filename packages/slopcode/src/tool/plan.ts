@@ -7,6 +7,8 @@ import { MessageV2 } from "../session/message-v2"
 import { Identifier } from "../id/id"
 import { Provider } from "../provider/provider"
 import { Instance } from "../project/instance"
+import { Agent } from "../agent/agent"
+import { PermissionNext } from "../permission/next"
 import EXIT_DESCRIPTION from "./plan-exit.txt"
 
 async function getLastModel(sessionID: string) {
@@ -15,6 +17,44 @@ async function getLastModel(sessionID: string) {
   }
   return Provider.defaultModel()
 }
+
+const FORECAST_DESCRIPTION = `Queue likely build-mode permissions for review before switching from plan mode to build mode.`
+
+export const PlanPermissionsTool = Tool.define("plan_permissions", {
+  description: FORECAST_DESCRIPTION,
+  parameters: z.object({
+    permissions: PermissionNext.Candidate.array().min(1),
+  }),
+  async execute(params, ctx) {
+    const build = await Agent.get("build")
+    if (!build) throw new Error("Build agent not found")
+    const session = await Session.get(ctx.sessionID)
+    const permissions = await PermissionNext.forecast({
+      sessionID: ctx.sessionID,
+      ruleset: PermissionNext.merge(build.permission, session.permission ?? []),
+      requests: params.permissions,
+    })
+    if (permissions.length === 0) {
+      return {
+        title: "No build permissions queued",
+        output: "The predicted permissions are already allowed or do not require approval before build mode.",
+        metadata: { permissions: [] },
+      }
+    }
+    return {
+      title: `Queued ${permissions.length} build permission${permissions.length === 1 ? "" : "s"}`,
+      output: "These predicted permissions will be reviewed before plan mode switches to build mode.",
+      metadata: {
+        permissions: permissions.map((item) => ({
+          permission: item.permission,
+          patterns: item.patterns,
+          always: item.always,
+          reason: item.reason,
+        })),
+      },
+    }
+  },
+})
 
 export const PlanExitTool = Tool.define("plan_exit", {
   description: EXIT_DESCRIPTION,
@@ -40,6 +80,11 @@ export const PlanExitTool = Tool.define("plan_exit", {
 
     const answer = answers[0]?.[0]
     if (answer === "No") throw new Question.RejectedError()
+
+    await PermissionNext.review({
+      sessionID: ctx.sessionID,
+      tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
+    })
 
     const model = await getLastModel(ctx.sessionID)
 

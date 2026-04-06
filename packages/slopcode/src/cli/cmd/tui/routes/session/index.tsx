@@ -1826,7 +1826,7 @@ export function Session() {
               </scrollbox>
               <box flexShrink={0}>
                 <Show when={permissions().length > 0}>
-                  <PermissionPrompt request={permissions()[0]} />
+                  <PermissionPrompt requests={permissions()} />
                 </Show>
                 <Show when={permissions().length === 0 && questions().length > 0}>
                   <QuestionPrompt request={questions()[0]} />
