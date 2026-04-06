@@ -63,19 +63,17 @@ export function SessionComposerRegion(props: {
           )}
         </Show>
 
-        <Show when={props.state.permissionRequest()} keyed>
-          {(request) => (
-            <div>
-              <SessionPermissionDock
-                request={request}
-                responding={props.state.permissionResponding()}
-                onDecide={(response) => {
-                  props.onResponseSubmit()
-                  props.state.decide(response)
-                }}
-              />
-            </div>
-          )}
+        <Show when={props.state.permissionRequests().length > 0}>
+          <div>
+            <SessionPermissionDock
+              requests={props.state.permissionRequests()}
+              responding={props.state.permissionResponding()}
+              onDecide={(response, permissionIDs) => {
+                props.onResponseSubmit()
+                props.state.decide(response, permissionIDs)
+              }}
+            />
+          </div>
         </Show>
 
         <Show when={!props.state.blocked()}>

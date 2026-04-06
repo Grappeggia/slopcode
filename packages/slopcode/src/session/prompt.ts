@@ -1989,6 +1989,8 @@ You should build your plan incrementally by writing to or editing this file. NOT
 
 ## Plan Workflow
 
+As you research and refine the plan, keep track of the most likely build-mode permissions the implementation will need. Before you finish planning, call the plan_permissions tool to queue likely approvals such as edit targets, external directories, bash command families, task subagents, or sensitive reads so the user can review them before build mode starts.
+
 ### Phase 1: Initial Understanding
 Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the explore subagent type.
 
@@ -2042,7 +2044,13 @@ Goal: Write your final plan to the plan file (the only file you can edit).
 - Include the paths of critical files to be modified
 - Include a verification section describing how to test the changes end-to-end (run the code, use MCP tools, run tests)
 
-### Phase 5: Call plan_exit tool
+### Phase 5: Queue Permission Review
+Goal: Proactively map likely build-mode permissions before leaving plan mode.
+- Call plan_permissions with the most likely build-mode permissions that still need user approval
+- Include concrete paths or command families when possible so the user can pre-approve them accurately
+- Only queue permissions that seem genuinely likely during implementation; do not dump speculative noise
+
+### Phase 6: Call plan_exit tool
 At the very end of your turn, once you have asked the user questions and are happy with your final plan file - you should always call plan_exit to indicate to the user that you are done planning.
 This is critical - your turn should only end with either asking the user a question or calling plan_exit. Do not stop unless it's for these 2 reasons.
 

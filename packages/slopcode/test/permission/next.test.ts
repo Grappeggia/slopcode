@@ -785,3 +785,122 @@ test("ask - allows all patterns when all match allow rules", async () => {
     },
   })
 })
+
+test("forecast - queues only permissions that still require approval", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const queued = await PermissionNext.forecast({
+        sessionID: "session_forecast",
+        ruleset: [
+          { permission: "edit", pattern: "*", action: "ask" },
+          { permission: "read", pattern: "*", action: "allow" },
+        ],
+        requests: [
+          { permission: "edit", patterns: ["src/app.ts"], reason: "Will update implementation" },
+          { permission: "read", patterns: ["README.md"] },
+        ],
+      })
+
+      expect(queued).toHaveLength(1)
+      expect(queued[0]).toMatchObject({
+        kind: "forecast",
+        permission: "edit",
+        patterns: ["src/app.ts"],
+      })
+      expect(await PermissionNext.list({ sessionID: "session_forecast" })).toEqual([])
+    },
+  })
+})
+
+test("review - once forecast approval preapproves the next matching request", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await PermissionNext.forecast({
+        sessionID: "session_forecast_once",
+        ruleset: [{ permission: "edit", pattern: "*", action: "ask" }],
+        requests: [{ permission: "edit", patterns: ["src/app.ts"] }],
+      })
+
+      const review = PermissionNext.review({ sessionID: "session_forecast_once" })
+      const pending = await PermissionNext.list({ sessionID: "session_forecast_once" })
+      expect(pending).toHaveLength(1)
+      expect(pending[0]).toMatchObject({ kind: "forecast", permission: "edit" })
+
+      await PermissionNext.reply({
+        requestID: pending[0].id,
+        sessionID: "session_forecast_once",
+        reply: "once",
+      })
+
+      await expect(review).resolves.toBe(true)
+      await expect(
+        PermissionNext.ask({
+          sessionID: "session_forecast_once",
+          permission: "edit",
+          patterns: ["src/app.ts"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "edit", pattern: "*", action: "ask" }],
+        }),
+      ).resolves.toBeUndefined()
+
+      const blocked = PermissionNext.ask({
+        sessionID: "session_forecast_once",
+        permission: "edit",
+        patterns: ["src/app.ts"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "edit", pattern: "*", action: "ask" }],
+      })
+      const remaining = await PermissionNext.list({ sessionID: "session_forecast_once" })
+      expect(remaining).toHaveLength(1)
+      await PermissionNext.reply({
+        requestID: remaining[0].id,
+        sessionID: "session_forecast_once",
+        reply: "reject",
+      })
+      await expect(blocked).rejects.toBeInstanceOf(PermissionNext.RejectedError)
+    },
+  })
+})
+
+test("review - rejecting a forecast leaves other forecast approvals pending", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await PermissionNext.forecast({
+        sessionID: "session_forecast_reject",
+        ruleset: [{ permission: "edit", pattern: "*", action: "ask" }],
+        requests: [
+          { permission: "edit", patterns: ["src/app.ts"] },
+          { permission: "edit", patterns: ["src/other.ts"] },
+        ],
+      })
+
+      const review = PermissionNext.review({ sessionID: "session_forecast_reject" })
+      const pending = await PermissionNext.list({ sessionID: "session_forecast_reject" })
+      expect(pending).toHaveLength(2)
+
+      await PermissionNext.reply({
+        requestID: pending[0].id,
+        sessionID: "session_forecast_reject",
+        reply: "reject",
+      })
+      expect((await PermissionNext.list({ sessionID: "session_forecast_reject" })).map((item) => item.id)).toEqual([
+        pending[1].id,
+      ])
+
+      await PermissionNext.reply({
+        requestID: pending[1].id,
+        sessionID: "session_forecast_reject",
+        reply: "once",
+      })
+      await expect(review).resolves.toBe(true)
+    },
+  })
+})

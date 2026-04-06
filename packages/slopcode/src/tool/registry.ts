@@ -1,4 +1,4 @@
-import { PlanExitTool } from "./plan"
+import { PlanExitTool, PlanPermissionsTool } from "./plan"
 import { QuestionTool } from "./question"
 import { BashTool } from "./bash"
 import { EditTool } from "./edit"
@@ -119,7 +119,9 @@ export namespace ToolRegistry {
       ApplyPatchTool,
       ...(Flag.SLOPCODE_EXPERIMENTAL_LSP_TOOL ? [LspTool] : []),
       ...(config.experimental?.batch_tool === true ? [BatchTool] : []),
-      ...(Flag.SLOPCODE_EXPERIMENTAL_PLAN_MODE && Flag.SLOPCODE_CLIENT === "cli" ? [PlanExitTool] : []),
+      ...(Flag.SLOPCODE_EXPERIMENTAL_PLAN_MODE && Flag.SLOPCODE_CLIENT === "cli"
+        ? [PlanPermissionsTool, PlanExitTool]
+        : []),
       ...custom,
     ]
   }

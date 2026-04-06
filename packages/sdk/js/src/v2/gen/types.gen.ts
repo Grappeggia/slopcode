@@ -560,6 +560,8 @@ export type EventMessagePartRemoved = {
   }
 }
 
+export type PermissionKind = "blocking" | "forecast"
+
 export type EventPermissionAsked = {
   type: "permission.asked"
   properties: {
@@ -571,6 +573,8 @@ export type EventPermissionAsked = {
       [key: string]: unknown
     }
     always: Array<string>
+    kind?: PermissionKind
+    reason?: string
     tool?: {
       messageID: string
       callID: string
@@ -1940,6 +1944,8 @@ export type PermissionRequest = {
     [key: string]: unknown
   }
   always: Array<string>
+  kind?: PermissionKind
+  reason?: string
   tool?: {
     messageID: string
     callID: string

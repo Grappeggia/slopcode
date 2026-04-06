@@ -63,6 +63,7 @@ export namespace Agent {
       question: "deny",
       plan_enter: "deny",
       plan_exit: "deny",
+      plan_permissions: "deny",
       edit: "ask",
       // mirrors github.com/github/gitignore Node.gitignore pattern for .env files
       read: {
@@ -98,6 +99,7 @@ export namespace Agent {
           defaults,
           PermissionNext.fromConfig({
             question: "allow",
+            plan_permissions: "allow",
             plan_exit: "allow",
             external_directory: {
               [path.join(Global.Path.data, "plans", "*")]: "allow",
