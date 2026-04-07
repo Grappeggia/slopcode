@@ -243,6 +243,7 @@ const context = createContext<{
   diffWrapMode: () => "word" | "none"
   isToolExpanded: (id: string) => boolean
   toggleToolExpanded: (id: string) => void
+  isPermissionToolHidden: (callID?: string) => boolean
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
 }>()
@@ -278,6 +279,14 @@ export function Session() {
     if (session()?.parentID) return []
     return children().flatMap((x) => sync.data.question[x.id] ?? [])
   })
+  const hiddenPermissionCallIDs = createMemo(
+    () =>
+      new Set(
+        (permissions().length > 1 ? permissions() : [])
+          .flatMap((item) => (item.tool?.callID ? [item.tool.callID] : []))
+          .filter((item) => item),
+      ),
+  )
 
   const pending = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant" && !x.time.completed)?.id
@@ -1900,6 +1909,7 @@ export function Session() {
         diffWrapMode,
         isToolExpanded,
         toggleToolExpanded,
+        isPermissionToolHidden: (callID?: string) => (callID ? hiddenPermissionCallIDs().has(callID) : false),
         sync,
         tui: tuiConfig,
       }}
@@ -2688,6 +2698,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
 
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
+    if (ctx.isPermissionToolHidden(props.part.callID)) return true
     if (ctx.showDetails()) return false
     if (props.part.state.status !== "completed") return false
     return true
