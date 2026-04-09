@@ -17,7 +17,9 @@ export type PromptQueueItem = {
   reject: (error: unknown) => void
 }
 
-const short = (value: string, limit = 72) => {
+const SUMMARY_MAX = 250
+
+const short = (value: string, limit = SUMMARY_MAX) => {
   const text = value.replace(/\s+/g, " ").trim()
   if (!text) return ""
   if (text.length <= limit) return text
