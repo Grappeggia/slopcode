@@ -239,6 +239,7 @@ export function SessionSidePanel(props: {
                       const stop = createFileTabListSync({ el, contextOpen })
                       onCleanup(stop)
                     }}
+                    style={{ width: "auto", flex: 1, "min-width": 0 }}
                   >
                     <Show when={reviewTab()}>
                       <Tabs.Trigger value="review">
@@ -281,41 +282,41 @@ export function SessionSidePanel(props: {
                     <SortableProvider ids={openedTabs()}>
                       <For each={openedTabs()}>{(tab) => <SortableTab tab={tab} onTabClose={tabs().close} />}</For>
                     </SortableProvider>
-                    <StickyAddButton>
-                      <div class="flex items-center gap-1">
-                        <TooltipKeybind
-                          title={language.t("command.palette")}
-                          keybind={command.keybind("command.palette")}
-                          class="flex items-center"
-                        >
-                          <IconButton
-                            icon="magnifying-glass"
-                            variant="ghost"
-                            iconSize="small"
-                            class="!rounded-md"
-                            onClick={() => command.show()}
-                            aria-label={language.t("command.palette")}
-                          />
-                        </TooltipKeybind>
-                        <TooltipKeybind
-                          title={language.t("command.file.open")}
-                          keybind={command.keybind("file.open")}
-                          class="flex items-center"
-                        >
-                          <IconButton
-                            icon="plus-small"
-                            variant="ghost"
-                            iconSize="large"
-                            class="!rounded-md"
-                            onClick={() =>
-                              dialog.show(() => <DialogSelectFile mode="files" onOpenFile={showAllFiles} />)
-                            }
-                            aria-label={language.t("command.file.open")}
-                          />
-                        </TooltipKeybind>
-                      </div>
-                    </StickyAddButton>
                   </Tabs.List>
+                  <StickyAddButton>
+                    <div class="flex items-center gap-1">
+                      <TooltipKeybind
+                        title={language.t("command.palette")}
+                        keybind={command.keybind("command.palette")}
+                        class="flex items-center"
+                      >
+                        <IconButton
+                          icon="magnifying-glass"
+                          variant="ghost"
+                          iconSize="small"
+                          class="!rounded-md"
+                          onClick={() => command.show()}
+                          aria-label={language.t("command.palette")}
+                        />
+                      </TooltipKeybind>
+                      <TooltipKeybind
+                        title={language.t("command.file.open")}
+                        keybind={command.keybind("file.open")}
+                        class="flex items-center"
+                      >
+                        <IconButton
+                          icon="plus-small"
+                          variant="ghost"
+                          iconSize="large"
+                          class="!rounded-md"
+                          onClick={() =>
+                            dialog.show(() => <DialogSelectFile mode="files" onOpenFile={showAllFiles} />)
+                          }
+                          aria-label={language.t("command.file.open")}
+                        />
+                      </TooltipKeybind>
+                    </div>
+                  </StickyAddButton>
                 </div>
 
                 <Show when={reviewTab()}>
