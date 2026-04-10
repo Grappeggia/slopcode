@@ -30,13 +30,13 @@ import { WebCommand } from "./cli/cmd/web"
 import { PrCommand } from "./cli/cmd/pr"
 import { SessionCommand } from "./cli/cmd/session"
 import { DbCommand } from "./cli/cmd/db"
+import { PluginCommand } from "./cli/cmd/plug"
 import path from "path"
 import { Global } from "./global"
 import { JsonMigration } from "./storage/json-migration"
 import { Database } from "./storage/db"
 import { ConsoleCommand } from "./cli/cmd/console"
 import { DaemonCommand } from "./cli/cmd/daemon"
-import { Flag } from "./flag/flag"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -67,7 +67,15 @@ let cli = yargs(hideBin(process.argv))
     type: "string",
     choices: ["DEBUG", "INFO", "WARN", "ERROR"],
   })
+  .option("pure", {
+    describe: "run without external plugins",
+    type: "boolean",
+  })
   .middleware(async (opts) => {
+    if (opts.pure) {
+      process.env.SLOPCODE_PURE = "1"
+    }
+
     await Log.init({
       print: process.argv.includes("--print-logs"),
       dev: Installation.isLocal(),
@@ -183,6 +191,8 @@ let cli = yargs(hideBin(process.argv))
   .command(GenerateCommand)
   .command(DebugCommand)
   .command(AuthCommand)
+  .command(ConsoleCommand)
+  .command(ProvidersCommand)
   .command(AgentCommand)
   .command(UpgradeCommand)
   .command(UninstallCommand)
@@ -195,15 +205,8 @@ let cli = yargs(hideBin(process.argv))
   .command(GithubCommand)
   .command(PrCommand)
   .command(SessionCommand)
+  .command(PluginCommand)
   .command(DbCommand)
-
-if (Flag.SLOPCODE_EXPERIMENTAL_CONSOLE) {
-  cli = cli.command(ConsoleCommand)
-}
-
-if (Flag.SLOPCODE_EXPERIMENTAL_PROVIDERS) {
-  cli = cli.command(ProvidersCommand)
-}
 
 if (Installation.isLocal()) {
   cli = cli.command(WorkspaceServeCommand)

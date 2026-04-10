@@ -32,6 +32,12 @@ type User = {
   email: string
 }
 
+type Account = {
+  email: string
+  url: string
+  active: boolean
+}
+
 async function login(url: string) {
   const server = url.replace(/\/+$/, "")
   const code = await fetch(`${server}/auth/device/code`, {
@@ -122,21 +128,23 @@ function list() {
   }
 }
 
-async function logout(email?: string) {
+function options(rows: Account[]) {
+  return rows.map((row) => ({
+    value: `${row.email}\u0000${row.url}`,
+    label: row.active
+      ? `${row.email} ${UI.Style.TEXT_DIM}${row.url}${UI.Style.TEXT_NORMAL} (active)`
+      : `${row.email} ${UI.Style.TEXT_DIM}${row.url}${UI.Style.TEXT_NORMAL}`,
+  }))
+}
+
+async function select(email: string | undefined, message: string) {
   const rows = Database.use((db) => db.select().from(ControlAccountTable).all())
   if (rows.length === 0) {
     UI.println("No accounts found")
     return
   }
 
-  const opts = rows.map((row) => ({
-    value: `${row.email}\u0000${row.url}`,
-    label: row.active
-      ? `${row.email} ${UI.Style.TEXT_DIM}${row.url}${UI.Style.TEXT_NORMAL} (active)`
-      : `${row.email} ${UI.Style.TEXT_DIM}${row.url}${UI.Style.TEXT_NORMAL}`,
-  }))
-
-  const filtered = email ? opts.filter((x) => x.label.startsWith(email + " ")) : opts
+  const filtered = email ? options(rows).filter((x) => x.label.startsWith(email + " ")) : options(rows)
   if (filtered.length === 0) {
     UI.println("Account not found: " + email)
     return
@@ -146,12 +154,18 @@ async function logout(email?: string) {
     filtered.length === 1
       ? filtered[0].value
       : await prompts.select({
-          message: "Select account to log out",
+          message,
           options: filtered,
         })
   if (prompts.isCancel(selected)) throw new UI.CancelledError()
+  return selected.split("\u0000") as [string, string]
+}
 
-  const [user, url] = selected.split("\u0000")
+async function logout(email?: string) {
+  const selected = await select(email, "Select account to log out")
+  if (!selected) return
+
+  const [user, url] = selected
   Database.use((db) => {
     const wasActive = db
       .select({ active: ControlAccountTable.active })
@@ -173,6 +187,35 @@ async function logout(email?: string) {
   })
 
   prompts.outro("Logged out from " + user)
+}
+
+async function switchAccount(email?: string) {
+  const selected = await select(email, "Select active account")
+  if (!selected) return
+
+  const [user, url] = selected
+  Database.use((db) => {
+    db.update(ControlAccountTable).set({ active: false }).where(eq(ControlAccountTable.active, true)).run()
+    db.update(ControlAccountTable)
+      .set({ active: true })
+      .where(and(eq(ControlAccountTable.email, user), eq(ControlAccountTable.url, url)))
+      .run()
+  })
+  prompts.outro("Switched to " + user)
+}
+
+async function openAccount() {
+  const row = Database.use((db) => {
+    const active = db.select().from(ControlAccountTable).where(eq(ControlAccountTable.active, true)).get()
+    if (active) return active
+    return db.select().from(ControlAccountTable).get()
+  })
+  if (!row) {
+    UI.println("No accounts found")
+    return
+  }
+  open(row.url).catch(() => {})
+  prompts.outro("Opened " + row.url)
 }
 
 export const ConsoleLoginCommand = cmd({
@@ -215,10 +258,39 @@ export const ConsoleListCommand = cmd({
   },
 })
 
+export const ConsoleSwitchCommand = cmd({
+  command: "switch [email]",
+  describe: "switch active console account",
+  builder: (yargs) =>
+    yargs.positional("email", {
+      describe: "account email to switch to",
+      type: "string",
+    }),
+  async handler(args) {
+    UI.empty()
+    await switchAccount(args.email)
+  },
+})
+
+export const ConsoleOpenCommand = cmd({
+  command: "open",
+  describe: "open active console account",
+  async handler() {
+    UI.empty()
+    await openAccount()
+  },
+})
+
 export const ConsoleCommand = cmd({
   command: "console",
   describe: "manage console accounts",
   builder: (yargs) =>
-    yargs.command(ConsoleLoginCommand).command(ConsoleLogoutCommand).command(ConsoleListCommand).demandCommand(),
+    yargs
+      .command(ConsoleLoginCommand)
+      .command(ConsoleLogoutCommand)
+      .command(ConsoleListCommand)
+      .command(ConsoleSwitchCommand)
+      .command(ConsoleOpenCommand)
+      .demandCommand(),
   async handler() {},
 })

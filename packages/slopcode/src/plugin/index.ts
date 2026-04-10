@@ -51,10 +51,15 @@ export namespace Plugin {
       if (init) hooks.push(init)
     }
 
-    let plugins = config.plugin ?? []
+    let plugins = Flag.SLOPCODE_PURE ? [] : (config.plugin ?? [])
     if (plugins.length) await Config.waitForDependencies()
-    if (!Flag.SLOPCODE_DISABLE_DEFAULT_PLUGINS) {
+    if (!Flag.SLOPCODE_DISABLE_DEFAULT_PLUGINS && !Flag.SLOPCODE_PURE) {
       plugins = [...BUILTIN, ...plugins]
+    }
+    if (Flag.SLOPCODE_PURE && (config.plugin?.length || !Flag.SLOPCODE_DISABLE_DEFAULT_PLUGINS)) {
+      log.info("skipping external plugins in pure mode", {
+        count: (config.plugin?.length ?? 0) + (Flag.SLOPCODE_DISABLE_DEFAULT_PLUGINS ? 0 : BUILTIN.length),
+      })
     }
 
     for (let plugin of plugins) {
