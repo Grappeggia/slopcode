@@ -24,7 +24,7 @@ if (!value || invalid.length > 0) {
 
 const key = ["major", "minor", "patch"].includes(value) ? "bump" : "version"
 const repo = process.env.GH_REPO ?? (ref === "beta" ? "teamslop/slopcode-beta" : "teamslop/slopcode")
-const env = {
+const env: Record<string, string | undefined> = {
   ...process.env,
   GH_REPO: repo,
   SLOPCODE_RELEASE: "local",
@@ -80,6 +80,12 @@ if (dry) {
 const dirty = (await $`git status --porcelain`.text()).trim()
 if (dirty) {
   throw new Error("Release from a clean worktree only. Commit or stash changes first.")
+}
+
+await $`git fetch origin ${ref}`
+const behind = Number((await $`git rev-list --count HEAD..origin/${ref}`.text()).trim() || "0")
+if (behind > 0) {
+  throw new Error(`Branch is behind origin/${ref}. Rebase or fast-forward before releasing.`)
 }
 
 await $`bun ./script/publish.ts`.env({

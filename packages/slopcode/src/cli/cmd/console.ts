@@ -115,36 +115,37 @@ async function switchAccount(email?: string) {
   }
 
   const active = Account.active()
-  const hasOrgs = groups.some((group) => group.orgs.length > 0)
-  if (!hasOrgs) {
-    const row = await selectAccount(email, "Select active account")
-    if (!row) return
-    Account.use(row.id)
-    prompts.outro("Switched to " + row.email)
-    return
-  }
+  const options = groups.flatMap((group) => {
+    if (group.orgs.length === 0) {
+      return [
+        {
+          value: `${group.account.id}\u0000`,
+          label: accountLabel(group.account, active?.id === group.account.id && !active?.active_org_id),
+          name: group.account.email,
+        },
+      ]
+    }
 
-  const options = groups.flatMap((group) =>
-    group.orgs.map((org) => ({
+    return group.orgs.map((org) => ({
       value: `${group.account.id}\u0000${org.id}`,
       label: orgLabel(group.account, org, active?.id === group.account.id && active.active_org_id === org.id),
       name: org.name,
-    })),
-  )
+    }))
+  })
   if (options.length === 0) {
-    UI.println("No orgs found")
+    UI.println("No accounts found")
     return
   }
 
   const selected = await prompts.select({
-    message: "Select org",
+    message: options.some((item) => item.value.endsWith("\u0000")) ? "Select account or org" : "Select org",
     options,
   })
   if (prompts.isCancel(selected)) throw new UI.CancelledError()
   const [accountID, orgID] = selected.split("\u0000")
   const item = options.find((option) => option.value === selected)
-  Account.use(accountID, orgID)
-  prompts.outro("Switched to " + (item?.name ?? orgID))
+  Account.use(accountID, orgID || undefined)
+  prompts.outro("Switched to " + (item?.name ?? orgID ?? accountID))
 }
 
 async function listOrgs() {

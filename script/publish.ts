@@ -111,8 +111,7 @@ if (Script.release) {
       console.log("release: skip tag", tag)
     }
 
-    await $`git cherry-pick HEAD..origin/dev`.nothrow()
-    await $`git push origin HEAD --tags --no-verify --force-with-lease`
+    await $`git push origin HEAD --tags`
     await new Promise((resolve) => setTimeout(resolve, 5_000))
     const release = await releaseInfo()
     process.env.GH_REPO = release.repo
