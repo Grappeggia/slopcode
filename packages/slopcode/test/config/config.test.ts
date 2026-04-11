@@ -2,7 +2,10 @@ import { test, expect, describe, mock, afterEach } from "bun:test"
 import { Config } from "../../src/config/config"
 import { Instance } from "../../src/project/instance"
 import { Auth } from "../../src/auth"
+import { AccountStateTable, AccountTable } from "../../src/account/account.sql"
+import { Database } from "../../src/storage/db"
 import { tmpdir } from "../fixture/fixture"
+import { resetDatabase } from "../fixture/db"
 import path from "path"
 import fs from "fs/promises"
 import { pathToFileURL } from "url"
@@ -18,6 +21,7 @@ afterEach(async () => {
   for (const file of ["opencode.json", "opencode.jsonc", "slopcode.json", "slopcode.jsonc", "config.json", "config"]) {
     await fs.rm(path.join(legacyGlobalConfigDir, file), { force: true }).catch(() => {})
   }
+  await resetDatabase()
 })
 
 async function writeManagedSettings(settings: object, filename = "slopcode.json") {
@@ -1772,6 +1776,62 @@ test("project config overrides remote well-known config", async () => {
   } finally {
     globalThis.fetch = originalFetch
     Auth.all = originalAuthAll
+  }
+})
+
+test("loads remote config from the active org account", async () => {
+  Database.use((db) => {
+    db.insert(AccountTable)
+      .values({
+        id: "acc-1",
+        email: "dev@example.com",
+        url: "https://console.example.com",
+        access_token: "access-1",
+        refresh_token: "refresh-1",
+        token_expiry: Date.now() + 10 * 60_000,
+        time_created: 1,
+        time_updated: 1,
+      })
+      .run()
+    db.insert(AccountStateTable)
+      .values({
+        id: 1,
+        active_account_id: "acc-1",
+        active_org_id: "org-1",
+      })
+      .run()
+  })
+
+  let fetched = false
+  const originalFetch = globalThis.fetch
+  const mockFetch = mock((input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input.toString())
+    if (url.pathname === "/api/orgs") {
+      return Promise.resolve(new Response(JSON.stringify([{ id: "org-1", name: "Acme" }]), { status: 200 }))
+    }
+    if (url.pathname === "/api/config") {
+      fetched = true
+      expect(new Headers(init?.headers).get("x-org-id")).toBe("org-1")
+      return Promise.resolve(
+        new Response(JSON.stringify({ config: { instructions: ["remote-instruction-123"] } }), { status: 200 }),
+      )
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }))
+  })
+  globalThis.fetch = mockFetch as unknown as typeof fetch
+
+  try {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const config = await Config.get()
+        expect(fetched).toBe(true)
+        expect(config.instructions).toContain("remote-instruction-123")
+      },
+    })
+  } finally {
+    globalThis.fetch = originalFetch
   }
 })
 

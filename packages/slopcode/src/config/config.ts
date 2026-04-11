@@ -33,7 +33,7 @@ import { Glob } from "../util/glob"
 import { PackageRegistry } from "@/bun/registry"
 import { proxied } from "@/util/proxied"
 import { iife } from "@/util/iife"
-import { Control } from "@/control"
+import { Account } from "@/account"
 import { ConfigPaths } from "./paths"
 import { Filesystem } from "@/util/filesystem"
 
@@ -109,8 +109,25 @@ export namespace Config {
       }
     }
 
-    const token = await Control.token()
-    if (token) {
+    const active = await Account.activeOrg().catch(() => undefined)
+    if (active) {
+      const remote = await Account.config(active.account.id, active.org.id).catch(() => undefined)
+      if (remote) {
+        const source = `${active.account.url}/api/config`
+        const next = { ...remote }
+        if (!next.$schema) next.$schema = product.config.schema
+        result = mergeConfigConcatArrays(
+          result,
+          await load(JSON.stringify(next), {
+            dir: path.dirname(source),
+            source,
+          }),
+        )
+        log.debug("loaded remote config from active org", {
+          source,
+          orgID: active.org.id,
+        })
+      }
     }
 
     // Global user config overrides remote config.
