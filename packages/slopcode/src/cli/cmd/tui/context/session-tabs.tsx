@@ -157,8 +157,9 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
           shouldArchiveSessionTab({ state: next, sessionID: id, sessions: sync.data.session })
         ) {
           const tab = current.tabs.find((item) => item.id === id)
-          sdk.clientFor(tab?.type === "session" ? tab.workspaceID : undefined).session
-            .update({ sessionID: id, time: { archived: Date.now() } })
+          sdk
+            .clientFor(tab?.type === "session" ? tab.workspaceID : undefined)
+            .session.update({ sessionID: id, time: { archived: Date.now() } })
             .catch((error) => {
               console.error("Failed to archive closed session tab", error)
             })

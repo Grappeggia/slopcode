@@ -95,7 +95,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
           void (async () => {
             while (!signal.aborted) {
-              const events = await clientFor(workspaceID).event.subscribe({}, { signal }).catch(() => undefined)
+              const events = await clientFor(workspaceID)
+                .event.subscribe({}, { signal })
+                .catch(() => undefined)
               if (!events) {
                 if (signal.aborted) break
                 await Bun.sleep(250)

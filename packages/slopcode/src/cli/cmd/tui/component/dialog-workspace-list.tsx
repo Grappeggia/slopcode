@@ -83,7 +83,8 @@ export function DialogWorkspaceList() {
         .then((result) => ["__local__", result.data?.length ?? 0] as const)
         .catch(() => ["__local__", null] as const),
       ...items.map((workspace) =>
-        sdk.clientFor(workspace.id)
+        sdk
+          .clientFor(workspace.id)
           .session.list({ roots: true, limit: 1 })
           .then((result) => [workspace.id, result.data?.length ?? 0] as const)
           .catch(() => [workspace.id, null] as const),
@@ -158,14 +159,14 @@ export function DialogWorkspaceList() {
       onSelect={async (option) => {
         setToDelete(undefined)
         if (option.value === "__create__") {
-          dialog.replace(() =>
+          dialog.replace(() => (
             <DialogWorkspaceCreate
               onDone={async (workspaceID) => {
                 await workspacesCtrl.refetch()
                 await openWorkspaceHome(workspaceID)
               }}
-            />,
-          )
+            />
+          ))
           return
         }
         if (option.value === "__local__") {

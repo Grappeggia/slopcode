@@ -124,7 +124,10 @@ export function promoteDraftTab(
   const index = state.tabs.findIndex(isDraft)
   if (index === -1) {
     return {
-      tabs: [...state.tabs, { type: "session", id: input.sessionID, pendingTitle: true, workspaceID: input.workspaceID }],
+      tabs: [
+        ...state.tabs,
+        { type: "session", id: input.sessionID, pendingTitle: true, workspaceID: input.workspaceID },
+      ],
       active: input.sessionID,
     }
   }

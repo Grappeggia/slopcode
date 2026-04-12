@@ -51,7 +51,9 @@ export function DialogConsoleOrg() {
     return listed
       .toSorted((a, b) => {
         if (a.active !== b.active) return a.active ? -1 : 1
-        const account = `${a.accountEmail} ${host(a.accountUrl)}`.localeCompare(`${b.accountEmail} ${host(b.accountUrl)}`)
+        const account = `${a.accountEmail} ${host(a.accountUrl)}`.localeCompare(
+          `${b.accountEmail} ${host(b.accountUrl)}`,
+        )
         if (account !== 0) return account
         return a.orgName.localeCompare(b.orgName)
       })
@@ -82,5 +84,11 @@ export function DialogConsoleOrg() {
       }))
   })
 
-  return <DialogSelect<string | NonNullable<ReturnType<typeof current>>> title="Switch org" options={options()} current={current()} />
+  return (
+    <DialogSelect<string | NonNullable<ReturnType<typeof current>>>
+      title="Switch org"
+      options={options()}
+      current={current()}
+    />
+  )
 }

@@ -497,7 +497,9 @@ export const AuthLogoutCommand = cmd({
     const database = await ModelsDev.get()
     if (args.provider) {
       const input = args.provider.toLowerCase()
-      const match = credentials.find(([key]) => key.toLowerCase() === input || (database[key]?.name || "").toLowerCase() === input)
+      const match = credentials.find(
+        ([key]) => key.toLowerCase() === input || (database[key]?.name || "").toLowerCase() === input,
+      )
       if (!match) {
         prompts.log.error(`Unknown provider \"${args.provider}\"`)
         return
