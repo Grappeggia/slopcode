@@ -100,6 +100,7 @@ export function DialogMessage(props: {
               type: "session",
               initialPrompt,
               source: "fork",
+              workspaceID: route.data.workspaceID,
             })
             dialog.clear()
           },

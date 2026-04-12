@@ -7,6 +7,7 @@ export type SessionTab =
       type: "session"
       id: string
       pendingTitle?: boolean
+      workspaceID?: string
     }
   | {
       type: "draft"
@@ -103,6 +104,7 @@ export function promoteDraftTab(
   state: SessionTabsState,
   input: {
     sessionID: string
+    workspaceID?: string
   },
 ): SessionTabsState {
   const existing = state.tabs.findIndex((tab) => isSession(tab) && tab.id === input.sessionID)
@@ -110,7 +112,11 @@ export function promoteDraftTab(
     return {
       tabs: state.tabs
         .filter((tab) => !isDraft(tab))
-        .map((tab) => (isSession(tab) && tab.id === input.sessionID ? { ...tab, pendingTitle: true } : tab)),
+        .map((tab) =>
+          isSession(tab) && tab.id === input.sessionID
+            ? { ...tab, pendingTitle: true, workspaceID: input.workspaceID }
+            : tab,
+        ),
       active: input.sessionID,
     }
   }
@@ -118,13 +124,13 @@ export function promoteDraftTab(
   const index = state.tabs.findIndex(isDraft)
   if (index === -1) {
     return {
-      tabs: [...state.tabs, { type: "session", id: input.sessionID, pendingTitle: true }],
+      tabs: [...state.tabs, { type: "session", id: input.sessionID, pendingTitle: true, workspaceID: input.workspaceID }],
       active: input.sessionID,
     }
   }
 
   const tabs = state.tabs.slice()
-  tabs[index] = { type: "session", id: input.sessionID, pendingTitle: true }
+  tabs[index] = { type: "session", id: input.sessionID, pendingTitle: true, workspaceID: input.workspaceID }
   return {
     tabs,
     active: input.sessionID,
@@ -137,14 +143,19 @@ export function visitSessionTabs(
     sessionID: string
     source?: SessionRouteSource
     root?: boolean
+    workspaceID?: string
   },
 ): SessionTabsState {
   const pendingTitle = input.source === "new"
   if (state.tabs.some((tab) => isSession(tab) && tab.id === input.sessionID)) {
     return {
       tabs: state.tabs.map((tab) => {
-        if (!pendingTitle || !isSession(tab) || tab.id !== input.sessionID) return tab
-        return { ...tab, pendingTitle: true }
+        if (!isSession(tab) || tab.id !== input.sessionID) return tab
+        return {
+          ...tab,
+          pendingTitle: pendingTitle || tab.pendingTitle,
+          workspaceID: input.workspaceID ?? tab.workspaceID,
+        }
       }),
       active: input.sessionID,
     }
@@ -153,8 +164,8 @@ export function visitSessionTabs(
     tabs: [
       ...state.tabs,
       pendingTitle
-        ? { type: "session", id: input.sessionID, pendingTitle: true }
-        : { type: "session", id: input.sessionID },
+        ? { type: "session", id: input.sessionID, pendingTitle: true, workspaceID: input.workspaceID }
+        : { type: "session", id: input.sessionID, workspaceID: input.workspaceID },
     ],
     active: input.sessionID,
   }

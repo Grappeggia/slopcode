@@ -6,6 +6,7 @@ import { useSDK } from "../context/sdk"
 
 interface DialogSessionRenameProps {
   session: string
+  workspaceID?: string
 }
 
 export function DialogSessionRename(props: DialogSessionRenameProps) {
@@ -19,7 +20,7 @@ export function DialogSessionRename(props: DialogSessionRenameProps) {
       title="Rename Session"
       value={session()?.title}
       onConfirm={(value) => {
-        sdk.client.session.update({
+        sdk.clientFor(props.workspaceID).session.update({
           sessionID: props.session,
           title: value,
         })

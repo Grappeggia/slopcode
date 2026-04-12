@@ -479,9 +479,14 @@ export const AuthLoginCommand = cmd({
 })
 
 export const AuthLogoutCommand = cmd({
-  command: "logout",
+  command: "logout [provider]",
   describe: "log out from a configured provider",
-  async handler() {
+  builder: (yargs) =>
+    yargs.positional("provider", {
+      describe: "provider id or name to remove",
+      type: "string",
+    }),
+  async handler(args) {
     UI.empty()
     const credentials = await Auth.all().then((x) => Object.entries(x))
     prompts.intro("Remove credential")
@@ -490,6 +495,17 @@ export const AuthLogoutCommand = cmd({
       return
     }
     const database = await ModelsDev.get()
+    if (args.provider) {
+      const input = args.provider.toLowerCase()
+      const match = credentials.find(([key]) => key.toLowerCase() === input || (database[key]?.name || "").toLowerCase() === input)
+      if (!match) {
+        prompts.log.error(`Unknown provider \"${args.provider}\"`)
+        return
+      }
+      await Auth.remove(match[0])
+      prompts.outro(`Logged out from ${database[match[0]]?.name || match[0]}`)
+      return
+    }
     const providerID = await prompts.select({
       message: "Select provider",
       options: credentials.map(([key, value]) => ({
@@ -499,6 +515,6 @@ export const AuthLogoutCommand = cmd({
     })
     if (prompts.isCancel(providerID)) throw new UI.CancelledError()
     await Auth.remove(providerID)
-    prompts.outro("Logout successful")
+    prompts.outro(`Logged out from ${database[providerID]?.name || providerID}`)
   },
 })

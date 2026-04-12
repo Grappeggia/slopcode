@@ -60,8 +60,8 @@ async function login(url: string) {
   spinner.stop("Device code expired", 1)
 }
 
-function list() {
-  const rows = Account.list()
+async function list() {
+  const rows = await Account.orgsByAccount()
   if (rows.length === 0) {
     UI.println("No accounts found")
     return
@@ -69,8 +69,13 @@ function list() {
 
   const active = Account.active()
   for (const row of rows) {
-    const dot = active?.id === row.id ? UI.Style.TEXT_SUCCESS + "*" + UI.Style.TEXT_NORMAL : " "
-    UI.println(`  ${dot} ${accountLabel(row, active?.id === row.id)}`)
+    const isActive = active?.id === row.account.id
+    const dot = isActive ? UI.Style.TEXT_SUCCESS + "*" + UI.Style.TEXT_NORMAL : " "
+    UI.println(`  ${dot} ${accountLabel(row.account, isActive)}`)
+    if (!isActive || !active?.active_org_id) continue
+    const org = row.orgs.find((item) => item.id === active.active_org_id)
+    if (!org) continue
+    UI.println(`    ${dim("org")} ${org.name} ${dim(active.active_org_id)}`)
   }
 }
 
@@ -213,7 +218,7 @@ export const ConsoleListCommand = cmd({
   describe: "list console accounts",
   async handler() {
     UI.empty()
-    list()
+    await list()
   },
 })
 

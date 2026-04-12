@@ -21,6 +21,8 @@ import { CommandProvider, useCommandDialog } from "@tui/component/dialog-command
 import { DialogAgent } from "@tui/component/dialog-agent"
 import { DialogProvider as DialogProviderList } from "@tui/component/dialog-provider"
 import { DialogSessionList } from "@tui/component/dialog-session-list"
+import { DialogWorkspaceList } from "@tui/component/dialog-workspace-list"
+import { DialogConsoleOrg } from "@tui/component/dialog-console-org"
 import { KeybindProvider } from "@tui/context/keybind"
 import { ThemeProvider, useTheme } from "@tui/context/theme"
 import { Home } from "@tui/routes/home"
@@ -302,6 +304,7 @@ function App() {
         type: "session",
         sessionID: args.sessionID,
         source: "switch",
+        workspaceID: route.data.workspaceID,
       })
     }
     if (args.agent) local.agent.set(args.agent)
@@ -329,13 +332,23 @@ function App() {
       if (args.fork) {
         sdk.client.session.fork({ sessionID: match }).then((result) => {
           if (result.data?.id) {
-            route.navigate({ type: "session", sessionID: result.data.id, source: "fork" })
+            route.navigate({
+              type: "session",
+              sessionID: result.data.id,
+              source: "fork",
+              workspaceID: route.data.workspaceID,
+            })
           } else {
             toast.show({ message: "Failed to fork session", variant: "error" })
           }
         })
       } else {
-        route.navigate({ type: "session", sessionID: match, source: "switch" })
+        route.navigate({
+          type: "session",
+          sessionID: match,
+          source: "switch",
+          workspaceID: route.data.workspaceID,
+        })
       }
     }
   })
@@ -349,7 +362,12 @@ function App() {
     forked = true
     sdk.client.session.fork({ sessionID: args.sessionID }).then((result) => {
       if (result.data?.id) {
-        route.navigate({ type: "session", sessionID: result.data.id, source: "fork" })
+        route.navigate({
+          type: "session",
+          sessionID: result.data.id,
+          source: "fork",
+          workspaceID: route.data.workspaceID,
+        })
       } else {
         toast.show({ message: "Failed to fork session", variant: "error" })
       }
@@ -381,6 +399,18 @@ function App() {
       },
       onSelect: () => {
         dialog.replace(() => <DialogSessionList />)
+      },
+    },
+    {
+      title: "Workspaces",
+      value: "workspace.list",
+      category: "Session",
+      slash: {
+        name: "workspaces",
+        aliases: ["workspace"],
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogWorkspaceList />)
       },
     },
     {
@@ -530,6 +560,18 @@ function App() {
       },
       onSelect: () => {
         dialog.replace(() => <DialogProviderList />)
+      },
+      category: "Provider",
+    },
+    {
+      title: "Switch console org",
+      value: "console.orgs",
+      slash: {
+        name: "orgs",
+        aliases: ["console"],
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogConsoleOrg />)
       },
       category: "Provider",
     },
@@ -709,12 +751,13 @@ function App() {
       type: "session",
       sessionID: evt.properties.sessionID,
       source: "switch",
+      workspaceID: route.data.workspaceID,
     })
   })
 
   sdk.event.on(SessionApi.Event.Deleted.type, (evt) => {
     if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
-      route.navigate({ type: "home" })
+      route.navigate({ type: "home", workspaceID: route.data.workspaceID })
       toast.show({
         variant: "info",
         message: "The current session was deleted",

@@ -1,8 +1,9 @@
 import { createSlopcodeClient, type Event } from "@slopcode-ai/sdk/v2"
 import { createSimpleContext } from "./helper"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
-import { batch, onCleanup, onMount } from "solid-js"
+import { batch, createEffect, on, onCleanup, onMount } from "solid-js"
 import { nextSDKFlushDelay, queueSDKEvent } from "./sdk-event-queue"
+import { useRoute } from "./route"
 
 export type EventSource = {
   on: (handler: (event: Event) => void) => () => void
@@ -18,15 +19,26 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     headers?: RequestInit["headers"]
     events?: EventSource
   }) => {
+    const route = useRoute()
     const abort = new AbortController()
-    const sdk = createSlopcodeClient({
-      baseUrl: props.url,
-      signal: abort.signal,
-      directory: props.directory,
-      viewID: props.viewID,
-      fetch: props.fetch,
-      headers: props.headers,
-    })
+    const clients = new Map<string, ReturnType<typeof createSlopcodeClient>>()
+
+    const clientFor = (workspaceID?: string) => {
+      const key = workspaceID ?? ""
+      const hit = clients.get(key)
+      if (hit) return hit
+      const client = createSlopcodeClient({
+        baseUrl: props.url,
+        signal: abort.signal,
+        directory: props.directory,
+        viewID: props.viewID,
+        workspaceID,
+        fetch: props.fetch,
+        headers: props.headers,
+      } as any)
+      clients.set(key, client)
+      return client
+    }
 
     const emitter = createGlobalEmitter<{
       [key in Event["type"]]: Extract<Event, { type: key }>
@@ -42,7 +54,6 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       queue = []
       timer = undefined
       last = Date.now()
-      // Batch all event emissions so all store updates result in a single render
       batch(() => {
         for (const event of events) {
           emitter.emit(event.type, event)
@@ -67,41 +78,73 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       timer = setTimeout(flush, delay)
     }
 
-    onMount(async () => {
-      // If an event source is provided, use it instead of SSE
+    onMount(() => {
       if (props.events) {
         const unsub = props.events.on(handleEvent)
         onCleanup(unsub)
-        return
-      }
-
-      // Fall back to SSE
-      while (true) {
-        if (abort.signal.aborted) break
-        const events = await sdk.event.subscribe(
-          {},
-          {
-            signal: abort.signal,
-          },
-        )
-
-        for await (const event of events.stream) {
-          handleEvent(event)
-        }
-
-        // Flush any remaining events
-        if (timer) clearTimeout(timer)
-        if (queue.length > 0) {
-          flush()
-        }
       }
     })
+
+    createEffect(
+      on(
+        () => route.data.workspaceID,
+        (workspaceID) => {
+          if (props.events) return
+          const stop = new AbortController()
+          const signal = AbortSignal.any([abort.signal, stop.signal])
+
+          void (async () => {
+            while (!signal.aborted) {
+              const events = await clientFor(workspaceID).event.subscribe({}, { signal }).catch(() => undefined)
+              if (!events) {
+                if (signal.aborted) break
+                await Bun.sleep(250)
+                continue
+              }
+
+              try {
+                for await (const event of events.stream) {
+                  if (signal.aborted) break
+                  handleEvent(event)
+                }
+              } catch {
+                if (signal.aborted) break
+              }
+
+              if (signal.aborted) break
+              if (timer) clearTimeout(timer)
+              if (queue.length > 0) flush()
+              await Bun.sleep(250)
+            }
+          })()
+
+          onCleanup(() => {
+            stop.abort()
+            if (timer) clearTimeout(timer)
+            if (queue.length > 0) flush()
+          })
+        },
+      ),
+    )
 
     onCleanup(() => {
       abort.abort()
       if (timer) clearTimeout(timer)
     })
 
-    return { client: sdk, event: emitter, url: props.url }
+    return {
+      get client() {
+        return clientFor(route.data.workspaceID)
+      },
+      clientFor,
+      event: emitter,
+      url: props.url,
+      fetch: props.fetch,
+      directory: props.directory,
+      headers: props.headers,
+      get workspaceID() {
+        return route.data.workspaceID
+      },
+    }
   },
 })

@@ -1014,6 +1014,7 @@ export function Prompt(props: PromptProps) {
             type: "session",
             sessionID,
             source: "switch",
+            workspaceID: route.data.workspaceID,
           })
           return
         }
@@ -1021,6 +1022,7 @@ export function Prompt(props: PromptProps) {
           type: "session",
           sessionID,
           source: "new",
+          workspaceID: route.data.workspaceID,
         })
       }, 50)
     input.clear()

@@ -17,6 +17,7 @@ export function DialogSubagent(props: { sessionID: string }) {
               type: "session",
               sessionID: props.sessionID,
               source: "child",
+              workspaceID: route.data.workspaceID,
             })
             dialog.clear()
           },

@@ -11,6 +11,7 @@ import { useKeybind } from "../../context/keybind"
 import { useDirectory } from "../../context/directory"
 import { useKV } from "../../context/kv"
 import { TodoItem } from "../../component/todo-item"
+import { useRoute } from "../../context/route"
 
 export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const sync = useSync()
@@ -62,6 +63,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
 
   const directory = useDirectory()
   const kv = useKV()
+  const route = useRoute()
 
   const hasProviders = createMemo(() =>
     sync.data.provider.some((x) => x.id !== "slopcode" || Object.values(x.models).some((y) => y.cost?.input !== 0)),
@@ -307,6 +309,9 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
             <span style={{ fg: theme.textMuted }}>{directory().split("/").slice(0, -1).join("/")}/</span>
             <span style={{ fg: theme.text }}>{directory().split("/").at(-1)}</span>
           </text>
+          <Show when={route.data.type === "session" && route.data.workspaceID}>
+            <text fg={theme.textMuted}>workspace {route.data.workspaceID}</text>
+          </Show>
           <text fg={theme.textMuted}>
             <span style={{ fg: theme.success }}>•</span> <b>Slop</b>
             <span style={{ fg: theme.text }}>

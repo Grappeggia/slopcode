@@ -44,6 +44,7 @@ import { MDNS } from "./mdns"
 import { DaemonAuth } from "@/daemon/auth"
 import { DaemonRuntime } from "@/daemon/runtime"
 import { Identifier } from "@/id/id"
+import { Workspace } from "@/control-plane/workspace"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -245,6 +246,7 @@ export namespace Server {
         .use(async (c, next) => {
           if (c.req.path === "/log") return next()
           const raw = c.req.query("directory") || c.req.header("x-slopcode-directory") || process.cwd()
+          const workspaceID = c.req.query("workspace") || c.req.header("x-slopcode-workspace") || undefined
           const viewID = c.req.header("x-slopcode-view-id") || undefined
           const directory = (() => {
             try {
@@ -253,8 +255,14 @@ export namespace Server {
               return raw
             }
           })()
+          const target = workspaceID
+            ? await Workspace.get(workspaceID).then((workspace) => workspace?.config.directory)
+            : directory
+          if (!target) {
+            return c.text(`Workspace not found: ${workspaceID}`, 500)
+          }
           return Instance.provide({
-            directory,
+            directory: target,
             viewID,
             init: InstanceBootstrap,
             async fn() {

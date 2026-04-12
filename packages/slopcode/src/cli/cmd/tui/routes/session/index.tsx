@@ -360,7 +360,7 @@ export function Session() {
           message: `Session not found: ${route.sessionID}`,
           variant: "error",
         })
-        return navigate({ type: "home" })
+        return navigate({ type: "home", workspaceID: route.workspaceID })
       })
   })
 
@@ -881,6 +881,7 @@ export function Session() {
       type: "session",
       sessionID: current.childSessionID,
       source: "child",
+      workspaceID: route.workspaceID,
     })
   }
 
@@ -964,6 +965,7 @@ export function Session() {
         type: "session",
         sessionID: next.id,
         source: "child",
+        workspaceID: route.workspaceID,
       })
     }
   }
@@ -981,6 +983,7 @@ export function Session() {
         type: "session",
         sessionID: sessions[next].id,
         source: "child",
+        workspaceID: route.workspaceID,
       })
     }
   }
@@ -1658,6 +1661,7 @@ export function Session() {
             type: "session",
             sessionID: parentID,
             source: "switch",
+            workspaceID: route.workspaceID,
           })
         }
         dialog.clear()
@@ -3083,7 +3087,8 @@ function Task(props: ToolProps<typeof TaskTool>) {
   const ctx = use()
   const { theme } = useTheme()
   const keybind = useKeybind()
-  const { navigate } = useRoute()
+  const route = useRoute()
+  const { navigate } = route
   const local = useLocal()
   const sync = useSync()
 
@@ -3109,7 +3114,12 @@ function Task(props: ToolProps<typeof TaskTool>) {
 
   const open = () => {
     if (!props.metadata.sessionId) return
-    navigate({ type: "session", sessionID: props.metadata.sessionId, source: "switch" })
+    navigate({
+      type: "session",
+      sessionID: props.metadata.sessionId,
+      source: "switch",
+      workspaceID: route.data.workspaceID,
+    })
   }
 
   return (

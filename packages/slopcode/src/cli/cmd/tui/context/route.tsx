@@ -7,6 +7,7 @@ export type SessionRouteSource = "child" | "fork" | "new" | "switch"
 export type HomeRoute = {
   type: "home"
   initialPrompt?: PromptInfo
+  workspaceID?: string
 }
 
 export type SessionRoute = {
@@ -14,6 +15,7 @@ export type SessionRoute = {
   sessionID: string
   initialPrompt?: PromptInfo
   source?: SessionRouteSource
+  workspaceID?: string
 }
 
 export type Route = HomeRoute | SessionRoute
@@ -34,7 +36,6 @@ export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
         return store
       },
       navigate(route: Route) {
-        console.log("navigate", route)
         setStore(route)
       },
     }

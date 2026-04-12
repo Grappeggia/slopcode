@@ -52,6 +52,7 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
             type: "session",
             initialPrompt,
             source: "fork",
+            workspaceID: route.data.workspaceID,
           })
           dialog.clear()
         },

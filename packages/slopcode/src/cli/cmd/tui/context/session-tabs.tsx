@@ -35,12 +35,19 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
           return {
             sessionID: data.sessionID,
             source: data.source,
+            workspaceID: data.workspaceID,
             parentID: sync.session.get(data.sessionID)?.parentID,
           }
         },
         (next) => {
           if (!next) return
-          setState((state) => visitSessionTabs(state, { sessionID: next.sessionID, source: next.source }))
+          setState((state) =>
+            visitSessionTabs(state, {
+              sessionID: next.sessionID,
+              source: next.source,
+              workspaceID: next.workspaceID,
+            }),
+          )
         },
         { defer: true },
       ),
@@ -125,14 +132,19 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       open(id: string) {
         if (id === DRAFT_TAB_ID) {
           setState((state) => activateTab(state, DRAFT_TAB_ID))
-          route.navigate({ type: "home" })
+          route.navigate({
+            type: "home",
+            workspaceID: route.data.type === "session" ? route.data.workspaceID : route.data.workspaceID,
+          })
           return
         }
         setState((state) => activateTab(state, id))
+        const tab = state().tabs.find((item) => item.id === id)
         route.navigate({
           type: "session",
           sessionID: id,
           source: "switch",
+          workspaceID: tab?.type === "session" ? tab.workspaceID : undefined,
         })
       },
       close(id: string) {
@@ -144,28 +156,44 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
           id !== DRAFT_TAB_ID &&
           shouldArchiveSessionTab({ state: next, sessionID: id, sessions: sync.data.session })
         ) {
-          sdk.client.session.update({ sessionID: id, time: { archived: Date.now() } }).catch((error) => {
-            console.error("Failed to archive closed session tab", error)
-          })
+          const tab = current.tabs.find((item) => item.id === id)
+          sdk.clientFor(tab?.type === "session" ? tab.workspaceID : undefined).session
+            .update({ sessionID: id, time: { archived: Date.now() } })
+            .catch((error) => {
+              console.error("Failed to archive closed session tab", error)
+            })
         }
         const routeID = route.data.type === "home" ? DRAFT_TAB_ID : route.data.sessionID
         if (routeID !== id) return
         if (!next.active || next.active === DRAFT_TAB_ID) {
-          route.navigate({ type: "home" })
+          route.navigate({
+            type: "home",
+            workspaceID: route.data.type === "session" ? route.data.workspaceID : route.data.workspaceID,
+          })
           return
         }
+        const nextTab = next.tabs.find((tab) => tab.id === next.active)
         route.navigate({
           type: "session",
           sessionID: next.active,
           source: "switch",
+          workspaceID: nextTab?.type === "session" ? nextTab.workspaceID : undefined,
         })
       },
       openDraft() {
         setState((state) => openDraftTab(state))
-        route.navigate({ type: "home" })
+        route.navigate({
+          type: "home",
+          workspaceID: route.data.type === "session" ? route.data.workspaceID : route.data.workspaceID,
+        })
       },
       promoteDraft(sessionID: string) {
-        setState((state) => promoteDraftTab(state, { sessionID }))
+        setState((state) =>
+          promoteDraftTab(state, {
+            sessionID,
+            workspaceID: route.data.type === "session" ? route.data.workspaceID : route.data.workspaceID,
+          }),
+        )
       },
     }
   },

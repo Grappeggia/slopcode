@@ -26,7 +26,7 @@ import type { Snapshot } from "@/snapshot"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
 import { useKV } from "./kv"
-import { batch, onMount } from "solid-js"
+import { batch, createEffect, onMount } from "solid-js"
 import { Log } from "@/util/log"
 import type { Path } from "@slopcode-ai/sdk"
 
@@ -65,6 +65,35 @@ function applyDelta(part: Part, input: Delta) {
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
   init: () => {
+    const empty = () => ({
+      provider_next: {
+        all: [],
+        default: {},
+        connected: [],
+      },
+      provider_auth: {},
+      config: {},
+      status: "loading" as const,
+      agent: [],
+      permission: {},
+      question: {},
+      command: [],
+      provider: [],
+      provider_default: {},
+      session: [],
+      session_status: {},
+      session_diff: {},
+      todo: {},
+      message: {},
+      part: {},
+      lsp: [],
+      mcp: {},
+      mcp_resource: {},
+      formatter: [],
+      vcs: undefined,
+      path: { state: "", config: "", worktree: "", directory: "" },
+    })
+
     const [store, setStore] = createStore<{
       status: "loading" | "partial" | "complete"
       provider: Provider[]
@@ -106,34 +135,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       formatter: FormatterStatus[]
       vcs: VcsInfo | undefined
       path: Path
-    }>({
-      provider_next: {
-        all: [],
-        default: {},
-        connected: [],
-      },
-      provider_auth: {},
-      config: {},
-      status: "loading",
-      agent: [],
-      permission: {},
-      question: {},
-      command: [],
-      provider: [],
-      provider_default: {},
-      session: [],
-      session_status: {},
-      session_diff: {},
-      todo: {},
-      message: {},
-      part: {},
-      lsp: [],
-      mcp: {},
-      mcp_resource: {},
-      formatter: [],
-      vcs: undefined,
-      path: { state: "", config: "", worktree: "", directory: "" },
-    })
+    }>(empty())
 
     const sdk = useSDK()
     const kv = useKV()
@@ -494,7 +496,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const args = useArgs()
 
     async function bootstrap() {
-      console.log("bootstrapping")
+      fullSyncedSessions.clear()
+      delta.clear()
+      setStore(reconcile(empty()))
       const start = Date.now() - 30 * 24 * 60 * 60 * 1000
       const sessionListPromise = sdk.client.session
         .list({ start: start })
@@ -572,8 +576,17 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         })
     }
 
+    let scope = sdk.workspaceID
+
     onMount(() => {
-      bootstrap()
+      void bootstrap()
+    })
+
+    createEffect(() => {
+      const next = sdk.workspaceID
+      if (next === scope) return
+      scope = next
+      void bootstrap()
     })
 
     const result = {

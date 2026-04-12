@@ -73,8 +73,14 @@ const consoleModule = await import("../../src/cli/cmd/console")
 const accountModule = await import("../../src/account")
 const uiModule = await import("../../src/cli/ui")
 
-const { ConsoleLoginCommand, ConsoleLogoutCommand, ConsoleSwitchCommand, ConsoleOrgsCommand, ConsoleOpenCommand } =
-  consoleModule
+const {
+  ConsoleLoginCommand,
+  ConsoleLogoutCommand,
+  ConsoleListCommand,
+  ConsoleSwitchCommand,
+  ConsoleOrgsCommand,
+  ConsoleOpenCommand,
+} = consoleModule
 const Account = accountModule.Account as unknown as AccountApi
 const { UI } = uiModule
 
@@ -155,6 +161,22 @@ describe("console CLI commands", () => {
 
     expect(remove).toHaveBeenCalledWith("acc-2")
     expect(outroCalls).toEqual(["Logged out from other@example.com"])
+  })
+
+  test("list shows the active org under the active account", async () => {
+    Account.active = () => row({ active_org_id: "org-1" })
+    Account.orgsByAccount = async () => [
+      {
+        account: row({ active_org_id: "org-1" }),
+        orgs: [{ id: "org-1", name: "Acme" }],
+      },
+    ]
+
+    await ConsoleListCommand.handler({} as never)
+
+    expect(printed).toHaveLength(2)
+    expect(printed[0]).toContain("dev@example.com")
+    expect(printed[1]).toContain("Acme")
   })
 
   test("switch selects an org and updates active account state", async () => {
