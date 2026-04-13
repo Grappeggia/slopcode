@@ -1624,9 +1624,10 @@ export function Prompt(props: PromptProps) {
                   {keybind.print("session_interrupt")}
                   <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
                     {(() => {
-                      const text = store.interrupt > 0
-                        ? label("again to interrupt", "again", true)
-                        : label("interrupt", "stop", true)
+                      const text =
+                        store.interrupt > 0
+                          ? label("again to interrupt", "again", true)
+                          : label("interrupt", "stop", true)
                       return text ? ` ${text}` : ""
                     })()}
                   </span>
