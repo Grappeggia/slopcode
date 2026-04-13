@@ -188,7 +188,7 @@ const fetch = async (input) => {
   if (url.pathname === "/config/providers") return json({ providers: [provider], default: { mock: "test" } })
   if (url.pathname === "/provider") return json({ all: [provider], default: { mock: "test" }, connected: ["mock"] })
   if (url.pathname === "/agent") return json([{ name: "build", mode: "primary", hidden: false }])
-  if (url.pathname === "/config") return json({})
+  if (url.pathname === "/config") return json({ keybinds: { session_interrupt: "escape" } })
   if (url.pathname === "/session") return json([session])
   if (url.pathname === "/command") return json([])
   if (url.pathname === "/lsp") return json([])
@@ -286,6 +286,8 @@ describe("tui prompt footer layout", () => {
 
     expect(result.code).toBe(0)
     expect(result.screen).toMatch(/stop\s+agent\s+hist\s+cmd/)
+    expect(result.screen).not.toMatch(/stopagent/)
+    expect(result.raw).not.toMatch(/escstop/)
     expect(result.screen).not.toMatch(/\bs\s*\n\s*t\s*\n\s*o\s*\n\s*p\b/)
   }, 15_000)
 })
