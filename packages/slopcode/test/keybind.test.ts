@@ -54,6 +54,17 @@ describe("Keybind.toString", () => {
     expect(Keybind.toString(info)).toBe("pgup")
   })
 
+  test("should abbreviate escape to esc", () => {
+    const info: Keybind.Info = {
+      ctrl: false,
+      meta: false,
+      shift: false,
+      leader: false,
+      name: "escape",
+    }
+    expect(Keybind.toString(info)).toBe("esc")
+  })
+
   test("should handle empty name", () => {
     const info: Keybind.Info = { ctrl: true, meta: false, shift: false, leader: false, name: "" }
     expect(Keybind.toString(info)).toBe("ctrl")
