@@ -22,6 +22,7 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
     })
     const [store, setStore] = createStore({
       leader: false,
+      suspended: 0,
     })
     const renderer = useRenderer()
 
@@ -58,6 +59,7 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
     }
 
     useKeyboard(async (evt) => {
+      if (store.suspended > 0) return
       if (!store.leader && result.match("leader", evt)) {
         leader(true)
         return
@@ -86,6 +88,11 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
       keep() {
         if (!store.leader) return
         keep = true
+      },
+      suspend() {
+        if (store.leader) leader(false)
+        setStore("suspended", (value) => value + 1)
+        return () => setStore("suspended", (value) => Math.max(0, value - 1))
       },
       parse(evt: ParsedKey): Keybind.Info {
         // Handle special case for Ctrl+Underscore (represented as \x1F)

@@ -13,6 +13,7 @@ import { NamedError } from "@slopcode-ai/util/error"
 import { LSP } from "../lsp"
 import { Format } from "../format"
 import { TuiRoutes } from "./routes/tui"
+import { EditorRoutes } from "./routes/editor"
 import { Instance } from "../project/instance"
 import { Vcs } from "../project/vcs"
 import { Agent } from "../agent/agent"
@@ -247,7 +248,7 @@ export namespace Server {
           if (c.req.path === "/log") return next()
           const raw = c.req.query("directory") || c.req.header("x-slopcode-directory") || process.cwd()
           const workspaceID = c.req.query("workspace") || c.req.header("x-slopcode-workspace") || undefined
-          const viewID = c.req.header("x-slopcode-view-id") || undefined
+          const viewID = c.req.query("viewID") || c.req.header("x-slopcode-view-id") || undefined
           const directory = (() => {
             try {
               return decodeURIComponent(raw)
@@ -286,6 +287,7 @@ export namespace Server {
         .use(validator("query", z.object({ directory: z.string().optional() })))
         .route("/project", ProjectRoutes())
         .route("/pty", PtyRoutes())
+        .route("/editor", EditorRoutes())
         .route("/config", ConfigRoutes())
         .route("/experimental", ExperimentalRoutes())
         .route("/session", SessionRoutes())

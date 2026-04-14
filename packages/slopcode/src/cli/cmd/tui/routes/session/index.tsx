@@ -68,6 +68,7 @@ import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar, type SidebarMode } from "./sidebar"
+import { EditorPane, type EditorInfo } from "./editor-pane"
 import { Flag } from "@/flag/flag"
 import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import { Clipboard } from "../../util/clipboard"
@@ -301,6 +302,7 @@ export function Session() {
   const [historyPrompt, setHistoryPrompt] = createSignal<string>()
   const [target, setTarget] = createSignal<"prompt" | "timeline">("prompt")
   const [expandedToolParts, setExpandedToolParts] = createSignal<Record<string, boolean>>({})
+  const [editor, setEditor] = createSignal<EditorInfo>()
 
   type HistoryTrace = {
     partID: string
@@ -375,6 +377,77 @@ export function Session() {
 
   const toast = useToast()
   const sdk = useSDK()
+  const editorUrl = (input: string) => {
+    const next = new URL(input, sdk.url)
+    if (sdk.directory) next.searchParams.set("directory", sdk.directory)
+    if (route.workspaceID) next.searchParams.set("workspace", route.workspaceID)
+    if (sdk.viewID) next.searchParams.set("viewID", sdk.viewID)
+    next.searchParams.set("sessionID", route.sessionID)
+    return next
+  }
+  const editorHeaders = () => new Headers(sdk.headers)
+  const closeEditor = async () => {
+    const info = editor()
+    if (!info) return
+    await (sdk.fetch ?? fetch)(editorUrl(`/editor/${info.id}`), {
+      method: "DELETE",
+      headers: editorHeaders(),
+    }).catch(() => undefined)
+    setEditor(undefined)
+  }
+  const requestCloseEditor = async () => {
+    const info = editor()
+    if (!info) return
+    if (info.dirty) {
+      const confirmed = await DialogConfirm.show(
+        dialog,
+        "Discard changes?",
+        `Close ${info.file} without saving?`,
+      )
+      if (!confirmed) return
+    }
+    await closeEditor()
+  }
+  const openEditor = async (file: string) => {
+    const current = editor()
+    if (current?.file === file) return
+    if (current?.dirty) {
+      const confirmed = await DialogConfirm.show(
+        dialog,
+        "Discard changes?",
+        `Close ${current.file} without saving before opening ${file}?`,
+      )
+      if (!confirmed) return
+    }
+    if (current) await closeEditor()
+    const response = await (sdk.fetch ?? fetch)(editorUrl("/editor"), {
+      method: "POST",
+      headers: (() => {
+        const next = editorHeaders()
+        next.set("content-type", "application/json")
+        return next
+      })(),
+      body: JSON.stringify({
+        sessionID: route.sessionID,
+        file,
+        size: {
+          rows: Math.max(5, dimensions().height - 8),
+          cols: Math.max(20, dimensions().width - 6),
+        },
+      }),
+    })
+    if (!response.ok) {
+      toast.show({ message: await response.text(), variant: "error" })
+      return
+    }
+    const info = (await response.json()) as EditorInfo
+    setEditor(info)
+  }
+  const modified = createMemo(() => {
+    const files = new Set((sync.data.file_status ?? []).map((item) => item.path))
+    if (editor()?.dirty && editor()?.file) files.add(editor()!.file)
+    return files
+  })
 
   // Handle initial prompt from fork
   createEffect(() => {
@@ -470,10 +543,16 @@ export function Session() {
         setHistoryPrompt(undefined)
         setTarget("prompt")
         setExpandedToolParts({})
+        void closeEditor()
+        setEditor(undefined)
       },
       { defer: true },
     ),
   )
+
+  onCleanup(() => {
+    void closeEditor()
+  })
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
@@ -497,6 +576,7 @@ export function Session() {
 
   useKeyboard((evt) => {
     if (dialog.stack.length > 0) return
+    if (editor()) return
 
     const handleAppExit = () => {
       if (!keybind.match("app_exit", evt)) return false
@@ -1797,6 +1877,22 @@ export function Session() {
       }}
     >
       <box flexDirection="row">
+        <Show
+          when={!editor()}
+          fallback={
+            <EditorPane
+              sessionID={route.sessionID}
+              info={editor}
+              onChange={(next) => setEditor((prev) => (prev ? { ...prev, ...next } : (next as EditorInfo)))}
+              onRequestClose={() => {
+                void requestCloseEditor()
+              }}
+              onClosed={() => {
+                setEditor(undefined)
+              }}
+            />
+          }
+        >
         <box flexGrow={1}>
           <SessionStrip
             action={
@@ -1966,7 +2062,17 @@ export function Session() {
         <Show when={sidebarVisible()}>
           <Switch>
             <Match when={wide()}>
-              <Sidebar sessionID={route.sessionID} mode={sidebarMode()} setMode={(mode) => setSidebarMode(mode)} />
+                <Sidebar
+                  sessionID={route.sessionID}
+                  mode={sidebarMode()}
+                  modified={modified()}
+                  activeFile={editor()?.file}
+                  openFile={(file) => {
+                    void openEditor(file)
+                  }}
+                  setMode={(mode) => setSidebarMode(mode)}
+                />
+
             </Match>
             <Match when={!wide()}>
               <box
@@ -1978,10 +2084,21 @@ export function Session() {
                 alignItems="flex-end"
                 backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
               >
-                <Sidebar sessionID={route.sessionID} mode={sidebarMode()} setMode={(mode) => setSidebarMode(mode)} />
+              <Sidebar
+                sessionID={route.sessionID}
+                mode={sidebarMode()}
+                modified={modified()}
+                activeFile={editor()?.file}
+                openFile={(file) => {
+                  void openEditor(file)
+                }}
+                setMode={(mode) => setSidebarMode(mode)}
+              />
+
               </box>
             </Match>
           </Switch>
+        </Show>
         </Show>
       </box>
     </context.Provider>

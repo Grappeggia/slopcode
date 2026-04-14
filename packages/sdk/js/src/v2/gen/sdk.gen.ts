@@ -21,6 +21,18 @@ import type {
   ConfigUpdateResponses,
   DaemonShutdownResponses,
   DaemonStatusResponses,
+  EditorCloseErrors,
+  EditorCloseResponses,
+  EditorConnectErrors,
+  EditorConnectResponses,
+  EditorDismissDiffErrors,
+  EditorDismissDiffResponses,
+  EditorGetErrors,
+  EditorGetResponses,
+  EditorOpenErrors,
+  EditorOpenResponses,
+  EditorSaveErrors,
+  EditorSaveResponses,
   EventSubscribeResponses,
   EventTuiCommandExecute,
   EventTuiPromptAppend,
@@ -707,6 +719,208 @@ export class Pty extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<PtyConnectResponses, PtyConnectErrors, ThrowOnError>({
       url: "/pty/{ptyID}/connect",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Editor extends HeyApiClient {
+  /**
+   * Open embedded editor
+   *
+   * Start a Neovim-backed embedded editor session for a file.
+   */
+  public open<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      sessionID?: string
+      file?: string
+      size?: {
+        rows: number
+        cols: number
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "sessionID" },
+            { in: "body", key: "file" },
+            { in: "body", key: "size" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<EditorOpenResponses, EditorOpenErrors, ThrowOnError>({
+      url: "/editor",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Close embedded editor
+   *
+   * Terminate an embedded editor session.
+   */
+  public close<ThrowOnError extends boolean = false>(
+    parameters: {
+      editorID: string
+      directory?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "editorID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<EditorCloseResponses, EditorCloseErrors, ThrowOnError>({
+      url: "/editor/{editorID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get embedded editor
+   *
+   * Get the current state of an embedded editor session.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      editorID: string
+      directory?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "editorID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<EditorGetResponses, EditorGetErrors, ThrowOnError>({
+      url: "/editor/{editorID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Save embedded editor
+   *
+   * Write the active editor buffer to disk.
+   */
+  public save<ThrowOnError extends boolean = false>(
+    parameters: {
+      editorID: string
+      directory?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "editorID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<EditorSaveResponses, EditorSaveErrors, ThrowOnError>({
+      url: "/editor/{editorID}/save",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Dismiss editor diff
+   *
+   * Collapse the editor back to a single editable buffer.
+   */
+  public dismissDiff<ThrowOnError extends boolean = false>(
+    parameters: {
+      editorID: string
+      directory?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "editorID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<EditorDismissDiffResponses, EditorDismissDiffErrors, ThrowOnError>({
+      url: "/editor/{editorID}/diff/dismiss",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Connect embedded editor
+   *
+   * Open a WebSocket for live editor snapshots and input forwarding.
+   */
+  public connect<ThrowOnError extends boolean = false>(
+    parameters: {
+      editorID: string
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "editorID" },
+            { in: "query", key: "directory" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<EditorConnectResponses, EditorConnectErrors, ThrowOnError>({
+      url: "/editor/{editorID}/connect",
       ...options,
       ...params,
     })
@@ -3777,6 +3991,11 @@ export class SlopcodeClient extends HeyApiClient {
   private _pty?: Pty
   get pty(): Pty {
     return (this._pty ??= new Pty({ client: this.client }))
+  }
+
+  private _editor?: Editor
+  get editor(): Editor {
+    return (this._editor ??= new Editor({ client: this.client }))
   }
 
   private _config?: Config2

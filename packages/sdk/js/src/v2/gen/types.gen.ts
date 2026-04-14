@@ -906,6 +906,33 @@ export type EventSessionError = {
   }
 }
 
+export type EditorSession = {
+  id: string
+  sessionID: string
+  file: string
+  cwd: string
+  status: "running" | "exited"
+  dirty: boolean
+  diff: boolean
+  mode: string
+  pid: number
+}
+
+export type EventEditorUpdated = {
+  type: "editor.updated"
+  properties: {
+    info: EditorSession
+  }
+}
+
+export type EventEditorExited = {
+  type: "editor.exited"
+  properties: {
+    id: string
+    sessionID: string
+  }
+}
+
 export type EventVcsBranchUpdated = {
   type: "vcs.branch.updated"
   properties: {
@@ -1021,6 +1048,8 @@ export type Event =
   | EventSessionDeleted
   | EventSessionDiff
   | EventSessionError
+  | EventEditorUpdated
+  | EventEditorExited
   | EventVcsBranchUpdated
   | EventWorktreeReady
   | EventWorktreeFailed
@@ -2518,6 +2547,189 @@ export type PtyConnectResponses = {
 }
 
 export type PtyConnectResponse = PtyConnectResponses[keyof PtyConnectResponses]
+
+export type EditorOpenData = {
+  body?: {
+    sessionID: string
+    file: string
+    size: {
+      rows: number
+      cols: number
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/editor"
+}
+
+export type EditorOpenErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type EditorOpenError = EditorOpenErrors[keyof EditorOpenErrors]
+
+export type EditorOpenResponses = {
+  /**
+   * Editor session
+   */
+  200: EditorSession
+}
+
+export type EditorOpenResponse = EditorOpenResponses[keyof EditorOpenResponses]
+
+export type EditorCloseData = {
+  body?: never
+  path: {
+    editorID: string
+  }
+  query: {
+    directory?: string
+    sessionID: string
+  }
+  url: "/editor/{editorID}"
+}
+
+export type EditorCloseErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type EditorCloseError = EditorCloseErrors[keyof EditorCloseErrors]
+
+export type EditorCloseResponses = {
+  /**
+   * Closed editor session
+   */
+  200: boolean
+}
+
+export type EditorCloseResponse = EditorCloseResponses[keyof EditorCloseResponses]
+
+export type EditorGetData = {
+  body?: never
+  path: {
+    editorID: string
+  }
+  query: {
+    directory?: string
+    sessionID: string
+  }
+  url: "/editor/{editorID}"
+}
+
+export type EditorGetErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type EditorGetError = EditorGetErrors[keyof EditorGetErrors]
+
+export type EditorGetResponses = {
+  /**
+   * Editor session
+   */
+  200: EditorSession
+}
+
+export type EditorGetResponse = EditorGetResponses[keyof EditorGetResponses]
+
+export type EditorSaveData = {
+  body?: never
+  path: {
+    editorID: string
+  }
+  query: {
+    directory?: string
+    sessionID: string
+  }
+  url: "/editor/{editorID}/save"
+}
+
+export type EditorSaveErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type EditorSaveError = EditorSaveErrors[keyof EditorSaveErrors]
+
+export type EditorSaveResponses = {
+  /**
+   * Saved editor session
+   */
+  200: EditorSession
+}
+
+export type EditorSaveResponse = EditorSaveResponses[keyof EditorSaveResponses]
+
+export type EditorDismissDiffData = {
+  body?: never
+  path: {
+    editorID: string
+  }
+  query: {
+    directory?: string
+    sessionID: string
+  }
+  url: "/editor/{editorID}/diff/dismiss"
+}
+
+export type EditorDismissDiffErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type EditorDismissDiffError = EditorDismissDiffErrors[keyof EditorDismissDiffErrors]
+
+export type EditorDismissDiffResponses = {
+  /**
+   * Updated editor session
+   */
+  200: EditorSession
+}
+
+export type EditorDismissDiffResponse = EditorDismissDiffResponses[keyof EditorDismissDiffResponses]
+
+export type EditorConnectData = {
+  body?: never
+  path: {
+    editorID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/editor/{editorID}/connect"
+}
+
+export type EditorConnectErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type EditorConnectError = EditorConnectErrors[keyof EditorConnectErrors]
+
+export type EditorConnectResponses = {
+  /**
+   * Connected editor
+   */
+  200: boolean
+}
+
+export type EditorConnectResponse = EditorConnectResponses[keyof EditorConnectResponses]
 
 export type ConfigGetData = {
   body?: never

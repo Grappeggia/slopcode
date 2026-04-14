@@ -144,6 +144,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       fetch: props.fetch,
       directory: props.directory,
       headers: props.headers,
+      viewID: props.viewID,
       get workspaceID() {
         return route.data.workspaceID
       },

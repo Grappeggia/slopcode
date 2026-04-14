@@ -3,7 +3,7 @@ import { createMemo, createResource, createSignal, For, Show, Switch, Match } fr
 import { createStore } from "solid-js/store"
 import { selectedForeground, useTheme } from "../../context/theme"
 import { Locale } from "@/util/locale"
-import path from "path"
+import * as path from "path"
 import type { AssistantMessage } from "@slopcode-ai/sdk/v2"
 import { Installation } from "@/installation"
 import { useKeybind } from "../../context/keybind"
@@ -47,7 +47,17 @@ function ModeTab(props: { active: boolean; label: string; onSelect(): void }) {
   )
 }
 
-function FileRow(props: { icon: string; label: string; muted?: boolean; onSelect(): void }) {
+function FileRow(props: {
+  icon: string
+  label: string
+  muted?: boolean
+  underline?: boolean
+  onSelect(): void
+  action?: {
+    label: string
+    onSelect(): void
+  }
+}) {
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
   const fg = createMemo(() => {
@@ -64,15 +74,34 @@ function FileRow(props: { icon: string; label: string; muted?: boolean; onSelect
       onMouseOver={() => setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseUp={props.onSelect}
+      flexDirection="row"
+      justifyContent="space-between"
+      gap={1}
     >
       <text fg={fg()} wrapMode="none">
-        <span style={{ fg: fg() }}>{props.icon}</span> {Locale.truncateMiddle(props.label, 31)}
+        <span style={{ fg: fg() }}>{props.icon}</span>{" "}
+        <span style={props.underline ? { underline: true } : {}}>{Locale.truncateMiddle(props.label, 27)}</span>
       </text>
+      <Show when={props.action}>
+        {(action) => (
+          <text
+            fg={theme.textMuted}
+            wrapMode="none"
+            onMouseUp={(evt) => {
+              evt.preventDefault()
+              evt.stopPropagation()
+              action().onSelect()
+            }}
+          >
+            {action().label}
+          </text>
+        )}
+      </Show>
     </box>
   )
 }
 
-function FilesSidebar() {
+function FilesSidebar(props: { openFile(file: string): void; modified: Set<string> }) {
   const sdk = useSDK()
   const keybind = useKeybind()
   const promptRef = usePromptRef()
@@ -133,6 +162,15 @@ function FilesSidebar() {
               icon={item.type === "directory" ? "📂" : "·"}
               label={item.type === "directory" ? `${item.path}/` : item.path}
               muted={item.ignored}
+              underline={item.type === "file" && props.modified.has(item.path)}
+              action={
+                item.type === "file"
+                  ? {
+                      label: "📂",
+                      onSelect: () => props.openFile(item.path),
+                    }
+                  : undefined
+              }
               onSelect={() => {
                 if (item.type === "directory") {
                   setDir(item.path)
@@ -164,6 +202,9 @@ export function Sidebar(props: {
   sessionID: string
   overlay?: boolean
   mode: SidebarMode
+  modified: Set<string>
+  activeFile?: string
+  openFile(file: string): void
   setMode(mode: SidebarMode): void
 }) {
   const sync = useSync()
@@ -237,7 +278,7 @@ export function Sidebar(props: {
         </box>
         <Switch>
           <Match when={props.mode === "files"}>
-            <FilesSidebar />
+            <FilesSidebar openFile={props.openFile} modified={props.modified} />
           </Match>
           <Match when={true}>
             <scrollbox
@@ -408,10 +449,13 @@ export function Sidebar(props: {
                         {(item) => {
                           return (
                             <box flexDirection="row" gap={1} justifyContent="space-between">
-                              <text fg={theme.textMuted} wrapMode="none">
-                                {item.file}
+                              <text fg={props.activeFile === item.file ? theme.text : theme.textMuted} wrapMode="none">
+                                <span style={props.modified.has(item.file) ? { underline: true } : {}}>{item.file}</span>
                               </text>
                               <box flexDirection="row" gap={1} flexShrink={0}>
+                                <text fg={theme.textMuted} onMouseUp={() => props.openFile(item.file)}>
+                                  📂
+                                </text>
                                 <Show when={item.additions}>
                                   <text fg={theme.diffAdded}>+{item.additions}</text>
                                 </Show>
