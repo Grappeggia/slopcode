@@ -3,8 +3,9 @@ import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
 import { useParams } from "@solidjs/router"
 import { Tabs } from "@slopcode-ai/ui/tabs"
+import { Button } from "@slopcode-ai/ui/button"
 import { IconButton } from "@slopcode-ai/ui/icon-button"
-import { TooltipKeybind } from "@slopcode-ai/ui/tooltip"
+import { Tooltip, TooltipKeybind } from "@slopcode-ai/ui/tooltip"
 import { ResizeHandle } from "@slopcode-ai/ui/resize-handle"
 import { Mark } from "@slopcode-ai/ui/logo"
 import { DragDropProvider, DragDropSensors, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
@@ -142,6 +143,35 @@ export function SessionSidePanel(props: {
     if (fileTreeTab() !== "changes") return
     layout.fileTree.setTab("all")
   }
+
+  const openExplorer = () => {
+    if (!layout.fileTree.opened()) layout.fileTree.open()
+    if (fileTreeTab() === "all") return
+    layout.fileTree.setTab("all")
+  }
+
+  const explorerActive = createMemo(() => layout.fileTree.opened() && fileTreeTab() === "all")
+  const explorerLabel = () => language.t("command.fileTree.openAll")
+  const ExplorerButton = (props: { action: string }) => (
+    <Tooltip value={explorerLabel()} class="flex items-center" placement="bottom">
+      <Button
+        size="small"
+        variant="ghost"
+        data-action={props.action}
+        data-active={explorerActive() ? "true" : undefined}
+        onClick={openExplorer}
+        aria-label={explorerLabel()}
+        class={`w-6 !px-0 !rounded-md text-base leading-none ${explorerActive() ? "text-text-strong" : "text-text-weak hover:text-text-base"}`}
+      >
+        <span
+          aria-hidden="true"
+          style={{ "font-family": '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif' }}
+        >
+          📂
+        </span>
+      </Button>
+    </Tooltip>
+  )
 
   const [store, setStore] = createStore({
     activeDraggable: undefined as string | undefined,
@@ -313,6 +343,7 @@ export function SessionSidePanel(props: {
                           aria-label={language.t("command.file.open")}
                         />
                       </TooltipKeybind>
+                      <ExplorerButton action="session-tabs-open-all" />
                     </div>
                   </StickyAddButton>
                 </div>
@@ -383,6 +414,9 @@ export function SessionSidePanel(props: {
                   <Tabs.Trigger value="all" class="flex-1" classes={{ button: "w-full" }}>
                     {language.t("session.files.all")}
                   </Tabs.Trigger>
+                  <div class="ml-auto shrink-0 flex items-center">
+                    <ExplorerButton action="file-tree-header-open-all" />
+                  </div>
                 </Tabs.List>
                 <Tabs.Content
                   value="changes"
