@@ -809,6 +809,7 @@ export namespace Config {
       session_new: z.string().optional().default("<leader>n").describe("Create a new session"),
       session_list: z.string().optional().default("<leader>l").describe("List all sessions"),
       session_timeline: z.string().optional().default("<leader>g").describe("Show session timeline"),
+      session_files: z.string().optional().default("<leader>f").describe("Open file explorer"),
       session_tabs_previous: z
         .string()
         .optional()

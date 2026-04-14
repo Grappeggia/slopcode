@@ -1,5 +1,4 @@
 import type { BoxRenderable, TextareaRenderable, KeyEvent, ScrollBoxRenderable } from "@opentui/core"
-import { pathToFileURL } from "bun"
 import fuzzysort from "fuzzysort"
 import { firstBy } from "remeda"
 import { createMemo, createResource, createEffect, onMount, onCleanup, Index, Show, createSignal, For } from "solid-js"
@@ -12,6 +11,7 @@ import { useCommandDialog } from "@tui/component/dialog-command"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Locale } from "@/util/locale"
 import type { PromptInfo } from "./history"
+import { createPromptFilePart } from "./file-part"
 import { useFrecency } from "./frecency"
 import { autocompleteLineHeights, autocompleteLineOffsets, autocompleteLines } from "./autocomplete-layout"
 
@@ -248,41 +248,20 @@ export function Autocomplete(props: {
         const width = props.anchor().width - 4
         options.push(
           ...sortedFiles.map((item): AutocompleteOption => {
-            const baseDir = (sync.data.path.directory || process.cwd()).replace(/\/+$/, "")
-            const fullPath = `${baseDir}/${item}`
-            const urlObj = pathToFileURL(fullPath)
-            let filename = item
-            if (lineRange && !item.endsWith("/")) {
-              filename = `${item}#${lineRange.startLine}${lineRange.endLine ? `-${lineRange.endLine}` : ""}`
-              urlObj.searchParams.set("start", String(lineRange.startLine))
-              if (lineRange.endLine !== undefined) {
-                urlObj.searchParams.set("end", String(lineRange.endLine))
-              }
-            }
-            const url = urlObj.href
-
             const isDir = item.endsWith("/")
+            const part = createPromptFilePart({
+              directory: (sync.data.path.directory || process.cwd()).replace(/\/+$/, ""),
+              path: item,
+              lineRange: isDir ? undefined : lineRange,
+            })
+
             return {
-              display: Locale.truncateMiddle(filename, width),
-              value: filename,
+              display: Locale.truncateMiddle(part.filename, width),
+              value: part.filename,
               isDirectory: isDir,
               path: item,
               onSelect: () => {
-                insertPart(filename, {
-                  type: "file",
-                  mime: "text/plain",
-                  filename,
-                  url,
-                  source: {
-                    type: "file",
-                    text: {
-                      start: 0,
-                      end: 0,
-                      value: "",
-                    },
-                    path: item,
-                  },
-                })
+                insertPart(part.filename, part)
               },
             }
           }),

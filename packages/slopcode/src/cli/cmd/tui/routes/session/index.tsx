@@ -67,7 +67,7 @@ import { DialogConfirm } from "@tui/ui/dialog-confirm"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
-import { Sidebar } from "./sidebar"
+import { Sidebar, type SidebarMode } from "./sidebar"
 import { Flag } from "@/flag/flag"
 import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import { Clipboard } from "../../util/clipboard"
@@ -285,6 +285,7 @@ export function Session() {
   const dimensions = useTerminalDimensions()
   const [sidebar, setSidebar] = kv.signal<"auto" | "hide">("sidebar", "auto")
   const [sidebarOpen, setSidebarOpen] = createSignal(false)
+  const [sidebarMode, setSidebarMode] = createSignal<SidebarMode>("summary")
   const [conceal, setConceal] = createSignal(true)
   const [showThinking, setShowThinking] = kv.signal("thinking_visibility", true)
   const [timestamps, setTimestamps] = kv.signal<"hide" | "show">("timestamps", "hide")
@@ -318,6 +319,14 @@ export function Session() {
     if (sidebar() === "auto" && wide()) return true
     return false
   })
+  const showFiles = () => {
+    if (session()?.parentID) return
+    batch(() => {
+      setSidebarMode("files")
+      setSidebarOpen(true)
+    })
+  }
+
   const showTimestamps = createMemo(() => timestamps() === "show")
   const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
 
@@ -1261,9 +1270,31 @@ export function Session() {
       onSelect: (dialog) => {
         batch(() => {
           const isVisible = sidebarVisible()
-          setSidebar(() => (isVisible ? "hide" : "auto"))
-          setSidebarOpen(!isVisible)
+          if (isVisible) {
+            setSidebar(() => "hide")
+            setSidebarOpen(false)
+            dialog.clear()
+            return
+          }
+          setSidebarMode("summary")
+          setSidebar(() => "auto")
+          setSidebarOpen(true)
         })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Open file explorer",
+      value: "session.files.open",
+      keybind: "session_files",
+      category: "Session",
+      enabled: !session()?.parentID,
+      slash: {
+        name: "files",
+        aliases: ["explorer"],
+      },
+      onSelect: (dialog) => {
+        showFiles()
         dialog.clear()
       },
     },
@@ -1767,7 +1798,16 @@ export function Session() {
     >
       <box flexDirection="row">
         <box flexGrow={1}>
-          <SessionStrip />
+          <SessionStrip
+            action={
+              session()?.parentID
+                ? undefined
+                : {
+                    active: sidebarVisible() && sidebarMode() === "files",
+                    onSelect: showFiles,
+                  }
+            }
+          />
           <box flexGrow={1} paddingTop={1} paddingLeft={2} paddingRight={2} gap={1}>
             <Show when={session()}>
               <Show when={showHeader() && (!sidebarVisible() || !wide())}>
@@ -1926,7 +1966,7 @@ export function Session() {
         <Show when={sidebarVisible()}>
           <Switch>
             <Match when={wide()}>
-              <Sidebar sessionID={route.sessionID} />
+              <Sidebar sessionID={route.sessionID} mode={sidebarMode()} setMode={(mode) => setSidebarMode(mode)} />
             </Match>
             <Match when={!wide()}>
               <box
@@ -1938,7 +1978,7 @@ export function Session() {
                 alignItems="flex-end"
                 backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
               >
-                <Sidebar sessionID={route.sessionID} />
+                <Sidebar sessionID={route.sessionID} mode={sidebarMode()} setMode={(mode) => setSidebarMode(mode)} />
               </box>
             </Match>
           </Switch>

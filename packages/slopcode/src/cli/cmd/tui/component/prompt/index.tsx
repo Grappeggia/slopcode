@@ -28,6 +28,7 @@ import { Identifier } from "@/id/id"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
+import { createPromptFilePart, promptFileVirtualText } from "./file-part"
 import { ghostCursor, ghostVisible, ghostRemainder } from "./ghost.ts"
 import { usePromptStash } from "./stash"
 import { DialogStash } from "../dialog-stash"
@@ -74,6 +75,7 @@ export type PromptRef = {
   reset(): void
   blur(): void
   focus(): void
+  attachFile(file: string): boolean
   submit(): void
 }
 
@@ -536,6 +538,46 @@ export function Prompt(props: PromptProps) {
     ]
   })
 
+  function addFile(file: string) {
+    if (!input) return false
+
+    const part = createPromptFilePart({
+      directory: (sync.data.path.directory || process.cwd()).replace(/\/+$/, ""),
+      path: file,
+    })
+    const duplicate = store.prompt.parts.some((item) => item.type === "file" && item.url === part.url)
+    if (duplicate) return false
+
+    const prefix = store.prompt.input && !/\s$/.test(store.prompt.input) ? " " : ""
+    const text = promptFileVirtualText(part.filename)
+    const start = Bun.stringWidth(store.prompt.input + prefix)
+    const end = start + Bun.stringWidth(text)
+
+    input.cursorOffset = input.plainText.length
+    input.insertText(prefix + text + " ")
+
+    const extmarkId = input.extmarks.create({
+      start,
+      end,
+      virtual: true,
+      styleId: fileStyleId,
+      typeId: promptPartTypeId,
+    })
+    const partIndex = store.prompt.parts.length
+    part.source.text.start = start
+    part.source.text.end = end
+    part.source.text.value = text
+
+    setStore("prompt", "parts", (parts) => [...parts, part])
+    setStore("extmarkToPartIndex", (map: Map<number, number>) => {
+      const next = new Map(map)
+      next.set(extmarkId, partIndex)
+      return next
+    })
+    input.focus()
+    return true
+  }
+
   const ref: PromptRef = {
     get focused() {
       return input.focused
@@ -551,6 +593,9 @@ export function Prompt(props: PromptProps) {
     },
     blur() {
       input.blur()
+    },
+    attachFile(file) {
+      return addFile(file)
     },
     set(prompt) {
       loadPrompt(prompt)

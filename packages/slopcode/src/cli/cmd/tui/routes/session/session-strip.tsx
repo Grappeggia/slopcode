@@ -15,6 +15,14 @@ import {
 } from "./session-strip-layout"
 
 const INSET = 0
+const ACTION = "__action__"
+const EXPLORER = "📂"
+
+type SessionStripAction = {
+  label: string
+  active: boolean
+  onSelect(): void
+}
 
 type SessionStripViewProps = {
   tabs: SessionStripTab[]
@@ -33,6 +41,11 @@ type SessionStripViewProps = {
   }
   open(id: string): void
   close(id: string): void
+  action?: SessionStripAction
+}
+
+type SessionStripProps = {
+  action?: Omit<SessionStripAction, "label">
 }
 
 export function SessionStripView(props: SessionStripViewProps) {
@@ -50,6 +63,13 @@ export function SessionStripView(props: SessionStripViewProps) {
   const closeVisible = (id: string) => hover() === id
   const closeFg = (id: string) => (closeVisible(id) ? props.colors.text : props.colors.muted)
   const controlFg = (id: string) => (hover() === id ? props.colors.text : props.colors.muted)
+  const actionLead = () => !!(props.prev || props.tabs.length > 0 || props.hidden > 0 || props.next)
+  const actionFg = () => {
+    if (!props.action) return props.colors.muted
+    if (props.action.active) return props.colors.accent
+    if (hover() === ACTION) return props.colors.text
+    return props.colors.muted
+  }
 
   return (
     <box flexShrink={0} flexDirection="column" backgroundColor={props.colors.panel}>
@@ -143,6 +163,23 @@ export function SessionStripView(props: SessionStripViewProps) {
             </>
           )}
         </Show>
+        <Show when={props.action}>
+          {(action) => (
+            <>
+              <Show when={actionLead()}>{sep(owners(props.next ? next : props.tabs.at(-1)?.id, ACTION))}</Show>
+              <box
+                backgroundColor={bg(ACTION)}
+                onMouseOver={() => setHover(ACTION)}
+                onMouseOut={() => setHover(undefined)}
+                onMouseUp={action().onSelect}
+              >
+                <text fg={actionFg()} attributes={action().active ? TextAttributes.BOLD : undefined} wrapMode="none">
+                  {action().label}
+                </text>
+              </box>
+            </>
+          )}
+        </Show>
       </box>
       <box height={1} flexDirection="row" paddingLeft={INSET} paddingRight={INSET}>
         <For each={props.underlineSegments}>
@@ -154,12 +191,21 @@ export function SessionStripView(props: SessionStripViewProps) {
             </box>
           )}
         </For>
+        <Show when={props.action}>
+          {(action) => (
+            <box flexShrink={0} backgroundColor={fill([ACTION])}>
+              <text fg={props.colors.edge} wrapMode="none">
+                {`${actionLead() ? "┴" : ""}${"─".repeat(Bun.stringWidth(action().label))}`}
+              </text>
+            </box>
+          )}
+        </Show>
       </box>
     </box>
   )
 }
 
-export function SessionStrip() {
+export function SessionStrip(props: SessionStripProps = {}) {
   const tabs = useSessionTabs()
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -170,10 +216,24 @@ export function SessionStrip() {
       title: tab.title,
     })),
   )
+  const action = createMemo(() =>
+    props.action
+      ? {
+          label: EXPLORER,
+          active: props.action.active,
+          onSelect: props.action.onSelect,
+        }
+      : undefined,
+  )
+  const width = createMemo(() => {
+    const total = sessionStripWidth(dimensions().width, INSET)
+    if (!action()) return total
+    return Math.max(0, total - Bun.stringWidth(SessionStripText.SEP + action()!.label))
+  })
   const layout = createMemo(() =>
     layoutSessionStrip(items(), {
       active: tabs.active(),
-      width: sessionStripWidth(dimensions().width, INSET),
+      width: width(),
     }),
   )
   const underlineSegments = createMemo(() =>
@@ -204,6 +264,7 @@ export function SessionStrip() {
         colors={colors()}
         open={(id) => tabs.open(id)}
         close={(id) => tabs.close(id)}
+        action={action()}
       />
     </Show>
   )
