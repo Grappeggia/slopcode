@@ -12,6 +12,8 @@ import {
   openDraftTab,
   promoteDraftTab,
   pruneSessionTabs,
+  sessionStripVisible,
+  sessionTabsSwitchable,
   sessionWaiting,
   shouldArchiveSessionTab,
   tabStatus,
@@ -117,16 +119,21 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
     const hasDraft = createMemo(() => hasDraftTab(state()))
     const active = createMemo(() => state().active)
     const draftActive = createMemo(() => route.data.type === "home" && active() === DRAFT_TAB_ID)
-    const visible = createMemo(() => {
-      if (route.data.type === "home") return hasDraft()
-      return tabs().length > 1
-    })
+    const visible = createMemo(() =>
+      sessionStripVisible({
+        home: route.data.type === "home",
+        draft: hasDraft(),
+        count: tabs().length,
+      }),
+    )
+    const switchable = createMemo(() => sessionTabsSwitchable(ids()))
 
     return {
       tabs,
       ids,
       active,
       visible,
+      switchable,
       hasDraft,
       draftActive,
       open(id: string) {

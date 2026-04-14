@@ -6,6 +6,8 @@ import {
   openDraftTab,
   promoteDraftTab,
   pruneSessionTabs,
+  sessionStripVisible,
+  sessionTabsSwitchable,
   sessionWaiting,
   shouldArchiveSessionTab,
   tabStatus,
@@ -178,6 +180,21 @@ describe("session tabs", () => {
       active: DRAFT_TAB_ID,
     })
     expect(reused).toEqual(next)
+  })
+
+  test("keeps the strip visible for a single active session route", () => {
+    expect(sessionStripVisible({ home: false, draft: false, count: 1 })).toBe(true)
+    expect(sessionStripVisible({ home: false, draft: false, count: 0 })).toBe(false)
+  })
+
+  test("only shows the home strip when a draft tab exists", () => {
+    expect(sessionStripVisible({ home: true, draft: true, count: 1 })).toBe(true)
+    expect(sessionStripVisible({ home: true, draft: false, count: 0 })).toBe(false)
+  })
+
+  test("only allows tab switching when multiple tabs exist", () => {
+    expect(sessionTabsSwitchable(["ses_1"])).toBe(false)
+    expect(sessionTabsSwitchable(["ses_1", "ses_2"])).toBe(true)
   })
 
   test("promotes the draft tab into a real session in place", () => {

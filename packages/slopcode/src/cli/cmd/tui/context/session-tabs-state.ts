@@ -88,6 +88,15 @@ export function adjacentTab(ids: string[], active: string | undefined, offset: 1
   return ids[(index + offset + ids.length) % ids.length]
 }
 
+export function sessionStripVisible(input: { home: boolean; draft: boolean; count: number }) {
+  if (input.home) return input.draft
+  return input.count > 0
+}
+
+export function sessionTabsSwitchable(ids: string[]) {
+  return ids.length > 1
+}
+
 export function hasDraftTab(state: SessionTabsState) {
   return state.tabs.some(isDraft)
 }

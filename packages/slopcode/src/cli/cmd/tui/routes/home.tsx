@@ -63,7 +63,7 @@ export function Home() {
 
   const keybind = useKeybind()
   const openTab = (offset: 1 | -1) => {
-    if (!tabs.visible()) return false
+    if (!tabs.switchable()) return false
     const next = adjacentTab(tabs.ids(), tabs.active(), offset)
     if (!next) return false
     tabs.open(next)

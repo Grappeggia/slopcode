@@ -404,7 +404,7 @@ export function Session() {
   let prompt: PromptRef
   const keybind = useKeybind()
   const openTab = (offset: 1 | -1) => {
-    if (!tabs.visible()) return false
+    if (!tabs.switchable()) return false
     const next = adjacentTab(tabs.ids(), tabs.active(), offset)
     if (!next) return false
     tabs.open(next)
@@ -1647,7 +1647,7 @@ export function Session() {
       value: "session.tabs.previous",
       keybind: "session_tabs_previous",
       category: "Session",
-      enabled: tabs.visible(),
+      enabled: tabs.switchable(),
       hidden: true,
       onSelect: (dialog) => {
         openTab(-1)
@@ -1659,7 +1659,7 @@ export function Session() {
       value: "session.tabs.next",
       keybind: "session_tabs_next",
       category: "Session",
-      enabled: tabs.visible(),
+      enabled: tabs.switchable(),
       hidden: true,
       onSelect: (dialog) => {
         openTab(1)
