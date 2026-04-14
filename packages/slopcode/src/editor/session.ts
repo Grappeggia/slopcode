@@ -182,7 +182,11 @@ export namespace EditorSession {
     Bus.publish(Event.Updated, { info: session.info })
   }
 
-  const exists = async (file: string) => fs.access(file).then(() => true).catch(() => false)
+  const exists = async (file: string) =>
+    fs
+      .access(file)
+      .then(() => true)
+      .catch(() => false)
 
   const read = async (file: string) => {
     const full = path.join(Instance.directory, file)

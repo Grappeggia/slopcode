@@ -124,7 +124,9 @@ export async function render(input: Input) {
       ? plain(visible)
       : await codeToTokens(visible.join("\n"), { lang, theme: "github-dark" })
           .then((result) =>
-            result.tokens.map((line) => line.map((token) => ({ ...style(token), text: token.content || " " }) satisfies Segment)),
+            result.tokens.map((line) =>
+              line.map((token) => ({ ...style(token), text: token.content || " " }) satisfies Segment),
+            ),
           )
           .catch(() => plain(visible))
   const marks = new Map(input.diagnostics.map((item) => [item.line - 1, item.severity]))
@@ -145,7 +147,9 @@ export async function render(input: Input) {
         fg: mark === "error" ? palette.gutter_error : mark === "warning" ? palette.gutter_warning : palette.gutter,
       },
       { text: " ", fg: palette.gutter },
-      ...(bodyRow.length > 0 ? bodyRow : [{ text: line === input.row ? " " : "", bg: line === input.row ? palette.cursor_bg : undefined }]),
+      ...(bodyRow.length > 0
+        ? bodyRow
+        : [{ text: line === input.row ? " " : "", bg: line === input.row ? palette.cursor_bg : undefined }]),
     ] satisfies Segment[]
   })
 }

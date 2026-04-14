@@ -943,7 +943,7 @@
           }
         ],
         "summary": "Open embedded editor",
-        "description": "Start a Neovim-backed embedded editor session for a file.",
+        "description": "Start a built-in embedded editor session for a file.",
         "responses": {
           "200": {
             "description": "Editor session",
