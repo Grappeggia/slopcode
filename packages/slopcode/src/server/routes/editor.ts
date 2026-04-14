@@ -13,7 +13,7 @@ export const EditorRoutes = lazy(() =>
       "/",
       describeRoute({
         summary: "Open embedded editor",
-        description: "Start a Neovim-backed embedded editor session for a file.",
+        description: "Start a built-in embedded editor session for a file.",
         operationId: "editor.open",
         responses: {
           200: {

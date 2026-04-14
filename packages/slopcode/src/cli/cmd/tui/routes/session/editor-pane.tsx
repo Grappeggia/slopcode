@@ -5,30 +5,7 @@ import { useTheme } from "@tui/context/theme"
 import { useSDK } from "@tui/context/sdk"
 import { useKeybind } from "@tui/context/keybind"
 import { useDialog } from "@tui/ui/dialog"
-
-type Style = {
-  fg?: string
-  bg?: string
-  bold?: boolean
-  italic?: boolean
-  underline?: boolean
-  strikethrough?: boolean
-}
-
-type Segment = Style & {
-  text: string
-}
-
-type Snapshot = {
-  width: number
-  height: number
-  rows: Segment[][]
-  mode: string
-  dirty: boolean
-  diff: boolean
-  file: string
-  status: string
-}
+import type { Snapshot } from "@/editor/types"
 
 export type EditorInfo = {
   id: string
@@ -284,9 +261,12 @@ export function EditorPane(props: {
         <box flexDirection="row" justifyContent="space-between" alignItems="center">
           <text fg={theme.text} wrapMode="none">
             <b>{props.info()?.file ?? snapshot()?.file ?? "Editor"}</b>
-            <span style={{ fg: theme.textMuted }}> {snapshot()?.mode ?? props.info()?.mode ?? "NORMAL"}</span>
+            <span style={{ fg: theme.textMuted }}> {snapshot()?.mode ?? props.info()?.mode ?? "EDIT"}</span>
             <Show when={props.info()?.dirty || snapshot()?.dirty}>
               <span style={{ fg: theme.warning }}> modified</span>
+            </Show>
+            <Show when={(snapshot()?.diagnostics?.length ?? 0) > 0}>
+              <span style={{ fg: theme.error }}> {(snapshot()?.diagnostics?.length ?? 0).toString()} issues</span>
             </Show>
           </text>
           <box flexDirection="row" gap={1}>
@@ -320,8 +300,19 @@ export function EditorPane(props: {
           </For>
         </box>
       </box>
+      <Show when={(snapshot()?.diagnostics?.length ?? 0) > 0}>
+        <box flexDirection="column" gap={0}>
+          <For each={snapshot()?.diagnostics?.slice(0, 3) ?? []}>
+            {(item) => (
+              <text fg={item.severity === "error" ? theme.error : theme.warning} wrapMode="none">
+                {`L${item.line}:C${item.column} ${item.message}`}
+              </text>
+            )}
+          </For>
+        </box>
+      </Show>
       <text fg={theme.textMuted}>
-        Embedded Neovim. Use normal editor keys for editing. Toolbar shortcuts: ^S save, ^D dismiss diff, ^Q back.
+        Embedded SlopCode editor with built-in syntax colors and local linting. Toolbar shortcuts: ^S save, ^D dismiss diff, ^Q back.
       </text>
     </box>
   )

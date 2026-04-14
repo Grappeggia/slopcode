@@ -729,7 +729,7 @@ export class Editor extends HeyApiClient {
   /**
    * Open embedded editor
    *
-   * Start a Neovim-backed embedded editor session for a file.
+   * Start a built-in embedded editor session for a file.
    */
   public open<ThrowOnError extends boolean = false>(
     parameters?: {
