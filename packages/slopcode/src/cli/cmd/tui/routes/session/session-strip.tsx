@@ -13,6 +13,7 @@ import {
   type SessionStripTab,
   type SessionStripUnderlineSegment,
 } from "./session-strip-layout"
+import { sessionStripActionNeedsSeparator, sessionStripShouldShowHidden } from "./session-strip-action"
 
 const INSET = 0
 const ACTION = "__action__"
@@ -63,7 +64,13 @@ export function SessionStripView(props: SessionStripViewProps) {
   const closeVisible = (id: string) => hover() === id
   const closeFg = (id: string) => (closeVisible(id) ? props.colors.text : props.colors.muted)
   const controlFg = (id: string) => (hover() === id ? props.colors.text : props.colors.muted)
-  const actionLead = () => !!(props.prev || props.tabs.length > 0 || props.hidden > 0 || props.next)
+  const showHidden = () =>
+    sessionStripShouldShowHidden({ tabs: props.tabs.length, hidden: props.hidden, action: !!props.action })
+  const actionSep = () =>
+    sessionStripActionNeedsSeparator({
+      hidden: showHidden() ? props.hidden : 0,
+      next: props.next,
+    })
   const actionFg = () => {
     if (!props.action) return props.colors.muted
     if (props.action.active) return props.colors.accent
@@ -143,7 +150,7 @@ export function SessionStripView(props: SessionStripViewProps) {
             )
           }}
         </For>
-        <Show when={props.hidden > 0}>
+        <Show when={showHidden()}>
           <text fg={props.colors.muted}>{`+${props.hidden}`}</text>
         </Show>
         <Show when={props.next}>
@@ -166,7 +173,7 @@ export function SessionStripView(props: SessionStripViewProps) {
         <Show when={props.action}>
           {(action) => (
             <>
-              <Show when={actionLead()}>{sep(owners(props.next ? next : props.tabs.at(-1)?.id, ACTION))}</Show>
+              <Show when={actionSep()}>{sep(owners(props.next ? next : undefined, ACTION))}</Show>
               <box
                 backgroundColor={bg(ACTION)}
                 onMouseOver={() => setHover(ACTION)}
@@ -195,7 +202,7 @@ export function SessionStripView(props: SessionStripViewProps) {
           {(action) => (
             <box flexShrink={0} backgroundColor={fill([ACTION])}>
               <text fg={props.colors.edge} wrapMode="none">
-                {`${actionLead() ? "┴" : ""}${"─".repeat(Bun.stringWidth(action().label))}`}
+                {`${actionSep() ? "┴" : ""}${"─".repeat(Bun.stringWidth(action().label))}`}
               </text>
             </box>
           )}
