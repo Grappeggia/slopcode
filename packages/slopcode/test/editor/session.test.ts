@@ -13,6 +13,45 @@ async function eventually(check: () => boolean | Promise<boolean>, timeout = 150
 }
 
 describe("editor session", () => {
+  test("processes websocket input outside the instance context", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "outside.ts"), "const a = 1\n")
+      },
+    })
+    const { EditorSession } = await import("../../src/editor/session")
+    const handle = await Instance.provide({
+      directory: tmp.path,
+      viewID: "view-a",
+      fn: async () => {
+        const info = await EditorSession.open({
+          sessionID: "ses_test0000000000000000002",
+          file: "outside.ts",
+          size: { rows: 8, cols: 40 },
+        })
+        const ws = {
+          readyState: 1,
+          data: { id: "c" },
+          send() {},
+          close() {},
+        }
+        return {
+          info,
+          handle: EditorSession.connect(info.id, ws as never, { sessionID: info.sessionID }),
+        }
+      },
+    })
+    handle.handle?.onMessage(JSON.stringify({ type: "input", keys: ";" }))
+    await eventually(async () =>
+      Instance.provide({
+        directory: tmp.path,
+        viewID: "view-a",
+        fn: async () => EditorSession.get(handle.info.id, { sessionID: handle.info.sessionID })?.dirty === true,
+      }),
+    )
+  })
+
   test("opens, edits, saves, and closes", async () => {
     await using tmp = await tmpdir({
       git: true,

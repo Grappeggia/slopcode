@@ -23,6 +23,8 @@ export namespace EditorSession {
 
   type Active = {
     info: z.infer<typeof Info>
+    directory: string
+    view_id?: string
     lines: string[]
     row: number
     col: number
@@ -176,10 +178,18 @@ export namespace EditorSession {
     })
   }
 
+  const provide = async <T>(session: Active, fn: () => Promise<T> | T) => {
+    return Instance.provide({
+      directory: session.directory,
+      viewID: session.view_id,
+      fn,
+    })
+  }
+
   const update = async (session: Active, full = false) => {
     if (full) inspect(session)
     await send(session)
-    Bus.publish(Event.Updated, { info: session.info })
+    await provide(session, () => Bus.publish(Event.Updated, { info: session.info }))
   }
 
   const exists = async (file: string) =>
@@ -297,6 +307,8 @@ export namespace EditorSession {
     }
     const session: Active = {
       info,
+      directory: Instance.directory,
+      view_id: Instance.viewID,
       lines: split(await read(input.file)),
       row: 0,
       col: 0,
@@ -339,7 +351,7 @@ export namespace EditorSession {
     session.info.dirty = false
     inspect(session)
     await update(session)
-    await Bus.publish(FileWatcher.Event.Updated, { file: full, event: "change" })
+    await provide(session, () => Bus.publish(FileWatcher.Event.Updated, { file: full, event: "change" }))
     return session.info
   }
 
@@ -357,7 +369,7 @@ export namespace EditorSession {
     session.info.status = "exited"
     await send(session)
     state().delete(id)
-    Bus.publish(Event.Exited, { id, sessionID: session.info.sessionID })
+    await provide(session, () => Bus.publish(Event.Exited, { id, sessionID: session.info.sessionID }))
     return true
   }
 
