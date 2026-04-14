@@ -46,7 +46,10 @@ export namespace NvimRPC {
         })
         buffer = Buffer.alloc(0)
       } catch (error) {
-        const last = typeof (error as { lastPosition?: unknown }).lastPosition === "number" ? Number((error as { lastPosition?: number }).lastPosition) : 0
+        const last =
+          typeof (error as { lastPosition?: unknown }).lastPosition === "number"
+            ? Number((error as { lastPosition?: number }).lastPosition)
+            : 0
         if (last > 0) buffer = buffer.slice(last)
         if ((error as { incomplete?: boolean }).incomplete) return
         close()

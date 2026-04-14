@@ -58,7 +58,7 @@ export namespace EditorSession {
 
   const status = async (rpc: Awaited<ReturnType<typeof NvimRPC.connect>>) => {
     return rpc.request("nvim_exec_lua", [
-      'return { dirty = vim.bo.modified, mode = vim.api.nvim_get_mode().mode, file = vim.api.nvim_buf_get_name(0) }',
+      "return { dirty = vim.bo.modified, mode = vim.api.nvim_get_mode().mode, file = vim.api.nvim_buf_get_name(0) }",
       [],
     ]) as Promise<{ dirty?: boolean; mode?: string; file?: string }>
   }
@@ -113,7 +113,9 @@ export namespace EditorSession {
     await session.rpc.request("nvim_command", ["leftabove vnew"])
     const buf = Number(await session.rpc.request("nvim_eval", ['bufnr("%")']))
     await session.rpc.request("nvim_buf_set_lines", [buf, 0, -1, true, lines(session.before)])
-    await session.rpc.request("nvim_command", ["setlocal buftype=nofile bufhidden=wipe noswapfile nowrap readonly nomodifiable"])
+    await session.rpc.request("nvim_command", [
+      "setlocal buftype=nofile bufhidden=wipe noswapfile nowrap readonly nomodifiable",
+    ])
     await session.rpc.request("nvim_command", ["diffthis"])
     await session.rpc.request("nvim_command", ["wincmd p"])
     await session.rpc.request("nvim_command", ["diffthis"])
@@ -161,9 +163,12 @@ export namespace EditorSession {
     subscribers: Map<unknown, Socket>
   }
 
-  const state = Instance.state(() => new Map<string, Active>(), async (items) => {
-    await Promise.all(Array.from(items.values()).map((item) => close(item.info.id)))
-  })
+  const state = Instance.state(
+    () => new Map<string, Active>(),
+    async (items) => {
+      await Promise.all(Array.from(items.values()).map((item) => close(item.info.id)))
+    },
+  )
 
   const getActive = (id: string, sessionID?: string) => {
     const session = state().get(id)
@@ -226,7 +231,8 @@ export namespace EditorSession {
     } satisfies Active
     state().set(id, session)
     const off = rpc.on("redraw", async (params) => {
-      const next = Array.isArray(params[0]) && Array.isArray((params[0] as unknown[])[0]) ? (params[0] as unknown[]) : params
+      const next =
+        Array.isArray(params[0]) && Array.isArray((params[0] as unknown[])[0]) ? (params[0] as unknown[]) : params
       if (!ui.redraw(next)) return
       await update(session)
     })
@@ -262,7 +268,10 @@ export namespace EditorSession {
     if (!session) return
     await session.rpc.request("nvim_command", ["write"])
     await update(session)
-    await Bus.publish(FileWatcher.Event.Updated, { file: path.join(Instance.directory, session.info.file), event: "change" })
+    await Bus.publish(FileWatcher.Event.Updated, {
+      file: path.join(Instance.directory, session.info.file),
+      event: "change",
+    })
     return session.info
   }
 

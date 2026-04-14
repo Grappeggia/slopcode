@@ -8,7 +8,21 @@ describe("nvim ui", () => {
       ["default_colors_set", [0xffffff, 0x111111, 0, 0, 0]],
       ["hl_attr_define", [1, { foreground: 0xff0000, background: 0x111111, bold: true }, {}, []]],
       ["grid_resize", [1, 4, 2]],
-      ["grid_line", [1, 0, 0, [["a", 1], ["b", 1], ["c", 1], ["d", 1]], false]],
+      [
+        "grid_line",
+        [
+          1,
+          0,
+          0,
+          [
+            ["a", 1],
+            ["b", 1],
+            ["c", 1],
+            ["d", 1],
+          ],
+          false,
+        ],
+      ],
       ["grid_cursor_goto", [1, 0, 1]],
       ["mode_change", ["i", 0]],
       ["flush", []],

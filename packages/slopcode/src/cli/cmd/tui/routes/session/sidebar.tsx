@@ -450,7 +450,9 @@ export function Sidebar(props: {
                           return (
                             <box flexDirection="row" gap={1} justifyContent="space-between">
                               <text fg={props.activeFile === item.file ? theme.text : theme.textMuted} wrapMode="none">
-                                <span style={props.modified.has(item.file) ? { underline: true } : {}}>{item.file}</span>
+                                <span style={props.modified.has(item.file) ? { underline: true } : {}}>
+                                  {item.file}
+                                </span>
                               </text>
                               <box flexDirection="row" gap={1} flexShrink={0}>
                                 <text fg={theme.textMuted} onMouseUp={() => props.openFile(item.file)}>

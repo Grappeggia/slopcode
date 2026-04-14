@@ -273,7 +273,14 @@ export function EditorPane(props: {
 
   return (
     <box flexGrow={1} flexDirection="column" paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
-      <box flexShrink={0} backgroundColor={theme.backgroundPanel} paddingTop={1} paddingBottom={1} paddingLeft={1} paddingRight={1}>
+      <box
+        flexShrink={0}
+        backgroundColor={theme.backgroundPanel}
+        paddingTop={1}
+        paddingBottom={1}
+        paddingLeft={1}
+        paddingRight={1}
+      >
         <box flexDirection="row" justifyContent="space-between" alignItems="center">
           <text fg={theme.text} wrapMode="none">
             <b>{props.info()?.file ?? snapshot()?.file ?? "Editor"}</b>

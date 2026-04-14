@@ -188,8 +188,8 @@ export namespace NvimUI {
     const applyDefaultColors = (item: unknown[]) => {
       const [fg, bg] = item
       colors = {
-        fg: typeof fg === "number" ? hex(fg) ?? colors.fg : colors.fg,
-        bg: typeof bg === "number" ? hex(bg) ?? colors.bg : colors.bg,
+        fg: typeof fg === "number" ? (hex(fg) ?? colors.fg) : colors.fg,
+        bg: typeof bg === "number" ? (hex(bg) ?? colors.bg) : colors.bg,
       }
       flushed = true
     }
@@ -249,7 +249,10 @@ export namespace NvimUI {
           }
           for (let col = 0; col < grid.width; col++) {
             const item = line[col] ?? blank()
-            const next = col === cursor.col && row === cursor.row ? invert(hl.get(item.hl) ?? {}, colors.fg, colors.bg) : hl.get(item.hl) ?? {}
+            const next =
+              col === cursor.col && row === cursor.row
+                ? invert(hl.get(item.hl) ?? {}, colors.fg, colors.bg)
+                : (hl.get(item.hl) ?? {})
             if (!prev || !equal(prev, next)) {
               push()
               prev = next

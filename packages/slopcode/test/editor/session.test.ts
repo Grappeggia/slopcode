@@ -62,7 +62,12 @@ mock.module("bun-pty", () => ({
         }
         if (method === "nvim_exec_lua") {
           socket.write(
-            packr.pack([1, id, null, { dirty: state.dirty, mode: state.mode, file: path.join(process.cwd(), "test.ts") }]),
+            packr.pack([
+              1,
+              id,
+              null,
+              { dirty: state.dirty, mode: state.mode, file: path.join(process.cwd(), "test.ts") },
+            ]),
           )
           return
         }
