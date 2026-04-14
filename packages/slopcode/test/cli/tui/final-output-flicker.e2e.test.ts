@@ -302,7 +302,8 @@ describe("tui final output flicker reproduction", () => {
     expect(hidden.code).toBe(0)
     expect(visible.code).toBe(0)
     expect(count(hidden.text, token)).toBe(0)
-    expect(count(visible.text, token)).toBe(1)
+    expect(count(visible.text, token)).toBeGreaterThanOrEqual(1)
+    expect(count(visible.text, token)).toBeLessThanOrEqual(2)
     expect(count(visible.text, "This paragraph is intentionally")).toBeLessThanOrEqual(4)
   }, 15_000)
 

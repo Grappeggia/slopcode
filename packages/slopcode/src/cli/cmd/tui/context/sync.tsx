@@ -38,13 +38,6 @@ type Delta = {
   delta: string
 }
 
-type FileStatus = {
-  path: string
-  added: number
-  removed: number
-  status: "added" | "deleted" | "modified"
-}
-
 const deltaKey = (input: Delta) => `${input.messageID}:${input.partID}:${input.field}`
 
 function mergeByID<T extends { id: string }>(saved: T[], live?: T[]) {
@@ -97,7 +90,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       mcp: {},
       mcp_resource: {},
       formatter: [],
-      file_status: [],
       vcs: undefined,
       path: { state: "", config: "", worktree: "", directory: "" },
     })
@@ -141,7 +133,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         [key: string]: McpResource
       }
       formatter: FormatterStatus[]
-      file_status: FileStatus[]
       vcs: VcsInfo | undefined
       path: Path
     }>(empty())
@@ -228,23 +219,16 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       fullSyncedSessions.add(sessionID)
     }
 
-    async function refreshFiles() {
-      const next = await sdk.client.file.status().then((x) => (x.data ?? []) as FileStatus[])
-      setStore("file_status", reconcile(next))
-    }
-
     async function refresh() {
-      const [permission, question, status, files] = await Promise.all([
+      const [permission, question, status] = await Promise.all([
         sdk.client.permission.list().then((x) => x.data ?? []),
         sdk.client.question.list().then((x) => x.data ?? []),
         sdk.client.session.status().then((x) => x.data ?? {}),
-        sdk.client.file.status().then((x) => (x.data ?? []) as FileStatus[]),
       ])
       batch(() => {
         setStore("permission", reconcile(groupPermission(permission)))
         setStore("question", reconcile(groupQuestion(question)))
         setStore("session_status", reconcile(status))
-        setStore("file_status", reconcile(files))
       })
       await Promise.all(Object.keys(store.message).map((sessionID) => syncSession(sessionID, true)))
     }
@@ -347,10 +331,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
         case "session.diff":
           setStore("session_diff", event.properties.sessionID, event.properties.diff)
-          break
-
-        case "file.watcher.updated":
-          void refreshFiles()
           break
 
         case "session.deleted": {

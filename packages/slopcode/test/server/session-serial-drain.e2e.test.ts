@@ -60,82 +60,86 @@ afterEach(() => {
 })
 
 describe("session serial drain e2e", () => {
-  test("drains five queued prompts one at a time after the active prompt completes", async () => {
-    await using tmp = await tmpdir({
-      git: true,
-      config: {
-        queue_mode: "serial",
-        agent: {
-          build: {
-            model: "slopcode/kimi-k2.5-free",
+  test(
+    "drains five queued prompts one at a time after the active prompt completes",
+    async () => {
+      await using tmp = await tmpdir({
+        git: true,
+        config: {
+          queue_mode: "serial",
+          agent: {
+            build: {
+              model: "slopcode/kimi-k2.5-free",
+            },
           },
         },
-      },
-    })
+      })
 
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const app = Server.App()
-        const create = await app.request("/session", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: "Serial Queue Drain" }),
-        })
-        expect(create.status).toBe(200)
-        const session = (await create.json()) as SessionInfo
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const app = Server.App()
+          const create = await app.request("/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: "Serial Queue Drain" }),
+          })
+          expect(create.status).toBe(200)
+          const session = (await create.json()) as SessionInfo
 
-        const gate = deferred<void>()
-        const calls: string[] = []
+          const gate = deferred<void>()
+          const calls: string[] = []
 
-        spyOn(LLM, "stream").mockImplementation(async (input) => {
-          calls.push(JSON.stringify(input.messages))
-          if (calls.length === 1) {
-            return stream({ text: "working", finishReason: "tool-calls", wait: gate.promise })
-          }
-          if (calls.length === 2) {
-            return stream({ text: "first done" })
-          }
-          return stream({ text: `queued done ${calls.length - 2}` })
-        })
+          spyOn(LLM, "stream").mockImplementation(async (input) => {
+            calls.push(JSON.stringify(input.messages))
+            if (calls.length === 1) {
+              return stream({ text: "working", finishReason: "tool-calls", wait: gate.promise })
+            }
+            if (calls.length === 2) {
+              return stream({ text: "first done" })
+            }
+            return stream({ text: `queued done ${calls.length - 2}` })
+          })
 
-        const first = await app.request(`/session/${session.id}/prompt_async`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            agent: "build",
-            parts: [{ type: "text", text: "initial" }],
-          }),
-        })
-        expect(first.status).toBe(204)
-
-        await eventually(() => calls.length === 1)
-
-        for (let i = 1; i <= 5; i++) {
-          const response = await app.request(`/session/${session.id}/prompt_async`, {
+          const first = await app.request(`/session/${session.id}/prompt_async`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               agent: "build",
-              parts: [{ type: "text", text: `queued ${i}` }],
+              parts: [{ type: "text", text: "initial" }],
             }),
           })
-          expect(response.status).toBe(204)
-        }
+          expect(first.status).toBe(204)
 
-        gate.resolve()
+          await eventually(() => calls.length === 1)
 
-        await eventually(() => calls.length >= 7, 10000)
-
-        expect(calls[1]).not.toMatch(/queued [1-5]/)
-        for (let i = 1; i <= 5; i++) {
-          const input = calls[i + 1] ?? ""
-          expect(input).toContain(`queued ${i}`)
-          for (let later = i + 1; later <= 5; later++) {
-            expect(input).not.toContain(`queued ${later}`)
+          for (let i = 1; i <= 5; i++) {
+            const response = await app.request(`/session/${session.id}/prompt_async`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                agent: "build",
+                parts: [{ type: "text", text: `queued ${i}` }],
+              }),
+            })
+            expect(response.status).toBe(204)
           }
-        }
-      },
-    })
-  })
+
+          gate.resolve()
+
+          await eventually(() => calls.length >= 7, 10000)
+
+          expect(calls[1]).not.toMatch(/queued [1-5]/)
+          for (let i = 1; i <= 5; i++) {
+            const input = calls[i + 1] ?? ""
+            expect(input).toContain(`queued ${i}`)
+            for (let later = i + 1; later <= 5; later++) {
+              expect(input).not.toContain(`queued ${later}`)
+            }
+          }
+        },
+      })
+    },
+    15_000,
+  )
 })

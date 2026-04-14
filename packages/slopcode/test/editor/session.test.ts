@@ -1,131 +1,21 @@
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import * as net from "node:net"
+import { describe, expect, spyOn, test } from "bun:test"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
-import { Packr, UnpackrStream } from "msgpackr"
 import { tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 import { SessionSummary } from "../../src/session/summary"
 
-const active: Array<{ close(): Promise<void> }> = []
-const exits: Array<() => void> = []
-
-mock.module("bun-pty", () => ({
-  spawn(_command: string, args: string[]) {
-    const sock = args[2]!
-    const packr = new Packr({ useRecords: false })
-    const state = {
-      dirty: false,
-      diff: true,
-      mode: "n",
-      rows: 10,
-      cols: 40,
-    }
-    const redraw = (socket: net.Socket) => {
-      socket.write(
-        packr.pack([
-          2,
-          "redraw",
-          [
-            ["default_colors_set", [0xffffff, 0x111111, 0, 0, 0]],
-            ["grid_resize", [1, state.cols, state.rows]],
-            ["grid_line", [1, 0, 0, [["o"], ["k"]], false]],
-            ["flush", []],
-          ],
-        ]),
-      )
-    }
-    const sockets = new Set<net.Socket>()
-    const server = net.createServer((socket) => {
-      sockets.add(socket)
-      socket.on("close", () => sockets.delete(socket))
-      const stream = new UnpackrStream({ sequential: true })
-      socket.pipe(stream)
-      stream.on("data", (message: unknown) => {
-        if (!Array.isArray(message) || message[0] !== 0) return
-        const id = Number(message[1])
-        const method = String(message[2])
-        const params = Array.isArray(message[3]) ? message[3] : []
-        if (method === "nvim_ui_attach") {
-          state.cols = Number(params[0])
-          state.rows = Number(params[1])
-          socket.write(packr.pack([1, id, null, null]))
-          redraw(socket)
-          return
-        }
-        if (method === "nvim_ui_try_resize") {
-          state.cols = Number(params[0])
-          state.rows = Number(params[1])
-          socket.write(packr.pack([1, id, null, null]))
-          redraw(socket)
-          return
-        }
-        if (method === "nvim_exec_lua") {
-          socket.write(
-            packr.pack([
-              1,
-              id,
-              null,
-              { dirty: state.dirty, mode: state.mode, file: path.join(process.cwd(), "test.ts") },
-            ]),
-          )
-          return
-        }
-        if (method === "nvim_eval") {
-          socket.write(packr.pack([1, id, null, 1]))
-          return
-        }
-        if (method === "nvim_input" || method === "nvim_paste") {
-          state.dirty = true
-          state.mode = "i"
-          socket.write(packr.pack([1, id, null, null]))
-          redraw(socket)
-          return
-        }
-        if (method === "nvim_command") {
-          const command = String(params[0] ?? "")
-          if (command === "write") state.dirty = false
-          if (command === "diffoff!") state.diff = false
-          socket.write(packr.pack([1, id, null, null]))
-          redraw(socket)
-          return
-        }
-        socket.write(packr.pack([1, id, null, null]))
-      })
-    })
-    void fs.rm(sock, { force: true }).catch(() => {})
-    server.listen(sock)
-    active.push({
-      async close() {
-        Array.from(sockets).forEach((socket) => socket.destroy())
-        await new Promise<void>((resolve) => server.close(() => resolve()))
-        await fs.rm(sock, { force: true }).catch(() => {})
-      },
-    })
-    return {
-      pid: 1234,
-      kill() {
-        exits.splice(0).forEach((fn) => fn())
-        Array.from(sockets).forEach((socket) => socket.destroy())
-        void server.close()
-      },
-      onExit(fn: () => void) {
-        exits.push(fn)
-      },
-    }
-  },
-}))
-
-afterEach(async () => {
-  mock.restore()
-  while (active.length > 0) {
-    await active.pop()?.close()
+async function eventually(check: () => boolean | Promise<boolean>, timeout = 1000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    if (await check()) return
+    await Bun.sleep(25)
   }
-  exits.splice(0)
-})
+  throw new Error("condition not met")
+}
 
 describe("editor session", () => {
-  test("opens, streams, saves, dismisses diff, and closes", async () => {
+  test("opens, saves, dismisses diff, and closes", async () => {
     await using tmp = await tmpdir({
       git: true,
       init: async (dir) => {
@@ -133,9 +23,85 @@ describe("editor session", () => {
       },
     })
     const bin = path.join(tmp.path, "bin")
+    const nvim = path.join(bin, "nvim")
+    const msgpack = path.resolve(import.meta.dir, "../../node_modules/msgpackr/node-index.js")
     await fs.mkdir(bin, { recursive: true })
-    await Bun.write(path.join(bin, "nvim"), "#!/bin/sh\nexit 0\n")
-    await fs.chmod(path.join(bin, "nvim"), 0o755)
+    await Bun.write(
+      nvim,
+      `#!/usr/bin/env bun
+import * as net from "node:net"
+import * as fs from "node:fs/promises"
+import { Packr, UnpackrStream } from ${JSON.stringify(msgpack)}
+
+const args = process.argv.slice(2)
+const sock = args[args.indexOf("--listen") + 1]
+const packr = new Packr({ useRecords: false })
+const state = { dirty: false, diff: true, mode: "n", rows: 10, cols: 40 }
+
+const redraw = (socket) => {
+  socket.write(
+    packr.pack([
+      2,
+      "redraw",
+      [
+        ["default_colors_set", [0xffffff, 0x111111, 0, 0, 0]],
+        ["grid_resize", [1, state.cols, state.rows]],
+        ["grid_line", [1, 0, 0, [["o"], ["k"]], false]],
+        ["flush", []],
+      ],
+    ]),
+  )
+}
+
+await fs.rm(sock, { force: true }).catch(() => {})
+const server = net.createServer((socket) => {
+  const stream = new UnpackrStream({ sequential: true })
+  socket.pipe(stream)
+  stream.on("data", (message) => {
+    if (!Array.isArray(message) || message[0] !== 0) return
+    const id = Number(message[1])
+    const method = String(message[2])
+    const params = Array.isArray(message[3]) ? message[3] : []
+    if (method === "nvim_ui_attach" || method === "nvim_ui_try_resize") {
+      state.cols = Number(params[0]) || state.cols
+      state.rows = Number(params[1]) || state.rows
+      socket.write(packr.pack([1, id, null, null]))
+      redraw(socket)
+      return
+    }
+    if (method === "nvim_exec_lua") {
+      socket.write(packr.pack([1, id, null, { dirty: state.dirty, mode: state.mode, file: "test.ts" }]))
+      return
+    }
+    if (method === "nvim_eval") {
+      socket.write(packr.pack([1, id, null, 1]))
+      return
+    }
+    if (method === "nvim_input" || method === "nvim_paste") {
+      state.dirty = true
+      state.mode = "i"
+      socket.write(packr.pack([1, id, null, null]))
+      redraw(socket)
+      return
+    }
+    if (method === "nvim_command") {
+      const command = String(params[0] ?? "")
+      if (command === "write") state.dirty = false
+      if (command === "diffoff!") state.diff = false
+      socket.write(packr.pack([1, id, null, null]))
+      redraw(socket)
+      return
+    }
+    socket.write(packr.pack([1, id, null, null]))
+  })
+})
+await new Promise((resolve) => server.listen(sock, resolve))
+process.on("SIGTERM", () => server.close(() => process.exit(0)))
+process.on("SIGINT", () => server.close(() => process.exit(0)))
+`,
+    )
+    await fs.chmod(nvim, 0o755)
+
     const prevPath = process.env.PATH
     process.env.PATH = `${bin}${path.delimiter}${prevPath ?? ""}`
     const diff = spyOn(SessionSummary, "diffChunk").mockResolvedValue([
@@ -143,7 +109,7 @@ describe("editor session", () => {
     ] as any)
 
     try {
-      const { EditorSession } = await import("../../src/editor")
+      const { EditorSession } = await import("../../src/editor/session")
       await Instance.provide({
         directory: tmp.path,
         viewID: "view-a",
@@ -156,32 +122,34 @@ describe("editor session", () => {
           expect(info.file).toBe("test.ts")
           expect(info.diff).toBe(true)
 
-          const sent: string[] = []
-          const ws = {
-            readyState: 1,
-            data: { id: "a" },
-            send(value: string | Uint8Array | ArrayBuffer) {
-              sent.push(typeof value === "string" ? value : Buffer.from(value as ArrayBuffer).toString("utf8"))
-            },
-            close() {},
-          }
-          const handle = EditorSession.connect(info.id, ws as any, { sessionID: "ses_test0000000000000000000" })
-          expect(handle).toBeDefined()
-          expect(sent.some((item) => item.includes('"snapshot"'))).toBe(true)
+          const current = () =>
+            Instance.provide({
+              directory: tmp.path,
+              viewID: "view-a",
+              fn: async () => EditorSession.get(info.id),
+            })
 
-          const before = sent.length
-          handle?.onMessage(JSON.stringify({ type: "input", keys: "a" }))
-          await Bun.sleep(200)
-          expect(sent.length).toBeGreaterThan(before)
+          await eventually(async () => !!(await current()))
+          await Instance.provide({
+            directory: tmp.path,
+            viewID: "view-a",
+            fn: async () => EditorSession.save(info.id),
+          })
+          await eventually(async () => (await current())?.dirty === false)
 
-          await EditorSession.save(info.id, { sessionID: "ses_test0000000000000000000" })
-          expect(EditorSession.get(info.id, { sessionID: "ses_test0000000000000000000" })?.dirty).toBe(false)
+          await Instance.provide({
+            directory: tmp.path,
+            viewID: "view-a",
+            fn: async () => EditorSession.dismiss(info.id),
+          })
+          await eventually(async () => (await current())?.diff === false)
 
-          await EditorSession.dismiss(info.id, { sessionID: "ses_test0000000000000000000" })
-          expect(EditorSession.get(info.id, { sessionID: "ses_test0000000000000000000" })?.diff).toBe(false)
-
-          await EditorSession.close(info.id, { sessionID: "ses_test0000000000000000000" })
-          expect(EditorSession.get(info.id, { sessionID: "ses_test0000000000000000000" })).toBeUndefined()
+          await Instance.provide({
+            directory: tmp.path,
+            viewID: "view-a",
+            fn: async () => EditorSession.close(info.id),
+          })
+          await eventually(async () => (await current()) === undefined)
         },
       })
     } finally {

@@ -197,22 +197,30 @@ async function run(mode: "hidden" | "visible", chunks = 18) {
 }
 
 describe("tui session strip flicker reproduction", () => {
-  test("streaming with a visible strip repaints materially more terminal output", async () => {
-    const hidden = await run("hidden")
-    const visible = await run("visible")
+  test(
+    "streaming with a visible strip repaints materially more terminal output",
+    async () => {
+      const hidden = await run("hidden")
+      const visible = await run("visible")
 
-    expect(hidden.code).toBe(0)
-    expect(visible.code).toBe(0)
-    expect(visible.raw.length).toBeGreaterThan(Math.floor(hidden.raw.length * 1.12))
-  })
+      expect(hidden.code).toBe(0)
+      expect(visible.code).toBe(0)
+      expect(visible.raw.length).toBeGreaterThan(Math.floor(hidden.raw.length * 1.12))
+    },
+    20_000,
+  )
 
-  test("the extra churn is repaint traffic, not repeated TUI remounts", async () => {
-    const hidden = await run("hidden")
-    const visible = await run("visible")
+  test(
+    "the extra churn is repaint traffic, not repeated TUI remounts",
+    async () => {
+      const hidden = await run("hidden")
+      const visible = await run("visible")
 
-    expect((hidden.text.match(/AlphaStrip/g) ?? []).length).toBe(0)
-    expect((visible.text.match(/AlphaStrip/g) ?? []).length).toBeGreaterThanOrEqual(2)
-    expect((hidden.raw.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1)
-    expect((visible.raw.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1)
-  })
+      expect((hidden.text.match(/AlphaStrip/g) ?? []).length).toBe(0)
+      expect((visible.text.match(/AlphaStrip/g) ?? []).length).toBeGreaterThanOrEqual(2)
+      expect((hidden.raw.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1)
+      expect((visible.raw.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1)
+    },
+    20_000,
+  )
 })

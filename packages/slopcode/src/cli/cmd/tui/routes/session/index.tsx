@@ -440,7 +440,7 @@ export function Session() {
     setEditor(info)
   }
   const modified = createMemo(() => {
-    const files = new Set((sync.data.file_status ?? []).map((item) => item.path))
+    const files = new Set((sync.data.session_diff[route.sessionID] ?? []).map((item) => item.file))
     if (editor()?.dirty && editor()?.file) files.add(editor()!.file)
     return files
   })
@@ -2591,20 +2591,27 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
     state = updateRichTextStream(state, props.part.text, done())
     return state
   })
-  const segments = createMemo(() => [...stream().sealed, ...stream().tail])
+  const sealed = createMemo(() => stream().sealed)
+  const tail = createMemo(() => stream().tail)
   return (
-    <Show when={segments().length}>
+    <Show when={sealed().length || tail().length}>
       <box
         id={"text-" + props.part.id}
         paddingLeft={2}
         marginTop={1}
         flexShrink={0}
+        flexDirection="column"
         border={["left"]}
         customBorderChars={SplitBorder.customBorderChars}
         borderColor={selected() ? theme.textMuted : theme.background}
         backgroundColor={selected() ? theme.backgroundElement : undefined}
       >
-        <RichSegments conceal={ctx.conceal()} segments={segments()} syntaxStyle={syntax()} text={theme.text} />
+        <Show when={sealed().length}>
+          <RichSegments conceal={ctx.conceal()} segments={sealed()} syntaxStyle={syntax()} text={theme.text} />
+        </Show>
+        <Show when={tail().length}>
+          <RichSegments conceal={ctx.conceal()} segments={tail()} syntaxStyle={syntax()} text={theme.text} />
+        </Show>
       </box>
     </Show>
   )
