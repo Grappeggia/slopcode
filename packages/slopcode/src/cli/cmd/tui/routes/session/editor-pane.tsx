@@ -123,6 +123,7 @@ export function EditorPane(props: {
   }
 
   const headers = () => new Headers(sdk.headers)
+  const daemonToken = () => headers().get("x-slopcode-daemon-token")
 
   const send = (value: Record<string, unknown>) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return
@@ -165,6 +166,8 @@ export function EditorPane(props: {
         setSnapshot(undefined)
         const next = url(`/editor/${id}/connect`)
         next.protocol = next.protocol === "https:" ? "wss:" : "ws:"
+        const token = daemonToken()
+        if (token) next.searchParams.set("daemonToken", token)
         let disposed = false
         ws = new WebSocket(next)
         ws.onopen = () => {

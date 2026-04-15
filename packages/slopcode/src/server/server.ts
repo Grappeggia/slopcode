@@ -128,7 +128,10 @@ export namespace Server {
           // Allow CORS preflight requests to succeed without auth.
           // Browser clients sending Authorization headers will preflight with OPTIONS.
           if (c.req.method === "OPTIONS") return next()
-          if (_daemonToken && DaemonAuth.valid(c.req.header(DaemonAuth.Header))) return next()
+          if (_daemonToken) {
+            const token = c.req.header(DaemonAuth.Header) || c.req.query("daemonToken")
+            if (DaemonAuth.valid(token)) return next()
+          }
           const password = Flag.SLOPCODE_SERVER_PASSWORD
           if (password) {
             const username = Flag.SLOPCODE_SERVER_USERNAME ?? "slopcode"
