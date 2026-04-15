@@ -330,7 +330,9 @@ describe("editor tab persistence e2e", () => {
     const child = Bun.spawn([process.execPath, "--cwd", pkgDir, file], {
       cwd: pkgDir,
       env: {
-        ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+        ...Object.fromEntries(
+          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+        ),
         COLUMNS: "100",
         LINES: "28",
         TERM: "xterm-256color",
@@ -358,10 +360,13 @@ describe("editor tab persistence e2e", () => {
     const states = stderr
       .split("\n")
       .filter((line) => line.startsWith("__EDITOR_STATE__"))
-      .map((line) => JSON.parse(line.slice("__EDITOR_STATE__".length)) as {
-        phase: string
-        editor: { active?: string; tabs: Array<{ file: string }> }
-      })
+      .map(
+        (line) =>
+          JSON.parse(line.slice("__EDITOR_STATE__".length)) as {
+            phase: string
+            editor: { active?: string; tabs: Array<{ file: string }> }
+          },
+      )
     const noise = stderr
       .split("\n")
       .filter((line) => line && !line.startsWith("__EDITOR_STATE__"))
