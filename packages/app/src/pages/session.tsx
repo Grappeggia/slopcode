@@ -111,7 +111,9 @@ export default function Page() {
   )
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
-  const desktopSidePanelOpen = createMemo(() => isDesktop() && (view().reviewPanel.opened() || layout.fileTree.opened()))
+  const desktopSidePanelOpen = createMemo(
+    () => isDesktop() && (view().reviewPanel.opened() || layout.fileTree.opened()),
+  )
   const desktopSidePanelCollapsed = createMemo(() => desktopSidePanelOpen() && view().sidePanel.collapsed())
   const desktopReviewOpen = createMemo(
     () => desktopSidePanelOpen() && !desktopSidePanelCollapsed() && view().reviewPanel.opened(),

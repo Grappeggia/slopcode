@@ -262,7 +262,13 @@ export function SessionSidePanel(props: {
           "shrink-0": !reviewOpen(),
           "bg-background-stronger": collapsed(),
         }}
-        style={{ width: collapsed() ? `${SESSION_SIDE_PANEL_RAIL_WIDTH}px` : reviewOpen() ? undefined : `${layout.fileTree.width()}px` }}
+        style={{
+          width: collapsed()
+            ? `${SESSION_SIDE_PANEL_RAIL_WIDTH}px`
+            : reviewOpen()
+              ? undefined
+              : `${layout.fileTree.width()}px`,
+        }}
       >
         <div class="absolute left-0 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2">
           <SideButton collapsed={collapsed()} />
