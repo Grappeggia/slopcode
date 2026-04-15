@@ -69,6 +69,7 @@ import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar, type SidebarMode } from "./sidebar"
+import { sessionSidebarExpanded, sessionSidebarHeaderVisible, sessionSidebarWidth } from "./sidebar-layout"
 import { EditorPane, type EditorInfo } from "./editor-pane"
 import { EditorTabStrip } from "./editor-tab-strip"
 import { Flag } from "@/flag/flag"
@@ -287,6 +288,7 @@ export function Session() {
 
   const dimensions = useTerminalDimensions()
   const [sidebar, setSidebar] = kv.signal<"auto" | "hide">("sidebar", "auto")
+  const [sidebarCollapsed, setSidebarCollapsed] = kv.signal("sidebar_collapsed", false)
   const [sidebarOpen, setSidebarOpen] = createSignal(false)
   const [sidebarMode, setSidebarMode] = createSignal<SidebarMode>("summary")
   const [conceal, setConceal] = createSignal(true)
@@ -323,16 +325,48 @@ export function Session() {
     if (sidebar() === "auto" && wide()) return true
     return false
   })
+  const sidebarRail = createMemo(() => wide() && sidebarVisible() && sidebarCollapsed())
+  const sidebarExpanded = createMemo(() =>
+    sessionSidebarExpanded({
+      visible: sidebarVisible(),
+      wide: wide(),
+      collapsed: sidebarRail(),
+    }),
+  )
+  const sidebarWidth = createMemo(() =>
+    sessionSidebarWidth({
+      visible: sidebarVisible(),
+      wide: wide(),
+      collapsed: sidebarRail(),
+    }),
+  )
+  const sidebarHeader = createMemo(() =>
+    sessionSidebarHeaderVisible({
+      visible: sidebarVisible(),
+      wide: wide(),
+      collapsed: sidebarRail(),
+    }),
+  )
   const showFiles = () => {
     if (session()?.parentID) return
     batch(() => {
       setSidebarMode("files")
       setSidebarOpen(true)
+      if (wide()) setSidebarCollapsed(() => false)
     })
+  }
+  const toggleSidebarRail = () => {
+    if (session()?.parentID) return
+    if (!wide()) {
+      setSidebarOpen(false)
+      return
+    }
+
+    setSidebarCollapsed((value) => !value)
   }
 
   const showTimestamps = createMemo(() => timestamps() === "show")
-  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
+  const contentWidth = createMemo(() => dimensions().width - sidebarWidth() - 4)
 
   const scrollAcceleration = createMemo(() => {
     const tui = tuiConfig
@@ -1923,7 +1957,7 @@ export function Session() {
                 session()?.parentID
                   ? undefined
                   : {
-                      active: sidebarVisible() && sidebarMode() === "files",
+                      active: sidebarExpanded() && sidebarMode() === "files",
                       onSelect: showFiles,
                     }
               }
@@ -1942,7 +1976,7 @@ export function Session() {
             </Show>
             <box flexGrow={1} paddingTop={1} paddingLeft={2} paddingRight={2} gap={1}>
               <Show when={session()}>
-                <Show when={showHeader() && (!sidebarVisible() || !wide())}>
+                <Show when={showHeader() && sidebarHeader()}>
                   <Header />
                 </Show>
                 <scrollbox
@@ -2100,6 +2134,7 @@ export function Session() {
               <Match when={wide()}>
                 <Sidebar
                   sessionID={route.sessionID}
+                  collapsed={sidebarRail()}
                   mode={sidebarMode()}
                   modified={modified()}
                   activeFile={editor()?.file}
@@ -2107,6 +2142,7 @@ export function Session() {
                     void openEditor(file)
                   }}
                   setMode={(mode) => setSidebarMode(mode)}
+                  toggleCollapse={toggleSidebarRail}
                 />
               </Match>
               <Match when={!wide()}>
@@ -2121,6 +2157,7 @@ export function Session() {
                 >
                   <Sidebar
                     sessionID={route.sessionID}
+                    collapsed={sidebarRail()}
                     mode={sidebarMode()}
                     modified={modified()}
                     activeFile={editor()?.file}
@@ -2128,6 +2165,7 @@ export function Session() {
                       void openEditor(file)
                     }}
                     setMode={(mode) => setSidebarMode(mode)}
+                    toggleCollapse={toggleSidebarRail}
                   />
                 </box>
               </Match>

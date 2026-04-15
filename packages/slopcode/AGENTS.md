@@ -1,5 +1,7 @@
 # slopcode database guide
 
+- Prioritize TUI behavior here before matching web UI changes when a request could land in both surfaces.
+
 ## Release
 
 - The default release flow is `bun run release patch` from the repo root. Use `minor`, `major`, or an explicit version only when the user explicitly asks for a different bump.
