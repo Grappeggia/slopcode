@@ -215,7 +215,11 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       id: "fileTree.toggle",
       title: language.t("command.fileTree.toggle"),
       keybind: "mod+\\",
-      onSelect: () => layout.fileTree.toggle(),
+      onSelect: () => {
+        const next = !layout.fileTree.opened()
+        layout.fileTree.toggle()
+        if (next) view().sidePanel.expand()
+      },
     }),
     viewCommand({
       id: "input.focus",

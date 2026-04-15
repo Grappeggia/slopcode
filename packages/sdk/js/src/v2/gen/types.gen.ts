@@ -1121,7 +1121,7 @@ export type PtyConfig = {
  */
 export type SessionConfig = {
   /**
-   * Timeout in milliseconds for a single session turn before it is aborted (default: 900000).
+   * Timeout in milliseconds for a single session turn before it is aborted (default: 9000000).
    */
   turn_timeout_ms?: number
 }

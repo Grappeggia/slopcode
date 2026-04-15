@@ -509,6 +509,8 @@ export const dict = {
   "session.tab.review": "Review",
   "session.tab.context": "Context",
   "session.panel.reviewAndFiles": "Review and files",
+  "session.panel.collapse": "Collapse side panel",
+  "session.panel.expand": "Expand side panel",
   "session.review.filesChanged": "{{count}} Files Changed",
   "session.review.change.one": "Change",
   "session.review.change.other": "Changes",

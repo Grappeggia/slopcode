@@ -22,7 +22,6 @@ import { mergeDeep } from "remeda"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
-  const TURN_TIMEOUT = 15 * 60 * 1000
   const log = Log.create({ service: "session.processor" })
 
   export type Info = Awaited<ReturnType<typeof create>>
@@ -52,7 +51,7 @@ export namespace SessionProcessor {
         needsCompaction = false
         const cfg = await Config.get()
         const shouldBreak = cfg.experimental?.continue_loop_on_deny !== true
-        const timeout = cfg.session?.turn_timeout_ms ?? TURN_TIMEOUT
+        const timeout = cfg.session?.turn_timeout_ms ?? Config.DEFAULT_SESSION_TURN_TIMEOUT
         const timer = abortAfterAny(timeout, input.abort)
         const abort = timer.signal
         try {

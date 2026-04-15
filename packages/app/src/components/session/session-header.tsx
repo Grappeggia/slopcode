@@ -249,6 +249,11 @@ export function SessionHeader() {
   const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
   const view = createMemo(() => layout.view(sessionKey))
   const panelOpen = createMemo(() => view().reviewPanel.opened() || layout.fileTree.opened())
+  const toggleFileTree = () => {
+    const next = !layout.fileTree.opened()
+    layout.fileTree.toggle()
+    if (next) view().sidePanel.expand()
+  }
   const os = createMemo(() => detectOS(platform))
 
   const [exists, setExists] = createStore<Partial<Record<OpenApp, boolean>>>({
@@ -700,7 +705,7 @@ export function SessionHeader() {
                     <Button
                       variant="ghost"
                       class="titlebar-icon w-7 h-6 p-0 box-border"
-                      onClick={() => layout.fileTree.toggle()}
+                      onClick={toggleFileTree}
                       aria-label={language.t("command.fileTree.toggle")}
                       aria-expanded={layout.fileTree.opened()}
                       aria-controls="file-tree-panel"
