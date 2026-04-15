@@ -12,9 +12,24 @@ export type TabSelection = {
   variant: Record<string, string | undefined>
 }
 
+export type EditorTab = {
+  file: string
+  editorID: string
+  dirty: boolean
+  diff: boolean
+  mode: string
+  status: string
+}
+
+export type EditorTabs = {
+  tabs: EditorTab[]
+  active?: string
+}
+
 export type TabState = {
   prompt: PromptInfo
   selection: TabSelection
+  editor: EditorTabs
 }
 
 export type TabStateStore = Record<string, TabState>
@@ -34,10 +49,17 @@ export function blankSelection(): TabSelection {
   }
 }
 
+export function blankEditorTabs(): EditorTabs {
+  return {
+    tabs: [],
+  }
+}
+
 export function blankTabState(): TabState {
   return {
     prompt: blankPrompt(),
     selection: blankSelection(),
+    editor: blankEditorTabs(),
   }
 }
 
@@ -53,10 +75,18 @@ export function cloneSelection(selection?: Partial<TabSelection>): TabSelection 
   }
 }
 
+export function cloneEditor(editor?: Partial<EditorTabs>): EditorTabs {
+  return {
+    active: editor?.active,
+    tabs: structuredClone(unwrap(editor?.tabs ?? [])),
+  }
+}
+
 export function cloneTabState(state?: Partial<TabState>): TabState {
   return {
     prompt: clonePrompt(state?.prompt),
     selection: cloneSelection(state?.selection),
+    editor: cloneEditor(state?.editor),
   }
 }
 
@@ -112,6 +142,50 @@ export function copyTabState(
   const source = getTabState(store, sourceID)
   ensureTabState(store, targetID).selection = cloneSelection(source.selection)
   ensureTabState(store, targetID).prompt = input?.prompt === "reset" ? blankPrompt() : clonePrompt(source.prompt)
+}
+
+export function setEditorTab(store: TabStateStore, id: string, tab: EditorTab) {
+  const editor = ensureTabState(store, id).editor
+  const index = editor.tabs.findIndex((item) => item.file === tab.file)
+  if (index === -1) {
+    editor.tabs = [...editor.tabs, structuredClone(tab)]
+    editor.active = tab.file
+    return
+  }
+  editor.tabs[index] = {
+    ...editor.tabs[index],
+    ...structuredClone(tab),
+  }
+  editor.active = tab.file
+}
+
+export function patchEditorTab(store: TabStateStore, id: string, file: string, patch: Partial<EditorTab>) {
+  const editor = ensureTabState(store, id).editor
+  const index = editor.tabs.findIndex((item) => item.file === file)
+  if (index === -1) return
+  editor.tabs[index] = {
+    ...editor.tabs[index],
+    ...structuredClone(patch),
+  }
+}
+
+export function activateEditorTab(store: TabStateStore, id: string, file: string | undefined) {
+  const editor = ensureTabState(store, id).editor
+  if (!file) {
+    editor.active = undefined
+    return
+  }
+  if (!editor.tabs.some((item) => item.file === file)) return
+  editor.active = file
+}
+
+export function closeEditorTab(store: TabStateStore, id: string, file: string) {
+  const editor = ensureTabState(store, id).editor
+  const index = editor.tabs.findIndex((item) => item.file === file)
+  if (index === -1) return
+  editor.tabs = editor.tabs.filter((item) => item.file !== file)
+  if (editor.active !== file) return
+  editor.active = editor.tabs[index]?.file ?? editor.tabs[index - 1]?.file
 }
 
 export function removeTabState(store: TabStateStore, id: string) {

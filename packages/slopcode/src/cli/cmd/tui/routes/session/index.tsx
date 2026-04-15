@@ -17,6 +17,7 @@ import { Dynamic } from "solid-js/web"
 import path from "path"
 import { useRoute, useRouteData } from "@tui/context/route"
 import { useSessionTabs } from "@tui/context/session-tabs"
+import { useTabState } from "@tui/context/tab-state"
 import { useSync } from "@tui/context/sync"
 import { SplitBorder } from "@tui/component/border"
 import { Spinner } from "@tui/component/spinner"
@@ -69,6 +70,7 @@ import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar, type SidebarMode } from "./sidebar"
 import { EditorPane, type EditorInfo } from "./editor-pane"
+import { EditorTabStrip } from "./editor-tab-strip"
 import { Flag } from "@/flag/flag"
 import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import { Clipboard } from "../../util/clipboard"
@@ -302,7 +304,7 @@ export function Session() {
   const [historyPrompt, setHistoryPrompt] = createSignal<string>()
   const [target, setTarget] = createSignal<"prompt" | "timeline">("prompt")
   const [expandedToolParts, setExpandedToolParts] = createSignal<Record<string, boolean>>({})
-  const [editor, setEditor] = createSignal<EditorInfo>()
+  const tabState = useTabState()
 
   type HistoryTrace = {
     partID: string
@@ -386,36 +388,48 @@ export function Session() {
     return next
   }
   const editorHeaders = () => new Headers(sdk.headers)
-  const closeEditor = async () => {
-    const info = editor()
-    if (!info) return
-    await (sdk.fetch ?? fetch)(editorUrl(`/editor/${info.id}`), {
+  const editorState = createMemo(() => tabState.editor(route.sessionID))
+  const editorTabs = createMemo(() => editorState().tabs)
+  const activeEditorFile = createMemo(() => editorState().active)
+  const editor = createMemo<EditorInfo | undefined>(() => {
+    const file = activeEditorFile()
+    if (!file) return
+    const hit = editorTabs().find((item) => item.file === file)
+    if (!hit) return
+    return {
+      id: hit.editorID,
+      file: hit.file,
+      dirty: hit.dirty,
+      diff: hit.diff,
+      mode: hit.mode,
+      status: hit.status,
+    }
+  })
+  const closeEditor = async (file = activeEditorFile()) => {
+    if (!file) return
+    const hit = editorTabs().find((item) => item.file === file)
+    if (!hit) return
+    await (sdk.fetch ?? fetch)(editorUrl(`/editor/${hit.editorID}`), {
       method: "DELETE",
       headers: editorHeaders(),
     }).catch(() => undefined)
-    setEditor(undefined)
+    tabState.closeEditor(route.sessionID, file)
   }
-  const requestCloseEditor = async () => {
-    const info = editor()
+  const requestCloseEditor = async (file = activeEditorFile()) => {
+    if (!file) return
+    const info = editorTabs().find((item) => item.file === file)
     if (!info) return
     if (info.dirty) {
       const confirmed = await DialogConfirm.show(dialog, "Discard changes?", `Close ${info.file} without saving?`)
       if (!confirmed) return
     }
-    await closeEditor()
+    await closeEditor(file)
   }
   const openEditor = async (file: string) => {
-    const current = editor()
-    if (current?.file === file) return
-    if (current?.dirty) {
-      const confirmed = await DialogConfirm.show(
-        dialog,
-        "Discard changes?",
-        `Close ${current.file} without saving before opening ${file}?`,
-      )
-      if (!confirmed) return
+    if (editorTabs().some((item) => item.file === file)) {
+      tabState.activateEditor(route.sessionID, file)
+      return
     }
-    if (current) await closeEditor()
     const response = await (sdk.fetch ?? fetch)(editorUrl("/editor"), {
       method: "POST",
       headers: (() => {
@@ -437,11 +451,20 @@ export function Session() {
       return
     }
     const info = (await response.json()) as EditorInfo
-    setEditor(info)
+    tabState.setEditor(route.sessionID, {
+      file,
+      editorID: info.id,
+      dirty: info.dirty,
+      diff: info.diff,
+      mode: info.mode,
+      status: info.status,
+    })
   }
   const modified = createMemo(() => {
     const files = new Set((sync.data.session_diff[route.sessionID] ?? []).map((item) => item.file))
-    if (editor()?.dirty && editor()?.file) files.add(editor()!.file)
+    editorTabs()
+      .filter((item) => item.dirty)
+      .forEach((item) => files.add(item.file))
     return files
   })
 
@@ -539,16 +562,10 @@ export function Session() {
         setHistoryPrompt(undefined)
         setTarget("prompt")
         setExpandedToolParts({})
-        void closeEditor()
-        setEditor(undefined)
       },
       { defer: true },
     ),
   )
-
-  onCleanup(() => {
-    void closeEditor()
-  })
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
@@ -1879,12 +1896,23 @@ export function Session() {
             <EditorPane
               sessionID={route.sessionID}
               info={editor}
-              onChange={(next) => setEditor((prev) => (prev ? { ...prev, ...next } : (next as EditorInfo)))}
+              onChange={(next) => {
+                const file = editor()?.file
+                if (!file) return
+                tabState.patchEditor(route.sessionID, file, {
+                  dirty: next.dirty,
+                  diff: next.diff,
+                  mode: next.mode,
+                  status: next.status,
+                })
+              }}
               onRequestClose={() => {
                 void requestCloseEditor()
               }}
-              onClosed={() => {
-                setEditor(undefined)
+              onClosed={(id) => {
+                const hit = editorTabs().find((item) => item.editorID === id)
+                if (!hit) return
+                tabState.closeEditor(route.sessionID, hit.file)
               }}
             />
           }
@@ -1900,6 +1928,18 @@ export function Session() {
                     }
               }
             />
+            <Show when={editorTabs().length > 0}>
+              <box flexShrink={0} paddingTop={1} paddingLeft={2} paddingRight={2}>
+                <EditorTabStrip
+                  tabs={editorTabs()}
+                  active={activeEditorFile()}
+                  onSelect={(file) => tabState.activateEditor(route.sessionID, file)}
+                  onClose={(file) => {
+                    void requestCloseEditor(file)
+                  }}
+                />
+              </box>
+            </Show>
             <box flexGrow={1} paddingTop={1} paddingLeft={2} paddingRight={2} gap={1}>
               <Show when={session()}>
                 <Show when={showHeader() && (!sidebarVisible() || !wide())}>

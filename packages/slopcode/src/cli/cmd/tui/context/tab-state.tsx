@@ -6,16 +6,21 @@ import { useSessionTabs } from "./session-tabs"
 import { DRAFT_TAB_ID } from "./session-tabs-state"
 import { useSync } from "./sync"
 import {
+  activateEditorTab,
   blankTabState,
   clearTabPrompt,
+  closeEditorTab,
   copyTabSelection,
   copyTabState,
   getTabState,
+  patchEditorTab,
   removeTabState,
+  setEditorTab,
   setTabAgent,
   setTabModel,
   setTabPrompt,
   setTabVariant,
+  type EditorTab,
   type TabModel,
   type TabSelection,
 } from "./tab-state-store"
@@ -124,6 +129,37 @@ export const { use: useTabState, provider: TabStateProvider } = createSimpleCont
       },
       selection(id?: string): TabSelection {
         return getTabState(store, id ?? currentID()).selection
+      },
+      editor(id?: string) {
+        return getTabState(store, id ?? currentID()).editor
+      },
+      setEditor(id: string, tab: EditorTab) {
+        setStore(
+          produce((draft) => {
+            setEditorTab(draft, id, tab)
+          }),
+        )
+      },
+      patchEditor(id: string, file: string, patch: Partial<EditorTab>) {
+        setStore(
+          produce((draft) => {
+            patchEditorTab(draft, id, file, patch)
+          }),
+        )
+      },
+      activateEditor(id: string, file: string | undefined) {
+        setStore(
+          produce((draft) => {
+            activateEditorTab(draft, id, file)
+          }),
+        )
+      },
+      closeEditor(id: string, file: string) {
+        setStore(
+          produce((draft) => {
+            closeEditorTab(draft, id, file)
+          }),
+        )
       },
     }
   },

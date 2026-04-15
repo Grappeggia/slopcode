@@ -2,12 +2,16 @@ import { describe, expect, test } from "bun:test"
 import { createStore } from "solid-js/store"
 import { DRAFT_TAB_ID } from "../../../src/cli/cmd/tui/context/session-tabs-state"
 import {
+  activateEditorTab,
   blankTabState,
   clearTabPrompt,
+  closeEditorTab,
   copyTabSelection,
   copyTabState,
   getTabState,
+  patchEditorTab,
   removeTabState,
+  setEditorTab,
   setTabAgent,
   setTabModel,
   setTabPrompt,
@@ -73,6 +77,9 @@ describe("tab state store", () => {
           "openai/gpt-5": "fast",
         },
       },
+      editor: {
+        tabs: [],
+      },
     })
   })
 
@@ -111,6 +118,44 @@ describe("tab state store", () => {
     removeTabState(store, "ses_4")
 
     expect(store).toEqual({})
+  })
+
+  test("tracks persistent editor tabs per session", () => {
+    const store: TabStateStore = {}
+
+    setEditorTab(store, "ses_5", {
+      file: "src/foo.ts",
+      editorID: "editor-1",
+      dirty: false,
+      diff: false,
+      mode: "EDIT",
+      status: "running",
+    })
+    setEditorTab(store, "ses_5", {
+      file: "src/bar.ts",
+      editorID: "editor-2",
+      dirty: true,
+      diff: false,
+      mode: "EDIT",
+      status: "running",
+    })
+    activateEditorTab(store, "ses_5", "src/foo.ts")
+    patchEditorTab(store, "ses_5", "src/foo.ts", { dirty: true })
+    closeEditorTab(store, "ses_5", "src/bar.ts")
+
+    expect(getTabState(store, "ses_5").editor).toEqual({
+      active: "src/foo.ts",
+      tabs: [
+        {
+          file: "src/foo.ts",
+          editorID: "editor-1",
+          dirty: true,
+          diff: false,
+          mode: "EDIT",
+          status: "running",
+        },
+      ],
+    })
   })
 
   test("accepts prompt proxies from solid stores", () => {

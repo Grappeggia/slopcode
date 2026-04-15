@@ -292,8 +292,6 @@ export namespace EditorSession {
   }
 
   export async function open(input: z.infer<typeof OpenInput>) {
-    const hit = Array.from(state().values()).find((item) => item.info.sessionID === input.sessionID)
-    if (hit) await close(hit.info.id)
     const info: z.infer<typeof Info> = {
       id: `${Identifier.create("pty", false)}_editor`,
       sessionID: input.sessionID,

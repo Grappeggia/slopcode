@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { MouseButton } from "@opentui/core"
 import { useTheme } from "@tui/context/theme"
@@ -102,7 +102,7 @@ export function EditorPane(props: {
   info: () => EditorInfo | undefined
   onChange(info: Partial<EditorInfo>): void
   onRequestClose(): void
-  onClosed(): void
+  onClosed(id: string): void
 }) {
   const sdk = useSDK()
   const keybind = useKeybind()
@@ -157,38 +157,44 @@ export function EditorPane(props: {
     onCleanup(resume)
   })
 
-  createEffect(() => {
-    const info = props.info()
-    if (!info) return
-    const id = info.id
-    const next = url(`/editor/${info.id}/connect`)
-    next.protocol = next.protocol === "https:" ? "wss:" : "ws:"
-    ws = new WebSocket(next)
-    ws.onopen = () => {
-      send({ type: "resize", rows: size().rows, cols: size().cols })
-      send({ type: "focus", gained: true })
-    }
-    ws.onmessage = (event) => {
-      const data = JSON.parse(String(event.data)) as { type: string; snapshot?: Snapshot }
-      if (data.type !== "snapshot" || !data.snapshot) return
-      setSnapshot(data.snapshot)
-      props.onChange({
-        file: data.snapshot.file,
-        dirty: data.snapshot.dirty,
-        diff: data.snapshot.diff,
-        mode: data.snapshot.mode,
-        status: data.snapshot.status,
-      })
-    }
-    ws.onclose = () => {
-      if (props.info()?.id === id) props.onClosed()
-    }
-    onCleanup(() => {
-      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "focus", gained: false }))
-      ws?.close()
-      ws = undefined
-    })
-  })
+  createEffect(
+    on(
+      () => props.info()?.id,
+      (id) => {
+        if (!id) return
+        setSnapshot(undefined)
+        const next = url(`/editor/${id}/connect`)
+        next.protocol = next.protocol === "https:" ? "wss:" : "ws:"
+        let disposed = false
+        ws = new WebSocket(next)
+        ws.onopen = () => {
+          send({ type: "resize", rows: size().rows, cols: size().cols })
+          send({ type: "focus", gained: true })
+        }
+        ws.onmessage = (event) => {
+          const data = JSON.parse(String(event.data)) as { type: string; snapshot?: Snapshot }
+          if (data.type !== "snapshot" || !data.snapshot) return
+          setSnapshot(data.snapshot)
+          props.onChange({
+            file: data.snapshot.file,
+            dirty: data.snapshot.dirty,
+            diff: data.snapshot.diff,
+            mode: data.snapshot.mode,
+            status: data.snapshot.status,
+          })
+        }
+        ws.onclose = () => {
+          if (!disposed) props.onClosed(id)
+        }
+        onCleanup(() => {
+          disposed = true
+          if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "focus", gained: false }))
+          ws?.close()
+          ws = undefined
+        })
+      },
+    ),
+  )
 
   createEffect(() => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return
