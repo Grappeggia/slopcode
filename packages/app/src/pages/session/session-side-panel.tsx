@@ -20,7 +20,7 @@ import { SessionContextTab, SortableTab, FileVisual } from "@/components/session
 import { useCommand } from "@/context/command"
 import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
-import { useLayout } from "@/context/layout"
+import { SESSION_SIDE_PANEL_RAIL_WIDTH, useLayout } from "@/context/layout"
 import { useSync } from "@/context/sync"
 import { createFileTabListSync } from "@/pages/session/file-tab-scroll"
 import { FileTabContent } from "@/pages/session/file-tabs"
@@ -46,8 +46,9 @@ export function SessionSidePanel(props: {
   const tabs = createMemo(() => layout.tabs(sessionKey))
   const view = createMemo(() => layout.view(sessionKey))
 
-  const reviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
   const open = createMemo(() => isDesktop() && (view().reviewPanel.opened() || layout.fileTree.opened()))
+  const collapsed = createMemo(() => open() && view().sidePanel.collapsed())
+  const reviewOpen = createMemo(() => open() && !collapsed() && view().reviewPanel.opened())
   const reviewTab = createMemo(() => isDesktop())
 
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
@@ -145,6 +146,7 @@ export function SessionSidePanel(props: {
   }
 
   const openExplorer = () => {
+    view().sidePanel.expand()
     if (!layout.fileTree.opened()) layout.fileTree.open()
     if (fileTreeTab() === "all") return
     layout.fileTree.setTab("all")
@@ -169,6 +171,23 @@ export function SessionSidePanel(props: {
         >
           📂
         </span>
+      </Button>
+    </Tooltip>
+  )
+
+  const SideButton = (props: { collapsed: boolean }) => (
+    <Tooltip value={language.t(props.collapsed ? "session.panel.expand" : "session.panel.collapse")} placement="left">
+      <Button
+        size="small"
+        variant="ghost"
+        data-action={props.collapsed ? "session-side-panel-expand" : "session-side-panel-collapse"}
+        onClick={() => (props.collapsed ? view().sidePanel.expand() : view().sidePanel.collapse())}
+        aria-label={language.t(props.collapsed ? "session.panel.expand" : "session.panel.collapse")}
+        aria-controls="review-panel"
+        aria-expanded={!props.collapsed}
+        class="h-7 w-7 !rounded-full !px-0 border border-border-weak-base bg-background-stronger text-text-weak shadow-sm hover:text-text-strong"
+      >
+        {props.collapsed ? "<" : ">"}
       </Button>
     </Tooltip>
   )
@@ -241,10 +260,19 @@ export function SessionSidePanel(props: {
         classList={{
           "flex-1": reviewOpen(),
           "shrink-0": !reviewOpen(),
+          "bg-background-stronger": collapsed(),
         }}
-        style={{ width: reviewOpen() ? undefined : `${layout.fileTree.width()}px` }}
+        style={{ width: collapsed() ? `${SESSION_SIDE_PANEL_RAIL_WIDTH}px` : reviewOpen() ? undefined : `${layout.fileTree.width()}px` }}
       >
-        <Show when={reviewOpen()}>
+        <div class="absolute left-0 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2">
+          <SideButton collapsed={collapsed()} />
+        </div>
+
+        <Show when={collapsed()}>
+          <div class="h-full w-full bg-background-stronger" />
+        </Show>
+
+        <Show when={!collapsed() && reviewOpen()}>
           <div class="flex-1 min-w-0 h-full">
             <DragDropProvider
               onDragStart={handleDragStart}
@@ -393,7 +421,7 @@ export function SessionSidePanel(props: {
           </div>
         </Show>
 
-        <Show when={layout.fileTree.opened()}>
+        <Show when={!collapsed() && layout.fileTree.opened()}>
           <div id="file-tree-panel" class="relative shrink-0 h-full" style={{ width: `${layout.fileTree.width()}px` }}>
             <div
               class="h-full flex flex-col overflow-hidden group/filetree"

@@ -41,6 +41,7 @@ export namespace Config {
   const ModelId = z.string().meta({ $ref: "https://models.dev/model-schema.json#/$defs/Model" })
 
   const log = Log.create({ service: "config" })
+  export const DEFAULT_SESSION_TURN_TIMEOUT = 150 * 60 * 1000
 
   // Managed settings directory for enterprise deployments (highest priority, admin-controlled)
   // These settings override all user and project settings
@@ -257,7 +258,7 @@ export namespace Config {
       idle_timeout_ms: result.pty?.idle_timeout_ms ?? 10 * 60 * 1000,
     }
     result.session = {
-      turn_timeout_ms: result.session?.turn_timeout_ms ?? 15 * 60 * 1000,
+      turn_timeout_ms: result.session?.turn_timeout_ms ?? DEFAULT_SESSION_TURN_TIMEOUT,
     }
     result.shell = {
       timeout_ms: result.shell?.timeout_ms ?? 5 * 60 * 1000,
@@ -1020,7 +1021,9 @@ export namespace Config {
         .int()
         .positive()
         .optional()
-        .describe("Timeout in milliseconds for a single session turn before it is aborted (default: 900000)."),
+        .describe(
+          `Timeout in milliseconds for a single session turn before it is aborted (default: ${DEFAULT_SESSION_TURN_TIMEOUT}).`,
+        ),
     })
     .strict()
     .meta({

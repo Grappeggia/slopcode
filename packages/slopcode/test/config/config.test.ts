@@ -40,6 +40,7 @@ test("loads config with defaults when no files exist", async () => {
     fn: async () => {
       const config = await Config.get()
       expect(config.username).toBeDefined()
+      expect(config.session?.turn_timeout_ms).toBe(Config.DEFAULT_SESSION_TURN_TIMEOUT)
     },
   })
 })

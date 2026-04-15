@@ -14,6 +14,7 @@ const AVATAR_COLOR_KEYS = ["pink", "mint", "orange", "purple", "cyan", "lime"] a
 const DEFAULT_PANEL_WIDTH = 344
 const DEFAULT_SESSION_WIDTH = 600
 const DEFAULT_TERMINAL_HEIGHT = 280
+export const SESSION_SIDE_PANEL_RAIL_WIDTH = 40
 export type AvatarColorKey = (typeof AVATAR_COLOR_KEYS)[number]
 
 export function getAvatarColors(key?: string) {
@@ -43,6 +44,7 @@ type SessionView = {
   turnStart?: number
   mobileTab?: "session" | "changes"
   changes?: "session" | "turn"
+  sideCollapsed?: boolean
 }
 
 type TabHandoff = {
@@ -676,6 +678,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         const s = createMemo(() => store.sessionView[key()] ?? { scroll: {} })
         const terminalOpened = createMemo(() => store.terminal?.opened ?? false)
         const reviewPanelOpened = createMemo(() => store.review?.panelOpened ?? true)
+        const collapsed = createMemo(() => !!s().sideCollapsed)
 
         function setTerminalOpened(next: boolean) {
           const current = store.terminal
@@ -693,12 +696,27 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           const current = store.review
           if (!current) {
             setStore("review", { diffStyle: "split" as ReviewDiffStyle, panelOpened: next })
+            if (next) setCollapsed(false)
             return
           }
 
           const value = current.panelOpened ?? true
+          if (value !== next) setStore("review", "panelOpened", next)
+          if (next) setCollapsed(false)
+        }
+
+        function setCollapsed(next: boolean) {
+          const value = s().sideCollapsed ?? false
           if (value === next) return
-          setStore("review", "panelOpened", next)
+
+          updateView((draft) => {
+            if (next) {
+              draft.sideCollapsed = true
+              return
+            }
+
+            delete draft.sideCollapsed
+          })
         }
 
         function updateView(next: (draft: SessionView) => void) {
@@ -724,6 +742,18 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           },
           setScroll(tab: string, pos: SessionScroll) {
             scroll.setScroll(key(), tab, pos)
+          },
+          sidePanel: {
+            collapsed,
+            collapse() {
+              setCollapsed(true)
+            },
+            expand() {
+              setCollapsed(false)
+            },
+            toggle() {
+              setCollapsed(!collapsed())
+            },
           },
           terminal: {
             opened: terminalOpened,

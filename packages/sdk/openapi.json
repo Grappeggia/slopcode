@@ -10351,7 +10351,7 @@
         "type": "object",
         "properties": {
           "turn_timeout_ms": {
-            "description": "Timeout in milliseconds for a single session turn before it is aborted (default: 900000).",
+            "description": "Timeout in milliseconds for a single session turn before it is aborted (default: 9000000).",
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991

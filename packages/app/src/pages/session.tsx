@@ -14,7 +14,7 @@ import { NewSessionView, SessionHeader } from "@/components/session"
 import { useComments } from "@/context/comments"
 import { type FileSelection, type SelectedLineRange, selectionFromLines, useFile } from "@/context/file"
 import { useLanguage } from "@/context/language"
-import { useLayout } from "@/context/layout"
+import { SESSION_SIDE_PANEL_RAIL_WIDTH, useLayout } from "@/context/layout"
 import { useLocal } from "@/context/local"
 import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
@@ -111,11 +111,14 @@ export default function Page() {
   )
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
-  const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
-  const desktopFileTreeOpen = createMemo(() => isDesktop() && layout.fileTree.opened())
-  const desktopSidePanelOpen = createMemo(() => desktopReviewOpen() || desktopFileTreeOpen())
+  const desktopSidePanelOpen = createMemo(() => isDesktop() && (view().reviewPanel.opened() || layout.fileTree.opened()))
+  const desktopSidePanelCollapsed = createMemo(() => desktopSidePanelOpen() && view().sidePanel.collapsed())
+  const desktopReviewOpen = createMemo(
+    () => desktopSidePanelOpen() && !desktopSidePanelCollapsed() && view().reviewPanel.opened(),
+  )
   const sessionPanelWidth = createMemo(() => {
     if (!desktopSidePanelOpen()) return "100%"
+    if (desktopSidePanelCollapsed()) return `calc(100% - ${SESSION_SIDE_PANEL_RAIL_WIDTH}px)`
     if (desktopReviewOpen()) return `${layout.session.width()}px`
     return `calc(100% - ${layout.fileTree.width()}px)`
   })
