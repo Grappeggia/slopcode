@@ -433,13 +433,7 @@ export function SessionSidePanel(props: {
               class="h-full flex flex-col overflow-hidden group/filetree"
               classList={{ "border-l border-border-weak-base": reviewOpen() }}
             >
-              <Tabs
-                variant="pill"
-                value={fileTreeTab()}
-                onChange={setFileTreeTabValue}
-                class="h-full"
-                data-scope="filetree"
-              >
+              <Tabs value={fileTreeTab()} onChange={setFileTreeTabValue} class="h-full" data-scope="filetree">
                 <Tabs.List data-scrolled={store.fileTreeScrolled ? "" : undefined}>
                   <Tabs.Trigger value="changes" class="flex-1" classes={{ button: "w-full" }}>
                     {reviewCount()}{" "}
