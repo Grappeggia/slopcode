@@ -145,8 +145,7 @@ function OpenFileRow(props: { tab: EditorTab; active?: boolean; onSelect(): void
     >
       <box onMouseUp={props.onSelect}>
         <text fg={fg()} wrapMode="none">
-          <span style={{ fg: fg() }}>{props.active ? ">" : "-"}</span>{" "}
-          {Locale.truncateMiddle(props.tab.file, 28)}
+          <span style={{ fg: fg() }}>{props.active ? ">" : "-"}</span> {Locale.truncateMiddle(props.tab.file, 28)}
           <Show when={props.tab.dirty}>
             <span style={{ fg: theme.warning }}> *</span>
           </Show>
