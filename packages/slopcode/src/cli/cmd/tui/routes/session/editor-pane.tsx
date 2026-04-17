@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack } from "solid-js"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { MouseButton } from "@opentui/core"
 import { useTheme } from "@tui/context/theme"
@@ -162,12 +162,13 @@ export function EditorPane(props: {
   createEffect(
     on(
       () => props.info()?.id,
-      (id) => {
+      (id, prev) => {
         if (!id) return
-        setSnapshot(props.info()?.snapshot)
+        if (id === prev) return
+        setSnapshot(untrack(() => props.info()?.snapshot))
         const next = url(`/editor/${id}/connect`)
         next.protocol = next.protocol === "https:" ? "wss:" : "ws:"
-        const token = daemonToken()
+        const token = untrack(daemonToken)
         if (token) next.searchParams.set("daemonToken", token)
         let disposed = false
         ws = new WebSocket(next)
