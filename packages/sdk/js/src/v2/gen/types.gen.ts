@@ -2642,6 +2642,61 @@ export type EditorGetResponses = {
 
 export type EditorGetResponse = EditorGetResponses[keyof EditorGetResponses]
 
+export type EditorSnapshotData = {
+  body?: never
+  path: {
+    editorID: string
+  }
+  query: {
+    directory?: string
+    sessionID: string
+  }
+  url: "/editor/{editorID}/snapshot"
+}
+
+export type EditorSnapshotErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type EditorSnapshotError = EditorSnapshotErrors[keyof EditorSnapshotErrors]
+
+export type EditorSnapshotResponses = {
+  /**
+   * Editor snapshot
+   */
+  200: {
+    width: number
+    height: number
+    rows: Array<
+      Array<{
+        text: string
+        fg?: string
+        bg?: string
+        bold?: boolean
+        italic?: boolean
+        underline?: boolean
+        strikethrough?: boolean
+      }>
+    >
+    mode: string
+    dirty: boolean
+    diff: boolean
+    file: string
+    status: string
+    diagnostics: Array<{
+      line: number
+      column: number
+      severity: "error" | "warning"
+      message: string
+    }>
+  }
+}
+
+export type EditorSnapshotResponse = EditorSnapshotResponses[keyof EditorSnapshotResponses]
+
 export type EditorSaveData = {
   body?: never
   path: {

@@ -1129,6 +1129,146 @@
         ]
       }
     },
+    "/editor/{editorID}/snapshot": {
+      "get": {
+        "operationId": "editor.snapshot",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "editorID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Get embedded editor snapshot",
+        "description": "Get the current rendered editor snapshot.",
+        "responses": {
+          "200": {
+            "description": "Editor snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "width": {
+                      "type": "number"
+                    },
+                    "height": {
+                      "type": "number"
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "fg": {
+                              "type": "string"
+                            },
+                            "bg": {
+                              "type": "string"
+                            },
+                            "bold": {
+                              "type": "boolean"
+                            },
+                            "italic": {
+                              "type": "boolean"
+                            },
+                            "underline": {
+                              "type": "boolean"
+                            },
+                            "strikethrough": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["text"]
+                        }
+                      }
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "dirty": {
+                      "type": "boolean"
+                    },
+                    "diff": {
+                      "type": "boolean"
+                    },
+                    "file": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "diagnostics": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "line": {
+                            "type": "number"
+                          },
+                          "column": {
+                            "type": "number"
+                          },
+                          "severity": {
+                            "type": "string",
+                            "enum": ["error", "warning"]
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["line", "column", "severity", "message"]
+                      }
+                    }
+                  },
+                  "required": ["width", "height", "rows", "mode", "dirty", "diff", "file", "status", "diagnostics"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.editor.snapshot({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/editor/{editorID}/save": {
       "post": {
         "operationId": "editor.save",

@@ -33,6 +33,8 @@ import type {
   EditorOpenResponses,
   EditorSaveErrors,
   EditorSaveResponses,
+  EditorSnapshotErrors,
+  EditorSnapshotResponses,
   EventSubscribeResponses,
   EventTuiCommandExecute,
   EventTuiPromptAppend,
@@ -827,6 +829,38 @@ export class Editor extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<EditorGetResponses, EditorGetErrors, ThrowOnError>({
       url: "/editor/{editorID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get embedded editor snapshot
+   *
+   * Get the current rendered editor snapshot.
+   */
+  public snapshot<ThrowOnError extends boolean = false>(
+    parameters: {
+      editorID: string
+      directory?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "editorID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<EditorSnapshotResponses, EditorSnapshotErrors, ThrowOnError>({
+      url: "/editor/{editorID}/snapshot",
       ...options,
       ...params,
     })

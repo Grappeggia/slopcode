@@ -307,7 +307,9 @@ describe("editor sidebar open e2e", () => {
       rows: height,
       cwd: pkgDir,
       env: {
-        ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+        ...Object.fromEntries(
+          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+        ),
         TERM: "xterm-256color",
         SLOPCODE_TEST_HOME: home,
         SLOPCODE_ROUTE: JSON.stringify({
