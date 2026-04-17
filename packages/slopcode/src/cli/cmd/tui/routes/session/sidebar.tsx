@@ -123,6 +123,8 @@ function FileRow(props: {
 function OpenFileRow(props: { tab: EditorTab; active?: boolean; onSelect(): void; onSave(): void; onClose(): void }) {
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
+  const [saveHover, setSaveHover] = createSignal(false)
+  const [closeHover, setCloseHover] = createSignal(false)
   const fg = createMemo(() => {
     if (props.active) return theme.text
     if (hover()) return theme.text
@@ -133,44 +135,56 @@ function OpenFileRow(props: { tab: EditorTab; active?: boolean; onSelect(): void
     <box
       paddingLeft={1}
       paddingRight={1}
+      paddingTop={1}
+      paddingBottom={1}
       backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
       onMouseOver={() => setHover(true)}
       onMouseOut={() => setHover(false)}
-      flexDirection="row"
-      justifyContent="space-between"
+      flexDirection="column"
       gap={1}
     >
-      <box flexGrow={1} onMouseUp={props.onSelect}>
+      <box onMouseUp={props.onSelect}>
         <text fg={fg()} wrapMode="none">
-          <span style={{ fg: fg() }}>{props.active ? "●" : "○"}</span> {Locale.truncateMiddle(props.tab.file, 16)}
+          <span style={{ fg: fg() }}>{props.active ? ">" : "-"}</span>{" "}
+          {Locale.truncateMiddle(props.tab.file, 28)}
           <Show when={props.tab.dirty}>
             <span style={{ fg: theme.warning }}> *</span>
           </Show>
         </text>
       </box>
-      <box flexDirection="row" gap={1} flexShrink={0}>
-        <text
-          fg={theme.textMuted}
-          wrapMode="none"
+      <box flexDirection="column" gap={1} paddingLeft={2}>
+        <box
+          paddingLeft={1}
+          paddingRight={1}
+          backgroundColor={saveHover() ? theme.background : theme.backgroundPanel}
+          onMouseOver={() => setSaveHover(true)}
+          onMouseOut={() => setSaveHover(false)}
           onMouseUp={(evt) => {
             evt.preventDefault()
             evt.stopPropagation()
             props.onSave()
           }}
         >
-          💾 save
-        </text>
-        <text
-          fg={theme.textMuted}
-          wrapMode="none"
+          <text fg={theme.textMuted} wrapMode="none">
+            [save]
+          </text>
+        </box>
+        <box
+          paddingLeft={1}
+          paddingRight={1}
+          backgroundColor={closeHover() ? theme.background : theme.backgroundPanel}
+          onMouseOver={() => setCloseHover(true)}
+          onMouseOut={() => setCloseHover(false)}
           onMouseUp={(evt) => {
             evt.preventDefault()
             evt.stopPropagation()
             props.onClose()
           }}
         >
-          ✕ close
-        </text>
+          <text fg={theme.textMuted} wrapMode="none">
+            [close]
+          </text>
+        </box>
       </box>
     </box>
   )

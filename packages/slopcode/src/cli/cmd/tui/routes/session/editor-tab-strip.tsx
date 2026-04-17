@@ -39,8 +39,10 @@ function Tab(props: {
       </text>
       <Show when={props.closable}>
         <box
-          width={5}
+          paddingLeft={1}
+          paddingRight={1}
           justifyContent="center"
+          backgroundColor={hover() ? theme.background : theme.backgroundPanel}
           onMouseDown={(evt) => {
             evt.preventDefault()
             evt.stopPropagation()
@@ -48,7 +50,7 @@ function Tab(props: {
           }}
         >
           <text fg={hover() ? theme.text : theme.textMuted} wrapMode="none">
-            x
+            [x]
           </text>
         </box>
       </Show>

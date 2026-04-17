@@ -276,7 +276,7 @@ describe("editor full app sidebar open e2e", () => {
 
       const filesMode = await eventually(() => {
         const screen = frame(raw, width, height).join("\n")
-        if (!screen.includes("Open Files") || !screen.includes("💾") || !screen.includes("✕")) return
+        if (!screen.includes("Open Files") || !screen.includes("[save]") || !screen.includes("[close]")) return
         return screen
       })
       expect(filesMode).toContain("route.tsx")
@@ -288,8 +288,8 @@ describe("editor full app sidebar open e2e", () => {
         if (!screen.includes("Open Files") || !screen.includes("route.tsx") || !screen.includes(snippet)) return
         return screen
       })
-      expect(summaryMode).toContain("💾")
-      expect(summaryMode).toContain("✕")
+      expect(summaryMode).toContain("[save]")
+      expect(summaryMode).toContain("[close]")
 
       const samples: Array<{ elapsed: number; visible: boolean; screen: string }> = []
       while (Date.now() - start < 4_200) {
@@ -312,4 +312,6 @@ describe("editor full app sidebar open e2e", () => {
       pty.kill()
     }
   }, 25_000)
+
+
 })
