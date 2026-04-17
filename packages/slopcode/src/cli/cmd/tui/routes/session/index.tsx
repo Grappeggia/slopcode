@@ -70,7 +70,7 @@ import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar, type SidebarMode } from "./sidebar"
-import { sessionSidebarExpanded, sessionSidebarHeaderVisible, sessionSidebarWidth } from "./sidebar-layout"
+import { sessionMainWidth, sessionSidebarExpanded, sessionSidebarHeaderVisible } from "./sidebar-layout"
 import { EditorPane, type EditorInfo } from "./editor-pane"
 import { EditorTabStrip } from "./editor-tab-strip"
 import { Flag } from "@/flag/flag"
@@ -334,8 +334,8 @@ export function Session() {
       collapsed: sidebarRail(),
     }),
   )
-  const sidebarWidth = createMemo(() =>
-    sessionSidebarWidth({
+  const mainWidth = createMemo(() =>
+    sessionMainWidth(dimensions().width, {
       visible: sidebarVisible(),
       wide: wide(),
       collapsed: sidebarRail(),
@@ -367,7 +367,7 @@ export function Session() {
   }
 
   const showTimestamps = createMemo(() => timestamps() === "show")
-  const contentWidth = createMemo(() => dimensions().width - sidebarWidth() - 4)
+  const contentWidth = createMemo(() => Math.max(0, mainWidth() - 4))
 
   const scrollAcceleration = createMemo(() => {
     const tui = tuiConfig
@@ -1903,6 +1903,7 @@ export function Session() {
       <box flexDirection="row">
         <box flexGrow={1}>
           <SessionStrip
+            width={mainWidth()}
             action={
               session()?.parentID
                 ? undefined
