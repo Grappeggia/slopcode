@@ -6,7 +6,6 @@ import { Locale } from "@/util/locale"
 import * as path from "path"
 import type { AssistantMessage } from "@slopcode-ai/sdk/v2"
 import { Installation } from "@/installation"
-import { useKeybind } from "../../context/keybind"
 import { useDirectory } from "../../context/directory"
 import { useKV } from "../../context/kv"
 import { TodoItem } from "../../component/todo-item"
@@ -90,8 +89,6 @@ function FileRow(props: {
 
   return (
     <box
-      paddingLeft={1}
-      paddingRight={1}
       backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
       onMouseOver={() => setHover(true)}
       onMouseOut={() => setHover(false)}
@@ -212,7 +209,6 @@ function OpenFilesSection(props: {
 
 function FilesSidebar(props: { openFile(file: string): void; modified: Set<string> }) {
   const sdk = useSDK()
-  const keybind = useKeybind()
   const promptRef = usePromptRef()
   const toast = useToast()
   const { theme } = useTheme()
@@ -227,7 +223,6 @@ function FilesSidebar(props: { openFile(file: string): void; modified: Set<strin
     }
     return result.data ?? []
   })
-  const title = createMemo(() => (dir() ? dir() : "."))
   const up = () => {
     if (!dir()) return
     const next = path.dirname(dir())
@@ -245,14 +240,9 @@ function FilesSidebar(props: { openFile(file: string): void; modified: Set<strin
       }}
     >
       <box flexShrink={0} gap={1} paddingRight={1}>
-        <box>
-          <text fg={theme.text}>
-            <b>File explorer</b>
-          </text>
-          <text fg={theme.textMuted}>{title()}</text>
-          <text fg={theme.textMuted}>Select a file to attach it to the prompt.</text>
-          <text fg={theme.textMuted}>{keybind.print("session_files")} reopens this view.</text>
-        </box>
+        <Show when={dir()}>
+          <text fg={theme.textMuted}>{dir()}</text>
+        </Show>
         <Show when={failed()}>
           <text fg={theme.error}>{failed()}</text>
         </Show>
