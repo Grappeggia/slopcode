@@ -6,6 +6,7 @@ import { MouseButton, TextAttributes } from "@opentui/core"
 import { RouteProvider, useRoute } from "@tui/context/route"
 import { SessionTabsProvider, useSessionTabs } from "@tui/context/session-tabs"
 import { TabStateProvider, useTabState } from "@tui/context/tab-state"
+import { EditorConnectionProvider } from "@tui/context/editor-connection"
 import { SDKProvider, useSDK } from "@tui/context/sdk"
 import { SyncProvider, useSync } from "@tui/context/sync"
 import { DialogProvider, useDialog } from "@tui/ui/dialog"
@@ -160,7 +161,8 @@ export function tui(input: {
                           <SyncProvider>
                             <SessionTabsProvider>
                               <TabStateProvider>
-                                <ThemeProvider mode={mode}>
+                                <EditorConnectionProvider>
+                                  <ThemeProvider mode={mode}>
                                   <LocalProvider>
                                     <KeybindProvider>
                                       <PromptStashProvider>
@@ -179,6 +181,7 @@ export function tui(input: {
                                     </KeybindProvider>
                                   </LocalProvider>
                                 </ThemeProvider>
+                                </EditorConnectionProvider>
                               </TabStateProvider>
                             </SessionTabsProvider>
                           </SyncProvider>

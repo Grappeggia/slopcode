@@ -188,6 +188,7 @@ import { SDKProvider } from "@tui/context/sdk"
 import { SyncProvider } from "@tui/context/sync"
 import { SessionTabsProvider } from "@tui/context/session-tabs"
 import { TabStateProvider } from "@tui/context/tab-state"
+import { EditorConnectionProvider } from "@tui/context/editor-connection"
 import { ThemeProvider, useTheme } from "@tui/context/theme"
 import { LocalProvider } from "@tui/context/local"
 import { KeybindProvider } from "@tui/context/keybind"
@@ -225,7 +226,8 @@ render(
                   <SyncProvider>
                     <SessionTabsProvider>
                       <TabStateProvider>
-                        <ThemeProvider mode="dark">
+                        <EditorConnectionProvider>
+                          <ThemeProvider mode="dark">
                           <LocalProvider>
                             <KeybindProvider>
                               <PromptStashProvider>
@@ -244,6 +246,7 @@ render(
                             </KeybindProvider>
                           </LocalProvider>
                         </ThemeProvider>
+                        </EditorConnectionProvider>
                       </TabStateProvider>
                     </SessionTabsProvider>
                   </SyncProvider>

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
+import { spawn } from "bun-pty"
 import { tmpdir } from "../../fixture/fixture"
 import { Server } from "../../../src/server/server"
 import { DaemonAuth } from "../../../src/daemon/auth"
@@ -11,6 +12,8 @@ const fixturePath = path.resolve(pkgDir, "src/cli/cmd/tui/context/route.tsx")
 const scripts: string[] = []
 const active: Array<{ stop(force?: boolean): Promise<void> | void }> = []
 const token = "editor-tab-persistence-token"
+const width = 140
+const height = 40
 
 afterEach(async () => {
   await Promise.all(scripts.splice(0).map((file) => fs.rm(file, { force: true })))
@@ -128,178 +131,68 @@ function frame(raw: string, width: number, height: number) {
     put(String.fromCodePoint(code))
     i += code > 0xffff ? 2 : 1
   }
-  return rows.map((row) => row.join("").replace(/\s+$/g, "")).join("\n")
+  return rows.map((row) => row.join(""))
 }
 
-async function script(input: { serverUrl: string; directory: string; sessionID: string; file: string }) {
+function column(line: string, text: string, occurrence = 0) {
+  let index = -1
+  let offset = 0
+  for (let i = 0; i <= occurrence; i++) {
+    index = line.indexOf(text, offset)
+    if (index === -1) return
+    offset = index + text.length
+  }
+  return Bun.stringWidth(line.slice(0, index)) + 1
+}
+
+function locate(screen: string[], text: string, occurrence = 0) {
+  for (let row = 0; row < screen.length; row++) {
+    const col = column(screen[row]!, text, occurrence)
+    if (!col) continue
+    return { row: row + 1, col }
+  }
+}
+
+async function eventually<T>(check: () => T | Promise<T>, timeout = 12_000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const value = await check()
+    if (value) return value
+    await Bun.sleep(50)
+  }
+  throw new Error("condition not met")
+}
+
+function click(pty: ReturnType<typeof spawn>, row: number, col: number) {
+  pty.write(`\u001b[<0;${col};${row}M`)
+  pty.write(`\u001b[<3;${col};${row}m`)
+}
+
+async function script() {
   const file = path.join(
     pkgDir,
-    `.slopcode-editor-tab-persistence-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tsx`,
+    `.slopcode-editor-tab-persistence-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.ts`,
   )
   scripts.push(file)
   await Bun.write(
     file,
-    `import { render, useTerminalDimensions } from "@opentui/solid"
-import { createSignal, onMount } from "solid-js"
-import { ArgsProvider } from "@tui/context/args"
-import { ExitProvider } from "@tui/context/exit"
-import { KVProvider } from "@tui/context/kv"
-import { ToastProvider } from "@tui/ui/toast"
-import { RouteProvider, useRoute } from "@tui/context/route"
-import { TuiConfigProvider } from "@tui/context/tui-config"
-import { SDKProvider, useSDK } from "@tui/context/sdk"
-import { SyncProvider, useSync } from "@tui/context/sync"
-import { SessionTabsProvider } from "@tui/context/session-tabs"
-import { TabStateProvider, useTabState } from "@tui/context/tab-state"
-import { ThemeProvider, useTheme } from "@tui/context/theme"
-import { LocalProvider } from "@tui/context/local"
-import { KeybindProvider } from "@tui/context/keybind"
-import { PromptStashProvider } from ${JSON.stringify(path.resolve(pkgDir, "src/cli/cmd/tui/component/prompt/stash.tsx"))}
-import { DialogProvider } from "@tui/ui/dialog"
-import { CommandProvider } from "@tui/component/dialog-command"
-import { FrecencyProvider } from ${JSON.stringify(path.resolve(pkgDir, "src/cli/cmd/tui/component/prompt/frecency.tsx"))}
-import { PromptHistoryProvider } from ${JSON.stringify(path.resolve(pkgDir, "src/cli/cmd/tui/component/prompt/history.ts"))}
-import { PromptRefProvider } from ${JSON.stringify(path.resolve(pkgDir, "src/cli/cmd/tui/context/prompt.tsx"))}
-import { Session } from ${JSON.stringify(path.resolve(pkgDir, "src/cli/cmd/tui/routes/session/index.tsx"))}
+    `import { tui } from ${JSON.stringify(path.resolve(pkgDir, "src/cli/cmd/tui/app.tsx"))}
+import { TuiConfig } from ${JSON.stringify(path.resolve(pkgDir, "src/config/tui.ts"))}
+import { Instance } from ${JSON.stringify(path.resolve(pkgDir, "src/project/instance.ts"))}
 
-function Driver() {
-  const route = useRoute()
-  const sdk = useSDK()
-  const sync = useSync()
-  const tabState = useTabState()
-
-  onMount(() => {
-    void (async () => {
-      route.navigate({ type: "session", sessionID: ${JSON.stringify(input.sessionID)}, source: "switch" })
-      while (!sync.session.get(${JSON.stringify(input.sessionID)})) {
-        await Bun.sleep(50)
-      }
-      const url = new URL("/editor", sdk.url)
-      if (sdk.directory) url.searchParams.set("directory", sdk.directory)
-      url.searchParams.set("sessionID", ${JSON.stringify(input.sessionID)})
-      const headers = new Headers(sdk.headers)
-      headers.set("content-type", "application/json")
-      const response = await (sdk.fetch ?? fetch)(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          sessionID: ${JSON.stringify(input.sessionID)},
-          file: ${JSON.stringify(input.file)},
-          size: { rows: 12, cols: 80 },
-        }),
-      })
-      if (!response.ok) {
-        console.error(await response.text())
-        process.exit(1)
-      }
-      const info = await response.json()
-      const snapshot = await (sdk.fetch ?? fetch)(
-        new URL("/editor/" + info.id + "/snapshot?sessionID=" + ${JSON.stringify(input.sessionID)}, sdk.url),
-        {
-          method: "GET",
-          headers: new Headers(sdk.headers),
-        },
-      ).then((result) => (result.ok ? result.json() : undefined))
-      tabState.setEditor(${JSON.stringify(input.sessionID)}, {
-        file: ${JSON.stringify(input.file)},
-        editorID: info.id,
-        dirty: info.dirty,
-        diff: info.diff,
-        mode: info.mode,
-        status: info.status,
-        snapshot,
-      })
-      const start = Date.now()
-      const dump = (phase) => {
-        process.stderr.write(
-          "__EDITOR_STATE__" +
-            JSON.stringify({
-              phase,
-              elapsed: Date.now() - start,
-              editor: tabState.editor(${JSON.stringify(input.sessionID)}),
-            }) +
-            "\\n",
-        )
-      }
-      await Bun.sleep(2200)
-      dump("opened")
-      tabState.activateEditor(${JSON.stringify(input.sessionID)}, undefined)
-      await Bun.sleep(500)
-      dump("chat")
-      tabState.activateEditor(${JSON.stringify(input.sessionID)}, ${JSON.stringify(input.file)})
-      await Bun.sleep(1800)
-      dump("back")
-      process.exit(0)
-    })()
-  })
-
-  return <></>
-}
-
-function App() {
-  const { theme } = useTheme()
-  const dims = useTerminalDimensions()
-  return (
-    <box width={dims().width} height={dims().height} backgroundColor={theme.background}>
-      <Session />
-      <Driver />
-    </box>
-  )
-}
-
-render(
-  () => (
-    <ArgsProvider>
-      <ExitProvider onExit={async () => process.exit(0)}>
-        <KVProvider>
-          <ToastProvider>
-            <RouteProvider>
-              <TuiConfigProvider config={{}}>
-                <SDKProvider
-                  url=${JSON.stringify(input.serverUrl)}
-                  directory=${JSON.stringify(input.directory)}
-                  headers={{ ${JSON.stringify(DaemonAuth.Header)}: ${JSON.stringify(token)} }}
-                >
-                  <SyncProvider>
-                    <SessionTabsProvider>
-                      <TabStateProvider>
-                        <ThemeProvider mode="dark">
-                          <LocalProvider>
-                            <KeybindProvider>
-                              <PromptStashProvider>
-                                <DialogProvider>
-                                  <CommandProvider>
-                                    <FrecencyProvider>
-                                      <PromptHistoryProvider>
-                                        <PromptRefProvider>
-                                          <App />
-                                        </PromptRefProvider>
-                                      </PromptHistoryProvider>
-                                    </FrecencyProvider>
-                                  </CommandProvider>
-                                </DialogProvider>
-                              </PromptStashProvider>
-                            </KeybindProvider>
-                          </LocalProvider>
-                        </ThemeProvider>
-                      </TabStateProvider>
-                    </SessionTabsProvider>
-                  </SyncProvider>
-                </SDKProvider>
-              </TuiConfigProvider>
-            </RouteProvider>
-          </ToastProvider>
-        </KVProvider>
-      </ExitProvider>
-    </ArgsProvider>
-  ),
-  {
-    targetFps: 60,
-    gatherStats: false,
-    exitOnCtrlC: false,
-    useKittyKeyboard: {},
-  },
-)
+const directory = process.argv[2]
+const url = process.argv[3]
+const sessionID = process.argv[4]
+const token = process.argv[5]
+const config = await Instance.provide({ directory, fn: () => TuiConfig.get() })
+await tui({
+  url,
+  config,
+  directory,
+  headers: { ${JSON.stringify(DaemonAuth.Header)}: token },
+  args: { sessionID, continue: false, fork: false },
+  onExit: async () => {},
+})
 `,
   )
   return file
@@ -310,10 +203,8 @@ describe("editor tab persistence e2e", () => {
     await using tmp = await tmpdir({
       git: true,
       init: async (dir: string) => {
-        const file = path.join(dir, "src", "route.tsx")
-        await fs.mkdir(path.dirname(file), { recursive: true })
+        const file = path.join(dir, "route.tsx")
         await Bun.write(file, await Bun.file(fixturePath).text())
-        return file
       },
     })
 
@@ -332,73 +223,95 @@ describe("editor tab persistence e2e", () => {
     expect(create.status).toBe(200)
     const session = (await create.json()) as { id: string }
 
-    const file = await script({
-      serverUrl: server.url.toString(),
-      directory: tmp.path,
-      sessionID: session.id,
-      file: "src/route.tsx",
-    })
-
-    const home = path.join(
-      os.tmpdir(),
-      `slopcode-editor-tab-home-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    )
+    const file = await script()
+    let raw = ""
+    const home = path.join(os.tmpdir(), `slopcode-editor-tab-home-${process.pid}-${Date.now()}`)
     await fs.mkdir(home, { recursive: true })
-    const child = Bun.spawn([process.execPath, "--cwd", pkgDir, file], {
+    const pty = spawn(process.execPath, [file, tmp.path, server.url.toString(), session.id, token], {
+      name: process.env.TERM || "xterm-256color",
+      cols: width,
+      rows: height,
       cwd: pkgDir,
       env: {
-        ...Object.fromEntries(
-          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-        ),
-        COLUMNS: "100",
-        LINES: "28",
-        TERM: "xterm-256color",
+        ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+        TERM: process.env.TERM || "xterm-256color",
+        TERM_PROGRAM: process.env.TERM_PROGRAM || "tmux",
+        TERM_PROGRAM_VERSION: process.env.TERM_PROGRAM_VERSION || "",
+        TMUX: process.env.TMUX || "",
+        SSH_TTY: process.env.SSH_TTY || "",
+        HOME: process.env.HOME || os.homedir(),
         SLOPCODE_TEST_HOME: home,
-        SLOPCODE_ROUTE: JSON.stringify({
-          type: "session",
-          sessionID: session.id,
-          source: "switch",
-        }),
       },
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
     })
-    const [code, raw, stderr] = await Promise.all([
-      child.exited,
-      child.stdout ? new Response(child.stdout).text() : Promise.resolve(""),
-      child.stderr ? new Response(child.stderr).text() : Promise.resolve(""),
-    ])
+    const dispose = pty.onData((data) => {
+      raw += data
+    })
 
-    if (code !== 0) {
-      throw new Error(stderr || `child exited with ${code}`)
+    try {
+      await eventually(() => frame(raw, width, height).join("\n").includes("Editor Persistence"))
+      const summary = frame(raw, width, height)
+      const filesButton = locate(summary, "📂")
+      expect(filesButton).toBeDefined()
+      click(pty, filesButton!.row, filesButton!.col)
+
+      await eventually(() => frame(raw, width, height).join("\n").includes("File explorer"))
+      await eventually(() => frame(raw, width, height).join("\n").includes("route.tsx"))
+
+      const explorer = frame(raw, width, height)
+      const line = explorer.find((item) => item.includes("route.tsx"))
+      expect(line).toBeDefined()
+      const row = explorer.findIndex((item) => item.includes("route.tsx")) + 1
+      const icon = column(line!, "📂", 0)
+      const action = column(line!, "📂", 1) ?? icon
+      expect(action).toBeDefined()
+      click(pty, row, action! + 1)
+
+      const snippet = "SessionRoute"
+      await eventually(() => {
+        const screen = frame(raw, width, height).join("\n")
+        return screen.includes("route.tsx") && screen.includes(snippet)
+      }, 15_000)
+
+      const first = frame(raw, width, height)
+      const chat = locate(first, "Chat")
+      expect(chat).toBeDefined()
+      click(pty, chat!.row, chat!.col)
+
+      await eventually(() => {
+        const screen = frame(raw, width, height).join("\n")
+        return screen.includes("Chat") && !screen.includes(snippet)
+      })
+
+      const second = frame(raw, width, height)
+      const tab = locate(second, "route.tsx")
+      expect(tab).toBeDefined()
+      click(pty, tab!.row, tab!.col)
+
+      const start = await eventually(() => {
+        const screen = frame(raw, width, height).join("\n")
+        if (!screen.includes("route.tsx") || !screen.includes(snippet)) return
+        return Date.now()
+      }, 15_000)
+
+      const samples: Array<{ elapsed: number; visible: boolean; screen: string }> = []
+      while (Date.now() - start < 4_200) {
+        const screen = frame(raw, width, height).join("\n")
+        samples.push({
+          elapsed: Date.now() - start,
+          visible: screen.includes("route.tsx") && screen.includes(snippet),
+          screen,
+        })
+        await Bun.sleep(50)
+      }
+
+      expect(samples.at(-1)?.elapsed ?? 0).toBeGreaterThanOrEqual(4_000)
+      const blink = samples.find((item) => !item.visible)
+      if (blink) {
+        throw new Error(`editor blinked after tab restore at ${blink.elapsed}ms\n${blink.screen}`)
+      }
+    } finally {
+      dispose.dispose()
+      pty.kill()
     }
-
-    const states = stderr
-      .split("\n")
-      .filter((line) => line.startsWith("__EDITOR_STATE__"))
-      .map(
-        (line) =>
-          JSON.parse(line.slice("__EDITOR_STATE__".length)) as {
-            phase: string
-            elapsed: number
-            editor: { active?: string; tabs: Array<{ file: string }> }
-          },
-      )
-    const noise = stderr
-      .split("\n")
-      .filter((line) => line && !line.startsWith("__EDITOR_STATE__"))
-      .join("\n")
-
-    expect(noise).toBe("")
-    expect(states.map((item) => item.phase)).toEqual(["opened", "chat", "back"])
-    expect(states[0]?.editor.tabs.map((item) => item.file)).toEqual(["src/route.tsx"])
-    expect(states[0]?.editor.active).toBe("src/route.tsx")
-    expect(states[1]?.editor.tabs.map((item) => item.file)).toEqual(["src/route.tsx"])
-    expect(states[1]?.editor.active).toBeUndefined()
-    expect(states[2]?.editor.tabs.map((item) => item.file)).toEqual(["src/route.tsx"])
-    expect(states[2]?.editor.active).toBe("src/route.tsx")
-    expect(states[2]?.elapsed).toBeGreaterThanOrEqual(4_000)
-    expect(frame(raw, 100, 28).length).toBeGreaterThan(0)
-  }, 20_000)
+  }, 25_000)
 })

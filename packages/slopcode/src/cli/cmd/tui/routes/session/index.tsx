@@ -53,6 +53,7 @@ import type { QuestionTool } from "@/tool/question"
 import type { SkillTool } from "@/tool/skill"
 import { useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "@tui/context/sdk"
+import { useEditorConnection } from "@tui/context/editor-connection"
 import { useCommandDialog } from "@tui/component/dialog-command"
 import type { DialogContext } from "@tui/ui/dialog"
 import { useKeybind } from "@tui/context/keybind"
@@ -413,15 +414,7 @@ export function Session() {
 
   const toast = useToast()
   const sdk = useSDK()
-  const editorUrl = (input: string) => {
-    const next = new URL(input, sdk.url)
-    if (sdk.directory) next.searchParams.set("directory", sdk.directory)
-    if (route.workspaceID) next.searchParams.set("workspace", route.workspaceID)
-    if (sdk.viewID) next.searchParams.set("viewID", sdk.viewID)
-    next.searchParams.set("sessionID", route.sessionID)
-    return next
-  }
-  const editorHeaders = () => new Headers(sdk.headers)
+  const editorConn = useEditorConnection()
   const editorState = createMemo(() => tabState.editor(route.sessionID))
   const editorTabs = createMemo(() => editorState().tabs)
   const activeEditorFile = createMemo(() => editorState().active)
@@ -442,13 +435,7 @@ export function Session() {
   })
   const closeEditor = async (file = activeEditorFile()) => {
     if (!file) return
-    const hit = editorTabs().find((item) => item.file === file)
-    if (!hit) return
-    await (sdk.fetch ?? fetch)(editorUrl(`/editor/${hit.editorID}`), {
-      method: "DELETE",
-      headers: editorHeaders(),
-    }).catch(() => undefined)
-    tabState.closeEditor(route.sessionID, file)
+    await editorConn.close({ sessionID: route.sessionID, file })
   }
   const requestCloseEditor = async (file = activeEditorFile()) => {
     if (!file) return
@@ -465,39 +452,13 @@ export function Session() {
       tabState.activateEditor(route.sessionID, file)
       return
     }
-    const response = await (sdk.fetch ?? fetch)(editorUrl("/editor"), {
-      method: "POST",
-      headers: (() => {
-        const next = editorHeaders()
-        next.set("content-type", "application/json")
-        return next
-      })(),
-      body: JSON.stringify({
-        sessionID: route.sessionID,
-        file,
-        size: {
-          rows: Math.max(5, dimensions().height - 8),
-          cols: Math.max(20, dimensions().width - 6),
-        },
-      }),
-    })
-    if (!response.ok) {
-      toast.show({ message: await response.text(), variant: "error" })
-      return
-    }
-    const info = (await response.json()) as EditorInfo
-    const snapshot = await (sdk.fetch ?? fetch)(editorUrl(`/editor/${info.id}/snapshot`), {
-      method: "GET",
-      headers: editorHeaders(),
-    }).then((response) => (response.ok ? (response.json() as Promise<EditorInfo["snapshot"]>) : undefined))
-    tabState.setEditor(route.sessionID, {
+    return editorConn.open({
+      sessionID: route.sessionID,
       file,
-      editorID: info.id,
-      dirty: info.dirty,
-      diff: info.diff,
-      mode: info.mode,
-      status: info.status,
-      snapshot,
+      rows: Math.max(5, dimensions().height - 8),
+      cols: Math.max(20, dimensions().width - 6),
+    }).catch(async (error) => {
+      toast.show({ message: error instanceof Error ? error.message : String(error), variant: "error" })
     })
   }
   const modified = createMemo(() => {
@@ -2116,24 +2077,8 @@ export function Session() {
               <EditorPane
                 sessionID={route.sessionID}
                 info={editor}
-                onChange={(next) => {
-                  const file = editor()?.file
-                  if (!file) return
-                  tabState.patchEditor(route.sessionID, file, {
-                    dirty: next.dirty,
-                    diff: next.diff,
-                    mode: next.mode,
-                    status: next.status,
-                    snapshot: next.snapshot,
-                  })
-                }}
                 onRequestClose={() => {
                   void requestCloseEditor()
-                }}
-                onClosed={(id) => {
-                  const hit = editorTabs().find((item) => item.editorID === id)
-                  if (!hit) return
-                  tabState.closeEditor(route.sessionID, hit.file)
                 }}
               />
             </Show>

@@ -78,6 +78,9 @@ export const { use: useTabState, provider: TabStateProvider } = createSimpleCont
       get(id: string) {
         return getTabState(store, id)
       },
+      all() {
+        return store
+      },
       setPrompt(id: string, prompt: Parameters<typeof setTabPrompt>[2]) {
         setStore(
           produce((draft) => {

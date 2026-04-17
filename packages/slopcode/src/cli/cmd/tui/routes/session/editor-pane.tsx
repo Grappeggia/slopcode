@@ -1,10 +1,10 @@
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { MouseButton } from "@opentui/core"
 import { useTheme } from "@tui/context/theme"
-import { useSDK } from "@tui/context/sdk"
 import { useKeybind } from "@tui/context/keybind"
 import { useDialog } from "@tui/ui/dialog"
+import { useEditorConnection } from "@tui/context/editor-connection"
 import type { Snapshot } from "@/editor/types"
 
 export type EditorInfo = {
@@ -101,57 +101,27 @@ function Action(props: { label: string; muted?: boolean; onSelect(): void }) {
 export function EditorPane(props: {
   sessionID: string
   info: () => EditorInfo | undefined
-  onChange(info: Partial<EditorInfo>): void
   onRequestClose(): void
-  onClosed(id: string): void
 }) {
-  const sdk = useSDK()
+  const conn = useEditorConnection()
   const keybind = useKeybind()
   const dialog = useDialog()
   const { theme } = useTheme()
   const dims = useTerminalDimensions()
-  const [snapshot, setSnapshot] = createSignal<Snapshot | undefined>(props.info()?.snapshot)
   const size = createMemo(() => ({ cols: Math.max(20, dims().width - 6), rows: Math.max(5, dims().height - 8) }))
-  let ws: WebSocket | undefined
-
-  const url = (input: string) => {
-    const next = new URL(input, sdk.url)
-    if (sdk.directory) next.searchParams.set("directory", sdk.directory)
-    if (sdk.workspaceID) next.searchParams.set("workspace", sdk.workspaceID)
-    if (sdk.viewID) next.searchParams.set("viewID", sdk.viewID)
-    next.searchParams.set("sessionID", props.sessionID)
-    return next
-  }
-
-  const headers = () => new Headers(sdk.headers)
-  const daemonToken = () => headers().get("x-slopcode-daemon-token")
-
-  const send = (value: Record<string, unknown>) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify(value))
-  }
-
-  const request = async (method: string, input: string) => {
-    const response = await (sdk.fetch ?? fetch)(url(input), {
-      method,
-      headers: headers(),
-    })
-    if (!response.ok) throw new Error(await response.text())
-    return response.json()
-  }
+  const current = createMemo(() => props.info()?.id ? conn.get(props.info()?.id) : undefined)
+  const snapshot = createMemo(() => current()?.snapshot ?? props.info()?.snapshot)
 
   const save = async () => {
     const info = props.info()
     if (!info) return
-    const next = (await request("POST", `/editor/${info.id}/save`)) as EditorInfo
-    props.onChange(next)
+    await conn.save({ sessionID: props.sessionID, editorID: info.id })
   }
 
   const dismiss = async () => {
     const info = props.info()
     if (!info || !info.diff) return
-    const next = (await request("POST", `/editor/${info.id}/diff/dismiss`)) as EditorInfo
-    props.onChange(next)
+    await conn.dismiss({ sessionID: props.sessionID, editorID: info.id })
   }
 
   onMount(() => {
@@ -162,50 +132,46 @@ export function EditorPane(props: {
   createEffect(
     on(
       () => props.info()?.id,
-      (id, prev) => {
-        if (!id) return
-        if (id === prev) return
-        setSnapshot(untrack(() => props.info()?.snapshot))
-        const next = url(`/editor/${id}/connect`)
-        next.protocol = next.protocol === "https:" ? "wss:" : "ws:"
-        const token = untrack(daemonToken)
-        if (token) next.searchParams.set("daemonToken", token)
-        let disposed = false
-        ws = new WebSocket(next)
-        ws.onopen = () => {
-          send({ type: "resize", rows: size().rows, cols: size().cols })
-          send({ type: "focus", gained: true })
-        }
-        ws.onmessage = (event) => {
-          const data = JSON.parse(String(event.data)) as { type: string; snapshot?: Snapshot }
-          if (data.type !== "snapshot" || !data.snapshot) return
-          setSnapshot(data.snapshot)
-          props.onChange({
-            file: data.snapshot.file,
-            dirty: data.snapshot.dirty,
-            diff: data.snapshot.diff,
-            mode: data.snapshot.mode,
-            status: data.snapshot.status,
-            snapshot: data.snapshot,
-          })
-        }
-        ws.onclose = () => {
-          if (!disposed) props.onClosed(id)
-        }
-        onCleanup(() => {
-          disposed = true
-          if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "focus", gained: false }))
-          ws?.close()
-          ws = undefined
+      (id) => {
+        const info = props.info()
+        if (!id || !info) return
+        conn.ensure({
+          sessionID: props.sessionID,
+          tab: {
+            file: info.file,
+            editorID: info.id,
+            dirty: info.dirty,
+            diff: info.diff,
+            mode: info.mode,
+            status: info.status,
+            snapshot: info.snapshot,
+          },
+          rows: size().rows,
+          cols: size().cols,
         })
       },
     ),
   )
 
   createEffect(() => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    send({ type: "resize", rows: size().rows, cols: size().cols })
+    const id = props.info()?.id
+    if (!id) return
+    conn.resize(id, size())
   })
+
+  createEffect(
+    on(
+      () => props.info()?.id,
+      (id, prev) => {
+        if (prev) conn.focus(prev, false)
+        if (!id) return
+        conn.focus(id, true)
+        onCleanup(() => {
+          conn.focus(id, false)
+        })
+      },
+    ),
+  )
 
   useKeyboard((evt) => {
     const info = props.info()
@@ -228,7 +194,7 @@ export function EditorPane(props: {
     const value = key(evt)
     if (!value) return
     evt.preventDefault()
-    send({ type: "input", keys: value })
+    conn.input(info.id, value)
   })
 
   const mouse = (
@@ -243,17 +209,23 @@ export function EditorPane(props: {
       isDragging?: boolean
     },
   ) => {
-    if (dialog.stack.length > 0) return
+    const id = props.info()?.id
+    if (!id || dialog.stack.length > 0) return
     evt.preventDefault()
     evt.stopPropagation()
     if (type === "up" || type === "down") {
-      send({ type: "mouse", button: "wheel", action: type, modifier: modifier(evt.modifiers), row: evt.y, col: evt.x })
+      conn.mouse(id, {
+        type,
+        button: "wheel",
+        modifier: modifier(evt.modifiers),
+        row: evt.y,
+        col: evt.x,
+      })
       return
     }
-    send({
-      type: "mouse",
+    conn.mouse(id, {
+      type,
       button: button(evt.button),
-      action: type,
       modifier: modifier(evt.modifiers),
       row: evt.y,
       col: evt.x,
@@ -262,14 +234,7 @@ export function EditorPane(props: {
 
   return (
     <box flexGrow={1} flexDirection="column" paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
-      <box
-        flexShrink={0}
-        backgroundColor={theme.backgroundPanel}
-        paddingTop={1}
-        paddingBottom={1}
-        paddingLeft={1}
-        paddingRight={1}
-      >
+      <box flexShrink={0} backgroundColor={theme.backgroundPanel} paddingTop={1} paddingBottom={1} paddingLeft={1} paddingRight={1}>
         <box flexDirection="row" justifyContent="space-between" alignItems="center">
           <text fg={theme.text} wrapMode="none">
             <b>{props.info()?.file ?? snapshot()?.file ?? "Editor"}</b>
@@ -324,8 +289,7 @@ export function EditorPane(props: {
         </box>
       </Show>
       <text fg={theme.textMuted}>
-        Embedded SlopCode editor with built-in syntax colors and local linting. Toolbar shortcuts: ^S save, ^D dismiss
-        diff, ^Q back.
+        Embedded SlopCode editor with built-in syntax colors and local linting. Toolbar shortcuts: ^S save, ^D dismiss diff, ^Q back.
       </text>
     </box>
   )

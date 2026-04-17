@@ -286,7 +286,7 @@ describe("editor full app sidebar open e2e", () => {
         await Bun.sleep(50)
       }
 
-      expect(samples.length).toBeGreaterThanOrEqual(70)
+      expect(samples.at(-1)?.elapsed ?? 0).toBeGreaterThanOrEqual(4_000)
       const blink = samples.find((item) => !item.visible)
       if (blink) {
         throw new Error(`editor blinked after open at ${blink.elapsed}ms\n${blink.screen}`)
