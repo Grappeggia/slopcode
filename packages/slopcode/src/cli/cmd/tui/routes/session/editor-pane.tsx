@@ -98,18 +98,14 @@ function Action(props: { label: string; muted?: boolean; onSelect(): void }) {
   )
 }
 
-export function EditorPane(props: {
-  sessionID: string
-  info: () => EditorInfo | undefined
-  onRequestClose(): void
-}) {
+export function EditorPane(props: { sessionID: string; info: () => EditorInfo | undefined; onRequestClose(): void }) {
   const conn = useEditorConnection()
   const keybind = useKeybind()
   const dialog = useDialog()
   const { theme } = useTheme()
   const dims = useTerminalDimensions()
   const size = createMemo(() => ({ cols: Math.max(20, dims().width - 6), rows: Math.max(5, dims().height - 8) }))
-  const current = createMemo(() => props.info()?.id ? conn.get(props.info()?.id) : undefined)
+  const current = createMemo(() => (props.info()?.id ? conn.get(props.info()?.id) : undefined))
   const snapshot = createMemo(() => current()?.snapshot ?? props.info()?.snapshot)
 
   const save = async () => {
@@ -234,7 +230,14 @@ export function EditorPane(props: {
 
   return (
     <box flexGrow={1} flexDirection="column" paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
-      <box flexShrink={0} backgroundColor={theme.backgroundPanel} paddingTop={1} paddingBottom={1} paddingLeft={1} paddingRight={1}>
+      <box
+        flexShrink={0}
+        backgroundColor={theme.backgroundPanel}
+        paddingTop={1}
+        paddingBottom={1}
+        paddingLeft={1}
+        paddingRight={1}
+      >
         <box flexDirection="row" justifyContent="space-between" alignItems="center">
           <text fg={theme.text} wrapMode="none">
             <b>{props.info()?.file ?? snapshot()?.file ?? "Editor"}</b>
@@ -289,7 +292,8 @@ export function EditorPane(props: {
         </box>
       </Show>
       <text fg={theme.textMuted}>
-        Embedded SlopCode editor with built-in syntax colors and local linting. Toolbar shortcuts: ^S save, ^D dismiss diff, ^Q back.
+        Embedded SlopCode editor with built-in syntax colors and local linting. Toolbar shortcuts: ^S save, ^D dismiss
+        diff, ^Q back.
       </text>
     </box>
   )

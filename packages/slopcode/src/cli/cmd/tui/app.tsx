@@ -163,24 +163,24 @@ export function tui(input: {
                               <TabStateProvider>
                                 <EditorConnectionProvider>
                                   <ThemeProvider mode={mode}>
-                                  <LocalProvider>
-                                    <KeybindProvider>
-                                      <PromptStashProvider>
-                                        <DialogProvider>
-                                          <CommandProvider>
-                                            <FrecencyProvider>
-                                              <PromptHistoryProvider>
-                                                <PromptRefProvider>
-                                                  <App />
-                                                </PromptRefProvider>
-                                              </PromptHistoryProvider>
-                                            </FrecencyProvider>
-                                          </CommandProvider>
-                                        </DialogProvider>
-                                      </PromptStashProvider>
-                                    </KeybindProvider>
-                                  </LocalProvider>
-                                </ThemeProvider>
+                                    <LocalProvider>
+                                      <KeybindProvider>
+                                        <PromptStashProvider>
+                                          <DialogProvider>
+                                            <CommandProvider>
+                                              <FrecencyProvider>
+                                                <PromptHistoryProvider>
+                                                  <PromptRefProvider>
+                                                    <App />
+                                                  </PromptRefProvider>
+                                                </PromptHistoryProvider>
+                                              </FrecencyProvider>
+                                            </CommandProvider>
+                                          </DialogProvider>
+                                        </PromptStashProvider>
+                                      </KeybindProvider>
+                                    </LocalProvider>
+                                  </ThemeProvider>
                                 </EditorConnectionProvider>
                               </TabStateProvider>
                             </SessionTabsProvider>

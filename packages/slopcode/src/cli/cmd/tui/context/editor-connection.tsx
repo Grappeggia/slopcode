@@ -323,14 +323,16 @@ export const { use: useEditorConnection, provider: EditorConnectionProvider } = 
       mouse(editorID: string, input: Mouse) {
         const ws = sockets.get(editorID)
         if (ws?.readyState !== WebSocket.OPEN) return connect(editorID)
-        ws.send(JSON.stringify({
-          type: "mouse",
-          button: input.button,
-          action: input.type,
-          modifier: input.modifier,
-          row: input.row,
-          col: input.col,
-        }))
+        ws.send(
+          JSON.stringify({
+            type: "mouse",
+            button: input.button,
+            action: input.type,
+            modifier: input.modifier,
+            row: input.row,
+            col: input.col,
+          }),
+        )
       },
     }
   },

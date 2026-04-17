@@ -452,14 +452,16 @@ export function Session() {
       tabState.activateEditor(route.sessionID, file)
       return
     }
-    return editorConn.open({
-      sessionID: route.sessionID,
-      file,
-      rows: Math.max(5, dimensions().height - 8),
-      cols: Math.max(20, dimensions().width - 6),
-    }).catch(async (error) => {
-      toast.show({ message: error instanceof Error ? error.message : String(error), variant: "error" })
-    })
+    return editorConn
+      .open({
+        sessionID: route.sessionID,
+        file,
+        rows: Math.max(5, dimensions().height - 8),
+        cols: Math.max(20, dimensions().width - 6),
+      })
+      .catch(async (error) => {
+        toast.show({ message: error instanceof Error ? error.message : String(error), variant: "error" })
+      })
   }
   const modified = createMemo(() => {
     const files = new Set((sync.data.session_diff[route.sessionID] ?? []).map((item) => item.file))
