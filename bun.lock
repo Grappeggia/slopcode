@@ -25,7 +25,7 @@
     },
     "packages/app": {
       "name": "@slopcode-ai/app",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@kobalte/core": "catalog:",
         "@shikijs/transformers": "3.9.2",
@@ -75,7 +75,7 @@
     },
     "packages/console/app": {
       "name": "@slopcode-ai/console-app",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@cloudflare/vite-plugin": "1.15.2",
         "@ibm/plex": "6.4.1",
@@ -109,7 +109,7 @@
     },
     "packages/console/core": {
       "name": "@slopcode-ai/console-core",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@aws-sdk/client-sts": "3.782.0",
         "@jsx-email/render": "1.1.1",
@@ -136,7 +136,7 @@
     },
     "packages/console/function": {
       "name": "@slopcode-ai/console-function",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@ai-sdk/anthropic": "2.0.0",
         "@ai-sdk/openai": "2.0.2",
@@ -160,7 +160,7 @@
     },
     "packages/console/mail": {
       "name": "@slopcode-ai/console-mail",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@jsx-email/all": "2.2.3",
         "@jsx-email/cli": "1.4.3",
@@ -184,7 +184,7 @@
     },
     "packages/desktop": {
       "name": "@slopcode-ai/desktop",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@slopcode-ai/app": "workspace:*",
         "@slopcode-ai/ui": "workspace:*",
@@ -217,7 +217,7 @@
     },
     "packages/enterprise": {
       "name": "@slopcode-ai/enterprise",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@pierre/diffs": "catalog:",
         "@slopcode-ai/ui": "workspace:*",
@@ -246,7 +246,7 @@
     },
     "packages/function": {
       "name": "@slopcode-ai/function",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@octokit/auth-app": "8.0.1",
         "@octokit/rest": "catalog:",
@@ -262,7 +262,7 @@
     },
     "packages/plugin": {
       "name": "@slopcode-ai/plugin",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@slopcode-ai/sdk": "workspace:*",
         "zod": "catalog:",
@@ -282,7 +282,7 @@
     },
     "packages/sdk/js": {
       "name": "@slopcode-ai/sdk",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "devDependencies": {
         "@hey-api/openapi-ts": "0.90.10",
         "@tsconfig/node22": "catalog:",
@@ -293,7 +293,7 @@
     },
     "packages/slack": {
       "name": "@slopcode-ai/slack",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@slack/bolt": "^3.17.1",
         "@slopcode-ai/sdk": "workspace:*",
@@ -306,7 +306,7 @@
     },
     "packages/slopcode": {
       "name": "slopcode",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "bin": {
         "slopcode": "./bin/slopcode",
       },
@@ -444,7 +444,7 @@
     },
     "packages/ui": {
       "name": "@slopcode-ai/ui",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@kobalte/core": "catalog:",
         "@pierre/diffs": "catalog:",
@@ -486,7 +486,7 @@
     },
     "packages/util": {
       "name": "@slopcode-ai/util",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "zod": "catalog:",
       },
@@ -497,7 +497,7 @@
     },
     "packages/web": {
       "name": "@slopcode-ai/web",
-      "version": "0.2.56",
+      "version": "0.2.57",
       "dependencies": {
         "@astrojs/cloudflare": "12.6.3",
         "@astrojs/markdown-remark": "6.3.1",
