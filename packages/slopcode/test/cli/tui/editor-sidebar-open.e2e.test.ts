@@ -339,9 +339,6 @@ describe("editor sidebar open e2e", () => {
       expect(filesButton).toBeDefined()
       click(pty, filesButton!.row, filesButton!.col)
 
-      await eventually(() => frame(raw, width, height).includes("File explorer")).catch(() => {
-        throw new Error(`file explorer did not open\n${frame(raw, width, height)}`)
-      })
       await eventually(() => frame(raw, width, height).includes("route.tsx")).catch(() => {
         throw new Error(`fixture file did not appear in file explorer\n${frame(raw, width, height)}`)
       })

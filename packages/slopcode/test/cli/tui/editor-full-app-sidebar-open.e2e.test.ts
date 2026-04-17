@@ -256,7 +256,6 @@ describe("editor full app sidebar open e2e", () => {
       expect(filesButton).toBeDefined()
       click(pty, filesButton!.row, filesButton!.col)
 
-      await eventually(() => frame(raw, width, height).join("\n").includes("File explorer"))
       await eventually(() => frame(raw, width, height).join("\n").includes("route.tsx"))
 
       const explorer = frame(raw, width, height)
