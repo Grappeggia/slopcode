@@ -437,6 +437,7 @@ export function Session() {
       diff: hit.diff,
       mode: hit.mode,
       status: hit.status,
+      snapshot: hit.snapshot,
     }
   })
   const closeEditor = async (file = activeEditorFile()) => {
@@ -485,6 +486,10 @@ export function Session() {
       return
     }
     const info = (await response.json()) as EditorInfo
+    const snapshot = await (sdk.fetch ?? fetch)(editorUrl(`/editor/${info.id}/snapshot`), {
+      method: "GET",
+      headers: editorHeaders(),
+    }).then((response) => (response.ok ? (response.json() as Promise<EditorInfo["snapshot"]>) : undefined))
     tabState.setEditor(route.sessionID, {
       file,
       editorID: info.id,
@@ -492,6 +497,7 @@ export function Session() {
       diff: info.diff,
       mode: info.mode,
       status: info.status,
+      snapshot,
     })
   }
   const modified = createMemo(() => {
@@ -1938,6 +1944,7 @@ export function Session() {
                   diff: next.diff,
                   mode: next.mode,
                   status: next.status,
+                  snapshot: next.snapshot,
                 })
               }}
               onRequestClose={() => {

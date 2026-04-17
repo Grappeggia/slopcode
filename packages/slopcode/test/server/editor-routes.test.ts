@@ -26,6 +26,24 @@ mock.module("../../src/editor", () => ({
       file: z.string(),
       size: z.object({ rows: z.number(), cols: z.number() }),
     }),
+    SnapshotData: z.object({
+      width: z.number(),
+      height: z.number(),
+      rows: z.array(z.array(z.object({ text: z.string() }))),
+      mode: z.string(),
+      dirty: z.boolean(),
+      diff: z.boolean(),
+      file: z.string(),
+      status: z.string(),
+      diagnostics: z.array(
+        z.object({
+          line: z.number(),
+          column: z.number(),
+          severity: z.enum(["error", "warning"]),
+          message: z.string(),
+        }),
+      ),
+    }),
     ScopedInput: z.object({
       sessionID: z.string(),
     }),
@@ -55,6 +73,20 @@ mock.module("../../src/editor", () => ({
         diff: true,
         mode: "NORMAL",
         pid: 1,
+      }
+    },
+    snapshot: async (id: string) => {
+      calls.push(`snapshot:${id}`)
+      return {
+        width: 10,
+        height: 5,
+        rows: [[{ text: "test" }]],
+        mode: "EDIT",
+        dirty: false,
+        diff: false,
+        file: "test.ts",
+        status: "running",
+        diagnostics: [],
       }
     },
     save: async (id: string) => {
@@ -119,6 +151,12 @@ describe("editor routes", () => {
     })
     expect(open.status).toBe(200)
 
+    const snapshot = await app.request("/editor/pty_editor_test/snapshot?sessionID=ses_test0000000000000000000", {
+      method: "GET",
+      headers: { "x-slopcode-directory": tmp.path },
+    })
+    expect(snapshot.status).toBe(200)
+
     const save = await app.request("/editor/pty_editor_test/save?sessionID=ses_test0000000000000000000", {
       method: "POST",
       headers: { "x-slopcode-directory": tmp.path },
@@ -137,6 +175,7 @@ describe("editor routes", () => {
     })
     expect(close.status).toBe(200)
     expect(calls).toContain("open:test.ts")
+    expect(calls).toContain("snapshot:pty_editor_test")
     expect(calls).toContain("save:pty_editor_test")
     expect(calls).toContain("dismiss:pty_editor_test")
     expect(calls).toContain("close:pty_editor_test")

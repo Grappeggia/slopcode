@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import * as fs from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
+import { spawn } from "bun-pty"
 import { tmpdir } from "../../fixture/fixture"
 import { Server } from "../../../src/server/server"
 import { DaemonAuth } from "../../../src/daemon/auth"
@@ -10,7 +11,9 @@ const pkgDir = path.resolve(import.meta.dir, "../../..")
 const fixturePath = path.resolve(pkgDir, "src/cli/cmd/tui/context/route.tsx")
 const scripts: string[] = []
 const active: Array<{ stop(force?: boolean): Promise<void> | void }> = []
-const token = "editor-tab-persistence-token"
+const token = "editor-sidebar-open-token"
+const width = 120
+const height = 30
 
 afterEach(async () => {
   await Promise.all(scripts.splice(0).map((file) => fs.rm(file, { force: true })))
@@ -128,29 +131,63 @@ function frame(raw: string, width: number, height: number) {
     put(String.fromCodePoint(code))
     i += code > 0xffff ? 2 : 1
   }
-  return rows.map((row) => row.join("").replace(/\s+$/g, "")).join("\n")
+  return rows.map((row) => row.join("")).join("\n")
 }
 
-async function script(input: { serverUrl: string; directory: string; sessionID: string; file: string }) {
+function column(line: string, text: string, occurrence = 0) {
+  let index = -1
+  let offset = 0
+  for (let i = 0; i <= occurrence; i++) {
+    index = line.indexOf(text, offset)
+    if (index === -1) return
+    offset = index + text.length
+  }
+  return Bun.stringWidth(line.slice(0, index)) + 1
+}
+
+function locate(screen: string, text: string, occurrence = 0) {
+  const lines = screen.split("\n")
+  for (let row = 0; row < lines.length; row++) {
+    const col = column(lines[row]!, text, occurrence)
+    if (!col) continue
+    return { row: row + 1, col }
+  }
+}
+
+async function eventually<T>(check: () => T | Promise<T>, timeout = 8_000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const value = await check()
+    if (value) return value
+    await Bun.sleep(50)
+  }
+  throw new Error("condition not met")
+}
+
+function click(pty: ReturnType<typeof spawn>, row: number, col: number) {
+  pty.write(`\u001b[<0;${col};${row}M`)
+  pty.write(`\u001b[<3;${col};${row}m`)
+}
+
+async function script(input: { serverUrl: string; directory: string }) {
   const file = path.join(
     pkgDir,
-    `.slopcode-editor-tab-persistence-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tsx`,
+    `.slopcode-editor-sidebar-open-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tsx`,
   )
   scripts.push(file)
   await Bun.write(
     file,
     `import { render, useTerminalDimensions } from "@opentui/solid"
-import { createSignal, onMount } from "solid-js"
 import { ArgsProvider } from "@tui/context/args"
 import { ExitProvider } from "@tui/context/exit"
 import { KVProvider } from "@tui/context/kv"
 import { ToastProvider } from "@tui/ui/toast"
-import { RouteProvider, useRoute } from "@tui/context/route"
+import { RouteProvider } from "@tui/context/route"
 import { TuiConfigProvider } from "@tui/context/tui-config"
-import { SDKProvider, useSDK } from "@tui/context/sdk"
-import { SyncProvider, useSync } from "@tui/context/sync"
+import { SDKProvider } from "@tui/context/sdk"
+import { SyncProvider } from "@tui/context/sync"
 import { SessionTabsProvider } from "@tui/context/session-tabs"
-import { TabStateProvider, useTabState } from "@tui/context/tab-state"
+import { TabStateProvider } from "@tui/context/tab-state"
 import { ThemeProvider, useTheme } from "@tui/context/theme"
 import { LocalProvider } from "@tui/context/local"
 import { KeybindProvider } from "@tui/context/keybind"
@@ -162,87 +199,12 @@ import { PromptHistoryProvider } from ${JSON.stringify(path.resolve(pkgDir, "src
 import { PromptRefProvider } from ${JSON.stringify(path.resolve(pkgDir, "src/cli/cmd/tui/context/prompt.tsx"))}
 import { Session } from ${JSON.stringify(path.resolve(pkgDir, "src/cli/cmd/tui/routes/session/index.tsx"))}
 
-function Driver() {
-  const route = useRoute()
-  const sdk = useSDK()
-  const sync = useSync()
-  const tabState = useTabState()
-
-  onMount(() => {
-    void (async () => {
-      route.navigate({ type: "session", sessionID: ${JSON.stringify(input.sessionID)}, source: "switch" })
-      while (!sync.session.get(${JSON.stringify(input.sessionID)})) {
-        await Bun.sleep(50)
-      }
-      const url = new URL("/editor", sdk.url)
-      if (sdk.directory) url.searchParams.set("directory", sdk.directory)
-      url.searchParams.set("sessionID", ${JSON.stringify(input.sessionID)})
-      const headers = new Headers(sdk.headers)
-      headers.set("content-type", "application/json")
-      const response = await (sdk.fetch ?? fetch)(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          sessionID: ${JSON.stringify(input.sessionID)},
-          file: ${JSON.stringify(input.file)},
-          size: { rows: 12, cols: 80 },
-        }),
-      })
-      if (!response.ok) {
-        console.error(await response.text())
-        process.exit(1)
-      }
-      const info = await response.json()
-      const snapshot = await (sdk.fetch ?? fetch)(
-        new URL("/editor/" + info.id + "/snapshot?sessionID=" + ${JSON.stringify(input.sessionID)}, sdk.url),
-        {
-          method: "GET",
-          headers: new Headers(sdk.headers),
-        },
-      ).then((result) => (result.ok ? result.json() : undefined))
-      tabState.setEditor(${JSON.stringify(input.sessionID)}, {
-        file: ${JSON.stringify(input.file)},
-        editorID: info.id,
-        dirty: info.dirty,
-        diff: info.diff,
-        mode: info.mode,
-        status: info.status,
-        snapshot,
-      })
-      const start = Date.now()
-      const dump = (phase) => {
-        process.stderr.write(
-          "__EDITOR_STATE__" +
-            JSON.stringify({
-              phase,
-              elapsed: Date.now() - start,
-              editor: tabState.editor(${JSON.stringify(input.sessionID)}),
-            }) +
-            "\\n",
-        )
-      }
-      await Bun.sleep(2200)
-      dump("opened")
-      tabState.activateEditor(${JSON.stringify(input.sessionID)}, undefined)
-      await Bun.sleep(500)
-      dump("chat")
-      tabState.activateEditor(${JSON.stringify(input.sessionID)}, ${JSON.stringify(input.file)})
-      await Bun.sleep(1800)
-      dump("back")
-      process.exit(0)
-    })()
-  })
-
-  return <></>
-}
-
 function App() {
   const { theme } = useTheme()
   const dims = useTerminalDimensions()
   return (
     <box width={dims().width} height={dims().height} backgroundColor={theme.background}>
       <Session />
-      <Driver />
     </box>
   )
 }
@@ -305,15 +267,13 @@ render(
   return file
 }
 
-describe("editor tab persistence e2e", () => {
-  test("keeps a real repo file mounted across chat/editor tab switching", async () => {
+describe("editor sidebar open e2e", () => {
+  test("opens a real code file from the sidebar and stays visually mounted for 4+ seconds", async () => {
     await using tmp = await tmpdir({
       git: true,
       init: async (dir: string) => {
-        const file = path.join(dir, "src", "route.tsx")
-        await fs.mkdir(path.dirname(file), { recursive: true })
+        const file = path.join(dir, "route.tsx")
         await Bun.write(file, await Bun.file(fixturePath).text())
-        return file
       },
     })
 
@@ -327,7 +287,7 @@ describe("editor tab persistence e2e", () => {
         "x-slopcode-directory": tmp.path,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ title: "Editor Persistence" }),
+      body: JSON.stringify({ title: "Sidebar Open" }),
     })
     expect(create.status).toBe(200)
     const session = (await create.json()) as { id: string }
@@ -335,23 +295,19 @@ describe("editor tab persistence e2e", () => {
     const file = await script({
       serverUrl: server.url.toString(),
       directory: tmp.path,
-      sessionID: session.id,
-      file: "src/route.tsx",
     })
 
-    const home = path.join(
-      os.tmpdir(),
-      `slopcode-editor-tab-home-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    )
+    const home = path.join(os.tmpdir(), `slopcode-editor-sidebar-open-home-${process.pid}-${Date.now()}`)
     await fs.mkdir(home, { recursive: true })
-    const child = Bun.spawn([process.execPath, "--cwd", pkgDir, file], {
+
+    let raw = ""
+    const pty = spawn(process.execPath, ["--cwd", pkgDir, file], {
+      name: "xterm-256color",
+      cols: width,
+      rows: height,
       cwd: pkgDir,
       env: {
-        ...Object.fromEntries(
-          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-        ),
-        COLUMNS: "100",
-        LINES: "28",
+        ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
         TERM: "xterm-256color",
         SLOPCODE_TEST_HOME: home,
         SLOPCODE_ROUTE: JSON.stringify({
@@ -360,45 +316,68 @@ describe("editor tab persistence e2e", () => {
           source: "switch",
         }),
       },
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
     })
-    const [code, raw, stderr] = await Promise.all([
-      child.exited,
-      child.stdout ? new Response(child.stdout).text() : Promise.resolve(""),
-      child.stderr ? new Response(child.stderr).text() : Promise.resolve(""),
-    ])
+    const dispose = pty.onData((data) => {
+      raw += data
+    })
 
-    if (code !== 0) {
-      throw new Error(stderr || `child exited with ${code}`)
+    try {
+      await eventually(() => {
+        const screen = frame(raw, width, height)
+        return screen.includes("Sidebar Open") && screen.includes("📂")
+      }).catch(() => {
+        throw new Error(`initial session screen did not render\n${frame(raw, width, height)}`)
+      })
+
+      const summary = frame(raw, width, height)
+      const filesButton = locate(summary, "📂")
+      expect(filesButton).toBeDefined()
+      click(pty, filesButton!.row, filesButton!.col)
+
+      await eventually(() => frame(raw, width, height).includes("File explorer")).catch(() => {
+        throw new Error(`file explorer did not open\n${frame(raw, width, height)}`)
+      })
+      await eventually(() => frame(raw, width, height).includes("route.tsx")).catch(() => {
+        throw new Error(`fixture file did not appear in file explorer\n${frame(raw, width, height)}`)
+      })
+
+      const explorer = frame(raw, width, height)
+      const line = explorer.split("\n").find((item) => item.includes("route.tsx"))
+      expect(line).toBeDefined()
+      const row = explorer.split("\n").findIndex((item) => item.includes("route.tsx")) + 1
+      const icon = column(line!, "📂", 0)
+      const action = column(line!, "📂", 1) ?? icon
+      expect(action).toBeDefined()
+      click(pty, row, action! + 1)
+
+      const snippet = "SessionRouteSource"
+      const start = await eventually(async () => {
+        const screen = frame(raw, width, height)
+        if (!screen.includes("route.tsx") || !screen.includes(snippet)) return
+        return Date.now()
+      }).catch(() => {
+        throw new Error(`editor content never stabilized after sidebar open\n${frame(raw, width, height)}`)
+      })
+
+      const samples: Array<{ elapsed: number; visible: boolean; screen: string }> = []
+      while (Date.now() - start < 4_200) {
+        const screen = frame(raw, width, height)
+        samples.push({
+          elapsed: Date.now() - start,
+          visible: screen.includes("route.tsx") && screen.includes(snippet),
+          screen,
+        })
+        await Bun.sleep(100)
+      }
+
+      expect(samples.length).toBeGreaterThanOrEqual(35)
+      const blink = samples.find((item) => !item.visible)
+      if (blink) {
+        throw new Error(`editor blinked after open at ${blink.elapsed}ms\n${blink.screen}`)
+      }
+    } finally {
+      dispose.dispose()
+      pty.kill()
     }
-
-    const states = stderr
-      .split("\n")
-      .filter((line) => line.startsWith("__EDITOR_STATE__"))
-      .map(
-        (line) =>
-          JSON.parse(line.slice("__EDITOR_STATE__".length)) as {
-            phase: string
-            elapsed: number
-            editor: { active?: string; tabs: Array<{ file: string }> }
-          },
-      )
-    const noise = stderr
-      .split("\n")
-      .filter((line) => line && !line.startsWith("__EDITOR_STATE__"))
-      .join("\n")
-
-    expect(noise).toBe("")
-    expect(states.map((item) => item.phase)).toEqual(["opened", "chat", "back"])
-    expect(states[0]?.editor.tabs.map((item) => item.file)).toEqual(["src/route.tsx"])
-    expect(states[0]?.editor.active).toBe("src/route.tsx")
-    expect(states[1]?.editor.tabs.map((item) => item.file)).toEqual(["src/route.tsx"])
-    expect(states[1]?.editor.active).toBeUndefined()
-    expect(states[2]?.editor.tabs.map((item) => item.file)).toEqual(["src/route.tsx"])
-    expect(states[2]?.editor.active).toBe("src/route.tsx")
-    expect(states[2]?.elapsed).toBeGreaterThanOrEqual(4_000)
-    expect(frame(raw, 100, 28).length).toBeGreaterThan(0)
   }, 20_000)
 })

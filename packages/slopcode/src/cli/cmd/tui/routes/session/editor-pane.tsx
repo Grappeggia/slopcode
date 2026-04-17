@@ -14,6 +14,7 @@ export type EditorInfo = {
   diff: boolean
   mode: string
   status: string
+  snapshot?: Snapshot
 }
 
 const button = (value: number) => {
@@ -109,7 +110,7 @@ export function EditorPane(props: {
   const dialog = useDialog()
   const { theme } = useTheme()
   const dims = useTerminalDimensions()
-  const [snapshot, setSnapshot] = createSignal<Snapshot>()
+  const [snapshot, setSnapshot] = createSignal<Snapshot | undefined>(props.info()?.snapshot)
   const size = createMemo(() => ({ cols: Math.max(20, dims().width - 6), rows: Math.max(5, dims().height - 8) }))
   let ws: WebSocket | undefined
 
@@ -163,7 +164,7 @@ export function EditorPane(props: {
       () => props.info()?.id,
       (id) => {
         if (!id) return
-        setSnapshot(undefined)
+        setSnapshot(props.info()?.snapshot)
         const next = url(`/editor/${id}/connect`)
         next.protocol = next.protocol === "https:" ? "wss:" : "ws:"
         const token = daemonToken()
@@ -184,6 +185,7 @@ export function EditorPane(props: {
             diff: data.snapshot.diff,
             mode: data.snapshot.mode,
             status: data.snapshot.status,
+            snapshot: data.snapshot,
           })
         }
         ws.onclose = () => {

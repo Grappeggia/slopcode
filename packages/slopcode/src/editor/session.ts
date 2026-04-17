@@ -35,7 +35,7 @@ export namespace EditorSession {
     diagnostics: Diagnostic[]
     pending: Promise<void>
     rev: number
-    subscribers: Map<unknown, Socket>
+    subscribers: Set<Socket>
   }
 
   const state = Instance.state(
@@ -140,7 +140,7 @@ export namespace EditorSession {
     session.diagnostics = lint(session.info.file, content(session))
   }
 
-  const snapshot = async (session: Active) => {
+  const snapshotData = async (session: Active) => {
     const rows = await render({
       file: session.info.file,
       lines: session.lines,
@@ -167,11 +167,12 @@ export namespace EditorSession {
 
   const send = async (session: Active) => {
     const rev = ++session.rev
-    const payload = JSON.stringify({ type: "snapshot", snapshot: await snapshot(session) })
+    const payload = JSON.stringify({ type: "snapshot", snapshot: await snapshotData(session) })
     if (rev !== session.rev) return
-    Array.from(session.subscribers.entries()).forEach(([key, ws]) => {
-      if (ws.readyState !== 1 || ws.data !== key) {
-        session.subscribers.delete(key)
+    Array.from(session.subscribers).forEach((ws) => {
+      if (ws.readyState === 0) return
+      if (ws.readyState !== 1) {
+        session.subscribers.delete(ws)
         return
       }
       ws.send(payload)
@@ -282,6 +283,37 @@ export namespace EditorSession {
     size: z.object({ rows: z.number().int().positive(), cols: z.number().int().positive() }),
   })
 
+  export const SnapshotData = z.object({
+    width: z.number(),
+    height: z.number(),
+    rows: z.array(
+      z.array(
+        z.object({
+          text: z.string(),
+          fg: z.string().optional(),
+          bg: z.string().optional(),
+          bold: z.boolean().optional(),
+          italic: z.boolean().optional(),
+          underline: z.boolean().optional(),
+          strikethrough: z.boolean().optional(),
+        }),
+      ),
+    ),
+    mode: z.string(),
+    dirty: z.boolean(),
+    diff: z.boolean(),
+    file: z.string(),
+    status: z.string(),
+    diagnostics: z.array(
+      z.object({
+        line: z.number(),
+        column: z.number(),
+        severity: z.enum(["error", "warning"]),
+        message: z.string(),
+      }),
+    ),
+  })
+
   export const ScopedInput = z.object({
     sessionID: Identifier.schema("session"),
   })
@@ -317,7 +349,7 @@ export namespace EditorSession {
       diagnostics: [],
       pending: Promise.resolve(),
       rev: 0,
-      subscribers: new Map(),
+      subscribers: new Set(),
     }
     inspect(session)
     viewport(session)
@@ -328,6 +360,12 @@ export namespace EditorSession {
 
   export function get(id: string, input?: z.infer<typeof ScopedInput>) {
     return active(id, input?.sessionID)?.info
+  }
+
+  export async function snapshot(id: string, input?: z.infer<typeof ScopedInput>) {
+    const session = active(id, input?.sessionID)
+    if (!session) return
+    return snapshotData(session)
   }
 
   export async function resize(id: string, size: { rows: number; cols: number }, input?: z.infer<typeof ScopedInput>) {
@@ -377,16 +415,17 @@ export namespace EditorSession {
       ws.close()
       return
     }
-    const key = ws.data && typeof ws.data === "object" ? ws.data : ws
-    session.subscribers.set(key, ws)
-    void send(session)
+    session.subscribers.add(ws)
+    setTimeout(() => {
+      void send(session)
+    }, 0)
     return {
       onMessage(message: string | ArrayBuffer) {
         const next = typeof message === "string" ? message : Buffer.from(message).toString("utf8")
         void queue(session, () => write(session, next))
       },
       onClose() {
-        session.subscribers.delete(key)
+        session.subscribers.delete(ws)
       },
     }
   }

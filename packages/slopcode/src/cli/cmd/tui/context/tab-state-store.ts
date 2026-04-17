@@ -1,4 +1,5 @@
 import { unwrap } from "solid-js/store"
+import type { Snapshot } from "@/editor/types"
 import type { PromptInfo } from "../component/prompt/history"
 
 export type TabModel = {
@@ -19,6 +20,7 @@ export type EditorTab = {
   diff: boolean
   mode: string
   status: string
+  snapshot?: Snapshot
 }
 
 export type EditorTabs = {

@@ -58,6 +58,32 @@ export const EditorRoutes = lazy(() =>
         return c.json(info)
       },
     )
+    .get(
+      "/:editorID/snapshot",
+      describeRoute({
+        summary: "Get embedded editor snapshot",
+        description: "Get the current rendered editor snapshot.",
+        operationId: "editor.snapshot",
+        responses: {
+          200: {
+            description: "Editor snapshot",
+            content: {
+              "application/json": {
+                schema: resolver(EditorSession.SnapshotData),
+              },
+            },
+          },
+          ...errors(404),
+        },
+      }),
+      validator("param", z.object({ editorID: z.string() })),
+      validator("query", EditorSession.ScopedInput),
+      async (c) => {
+        const info = await EditorSession.snapshot(c.req.valid("param").editorID, c.req.valid("query"))
+        if (!info) throw new NotFoundError({ message: "Editor session not found" })
+        return c.json(info)
+      },
+    )
     .post(
       "/:editorID/save",
       describeRoute({
