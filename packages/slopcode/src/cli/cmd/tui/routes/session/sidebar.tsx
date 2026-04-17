@@ -123,13 +123,7 @@ function FileRow(props: {
   )
 }
 
-function OpenFileRow(props: {
-  tab: EditorTab
-  active?: boolean
-  onSelect(): void
-  onSave(): void
-  onClose(): void
-}) {
+function OpenFileRow(props: { tab: EditorTab; active?: boolean; onSelect(): void; onSave(): void; onClose(): void }) {
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
   const fg = createMemo(() => {
@@ -151,8 +145,7 @@ function OpenFileRow(props: {
     >
       <box flexGrow={1} onMouseUp={props.onSelect}>
         <text fg={fg()} wrapMode="none">
-          <span style={{ fg: fg() }}>{props.active ? "●" : "○"}</span>{" "}
-          {Locale.truncateMiddle(props.tab.file, 16)}
+          <span style={{ fg: fg() }}>{props.active ? "●" : "○"}</span> {Locale.truncateMiddle(props.tab.file, 16)}
           <Show when={props.tab.dirty}>
             <span style={{ fg: theme.warning }}> *</span>
           </Show>
@@ -216,7 +209,6 @@ function OpenFilesSection(props: {
     </Show>
   )
 }
-
 
 function FilesSidebar(props: { openFile(file: string): void; modified: Set<string> }) {
   const sdk = useSDK()

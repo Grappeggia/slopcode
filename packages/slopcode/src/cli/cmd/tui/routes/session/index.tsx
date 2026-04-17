@@ -2116,7 +2116,6 @@ export function Session() {
                 setMode={(mode) => setSidebarMode(mode)}
                 toggleCollapse={toggleSidebarRail}
               />
-
             </Match>
             <Match when={!wide()}>
               <box

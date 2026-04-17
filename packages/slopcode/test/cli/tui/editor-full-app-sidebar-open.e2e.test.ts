@@ -313,6 +313,4 @@ describe("editor full app sidebar open e2e", () => {
       pty.kill()
     }
   }, 25_000)
-
-
 })
