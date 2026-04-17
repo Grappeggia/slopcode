@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   SESSION_SIDEBAR_RAIL_WIDTH,
   SESSION_SIDEBAR_WIDTH,
+  sessionMainWidth,
   sessionSidebarExpanded,
   sessionSidebarHeaderVisible,
   sessionSidebarWidth,
@@ -18,6 +19,17 @@ describe("session sidebar layout", () => {
 
   test("keeps the full width for visible narrow overlays", () => {
     expect(sessionSidebarWidth({ visible: true, wide: false, collapsed: true })).toBe(SESSION_SIDEBAR_WIDTH)
+  })
+
+  test("keeps the main pane full width unless the sidebar is docked", () => {
+    expect(sessionMainWidth(120, { visible: false, wide: true, collapsed: false })).toBe(120)
+    expect(sessionMainWidth(120, { visible: true, wide: false, collapsed: false })).toBe(120)
+    expect(sessionMainWidth(120, { visible: true, wide: true, collapsed: false })).toBe(120 - SESSION_SIDEBAR_WIDTH)
+    expect(sessionMainWidth(120, { visible: true, wide: true, collapsed: true })).toBe(120 - SESSION_SIDEBAR_RAIL_WIDTH)
+  })
+
+  test("clamps the main pane width at zero on tiny screens", () => {
+    expect(sessionMainWidth(20, { visible: true, wide: true, collapsed: false })).toBe(0)
   })
 
   test("only treats wide non-collapsed sidebars as expanded", () => {

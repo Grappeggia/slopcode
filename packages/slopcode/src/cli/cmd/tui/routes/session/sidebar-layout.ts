@@ -13,6 +13,13 @@ export function sessionSidebarWidth(input: SidebarLayout) {
   return SESSION_SIDEBAR_WIDTH
 }
 
+export function sessionMainWidth(total: number, input: SidebarLayout) {
+  if (total <= 0) return 0
+  if (!input.visible) return total
+  if (!input.wide) return total
+  return Math.max(0, total - sessionSidebarWidth(input))
+}
+
 export function sessionSidebarExpanded(input: SidebarLayout) {
   if (!input.visible) return false
   if (!input.wide) return true

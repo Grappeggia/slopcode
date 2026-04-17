@@ -47,6 +47,7 @@ type SessionStripViewProps = {
 
 type SessionStripProps = {
   action?: Omit<SessionStripAction, "label">
+  width?: number
 }
 
 export function SessionStripView(props: SessionStripViewProps) {
@@ -233,7 +234,7 @@ export function SessionStrip(props: SessionStripProps = {}) {
       : undefined,
   )
   const width = createMemo(() => {
-    const total = sessionStripWidth(dimensions().width, INSET)
+    const total = sessionStripWidth(props.width ?? dimensions().width, INSET)
     if (!action()) return total
     return Math.max(0, total - Bun.stringWidth(SessionStripText.SEP + action()!.label))
   })
