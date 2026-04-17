@@ -79,7 +79,10 @@ export const { use: useEditorConnection, provider: EditorConnectionProvider } = 
     }
 
     const patch = (editorID: string, patch: Partial<Connection>) => {
-      if (!store[editorID]) return
+      const current = store[editorID]
+      if (!current) return
+      const changed = Object.entries(patch).some(([key, value]) => current[key as keyof Connection] !== value)
+      if (!changed) return
       setStore(editorID, (item) => ({ ...item, ...patch }))
     }
 
@@ -303,13 +306,17 @@ export const { use: useEditorConnection, provider: EditorConnectionProvider } = 
       resize(editorID: string, size: { rows: number; cols: number }) {
         const hit = store[editorID]
         if (!hit) return
-        patch(editorID, { rows: size.rows, cols: size.cols })
+        const rows = Math.max(1, size.rows)
+        const cols = Math.max(8, size.cols)
+        if (hit.rows === rows && hit.cols === cols) return
+        patch(editorID, { rows, cols })
         const ws = sockets.get(editorID)
         if (ws?.readyState !== WebSocket.OPEN) return connect(editorID)
-        ws.send(JSON.stringify({ type: "resize", rows: size.rows, cols: size.cols }))
+        ws.send(JSON.stringify({ type: "resize", rows, cols }))
       },
       focus(editorID: string, gained: boolean) {
-        if (!store[editorID]) return
+        const hit = store[editorID]
+        if (!hit || hit.focused === gained) return
         patch(editorID, { focused: gained })
         const ws = sockets.get(editorID)
         if (ws?.readyState !== WebSocket.OPEN) return connect(editorID)
