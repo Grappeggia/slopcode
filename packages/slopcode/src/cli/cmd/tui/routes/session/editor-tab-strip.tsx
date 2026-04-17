@@ -38,17 +38,19 @@ function Tab(props: {
         </Show>
       </text>
       <Show when={props.closable}>
-        <text
-          fg={hover() ? theme.text : theme.textMuted}
-          wrapMode="none"
-          onMouseUp={(evt) => {
+        <box
+          width={5}
+          justifyContent="center"
+          onMouseDown={(evt) => {
             evt.preventDefault()
             evt.stopPropagation()
             props.onClose?.()
           }}
         >
-          x
-        </text>
+          <text fg={hover() ? theme.text : theme.textMuted} wrapMode="none">
+            x
+          </text>
+        </box>
       </Show>
     </box>
   )

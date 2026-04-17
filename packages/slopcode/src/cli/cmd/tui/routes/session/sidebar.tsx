@@ -15,6 +15,7 @@ import { useSDK } from "../../context/sdk"
 import { usePromptRef } from "../../context/prompt"
 import { useToast } from "../../ui/toast"
 import { SESSION_SIDEBAR_RAIL_WIDTH, SESSION_SIDEBAR_WIDTH } from "./sidebar-layout"
+import type { EditorTab } from "@tui/context/tab-state-store"
 
 export type SidebarMode = "summary" | "files"
 
@@ -122,6 +123,101 @@ function FileRow(props: {
   )
 }
 
+function OpenFileRow(props: {
+  tab: EditorTab
+  active?: boolean
+  onSelect(): void
+  onSave(): void
+  onClose(): void
+}) {
+  const { theme } = useTheme()
+  const [hover, setHover] = createSignal(false)
+  const fg = createMemo(() => {
+    if (props.active) return theme.text
+    if (hover()) return theme.text
+    return theme.textMuted
+  })
+
+  return (
+    <box
+      paddingLeft={1}
+      paddingRight={1}
+      backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
+      onMouseOver={() => setHover(true)}
+      onMouseOut={() => setHover(false)}
+      flexDirection="row"
+      justifyContent="space-between"
+      gap={1}
+    >
+      <box flexGrow={1} onMouseUp={props.onSelect}>
+        <text fg={fg()} wrapMode="none">
+          <span style={{ fg: fg() }}>{props.active ? "●" : "○"}</span>{" "}
+          {Locale.truncateMiddle(props.tab.file, 16)}
+          <Show when={props.tab.dirty}>
+            <span style={{ fg: theme.warning }}> *</span>
+          </Show>
+        </text>
+      </box>
+      <box flexDirection="row" gap={1} flexShrink={0}>
+        <text
+          fg={theme.textMuted}
+          wrapMode="none"
+          onMouseUp={(evt) => {
+            evt.preventDefault()
+            evt.stopPropagation()
+            props.onSave()
+          }}
+        >
+          💾 save
+        </text>
+        <text
+          fg={theme.textMuted}
+          wrapMode="none"
+          onMouseUp={(evt) => {
+            evt.preventDefault()
+            evt.stopPropagation()
+            props.onClose()
+          }}
+        >
+          ✕ close
+        </text>
+      </box>
+    </box>
+  )
+}
+
+function OpenFilesSection(props: {
+  tabs: EditorTab[]
+  activeFile?: string
+  onSelect(file: string): void
+  onSave(file: string): void
+  onClose(file: string): void
+}) {
+  const { theme } = useTheme()
+
+  return (
+    <Show when={props.tabs.length > 0}>
+      <box flexShrink={0} gap={1} paddingRight={1}>
+        <text fg={theme.text}>
+          <b>Open Files</b>
+        </text>
+        <For each={props.tabs}>
+          {(tab) => (
+            <OpenFileRow
+              tab={tab}
+              active={props.activeFile === tab.file}
+              onSelect={() => props.onSelect(tab.file)}
+              onSave={() => props.onSave(tab.file)}
+              onClose={() => props.onClose(tab.file)}
+            />
+          )}
+        </For>
+      </box>
+    </Show>
+  )
+}
+
+
 function FilesSidebar(props: { openFile(file: string): void; modified: Set<string> }) {
   const sdk = useSDK()
   const keybind = useKeybind()
@@ -226,7 +322,10 @@ export function Sidebar(props: {
   mode: SidebarMode
   modified: Set<string>
   activeFile?: string
+  editorTabs: EditorTab[]
   openFile(file: string): void
+  saveFile(file: string): void
+  closeFile(file: string): void
   setMode(mode: SidebarMode): void
   toggleCollapse(): void
 }) {
@@ -309,6 +408,13 @@ export function Sidebar(props: {
             <ModeTab active={props.mode === "summary"} label="Summary" onSelect={() => props.setMode("summary")} />
             <ModeTab active={props.mode === "files"} label="Files" onSelect={() => props.setMode("files")} />
           </box>
+          <OpenFilesSection
+            tabs={props.editorTabs}
+            activeFile={props.activeFile}
+            onSelect={props.openFile}
+            onSave={props.saveFile}
+            onClose={props.closeFile}
+          />
           <Switch>
             <Match when={props.mode === "files"}>
               <FilesSidebar openFile={props.openFile} modified={props.modified} />

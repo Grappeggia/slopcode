@@ -433,6 +433,14 @@ export function Session() {
       snapshot: hit.snapshot,
     }
   })
+  const saveEditor = async (file = activeEditorFile()) => {
+    if (!file) return
+    const hit = editorTabs().find((item) => item.file === file)
+    if (!hit) return
+    await editorConn.save({ sessionID: route.sessionID, editorID: hit.editorID }).catch(async (error) => {
+      toast.show({ message: error instanceof Error ? error.message : String(error), variant: "error" })
+    })
+  }
   const closeEditor = async (file = activeEditorFile()) => {
     if (!file) return
     await editorConn.close({ sessionID: route.sessionID, file })
@@ -2091,16 +2099,24 @@ export function Session() {
             <Match when={wide()}>
               <Sidebar
                 sessionID={route.sessionID}
-                collapsed={sidebarRail()}
+                collapsed={sidebarCollapsed()}
                 mode={sidebarMode()}
                 modified={modified()}
                 activeFile={editor()?.file}
+                editorTabs={editorTabs()}
                 openFile={(file) => {
                   void openEditor(file)
+                }}
+                saveFile={(file) => {
+                  void saveEditor(file)
+                }}
+                closeFile={(file) => {
+                  void requestCloseEditor(file)
                 }}
                 setMode={(mode) => setSidebarMode(mode)}
                 toggleCollapse={toggleSidebarRail}
               />
+
             </Match>
             <Match when={!wide()}>
               <box
@@ -2118,8 +2134,15 @@ export function Session() {
                   mode={sidebarMode()}
                   modified={modified()}
                   activeFile={editor()?.file}
+                  editorTabs={editorTabs()}
                   openFile={(file) => {
                     void openEditor(file)
+                  }}
+                  saveFile={(file) => {
+                    void saveEditor(file)
+                  }}
+                  closeFile={(file) => {
+                    void requestCloseEditor(file)
                   }}
                   setMode={(mode) => setSidebarMode(mode)}
                   toggleCollapse={toggleSidebarRail}
