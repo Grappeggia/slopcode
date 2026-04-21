@@ -84,7 +84,10 @@ describe("editor session", () => {
         await Bun.write(path.join(dir, "fallback.ts"), "const a = 1\n")
         await fs.mkdir(path.join(dir, "nvim", "bin"), { recursive: true })
         await fs.mkdir(path.join(dir, "nvim", "share", "nvim", "runtime"), { recursive: true })
-        await Bun.write(path.join(dir, "nvim", "bin", "nvim"), "#!/bin/sh\necho 'GLIBC_2.34 not found' 1>&2\nexit 127\n")
+        await Bun.write(
+          path.join(dir, "nvim", "bin", "nvim"),
+          "#!/bin/sh\necho 'GLIBC_2.34 not found' 1>&2\nexit 127\n",
+        )
       },
     })
     await Bun.$`chmod 755 ${path.join(tmp.path, "nvim", "bin", "nvim")}`

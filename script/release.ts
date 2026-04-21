@@ -63,7 +63,7 @@ const publish = {
   },
 }
 
-const parse = <T,>(text: string) => JSON.parse(text) as T
+const parse = <T>(text: string) => JSON.parse(text) as T
 
 const runWait = 120000
 const runPoll = 5000
@@ -142,9 +142,5 @@ const waitForCompletion = async (id: number, left: number): Promise<string> => {
 const run = await waitForRun(runWait)
 const url = await waitForCompletion(run.databaseId, completionWait)
 console.log(
-  [
-    `Prepared release assets locally for ${version}.`,
-    `publish.yml completed on ${ref}.`,
-    `Run: ${url}`,
-  ].join("\n"),
+  [`Prepared release assets locally for ${version}.`, `publish.yml completed on ${ref}.`, `Run: ${url}`].join("\n"),
 )

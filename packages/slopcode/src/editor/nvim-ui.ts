@@ -391,7 +391,8 @@ export namespace NvimUI {
 
     const applyPopup = (item: unknown[]) => {
       const [items, selected, row, col] = item
-      if (!Array.isArray(items) || typeof selected !== "number" || typeof row !== "number" || typeof col !== "number") return
+      if (!Array.isArray(items) || typeof selected !== "number" || typeof row !== "number" || typeof col !== "number")
+        return
       popup = {
         visible: true,
         row,
@@ -498,7 +499,9 @@ export namespace NvimUI {
           for (let col = 0; col < next.width; col++) {
             const item = line[col] ?? blank()
             const style =
-              col === mark.col && row === mark.row ? invert(hl.get(item.hl) ?? {}, colors.fg, colors.bg) : (hl.get(item.hl) ?? {})
+              col === mark.col && row === mark.row
+                ? invert(hl.get(item.hl) ?? {}, colors.fg, colors.bg)
+                : (hl.get(item.hl) ?? {})
             if (!prev || !equal(prev, style)) {
               push()
               prev = style

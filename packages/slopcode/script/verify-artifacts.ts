@@ -35,7 +35,11 @@ const metadata = {
 }
 
 const rm = async (target: string) => fs.rm(target, { recursive: true, force: true })
-const exists = async (target: string) => fs.access(target).then(() => true, () => false)
+const exists = async (target: string) =>
+  fs.access(target).then(
+    () => true,
+    () => false,
+  )
 const nvim = (os: string) => (os === "win32" ? "nvim.exe" : "nvim")
 
 const normalize = (name: string) => {
@@ -210,7 +214,9 @@ const alpineSmoke = async () => {
 const listTar = async (file: string) => (await $`tar -tf ${file}`.text()).split("\n").filter(Boolean)
 const listDeb = async (file: string) => (await $`dpkg-deb -c ${file}`.text()).split("\n").filter(Boolean)
 const listZip = async (file: string) =>
-  (await $`python3 -c ${"import sys, zipfile; print('\\n'.join(zipfile.ZipFile(sys.argv[1]).namelist()))"} ${file}`.text())
+  (
+    await $`python3 -c ${"import sys, zipfile; print('\\n'.join(zipfile.ZipFile(sys.argv[1]).namelist()))"} ${file}`.text()
+  )
     .split("\n")
     .filter(Boolean)
 
@@ -243,7 +249,9 @@ const verifyAlias = async () => {
     throw new Error("verify: missing linux x64 binary package for alias smoke")
   }
   await fs.mkdir(work, { recursive: true })
-  await $`npm install --no-package-lock --ignore-scripts=false ${targets.map((item) => item.tgz)} ${aliasPkg.tgz}`.cwd(work)
+  await $`npm install --no-package-lock --ignore-scripts=false ${targets.map((item) => item.tgz)} ${aliasPkg.tgz}`.cwd(
+    work,
+  )
   const aliasBin = path.join(work, "node_modules", ".bin", alias.bin)
   await $`${aliasBin} --version`.cwd(work)
 }

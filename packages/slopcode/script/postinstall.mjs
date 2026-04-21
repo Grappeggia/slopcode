@@ -195,7 +195,9 @@ async function main() {
     const { platform, arch } = detectPlatformAndArch()
     if (!(supported[platform] ?? []).includes(arch)) {
       clearCache()
-      console.log(`Unsupported slopcode platform during postinstall: ${platform}/${arch}. Supported targets: ${supportedMessage()}`)
+      console.log(
+        `Unsupported slopcode platform during postinstall: ${platform}/${arch}. Supported targets: ${supportedMessage()}`,
+      )
       return
     }
 

@@ -103,7 +103,10 @@ const nvimAssets = {
 
 const nvimCache = path.join(dir, "dist", ".neovim-cache")
 const nvimDownloads = new Map<string, Promise<string>>()
-const alpineIndexes = new Map<string, Promise<{ packages: Map<string, AlpinePackage>; providers: Map<string, string> }>>()
+const alpineIndexes = new Map<
+  string,
+  Promise<{ packages: Map<string, AlpinePackage>; providers: Map<string, string> }>
+>()
 const alpineDownloads = new Map<string, Promise<string>>()
 const alpineRoots = new Map<string, Promise<string>>()
 

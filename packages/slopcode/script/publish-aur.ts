@@ -79,7 +79,7 @@ const run = async () => {
     "",
   ].join("\n")
 
-  if (!pkgbuild.includes('/usr/lib/slopcode/neovim')) {
+  if (!pkgbuild.includes("/usr/lib/slopcode/neovim")) {
     throw new Error("aur: missing neovim sidecar install step")
   }
 

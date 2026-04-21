@@ -221,7 +221,9 @@ const verifyApkParity = async () => {
 
 const verifyNpmTargets = async (items: { name: string; version: string }[]) => {
   const loop = async (left: number) => {
-    const result = await Promise.all(items.map(async (item) => ({ ...item, ready: await exists(item.name, item.version) })))
+    const result = await Promise.all(
+      items.map(async (item) => ({ ...item, ready: await exists(item.name, item.version) })),
+    )
     const missing = result.filter((item) => !item.ready)
     if (missing.length === 0) {
       console.log("npm parity: ok", items.map((item) => `${item.name}@${item.version}`).join(", "))

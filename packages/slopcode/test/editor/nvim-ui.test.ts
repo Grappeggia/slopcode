@@ -74,7 +74,18 @@ describe("nvim ui", () => {
       ["grid_resize", [2, 3, 1]],
       ["grid_line", [2, 0, 0, [["X"], ["Y"], ["Z"]], false]],
       ["win_pos", [2, 10, 1, 2, 3, 1]],
-      ["popupmenu_show", [[["foo", "", "", ""], ["bar", "", "", ""]], 1, 0, 7]],
+      [
+        "popupmenu_show",
+        [
+          [
+            ["foo", "", "", ""],
+            ["bar", "", "", ""],
+          ],
+          1,
+          0,
+          7,
+        ],
+      ],
       ["cmdline_show", [[[0, ":w"]], 0, "", ""]],
       ["flush", []],
     ])
