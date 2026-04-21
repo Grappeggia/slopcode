@@ -347,10 +347,9 @@ describe("editor sidebar open e2e", () => {
       const line = explorer.split("\n").find((item) => item.includes("route.tsx"))
       expect(line).toBeDefined()
       const row = explorer.split("\n").findIndex((item) => item.includes("route.tsx")) + 1
-      const icon = column(line!, "📂", 0)
-      const action = column(line!, "📂", 1) ?? icon
-      expect(action).toBeDefined()
-      click(pty, row, action! + 1)
+      const open = column(line!, "[open]")
+      expect(open).toBeDefined()
+      click(pty, row, open! + 2)
 
       const snippet = "SessionRouteSource"
       const start = await eventually(async () => {

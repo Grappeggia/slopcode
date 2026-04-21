@@ -262,10 +262,9 @@ describe("editor tab persistence e2e", () => {
       const line = explorer.find((item) => item.includes("route.tsx"))
       expect(line).toBeDefined()
       const row = explorer.findIndex((item) => item.includes("route.tsx")) + 1
-      const icon = column(line!, "📂", 0)
-      const action = column(line!, "📂", 1) ?? icon
-      expect(action).toBeDefined()
-      click(pty, row, action! + 1)
+      const open = column(line!, "[open]")
+      expect(open).toBeDefined()
+      click(pty, row, open! + 2)
 
       const snippet = "SessionRoute"
       await eventually(() => {

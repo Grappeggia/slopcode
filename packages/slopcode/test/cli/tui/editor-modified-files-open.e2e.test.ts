@@ -6,12 +6,13 @@ import { spawn } from "bun-pty"
 import { tmpdir } from "../../fixture/fixture"
 import { Server } from "../../../src/server/server"
 import { DaemonAuth } from "../../../src/daemon/auth"
+import { Storage } from "../../../src/storage/storage"
 
 const pkgDir = path.resolve(import.meta.dir, "../../..")
 const fixturePath = path.resolve(pkgDir, "src/cli/cmd/tui/context/route.tsx")
 const scripts: string[] = []
 const active: Array<{ stop(force?: boolean): Promise<void> | void }> = []
-const token = "editor-full-app-sidebar-open-token"
+const token = "editor-modified-files-open-token"
 const width = 140
 const height = 40
 
@@ -145,14 +146,6 @@ function column(line: string, text: string, occurrence = 0) {
   return Bun.stringWidth(line.slice(0, index)) + 1
 }
 
-function locate(screen: string[], text: string, occurrence = 0) {
-  for (let row = 0; row < screen.length; row++) {
-    const col = column(screen[row]!, text, occurrence)
-    if (!col) continue
-    return { row: row + 1, col }
-  }
-}
-
 async function eventually<T>(check: () => T | Promise<T>, timeout = 12_000) {
   const start = Date.now()
   while (Date.now() - start < timeout) {
@@ -171,7 +164,7 @@ function click(pty: ReturnType<typeof spawn>, row: number, col: number) {
 async function script() {
   const file = path.join(
     pkgDir,
-    `.slopcode-editor-full-app-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.ts`,
+    `.slopcode-editor-modified-files-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.ts`,
   )
   scripts.push(file)
   await Bun.write(
@@ -198,8 +191,8 @@ await tui({
   return file
 }
 
-describe("editor full app sidebar open e2e", () => {
-  test("opens a real repo file from the actual app shell and keeps it visible for 4+ seconds", async () => {
+describe("editor modified files open e2e", () => {
+  test("opens a modified file from the summary action", async () => {
     await using tmp = await tmpdir({
       git: true,
       init: async (dir: string) => {
@@ -218,14 +211,25 @@ describe("editor full app sidebar open e2e", () => {
         "x-slopcode-directory": tmp.path,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ title: "Real App Repro" }),
+      body: JSON.stringify({ title: "Modified Files Repro" }),
     })
     expect(create.status).toBe(200)
     const session = (await create.json()) as { id: string }
+    const before = await Bun.file(path.join(tmp.path, "route.tsx")).text()
+    await Storage.write(["session_diff", session.id], [
+      {
+        file: "route.tsx",
+        before,
+        after: `${before}\nexport const repro = true\n`,
+        additions: 2,
+        deletions: 0,
+        status: "modified",
+      },
+    ])
 
     const file = await script()
     let raw = ""
-    const home = path.join(os.tmpdir(), `slopcode-full-app-home-${process.pid}-${Date.now()}`)
+    const home = path.join(os.tmpdir(), `slopcode-modified-files-home-${process.pid}-${Date.now()}`)
     await fs.mkdir(home, { recursive: true })
     const pty = spawn(process.execPath, [file, tmp.path, server.url.toString(), session.id, token], {
       name: process.env.TERM || "xterm-256color",
@@ -250,62 +254,23 @@ describe("editor full app sidebar open e2e", () => {
     })
 
     try {
-      await eventually(() => frame(raw, width, height).join("\n").includes("Real App Repro"))
-      const summary = frame(raw, width, height)
-      const filesButton = locate(summary, "📂")
-      expect(filesButton).toBeDefined()
-      click(pty, filesButton!.row, filesButton!.col)
-
-      await eventually(() => frame(raw, width, height).join("\n").includes("route.tsx"))
-
-      const explorer = frame(raw, width, height)
-      const line = explorer.find((item) => item.includes("route.tsx"))
+      const screen = await eventually(() => {
+        const next = frame(raw, width, height).join("\n")
+        if (!next.includes("Modified Files") || !next.includes("route.tsx")) return
+        return next
+      }, 15_000)
+      const row = screen.split("\n").findIndex((item) => item.includes("route.tsx")) + 1
+      const line = screen.split("\n")[row - 1]
       expect(line).toBeDefined()
-      const row = explorer.findIndex((item) => item.includes("route.tsx")) + 1
       const open = column(line!, "[open]")
       expect(open).toBeDefined()
       click(pty, row, open! + 2)
 
-      const snippet = "SessionRoute"
-      const start = await eventually(() => {
-        const screen = frame(raw, width, height).join("\n")
-        if (!screen.includes("route.tsx") || !screen.includes(snippet)) return
-        return Date.now()
-      }, 15_000)
-
-      const filesMode = await eventually(() => {
-        const screen = frame(raw, width, height).join("\n")
-        if (!screen.includes("Open Files") || !screen.includes("[save]") || !screen.includes("[close]")) return
-        return screen
-      })
-      expect(filesMode).toContain("route.tsx")
-      const summaryTab = locate(filesMode.split("\n"), "Summary")
-      expect(summaryTab).toBeDefined()
-      click(pty, summaryTab!.row, summaryTab!.col)
-      const summaryMode = await eventually(() => {
-        const screen = frame(raw, width, height).join("\n")
-        if (!screen.includes("Open Files") || !screen.includes("route.tsx") || !screen.includes(snippet)) return
-        return screen
-      })
-      expect(summaryMode).toContain("[save]")
-      expect(summaryMode).toContain("[close]")
-
-      const samples: Array<{ elapsed: number; visible: boolean; screen: string }> = []
-      while (Date.now() - start < 4_200) {
-        const screen = frame(raw, width, height).join("\n")
-        samples.push({
-          elapsed: Date.now() - start,
-          visible: screen.includes("route.tsx") && screen.includes(snippet),
-          screen,
-        })
-        await Bun.sleep(50)
-      }
-
-      expect(samples.at(-1)?.elapsed ?? 0).toBeGreaterThanOrEqual(4_000)
-      const blink = samples.find((item) => !item.visible)
-      if (blink) {
-        throw new Error(`editor blinked after open at ${blink.elapsed}ms\n${blink.screen}`)
-      }
+      await eventually(() => {
+        const next = frame(raw, width, height).join("\n")
+        if (!next.includes("SessionRoute") || !next.includes("route.tsx")) return
+        return next
+      }, 8_000)
     } finally {
       dispose.dispose()
       pty.kill()
