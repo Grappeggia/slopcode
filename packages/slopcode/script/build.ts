@@ -62,6 +62,7 @@ const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 
 const nvimVersion = "v0.12.1"
+const cliBinary = (os: string) => (os === "win32" ? "slopcode.exe" : "slopcode")
 const nvimBinary = (os: string) => (os === "win32" ? "nvim.exe" : "nvim")
 const nvimAssets = {
   "linux-x64": {
@@ -289,8 +290,9 @@ for (const item of targets) {
   if (!result.success) {
     throw new Error(`Build failed for ${name}`)
   }
-  if (!(await Bun.file(`dist/${name}/bin/slopcode`).exists())) {
-    throw new Error(`Missing built binary at dist/${name}/bin/slopcode`)
+  const binary = `dist/${name}/bin/${cliBinary(item.os)}`
+  if (!(await Bun.file(binary).exists())) {
+    throw new Error(`Missing built binary at ${binary}`)
   }
 
   await $`rm -rf ./dist/${name}/bin/tui`
