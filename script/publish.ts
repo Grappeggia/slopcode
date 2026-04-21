@@ -126,6 +126,8 @@ if (mode !== "publish") {
 }
 
 if (mode === "prep") {
+  console.log("\n=== artifact verification ===\n")
+  await import(`../packages/slopcode/script/verify-artifacts.ts`)
   console.log("\n=== local prepare complete ===\n")
 } else {
   console.log("\n=== cli ===\n")

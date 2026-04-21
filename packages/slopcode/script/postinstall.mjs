@@ -8,7 +8,7 @@ import { createRequire } from "module"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
-const pkg = require("../package.json")
+const pkg = require("./package.json")
 const supported = {
   darwin: ["arm64", "x64"],
   linux: ["arm64", "x64"],

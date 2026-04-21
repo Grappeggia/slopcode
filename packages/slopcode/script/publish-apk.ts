@@ -150,6 +150,15 @@ const run = async () => {
     throw new Error("Missing APKINDEX.tar.gz")
   }
 
+  await $`docker run --rm --platform linux/amd64 -v ${tmp}:/work ${image} sh -lc ${[
+    "set -eu",
+    "mkdir -p /work/verify/etc/apk/keys",
+    "cp -a /etc/apk/keys/. /work/verify/etc/apk/keys/",
+    `apk add --allow-untrusted --root /work/verify --initdb /work/out/work/x86_64/${pkg} >/dev/null`,
+    "test -x /work/verify/usr/bin/slopcode",
+    "test -x /work/verify/usr/lib/slopcode/neovim/bin/nvim",
+  ].join(" && ")}`
+
   await $`cp ${path.join(built, pkg)} ${path.join(arch, pkg)}`
   await $`cp ${indexTar} ${path.join(arch, "APKINDEX.tar.gz")}`
 

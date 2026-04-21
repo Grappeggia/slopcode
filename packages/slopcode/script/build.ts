@@ -4,6 +4,7 @@ import { $ } from "bun"
 import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
+import { gunzipSync } from "zlib"
 import solidPlugin from "../node_modules/@opentui/solid/scripts/solid-plugin"
 import { Archive } from "../src/util/archive"
 
@@ -64,6 +65,9 @@ const skipInstall = process.argv.includes("--skip-install")
 const nvimVersion = "v0.12.1"
 const cliBinary = (os: string) => (os === "win32" ? "slopcode.exe" : "slopcode")
 const nvimBinary = (os: string) => (os === "win32" ? "nvim.exe" : "nvim")
+const alpineVersion = "3.22"
+const alpineRoot = `https://dl-cdn.alpinelinux.org/alpine/v${alpineVersion}`
+const alpineArch = (arch: "arm64" | "x64") => (arch === "arm64" ? "aarch64" : "x86_64")
 const nvimAssets = {
   "linux-x64": {
     name: "nvim-linux-x86_64.tar.gz",
@@ -99,6 +103,160 @@ const nvimAssets = {
 
 const nvimCache = path.join(dir, "dist", ".neovim-cache")
 const nvimDownloads = new Map<string, Promise<string>>()
+const alpineIndexes = new Map<string, Promise<{ packages: Map<string, AlpinePackage>; providers: Map<string, string> }>>()
+const alpineDownloads = new Map<string, Promise<string>>()
+const alpineRoots = new Map<string, Promise<string>>()
+
+type AlpinePackage = {
+  name: string
+  version: string
+  repo: string
+  deps: string[]
+  provides: string[]
+}
+
+const tarEntry = (data: Uint8Array, file: string) => {
+  let offset = 0
+  while (offset + 512 <= data.length) {
+    const header = Uint8Array.from(data.subarray(offset, offset + 512))
+    const name = Buffer.from(header.subarray(0, 100)).toString("utf8").replace(/\0.*$/, "")
+    if (!name) return
+    const raw = Buffer.from(header.subarray(124, 136)).toString("utf8").replace(/\0.*$/, "").trim()
+    const size = Number.parseInt(raw || "0", 8)
+    const start = offset + 512
+    const end = start + size
+    if (name === file) {
+      return Uint8Array.from(data.subarray(start, end))
+    }
+    offset = start + Math.ceil(size / 512) * 512
+  }
+}
+
+const alpineName = (value: string) => {
+  if (!value || value.startsWith("!")) return ""
+  return value.split(/[<>=~]/)[0] ?? ""
+}
+
+const alpineIndex = (arch: "aarch64" | "x86_64") => {
+  const hit = alpineIndexes.get(arch)
+  if (hit) return hit
+  const task = (async () => {
+    const items = await Promise.all(
+      ["main", "community"].map(async (repo) => {
+        const url = `${alpineRoot}/${repo}/${arch}/APKINDEX.tar.gz`
+        const res = await fetch(url)
+        if (!res.ok) {
+          throw new Error(`Failed to download ${url}: ${res.status} ${res.statusText}`)
+        }
+        const plain = tarEntry(gunzipSync(new Uint8Array(await res.arrayBuffer())), "APKINDEX")
+        if (!plain) {
+          throw new Error(`Missing APKINDEX entry in ${url}`)
+        }
+        return {
+          repo: `${alpineRoot}/${repo}`,
+          text: Buffer.from(plain).toString("utf8"),
+        }
+      }),
+    )
+    const packages = new Map<string, AlpinePackage>()
+    const providers = new Map<string, string>()
+    for (const item of items) {
+      for (const block of item.text.split("\n\n")) {
+        if (!block.trim()) continue
+        const map = new Map(
+          block
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => [line.slice(0, 2), line.slice(2)]),
+        )
+        const name = map.get("P:")
+        const version = map.get("V:")
+        if (!name || !version) continue
+        const info = {
+          name,
+          version,
+          repo: item.repo,
+          deps: (map.get("D:") ?? "").split(" ").map(alpineName).filter(Boolean),
+          provides: (map.get("p:") ?? "").split(" ").map(alpineName).filter(Boolean),
+        } satisfies AlpinePackage
+        packages.set(name, info)
+        providers.set(name, name)
+        info.provides.forEach((provide) => {
+          if (!providers.has(provide)) {
+            providers.set(provide, name)
+          }
+        })
+      }
+    }
+    return { packages, providers }
+  })()
+  alpineIndexes.set(arch, task)
+  return task
+}
+
+const alpineResolve = async (arch: "aarch64" | "x86_64") => {
+  const index = await alpineIndex(arch)
+  const seen = new Set<string>()
+  const queue = ["neovim"]
+  while (queue.length > 0) {
+    const name = queue.shift()
+    if (!name || seen.has(name) || name.startsWith("so:libc.musl-")) continue
+    const next = index.providers.get(name) ?? name
+    if (seen.has(next) || next.startsWith("so:libc.musl-")) continue
+    const info = index.packages.get(next)
+    if (!info) {
+      throw new Error(`Missing Alpine package for ${name} (${arch})`)
+    }
+    seen.add(next)
+    info.deps.forEach((dep) => {
+      if (!dep.startsWith("so:libc.musl-")) {
+        queue.push(dep)
+      }
+    })
+  }
+  return Array.from(seen)
+    .map((name) => index.packages.get(name))
+    .filter((item): item is AlpinePackage => !!item)
+}
+
+const alpineDownload = (arch: "aarch64" | "x86_64", item: AlpinePackage) => {
+  const key = `${arch}:${item.name}:${item.version}`
+  const hit = alpineDownloads.get(key)
+  if (hit) return hit
+  const task = (async () => {
+    const out = path.join(nvimCache, "alpine", alpineVersion, arch, `${item.name}-${item.version}.apk`)
+    await fs.promises.mkdir(path.dirname(out), { recursive: true })
+    if (!(await Bun.file(out).exists())) {
+      const url = `${item.repo}/${arch}/${item.name}-${item.version}.apk`
+      const res = await fetch(url)
+      if (!res.ok) {
+        throw new Error(`Failed to download ${url}: ${res.status} ${res.statusText}`)
+      }
+      await Bun.write(out, await res.arrayBuffer())
+    }
+    return out
+  })()
+  alpineDownloads.set(key, task)
+  return task
+}
+
+const alpineBundle = (arch: "aarch64" | "x86_64") => {
+  const hit = alpineRoots.get(arch)
+  if (hit) return hit
+  const task = (async () => {
+    const root = path.join(nvimCache, "alpine", alpineVersion, `${arch}-root`)
+    await fs.promises.rm(root, { recursive: true, force: true })
+    await fs.promises.mkdir(root, { recursive: true })
+    const items = await alpineResolve(arch)
+    for (const item of items) {
+      const file = await alpineDownload(arch, item)
+      await $`tar -xzf ${file} -C ${root} ${"--exclude=.PKGINFO"} ${"--exclude=.SIGN.*"}`
+    }
+    return root
+  })()
+  alpineRoots.set(arch, task)
+  return task
+}
 
 const nvimKey = (item: { os: string; arch: "arm64" | "x64"; abi?: "musl" }) => {
   if (item.abi === "musl") return
@@ -131,25 +289,33 @@ const nvimDownload = (key: keyof typeof nvimAssets) => {
 }
 
 const nvimBundle = async (item: { os: string; arch: "arm64" | "x64"; abi?: "musl" }, name: string) => {
+  const dest = path.join(dir, "dist", name, "bin", "neovim")
+  await fs.promises.rm(dest, { recursive: true, force: true })
+  await fs.promises.mkdir(dest, { recursive: true })
+  if (item.abi === "musl") {
+    const root = await alpineBundle(alpineArch(item.arch))
+    await $`cp -RL ${path.join(root, "usr", "bin")} ${path.join(dest, "bin")}`
+    await $`cp -RL ${path.join(root, "usr", "lib")} ${path.join(dest, "lib")}`
+    await $`cp -RL ${path.join(root, "usr", "share")} ${path.join(dest, "share")}`
+    await $`docker run --rm -v ${dest}:/work alpine:${alpineVersion} sh -lc ${"apk add --no-cache patchelf >/dev/null && patchelf --replace-needed /usr/lib/lua/5.1/lpeg.so lpeg.so /work/bin/nvim"}`
+    return
+  }
   const key = nvimKey(item)
   if (!key) return
   const asset = nvimAssets[key]
   const file = await nvimDownload(key)
-  const dest = path.join(dir, "dist", name, "bin", "neovim")
-  await fs.promises.rm(dest, { recursive: true, force: true })
-  await fs.promises.mkdir(dest, { recursive: true })
   if (asset.format === "tar") {
     await $`tar -xzf ${file} -C ${dest} --strip-components=1`
-  } else {
-    const tmp = path.join(nvimCache, `${asset.name}.tmp`)
-    await fs.promises.rm(tmp, { recursive: true, force: true })
-    await fs.promises.mkdir(tmp, { recursive: true })
-    await Archive.extractZip(file, tmp)
-    const entries = await fs.promises.readdir(tmp, { withFileTypes: true })
-    const source = entries.length === 1 && entries[0]?.isDirectory() ? path.join(tmp, entries[0].name) : tmp
-    await fs.promises.cp(source, dest, { recursive: true, force: true })
-    await fs.promises.rm(tmp, { recursive: true, force: true })
+    return
   }
+  const tmp = path.join(nvimCache, `${asset.name}.tmp`)
+  await fs.promises.rm(tmp, { recursive: true, force: true })
+  await fs.promises.mkdir(tmp, { recursive: true })
+  await Archive.extractZip(file, tmp)
+  const entries = await fs.promises.readdir(tmp, { withFileTypes: true })
+  const source = entries.length === 1 && entries[0]?.isDirectory() ? path.join(tmp, entries[0].name) : tmp
+  await fs.promises.cp(source, dest, { recursive: true, force: true })
+  await fs.promises.rm(tmp, { recursive: true, force: true })
 }
 
 const allTargets: {
@@ -297,11 +463,9 @@ for (const item of targets) {
 
   await $`rm -rf ./dist/${name}/bin/tui`
   await nvimBundle(item, name)
-  if (item.abi !== "musl") {
-    const file = `dist/${name}/bin/neovim/bin/${nvimBinary(item.os)}`
-    if (!(await Bun.file(file).exists())) {
-      throw new Error(`Missing bundled Neovim at ${file}`)
-    }
+  const file = `dist/${name}/bin/neovim/bin/${nvimBinary(item.os)}`
+  if (!(await Bun.file(file).exists())) {
+    throw new Error(`Missing bundled Neovim at ${file}`)
   }
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(

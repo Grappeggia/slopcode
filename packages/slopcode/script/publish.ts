@@ -381,6 +381,7 @@ await verifyNpmTargets([{ name: pkg.name, version }])
 for (const item of aliases) {
   await publishPackage(item.name)
 }
+await verifyNpmTargets(aliases.map((item) => ({ name: item.name, version })))
 await verifyAptParity()
 await verifyRpmParity()
 await verifyApkParity()
