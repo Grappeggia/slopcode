@@ -5,6 +5,7 @@ import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import solidPlugin from "../node_modules/@opentui/solid/scripts/solid-plugin"
+import { Archive } from "../src/util/archive"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -59,6 +60,95 @@ console.log(`Loaded ${migrations.length} migrations`)
 const singleFlag = process.argv.includes("--single")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
+
+const nvimVersion = "v0.12.1"
+const nvimAssets = {
+  "linux-x64": {
+    name: "nvim-linux-x86_64.tar.gz",
+    url: `https://github.com/neovim/neovim/releases/download/${nvimVersion}/nvim-linux-x86_64.tar.gz`,
+    sha256: "ab757a1fd9ad307d53d2df4045698906a7ca3993d92260dd8fe49108712d57d0",
+    format: "tar",
+  },
+  "linux-arm64": {
+    name: "nvim-linux-arm64.tar.gz",
+    url: `https://github.com/neovim/neovim/releases/download/${nvimVersion}/nvim-linux-arm64.tar.gz`,
+    sha256: "a3f8aa5590fd2ac930bcc5c9070b9ac1ec33461d262b6428874c5fc640f3f13c",
+    format: "tar",
+  },
+  "darwin-x64": {
+    name: "nvim-macos-x86_64.tar.gz",
+    url: `https://github.com/neovim/neovim/releases/download/${nvimVersion}/nvim-macos-x86_64.tar.gz`,
+    sha256: "e59a5eafcdf824e2bf6a738e75f8f62ba4ff1b7f1c7daaec2d134aa46737907c",
+    format: "tar",
+  },
+  "darwin-arm64": {
+    name: "nvim-macos-arm64.tar.gz",
+    url: `https://github.com/neovim/neovim/releases/download/${nvimVersion}/nvim-macos-arm64.tar.gz`,
+    sha256: "b77e01c5421ac1bac593eed5c2ea1b950439306dd4c32371ac2473792da9a9d5",
+    format: "tar",
+  },
+  "win32-x64": {
+    name: "nvim-win64.zip",
+    url: `https://github.com/neovim/neovim/releases/download/${nvimVersion}/nvim-win64.zip`,
+    sha256: "75fedc530b3772ca9f177edc7db92560bb9d2d6700ac6d5b2c53eaf5a9317ae3",
+    format: "zip",
+  },
+} as const
+
+const nvimCache = path.join(dir, "dist", ".neovim-cache")
+const nvimDownloads = new Map<string, Promise<string>>()
+
+const nvimKey = (item: { os: string; arch: "arm64" | "x64"; abi?: "musl" }) => {
+  if (item.abi === "musl") return
+  const key = `${item.os}-${item.arch}` as keyof typeof nvimAssets
+  if (key in nvimAssets) return key
+}
+
+const nvimDownload = (key: keyof typeof nvimAssets) => {
+  const existing = nvimDownloads.get(key)
+  if (existing) return existing
+  const task = (async () => {
+    const asset = nvimAssets[key]
+    const out = path.join(nvimCache, asset.name)
+    await fs.promises.mkdir(nvimCache, { recursive: true })
+    if (!(await Bun.file(out).exists())) {
+      const res = await fetch(asset.url)
+      if (!res.ok) {
+        throw new Error(`Failed to download ${asset.url}: ${res.status} ${res.statusText}`)
+      }
+      await Bun.write(out, await res.arrayBuffer())
+    }
+    const digest = new Bun.CryptoHasher("sha256").update(await Bun.file(out).arrayBuffer()).digest("hex")
+    if (digest !== asset.sha256) {
+      throw new Error(`Neovim digest mismatch for ${asset.name}`)
+    }
+    return out
+  })()
+  nvimDownloads.set(key, task)
+  return task
+}
+
+const nvimBundle = async (item: { os: string; arch: "arm64" | "x64"; abi?: "musl" }, name: string) => {
+  const key = nvimKey(item)
+  if (!key) return
+  const asset = nvimAssets[key]
+  const file = await nvimDownload(key)
+  const dest = path.join(dir, "dist", name, "bin", "neovim")
+  await fs.promises.rm(dest, { recursive: true, force: true })
+  await fs.promises.mkdir(dest, { recursive: true })
+  if (asset.format === "tar") {
+    await $`tar -xzf ${file} -C ${dest} --strip-components=1`
+  } else {
+    const tmp = path.join(nvimCache, `${asset.name}.tmp`)
+    await fs.promises.rm(tmp, { recursive: true, force: true })
+    await fs.promises.mkdir(tmp, { recursive: true })
+    await Archive.extractZip(file, tmp)
+    const entries = await fs.promises.readdir(tmp, { withFileTypes: true })
+    const source = entries.length === 1 && entries[0]?.isDirectory() ? path.join(tmp, entries[0].name) : tmp
+    await fs.promises.cp(source, dest, { recursive: true, force: true })
+    await fs.promises.rm(tmp, { recursive: true, force: true })
+  }
+}
 
 const allTargets: {
   os: string
@@ -186,6 +276,7 @@ for (const item of targets) {
     entrypoints: ["./src/index.ts", parserWorker, workerPath],
     define: {
       SLOPCODE_VERSION: `'${Script.version}'`,
+      SLOPCODE_NVIM_VERSION: `'${nvimVersion}'`,
       SLOPCODE_MIGRATIONS: JSON.stringify(migrations),
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       SLOPCODE_WORKER_PATH: workerPath,
@@ -195,6 +286,7 @@ for (const item of targets) {
   })
 
   await $`rm -rf ./dist/${name}/bin/tui`
+  await nvimBundle(item, name)
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {
@@ -230,21 +322,27 @@ const debVersion = (() => {
 
 const debBuild = async (src: string, arch: "amd64" | "arm64") => {
   const binary = path.join(dir, "dist", src, "bin", "slopcode")
+  const nvim = path.join(dir, "dist", src, "bin", "neovim")
   if (!fs.existsSync(binary)) {
     throw new Error(`Missing Debian source binary at ${binary}`)
   }
 
   const root = path.join(dir, "dist", `deb-${arch}`)
   const binDir = path.join(root, "usr", "bin")
+  const libDir = path.join(root, "usr", "lib", "slopcode")
   const controlDir = path.join(root, "DEBIAN")
   const deb = path.join(dir, "dist", `slopcode-linux-${arch}.deb`)
 
   await fs.promises.rm(root, { recursive: true, force: true })
   await fs.promises.mkdir(binDir, { recursive: true })
+  await fs.promises.mkdir(libDir, { recursive: true })
   await fs.promises.mkdir(controlDir, { recursive: true })
 
   await $`cp ${binary} ${path.join(binDir, "slopcode")}`
   await $`chmod 755 ${path.join(binDir, "slopcode")}`
+  if (fs.existsSync(nvim)) {
+    await fs.promises.cp(nvim, path.join(libDir, "neovim"), { recursive: true, force: true })
+  }
 
   await Bun.write(
     path.join(controlDir, "control"),
@@ -276,11 +374,6 @@ if (Script.release) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
-      continue
-    }
-
-    if (key === winget) {
-      await $`zip -r ../../${key}.zip slopcode.exe`.cwd(`dist/${key}/bin`)
       continue
     }
 

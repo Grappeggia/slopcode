@@ -1,7 +1,13 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import * as path from "node:path"
 import { tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
+
+const basic = process.env.SLOPCODE_EDITOR_FORCE_BASIC
+
+afterEach(() => {
+  process.env.SLOPCODE_EDITOR_FORCE_BASIC = basic
+})
 
 async function eventually(check: () => boolean | Promise<boolean>, timeout = 1500) {
   const start = Date.now()
@@ -14,6 +20,7 @@ async function eventually(check: () => boolean | Promise<boolean>, timeout = 150
 
 describe("editor session", () => {
   test("processes websocket input outside the instance context", async () => {
+    process.env.SLOPCODE_EDITOR_FORCE_BASIC = "true"
     await using tmp = await tmpdir({
       git: true,
       init: async (dir) => {
@@ -53,6 +60,7 @@ describe("editor session", () => {
   })
 
   test("opens, edits, saves, and closes", async () => {
+    process.env.SLOPCODE_EDITOR_FORCE_BASIC = "true"
     await using tmp = await tmpdir({
       git: true,
       init: async (dir) => {
@@ -96,6 +104,7 @@ describe("editor session", () => {
   })
 
   test("publishes lint diagnostics in snapshots", async () => {
+    process.env.SLOPCODE_EDITOR_FORCE_BASIC = "true"
     await using tmp = await tmpdir({
       git: true,
       init: async (dir) => {

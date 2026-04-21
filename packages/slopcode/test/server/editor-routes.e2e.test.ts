@@ -18,9 +18,11 @@ type Client = {
 
 const token = "editor-e2e-token"
 const active: Array<{ stop(force?: boolean): Promise<void> | void }> = []
+const basic = process.env.SLOPCODE_EDITOR_FORCE_BASIC
 
 afterEach(async () => {
   await Promise.all(active.splice(0).map((server) => server.stop(true)))
+  process.env.SLOPCODE_EDITOR_FORCE_BASIC = basic
 })
 
 async function eventually<T>(check: () => T | Promise<T>, timeout = 2_000) {
@@ -97,6 +99,7 @@ async function connect(server: URL, directory: string, id: string, sessionID: st
 
 describe("editor routes e2e", () => {
   test("edits and saves through the real server and websocket", async () => {
+    process.env.SLOPCODE_EDITOR_FORCE_BASIC = "true"
     await using tmp = await tmpdir({
       git: true,
       init: async (dir) => {
@@ -129,6 +132,7 @@ describe("editor routes e2e", () => {
   })
 
   test("keeps multiple editor sessions alive for the same chat session", async () => {
+    process.env.SLOPCODE_EDITOR_FORCE_BASIC = "true"
     await using tmp = await tmpdir({
       git: true,
       init: async (dir) => {
@@ -165,6 +169,7 @@ describe("editor routes e2e", () => {
   })
 
   test("publishes diagnostics for invalid files over the real websocket", async () => {
+    process.env.SLOPCODE_EDITOR_FORCE_BASIC = "true"
     await using tmp = await tmpdir({
       git: true,
       init: async (dir) => {

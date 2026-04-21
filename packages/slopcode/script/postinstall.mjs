@@ -138,6 +138,14 @@ function findBinary() {
   return
 }
 
+function cacheSidecar(sourcePath) {
+  const source = path.join(path.dirname(sourcePath), "neovim")
+  if (!fs.existsSync(source)) return
+  const target = path.join(__dirname, "bin", "neovim")
+  fs.rmSync(target, { recursive: true, force: true })
+  fs.cpSync(source, target, { recursive: true, force: true })
+}
+
 function prepareBinDirectory(binaryName) {
   const binDir = path.join(__dirname, "bin")
   const targetPath = path.join(binDir, binaryName)
@@ -192,6 +200,7 @@ async function main() {
       fs.copyFileSync(binaryPath, target)
     }
     fs.chmodSync(target, 0o755)
+    cacheSidecar(binaryPath)
   } catch (error) {
     console.error("Failed to setup slopcode binary cache:", error.message)
     process.exit(0)

@@ -4,15 +4,35 @@ import { Packr, Unpackr } from "msgpackr"
 export namespace NvimRPC {
   type Handler = (params: unknown[]) => void
 
-  export async function connect(file: string) {
+  type Input = {
+    on(event: "data", handler: (chunk: string | Buffer | Uint8Array) => void): unknown
+    on(event: "close" | "end" | "error", handler: (error?: Error) => void): unknown
+  }
+
+  type Output = {
+    write(data: Uint8Array | Buffer): unknown
+    end?(): unknown
+    destroy?(error?: Error): unknown
+  }
+
+  const create = (input: Input, output: Output, done: () => void) => {
     const packr = new Packr({ useRecords: false })
     const unpackr = new Unpackr({ useRecords: false, sequential: true })
     const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>()
     const handlers = new Map<string, Set<Handler>>()
     let id = 1
     let buffer = Buffer.alloc(0)
+    let closed = false
 
-    const socket = net.createConnection(file)
+    const close = () => {
+      if (closed) return
+      closed = true
+      done()
+      Array.from(pending.values()).forEach((item) => {
+        item.reject(new Error("Neovim connection closed"))
+      })
+      pending.clear()
+    }
 
     const handle = (message: unknown) => {
       if (!Array.isArray(message)) return
@@ -36,8 +56,9 @@ export namespace NvimRPC {
       }
     }
 
-    socket.on("data", (chunk) => {
-      buffer = Buffer.concat([buffer, Buffer.from(chunk)])
+    input.on("data", (chunk) => {
+      const next = typeof chunk === "string" ? Buffer.from(chunk) : Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      buffer = Buffer.concat([buffer, next])
       try {
         let end = 0
         unpackr.unpackMultiple(buffer, (value, _start, finish) => {
@@ -56,19 +77,9 @@ export namespace NvimRPC {
       }
     })
 
-    await new Promise<void>((resolve, reject) => {
-      socket.once("connect", () => resolve())
-      socket.once("error", reject)
-    })
-
-    const close = () => {
-      socket.end()
-      socket.destroy()
-      Array.from(pending.values()).forEach((item) => {
-        item.reject(new Error("Neovim connection closed"))
-      })
-      pending.clear()
-    }
+    input.on("close", close)
+    input.on("end", close)
+    input.on("error", close)
 
     return {
       on(method: string, handler: Handler) {
@@ -83,16 +94,35 @@ export namespace NvimRPC {
         }
       },
       notify(method: string, params: unknown[] = []) {
-        socket.write(packr.pack([2, method, params]))
+        output.write(packr.pack([2, method, params]))
       },
       request(method: string, params: unknown[] = []) {
         const next = id++
         return new Promise<unknown>((resolve, reject) => {
           pending.set(next, { resolve, reject })
-          socket.write(packr.pack([0, next, method, params]))
+          output.write(packr.pack([0, next, method, params]))
         })
       },
       close,
     }
+  }
+
+  export function attach(input: Input, output: Output) {
+    return create(input, output, () => {
+      output.end?.()
+      output.destroy?.()
+    })
+  }
+
+  export async function connect(file: string) {
+    const socket = net.createConnection(file)
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", () => resolve())
+      socket.once("error", reject)
+    })
+    return create(socket, socket, () => {
+      socket.end()
+      socket.destroy()
+    })
   }
 }
