@@ -80,6 +80,8 @@ const parse = (value: string | undefined, fallback: number) => {
 }
 const aptWait = parse(process.env.SLOPCODE_APT_PARITY_WAIT_MS, 600000)
 const aptPoll = parse(process.env.SLOPCODE_APT_PARITY_POLL_MS, 5000)
+const npmWait = parse(process.env.SLOPCODE_NPM_PARITY_WAIT_MS, 600000)
+const npmPoll = parse(process.env.SLOPCODE_NPM_PARITY_POLL_MS, 5000)
 const rpmWait = parse(process.env.SLOPCODE_RPM_PARITY_WAIT_MS, 600000)
 const rpmPoll = parse(process.env.SLOPCODE_RPM_PARITY_POLL_MS, 5000)
 const apkWait = parse(process.env.SLOPCODE_APK_PARITY_WAIT_MS, 600000)
@@ -217,6 +219,24 @@ const verifyApkParity = async () => {
   await loop(apkWait)
 }
 
+const verifyNpmTargets = async (items: { name: string; version: string }[]) => {
+  const loop = async (left: number) => {
+    const result = await Promise.all(items.map(async (item) => ({ ...item, ready: await exists(item.name, item.version) })))
+    const missing = result.filter((item) => !item.ready)
+    if (missing.length === 0) {
+      console.log("npm parity: ok", items.map((item) => `${item.name}@${item.version}`).join(", "))
+      return
+    }
+    if (left <= 0) {
+      throw new Error(`npm parity failed: ${missing.map((item) => `${item.name}@${item.version}`).join(", ")}`)
+    }
+    const next = Math.min(npmPoll, left)
+    await Bun.sleep(next)
+    return loop(left - next)
+  }
+  await loop(npmWait)
+}
+
 const readme = (await Bun.file("./README.npm.md").text()).trim()
 if (!readme) {
   throw new Error("README.npm.md is missing or empty")
@@ -318,7 +338,7 @@ if (latestRelease) {
   await import("./publish-macports.ts")
 }
 
-const tasks = binaries.map(async (binary) => {
+const publishBinary = async (binary: (typeof binaries)[number]) => {
   if (await exists(binary.name, binary.version)) {
     console.log("skip", binary.name, binary.version)
     return
@@ -336,7 +356,7 @@ const tasks = binaries.map(async (binary) => {
     ? $`npm publish *.tgz --access public --tag ${Script.channel} --otp=${otp}`
     : $`npm publish *.tgz --access public --tag ${Script.channel}`
   await publish.cwd(`./dist/${binary.dir}`)
-})
+}
 
 const publishPackage = async (name: string) => {
   if (await exists(name, version)) {
@@ -352,7 +372,15 @@ const publishPackage = async (name: string) => {
   await publish.cwd(`./dist/${name}`)
 }
 
-await Promise.all([...tasks, publishPackage(pkg.name), ...aliases.map((item) => publishPackage(item.name))])
+for (const binary of binaries) {
+  await publishBinary(binary)
+}
+await verifyNpmTargets(binaries)
+await publishPackage(pkg.name)
+await verifyNpmTargets([{ name: pkg.name, version }])
+for (const item of aliases) {
+  await publishPackage(item.name)
+}
 await verifyAptParity()
 await verifyRpmParity()
 await verifyApkParity()

@@ -92,13 +92,13 @@ const run = async () => {
   await fs.mkdir(build, { recursive: true })
   await fs.mkdir(out, { recursive: true })
 
-  await $`gh release download ${tag} --repo ${source} --dir ${artifacts} --pattern slopcode-linux-x64-baseline.tar.gz`.env(
+  await $`gh release download ${tag} --repo ${source} --dir ${artifacts} --pattern slopcode-linux-x64-baseline-musl.tar.gz`.env(
     env,
   )
   await $`gh repo clone ${repo} ${root} -- --depth=1 --branch ${branch}`.env(env)
   await fs.mkdir(arch, { recursive: true })
 
-  await $`tar -xzf ${path.join(artifacts, "slopcode-linux-x64-baseline.tar.gz")} -C ${build}`
+  await $`tar -xzf ${path.join(artifacts, "slopcode-linux-x64-baseline-musl.tar.gz")} -C ${build}`
   const binary = path.join(build, "slopcode")
   if (!(await Bun.file(binary).exists())) {
     throw new Error(`Missing apk source binary at ${binary}`)
@@ -120,6 +120,10 @@ const run = async () => {
     "}",
     "package() {",
     '  install -Dm755 "$srcdir/$pkgname" "$pkgdir/usr/bin/slopcode"',
+    '  if [ -d "$srcdir/neovim" ]; then',
+    '    install -dm755 "$pkgdir/usr/lib/slopcode"',
+    '    cp -a "$srcdir/neovim" "$pkgdir/usr/lib/slopcode/neovim"',
+    "  fi",
     "}",
     "",
   ].join("\n")

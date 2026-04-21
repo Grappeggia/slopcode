@@ -1,138 +1,28 @@
-import { afterEach, describe, expect, mock, test } from "bun:test"
-import z from "zod"
+import { afterEach, describe, expect, test } from "bun:test"
+import * as path from "node:path"
 import { tmpdir } from "../fixture/fixture"
 
-const calls: string[] = []
-
-mock.module("../../src/project/bootstrap", () => ({
-  InstanceBootstrap: async () => {},
-}))
-
-mock.module("../../src/editor", () => ({
-  EditorSession: {
-    Info: z.object({
-      id: z.string(),
-      sessionID: z.string(),
-      file: z.string(),
-      cwd: z.string(),
-      status: z.enum(["running", "exited"]),
-      dirty: z.boolean(),
-      diff: z.boolean(),
-      mode: z.string(),
-      pid: z.number(),
-    }),
-    OpenInput: z.object({
-      sessionID: z.string(),
-      file: z.string(),
-      size: z.object({ rows: z.number(), cols: z.number() }),
-    }),
-    SnapshotData: z.object({
-      width: z.number(),
-      height: z.number(),
-      rows: z.array(z.array(z.object({ text: z.string() }))),
-      mode: z.string(),
-      dirty: z.boolean(),
-      diff: z.boolean(),
-      file: z.string(),
-      status: z.string(),
-      diagnostics: z.array(
-        z.object({
-          line: z.number(),
-          column: z.number(),
-          severity: z.enum(["error", "warning"]),
-          message: z.string(),
-        }),
-      ),
-    }),
-    ScopedInput: z.object({
-      sessionID: z.string(),
-    }),
-    open: async (input: any) => {
-      calls.push(`open:${input.file}`)
-      return {
-        id: "pty_editor_test",
-        sessionID: input.sessionID,
-        file: input.file,
-        cwd: "/tmp",
-        status: "running",
-        dirty: false,
-        diff: true,
-        mode: "NORMAL",
-        pid: 1,
-      }
-    },
-    get: (id: string) => {
-      calls.push(`get:${id}`)
-      return {
-        id,
-        sessionID: "ses_test0000000000000000000",
-        file: "test.ts",
-        cwd: "/tmp",
-        status: "running",
-        dirty: false,
-        diff: true,
-        mode: "NORMAL",
-        pid: 1,
-      }
-    },
-    snapshot: async (id: string) => {
-      calls.push(`snapshot:${id}`)
-      return {
-        width: 10,
-        height: 5,
-        rows: [[{ text: "test" }]],
-        mode: "EDIT",
-        dirty: false,
-        diff: false,
-        file: "test.ts",
-        status: "running",
-        diagnostics: [],
-      }
-    },
-    save: async (id: string) => {
-      calls.push(`save:${id}`)
-      return {
-        id,
-        sessionID: "ses_test0000000000000000000",
-        file: "test.ts",
-        cwd: "/tmp",
-        status: "running",
-        dirty: false,
-        diff: true,
-        mode: "NORMAL",
-        pid: 1,
-      }
-    },
-    dismiss: async (id: string) => {
-      calls.push(`dismiss:${id}`)
-      return {
-        id,
-        sessionID: "ses_test0000000000000000000",
-        file: "test.ts",
-        cwd: "/tmp",
-        status: "running",
-        dirty: false,
-        diff: false,
-        mode: "NORMAL",
-        pid: 1,
-      }
-    },
-    close: async (id: string) => {
-      calls.push(`close:${id}`)
-      return true
-    },
-    connect: () => undefined,
-  },
-}))
+const basic = process.env.SLOPCODE_EDITOR_FORCE_BASIC
 
 afterEach(() => {
-  calls.length = 0
-  mock.restore()
+  if (basic === undefined) {
+    delete process.env.SLOPCODE_EDITOR_FORCE_BASIC
+    return
+  }
+  process.env.SLOPCODE_EDITOR_FORCE_BASIC = basic
 })
 
 describe("editor routes", () => {
-  test("opens, saves, dismisses, and closes editor sessions", async () => {
-    await using tmp = await tmpdir({ git: true })
+  test("opens, snapshots, saves, dismisses, and closes editor sessions", async () => {
+    process.env.SLOPCODE_EDITOR_FORCE_BASIC = "true"
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "test.ts"), "const a = 1\n")
+        await Bun.$`git add test.ts && git commit -m "add test"`.cwd(dir).quiet()
+        await Bun.write(path.join(dir, "test.ts"), "const a = 2\n")
+      },
+    })
     const { Server } = await import("../../src/server/server")
     const app = Server.App()
     const headers = {
@@ -150,34 +40,31 @@ describe("editor routes", () => {
       }),
     })
     expect(open.status).toBe(200)
+    const info = (await open.json()) as { id: string; sessionID: string; diff: boolean }
+    expect(typeof info.diff).toBe("boolean")
 
-    const snapshot = await app.request("/editor/pty_editor_test/snapshot?sessionID=ses_test0000000000000000000", {
+    const snapshot = await app.request(`/editor/${info.id}/snapshot?sessionID=${info.sessionID}`, {
       method: "GET",
       headers: { "x-slopcode-directory": tmp.path },
     })
     expect(snapshot.status).toBe(200)
 
-    const save = await app.request("/editor/pty_editor_test/save?sessionID=ses_test0000000000000000000", {
+    const save = await app.request(`/editor/${info.id}/save?sessionID=${info.sessionID}`, {
       method: "POST",
       headers: { "x-slopcode-directory": tmp.path },
     })
     expect(save.status).toBe(200)
 
-    const dismiss = await app.request("/editor/pty_editor_test/diff/dismiss?sessionID=ses_test0000000000000000000", {
+    const dismiss = await app.request(`/editor/${info.id}/diff/dismiss?sessionID=${info.sessionID}`, {
       method: "POST",
       headers: { "x-slopcode-directory": tmp.path },
     })
     expect(dismiss.status).toBe(200)
 
-    const close = await app.request("/editor/pty_editor_test?sessionID=ses_test0000000000000000000", {
+    const close = await app.request(`/editor/${info.id}?sessionID=${info.sessionID}`, {
       method: "DELETE",
       headers: { "x-slopcode-directory": tmp.path },
     })
     expect(close.status).toBe(200)
-    expect(calls).toContain("open:test.ts")
-    expect(calls).toContain("snapshot:pty_editor_test")
-    expect(calls).toContain("save:pty_editor_test")
-    expect(calls).toContain("dismiss:pty_editor_test")
-    expect(calls).toContain("close:pty_editor_test")
   })
 })

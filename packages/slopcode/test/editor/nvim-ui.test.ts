@@ -51,4 +51,37 @@ describe("nvim ui", () => {
     expect(snap.rows[0]?.map((item) => item.text).join("")).toBe("222")
     expect(snap.rows[1]?.map((item) => item.text).join("")).toBe("333")
   })
+
+  test("preserves existing cells across resize", () => {
+    const ui = NvimUI.create()
+    ui.redraw([
+      ["grid_resize", [1, 2, 1]],
+      ["grid_line", [1, 0, 0, [["a"], ["b"]], false]],
+      ["grid_resize", [1, 4, 2]],
+      ["flush", []],
+    ])
+
+    const snap = ui.snapshot()
+    expect(snap.rows[0]?.map((item) => item.text).join("")).toBe("ab  ")
+  })
+
+  test("composes multigrid windows and popup overlays", () => {
+    const ui = NvimUI.create()
+    ui.redraw([
+      ["grid_resize", [1, 6, 3]],
+      ["grid_line", [1, 0, 0, [["a"], ["a"], ["a"], ["a"], ["a"], ["a"]], false]],
+      ["grid_line", [1, 1, 0, [["b"], ["b"], ["b"], ["b"], ["b"], ["b"]], false]],
+      ["grid_resize", [2, 3, 1]],
+      ["grid_line", [2, 0, 0, [["X"], ["Y"], ["Z"]], false]],
+      ["win_pos", [2, 10, 1, 2, 3, 1]],
+      ["popupmenu_show", [[["foo", "", "", ""], ["bar", "", "", ""]], 1, 0, 7]],
+      ["cmdline_show", [[[0, ":w"]], 0, "", ""]],
+      ["flush", []],
+    ])
+
+    const snap = ui.snapshot()
+    expect(snap.rows[1]?.map((item) => item.text).join("")).toContain("bbXYZb")
+    expect(snap.rows[1]?.map((item) => item.text).join("")).toContain("bar")
+    expect(snap.rows[2]?.map((item) => item.text).join("")).toContain(":w")
+  })
 })
