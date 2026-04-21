@@ -32,7 +32,11 @@ export namespace EditorSession {
     return (await Nvim.snapshot(id, input)) ?? Basic.snapshot(id, input)
   }
 
-  export async function resize(id: string, size: { rows: number; cols: number }, input?: Parameters<typeof Basic.resize>[2]) {
+  export async function resize(
+    id: string,
+    size: { rows: number; cols: number },
+    input?: Parameters<typeof Basic.resize>[2],
+  ) {
     return (await Nvim.resize(id, size, input)) ?? Basic.resize(id, size, input)
   }
 
@@ -50,7 +54,16 @@ export namespace EditorSession {
     return Basic.close(id, input)
   }
 
-  export function connect(id: string, ws: { readyState: number; data?: unknown; send(data: string | Uint8Array | ArrayBuffer): void; close(code?: number, reason?: string): void }, input?: Parameters<typeof Basic.connect>[2]) {
+  export function connect(
+    id: string,
+    ws: {
+      readyState: number
+      data?: unknown
+      send(data: string | Uint8Array | ArrayBuffer): void
+      close(code?: number, reason?: string): void
+    },
+    input?: Parameters<typeof Basic.connect>[2],
+  ) {
     return Nvim.connect(id, ws, input) ?? Basic.connect(id, ws, input)
   }
 }

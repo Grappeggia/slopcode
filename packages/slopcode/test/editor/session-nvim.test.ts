@@ -134,7 +134,12 @@ describe("nvim editor session", () => {
       },
     })
     process.env.SLOPCODE_NVIM_ROOT = path.join(tmp.path, "nvim")
-    process.env.SLOPCODE_NVIM_BIN_PATH = path.join(tmp.path, "nvim", "bin", process.platform === "win32" ? "nvim.exe" : "nvim")
+    process.env.SLOPCODE_NVIM_BIN_PATH = path.join(
+      tmp.path,
+      "nvim",
+      "bin",
+      process.platform === "win32" ? "nvim.exe" : "nvim",
+    )
     process.env.SLOPCODE_VIMRUNTIME = path.join(tmp.path, "nvim", "share", "nvim", "runtime")
     fs.writeFileSync(process.env.SLOPCODE_NVIM_BIN_PATH, "")
     const diff = spyOn(SessionSummary, "diffChunk").mockResolvedValue([

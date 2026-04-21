@@ -31,8 +31,7 @@ export namespace NvimBundle {
     if (!bin) return
     if (!(await Filesystem.exists(bin))) return
     const run =
-      process.env.SLOPCODE_VIMRUNTIME ??
-      path.join(path.dirname(path.dirname(bin)), "share", "nvim", "runtime")
+      process.env.SLOPCODE_VIMRUNTIME ?? path.join(path.dirname(path.dirname(bin)), "share", "nvim", "runtime")
     if (!(await Filesystem.exists(run))) return
     return {
       root: path.dirname(path.dirname(bin)),
