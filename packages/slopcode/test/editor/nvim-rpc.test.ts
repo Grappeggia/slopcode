@@ -49,4 +49,24 @@ describe("nvim rpc", () => {
     rpc.close()
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })
+
+  test("rejects pending requests when the socket closes", async () => {
+    const sock = path.join(os.tmpdir(), `slopcode-nvim-rpc-${process.pid}-${Date.now()}-close.sock`)
+    clean.push(sock)
+    const unpackr = new Unpackr({ useRecords: false, sequential: true })
+
+    const server = net.createServer((socket) => {
+      socket.on("data", (chunk) => {
+        unpackr.unpackMultiple(Buffer.from(chunk), (value) => {
+          if (!Array.isArray(value) || value[0] !== 0) return
+          socket.end()
+        })
+      })
+    })
+
+    await new Promise<void>((resolve) => server.listen(sock, resolve))
+    const rpc = await NvimRPC.connect(sock)
+    await expect(rpc.request("nvim_eval", ["1 + 1"])).rejects.toThrow("Neovim connection closed")
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
 })

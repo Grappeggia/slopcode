@@ -106,6 +106,9 @@ const run = async () => {
       }
 
       await $`cp ${binary} ${path.join(top, "SOURCES", "slopcode")}`
+      if (await Bun.file(path.join(src, "neovim")).exists()) {
+        await $`cp -r ${path.join(src, "neovim")} ${path.join(top, "SOURCES", "neovim")}`
+      }
 
       const spec = [
         "%global __os_install_post %{nil}",
@@ -129,9 +132,15 @@ const run = async () => {
         "",
         "%install",
         "install -Dm755 %{SOURCE0} %{buildroot}/usr/bin/slopcode",
+        "if [ -d %{_sourcedir}/neovim ]; then",
+        "  mkdir -p %{buildroot}/usr/lib/slopcode",
+        "  cp -a %{_sourcedir}/neovim %{buildroot}/usr/lib/slopcode/neovim",
+        "fi",
         "",
         "%files",
         "/usr/bin/slopcode",
+        "%dir /usr/lib/slopcode",
+        "/usr/lib/slopcode/neovim",
         "",
         "%changelog",
         `* ${date} SlopCode Team <support@slopcode.dev> - ${version}-1`,

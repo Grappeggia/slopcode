@@ -62,6 +62,7 @@ const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 
 const nvimVersion = "v0.12.1"
+const nvimBinary = (os: string) => (os === "win32" ? "nvim.exe" : "nvim")
 const nvimAssets = {
   "linux-x64": {
     name: "nvim-linux-x86_64.tar.gz",
@@ -258,7 +259,7 @@ for (const item of targets) {
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
 
-  await Bun.build({
+  const result = await Bun.build({
     conditions: ["browser"],
     tsconfig: "./tsconfig.json",
     plugins: [solidPlugin],
@@ -285,8 +286,21 @@ for (const item of targets) {
     },
   })
 
+  if (!result.success) {
+    throw new Error(`Build failed for ${name}`)
+  }
+  if (!(await Bun.file(`dist/${name}/bin/slopcode`).exists())) {
+    throw new Error(`Missing built binary at dist/${name}/bin/slopcode`)
+  }
+
   await $`rm -rf ./dist/${name}/bin/tui`
   await nvimBundle(item, name)
+  if (item.abi !== "musl") {
+    const file = `dist/${name}/bin/neovim/bin/${nvimBinary(item.os)}`
+    if (!(await Bun.file(file).exists())) {
+      throw new Error(`Missing bundled Neovim at ${file}`)
+    }
+  }
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {

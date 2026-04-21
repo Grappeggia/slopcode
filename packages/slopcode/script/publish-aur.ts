@@ -71,6 +71,10 @@ const run = async () => {
     "",
     "package() {",
     '  install -Dm755 "$srcdir/slopcode" "$pkgdir/usr/bin/slopcode"',
+    '  if [[ -d "$srcdir/neovim" ]]; then',
+    '    install -dm755 "$pkgdir/usr/lib/slopcode"',
+    '    cp -a "$srcdir/neovim" "$pkgdir/usr/lib/slopcode/neovim"',
+    "  fi",
     "}",
     "",
   ].join("\n")
