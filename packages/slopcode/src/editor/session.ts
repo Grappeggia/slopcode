@@ -1,14 +1,15 @@
 import { Log } from "@/util/log"
 import { EditorSession as Basic } from "./session-basic"
 import { EditorSessionNvim as Nvim } from "./session-nvim"
+import * as Schema from "./schema"
 
 export namespace EditorSession {
   const log = Log.create({ service: "editor" })
 
-  export const Info = Basic.Info
-  export const OpenInput = Basic.OpenInput
-  export const SnapshotData = Basic.SnapshotData
-  export const ScopedInput = Basic.ScopedInput
+  export const Info = Schema.Info
+  export const OpenInput = Schema.OpenInput
+  export const SnapshotData = Schema.SnapshotData
+  export const ScopedInput = Schema.ScopedInput
   export const Event = Basic.Event
 
   const basic = () => process.env.SLOPCODE_EDITOR_FORCE_BASIC === "true"

@@ -16,6 +16,7 @@ import { NvimBundle } from "./nvim-bundle"
 import { lint } from "./lint"
 import { NvimRPC } from "./nvim-rpc"
 import { NvimUI } from "./nvim-ui"
+import * as Schema from "./schema"
 import type { Diagnostic, Snapshot } from "./types"
 
 export namespace EditorSessionNvim {
@@ -220,60 +221,13 @@ export namespace EditorSessionNvim {
     })
   }
 
-  export const Info = z
-    .object({
-      id: z.string(),
-      sessionID: Identifier.schema("session"),
-      file: z.string(),
-      cwd: z.string(),
-      status: z.enum(["running", "exited"]),
-      dirty: z.boolean(),
-      diff: z.boolean(),
-      mode: z.string(),
-      pid: z.number(),
-    })
-    .meta({ ref: "EditorSession" })
+  export const Info = Schema.Info
 
-  export const OpenInput = z.object({
-    sessionID: Identifier.schema("session"),
-    file: z.string(),
-    size: z.object({ rows: z.number().int().positive(), cols: z.number().int().positive() }),
-  })
+  export const OpenInput = Schema.OpenInput
 
-  export const SnapshotData = z.object({
-    width: z.number(),
-    height: z.number(),
-    rows: z.array(
-      z.array(
-        z.object({
-          text: z.string(),
-          fg: z.string().optional(),
-          bg: z.string().optional(),
-          bold: z.boolean().optional(),
-          italic: z.boolean().optional(),
-          underline: z.boolean().optional(),
-          strikethrough: z.boolean().optional(),
-        }),
-      ),
-    ),
-    mode: z.string(),
-    dirty: z.boolean(),
-    diff: z.boolean(),
-    file: z.string(),
-    status: z.string(),
-    diagnostics: z.array(
-      z.object({
-        line: z.number(),
-        column: z.number(),
-        severity: z.enum(["error", "warning"]),
-        message: z.string(),
-      }),
-    ),
-  })
+  export const SnapshotData = Schema.SnapshotData
 
-  export const ScopedInput = z.object({
-    sessionID: Identifier.schema("session"),
-  })
+  export const ScopedInput = Schema.ScopedInput
 
   export const Event = {
     Updated: BusEvent.define("editor.updated", z.object({ info: Info })),
