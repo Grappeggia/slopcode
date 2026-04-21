@@ -1,12 +1,29 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import { tmpdir } from "../fixture/fixture"
 import { Instance } from "../../src/project/instance"
 
-const basic = process.env.SLOPCODE_EDITOR_FORCE_BASIC
+const env = {
+  basic: process.env.SLOPCODE_EDITOR_FORCE_BASIC,
+  root: process.env.SLOPCODE_NVIM_ROOT,
+  bin: process.env.SLOPCODE_NVIM_BIN_PATH,
+  runtime: process.env.SLOPCODE_VIMRUNTIME,
+}
+
+const set = (key: string, value?: string) => {
+  if (value === undefined) {
+    delete process.env[key]
+    return
+  }
+  process.env[key] = value
+}
 
 afterEach(() => {
-  process.env.SLOPCODE_EDITOR_FORCE_BASIC = basic
+  set("SLOPCODE_EDITOR_FORCE_BASIC", env.basic)
+  set("SLOPCODE_NVIM_ROOT", env.root)
+  set("SLOPCODE_NVIM_BIN_PATH", env.bin)
+  set("SLOPCODE_VIMRUNTIME", env.runtime)
 })
 
 async function eventually(check: () => boolean | Promise<boolean>, timeout = 1500) {
@@ -57,6 +74,37 @@ describe("editor session", () => {
         fn: async () => EditorSession.get(handle.info.id, { sessionID: handle.info.sessionID })?.dirty === true,
       }),
     )
+  })
+
+  test("falls back to the basic editor when bundled Neovim is not runnable", async () => {
+    if (process.platform === "win32") return
+    await using tmp = await tmpdir({
+      git: true,
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "fallback.ts"), "const a = 1\n")
+        await fs.mkdir(path.join(dir, "nvim", "bin"), { recursive: true })
+        await fs.mkdir(path.join(dir, "nvim", "share", "nvim", "runtime"), { recursive: true })
+        await Bun.write(path.join(dir, "nvim", "bin", "nvim"), "#!/bin/sh\necho 'GLIBC_2.34 not found' 1>&2\nexit 127\n")
+      },
+    })
+    await Bun.$`chmod 755 ${path.join(tmp.path, "nvim", "bin", "nvim")}`
+    set("SLOPCODE_NVIM_ROOT", path.join(tmp.path, "nvim"))
+    set("SLOPCODE_NVIM_BIN_PATH", path.join(tmp.path, "nvim", "bin", "nvim"))
+    set("SLOPCODE_VIMRUNTIME", path.join(tmp.path, "nvim", "share", "nvim", "runtime"))
+    const { EditorSession } = await import("../../src/editor/session")
+    await Instance.provide({
+      directory: tmp.path,
+      viewID: "view-a",
+      fn: async () => {
+        const info = await EditorSession.open({
+          sessionID: "ses_test0000000000000000003",
+          file: "fallback.ts",
+          size: { rows: 8, cols: 40 },
+        })
+        expect(info.mode).toBe("EDIT")
+        expect(info.pid).toBe(0)
+      },
+    })
   })
 
   test("opens, edits, saves, and closes", async () => {

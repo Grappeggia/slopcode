@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process"
 import path from "node:path"
 import { Filesystem } from "@/util/filesystem"
 
@@ -9,6 +10,13 @@ export namespace NvimBundle {
     bin: string
     runtime: string
   }
+
+  type Probe = {
+    info?: Info
+    error?: string
+  }
+
+  const probes = new Map<string, Promise<Probe>>()
 
   const binary = () => (process.platform === "win32" ? "nvim.exe" : "nvim")
 
@@ -49,6 +57,44 @@ export namespace NvimBundle {
     ].filter((item): item is string => !!item)
   }
 
+  const message = (info: Info) => {
+    const result = spawnSync(info.bin, ["--version"], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: {
+        ...process.env,
+        NVIM_APPNAME: "slopcode-editor-check",
+        VIMRUNTIME: info.runtime,
+      },
+    })
+    if (!result.error && result.status === 0) return { info } satisfies Probe
+    const error = [
+      result.error?.message,
+      typeof result.stderr === "string" ? result.stderr.trim() : "",
+      typeof result.stdout === "string" ? result.stdout.trim() : "",
+      typeof result.status === "number" ? `exit ${result.status}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n")
+    if (process.platform === "linux" && error.includes("GLIBC_")) {
+      return {
+        error: `Bundled Neovim is incompatible with this Linux runtime.\n${error}`,
+      } satisfies Probe
+    }
+    return {
+      error: error || "Bundled Neovim failed its startup probe.",
+    } satisfies Probe
+  }
+
+  const probe = (info: Info) => {
+    const key = `${info.bin}:${info.runtime}`
+    const hit = probes.get(key)
+    if (hit) return hit
+    const task = Promise.resolve(message(info))
+    probes.set(key, task)
+    return task
+  }
+
   export async function resolve() {
     const forced = await env()
     if (forced) return forced
@@ -56,5 +102,17 @@ export namespace NvimBundle {
       const hit = await complete(root)
       if (hit) return hit
     }
+  }
+
+  export async function ready() {
+    const hit = await resolve()
+    if (!hit) return
+    return (await probe(hit)).info
+  }
+
+  export async function problem() {
+    const hit = await resolve()
+    if (!hit) return
+    return (await probe(hit)).error
   }
 }

@@ -190,7 +190,7 @@ export namespace EditorSessionNvim {
   }
 
   const spawnEditor = async (file: string) => {
-    const bundle = await NvimBundle.resolve()
+    const bundle = await NvimBundle.ready()
     if (!bundle) return
     const dirs = await roots()
     return spawn(bundle.bin, ["--clean", "--embed", file], {
@@ -280,7 +280,13 @@ export namespace EditorSessionNvim {
   }
 
   export async function supported() {
-    return !!(await NvimBundle.resolve())
+    const hit = await NvimBundle.ready()
+    if (hit) return true
+    const error = await NvimBundle.problem()
+    if (error) {
+      log.warn("bundled neovim unavailable", { error })
+    }
+    return false
   }
 
   export async function open(input: z.infer<typeof OpenInput>) {
