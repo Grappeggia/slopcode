@@ -68,6 +68,30 @@ function CollapseTab(props: { label: string; onSelect(): void }) {
   )
 }
 
+function Action(props: { label: string; onSelect(): void }) {
+  const { theme } = useTheme()
+  const [hover, setHover] = createSignal(false)
+
+  return (
+    <box
+      paddingLeft={1}
+      paddingRight={1}
+      backgroundColor={hover() ? theme.background : theme.backgroundPanel}
+      onMouseOver={() => setHover(true)}
+      onMouseOut={() => setHover(false)}
+      onMouseUp={(evt) => {
+        evt.preventDefault()
+        evt.stopPropagation()
+        props.onSelect()
+      }}
+    >
+      <text fg={theme.textMuted} wrapMode="none">
+        {props.label}
+      </text>
+    </box>
+  )
+}
+
 function FileRow(props: {
   icon: string
   label: string
@@ -102,19 +126,7 @@ function FileRow(props: {
         <span style={props.underline ? { underline: true } : {}}>{Locale.truncateMiddle(props.label, 27)}</span>
       </text>
       <Show when={props.action}>
-        {(action) => (
-          <text
-            fg={theme.textMuted}
-            wrapMode="none"
-            onMouseUp={(evt) => {
-              evt.preventDefault()
-              evt.stopPropagation()
-              action().onSelect()
-            }}
-          >
-            {action().label}
-          </text>
-        )}
+        {(action) => <Action label={action().label} onSelect={action().onSelect} />}
       </Show>
     </box>
   )
@@ -123,8 +135,6 @@ function FileRow(props: {
 function OpenFileRow(props: { tab: EditorTab; active?: boolean; onSelect(): void; onSave(): void; onClose(): void }) {
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
-  const [saveHover, setSaveHover] = createSignal(false)
-  const [closeHover, setCloseHover] = createSignal(false)
   const fg = createMemo(() => {
     if (props.active) return theme.text
     if (hover()) return theme.text
@@ -152,38 +162,8 @@ function OpenFileRow(props: { tab: EditorTab; active?: boolean; onSelect(): void
         </text>
       </box>
       <box flexDirection="column" gap={1} paddingLeft={2}>
-        <box
-          paddingLeft={1}
-          paddingRight={1}
-          backgroundColor={saveHover() ? theme.background : theme.backgroundPanel}
-          onMouseOver={() => setSaveHover(true)}
-          onMouseOut={() => setSaveHover(false)}
-          onMouseUp={(evt) => {
-            evt.preventDefault()
-            evt.stopPropagation()
-            props.onSave()
-          }}
-        >
-          <text fg={theme.textMuted} wrapMode="none">
-            [save]
-          </text>
-        </box>
-        <box
-          paddingLeft={1}
-          paddingRight={1}
-          backgroundColor={closeHover() ? theme.background : theme.backgroundPanel}
-          onMouseOver={() => setCloseHover(true)}
-          onMouseOut={() => setCloseHover(false)}
-          onMouseUp={(evt) => {
-            evt.preventDefault()
-            evt.stopPropagation()
-            props.onClose()
-          }}
-        >
-          <text fg={theme.textMuted} wrapMode="none">
-            [close]
-          </text>
-        </box>
+        <Action label="[save]" onSelect={props.onSave} />
+        <Action label="[close]" onSelect={props.onClose} />
       </box>
     </box>
   )
@@ -278,7 +258,7 @@ function FilesSidebar(props: { openFile(file: string): void; modified: Set<strin
               action={
                 item.type === "file"
                   ? {
-                      label: "📂",
+                      label: "[open]",
                       onSelect: () => props.openFile(item.path),
                     }
                   : undefined
@@ -595,9 +575,7 @@ export function Sidebar(props: {
                                   </span>
                                 </text>
                                 <box flexDirection="row" gap={1} flexShrink={0}>
-                                  <text fg={theme.textMuted} onMouseUp={() => props.openFile(item.file)}>
-                                    📂
-                                  </text>
+                                  <Action label="[open]" onSelect={() => props.openFile(item.file)} />
                                   <Show when={item.additions}>
                                     <text fg={theme.diffAdded}>+{item.additions}</text>
                                   </Show>
