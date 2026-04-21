@@ -4,6 +4,7 @@ import { upgradeWebSocket } from "hono/bun"
 import z from "zod"
 import { lazy } from "../../util/lazy"
 import { EditorSession } from "@/editor"
+import * as Schema from "@/editor/schema"
 import { NotFoundError } from "../../storage/db"
 import { errors } from "../error"
 
@@ -20,14 +21,14 @@ export const EditorRoutes = lazy(() =>
             description: "Editor session",
             content: {
               "application/json": {
-                schema: resolver(EditorSession.Info),
+                schema: resolver(Schema.Info),
               },
             },
           },
           ...errors(400),
         },
       }),
-      validator("json", EditorSession.OpenInput),
+      validator("json", Schema.OpenInput),
       async (c) => {
         return c.json(await EditorSession.open(c.req.valid("json")))
       },
@@ -43,7 +44,7 @@ export const EditorRoutes = lazy(() =>
             description: "Editor session",
             content: {
               "application/json": {
-                schema: resolver(EditorSession.Info),
+                schema: resolver(Schema.Info),
               },
             },
           },
@@ -51,7 +52,7 @@ export const EditorRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ editorID: z.string() })),
-      validator("query", EditorSession.ScopedInput),
+      validator("query", Schema.ScopedInput),
       async (c) => {
         const info = EditorSession.get(c.req.valid("param").editorID, c.req.valid("query"))
         if (!info) throw new NotFoundError({ message: "Editor session not found" })
@@ -69,7 +70,7 @@ export const EditorRoutes = lazy(() =>
             description: "Editor snapshot",
             content: {
               "application/json": {
-                schema: resolver(EditorSession.SnapshotData),
+                schema: resolver(Schema.SnapshotData),
               },
             },
           },
@@ -77,7 +78,7 @@ export const EditorRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ editorID: z.string() })),
-      validator("query", EditorSession.ScopedInput),
+      validator("query", Schema.ScopedInput),
       async (c) => {
         const info = await EditorSession.snapshot(c.req.valid("param").editorID, c.req.valid("query"))
         if (!info) throw new NotFoundError({ message: "Editor session not found" })
@@ -95,7 +96,7 @@ export const EditorRoutes = lazy(() =>
             description: "Saved editor session",
             content: {
               "application/json": {
-                schema: resolver(EditorSession.Info),
+                schema: resolver(Schema.Info),
               },
             },
           },
@@ -103,7 +104,7 @@ export const EditorRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ editorID: z.string() })),
-      validator("query", EditorSession.ScopedInput),
+      validator("query", Schema.ScopedInput),
       async (c) => {
         const info = await EditorSession.save(c.req.valid("param").editorID, c.req.valid("query"))
         if (!info) throw new NotFoundError({ message: "Editor session not found" })
@@ -121,7 +122,7 @@ export const EditorRoutes = lazy(() =>
             description: "Updated editor session",
             content: {
               "application/json": {
-                schema: resolver(EditorSession.Info),
+                schema: resolver(Schema.Info),
               },
             },
           },
@@ -129,7 +130,7 @@ export const EditorRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ editorID: z.string() })),
-      validator("query", EditorSession.ScopedInput),
+      validator("query", Schema.ScopedInput),
       async (c) => {
         const info = await EditorSession.dismiss(c.req.valid("param").editorID, c.req.valid("query"))
         if (!info) throw new NotFoundError({ message: "Editor session not found" })
@@ -155,7 +156,7 @@ export const EditorRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ editorID: z.string() })),
-      validator("query", EditorSession.ScopedInput),
+      validator("query", Schema.ScopedInput),
       async (c) => {
         const ok = await EditorSession.close(c.req.valid("param").editorID, c.req.valid("query"))
         if (!ok) throw new NotFoundError({ message: "Editor session not found" })
@@ -183,7 +184,7 @@ export const EditorRoutes = lazy(() =>
       validator("param", z.object({ editorID: z.string() })),
       upgradeWebSocket((c) => {
         const id = c.req.param("editorID")
-        const input = EditorSession.ScopedInput.parse({ sessionID: c.req.query("sessionID") })
+        const input = Schema.ScopedInput.parse({ sessionID: c.req.query("sessionID") })
         let handler: ReturnType<typeof EditorSession.connect>
         return {
           onOpen(_event, ws) {

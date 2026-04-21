@@ -2,12 +2,13 @@ import { semver } from "bun"
 import { text } from "node:stream/consumers"
 import { Log } from "../util/log"
 import { Process } from "../util/process"
+import { BunRuntime } from "./runtime"
 
 export namespace PackageRegistry {
   const log = Log.create({ service: "bun" })
 
   function which() {
-    return process.execPath
+    return BunRuntime.which()
   }
 
   export async function info(pkg: string, field: string, cwd?: string): Promise<string | null> {
