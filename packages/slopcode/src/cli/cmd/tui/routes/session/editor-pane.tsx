@@ -291,10 +291,7 @@ export function EditorPane(props: { sessionID: string; info: () => EditorInfo | 
           </For>
         </box>
       </Show>
-      <text fg={theme.textMuted}>
-        Embedded SlopCode editor with built-in syntax colors and local linting. Toolbar shortcuts: ^S save, ^D dismiss
-        diff, ^Q back.
-      </text>
+      <text fg={theme.textMuted}>Embedded Neovim editor. Toolbar shortcuts: ^S save, ^D dismiss diff, ^Q back.</text>
     </box>
   )
 }
