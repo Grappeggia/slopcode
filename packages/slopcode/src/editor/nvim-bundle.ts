@@ -9,6 +9,7 @@ export namespace NvimBundle {
     root: string
     bin: string
     runtime: string
+    env: Record<string, string>
   }
 
   type Probe = {
@@ -22,6 +23,26 @@ export namespace NvimBundle {
 
   const runtime = (root: string) => path.join(root, "share", "nvim", "runtime")
 
+  const envs = async (root: string) => {
+    const env: Record<string, string> = {}
+    const lib = path.join(root, "lib")
+    const luaLib = path.join(root, "lib", "lua", "5.1")
+    if (await Filesystem.exists(lib)) {
+      env.LD_LIBRARY_PATH = [lib, (await Filesystem.exists(luaLib)) ? luaLib : undefined, process.env.LD_LIBRARY_PATH]
+        .filter(Boolean)
+        .join(":")
+    }
+    const lua = path.join(root, "share", "lua", "5.1")
+    if (await Filesystem.exists(lua)) {
+      env.LUA_PATH = [`${lua}/?.lua`, `${lua}/?/init.lua`, process.env.LUA_PATH].filter(Boolean).join(";")
+    }
+    const cpath = path.join(root, "lib", "lua", "5.1")
+    if (await Filesystem.exists(cpath)) {
+      env.LUA_CPATH = [`${cpath}/?.so`, process.env.LUA_CPATH].filter(Boolean).join(";")
+    }
+    return env
+  }
+
   const complete = async (root: string) => {
     const bin = path.join(root, "bin", binary())
     if (!(await Filesystem.exists(bin))) return
@@ -31,6 +52,7 @@ export namespace NvimBundle {
       root,
       bin,
       runtime: run,
+      env: await envs(root),
     } satisfies Info
   }
 
@@ -45,6 +67,7 @@ export namespace NvimBundle {
       root: path.dirname(path.dirname(bin)),
       bin,
       runtime: run,
+      env: await envs(path.dirname(path.dirname(bin))),
     } satisfies Info
   }
 
@@ -65,6 +88,7 @@ export namespace NvimBundle {
         ...process.env,
         NVIM_APPNAME: "slopcode-editor-check",
         VIMRUNTIME: info.runtime,
+        ...info.env,
       },
     })
     if (!result.error && result.status === 0) return { info } satisfies Probe

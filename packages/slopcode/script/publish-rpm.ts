@@ -159,6 +159,10 @@ const run = async () => {
       }
 
       const srcRpm = path.join(top, built)
+      const list = await $`rpm -qlp ${srcRpm}`.text()
+      if (!list.includes("/usr/bin/slopcode") || !list.includes("/usr/lib/slopcode/neovim/bin/nvim")) {
+        throw new Error(`RPM smoke failed for ${item.arch}`)
+      }
       const dstRpm = path.join(stable, path.basename(srcRpm))
       await $`cp ${srcRpm} ${dstRpm}`
       return {

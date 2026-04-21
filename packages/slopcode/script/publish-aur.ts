@@ -79,6 +79,10 @@ const run = async () => {
     "",
   ].join("\n")
 
+  if (!pkgbuild.includes('/usr/lib/slopcode/neovim')) {
+    throw new Error("aur: missing neovim sidecar install step")
+  }
+
   const src = [
     `pkgbase = ${pkg}`,
     "\tpkgdesc = The open source AI slopcoding agent focused on terminal workflows.",

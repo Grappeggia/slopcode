@@ -199,6 +199,7 @@ export namespace EditorSessionNvim {
         ...process.env,
         NVIM_APPNAME: "slopcode-editor",
         VIMRUNTIME: bundle.runtime,
+        ...bundle.env,
         XDG_CACHE_HOME: dirs.cache,
         XDG_CONFIG_HOME: dirs.config,
         XDG_DATA_HOME: dirs.data,
