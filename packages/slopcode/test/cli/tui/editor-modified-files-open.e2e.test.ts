@@ -216,16 +216,19 @@ describe("editor modified files open e2e", () => {
     expect(create.status).toBe(200)
     const session = (await create.json()) as { id: string }
     const before = await Bun.file(path.join(tmp.path, "route.tsx")).text()
-    await Storage.write(["session_diff", session.id], [
-      {
-        file: "route.tsx",
-        before,
-        after: `${before}\nexport const repro = true\n`,
-        additions: 2,
-        deletions: 0,
-        status: "modified",
-      },
-    ])
+    await Storage.write(
+      ["session_diff", session.id],
+      [
+        {
+          file: "route.tsx",
+          before,
+          after: `${before}\nexport const repro = true\n`,
+          additions: 2,
+          deletions: 0,
+          status: "modified",
+        },
+      ],
+    )
 
     const file = await script()
     let raw = ""

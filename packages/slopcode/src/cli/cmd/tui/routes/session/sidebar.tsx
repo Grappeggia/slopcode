@@ -125,9 +125,7 @@ function FileRow(props: {
         <span style={{ fg: fg() }}>{props.icon}</span>{" "}
         <span style={props.underline ? { underline: true } : {}}>{Locale.truncateMiddle(props.label, 27)}</span>
       </text>
-      <Show when={props.action}>
-        {(action) => <Action label={action().label} onSelect={action().onSelect} />}
-      </Show>
+      <Show when={props.action}>{(action) => <Action label={action().label} onSelect={action().onSelect} />}</Show>
     </box>
   )
 }
