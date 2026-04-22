@@ -240,7 +240,9 @@ export async function start(input: {
     rows: input.height,
     cwd: pkg_dir,
     env: {
-      ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+      ...Object.fromEntries(
+        Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+      ),
       TERM: process.env.TERM || "xterm-256color",
       TERM_PROGRAM: process.env.TERM_PROGRAM || "tmux",
       TERM_PROGRAM_VERSION: process.env.TERM_PROGRAM_VERSION || "",
