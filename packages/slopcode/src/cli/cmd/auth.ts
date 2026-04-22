@@ -17,6 +17,19 @@ import { setTimeout as sleep } from "node:timers/promises"
 
 type PluginAuth = NonNullable<Hooks["auth"]>
 
+const extraProviders = {
+  "brave-search": {
+    name: "Brave Search",
+    hint: "web search tool",
+    env: ["BRAVE_SEARCH_API_KEY"],
+    url: "https://api.search.brave.com/app/keys",
+  },
+} as const
+
+function providerName(provider: string, database: Record<string, { name?: string }>) {
+  return database[provider]?.name || extraProviders[provider as keyof typeof extraProviders]?.name || provider
+}
+
 /**
  * Handle plugin-based authentication flow.
  * Returns true if auth was handled, false if it should fall through to default handling.
@@ -243,8 +256,7 @@ export const AuthListCommand = cmd({
     const database = await ModelsDev.get()
 
     for (const [providerID, result] of results) {
-      const name = database[providerID]?.name || providerID
-      prompts.log.info(`${name} ${UI.Style.TEXT_DIM}${result.type}`)
+      prompts.log.info(`${providerName(providerID, database)} ${UI.Style.TEXT_DIM}${result.type}`)
     }
 
     prompts.outro(`${results.length} credentials`)
@@ -253,6 +265,17 @@ export const AuthListCommand = cmd({
     const activeEnvVars: Array<{ provider: string; envVar: string }> = []
 
     for (const [providerID, provider] of Object.entries(database)) {
+      for (const envVar of provider.env) {
+        if (process.env[envVar]) {
+          activeEnvVars.push({
+            provider: provider.name || providerID,
+            envVar,
+          })
+        }
+      }
+    }
+
+    for (const [providerID, provider] of Object.entries(extraProviders)) {
       for (const envVar of provider.env) {
         if (process.env[envVar]) {
           activeEnvVars.push({
@@ -384,6 +407,11 @@ export const AuthLoginCommand = cmd({
             value: x.id,
             hint: "plugin",
           })),
+          ...Object.entries(extraProviders).map(([id, provider]) => ({
+            label: provider.name,
+            value: id,
+            hint: provider.hint,
+          })),
         ]
 
         let provider: string
@@ -456,6 +484,10 @@ export const AuthLoginCommand = cmd({
           prompts.log.info("You can create an api key at https://vercel.link/ai-gateway-token")
         }
 
+        if (provider === "brave-search") {
+          prompts.log.info(`Create an api key at ${extraProviders["brave-search"].url}`)
+        }
+
         if (["cloudflare", "cloudflare-ai-gateway"].includes(provider)) {
           prompts.log.info(
             "Cloudflare AI Gateway can be configured with CLOUDFLARE_GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_API_TOKEN environment variables. Read more: https://slopcode.dev/docs/providers/#cloudflare-ai-gateway",
@@ -498,25 +530,25 @@ export const AuthLogoutCommand = cmd({
     if (args.provider) {
       const input = args.provider.toLowerCase()
       const match = credentials.find(
-        ([key]) => key.toLowerCase() === input || (database[key]?.name || "").toLowerCase() === input,
+        ([key]) => key.toLowerCase() === input || providerName(key, database).toLowerCase() === input,
       )
       if (!match) {
         prompts.log.error(`Unknown provider \"${args.provider}\"`)
         return
       }
       await Auth.remove(match[0])
-      prompts.outro(`Logged out from ${database[match[0]]?.name || match[0]}`)
+      prompts.outro(`Logged out from ${providerName(match[0], database)}`)
       return
     }
     const providerID = await prompts.select({
       message: "Select provider",
       options: credentials.map(([key, value]) => ({
-        label: (database[key]?.name || key) + UI.Style.TEXT_DIM + " (" + value.type + ")",
+        label: providerName(key, database) + UI.Style.TEXT_DIM + " (" + value.type + ")",
         value: key,
       })),
     })
     if (prompts.isCancel(providerID)) throw new UI.CancelledError()
     await Auth.remove(providerID)
-    prompts.outro(`Logged out from ${database[providerID]?.name || providerID}`)
+    prompts.outro(`Logged out from ${providerName(providerID, database)}`)
   },
 })

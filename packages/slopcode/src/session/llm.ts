@@ -23,6 +23,7 @@ import { Flag } from "@/flag/flag"
 import { PermissionNext } from "@/permission/next"
 import { Auth } from "@/auth"
 import { ProviderLimit } from "@/provider/limit"
+import { LlamaCppSessionCache } from "@/provider/llamacpp-cache"
 
 export namespace LLM {
   const log = Log.create({ service: "llm" })
@@ -229,6 +230,12 @@ export namespace LLM {
                   "User-Agent": `slopcode/${Installation.VERSION}`,
                 }
               : undefined),
+          ...(LlamaCppSessionCache.isEnabled(provider.options)
+            ? {
+                "x-slopcode-session": input.sessionID,
+                "x-slopcode-request": input.user.id,
+              }
+            : undefined),
           ...input.model.headers,
           ...headers,
         },

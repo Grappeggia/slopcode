@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { ghostCursor, ghostVisible, ghostRemainder } from "../../../src/cli/cmd/tui/component/prompt/ghost"
+import {
+  ghostCursor,
+  ghostExtraRows,
+  ghostLayout,
+  ghostVisible,
+  ghostRemainder,
+} from "../../../src/cli/cmd/tui/component/prompt/ghost"
 
 describe("prompt ghost", () => {
   test("uses live visual cursor when available", () => {
@@ -122,5 +128,93 @@ describe("prompt ghost", () => {
 
   test("returns undefined for empty input", () => {
     expect(ghostRemainder("", "hello")).toBeUndefined()
+  })
+
+  test("wraps the first ghost row to remaining width", () => {
+    const lines = ghostLayout({
+      ghost: "abcdefghijk",
+      row: 1,
+      col: 7,
+      width: 10,
+      rows: 6,
+    })
+
+    expect(lines).toEqual([
+      {
+        top: 1,
+        left: 7,
+        text: "abc",
+      },
+      {
+        top: 2,
+        left: 0,
+        text: "defghijk",
+      },
+    ])
+  })
+
+  test("continues wrapped ghost rows from column zero", () => {
+    const lines = ghostLayout({
+      ghost: "abcdefghijk",
+      row: 2,
+      col: 3,
+      width: 6,
+      rows: 6,
+    })
+
+    expect(lines).toEqual([
+      {
+        top: 2,
+        left: 3,
+        text: "abc",
+      },
+      {
+        top: 3,
+        left: 0,
+        text: "defghi",
+      },
+      {
+        top: 4,
+        left: 0,
+        text: "jk",
+      },
+    ])
+  })
+
+  test("clips ghost rows to the visible prompt height", () => {
+    const lines = ghostLayout({
+      ghost: "abcdefghijklmnop",
+      row: 4,
+      col: 8,
+      width: 10,
+      rows: 6,
+    })
+
+    expect(lines).toEqual([
+      {
+        top: 4,
+        left: 8,
+        text: "ab",
+      },
+      {
+        top: 5,
+        left: 0,
+        text: "cdefghijkl",
+      },
+    ])
+  })
+
+  test("reports extra rows needed to keep the footer below ghost text", () => {
+    const lines = ghostLayout({
+      ghost: "abcdefghijklmnop",
+      row: 0,
+      col: 4,
+      width: 8,
+      rows: 6,
+    })
+
+    expect(ghostExtraRows({ lines, height: 1 })).toBe(2)
+    expect(ghostExtraRows({ lines, height: 2 })).toBe(1)
+    expect(ghostExtraRows({ lines, height: 3 })).toBe(0)
   })
 })

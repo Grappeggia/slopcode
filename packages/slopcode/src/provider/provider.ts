@@ -45,6 +45,7 @@ import { GoogleAuth } from "google-auth-library"
 import { ProviderTransform } from "./transform"
 import { Installation } from "../installation"
 import { ProviderLimit } from "./limit"
+import { LlamaCppSessionCache } from "./llamacpp-cache"
 
 export namespace Provider {
   const log = Log.create({ service: "provider" })
@@ -1050,7 +1051,6 @@ export namespace Provider {
       const customFetch = options["fetch"]
 
       options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
-        // Preserve custom fetch if it exists, wrap it with timeout logic
         const fetchFn = customFetch ?? fetch
         const opts = init ?? {}
 
@@ -1064,21 +1064,43 @@ export namespace Provider {
           opts.signal = combined
         }
 
-        // Strip openai itemId metadata following what codex does
-        // Codex uses #[serde(skip_serializing)] on id fields for all item types:
-        // Message, Reasoning, FunctionCall, LocalShellCall, CustomToolCall, WebSearchCall
-        // IDs are only re-attached for Azure with store=true
-        if (model.api.npm === "@ai-sdk/openai" && opts.body && opts.method === "POST") {
-          const body = JSON.parse(opts.body as string)
-          const isAzure = model.providerID.includes("azure")
-          const keepIds = isAzure && body.store === true
-          if (!keepIds && Array.isArray(body.input)) {
-            for (const item of body.input) {
-              if ("id" in item) {
-                delete item.id
+        if (opts.method === "POST" && typeof opts.body === "string") {
+          const url = new URL(input instanceof Request ? input.url : input.toString())
+
+          if (model.api.npm === "@ai-sdk/openai") {
+            const body = JSON.parse(opts.body)
+            const isAzure = model.providerID.includes("azure")
+            const keepIds = isAzure && body.store === true
+            if (!keepIds && Array.isArray(body.input)) {
+              for (const item of body.input) {
+                if ("id" in item) {
+                  delete item.id
+                }
+              }
+              opts.body = JSON.stringify(body)
+            }
+          }
+
+          if (
+            LlamaCppSessionCache.isEnabled(provider.options) &&
+            (url.pathname.endsWith("/chat/completions") || url.pathname.endsWith("/completions"))
+          ) {
+            const sessionID = new Headers(opts.headers).get("x-slopcode-session")
+            if (sessionID) {
+              const body = JSON.parse(opts.body)
+              const injected = await LlamaCppSessionCache.prepareRequest({
+                sessionID,
+                providerID: model.providerID,
+                modelID: model.id,
+                providerOptions: provider.options,
+                baseURL: String(baseURL ?? model.api.url),
+                fetch: fetchFn,
+                signal: opts.signal ?? undefined,
+              })
+              if (injected) {
+                opts.body = JSON.stringify({ ...body, ...injected })
               }
             }
-            opts.body = JSON.stringify(body)
           }
         }
 

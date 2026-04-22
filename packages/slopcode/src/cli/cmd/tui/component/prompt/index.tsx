@@ -10,6 +10,7 @@ import {
   Show,
   Switch,
   Match,
+  For,
   untrack,
 } from "solid-js"
 import "opentui-spinner/solid"
@@ -29,7 +30,7 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { createPromptFilePart, promptFileVirtualText } from "./file-part"
-import { ghostCursor, ghostVisible, ghostRemainder } from "./ghost.ts"
+import { ghostCursor, ghostExtraRows, ghostLayout, ghostVisible, ghostRemainder } from "./ghost.ts"
 import { usePromptStash } from "./stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
@@ -81,6 +82,7 @@ export type PromptRef = {
 
 const PLACEHOLDERS = ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"]
 const SHELL_PLACEHOLDERS = ["ls -la", "git status", "pwd"]
+const PROMPT_MAX_HEIGHT = 6
 
 type QueueStore = {
   message: {
@@ -296,12 +298,30 @@ export function Prompt(props: PromptProps) {
     return store.ghost
   })
 
-  const inlineGhostPosition = createMemo(() => {
-    const point = ghostPoint()
-    return {
-      top: point.row,
-      left: point.col,
-    }
+  const inlineGhostLines = createMemo(() => {
+    const ghost = inlineGhost()
+    if (!ghost) return []
+
+    dimensions().width
+    const width = Math.max(
+      1,
+      (input as (TextareaRenderable & { width?: number }) | undefined)?.width ??
+        Math.max(1, (anchor?.width ?? dimensions().width) - 5),
+    )
+    return ghostLayout({
+      ghost,
+      row: ghostPoint().row,
+      col: ghostPoint().col,
+      width,
+      rows: PROMPT_MAX_HEIGHT,
+    })
+  })
+
+  const inlineGhostExtra = createMemo(() => {
+    return ghostExtraRows({
+      lines: inlineGhostLines(),
+      height: Math.max(1, (input as (TextareaRenderable & { height?: number }) | undefined)?.height ?? 1),
+    })
   })
 
   createEffect(
@@ -1311,7 +1331,7 @@ export function Prompt(props: PromptProps) {
                 textColor={keybind.leader ? theme.textMuted : theme.text}
                 focusedTextColor={keybind.leader ? theme.textMuted : theme.text}
                 minHeight={1}
-                maxHeight={6}
+                maxHeight={PROMPT_MAX_HEIGHT}
                 onContentChange={() => {
                   const value = input.plainText
                   setStore("prompt", "input", value)
@@ -1521,12 +1541,17 @@ export function Prompt(props: PromptProps) {
                 cursorColor={theme.text}
                 syntaxStyle={syntax()}
               />
-              <Show when={inlineGhost()}>
-                {(ghost) => (
-                  <box position="absolute" top={inlineGhostPosition().top} left={inlineGhostPosition().left} zIndex={1}>
-                    <text fg={theme.textMuted}>{ghost()}</text>
+              <For each={inlineGhostLines()}>
+                {(line) => (
+                  <box position="absolute" top={line.top} left={line.left} zIndex={1}>
+                    <text fg={theme.textMuted} wrapMode="none">
+                      {line.text}
+                    </text>
                   </box>
                 )}
+              </For>
+              <Show when={inlineGhostExtra() > 0}>
+                <box height={inlineGhostExtra()} flexShrink={0} />
               </Show>
             </box>
             <box flexDirection="row" flexShrink={0} gap={1} marginTop={1}>

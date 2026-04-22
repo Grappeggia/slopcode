@@ -9,7 +9,8 @@ import { Bus } from "@/bus"
 import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { Plugin } from "@/plugin"
-import type { Provider } from "@/provider/provider"
+import { Provider } from "@/provider/provider"
+import { LlamaCppSessionCache } from "@/provider/llamacpp-cache"
 import { LLM } from "./llm"
 import { Config } from "@/config/config"
 import { SessionCompaction } from "./compaction"
@@ -277,6 +278,18 @@ export namespace SessionProcessor {
                       metadata,
                     })
                     await Session.updateMessage(input.assistantMessage)
+                    const provider = await Provider.getProvider(input.model.providerID)
+                    await LlamaCppSessionCache.saveSession({
+                      sessionID: input.sessionID,
+                      providerID: input.model.providerID,
+                      modelID: input.model.id,
+                      providerOptions: provider?.options,
+                      baseURL: String(provider?.options?.baseURL ?? input.model.api.url),
+                      fetch: globalThis.fetch,
+                      signal: abort,
+                    }).catch((error) => {
+                      log.warn("slot save skipped", { sessionID: input.sessionID, error })
+                    })
                     if (snapshot) {
                       const patch = await Snapshot.patch(snapshot)
                       if (patch.files.length) {

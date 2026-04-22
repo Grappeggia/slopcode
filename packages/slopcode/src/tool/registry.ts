@@ -20,7 +20,7 @@ import path from "path"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@slopcode-ai/plugin"
 import z from "zod"
 import { Plugin } from "../plugin"
-import { WebSearchTool } from "./websearch"
+import { WebSearchTool, hasBraveSearchCredential } from "./websearch"
 import { CodeSearchTool } from "./codesearch"
 import { Flag } from "@/flag/flag"
 import { Log } from "@/util/log"
@@ -138,13 +138,17 @@ export namespace ToolRegistry {
     const config = await Config.get()
     const tools = await all()
     const hashline = config.experimental?.hashline_edit !== false
+    const brave = await hasBraveSearchCredential()
     const usePatch =
       model.modelID.includes("gpt-") && !model.modelID.includes("oss") && !model.modelID.includes("gpt-4")
     const result = await Promise.all(
       tools
         .filter((t) => {
-          // Enable websearch/codesearch for zen users OR via enable flag
-          if (t.id === "codesearch" || t.id === "websearch") {
+          if (t.id === "websearch") {
+            return brave || model.providerID === "slopcode" || Flag.SLOPCODE_ENABLE_EXA
+          }
+
+          if (t.id === "codesearch") {
             return model.providerID === "slopcode" || Flag.SLOPCODE_ENABLE_EXA
           }
 
