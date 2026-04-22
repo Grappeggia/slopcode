@@ -182,7 +182,8 @@ export function EditorPane(props: { sessionID: string; info: () => EditorInfo | 
       props.onRequestClose()
       return
     }
-    if (evt.ctrl && evt.name === "d" && info.diff) {
+    if ((evt.ctrl && evt.name === "d") || evt.sequence === "\u0004") {
+      if (!info.diff) return
       evt.preventDefault()
       void dismiss()
       return

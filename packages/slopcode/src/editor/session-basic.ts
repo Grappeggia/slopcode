@@ -3,6 +3,7 @@ import { Bus } from "@/bus"
 import { Identifier } from "@/id/id"
 import { FileWatcher } from "@/file/watcher"
 import { Instance } from "@/project/instance"
+import { SessionSummary } from "@/session/summary"
 import { Log } from "@/util/log"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
@@ -278,6 +279,7 @@ export namespace EditorSession {
   }
 
   export async function open(input: z.infer<typeof OpenInput>) {
+    const diff = (await SessionSummary.diffChunk({ sessionID: input.sessionID, files: [input.file] }))[0]
     const info: z.infer<typeof Info> = {
       id: `${Identifier.create("pty", false)}_editor`,
       sessionID: input.sessionID,
@@ -285,7 +287,7 @@ export namespace EditorSession {
       cwd: Instance.directory,
       status: "running",
       dirty: false,
-      diff: false,
+      diff: !!diff,
       mode: "EDIT",
       pid: 0,
     }
