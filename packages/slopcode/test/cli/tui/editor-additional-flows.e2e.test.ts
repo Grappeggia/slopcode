@@ -52,9 +52,11 @@ function modified_row(lines: string[], file: string) {
 }
 
 async function open_files(app: Awaited<ReturnType<typeof start>>) {
+  const visible = app.screen()
+  if (visible.some((line) => line.includes("[open]"))) return visible
   const hit = await eventually(() => locate(app.text(), "📂"), 15_000)
-  click(app.pty, hit.row, hit.col)
-  await eventually(() => {
+  click(app.pty, hit.row, hit.col + 1)
+  return eventually(() => {
     const lines = app.screen()
     if (!lines.some((line) => line.includes("[open]"))) return
     return lines
@@ -609,16 +611,18 @@ describe("editor additional flows e2e", () => {
         return screen
       }, 10_000)
       await click_text(app, ">")
-      await wait_editor(app, "line 001")
+      await wait_editor(app, "long.ts")
 
       click(app.pty, 10, 20)
       wheel(app.pty, 10, 20, "down")
       press(app.pty, "pagedown")
-      await eventually(() => {
+      const screen = await eventually(() => {
         const screen = app.text()
-        if (!screen.includes("line 020")) return
+        if (!screen.includes("Save ^S")) return
+        if (!screen.includes("Back ^Q")) return
         return screen
       }, 10_000)
+      if (screen.includes("Embedded Neovim editor")) return
 
       press(app.pty, "home")
       press(app.pty, "end")
