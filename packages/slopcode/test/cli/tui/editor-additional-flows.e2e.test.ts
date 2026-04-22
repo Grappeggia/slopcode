@@ -291,7 +291,7 @@ describe("editor additional flows e2e", () => {
       await click_files_open(app, "a.ts")
       await wait_editor(app, "ALPHA TAB")
 
-      await click_open_files_control(app, "a.ts", "[close]")
+      ctrl(app.pty, "q")
       await wait_no_editor(app, "ALPHA TAB")
     } finally {
       await app.stop()
