@@ -718,8 +718,6 @@ function App() {
     },
   ])
 
-
-
   sdk.event.on(TuiEvent.CommandExecute.type, (evt) => {
     command.trigger(evt.properties.command)
   })

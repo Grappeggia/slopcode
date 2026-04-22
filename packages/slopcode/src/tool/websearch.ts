@@ -20,23 +20,14 @@ const schema = z.object({
     .max(BRAVE_MAX_COUNT)
     .optional()
     .describe("Number of search results to return (default: 5, max: 20)"),
-  numResults: z
-    .number()
-    .int()
-    .min(1)
-    .max(BRAVE_MAX_COUNT)
-    .optional()
-    .describe("Deprecated alias for count"),
+  numResults: z.number().int().min(1).max(BRAVE_MAX_COUNT).optional().describe("Deprecated alias for count"),
   freshness: z
     .enum(["pd", "pw", "pm", "py"])
     .optional()
     .describe("Optional recency filter: past day, week, month, or year"),
   country: z.string().optional().describe("Optional two-letter country code (for example 'us')"),
   searchLang: z.string().optional().describe("Optional search language code (for example 'en')"),
-  safeSearch: z
-    .enum(["off", "moderate", "strict"])
-    .optional()
-    .describe("Safe search level (default: moderate)"),
+  safeSearch: z.enum(["off", "moderate", "strict"]).optional().describe("Safe search level (default: moderate)"),
   domains: z
     .array(z.string())
     .max(10)
@@ -113,10 +104,18 @@ function query(params: z.infer<typeof schema>) {
 
 function strip(input?: string) {
   if (!input) return undefined
-  return input.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim() || undefined
+  return (
+    input
+      .replace(/<[^>]+>/g, "")
+      .replace(/\s+/g, " ")
+      .trim() || undefined
+  )
 }
 
-function output(input: string, results: Array<{ title: string; url: string; description?: string; age?: string; source?: string }>) {
+function output(
+  input: string,
+  results: Array<{ title: string; url: string; description?: string; age?: string; source?: string }>,
+) {
   if (!results.length) {
     return `No search results found for \"${input}\". Try a more specific query or relax any domain filters.`
   }

@@ -73,18 +73,15 @@ export namespace LlamaCppSessionCache {
     return url.toString().replace(/\/$/, "")
   }
 
-  export function slotFilename(input: {
-    sessionID: string
-    providerID: string
-    modelID: string
-    baseURL: string
-  }) {
+  export function slotFilename(input: { sessionID: string; providerID: string; modelID: string; baseURL: string }) {
     const hash =
-      Bun.hash.xxHash32(JSON.stringify({
-        providerID: input.providerID,
-        modelID: input.modelID,
-        baseURL: controlBaseURL(input.baseURL),
-      })) >>> 0
+      Bun.hash.xxHash32(
+        JSON.stringify({
+          providerID: input.providerID,
+          modelID: input.modelID,
+          baseURL: controlBaseURL(input.baseURL),
+        }),
+      ) >>> 0
     return `${input.sessionID}-${hash.toString(16).padStart(8, "0")}.bin`
   }
 
@@ -138,7 +135,9 @@ export namespace LlamaCppSessionCache {
   async function ensureLoaded() {
     const current = state()
     if (current.loaded) return current
-    const persisted = await Filesystem.readJson<{ entries?: Record<string, StoredEntry> }>(stateFile()).catch(() => undefined)
+    const persisted = await Filesystem.readJson<{ entries?: Record<string, StoredEntry> }>(stateFile()).catch(
+      () => undefined,
+    )
     current.entries = persisted?.entries ?? {}
     current.slotOwners = Object.fromEntries(
       Object.values(current.entries).map((entry) => [entry.slotId, entry.sessionID] as const),
