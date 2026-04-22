@@ -495,8 +495,11 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const exit = useExit()
     const args = useArgs()
 
-    async function bootstrap() {
-      fullSyncedSessions.clear()
+    let bootstrapping: Promise<void> | undefined
+    function bootstrap() {
+      if (bootstrapping) return bootstrapping
+      bootstrapping = (async () => {
+        fullSyncedSessions.clear()
       delta.clear()
       setStore(reconcile(empty()))
       const start = Date.now() - 30 * 24 * 60 * 60 * 1000
@@ -574,6 +577,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           })
           await exit(e)
         })
+      })().finally(() => {
+        bootstrapping = undefined
+      })
+      return bootstrapping
     }
 
     let scope = sdk.workspaceID
