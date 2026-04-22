@@ -38,7 +38,7 @@ function section_row(lines: string[], title: string, file: string, label?: strin
 function explorer_row(lines: string[], file: string) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
-    if (!line.includes(file) || !line.includes("[open]")) continue
+    if (!line.includes(file)) continue
     return { row: i + 1, line }
   }
 }
@@ -80,9 +80,11 @@ async function click_files_open(app: Awaited<ReturnType<typeof start>>, file: st
     const lines = app.screen()
     const row = explorer_row(lines, file)
     if (!row) return
-    const col = column(row.line, "[open]")
-    if (!col) return
-    return { row: row.row, col: col + 2 }
+    for (let i = row.row - 1; i < Math.min(lines.length, row.row + 4); i++) {
+      const col = column(lines[i]!, "[open]")
+      if (!col) continue
+      return { row: i + 1, col: col + 2 }
+    }
   }, 10_000)
   click(app.pty, hit.row, hit.col)
 }
@@ -113,6 +115,21 @@ async function click_modified_open(app: Awaited<ReturnType<typeof start>>, file:
     const col = column(row.line, "[open]")
     if (!col) return
     return { row: row.row, col: col + 2 }
+  }, 10_000)
+  click(app.pty, hit.row, hit.col)
+}
+
+async function click_editor_tab_close(app: Awaited<ReturnType<typeof start>>, file: string) {
+  const hit = await eventually(() => {
+    const lines = app.screen()
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!
+      const start = line.indexOf(file)
+      if (start === -1) continue
+      const close = line.indexOf("[x]", start + file.length)
+      if (close === -1) continue
+      return { row: i + 1, col: Bun.stringWidth(line.slice(0, close)) + 2 }
+    }
   }, 10_000)
   click(app.pty, hit.row, hit.col)
 }
@@ -387,6 +404,10 @@ describe("editor additional flows e2e", () => {
         await Bun.write(path.join(dir, "a.ts"), 'export const alpha = "ALPHA LIFE"\n')
         await Bun.write(path.join(dir, "b.ts"), 'export const beta = "BETA LIFE"\n')
         await Bun.write(path.join(dir, "c.ts"), 'export const gamma = "GAMMA LIFE"\n')
+        await Bun.write(
+          path.join(dir, ".xdg-state", "slopcode", "kv.json"),
+          JSON.stringify({ dismissed_getting_started: true }),
+        )
       },
     })
     const app = await start({
@@ -396,6 +417,9 @@ describe("editor additional flows e2e", () => {
       width,
       height,
       script_name: "editor-multi-tab-lifecycle",
+      env: {
+        XDG_STATE_HOME: path.join(tmp.path, ".xdg-state"),
+      },
     })
     try {
       await ready(app, "Multi Tab Lifecycle")
@@ -404,26 +428,27 @@ describe("editor additional flows e2e", () => {
       await wait_editor(app, "ALPHA LIFE")
       await click_files_open(app, "b.ts")
       await wait_editor(app, "BETA LIFE")
+
       await click_files_open(app, "c.ts")
       await wait_editor(app, "GAMMA LIFE")
 
-      await click_open_files_control(app, "b.ts", "[close]")
+      await click_editor_tab_close(app, "b.ts")
       await eventually(() => {
         const screen = app.text()
         if (!screen.includes("GAMMA LIFE")) return
-        if (screen.includes("BETA LIFE")) return
+        if (screen.includes("b.ts  [x]")) return
         return screen
       }, 8_000)
 
-      await click_open_files_control(app, "c.ts", "[close]")
+      ctrl(app.pty, "q")
       await eventually(() => {
         const screen = app.text()
         if (!screen.includes("ALPHA LIFE")) return
-        if (screen.includes("GAMMA LIFE")) return
+        if (screen.includes("c.ts  [x]")) return
         return screen
       }, 8_000)
 
-      await click_open_files_control(app, "a.ts", "[close]")
+      ctrl(app.pty, "q")
       await wait_no_editor(app, "ALPHA LIFE")
     } finally {
       await app.stop()
