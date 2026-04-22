@@ -96,7 +96,7 @@ async function click_open_files_control(
     const lines = app.screen()
     const row = open_file_row(lines, file)
     if (!row) return
-    for (let i = row.row; i < Math.min(lines.length, row.row + 4); i++) {
+    for (let i = row.row - 1; i < Math.min(lines.length, row.row + 5); i++) {
       const col = column(lines[i]!, label)
       if (!col) continue
       return { row: i + 1, col: col + 2 }
@@ -305,53 +305,78 @@ describe("editor additional flows e2e", () => {
         await Bun.write(path.join(dir, "guard.ts"), "const guard = 1\n")
       },
     })
-    const app = await start({
+    const cancel = await start({
       title: "Dirty Close Guard",
       directory: tmp.path,
       token,
       width,
       height,
-      script_name: "editor-dirty-close",
+      script_name: "editor-dirty-close-cancel",
     })
     try {
-      await ready(app, "Dirty Close Guard")
-      await open_files(app)
-      await click_files_open(app, "guard.ts")
-      await wait_editor(app, "const guard = 1")
+      await ready(cancel, "Dirty Close Guard")
+      await open_files(cancel)
+      await click_files_open(cancel, "guard.ts")
+      await wait_editor(cancel, "const guard = 1")
 
-      app.pty.write(";")
+      cancel.pty.write(";")
       await eventually(() => {
-        const screen = app.text()
+        const screen = cancel.text()
         if (!screen.includes("modified")) return
         return screen
       }, 8_000)
 
-      await click_open_files_control(app, "guard.ts", "[close]")
+      ctrl(cancel.pty, "q")
       await eventually(() => {
-        const screen = app.text()
+        const screen = cancel.text()
         if (!screen.includes("Discard changes?")) return
         return screen
       }, 8_000)
-      await click_text(app, "Cancel")
+      press(cancel.pty, "left")
+      cancel.pty.write("\r")
       await eventually(() => {
-        const screen = app.text()
+        const screen = cancel.text()
         if (screen.includes("Discard changes?")) return
         if (!screen.includes("const guard = 1")) return
         if (!screen.includes("modified")) return
         return screen
       }, 8_000)
+    } finally {
+      await cancel.stop()
+    }
 
-      await click_open_files_control(app, "guard.ts", "[close]")
+    const confirm = await start({
+      title: "Dirty Close Guard",
+      directory: tmp.path,
+      token,
+      width,
+      height,
+      script_name: "editor-dirty-close-confirm",
+    })
+    try {
+      await ready(confirm, "Dirty Close Guard")
+      await open_files(confirm)
+      await click_files_open(confirm, "guard.ts")
+      await wait_editor(confirm, "const guard = 1")
+
+      confirm.pty.write(";")
       await eventually(() => {
-        const screen = app.text()
+        const screen = confirm.text()
+        if (!screen.includes("modified")) return
+        return screen
+      }, 8_000)
+
+      ctrl(confirm.pty, "q")
+      await eventually(() => {
+        const screen = confirm.text()
         if (!screen.includes("Discard changes?")) return
         return screen
       }, 8_000)
-      await click_text(app, "Confirm")
-      await wait_no_editor(app, "const guard = 1")
+      confirm.pty.write("\r")
+      await wait_no_editor(confirm, "const guard = 1")
       expect((await Bun.file(path.join(tmp.path, "guard.ts")).text()).trimEnd()).toBe("const guard = 1")
     } finally {
-      await app.stop()
+      await confirm.stop()
     }
   }, 35_000)
 
