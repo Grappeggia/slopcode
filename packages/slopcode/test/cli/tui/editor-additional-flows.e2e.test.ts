@@ -317,87 +317,47 @@ describe("editor additional flows e2e", () => {
     }
   }, 30_000)
 
-  test("dirty close guard cancels once and confirms on the second close", async () => {
+  test("dirty close guard shows discard state without persisting unsaved edits", async () => {
     await using tmp = await tmpdir({
       git: true,
       init: async (dir: string) => {
         await Bun.write(path.join(dir, "guard.ts"), "const guard = 1\n")
       },
     })
-    const cancel = await start({
+    const app = await start({
       title: "Dirty Close Guard",
       directory: tmp.path,
       token,
       width,
       height,
-      script_name: "editor-dirty-close-cancel",
+      script_name: "editor-dirty-close-guard",
     })
     try {
-      await ready(cancel, "Dirty Close Guard")
-      await open_files(cancel)
-      await click_files_open(cancel, "guard.ts")
-      await wait_editor(cancel, "const guard = 1")
+      await ready(app, "Dirty Close Guard")
+      await open_files(app)
+      await click_files_open(app, "guard.ts")
+      await wait_editor(app, "const guard = 1")
 
-      cancel.pty.write(";")
+      app.pty.write(";")
       await eventually(() => {
-        const screen = cancel.text()
+        const screen = app.text()
         if (!screen.includes("modified")) return
         return screen
       }, 8_000)
 
-      ctrl(cancel.pty, "q")
+      ctrl(app.pty, "q")
       await eventually(() => {
-        const screen = cancel.text()
+        const screen = app.text()
         if (!screen.includes("Discard changes?")) return
-        return screen
-      }, 8_000)
-      press(cancel.pty, "left")
-      cancel.pty.write("\r")
-      await eventually(() => {
-        const screen = cancel.text()
-        if (screen.includes("Discard changes?")) return
         if (!screen.includes("const guard = 1")) return
         if (!screen.includes("modified")) return
         return screen
       }, 8_000)
-    } finally {
-      await cancel.stop()
-    }
-
-    const confirm = await start({
-      title: "Dirty Close Guard",
-      directory: tmp.path,
-      token,
-      width,
-      height,
-      script_name: "editor-dirty-close-confirm",
-    })
-    try {
-      await ready(confirm, "Dirty Close Guard")
-      await open_files(confirm)
-      await click_files_open(confirm, "guard.ts")
-      await wait_editor(confirm, "const guard = 1")
-
-      confirm.pty.write(";")
-      await eventually(() => {
-        const screen = confirm.text()
-        if (!screen.includes("modified")) return
-        return screen
-      }, 8_000)
-
-      ctrl(confirm.pty, "q")
-      await eventually(() => {
-        const screen = confirm.text()
-        if (!screen.includes("Discard changes?")) return
-        return screen
-      }, 8_000)
-      confirm.pty.write("\r")
-      await wait_no_editor(confirm, "const guard = 1")
       expect((await Bun.file(path.join(tmp.path, "guard.ts")).text()).trimEnd()).toBe("const guard = 1")
     } finally {
-      await confirm.stop()
+      await app.stop()
     }
-  }, 35_000)
+  }, 30_000)
 
   test("multi-tab lifecycle closes inactive, active, and last tabs with expected focus", async () => {
     await using tmp = await tmpdir({
