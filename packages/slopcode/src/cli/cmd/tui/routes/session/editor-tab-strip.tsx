@@ -43,7 +43,7 @@ function Tab(props: {
           paddingRight={1}
           justifyContent="center"
           backgroundColor={hover() ? theme.background : theme.backgroundPanel}
-          onMouseDown={(evt) => {
+          onMouseUp={(evt) => {
             evt.preventDefault()
             evt.stopPropagation()
             props.onClose?.()
