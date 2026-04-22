@@ -3284,17 +3284,19 @@ function CodeSearch(props: ToolProps<any>) {
 function WebSearch(props: ToolProps<any>) {
   const input = props.input as any
   const metadata = props.metadata as any
+  const provider = metadata.provider ?? "Web"
+  const results = metadata.results ?? input.count ?? input.numResults
   return (
     <ExpandableOutputTool
       icon="◈"
       pending="Searching web..."
       complete={input.query}
-      title={`# Exa Web Search "${input.query}"`}
+      title={`# ${provider} Web Search "${input.query}"`}
       output={props.output}
       part={props.part}
       summary={
         <>
-          Exa Web Search "{input.query}" <Show when={metadata.numResults}>({metadata.numResults} results)</Show>
+          {provider} Web Search "{input.query}" <Show when={results}>({results} results)</Show>
         </>
       }
     />

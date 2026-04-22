@@ -161,9 +161,10 @@ function codesearch(info: ToolProps<typeof CodeSearchTool>) {
 }
 
 function websearch(info: ToolProps<typeof WebSearchTool>) {
+  const provider = info.metadata.provider ?? "Web"
   inline({
     icon: "◈",
-    title: `Exa Web Search "${info.input.query}"`,
+    title: `${provider} Web Search "${info.input.query}"`,
   })
 }
 
