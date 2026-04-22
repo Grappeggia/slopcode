@@ -458,9 +458,10 @@ export function Session() {
   const openEditor = async (file: string) => {
     if (editorTabs().some((item) => item.file === file)) {
       tabState.activateEditor(route.sessionID, file)
+      if (!wide()) setSidebarOpen(false)
       return
     }
-    return editorConn
+    const tab = await editorConn
       .open({
         sessionID: route.sessionID,
         file,
@@ -470,6 +471,8 @@ export function Session() {
       .catch(async (error) => {
         toast.show({ message: error instanceof Error ? error.message : String(error), variant: "error" })
       })
+    if (!tab) return
+    if (!wide()) setSidebarOpen(false)
   }
   const modified = createMemo(() => {
     const files = new Set((sync.data.session_diff[route.sessionID] ?? []).map((item) => item.file))
