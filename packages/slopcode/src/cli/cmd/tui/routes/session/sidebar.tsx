@@ -366,6 +366,10 @@ export function Sidebar(props: {
         paddingLeft={props.collapsed ? 1 : 2}
         paddingRight={props.collapsed ? 1 : 2}
         position={props.overlay ? "absolute" : "relative"}
+        onMouseDown={(evt) => {
+          evt.preventDefault()
+          evt.stopPropagation()
+        }}
       >
         <Show when={props.collapsed}>
           <box flexGrow={1} alignItems="center" gap={1}>
