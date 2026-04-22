@@ -38,7 +38,7 @@ function section_row(lines: string[], title: string, file: string, label?: strin
 function explorer_row(lines: string[], file: string) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!
-    if (!line.includes(file)) continue
+    if (!line.includes(file) || !line.includes("[open]")) continue
     return { row: i + 1, line }
   }
 }
