@@ -505,66 +505,80 @@ describe("editor additional flows e2e", () => {
         await Bun.write(path.join(dir, "diff.ts"), "const live = true\n")
       },
     })
-    const app = await start({
+    const prepare = async (session_id: string) => {
+      await Storage.write(
+        ["session_diff", session_id],
+        [
+          {
+            file: "diff.ts",
+            before: "const live = false\n",
+            after: "const live = true\n",
+            additions: 1,
+            deletions: 1,
+            status: "modified",
+          },
+        ],
+      )
+    }
+
+    const keyboard = await start({
       title: "Diff Dismiss",
       directory: tmp.path,
       token,
       width,
       height,
-      script_name: "editor-diff-dismiss",
-      prepare: async (session_id) => {
-        await Storage.write(
-          ["session_diff", session_id],
-          [
-            {
-              file: "diff.ts",
-              before: "const live = false\n",
-              after: "const live = true\n",
-              additions: 1,
-              deletions: 1,
-              status: "modified",
-            },
-          ],
-        )
-      },
+      script_name: "editor-diff-dismiss-keyboard",
+      prepare,
     })
     try {
-      await ready(app, "Diff Dismiss")
-      await click_modified_open(app, "diff.ts")
-      await wait_editor(app, "const live = true")
+      await ready(keyboard, "Diff Dismiss")
+      await click_modified_open(keyboard, "diff.ts")
+      await wait_editor(keyboard, "const live = true")
       await eventually(() => {
-        const screen = app.text()
+        const screen = keyboard.text()
         if (!screen.includes("Dismiss Diff ^D")) return
         return screen
       }, 10_000)
 
-      ctrl(app.pty, "d")
+      ctrl(keyboard.pty, "d")
       await eventually(() => {
-        const screen = app.text()
-        if (screen.includes("Dismiss Diff ^D")) return
-        if (!screen.includes("const live = true")) return
-        return screen
-      }, 10_000)
-
-      await click_open_files_control(app, "diff.ts", "[close]")
-      await wait_no_editor(app, "const live = true")
-      await click_modified_open(app, "diff.ts")
-      await wait_editor(app, "const live = true")
-      await eventually(() => {
-        const screen = app.text()
-        if (!screen.includes("Dismiss Diff ^D")) return
-        return screen
-      }, 10_000)
-
-      await click_text(app, "Dismiss Diff ^D")
-      await eventually(() => {
-        const screen = app.text()
+        const screen = keyboard.text()
         if (screen.includes("Dismiss Diff ^D")) return
         if (!screen.includes("const live = true")) return
         return screen
       }, 10_000)
     } finally {
-      await app.stop()
+      await keyboard.stop()
+    }
+
+    const toolbar = await start({
+      title: "Diff Dismiss",
+      directory: tmp.path,
+      token,
+      width,
+      height,
+      script_name: "editor-diff-dismiss-toolbar",
+      prepare,
+    })
+    try {
+      await ready(toolbar, "Diff Dismiss")
+      await click_modified_open(toolbar, "diff.ts")
+      await wait_editor(toolbar, "const live = true")
+      await eventually(() => {
+        const screen = toolbar.text()
+        if (!screen.includes("Dismiss Diff ^D")) return
+        return screen
+      }, 10_000)
+
+      await click_text(toolbar, "Dismiss Diff ^D")
+      await eventually(() => {
+        const screen = toolbar.text()
+        if (screen.includes("Dismiss Diff ^D")) return
+        if (!screen.includes("const live = true")) return
+        return screen
+      }, 10_000)
+    } finally {
+      await toolbar.stop()
     }
   }, 40_000)
 
