@@ -564,14 +564,14 @@ describe("editor additional flows e2e", () => {
       await ready(app, "Compact Overlay")
       await open_files(app)
       await click_files_open(app, "long.ts")
-      await eventually(() => {
+      const opened = await eventually(() => {
         const screen = app.text()
         if (!screen.includes("long.ts")) return
-        if (!screen.includes("Files")) return
+        if (!screen.includes("Back ^Q") || !screen.includes("Save ^S")) return
+        if (screen.includes("[open]")) return
         return screen
       }, 10_000)
-      await click_text(app, ">")
-      await wait_editor(app, "long.ts")
+      expect(opened).not.toContain("Open Files")
 
       click(app.pty, 10, 20)
       wheel(app.pty, 10, 20, "down")
