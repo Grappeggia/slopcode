@@ -114,7 +114,15 @@ function DialogLoading(props: { message: string }) {
   )
 }
 
-async function completeConnection(sdk: ReturnType<typeof useSDK>, dialog: ReturnType<typeof useDialog>, sync: ReturnType<typeof useSync>, local: ReturnType<typeof useLocal>, toast: ReturnType<typeof useToast>, providerID: string, title: string) {
+async function completeConnection(
+  sdk: ReturnType<typeof useSDK>,
+  dialog: ReturnType<typeof useDialog>,
+  sync: ReturnType<typeof useSync>,
+  local: ReturnType<typeof useLocal>,
+  toast: ReturnType<typeof useToast>,
+  providerID: string,
+  title: string,
+) {
   dialog.replace(() => <DialogLoading message={`Connecting ${title}...`} />)
   await sdk.client.instance.dispose()
   await sync.bootstrap()
