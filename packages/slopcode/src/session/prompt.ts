@@ -178,7 +178,9 @@ export namespace SessionPrompt {
       if (!agent) return
       const model = await iife(async () => {
         if (agent.model) return await Provider.getModel(agent.model.providerID, agent.model.modelID)
-        return (await Provider.getSmallModel(input.providerID)) ?? (await Provider.getModel(input.providerID, input.modelID))
+        return (
+          (await Provider.getSmallModel(input.providerID)) ?? (await Provider.getModel(input.providerID, input.modelID))
+        )
       })
       const user =
         input.message?.info.role === "user"
