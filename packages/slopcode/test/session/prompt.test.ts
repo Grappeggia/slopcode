@@ -61,6 +61,16 @@ function live() {
   } as unknown as Awaited<ReturnType<typeof LLM.stream>>
 }
 
+function title(text: string) {
+  return {
+    text: Promise.resolve(text),
+    fullStream: (async function* () {
+      yield { type: "start" }
+      yield { type: "finish" }
+    })(),
+  } as unknown as Awaited<ReturnType<typeof LLM.stream>>
+}
+
 async function eventually(check: () => boolean | Promise<boolean>, timeout = 5000) {
   const start = Date.now()
   while (Date.now() - start < timeout) {
@@ -213,6 +223,111 @@ describe("session.prompt special characters", () => {
       },
     })
   })
+})
+
+describe("session.prompt auto-title", () => {
+  test("titles a prompt session from the title model", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        agent: {
+          build: {
+            model: "slopcode/kimi-k2.5-free",
+          },
+        },
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        let titles = 0
+        spyOn(LLM, "stream").mockImplementation(async (input) => {
+          if (input.agent.name === "title") {
+            titles++
+            return title("Parser failure investigation")
+          }
+          return stream({ text: "done", finishReason: "stop" })
+        })
+
+        const session = await Session.create({})
+        await SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: "debug parser bug" }],
+        })
+        await eventually(async () => (await Session.get(session.id)).title === "Parser failure investigation")
+        expect(titles).toBeGreaterThan(0)
+        await Session.remove(session.id)
+      },
+    })
+  })
+
+  test("falls back to prompt text when title generation fails", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        agent: {
+          build: {
+            model: "slopcode/kimi-k2.5-free",
+          },
+        },
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        spyOn(LLM, "stream").mockImplementation(async (input) => {
+          if (input.agent.name === "title") throw new Error("title provider offline")
+          return stream({ text: "done", finishReason: "stop" })
+        })
+
+        const session = await Session.create({})
+        await SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: "debug parser failures" }],
+        })
+        await eventually(async () => (await Session.get(session.id)).title === "debug parser failures")
+        await Session.remove(session.id)
+      },
+    })
+  })
+
+  test("titles shell-only sessions from the shell command", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        agent: {
+          build: {
+            model: "slopcode/kimi-k2.5-free",
+          },
+        },
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        spyOn(LLM, "stream").mockImplementation(async (input) => {
+          if (input.agent.name === "title") {
+            return title("Git status check")
+          }
+          return stream({ text: "done", finishReason: "stop" })
+        })
+
+        const session = await Session.create({})
+        await SessionPrompt.shell({
+          sessionID: session.id,
+          agent: "build",
+          command: "printf hello",
+        })
+        await eventually(async () => (await Session.get(session.id)).title === "Git status check", 10000)
+        await Session.remove(session.id)
+      },
+    })
+  }, 15_000)
 })
 
 describe("session.prompt pause and resume", () => {
