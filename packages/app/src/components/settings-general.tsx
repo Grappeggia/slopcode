@@ -294,7 +294,10 @@ export const SettingsGeneral: Component = () => {
             variant="secondary"
             size="small"
             triggerVariant="settings"
-            triggerStyle={{ "font-family": terminalFontFamily(settings.appearance.terminalFont()), "min-width": "180px" }}
+            triggerStyle={{
+              "font-family": terminalFontFamily(settings.appearance.terminalFont()),
+              "min-width": "180px",
+            }}
           >
             {(option) => (
               <span style={{ "font-family": terminalFontFamily(option?.value) }}>

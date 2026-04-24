@@ -143,8 +143,11 @@ export function DialogWorkspaceList() {
           : workspace.id,
       value: workspace.id,
       category: workspace.config.type,
-      description:
-        workspace.branch ? `Branch ${workspace.branch}` : typeof workspace.config.directory === "string" ? workspace.config.directory : workspace.id,
+      description: workspace.branch
+        ? `Branch ${workspace.branch}`
+        : typeof workspace.config.directory === "string"
+          ? workspace.config.directory
+          : workspace.id,
       footer:
         counts()[workspace.id] === undefined
           ? "Loading sessions..."

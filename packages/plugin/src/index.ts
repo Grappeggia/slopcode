@@ -26,7 +26,10 @@ export type ProviderContext = {
 export type WorkspaceAdaptor = {
   name: string
   description: string
-  create(config: Record<string, unknown>, branch?: string | null): Promise<{ config: Record<string, unknown>; init: () => Promise<void> }>
+  create(
+    config: Record<string, unknown>,
+    branch?: string | null,
+  ): Promise<{ config: Record<string, unknown>; init: () => Promise<void> }>
   remove(config: Record<string, unknown>): Promise<void>
   request(
     config: Record<string, unknown>,

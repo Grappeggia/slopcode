@@ -1898,6 +1898,16 @@
                           }
                         },
                         "required": ["directory", "type"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["type"],
+                        "additionalProperties": {}
                       }
                     ]
                   }
@@ -1962,6 +1972,55 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.remove({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/workspace/adaptor": {
+      "get": {
+        "operationId": "experimental.workspace.adaptors",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List workspace adaptors",
+        "description": "List all workspace adaptors available for the current project.",
+        "responses": {
+          "200": {
+            "description": "Workspace adaptors",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "name", "description"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.adaptors({\n  ...\n})"
           }
         ]
       }
@@ -12010,6 +12069,16 @@
                   }
                 },
                 "required": ["directory", "type"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": ["type"],
+                "additionalProperties": {}
               }
             ]
           }

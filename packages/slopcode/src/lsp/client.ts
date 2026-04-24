@@ -455,7 +455,9 @@ export namespace LSPClient {
           ...(documentState.supported ? [requestDiagnosticReport(filePath)] : []),
           ...documentState.documentIdentifiers.map((identifier) => requestDiagnosticReport(filePath, identifier)),
           ...(workspaceState.supported ? [requestWorkspaceDiagnosticReport(filePath)] : []),
-          ...workspaceState.workspaceIdentifiers.map((identifier) => requestWorkspaceDiagnosticReport(filePath, identifier)),
+          ...workspaceState.workspaceIdentifiers.map((identifier) =>
+            requestWorkspaceDiagnosticReport(filePath, identifier),
+          ),
         ]),
       )
     }

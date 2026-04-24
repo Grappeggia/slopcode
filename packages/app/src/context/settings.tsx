@@ -164,7 +164,10 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setShowSessionProgressBar(value: boolean) {
           setStore("general", "showSessionProgressBar", value)
         },
-        showTitleBarTools: withFallback(() => store.general?.showTitleBarTools, defaultSettings.general.showTitleBarTools),
+        showTitleBarTools: withFallback(
+          () => store.general?.showTitleBarTools,
+          defaultSettings.general.showTitleBarTools,
+        ),
         setShowTitleBarTools(value: boolean) {
           setStore("general", "showTitleBarTools", value)
         },
