@@ -346,6 +346,18 @@ export namespace Provider {
         },
       }
     },
+    llmgateway: async () => {
+      return {
+        autoload: false,
+        options: {
+          headers: {
+            "HTTP-Referer": "https://slopcode.dev/",
+            "X-Title": "slopcode",
+            "X-Source": "slopcode",
+          },
+        },
+      }
+    },
     openrouter: async () => {
       return {
         autoload: false,

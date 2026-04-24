@@ -197,7 +197,7 @@ If the server requires authentication, SlopCode will prompt you to authenticate 
 
 If you have client credentials from the MCP server provider, you can configure them:
 
-```json title="slopcode.json" {7-11}
+```json title="slopcode.json" {7-12}
 {
   "$schema": "https://slopcode.dev/config.json",
   "mcp": {
@@ -207,12 +207,15 @@ If you have client credentials from the MCP server provider, you can configure t
       "oauth": {
         "clientId": "{env:MY_MCP_CLIENT_ID}",
         "clientSecret": "{env:MY_MCP_CLIENT_SECRET}",
-        "scope": "tools:read tools:execute"
+        "scope": "tools:read tools:execute",
+        "redirectUri": "http://127.0.0.1:3000/mcp/oauth/callback"
       }
     }
   }
 }
 ```
+
+Set `redirectUri` if your provider requires an exact allowlisted callback URL.
 
 ---
 
@@ -272,6 +275,7 @@ If you want to disable automatic OAuth for a server (e.g., for servers that use 
 | `clientId`     | String          | OAuth client ID. If not provided, dynamic client registration will be attempted. |
 | `clientSecret` | String          | OAuth client secret, if required by the authorization server.                    |
 | `scope`        | String          | OAuth scopes to request during authorization.                                    |
+| `redirectUri`  | String          | Override the OAuth redirect URI used for browser callbacks.                      |
 
 #### Debugging
 

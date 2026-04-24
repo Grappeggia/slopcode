@@ -11049,6 +11049,10 @@
           "scope": {
             "description": "OAuth scopes to request during authorization",
             "type": "string"
+          },
+          "redirectUri": {
+            "description": "Override the OAuth redirect URI used for browser callbacks",
+            "type": "string"
           }
         },
         "additionalProperties": false

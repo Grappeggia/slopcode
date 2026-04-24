@@ -2407,11 +2407,13 @@ function UserMessage(props: {
 }) {
   const ctx = use()
   const local = useLocal()
-  const text = createMemo(() => props.parts.flatMap((x) => (x.type === "text" && !x.synthetic ? [x] : []))[0])
+  const text = createMemo(() =>
+    props.parts.flatMap((x) => (x.type === "text" && !x.synthetic ? [x.text] : [])).join("\n\n"),
+  )
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
   const sync = useSync()
   const { theme, syntax } = useTheme()
-  const segments = createMemo(() => segmentRichText(text()?.text ?? ""))
+  const segments = createMemo(() => segmentRichText(text()))
   const [hover, setHover] = createSignal(false)
   const queued = createMemo(() => props.pending && props.message.id > props.pending)
   const color = createMemo(() => local.agent.color(props.message.agent))

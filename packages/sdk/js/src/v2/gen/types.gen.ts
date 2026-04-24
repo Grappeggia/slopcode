@@ -1363,6 +1363,10 @@ export type McpOAuthConfig = {
    * OAuth scopes to request during authorization
    */
   scope?: string
+  /**
+   * Override the OAuth redirect URI used for browser callbacks
+   */
+  redirectUri?: string
 }
 
 export type McpRemoteConfig = {
