@@ -251,6 +251,7 @@ export default defineConfig({
       sidebar: [
         "",
         "changelog",
+        "go",
         "cli",
         "config",
         "providers",
@@ -312,6 +313,16 @@ function configSchema() {
                 {
                   source: "/auth/:path*",
                   destination: "https://opencode.ai/auth/:path*",
+                  permanent: false,
+                },
+                {
+                  source: "/go",
+                  destination: "/docs/go",
+                  permanent: false,
+                },
+                {
+                  source: "/go/",
+                  destination: "/docs/go",
                   permanent: false,
                 },
               ],

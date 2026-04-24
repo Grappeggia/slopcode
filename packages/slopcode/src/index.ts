@@ -37,6 +37,7 @@ import { JsonMigration } from "./storage/json-migration"
 import { Database } from "./storage/db"
 import { ConsoleCommand } from "./cli/cmd/console"
 import { DaemonCommand } from "./cli/cmd/daemon"
+import { Telemetry } from "./util/telemetry"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -88,6 +89,8 @@ let cli = yargs(hideBin(process.argv))
 
     process.env.AGENT = "1"
     process.env.SLOPCODE = "1"
+
+    await Telemetry.init()
 
     Log.Default.info(product.id, {
       version: Installation.VERSION,

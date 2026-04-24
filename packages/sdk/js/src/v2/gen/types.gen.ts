@@ -1803,10 +1803,15 @@ export type Workspace = {
   id: string
   branch: string | null
   projectID: string
-  config: {
-    directory: string
-    type: "worktree"
-  }
+  config:
+    | {
+        directory: string
+        type: "worktree"
+      }
+    | {
+        type: string
+        [key: string]: unknown | string
+      }
 }
 
 export type WorktreeRemoveInput = {
@@ -3016,10 +3021,15 @@ export type ExperimentalWorkspaceRemoveResponse =
 export type ExperimentalWorkspaceCreateData = {
   body?: {
     branch: string | null
-    config: {
-      directory: string
-      type: "worktree"
-    }
+    config:
+      | {
+          directory: string
+          type: "worktree"
+        }
+      | {
+          type: string
+          [key: string]: unknown | string
+        }
   }
   path: {
     id: string
@@ -3049,6 +3059,29 @@ export type ExperimentalWorkspaceCreateResponses = {
 
 export type ExperimentalWorkspaceCreateResponse =
   ExperimentalWorkspaceCreateResponses[keyof ExperimentalWorkspaceCreateResponses]
+
+export type ExperimentalWorkspaceAdaptorsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/experimental/workspace/adaptor"
+}
+
+export type ExperimentalWorkspaceAdaptorsResponses = {
+  /**
+   * Workspace adaptors
+   */
+  200: Array<{
+    type: string
+    name: string
+    description: string
+  }>
+}
+
+export type ExperimentalWorkspaceAdaptorsResponse =
+  ExperimentalWorkspaceAdaptorsResponses[keyof ExperimentalWorkspaceAdaptorsResponses]
 
 export type ExperimentalWorkspaceListData = {
   body?: never

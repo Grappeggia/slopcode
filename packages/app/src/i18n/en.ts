@@ -305,6 +305,7 @@ export const dict = {
   "mcp.status.disabled": "disabled",
 
   "dialog.fork.empty": "No messages to fork from",
+  "dialog.fork.fullSession": "Full session",
 
   "dialog.directory.search.placeholder": "Search folders",
   "dialog.directory.empty": "No folders found",
@@ -644,6 +645,8 @@ export const dict = {
   "settings.general.row.theme.description": "Customise how SlopCode is themed.",
   "settings.general.row.font.title": "Font",
   "settings.general.row.font.description": "Customise the mono font used in code blocks",
+  "settings.general.row.terminalFont.title": "Terminal font",
+  "settings.general.row.terminalFont.description": "Customise the mono font used in terminals",
   "settings.general.row.reasoningSummaries.title": "Show reasoning summaries",
   "settings.general.row.reasoningSummaries.description": "Display model reasoning summaries in the timeline",
   "settings.general.row.shellToolPartsExpanded.title": "Expand shell tool parts",
@@ -652,6 +655,10 @@ export const dict = {
   "settings.general.row.editToolPartsExpanded.title": "Expand edit tool parts",
   "settings.general.row.editToolPartsExpanded.description":
     "Show edit, write, and patch tool parts expanded by default in the timeline",
+  "settings.general.row.showSessionProgressBar.title": "Show session progress bar",
+  "settings.general.row.showSessionProgressBar.description": "Display a progress bar while the agent is working",
+  "settings.general.row.titleBarTools.title": "Show title bar tools",
+  "settings.general.row.titleBarTools.description": "Display search and action controls in the desktop title bar",
 
   "settings.general.row.wayland.title": "Use native Wayland",
   "settings.general.row.wayland.description": "Disable X11 fallback on Wayland. Requires restart.",

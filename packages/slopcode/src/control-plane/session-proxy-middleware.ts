@@ -23,7 +23,7 @@ async function proxySessionRequest(req: Request) {
 
   const url = new URL(req.url)
   const body = req.method === "HEAD" ? undefined : await req.arrayBuffer()
-  return getAdaptor(workspace.config).request(
+  return getAdaptor(workspace.projectID, workspace.config.type).request(
     workspace.config,
     req.method,
     `${url.pathname}${url.search}`,

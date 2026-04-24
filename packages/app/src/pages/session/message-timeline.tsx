@@ -118,6 +118,8 @@ export function MessageTimeline(props: {
   const language = useLanguage()
 
   const rendered = createMemo(() => props.renderedUserMessages.map((message) => message.id))
+  const status = createMemo(() => sync.data.session_status[params.id ?? ""] ?? { type: "idle" as const })
+  const showProgress = createMemo(() => status().type !== "idle" && settings.general.showSessionProgressBar())
   const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
   const sessionID = createMemo(() => params.id)
   const info = createMemo(() => {
@@ -417,6 +419,11 @@ export function MessageTimeline(props: {
                 "md:max-w-200 md:mx-auto 2xl:max-w-[1000px]": props.centered,
               }}
             >
+              <Show when={showProgress()}>
+                <div class="h-0.5 mb-2 overflow-hidden rounded-full bg-border-weak-base/70">
+                  <div class="h-full w-1/3 rounded-full bg-icon-interactive-base animate-[session-progress_1.4s_ease-in-out_infinite]" />
+                </div>
+              </Show>
               <div class="h-10 w-full flex items-center justify-between gap-1.5">
                 <div class="flex items-center gap-1 min-w-0 flex-1 pr-2">
                   <Show when={parentID()}>

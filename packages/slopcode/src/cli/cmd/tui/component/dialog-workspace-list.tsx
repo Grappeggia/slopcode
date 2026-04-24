@@ -10,6 +10,7 @@ import { Identifier } from "@/id/id"
 import { DialogSessionList } from "./dialog-session-list"
 
 type CountState = Record<string, number | null | undefined>
+type WorkspaceAdaptor = { type: string; name: string; description: string }
 
 function DialogWorkspaceCreate(props: { onDone: (workspaceID: string) => Promise<void> }) {
   const dialog = useDialog()
@@ -17,12 +18,19 @@ function DialogWorkspaceCreate(props: { onDone: (workspaceID: string) => Promise
   const sync = useSync()
   const toast = useToast()
   const [creating, setCreating] = createSignal(false)
+  const [adaptors] = createResource(async () => {
+    const workspace = sdk.client.experimental.workspace as unknown as {
+      adaptors(): Promise<{ data?: WorkspaceAdaptor[] }>
+    }
+    const result = await workspace.adaptors()
+    return result.data ?? [{ type: "worktree", name: "Worktree", description: "Create a local git worktree" }]
+  })
 
   onMount(() => {
     dialog.setSize("medium")
   })
 
-  const createWorkspace = async () => {
+  const createWorkspace = async (type: string) => {
     if (creating()) return
     setCreating(true)
     const id = Identifier.ascending("workspace")
@@ -30,7 +38,7 @@ function DialogWorkspaceCreate(props: { onDone: (workspaceID: string) => Promise
     const result = await sdk.client.experimental.workspace.create({
       id,
       branch: null,
-      config: { type: "worktree", directory },
+      config: (type === "worktree" ? { type, directory } : { type }) as never,
     })
     if (!result.data) {
       setCreating(false)
@@ -47,12 +55,16 @@ function DialogWorkspaceCreate(props: { onDone: (workspaceID: string) => Promise
       skipFilter={true}
       options={
         creating()
-          ? [{ title: "Creating worktree...", value: "creating", description: "This may take a moment" }]
-          : [{ title: "Worktree", value: "worktree", description: "Create a local git worktree" }]
+          ? [{ title: "Creating workspace...", value: "creating", description: "This may take a moment" }]
+          : (adaptors() ?? []).map((item) => ({
+              title: item.name,
+              value: item.type,
+              description: item.description,
+            }))
       }
       onSelect={(option) => {
         if (option.value === "creating") return
-        void createWorkspace()
+        void createWorkspace(option.value)
       }}
     />
   )
@@ -131,7 +143,8 @@ export function DialogWorkspaceList() {
           : workspace.id,
       value: workspace.id,
       category: workspace.config.type,
-      description: workspace.branch ? `Branch ${workspace.branch}` : workspace.config.directory,
+      description:
+        workspace.branch ? `Branch ${workspace.branch}` : typeof workspace.config.directory === "string" ? workspace.config.directory : workspace.id,
       footer:
         counts()[workspace.id] === undefined
           ? "Loading sessions..."

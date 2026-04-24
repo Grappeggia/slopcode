@@ -52,6 +52,27 @@ export const WorkspaceRoutes = lazy(() =>
       },
     )
     .get(
+      "/adaptor",
+      describeRoute({
+        summary: "List workspace adaptors",
+        description: "List all workspace adaptors available for the current project.",
+        operationId: "experimental.workspace.adaptors",
+        responses: {
+          200: {
+            description: "Workspace adaptors",
+            content: {
+              "application/json": {
+                schema: resolver(z.array(Workspace.AdaptorInfo)),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        return c.json(Workspace.adaptors(Instance.project))
+      },
+    )
+    .get(
       "/",
       describeRoute({
         summary: "List workspaces",

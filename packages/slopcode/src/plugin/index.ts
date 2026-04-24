@@ -12,6 +12,7 @@ import { Session } from "../session"
 import { NamedError } from "@slopcode-ai/util/error"
 import { CopilotAuthPlugin } from "./copilot"
 import { GitlabAuthPlugin } from "./gitlab"
+import { registerAdaptor } from "../control-plane/adaptors"
 
 export namespace Plugin {
   const log = Log.create({ service: "plugin" })
@@ -39,6 +40,11 @@ export namespace Plugin {
       project: Instance.project,
       worktree: Instance.worktree,
       directory: Instance.directory,
+      experimental_workspace: {
+        register(type, adaptor) {
+          registerAdaptor(Instance.project.id, type, adaptor as never)
+        },
+      },
       serverUrl: Server.url(),
       $: Bun.$,
     }

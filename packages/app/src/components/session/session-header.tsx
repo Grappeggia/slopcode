@@ -20,6 +20,7 @@ import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
+import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { decode64 } from "@/utils/base64"
 import { Persist, persisted } from "@/utils/persist"
@@ -228,6 +229,7 @@ export function SessionHeader() {
   const server = useServer()
   const sync = useSync()
   const platform = usePlatform()
+  const settings = useSettings()
   const language = useLanguage()
 
   const projectDirectory = createMemo(() => decode64(params.dir) ?? "")
@@ -362,7 +364,7 @@ export function SessionHeader() {
 
   return (
     <>
-      <Show when={centerMount()}>
+      <Show when={settings.general.showTitleBarTools() ? centerMount() : undefined}>
         {(mount) => (
           <Portal mount={mount()}>
             <Button
@@ -392,7 +394,7 @@ export function SessionHeader() {
           </Portal>
         )}
       </Show>
-      <Show when={rightMount()}>
+      <Show when={settings.general.showTitleBarTools() ? rightMount() : undefined}>
         {(mount) => (
           <Portal mount={mount()}>
             <div class="flex items-center gap-1.5 xl:gap-2">

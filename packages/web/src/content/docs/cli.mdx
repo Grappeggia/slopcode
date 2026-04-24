@@ -349,6 +349,10 @@ slopcode run --attach http://localhost:4096 "Explain async/await in JavaScript"
 | `--title`    |       | Title for the session (uses truncated prompt if no value provided)      |
 | `--attach`   |       | Attach to a running slopcode server (e.g., http://localhost:4096)       |
 | `--port`     |       | Port for the local server (defaults to random port)                     |
+| `--dangerously-skip-permissions` |       | Auto-approve permissions that are not explicitly denied |
+
+
+Use `--dangerously-skip-permissions` only in trusted automation. It automatically approves permission requests unless they are explicitly denied.
 
 ---
 
@@ -428,6 +432,15 @@ slopcode export [sessionID]
 ```
 
 If you don't provide a session ID, you'll be prompted to select from available sessions.
+
+Use `--sanitize` to redact sensitive transcript fields, paths, diffs, and file contents before exporting.
+
+#### Flags
+
+| Flag         | Description                                  |
+| ------------ | -------------------------------------------- |
+| `--sanitize` | Redact sensitive transcript and file data    |
+
 
 ---
 

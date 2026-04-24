@@ -8,7 +8,7 @@ import { useRoute } from "@tui/context/route"
 import { useDialog } from "../../ui/dialog"
 import type { PromptInfo } from "@tui/component/prompt/history"
 
-export function DialogForkFromTimeline(props: { sessionID: string; onMove: (messageID: string) => void }) {
+export function DialogForkFromTimeline(props: { sessionID: string; onMove: (messageID?: string) => void }) {
   const sync = useSync()
   const dialog = useDialog()
   const sdk = useSDK()
@@ -18,9 +18,26 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
     dialog.setSize("large")
   })
 
-  const options = createMemo((): DialogSelectOption<string>[] => {
+  const options = createMemo((): DialogSelectOption<string | undefined>[] => {
     const messages = sync.data.message[props.sessionID] ?? []
-    const result = [] as DialogSelectOption<string>[]
+    const result = [
+      {
+        title: "Full session",
+        value: undefined,
+        onSelect: async (dialog) => {
+          const forked = await sdk.client.session.fork({
+            sessionID: props.sessionID,
+          })
+          route.navigate({
+            sessionID: forked.data!.id,
+            type: "session",
+            source: "fork",
+            workspaceID: route.data.workspaceID,
+          })
+          dialog.clear()
+        },
+      },
+    ] as DialogSelectOption<string | undefined>[]
     for (const message of messages) {
       if (message.role !== "user") continue
       const part = (sync.data.part[message.id] ?? []).find(
@@ -58,9 +75,8 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
         },
       })
     }
-    result.reverse()
-    return result
+    return [result[0]!, ...result.slice(1).reverse()]
   })
 
-  return <DialogSelect onMove={(option) => props.onMove(option.value)} title="Fork from message" options={options()} />
+  return <DialogSelect onMove={(option) => props.onMove(option.value)} title="Fork session" options={options()} />
 }

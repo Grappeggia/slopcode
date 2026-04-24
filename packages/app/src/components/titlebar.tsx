@@ -11,6 +11,7 @@ import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
+import { useSettings } from "@/context/settings"
 import { applyPath, backPath, forwardPath } from "./titlebar-history"
 
 type TauriDesktopWindow = {
@@ -40,6 +41,7 @@ export function Titlebar() {
   const platform = usePlatform()
   const command = useCommand()
   const language = useLanguage()
+  const settings = useSettings()
   const theme = useTheme()
   const navigate = useNavigate()
   const location = useLocation()
@@ -227,49 +229,51 @@ export function Titlebar() {
               </div>
             </Button>
           </TooltipKeybind>
-          <div class="hidden xl:flex items-center shrink-0">
-            <Show when={params.dir}>
-              <TooltipKeybind
-                placement="bottom"
-                title={language.t("command.session.new")}
-                keybind={command.keybind("session.new")}
-                openDelay={2000}
-              >
-                <Button
-                  variant="ghost"
-                  icon="new-session"
-                  class="titlebar-icon w-8 h-6 p-0 box-border"
-                  onClick={() => {
-                    if (!params.dir) return
-                    navigate(`/${params.dir}/session`)
-                  }}
-                  aria-label={language.t("command.session.new")}
-                />
-              </TooltipKeybind>
-            </Show>
-            <div class="flex items-center gap-0" classList={{ "ml-1": !!params.dir }}>
-              <Tooltip placement="bottom" value={language.t("common.goBack")} openDelay={2000}>
-                <Button
-                  variant="ghost"
-                  icon="chevron-left"
-                  class="titlebar-icon w-6 h-6 p-0 box-border"
-                  disabled={!canBack()}
-                  onClick={back}
-                  aria-label={language.t("common.goBack")}
-                />
-              </Tooltip>
-              <Tooltip placement="bottom" value={language.t("common.goForward")} openDelay={2000}>
-                <Button
-                  variant="ghost"
-                  icon="chevron-right"
-                  class="titlebar-icon w-6 h-6 p-0 box-border"
-                  disabled={!canForward()}
-                  onClick={forward}
-                  aria-label={language.t("common.goForward")}
-                />
-              </Tooltip>
+          <Show when={settings.general.showTitleBarTools()}>
+            <div class="hidden xl:flex items-center shrink-0">
+              <Show when={params.dir}>
+                <TooltipKeybind
+                  placement="bottom"
+                  title={language.t("command.session.new")}
+                  keybind={command.keybind("session.new")}
+                  openDelay={2000}
+                >
+                  <Button
+                    variant="ghost"
+                    icon="new-session"
+                    class="titlebar-icon w-8 h-6 p-0 box-border"
+                    onClick={() => {
+                      if (!params.dir) return
+                      navigate(`/${params.dir}/session`)
+                    }}
+                    aria-label={language.t("command.session.new")}
+                  />
+                </TooltipKeybind>
+              </Show>
+              <div class="flex items-center gap-0" classList={{ "ml-1": !!params.dir }}>
+                <Tooltip placement="bottom" value={language.t("common.goBack")} openDelay={2000}>
+                  <Button
+                    variant="ghost"
+                    icon="chevron-left"
+                    class="titlebar-icon w-6 h-6 p-0 box-border"
+                    disabled={!canBack()}
+                    onClick={back}
+                    aria-label={language.t("common.goBack")}
+                  />
+                </Tooltip>
+                <Tooltip placement="bottom" value={language.t("common.goForward")} openDelay={2000}>
+                  <Button
+                    variant="ghost"
+                    icon="chevron-right"
+                    class="titlebar-icon w-6 h-6 p-0 box-border"
+                    disabled={!canForward()}
+                    onClick={forward}
+                    aria-label={language.t("common.goForward")}
+                  />
+                </Tooltip>
+              </div>
             </div>
-          </div>
+          </Show>
         </div>
         <div
           id="opencode-titlebar-left"

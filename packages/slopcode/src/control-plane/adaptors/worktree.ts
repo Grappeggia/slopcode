@@ -5,7 +5,9 @@ import type { Adaptor } from "./types"
 type WorktreeConfig = Extract<Config, { type: "worktree" }>
 
 export const WorktreeAdaptor: Adaptor<WorktreeConfig> = {
-  async create(_from: WorktreeConfig, _branch: string) {
+  name: "Worktree",
+  description: "Create a local git worktree",
+  async create(_from: WorktreeConfig, _branch?: string | null) {
     const next = await Worktree.create(undefined)
     return {
       config: {

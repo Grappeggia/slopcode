@@ -1,5 +1,6 @@
 import { Component, Show, createMemo, createResource, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
+import { useParams } from "@solidjs/router"
 import { Button } from "@slopcode-ai/ui/button"
 import { Icon } from "@slopcode-ai/ui/icon"
 import { Select } from "@slopcode-ai/ui/select"
@@ -8,8 +9,10 @@ import { Tooltip } from "@slopcode-ai/ui/tooltip"
 import { useTheme, type ColorScheme } from "@slopcode-ai/ui/theme"
 import { showToast } from "@slopcode-ai/ui/toast"
 import { useLanguage } from "@/context/language"
+import { usePermission } from "@/context/permission"
 import { usePlatform } from "@/context/platform"
-import { useSettings, monoFontFamily } from "@/context/settings"
+import { monoFontFamily, terminalFontFamily, useSettings } from "@/context/settings"
+import { decode64 } from "@/utils/base64"
 import { playSound, SOUND_OPTIONS } from "@/utils/sound"
 import { Link } from "./link"
 
@@ -40,7 +43,9 @@ const playDemoSound = (src: string | undefined) => {
 export const SettingsGeneral: Component = () => {
   const theme = useTheme()
   const language = useLanguage()
+  const permission = usePermission()
   const platform = usePlatform()
+  const params = useParams()
   const settings = useSettings()
 
   const [store, setStore] = createStore({
@@ -48,6 +53,13 @@ export const SettingsGeneral: Component = () => {
   })
 
   const linux = createMemo(() => platform.platform === "desktop" && platform.os === "linux")
+  const directory = createMemo(() => decode64(params.dir))
+  const autoAcceptEnabled = createMemo(() => {
+    const sessionID = params.id
+    const dir = directory()
+    if (!sessionID || !dir) return false
+    return permission.isAutoAccepting(sessionID, dir)
+  })
 
   const check = () => {
     if (!platform.checkUpdate) return
@@ -267,6 +279,30 @@ export const SettingsGeneral: Component = () => {
             )}
           </Select>
         </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.general.row.terminalFont.title")}
+          description={language.t("settings.general.row.terminalFont.description")}
+        >
+          <Select
+            data-action="settings-terminal-font"
+            options={fontOptionsList}
+            current={fontOptionsList.find((o) => o.value === settings.appearance.terminalFont())}
+            value={(o) => o.value}
+            label={(o) => language.t(o.label)}
+            onSelect={(option) => option && settings.appearance.setTerminalFont(option.value)}
+            variant="secondary"
+            size="small"
+            triggerVariant="settings"
+            triggerStyle={{ "font-family": terminalFontFamily(settings.appearance.terminalFont()), "min-width": "180px" }}
+          >
+            {(option) => (
+              <span style={{ "font-family": terminalFontFamily(option?.value) }}>
+                {option ? language.t(option.label) : ""}
+              </span>
+            )}
+          </Select>
+        </SettingsRow>
       </div>
     </div>
   )
@@ -308,6 +344,52 @@ export const SettingsGeneral: Component = () => {
             <Switch
               checked={settings.general.editToolPartsExpanded()}
               onChange={(checked) => settings.general.setEditToolPartsExpanded(checked)}
+            />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.general.row.showSessionProgressBar.title")}
+          description={language.t("settings.general.row.showSessionProgressBar.description")}
+        >
+          <div data-action="settings-session-progress-bar">
+            <Switch
+              checked={settings.general.showSessionProgressBar()}
+              onChange={(checked) => settings.general.setShowSessionProgressBar(checked)}
+            />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("command.permissions.autoaccept.enable")}
+          description={language.t("toast.permissions.autoaccept.on.description")}
+        >
+          <div data-action="settings-auto-accept-permissions">
+            <Switch
+              checked={autoAcceptEnabled()}
+              disabled={!params.id || !directory()}
+              onChange={(checked) => {
+                const sessionID = params.id
+                const dir = directory()
+                if (!sessionID || !dir) return
+                if (checked) {
+                  permission.enableAutoAccept(sessionID, dir)
+                  return
+                }
+                permission.disableAutoAccept(sessionID, dir)
+              }}
+            />
+          </div>
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.general.row.titleBarTools.title")}
+          description={language.t("settings.general.row.titleBarTools.description")}
+        >
+          <div data-action="settings-title-bar-tools">
+            <Switch
+              checked={settings.general.showTitleBarTools()}
+              onChange={(checked) => settings.general.setShowTitleBarTools(checked)}
             />
           </div>
         </SettingsRow>

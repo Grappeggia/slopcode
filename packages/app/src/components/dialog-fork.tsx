@@ -1,4 +1,4 @@
-import { Component, createMemo } from "solid-js"
+import { Component, Show, createMemo } from "solid-js"
 import { useNavigate, useParams } from "@solidjs/router"
 import { useSync } from "@/context/sync"
 import { useSDK } from "@/context/sdk"
@@ -16,9 +16,10 @@ import { useLanguage } from "@/context/language"
 import { forkTabs } from "./dialog-fork-state"
 
 interface ForkableMessage {
-  id: string
+  id?: string
   text: string
-  time: string
+  time?: string
+  full?: boolean
 }
 
 function formatTime(date: Date): string {
@@ -56,7 +57,12 @@ export const DialogFork: Component = () => {
     if (!sessionID) return []
 
     const msgs = sync.data.message[sessionID] ?? []
-    const result: ForkableMessage[] = []
+    const result: ForkableMessage[] = [
+      {
+        text: language.t("dialog.fork.fullSession"),
+        full: true,
+      },
+    ]
 
     for (const message of msgs) {
       if (message.role !== "user") continue
@@ -72,7 +78,7 @@ export const DialogFork: Component = () => {
       })
     }
 
-    return result.reverse()
+    return [result[0]!, ...result.slice(1).reverse()]
   })
 
   const handleSelect = (item: ForkableMessage | undefined) => {
@@ -81,14 +87,15 @@ export const DialogFork: Component = () => {
     const sessionID = params.id
     if (!sessionID) return
 
-    const parts = sync.data.part[item.id] ?? []
-    const restored = extractPromptFromParts(parts, {
-      directory: sdk.directory,
-      attachmentName: language.t("common.attachment"),
-    })
+    const restored = item.id
+      ? extractPromptFromParts(sync.data.part[item.id] ?? [], {
+          directory: sdk.directory,
+          attachmentName: language.t("common.attachment"),
+        })
+      : undefined
 
     sdk.client.session
-      .fork({ sessionID, messageID: item.id })
+      .fork(item.id ? { sessionID, messageID: item.id } : { sessionID })
       .then((forked) => {
         if (!forked.data) {
           showToast({ title: language.t("common.requestFailed") })
@@ -112,6 +119,7 @@ export const DialogFork: Component = () => {
 
         dialog.close()
         navigate(`/${base64Encode(sdk.directory)}/session/${forked.data.id}`)
+        if (!restored) return
         requestAnimationFrame(() => {
           prompt.set(restored)
         })
@@ -128,7 +136,7 @@ export const DialogFork: Component = () => {
         class="flex-1 min-h-0 [&_[data-slot=list-scroll]]:flex-1 [&_[data-slot=list-scroll]]:min-h-0"
         search={{ placeholder: language.t("common.search.placeholder"), autofocus: true }}
         emptyMessage={language.t("dialog.fork.empty")}
-        key={(x) => x.id}
+        key={(x) => x.id ?? "__full-session__"}
         items={messages}
         filterKeys={["text"]}
         onSelect={handleSelect}
@@ -136,7 +144,9 @@ export const DialogFork: Component = () => {
         {(item) => (
           <div class="w-full flex items-center gap-2">
             <span class="truncate flex-1 min-w-0 text-left font-normal">{item.text}</span>
-            <span class="text-text-weak shrink-0 font-normal">{item.time}</span>
+            <Show when={item.time}>
+              <span class="text-text-weak shrink-0 font-normal">{item.time}</span>
+            </Show>
           </div>
         )}
       </List>

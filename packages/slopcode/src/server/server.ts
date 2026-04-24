@@ -260,7 +260,11 @@ export namespace Server {
             }
           })()
           const target = workspaceID
-            ? await Workspace.get(workspaceID).then((workspace) => workspace?.config.directory)
+            ? await Workspace.get(workspaceID).then((workspace) => {
+                if (!workspace) return undefined
+                const value = workspace.config.directory
+                return typeof value === "string" ? value : workspace.id
+              })
             : directory
           if (!target) {
             return c.text(`Workspace not found: ${workspaceID}`, 500)
@@ -269,9 +273,7 @@ export namespace Server {
             directory: target,
             viewID,
             init: InstanceBootstrap,
-            async fn() {
-              return next()
-            },
+            fn: () => next(),
           })
         })
         .get(
