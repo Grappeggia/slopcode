@@ -1,38 +1,46 @@
 import { createMemo, createSignal } from "solid-js"
 import { useLocal } from "@tui/context/local"
 import { useSync } from "@tui/context/sync"
-import { map, pipe, flatMap, entries, filter, sortBy, take } from "remeda"
+import { entries, flatMap, map, pipe, sortBy, take } from "remeda"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { useDialog } from "@tui/ui/dialog"
+import { useToast } from "@tui/ui/toast"
 import { createDialogProviderOptions, DialogProvider } from "./dialog-provider"
 import { useKeybind } from "../context/keybind"
 import * as fuzzysort from "fuzzysort"
 import type { Provider } from "@slopcode-ai/sdk/v2"
 
-function pickLatest(models: [string, Provider["models"][string]][]) {
-  const picks: Record<string, [string, Provider["models"][string]]> = {}
-  for (const item of models) {
-    const model = item[0]
-    const info = item[1]
-    const key = info.family ?? model
-    const prev = picks[key]
-    if (!prev) {
-      picks[key] = item
-      continue
-    }
-    if (info.release_date !== prev[1].release_date) {
-      if (info.release_date > prev[1].release_date) picks[key] = item
-      continue
-    }
-    if (model > prev[0]) picks[key] = item
-  }
-  return Object.values(picks)
+type ModelChoice = {
+  providerID: string
+  modelID: string
+}
+
+type DialogChoice = ModelChoice | { refresh: true } | string
+
+function isModelChoice(value: DialogChoice): value is ModelChoice {
+  return typeof value === "object" && value !== null && "providerID" in value
+}
+
+function isBuiltin(provider: Provider) {
+  return ["slopcode", "opencode", "zenmux"].includes(provider.id)
+}
+
+function sourceLabel(provider: Provider) {
+  if (provider.id === "openai") return "Direct OpenAI"
+  if (isBuiltin(provider) || provider.name.includes("Zen")) return "SlopCode Zen"
+  return provider.name
+}
+
+function modelDescription(provider: Provider, modelID: string, favorite = false) {
+  const parts = [`${provider.id}/${modelID}`, sourceLabel(provider)]
+  if (favorite) parts.push("Favorite")
+  return parts.join(" · ")
 }
 
 export function useConnected() {
   const sync = useSync()
   return createMemo(() =>
-    sync.data.provider.some((x) => x.id !== "slopcode" || Object.values(x.models).some((y) => y.cost?.input !== 0)),
+    sync.data.provider.some((x) => !isBuiltin(x) || Object.values(x.models).some((y) => y.cost?.input !== 0)),
   )
 }
 
@@ -40,6 +48,7 @@ export function DialogModel(props: { providerID?: string }) {
   const local = useLocal()
   const sync = useSync()
   const dialog = useDialog()
+  const toast = useToast()
   const keybind = useKeybind()
   const [query, setQuery] = createSignal("")
   const [all, setAll] = createSignal(false)
@@ -65,12 +74,13 @@ export function DialogModel(props: { providerID?: string }) {
         return [
           {
             key: item,
-            value: { providerID: provider.id, modelID: model.id },
+            value: { providerID: provider.id, modelID: model.id } satisfies ModelChoice,
             title: model.name ?? item.modelID,
-            description: provider.name,
+            description: modelDescription(provider, model.id, true),
+            search: `${provider.name} ${provider.id}/${model.id}`,
             category,
-            disabled: provider.id === "slopcode" && model.id.includes("-nano"),
-            footer: model.cost?.input === 0 && provider.id === "slopcode" ? "Free" : undefined,
+            disabled: isBuiltin(provider) && model.id.includes("-nano"),
+            footer: model.cost?.input === 0 && isBuiltin(provider) ? "Free" : undefined,
             onSelect: () => {
               dialog.clear()
               local.model.set({ providerID: provider.id, modelID: model.id }, { recent: true })
@@ -91,40 +101,51 @@ export function DialogModel(props: { providerID?: string }) {
     const providerOptions = pipe(
       sync.data.provider,
       sortBy(
-        (provider) => provider.id !== "slopcode",
+        (provider) => !isBuiltin(provider),
         (provider) => provider.name,
       ),
       flatMap((provider) => {
         const items = pipe(
           provider.models,
           entries(),
-          filter(([_, info]) => info.status !== "deprecated"),
-          filter(([_, info]) => (props.providerID ? info.providerID === props.providerID : true)),
-          map(([model, info]) => ({
-            value: { providerID: provider.id, modelID: model },
-            title: info.name ?? model,
-            description: favorites.some((item) => item.providerID === provider.id && item.modelID === model)
-              ? "(Favorite)"
-              : undefined,
+          map(([modelID, info]) => ({ modelID, info })),
+          all() ? (items) => items : (items) => items.filter((item) => item.info.status !== "deprecated"),
+          (items) => items.filter((item) => (props.providerID ? item.info.providerID === props.providerID : true)),
+          map(({ modelID, info }) => ({
+            value: { providerID: provider.id, modelID } satisfies ModelChoice,
+            title: info.name ?? modelID,
+            description: modelDescription(
+              provider,
+              modelID,
+              favorites.some((item) => item.providerID === provider.id && item.modelID === modelID),
+            ),
+            search: `${provider.name} ${provider.id}/${modelID} ${info.name ?? modelID}`,
             category: connected() ? provider.name : undefined,
-            disabled: provider.id === "slopcode" && model.includes("-nano"),
-            footer: info.cost?.input === 0 && provider.id === "slopcode" ? "Free" : undefined,
+            disabled: isBuiltin(provider) && modelID.includes("-nano"),
+            footer: info.cost?.input === 0 && isBuiltin(provider) ? "Free" : undefined,
             onSelect() {
               dialog.clear()
-              local.model.set({ providerID: provider.id, modelID: model }, { recent: true })
+              local.model.set({ providerID: provider.id, modelID }, { recent: true })
             },
           })),
-          filter((x) => {
-            if (!showSections) return true
-            if (favorites.some((item) => item.providerID === x.value.providerID && item.modelID === x.value.modelID))
-              return false
-            if (recents.some((item) => item.providerID === x.value.providerID && item.modelID === x.value.modelID))
-              return false
-            return true
-          }),
+          (items) =>
+            items.filter((item) => {
+              if (!showSections) return true
+              if (
+                favorites.some((fav) => fav.providerID === item.value.providerID && fav.modelID === item.value.modelID)
+              )
+                return false
+              if (
+                recents.some(
+                  (recent) => recent.providerID === item.value.providerID && recent.modelID === item.value.modelID,
+                )
+              )
+                return false
+              return true
+            }),
           sortBy(
-            (x) => x.footer !== "Free",
-            (x) => x.title,
+            (item) => item.footer !== "Free",
+            (item) => item.title,
           ),
         )
         return items
@@ -142,14 +163,33 @@ export function DialogModel(props: { providerID?: string }) {
         )
       : []
 
-    if (needle) {
-      return [
-        ...fuzzysort.go(needle, providerOptions, { keys: ["title", "category"] }).map((x) => x.obj),
-        ...fuzzysort.go(needle, popularProviders, { keys: ["title"] }).map((x) => x.obj),
-      ]
+    const refreshOption = {
+      title: "Refresh model catalog",
+      value: { refresh: true } as const,
+      description: "Fetch latest supported models and update provider lists",
+      search: "refresh models catalog models.dev provider list",
+      category: showSections ? "Actions" : undefined,
+      onSelect: async () => {
+        await sync.models.refresh(true)
+        toast.show({
+          message: "Model catalog refreshed",
+          variant: "info",
+        })
+      },
     }
 
-    return [...favoriteOptions, ...recentOptions, ...providerOptions, ...popularProviders]
+    if (needle) {
+      const matches = [
+        ...fuzzysort
+          .go(needle, providerOptions, { keys: ["title", "description", "category", "search"] })
+          .map((x) => x.obj),
+        ...fuzzysort.go(needle, popularProviders, { keys: ["title", "category"] }).map((x) => x.obj),
+        ...fuzzysort.go(needle, [refreshOption], { keys: ["title", "description", "search"] }).map((x) => x.obj),
+      ]
+      return matches
+    }
+
+    return [refreshOption, ...favoriteOptions, ...recentOptions, ...providerOptions, ...popularProviders]
   })
 
   const provider = createMemo(() =>
@@ -159,7 +199,7 @@ export function DialogModel(props: { providerID?: string }) {
   const title = createMemo(() => provider()?.name ?? "Select model")
 
   return (
-    <DialogSelect<ReturnType<typeof options>[number]["value"]>
+    <DialogSelect<DialogChoice>
       options={options()}
       keybind={[
         {
@@ -174,12 +214,13 @@ export function DialogModel(props: { providerID?: string }) {
           title: "Favorite",
           disabled: !connected(),
           onTrigger: (option) => {
-            local.model.toggleFavorite(option.value as { providerID: string; modelID: string })
+            if (!isModelChoice(option.value)) return
+            local.model.toggleFavorite(option.value)
           },
         },
         {
           keybind: keybind.all.model_show_all_toggle?.[0],
-          title: all() ? "Show latest only" : "Show all models",
+          title: all() ? "Hide deprecated models" : "Show deprecated models",
           onTrigger: () => {
             setAll((value) => !value)
           },

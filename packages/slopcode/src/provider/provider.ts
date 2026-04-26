@@ -12,6 +12,7 @@ import { NamedError } from "@slopcode-ai/util/error"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { Instance } from "../project/instance"
+import { State } from "../project/state"
 import { Flag } from "../flag/flag"
 import { iife } from "@/util/iife"
 import { Global } from "../global"
@@ -746,7 +747,24 @@ export namespace Provider {
     }
   }
 
-  const state = Instance.state(async () => {
+  const roots = new Map<string, string>()
+
+  function stateKey() {
+    return ModelsDev.token()
+  }
+
+  async function currentState() {
+    const scope = Instance.scope()
+    const next = stateKey()
+    const prev = roots.get(scope)
+    if (prev && prev !== next) {
+      await State.dispose(scope, init)
+    }
+    roots.set(scope, next)
+    return state()
+  }
+
+  async function init() {
     using _ = log.time("state")
     const config = await Config.get()
     const modelsDev = await ModelsDev.get()
@@ -1024,10 +1042,12 @@ export namespace Provider {
       sdk,
       modelLoaders,
     }
-  })
+  }
+
+  const state = State.create(() => Instance.scope(), init)
 
   export async function list() {
-    return state().then((state) => state.providers)
+    return currentState().then((state) => state.providers)
   }
 
   async function getSDK(model: Model) {
@@ -1035,7 +1055,7 @@ export namespace Provider {
       using _ = log.time("getSDK", {
         providerID: model.providerID,
       })
-      const s = await state()
+      const s = await currentState()
       const provider = s.providers[model.providerID]
       const options = { ...provider.options }
 
@@ -1161,11 +1181,11 @@ export namespace Provider {
   }
 
   export async function getProvider(providerID: string) {
-    return state().then((s) => s.providers[providerID])
+    return currentState().then((s) => s.providers[providerID])
   }
 
   export async function getModel(providerID: string, modelID: string) {
-    const s = await state()
+    const s = await currentState()
     const provider = s.providers[providerID]
     if (!provider) {
       const availableProviders = Object.keys(s.providers)
@@ -1185,7 +1205,7 @@ export namespace Provider {
   }
 
   export async function getLanguage(model: Model): Promise<LanguageModelV2> {
-    const s = await state()
+    const s = await currentState()
     const key = `${model.providerID}/${model.id}`
     if (s.models.has(key)) return s.models.get(key)!
 
@@ -1212,7 +1232,7 @@ export namespace Provider {
   }
 
   export async function closest(providerID: string, query: string[]) {
-    const s = await state()
+    const s = await currentState()
     const provider = s.providers[providerID]
     if (!provider) return undefined
     for (const item of query) {
@@ -1234,7 +1254,7 @@ export namespace Provider {
       return getModel(parsed.providerID, parsed.modelID)
     }
 
-    const provider = await state().then((state) => state.providers[providerID])
+    const provider = await currentState().then((state) => state.providers[providerID])
     if (provider) {
       let priority = [
         "claude-haiku-4-5",
@@ -1284,7 +1304,7 @@ export namespace Provider {
     }
 
     // Check if slopcode provider is available before using it
-    const slopcodeProvider = await state().then((state) => state.providers["slopcode"])
+    const slopcodeProvider = await currentState().then((state) => state.providers["slopcode"])
     if (slopcodeProvider && slopcodeProvider.models["gpt-5-nano"]) {
       return getModel("slopcode", "gpt-5-nano")
     }

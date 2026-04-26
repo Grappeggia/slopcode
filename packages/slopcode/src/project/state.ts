@@ -28,7 +28,7 @@ export namespace State {
     }
   }
 
-  export async function dispose(key: string) {
+  export async function dispose(key: string, target?: () => unknown) {
     const entries = recordsByKey.get(key)
     if (!entries) return
 
@@ -47,6 +47,7 @@ export namespace State {
 
     const tasks: Promise<void>[] = []
     for (const [init, entry] of entries) {
+      if (target && init !== target) continue
       if (!entry.dispose) continue
 
       const label = typeof init === "function" ? init.name : String(init)
@@ -61,8 +62,9 @@ export namespace State {
     }
     await Promise.all(tasks)
 
-    entries.clear()
-    recordsByKey.delete(key)
+    if (target) entries.delete(target)
+    else entries.clear()
+    if (entries.size === 0) recordsByKey.delete(key)
 
     disposalFinished = true
     log.info("state disposal completed", { key })

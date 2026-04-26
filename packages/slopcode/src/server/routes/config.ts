@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
 import { Config } from "../../config/config"
+import { ModelsDev } from "../../provider/models"
 import { Provider } from "../../provider/provider"
 import { mapValues } from "remeda"
 import { errors } from "../error"
@@ -9,6 +10,12 @@ import { Log } from "../../util/log"
 import { lazy } from "../../util/lazy"
 
 const log = Log.create({ service: "server" })
+const RefreshQuery = z.object({
+  refresh: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+})
 
 export const ConfigRoutes = lazy(() =>
   new Hono()
@@ -80,8 +87,11 @@ export const ConfigRoutes = lazy(() =>
           },
         },
       }),
+      validator("query", RefreshQuery),
       async (c) => {
         using _ = log.time("providers")
+        const query = c.req.valid("query")
+        await ModelsDev.refresh(query.refresh)
         const providers = await Provider.list().then((x) => mapValues(x, (item) => item))
         return c.json({
           providers: Object.values(providers),

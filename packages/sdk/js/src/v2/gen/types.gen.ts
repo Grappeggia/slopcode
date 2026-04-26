@@ -2909,6 +2909,7 @@ export type ConfigProvidersData = {
   path?: never
   query?: {
     directory?: string
+    refresh?: string
   }
   url: "/config/providers"
 }
@@ -4988,6 +4989,7 @@ export type ProviderListData = {
   path?: never
   query?: {
     directory?: string
+    refresh?: string
   }
   url: "/provider"
 }

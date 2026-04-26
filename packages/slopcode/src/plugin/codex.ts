@@ -27,6 +27,20 @@ export const OAUTH_ALLOWED_MODELS = new Set([
   "gpt-5.5-pro",
 ])
 
+function openAIVersion(modelID: string) {
+  const match = modelID.match(/^gpt-(\d+\.\d+)/)
+  if (!match) return
+  return Number.parseFloat(match[1])
+}
+
+export function supportsOAuthModel(modelID: string) {
+  if (modelID.includes("codex")) return true
+  if (OAUTH_ALLOWED_MODELS.has(modelID)) return true
+  const version = openAIVersion(modelID)
+  if (version && version > 5.4) return true
+  return false
+}
+
 interface PkceCodes {
   verifier: string
   challenge: string
@@ -371,9 +385,8 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
         if (auth.type !== "oauth") return {}
 
         // Filter models to only allowed Codex models for OAuth
-        for (const modelId of Object.keys(provider.models)) {
-          if (modelId.includes("codex")) continue
-          if (OAUTH_ALLOWED_MODELS.has(modelId)) continue
+        for (const [modelId, model] of Object.entries(provider.models)) {
+          if (supportsOAuthModel(modelId) || supportsOAuthModel(model.api.id)) continue
           delete provider.models[modelId]
         }
 
@@ -415,6 +428,14 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
             input: 0,
             output: 0,
             cache: { read: 0, write: 0 },
+          }
+          if (model.id.includes("gpt-5.5") || model.api.id.includes("gpt-5.5")) {
+            model.limit = {
+              ...model.limit,
+              context: 400_000,
+              input: 272_000,
+              output: 128_000,
+            } as typeof model.limit & { input: number }
           }
         }
 

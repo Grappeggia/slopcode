@@ -219,6 +219,19 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       fullSyncedSessions.add(sessionID)
     }
 
+    async function refreshModels(force = false) {
+      const query = { refresh: force ? "true" : "false" }
+      const providers = await sdk.client.config.providers(query, { throwOnError: true }).then((x) => x.data!)
+      const providerList = await sdk.client.provider
+        .list({ refresh: "false" }, { throwOnError: true })
+        .then((x) => x.data!)
+      batch(() => {
+        setStore("provider", reconcile(providers.providers))
+        setStore("provider_default", reconcile(providers.default))
+        setStore("provider_next", reconcile(providerList))
+      })
+    }
+
     async function refresh() {
       const [permission, question, status] = await Promise.all([
         sdk.client.permission.list().then((x) => x.data ?? []),
@@ -508,8 +521,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
 
         // blocking - include session.list when continuing a session
-        const providersPromise = sdk.client.config.providers({}, { throwOnError: true })
-        const providerListPromise = sdk.client.provider.list({}, { throwOnError: true })
+        const providersPromise = sdk.client.config.providers({ refresh: "false" }, { throwOnError: true })
+        const providerListPromise = sdk.client.provider.list({ refresh: "false" }, { throwOnError: true })
         const agentsPromise = sdk.client.app.agents({}, { throwOnError: true })
         const configPromise = sdk.client.config.get({}, { throwOnError: true })
         const blockingRequests: Promise<unknown>[] = [
@@ -606,6 +619,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       },
       get ready() {
         return store.status !== "loading"
+      },
+
+      models: {
+        async refresh(force = false) {
+          await refreshModels(force)
+        },
       },
 
       session: {

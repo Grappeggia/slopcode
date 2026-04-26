@@ -9,6 +9,13 @@ import { mapValues } from "remeda"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
 
+const RefreshQuery = z.object({
+  refresh: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+})
+
 export const ProviderRoutes = lazy(() =>
   new Hono()
     .get(
@@ -34,7 +41,10 @@ export const ProviderRoutes = lazy(() =>
           },
         },
       }),
+      validator("query", RefreshQuery),
       async (c) => {
+        const query = c.req.valid("query")
+        await ModelsDev.refresh(query.refresh)
         const config = await Config.get()
         const disabled = new Set(config.disabled_providers ?? [])
         const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined

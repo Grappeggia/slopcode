@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import {
   OAUTH_ALLOWED_MODELS,
-  parseJwtClaims,
-  extractAccountIdFromClaims,
   extractAccountId,
+  extractAccountIdFromClaims,
+  parseJwtClaims,
+  supportsOAuthModel,
   type IdTokenClaims,
 } from "../../src/plugin/codex"
 
@@ -14,10 +15,23 @@ function createTestJwt(payload: object): string {
 }
 
 describe("plugin.codex", () => {
-  describe("OAUTH_ALLOWED_MODELS", () => {
+  describe("supportsOAuthModel", () => {
     test("includes GPT-5.5 models", () => {
       expect(OAUTH_ALLOWED_MODELS.has("gpt-5.5")).toBe(true)
       expect(OAUTH_ALLOWED_MODELS.has("gpt-5.5-pro")).toBe(true)
+      expect(supportsOAuthModel("gpt-5.5")).toBe(true)
+      expect(supportsOAuthModel("gpt-5.5-pro")).toBe(true)
+    })
+
+    test("allows future GPT releases automatically", () => {
+      expect(supportsOAuthModel("gpt-5.6")).toBe(true)
+      expect(supportsOAuthModel("gpt-5.6-pro")).toBe(true)
+      expect(supportsOAuthModel("gpt-6.0")).toBe(true)
+    })
+
+    test("does not allow older unsupported non-codex GPT models", () => {
+      expect(supportsOAuthModel("gpt-5.4-nano")).toBe(false)
+      expect(supportsOAuthModel("gpt-4.1")).toBe(false)
     })
   })
 

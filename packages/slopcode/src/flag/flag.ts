@@ -57,8 +57,8 @@ export namespace Flag {
   export const SLOPCODE_DISABLE_FILETIME_CHECK = truthy("SLOPCODE_DISABLE_FILETIME_CHECK")
   export const SLOPCODE_EXPERIMENTAL_PLAN_MODE = SLOPCODE_EXPERIMENTAL || truthy("SLOPCODE_EXPERIMENTAL_PLAN_MODE")
   export const SLOPCODE_EXPERIMENTAL_MARKDOWN = truthy("SLOPCODE_EXPERIMENTAL_MARKDOWN")
-  export const SLOPCODE_MODELS_URL = process.env["SLOPCODE_MODELS_URL"]
-  export const SLOPCODE_MODELS_PATH = process.env["SLOPCODE_MODELS_PATH"]
+  export declare const SLOPCODE_MODELS_URL: string | undefined
+  export declare const SLOPCODE_MODELS_PATH: string | undefined
 
   function number(key: string) {
     const value = process.env[key]
@@ -123,6 +123,22 @@ Object.defineProperty(Flag, "SLOPCODE_SERVER_PASSWORD", {
 Object.defineProperty(Flag, "SLOPCODE_SERVER_USERNAME", {
   get() {
     return process.env["SLOPCODE_SERVER_USERNAME"]
+  },
+  enumerable: true,
+  configurable: false,
+})
+
+Object.defineProperty(Flag, "SLOPCODE_MODELS_URL", {
+  get() {
+    return process.env["SLOPCODE_MODELS_URL"]
+  },
+  enumerable: true,
+  configurable: false,
+})
+
+Object.defineProperty(Flag, "SLOPCODE_MODELS_PATH", {
+  get() {
+    return process.env["SLOPCODE_MODELS_PATH"]
   },
   enumerable: true,
   configurable: false,
