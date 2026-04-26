@@ -246,7 +246,8 @@ export namespace PermissionNext {
       for (const item of next) {
         const key = JSON.stringify([item.permission, item.patterns, item.always, item.reason])
         const index = list.findIndex(
-          (existing) => JSON.stringify([existing.permission, existing.patterns, existing.always, existing.reason]) === key,
+          (existing) =>
+            JSON.stringify([existing.permission, existing.patterns, existing.always, existing.reason]) === key,
         )
         if (index === -1) {
           list.push(item)
@@ -277,19 +278,18 @@ export namespace PermissionNext {
       if (list.length === 0) return false
       delete s.forecast[input.sessionID]
       await Promise.all(
-        list.map(
-          (info) =>
-            new Promise<void>((resolve, reject) => {
-              s.pending[info.id] = {
-                info: {
-                  ...info,
-                  tool: input.tool,
-                },
-                resolve,
-                reject,
-              }
-              Bus.publish(Event.Asked, { ...info, tool: input.tool, viewID: Instance.viewID })
-            }).catch(() => undefined),
+        list.map((info) =>
+          new Promise<void>((resolve, reject) => {
+            s.pending[info.id] = {
+              info: {
+                ...info,
+                tool: input.tool,
+              },
+              resolve,
+              reject,
+            }
+            Bus.publish(Event.Asked, { ...info, tool: input.tool, viewID: Instance.viewID })
+          }).catch(() => undefined),
         ),
       )
       return true

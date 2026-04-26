@@ -483,7 +483,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
 
     if (tool === "bash") {
       const desc = typeof data.description === "string" && data.description ? data.description : "Shell command"
-      const workdir = typeof data.workdir === "string" && data.workdir && data.workdir !== "." ? normalizePath(data.workdir) : ""
+      const workdir =
+        typeof data.workdir === "string" && data.workdir && data.workdir !== "." ? normalizePath(data.workdir) : ""
       if (workdir && !desc.includes(workdir)) return `${desc} in ${workdir}`
       return desc
     }
@@ -549,7 +550,9 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
           title="Always allow"
           body={
             <Switch>
-              <Match when={selected().length === 1 && selected()[0]?.always.length === 1 && selected()[0]?.always[0] === "*"}>
+              <Match
+                when={selected().length === 1 && selected()[0]?.always.length === 1 && selected()[0]?.always[0] === "*"}
+              >
                 <TextBody title={"This will allow " + selected()[0]!.permission + " until SlopCode is restarted."} />
               </Match>
               <Match when={true}>
@@ -608,7 +611,9 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
                 when={requests().length === 1}
                 fallback={
                   <box paddingLeft={2} flexShrink={0}>
-                    <text fg={theme.textMuted}>Each row shows the blocked tool call and the permission it would grant.</text>
+                    <text fg={theme.textMuted}>
+                      Each row shows the blocked tool call and the permission it would grant.
+                    </text>
                   </box>
                 }
               >
@@ -673,7 +678,10 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
                   </Show>
                   <Show when={requests().length === 1 && focused()?.reason}>
                     <box paddingLeft={1}>
-                      <text fg={theme.textMuted}>{focused()!.kind === "forecast" ? "Planned need: " : "Reason: "}{focused()!.reason}</text>
+                      <text fg={theme.textMuted}>
+                        {focused()!.kind === "forecast" ? "Planned need: " : "Reason: "}
+                        {focused()!.reason}
+                      </text>
                     </box>
                   </Show>
                   <Show when={requests().length === 1 || row(focused()).preview}>{current().body}</Show>

@@ -9130,6 +9130,10 @@
         },
         "required": ["type", "properties"]
       },
+      "PermissionKind": {
+        "type": "string",
+        "enum": ["blocking", "forecast"]
+      },
       "Event.permission.asked": {
         "type": "object",
         "properties": {
@@ -9169,6 +9173,12 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "kind": {
+                "$ref": "#/components/schemas/PermissionKind"
+              },
+              "reason": {
+                "type": "string"
               },
               "tool": {
                 "type": "object",
@@ -12449,6 +12459,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PermissionKind"
+          },
+          "reason": {
+            "type": "string"
           },
           "tool": {
             "type": "object",

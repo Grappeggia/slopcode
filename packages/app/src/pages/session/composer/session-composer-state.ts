@@ -78,7 +78,9 @@ export function createSessionComposerState() {
 
     setStore("responding", key)
     Promise.allSettled(
-      permissions.map((item) => sdk.client.permission.respond({ sessionID: item.sessionID, permissionID: item.id, response })),
+      permissions.map((item) =>
+        sdk.client.permission.respond({ sessionID: item.sessionID, permissionID: item.id, response }),
+      ),
     )
       .then((result) => {
         const error = result.find((item) => item.status === "rejected")

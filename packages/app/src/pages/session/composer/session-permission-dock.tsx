@@ -69,7 +69,12 @@ export function SessionPermissionDock(props: {
             <Button
               variant="ghost"
               size="normal"
-              onClick={() => props.onDecide("reject", selected().map((item) => item.id))}
+              onClick={() =>
+                props.onDecide(
+                  "reject",
+                  selected().map((item) => item.id),
+                )
+              }
               disabled={props.responding || selected().length === 0}
             >
               {language.t("ui.permission.deny")}
@@ -77,7 +82,12 @@ export function SessionPermissionDock(props: {
             <Button
               variant="secondary"
               size="normal"
-              onClick={() => props.onDecide("always", selected().map((item) => item.id))}
+              onClick={() =>
+                props.onDecide(
+                  "always",
+                  selected().map((item) => item.id),
+                )
+              }
               disabled={props.responding || selected().length === 0}
             >
               {language.t("ui.permission.allowAlways")}
@@ -85,7 +95,12 @@ export function SessionPermissionDock(props: {
             <Button
               variant="primary"
               size="normal"
-              onClick={() => props.onDecide("once", selected().map((item) => item.id))}
+              onClick={() =>
+                props.onDecide(
+                  "once",
+                  selected().map((item) => item.id),
+                )
+              }
               disabled={props.responding || selected().length === 0}
             >
               {language.t("ui.permission.allowOnce")}
