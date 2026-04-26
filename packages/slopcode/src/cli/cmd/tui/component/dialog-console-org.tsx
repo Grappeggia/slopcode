@@ -5,7 +5,6 @@ import { useToast } from "@tui/ui/toast"
 import { useTheme } from "@tui/context/theme"
 import { useSDK } from "@tui/context/sdk"
 import { useSync } from "@tui/context/sync"
-import { Account } from "@/account"
 
 const host = (url: string) => {
   try {
@@ -15,6 +14,15 @@ const host = (url: string) => {
   }
 }
 
+type Org = {
+  accountID: string
+  accountEmail: string
+  accountUrl: string
+  orgID: string
+  orgName: string
+  active: boolean
+}
+
 export function DialogConsoleOrg() {
   const dialog = useDialog()
   const toast = useToast()
@@ -22,19 +30,16 @@ export function DialogConsoleOrg() {
   const sdk = useSDK()
   const sync = useSync()
 
+  const console = sdk.client.experimental as unknown as {
+    console: {
+      listOrgs(): Promise<{ data?: { orgs?: Org[] } }>
+      switchOrg(input: { accountID: string; orgID: string }): Promise<unknown>
+    }
+  }
+
   const [orgs] = createResource(async () => {
-    const active = Account.active()
-    const groups = await Account.orgsByAccount()
-    return groups.flatMap((group) =>
-      group.orgs.map((org) => ({
-        accountID: group.account.id,
-        accountEmail: group.account.email,
-        accountUrl: group.account.url,
-        orgID: org.id,
-        orgName: org.name,
-        active: active?.id === group.account.id && active.active_org_id === org.id,
-      })),
-    )
+    const result = await console.console.listOrgs()
+    return result.data?.orgs ?? []
   })
 
   const current = createMemo(() => orgs()?.find((item) => item.active))
@@ -72,7 +77,10 @@ export function DialogConsoleOrg() {
             dialog.clear()
             return
           }
-          Account.use(item.accountID, item.orgID)
+          await console.console.switchOrg({
+            accountID: item.accountID,
+            orgID: item.orgID,
+          })
           await sdk.client.instance.dispose()
           await sync.bootstrap()
           toast.show({

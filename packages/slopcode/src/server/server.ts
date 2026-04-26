@@ -38,6 +38,7 @@ import { websocket } from "hono/bun"
 import { HTTPException } from "hono/http-exception"
 import { errors } from "./error"
 import { QuestionRoutes } from "./routes/question"
+import { SyncRoutes } from "./routes/sync"
 import { PermissionRoutes } from "./routes/permission"
 import { GlobalRoutes } from "./routes/global"
 import { DaemonRoutes } from "./routes/daemon"
@@ -298,6 +299,7 @@ export namespace Server {
         .route("/session", SessionRoutes())
         .route("/permission", PermissionRoutes())
         .route("/question", QuestionRoutes())
+        .route("/sync", SyncRoutes())
         .route("/provider", ProviderRoutes())
         .route("/", FileRoutes())
         .route("/mcp", McpRoutes())
@@ -383,10 +385,38 @@ export namespace Server {
             },
           }),
           async (c) => {
-            const branch = await Vcs.branch()
             return c.json({
-              branch,
+              branch: await Vcs.branch(),
+              default_branch: await Vcs.default_branch(),
             })
+          },
+        )
+        .get(
+          "/vcs/diff",
+          describeRoute({
+            summary: "Get VCS diff",
+            description: "Retrieve the current git diff for the working tree or against the default branch.",
+            operationId: "vcs.diff",
+            responses: {
+              200: {
+                description: "VCS diff",
+                content: {
+                  "application/json": {
+                    schema: resolver(Vcs.FileDiff.array()),
+                  },
+                },
+              },
+            },
+          }),
+          validator(
+            "query",
+            z.object({
+              mode: Vcs.Mode.optional(),
+            }),
+          ),
+          async (c) => {
+            const mode = c.req.valid("query").mode ?? "git"
+            return c.json(await Vcs.diff(mode))
           },
         )
         .get(

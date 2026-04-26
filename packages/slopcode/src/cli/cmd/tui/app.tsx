@@ -7,6 +7,7 @@ import { RouteProvider, useRoute } from "@tui/context/route"
 import { SessionTabsProvider, useSessionTabs } from "@tui/context/session-tabs"
 import { TabStateProvider, useTabState } from "@tui/context/tab-state"
 import { EditorConnectionProvider } from "@tui/context/editor-connection"
+import { EditorContextProvider } from "@tui/context/editor"
 import { SDKProvider, useSDK } from "@tui/context/sdk"
 import { SyncProvider, useSync } from "@tui/context/sync"
 import { DialogProvider, useDialog } from "@tui/ui/dialog"
@@ -190,7 +191,9 @@ export function tui(input: {
                                             <FrecencyProvider>
                                               <PromptHistoryProvider>
                                                 <PromptRefProvider>
-                                                  <App />
+                                                  <EditorContextProvider>
+                                                    <App />
+                                                  </EditorContextProvider>
                                                 </PromptRefProvider>
                                               </PromptHistoryProvider>
                                             </FrecencyProvider>

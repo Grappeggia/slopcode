@@ -1,6 +1,7 @@
 import z from "zod"
 import { Log } from "../util/log"
 import { Instance } from "../project/instance"
+import { SyncEvent } from "@/sync"
 import { BusEvent } from "./bus-event"
 import { GlobalBus } from "./global"
 
@@ -46,6 +47,11 @@ export namespace Bus {
       type: def.type,
       properties,
     }
+    const sync =
+      typeof properties === "object" && properties !== null && !Array.isArray(properties)
+        ? (properties as Record<string, unknown>)
+        : undefined
+    if (sync) SyncEvent.capture(def.type, sync)
     log.info("publishing", {
       type: def.type,
     })

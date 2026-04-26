@@ -18,10 +18,11 @@ function DialogWorkspaceCreate(props: { onDone: (workspaceID: string) => Promise
   const sync = useSync()
   const toast = useToast()
   const [creating, setCreating] = createSignal(false)
+  const workspace = sdk.client.experimental.workspace as unknown as {
+    adaptors(): Promise<{ data?: WorkspaceAdaptor[] }>
+    create(input: { id: string; type: string; branch: string | null }): Promise<{ data?: { id: string } }>
+  }
   const [adaptors] = createResource(async () => {
-    const workspace = sdk.client.experimental.workspace as unknown as {
-      adaptors(): Promise<{ data?: WorkspaceAdaptor[] }>
-    }
     const result = await workspace.adaptors()
     return result.data ?? [{ type: "worktree", name: "Worktree", description: "Create a local git worktree" }]
   })
@@ -34,11 +35,10 @@ function DialogWorkspaceCreate(props: { onDone: (workspaceID: string) => Promise
     if (creating()) return
     setCreating(true)
     const id = Identifier.ascending("workspace")
-    const directory = sync.data.path.worktree || sync.data.path.directory || sdk.directory || process.cwd()
-    const result = await sdk.client.experimental.workspace.create({
+    const result = await workspace.create({
       id,
+      type,
       branch: null,
-      config: (type === "worktree" ? { type, directory } : { type }) as never,
     })
     if (!result.data) {
       setCreating(false)

@@ -5,6 +5,7 @@ import { ToolRegistry } from "../../tool/registry"
 import { Worktree } from "../../worktree"
 import { Instance } from "../../project/instance"
 import { Project } from "../../project/project"
+import { Account } from "../../account"
 import { MCP } from "../../mcp"
 import { Session } from "../../session"
 import { zodToJsonSchema } from "zod-to-json-schema"
@@ -12,8 +13,123 @@ import { errors } from "../error"
 import { lazy } from "../../util/lazy"
 import { WorkspaceRoutes } from "./workspace"
 
+const ConsoleState = z.object({
+  activeOrgName: z.string().optional(),
+  consoleManagedProviders: z.array(z.string()),
+  switchableOrgCount: z.number().int().min(0),
+})
+
+const ConsoleOrg = z.object({
+  accountID: z.string(),
+  accountEmail: z.string(),
+  accountUrl: z.string(),
+  orgID: z.string(),
+  orgName: z.string(),
+  active: z.boolean(),
+})
+
+const ConsoleSwitch = z.object({
+  accountID: z.string(),
+  orgID: z.string(),
+})
+
+const providerIDs = (config: Record<string, unknown> | undefined) => {
+  const providers = config?.providers
+  if (typeof providers !== "object" || providers === null || Array.isArray(providers)) return []
+  return Object.keys(providers)
+}
+
 export const ExperimentalRoutes = lazy(() =>
   new Hono()
+    .get(
+      "/console",
+      describeRoute({
+        summary: "Get active Console provider metadata",
+        description: "Get the active Console org name and the set of provider IDs managed by that Console org.",
+        operationId: "experimental.console.get",
+        responses: {
+          200: {
+            description: "Active Console provider metadata",
+            content: {
+              "application/json": {
+                schema: resolver(ConsoleState),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      async (c) => {
+        const groups = await Account.orgsByAccount()
+        const active = await Account.activeOrg()
+        const config = active ? await Account.config(active.account.id, active.org.id) : undefined
+        return c.json({
+          activeOrgName: active?.org.name,
+          consoleManagedProviders: providerIDs(config),
+          switchableOrgCount: groups.reduce((count, group) => count + group.orgs.length, 0),
+        })
+      },
+    )
+    .get(
+      "/console/orgs",
+      describeRoute({
+        summary: "List switchable Console orgs",
+        description: "Get the available Console orgs across logged-in accounts, including the current active org.",
+        operationId: "experimental.console.listOrgs",
+        responses: {
+          200: {
+            description: "Switchable Console orgs",
+            content: {
+              "application/json": {
+                schema: resolver(z.object({ orgs: z.array(ConsoleOrg) })),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      async (c) => {
+        const groups = await Account.orgsByAccount()
+        const active = Account.active()
+        return c.json({
+          orgs: groups.flatMap((group) =>
+            group.orgs.map((org) => ({
+              accountID: group.account.id,
+              accountEmail: group.account.email,
+              accountUrl: group.account.url,
+              orgID: org.id,
+              orgName: org.name,
+              active: active?.id === group.account.id && active.active_org_id === org.id,
+            })),
+          ),
+        })
+      },
+    )
+    .post(
+      "/console/switch",
+      describeRoute({
+        summary: "Switch active Console org",
+        description: "Persist a new active Console account/org selection for the current local SlopCode state.",
+        operationId: "experimental.console.switchOrg",
+        responses: {
+          200: {
+            description: "Switch success",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator("json", ConsoleSwitch),
+      async (c) => {
+        const body = c.req.valid("json")
+        Account.use(body.accountID, body.orgID)
+        return c.json(true)
+      },
+    )
     .get(
       "/tool/ids",
       describeRoute({
