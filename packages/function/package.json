@@ -1,6 +1,6 @@
 {
   "name": "@slopcode-ai/function",
-  "version": "0.2.77",
+  "version": "0.2.81",
   "$schema": "https://json.schemastore.org/package.json",
   "private": true,
   "type": "module",
