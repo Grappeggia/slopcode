@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { createSerialQueue } from "@slopcode-ai/util/serial-queue"
+import type { Message } from "@slopcode-ai/sdk/v2"
+import {
+  promptQueueDone,
+  promptQueueReady,
+  type PromptQueueStore,
+} from "../../../src/cli/cmd/tui/component/prompt/queue"
 
 const eventually = async (check: () => boolean | Promise<boolean>, timeout = 2000) => {
   const start = Date.now()
@@ -8,6 +14,13 @@ const eventually = async (check: () => boolean | Promise<boolean>, timeout = 200
     await Bun.sleep(10)
   }
   throw new Error("condition not met")
+}
+
+type Terminal = {
+  id: string
+  parentID: string
+  finish?: string
+  error?: { name: string; data: { message: string } }
 }
 
 describe("serial prompt queue", () => {
@@ -397,6 +410,97 @@ describe("serial prompt queue", () => {
     expect(calls).toEqual(["first", "third", "second"])
 
     done.second = true
+    await eventually(() => !queue.busy("ses_1"))
+  })
+
+  test("promotes the next prompt after active terminal assistant error", async () => {
+    const store: PromptQueueStore = {
+      message: {
+        ses_1: [],
+      },
+      session_status: {
+        ses_1: { type: "idle" },
+      },
+    }
+    const calls: string[] = []
+    const terminal = (input: Terminal) =>
+      ({
+        id: input.id,
+        role: "assistant",
+        parentID: input.parentID,
+        sessionID: "ses_1",
+        mode: "build",
+        agent: "build",
+        modelID: "test",
+        providerID: "test",
+        path: {
+          cwd: "",
+          root: "",
+        },
+        cost: 0,
+        tokens: {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: {
+            read: 0,
+            write: 0,
+          },
+        },
+        time: {
+          created: Date.now(),
+          completed: Date.now(),
+        },
+        finish: input.finish,
+        error: input.error,
+      }) as Message
+    const queue = createSerialQueue<{
+      key: string
+      id: string
+      label: string
+      ready: () => boolean
+      done: () => boolean
+      run: () => Promise<void>
+    }>({ poll_ms: 5 })
+    const item = (id: string, label: string) => ({
+      key: "ses_1",
+      id,
+      label,
+      ready: () => promptQueueReady(store, "ses_1"),
+      done: () => promptQueueDone(store, "ses_1", id),
+      run: async () => {
+        calls.push(label)
+      },
+    })
+
+    queue.push(item("msg_1", "first"))
+    queue.push(item("msg_2", "second"))
+    await eventually(() => queue.snapshot("ses_1").active?.label === "first")
+
+    store.session_status.ses_1 = { type: "busy" }
+    store.message.ses_1 = [
+      terminal({
+        id: "asst_1",
+        parentID: "msg_1",
+        error: {
+          name: "MessageAbortedError",
+          data: {
+            message: "Interrupted",
+          },
+        },
+      }),
+    ]
+
+    await eventually(() => {
+      const next = queue.snapshot("ses_1")
+      return !next.active && next.queue[0]?.label === "second"
+    })
+
+    store.session_status.ses_1 = { type: "idle" }
+    await eventually(() => queue.snapshot("ses_1").active?.label === "second")
+    expect(calls).toEqual(["first", "second"])
+
+    store.message.ses_1.push(terminal({ id: "asst_2", parentID: "msg_2", finish: "stop" }))
     await eventually(() => !queue.busy("ses_1"))
   })
 })

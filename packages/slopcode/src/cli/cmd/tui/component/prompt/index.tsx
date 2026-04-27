@@ -39,7 +39,7 @@ import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { Editor } from "@tui/util/editor"
 import { useExit } from "../../context/exit"
 import { Clipboard } from "../../util/clipboard"
-import type { FilePart, Message } from "@slopcode-ai/sdk/v2"
+import type { FilePart } from "@slopcode-ai/sdk/v2"
 import { TuiEvent } from "../../event"
 import { iife } from "@/util/iife"
 import { Locale } from "@/util/locale"
@@ -52,7 +52,13 @@ import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { useTextareaKeybindings } from "../textarea-keybindings"
 import { DialogSkill } from "../dialog-skill"
-import { describePromptQueue, promptQueue } from "./queue"
+import {
+  describePromptQueue,
+  promptQueue,
+  promptQueueDone,
+  promptQueueReady,
+  type PromptQueueStore,
+} from "./queue"
 import * as TokenLimit from "./token-limit"
 
 export type PromptProps = {
@@ -83,33 +89,6 @@ export type PromptRef = {
 const PLACEHOLDERS = ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"]
 const SHELL_PLACEHOLDERS = ["ls -la", "git status", "pwd"]
 const PROMPT_MAX_HEIGHT = 6
-
-type QueueStore = {
-  message: {
-    [sessionID: string]: Message[] | undefined
-  }
-  session_status: {
-    [sessionID: string]: { type: string } | undefined
-  }
-}
-
-const idle = (store: QueueStore, sessionID: string) => (store.session_status[sessionID]?.type ?? "idle") === "idle"
-
-const assistants = (messages: Message[], messageID: string) =>
-  messages.filter((item) => item.role === "assistant" && item.parentID === messageID)
-
-const finished = (message: Message) => {
-  if (message.role !== "assistant") return false
-  if (!message.time.completed) return false
-  if (message.error) return message.error.name !== "MessageAbortedError"
-  if (!message.finish) return false
-  return !["tool-calls", "unknown"].includes(message.finish)
-}
-
-const done = (store: QueueStore, sessionID: string, messageID: string) => {
-  if (!idle(store, sessionID)) return false
-  return assistants(store.message[sessionID] ?? [], messageID).some(finished)
-}
 
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
@@ -1028,8 +1007,8 @@ export function Prompt(props: PromptProps) {
           summary: queued.summary,
           detail: queued.detail,
           time,
-          ready: () => idle(sync.data as QueueStore, sessionID) && !promptQueue.snapshot(sessionID).paused,
-          done: () => done(sync.data as QueueStore, sessionID, messageID),
+          ready: () => promptQueueReady(sync.data as PromptQueueStore, sessionID) && !promptQueue.snapshot(sessionID).paused,
+          done: () => promptQueueDone(sync.data as PromptQueueStore, sessionID, messageID),
           run: send,
           reject: (error: unknown) => {
             if (abort(error)) return
