@@ -52,13 +52,7 @@ import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { useTextareaKeybindings } from "../textarea-keybindings"
 import { DialogSkill } from "../dialog-skill"
-import {
-  describePromptQueue,
-  promptQueue,
-  promptQueueDone,
-  promptQueueReady,
-  type PromptQueueStore,
-} from "./queue"
+import { describePromptQueue, promptQueue, promptQueueDone, promptQueueReady, type PromptQueueStore } from "./queue"
 import * as TokenLimit from "./token-limit"
 
 export type PromptProps = {
@@ -1007,7 +1001,8 @@ export function Prompt(props: PromptProps) {
           summary: queued.summary,
           detail: queued.detail,
           time,
-          ready: () => promptQueueReady(sync.data as PromptQueueStore, sessionID) && !promptQueue.snapshot(sessionID).paused,
+          ready: () =>
+            promptQueueReady(sync.data as PromptQueueStore, sessionID) && !promptQueue.snapshot(sessionID).paused,
           done: () => promptQueueDone(sync.data as PromptQueueStore, sessionID, messageID),
           run: send,
           reject: (error: unknown) => {
