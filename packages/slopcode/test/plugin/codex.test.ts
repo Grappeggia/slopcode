@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  OAUTH_ALLOWED_MODELS,
   parseJwtClaims,
   extractAccountIdFromClaims,
   extractAccountId,
@@ -13,6 +14,13 @@ function createTestJwt(payload: object): string {
 }
 
 describe("plugin.codex", () => {
+  describe("OAUTH_ALLOWED_MODELS", () => {
+    test("includes GPT-5.5 models", () => {
+      expect(OAUTH_ALLOWED_MODELS.has("gpt-5.5")).toBe(true)
+      expect(OAUTH_ALLOWED_MODELS.has("gpt-5.5-pro")).toBe(true)
+    })
+  })
+
   describe("parseJwtClaims", () => {
     test("parses valid JWT with claims", () => {
       const payload = { email: "test@example.com", chatgpt_account_id: "acc-123" }
