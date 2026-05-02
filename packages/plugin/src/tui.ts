@@ -373,7 +373,10 @@ export type TuiSlotContext = {
   theme: TuiTheme
 }
 
-type SlotHandler<Props extends object = Record<string, unknown>> = (ctx: TuiSlotContext, props: Props) => JSX.Element | null
+type SlotHandler<Props extends object = Record<string, unknown>> = (
+  ctx: TuiSlotContext,
+  props: Props,
+) => JSX.Element | null
 
 export type TuiSlotPlugin<Slots extends Record<string, object> = {}> = {
   order?: number

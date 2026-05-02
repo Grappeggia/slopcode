@@ -12,7 +12,11 @@ const tab = Keybind.parse("tab").at(0)
 
 function state(api: TuiPluginApi, item: TuiPluginStatus) {
   if (!item.enabled) return <span style={{ fg: api.theme.current.textMuted }}>disabled</span>
-  return <span style={{ fg: item.active ? api.theme.current.success : api.theme.current.error }}>{item.active ? "active" : "inactive"}</span>
+  return (
+    <span style={{ fg: item.active ? api.theme.current.success : api.theme.current.error }}>
+      {item.active ? "active" : "inactive"}
+    </span>
+  )
 }
 
 function source(spec: string) {
@@ -46,7 +50,9 @@ function Install(props: { api: TuiPluginApi }) {
       description={() => (
         <box flexDirection="row" gap={1}>
           <text fg={props.api.theme.current.textMuted}>scope:</text>
-          <text fg={busy() ? props.api.theme.current.textMuted : props.api.theme.current.text}>{global() ? "global" : "local"}</text>
+          <text fg={busy() ? props.api.theme.current.textMuted : props.api.theme.current.text}>
+            {global() ? "global" : "local"}
+          </text>
           <Show when={!busy()}>
             <text fg={props.api.theme.current.textMuted}>({Keybind.toString(tab)} toggle)</text>
           </Show>

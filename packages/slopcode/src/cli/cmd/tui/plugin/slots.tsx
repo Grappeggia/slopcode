@@ -6,7 +6,10 @@ type HostSlotPlugin = TuiSlotPlugin & {
   id: string
 }
 
-type SlotRecord = Record<string, ((ctx: TuiSlotContext, props: Record<string, unknown>) => JSX.Element | null) | undefined>
+type SlotRecord = Record<
+  string,
+  ((ctx: TuiSlotContext, props: Record<string, unknown>) => JSX.Element | null) | undefined
+>
 export type HostPluginApi = TuiPluginApi
 export type HostSlots = {
   register(plugin: HostSlotPlugin): () => void

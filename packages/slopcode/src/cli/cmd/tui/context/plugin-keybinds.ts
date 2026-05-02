@@ -20,7 +20,11 @@ const text = (value: unknown) => {
   return value
 }
 
-export function createPluginKeybind(base: Base, defaults: PluginKeybindMap, overrides?: Record<string, unknown>): PluginKeybind {
+export function createPluginKeybind(
+  base: Base,
+  defaults: PluginKeybindMap,
+  overrides?: Record<string, unknown>,
+): PluginKeybind {
   const all = Object.freeze(
     Object.fromEntries(Object.entries(defaults).map(([name, value]) => [name, text(overrides?.[name]) ?? value])),
   )

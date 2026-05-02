@@ -1,5 +1,11 @@
 import type { ParsedKey } from "@opentui/core"
-import type { TuiDialogSelectOption, TuiPluginApi, TuiRouteDefinition, TuiSidebarMcpItem, TuiSlotProps } from "@slopcode-ai/plugin/tui"
+import type {
+  TuiDialogSelectOption,
+  TuiPluginApi,
+  TuiRouteDefinition,
+  TuiSidebarMcpItem,
+  TuiSlotProps,
+} from "@slopcode-ai/plugin/tui"
 import type { useCommandDialog } from "@tui/component/dialog-command"
 import type { useKeybind } from "@tui/context/keybind"
 import type { useRoute } from "@tui/context/route"

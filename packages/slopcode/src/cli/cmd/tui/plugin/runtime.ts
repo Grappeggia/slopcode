@@ -96,7 +96,8 @@ function createThemeInstaller(meta: ConfigPlugin.Origin, root: string, spec: str
     const src = path.isAbsolute(raw) ? raw : path.resolve(root, raw)
     const name = path.basename(src, path.extname(src))
     const source = path.dirname(meta.source || path.join(process.cwd(), ".slopcode", "tui.json"))
-    const local = path.basename(source) === ".slopcode" ? path.join(source, "themes") : path.join(source, ".slopcode", "themes")
+    const local =
+      path.basename(source) === ".slopcode" ? path.join(source, "themes") : path.join(source, ".slopcode", "themes")
     const dest = path.join(meta.scope === "local" ? local : path.join(Global.Path.config, "themes"), `${name}.json`)
     const text = await Filesystem.readText(src).catch((error) => {
       warn("failed to read tui plugin theme", { path: spec, theme: src, error })
@@ -158,7 +159,9 @@ async function syncPluginThemes(plugin: PluginEntry) {
   if (!plugin.load.theme_files.length) return
   const install = createThemeInstaller(plugin.load.origin, plugin.load.theme_root, plugin.load.spec)
   for (const file of plugin.load.theme_files) {
-    await install(file).catch((error) => warn("failed to sync tui plugin themes", { path: plugin.load.spec, id: plugin.id, theme: file, error }))
+    await install(file).catch((error) =>
+      warn("failed to sync tui plugin themes", { path: plugin.load.spec, id: plugin.id, theme: file, error }),
+    )
   }
 }
 
@@ -213,7 +216,9 @@ function createPluginScope(load: PluginLoad, id: string) {
 
 function readPluginEnabledMap(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {}
-  return Object.fromEntries(Object.entries(value).filter((item): item is [string, boolean] => typeof item[1] === "boolean"))
+  return Object.fromEntries(
+    Object.entries(value).filter((item): item is [string, boolean] => typeof item[1] === "boolean"),
+  )
 }
 
 function pluginEnabledState(state: RuntimeState, config: TuiConfig.Info) {
@@ -400,12 +405,16 @@ async function resolveExternalPlugins(list: ConfigPlugin.Origin[], wait: () => P
         })
       if (!mod) return
 
-      const id = await resolvePluginId(loaded.source, loaded.spec, loaded.target, readPluginId(mod.id, loaded.spec), loaded.pkg).catch(
-        (error) => {
-          fail("failed to load tui plugin", { path: loaded.spec, target: loaded.target, retry, error })
-          return undefined
-        },
-      )
+      const id = await resolvePluginId(
+        loaded.source,
+        loaded.spec,
+        loaded.target,
+        readPluginId(mod.id, loaded.spec),
+        loaded.pkg,
+      ).catch((error) => {
+        fail("failed to load tui plugin", { path: loaded.spec, target: loaded.target, retry, error })
+        return undefined
+      })
       if (!id) return
 
       return {
@@ -424,7 +433,10 @@ async function resolveExternalPlugins(list: ConfigPlugin.Origin[], wait: () => P
     missing: async (loaded, origin, retry) => {
       const theme_files = await readThemeFiles(loaded.spec, loaded.pkg)
       if (!theme_files.length) return
-      const name = typeof loaded.pkg?.json.name === "string" && loaded.pkg.json.name.trim() ? loaded.pkg.json.name.trim() : undefined
+      const name =
+        typeof loaded.pkg?.json.name === "string" && loaded.pkg.json.name.trim()
+          ? loaded.pkg.json.name.trim()
+          : undefined
       const id = await resolvePluginId(loaded.source, loaded.spec, loaded.target, name, loaded.pkg).catch((error) => {
         fail("failed to load tui plugin", { path: loaded.spec, target: loaded.target, retry, error })
         return undefined
@@ -554,7 +566,10 @@ async function installPluginBySpec(
   })
   if (!patch.ok) {
     if (patch.code === "invalid_json") {
-      return { ok: false, message: `Invalid JSON in ${patch.file} (${patch.parse} at line ${patch.line}, column ${patch.col})` }
+      return {
+        ok: false,
+        message: `Invalid JSON in ${patch.file} (${patch.parse} at line ${patch.line}, column ${patch.col})`,
+      }
     }
     return { ok: false, message: message(patch.error) }
   }
@@ -581,7 +596,8 @@ export const Slot = View
 export async function init(input: { api: HostPluginApi; config: TuiConfig.Info }) {
   const cwd = process.cwd()
   if (loaded) {
-    if (dir !== cwd) throw new Error(`TuiPluginRuntime.init() called with a different working directory. expected=${dir} got=${cwd}`)
+    if (dir !== cwd)
+      throw new Error(`TuiPluginRuntime.init() called with a different working directory. expected=${dir} got=${cwd}`)
     return loaded
   }
   dir = cwd

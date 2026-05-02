@@ -70,7 +70,6 @@ export namespace Plugin {
       return
     }
 
-
     for (const server of getLegacyPlugins(load.mod)) {
       hooks.push(await server(input, load.options))
     }
@@ -114,12 +113,10 @@ export namespace Plugin {
       })
     }
 
-    const items = Flag.SLOPCODE_DISABLE_DEFAULT_PLUGINS || Flag.SLOPCODE_PURE
-      ? external
-      : [
-          ...BUILTIN.map((spec) => ({ spec, source: "", scope: "global" as const })),
-          ...external,
-        ]
+    const items =
+      Flag.SLOPCODE_DISABLE_DEFAULT_PLUGINS || Flag.SLOPCODE_PURE
+        ? external
+        : [...BUILTIN.map((spec) => ({ spec, source: "", scope: "global" as const })), ...external]
 
     if (items.length) await Config.waitForDependencies()
 

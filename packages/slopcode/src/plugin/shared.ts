@@ -122,7 +122,8 @@ async function resolveTargetDirectory(target: string) {
 
 async function resolvePluginEntrypoint(spec: string, target: string, kind: PluginKind, pkg?: PluginPackage) {
   const source = pluginSource(spec)
-  const hit = pkg ?? (source === "npm" ? await readPluginPackage(target) : await readPluginPackage(target).catch(() => undefined))
+  const hit =
+    pkg ?? (source === "npm" ? await readPluginPackage(target) : await readPluginPackage(target).catch(() => undefined))
   if (!hit) return target
 
   const entry = resolvePackageEntrypoint(spec, kind, hit)
@@ -188,7 +189,8 @@ export async function readPluginPackage(target: string): Promise<PluginPackage> 
 
 export async function createPluginEntry(spec: string, target: string, kind: PluginKind): Promise<PluginEntry> {
   const source = pluginSource(spec)
-  const pkg = source === "npm" ? await readPluginPackage(target) : await readPluginPackage(target).catch(() => undefined)
+  const pkg =
+    source === "npm" ? await readPluginPackage(target) : await readPluginPackage(target).catch(() => undefined)
   const entry = await resolvePluginEntrypoint(spec, target, kind, pkg)
   return {
     spec,
@@ -225,7 +227,12 @@ export function readPluginId(id: unknown, spec: string) {
   return value
 }
 
-export function readV1Plugin(mod: Record<string, unknown>, spec: string, kind: PluginKind, mode: PluginMode = "strict") {
+export function readV1Plugin(
+  mod: Record<string, unknown>,
+  spec: string,
+  kind: PluginKind,
+  mode: PluginMode = "strict",
+) {
   const value = mod.default
   if (!isRecord(value)) {
     if (mode === "detect") return
@@ -235,13 +242,16 @@ export function readV1Plugin(mod: Record<string, unknown>, spec: string, kind: P
 
   const server = "server" in value ? value.server : undefined
   const tui = "tui" in value ? value.tui : undefined
-  if (server !== undefined && typeof server !== "function") throw new TypeError(`Plugin ${spec} has invalid server export`)
+  if (server !== undefined && typeof server !== "function")
+    throw new TypeError(`Plugin ${spec} has invalid server export`)
   if (tui !== undefined && typeof tui !== "function") throw new TypeError(`Plugin ${spec} has invalid tui export`)
   if (server !== undefined && tui !== undefined) {
     throw new TypeError(`Plugin ${spec} must default export either server() or tui(), not both`)
   }
-  if (kind === "server" && server === undefined) throw new TypeError(`Plugin ${spec} must default export an object with server()`)
-  if (kind === "tui" && tui === undefined) throw new TypeError(`Plugin ${spec} must default export an object with tui()`)
+  if (kind === "server" && server === undefined)
+    throw new TypeError(`Plugin ${spec} must default export an object with server()`)
+  if (kind === "tui" && tui === undefined)
+    throw new TypeError(`Plugin ${spec} must default export an object with tui()`)
   return value
 }
 

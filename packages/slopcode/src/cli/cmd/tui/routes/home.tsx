@@ -171,7 +171,15 @@ export function Home() {
         <Toast />
       </box>
       <TuiPluginRuntime.Slot name="home_footer">
-        <box paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2} flexDirection="row" flexShrink={0} gap={2}>
+        <box
+          paddingTop={1}
+          paddingBottom={1}
+          paddingLeft={2}
+          paddingRight={2}
+          flexDirection="row"
+          flexShrink={0}
+          gap={2}
+        >
           <text fg={theme.textMuted}>{directory()}</text>
           <Show when={workspace()}>
             <text fg={theme.textMuted}>workspace {workspace()}</text>
