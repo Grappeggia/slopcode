@@ -171,7 +171,7 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
               console.error("Failed to archive closed session tab", error)
             })
         }
-        const routeID = route.data.type === "home" ? DRAFT_TAB_ID : route.data.sessionID
+        const routeID = route.data.type === "session" ? route.data.sessionID : DRAFT_TAB_ID
         if (routeID !== id) return
         if (!next.active || next.active === DRAFT_TAB_ID) {
           route.navigate({

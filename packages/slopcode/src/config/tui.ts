@@ -10,13 +10,17 @@ import { Instance } from "@/project/instance"
 import { Flag } from "@/flag/flag"
 import { Log } from "@/util/log"
 import { Global } from "@/global"
+import { ConfigPlugin } from "./plugin"
+import { Filesystem } from "@/util/filesystem"
 
 export namespace TuiConfig {
   const log = Log.create({ service: "tui.config" })
 
   export const Info = TuiInfo
 
-  export type Info = z.output<typeof Info>
+  export type Info = z.output<typeof Info> & {
+    plugin_origins?: ConfigPlugin.Origin[]
+  }
 
   function mergeInfo(target: Info, source: Info): Info {
     return mergeDeep(target, source)
@@ -24,6 +28,26 @@ export namespace TuiConfig {
 
   function customPath() {
     return Flag.SLOPCODE_TUI_CONFIG
+  }
+
+  function scope(file: string): ConfigPlugin.Scope {
+    if (Filesystem.contains(Instance.directory, file)) return "local"
+    if (Instance.worktree !== "/" && Filesystem.contains(Instance.worktree, file)) return "local"
+    return "global"
+  }
+
+  async function mergeFile(result: Info, file: string) {
+    const next = await loadFile(file)
+    const merged = mergeInfo(result, next)
+    if (!next.plugin?.length) return merged
+
+    const plugins = ConfigPlugin.deduplicatePluginOrigins([
+      ...(result.plugin_origins ?? []),
+      ...next.plugin.map((spec) => ({ spec, scope: scope(file), source: file })),
+    ])
+    merged.plugin = plugins.map((item) => item.spec)
+    merged.plugin_origins = plugins
+    return merged
   }
 
   const state = Instance.state(async () => {
@@ -35,7 +59,6 @@ export namespace TuiConfig {
     const custom = customPath()
     const managed = Config.managedConfigDir()
     await migrateTuiConfig({ directories, custom, managed })
-    // Re-compute after migration since migrateTuiConfig may have created new tui.json files
     projectFiles = Flag.SLOPCODE_DISABLE_PROJECT_CONFIG
       ? []
       : await ConfigPaths.projectFiles("tui", Instance.directory, Instance.worktree)
@@ -43,32 +66,32 @@ export namespace TuiConfig {
     let result: Info = {}
 
     for (const file of ConfigPaths.fileInDirectory(legacyGlobalDir, "tui")) {
-      result = mergeInfo(result, await loadFile(file))
+      result = await mergeFile(result, file)
     }
 
     for (const file of ConfigPaths.fileInDirectory(Global.Path.config, "tui")) {
-      result = mergeInfo(result, await loadFile(file))
+      result = await mergeFile(result, file)
     }
 
     if (custom) {
-      result = mergeInfo(result, await loadFile(custom))
+      result = await mergeFile(result, custom)
       log.debug("loaded custom tui config", { path: custom })
     }
 
     for (const file of projectFiles) {
-      result = mergeInfo(result, await loadFile(file))
+      result = await mergeFile(result, file)
     }
 
     for (const dir of unique(directories)) {
       if (!ConfigPaths.isConfigDirectory(dir) && dir !== Flag.SLOPCODE_CONFIG_DIR) continue
       for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
-        result = mergeInfo(result, await loadFile(file))
+        result = await mergeFile(result, file)
       }
     }
 
     if (existsSync(managed)) {
       for (const file of ConfigPaths.fileInDirectory(managed, "tui")) {
-        result = mergeInfo(result, await loadFile(file))
+        result = await mergeFile(result, file)
       }
     }
 
@@ -81,6 +104,10 @@ export namespace TuiConfig {
 
   export async function get() {
     return state().then((x) => x.config)
+  }
+
+  export async function waitForDependencies() {
+    await Config.waitForDependencies()
   }
 
   async function loadFile(filepath: string): Promise<Info> {
@@ -96,8 +123,6 @@ export namespace TuiConfig {
     const data = await ConfigPaths.parseText(text, configFilepath, "empty")
     if (!data || typeof data !== "object" || Array.isArray(data)) return {}
 
-    // Flatten a nested "tui" key so users who wrote `{ "tui": { ... } }` inside tui.json
-    // (mirroring the old slopcode.json shape) still get their settings applied.
     const normalized = (() => {
       const copy = { ...(data as Record<string, unknown>) }
       if (!("tui" in copy)) return copy
@@ -119,6 +144,11 @@ export namespace TuiConfig {
       return {}
     }
 
-    return parsed.data
+    const out: Info = parsed.data
+    if (!out.plugin) return out
+    for (let i = 0; i < out.plugin.length; i++) {
+      out.plugin[i] = await ConfigPlugin.resolvePluginSpec(out.plugin[i], configFilepath)
+    }
+    return out
   }
 }

@@ -57,6 +57,7 @@ import * as TokenLimit from "./token-limit"
 
 export type PromptProps = {
   sessionID?: string
+  workspaceID?: string
   visible?: boolean
   disabled?: boolean
   historyMode?: boolean
@@ -66,7 +67,12 @@ export type PromptProps = {
   onFocus?: () => void
   ref?: (ref: PromptRef) => void
   hint?: JSX.Element
+  right?: JSX.Element
   showPlaceholder?: boolean
+  placeholders?: {
+    normal?: string[]
+    shell?: string[]
+  }
 }
 
 export type PromptRef = {
@@ -1053,7 +1059,7 @@ export function Prompt(props: PromptProps) {
             type: "session",
             sessionID,
             source: "switch",
-            workspaceID: route.data.workspaceID,
+            workspaceID: props.workspaceID ?? route.data.workspaceID,
           })
           return
         }
@@ -1061,7 +1067,7 @@ export function Prompt(props: PromptProps) {
           type: "session",
           sessionID,
           source: "new",
-          workspaceID: route.data.workspaceID,
+          workspaceID: props.workspaceID ?? route.data.workspaceID,
         })
       }, 50)
     input.clear()
@@ -1176,10 +1182,11 @@ export function Prompt(props: PromptProps) {
       return undefined
     }
     if (store.mode === "shell") {
-      const example = SHELL_PLACEHOLDERS[store.placeholder % SHELL_PLACEHOLDERS.length]
-      return `Run a command... "${example}"`
+      const list = props.placeholders?.shell?.length ? props.placeholders.shell : SHELL_PLACEHOLDERS
+      return `Run a command... "${list[store.placeholder % list.length]}"`
     }
-    return `Ask anything... "${PLACEHOLDERS[store.placeholder % PLACEHOLDERS.length]}"`
+    const list = props.placeholders?.normal?.length ? props.placeholders.normal : PLACEHOLDERS
+    return `Ask anything... "${list[store.placeholder % list.length]}"`
   })
   const dimensions = useTerminalDimensions()
   const compact = createMemo(() => dimensions().width < 100)
@@ -1659,6 +1666,7 @@ export function Prompt(props: PromptProps) {
               </box>
             </box>
           </Show>
+          {props.right}
           <box gap={chipGap()} flexDirection="row" flexShrink={0}>
             <Show when={waiting() || status().type !== "idle"}>
               {hint(

@@ -1,5 +1,6 @@
 import z from "zod"
 import { Config } from "./config"
+import { ConfigPlugin } from "./plugin"
 
 const KeybindOverride = z
   .object(
@@ -30,6 +31,8 @@ export const TuiInfo = z
     $schema: z.string().optional(),
     theme: z.string().optional(),
     keybinds: KeybindOverride.optional(),
+    plugin: ConfigPlugin.Spec.array().optional(),
+    plugin_enabled: z.record(z.string(), z.boolean()).optional(),
   })
   .extend(TuiOptions.shape)
   .strict()

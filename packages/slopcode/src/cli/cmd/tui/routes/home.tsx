@@ -19,6 +19,7 @@ import { useKV } from "../context/kv"
 import { useCommandDialog } from "../component/dialog-command"
 import { ShortcutHint } from "../ui/shortcut-hint"
 import { SessionStrip } from "./session/session-strip"
+import { TuiPluginRuntime } from "../plugin/runtime"
 
 let argsPromptSubmitted = false
 
@@ -132,54 +133,71 @@ export function Home() {
       <box flexGrow={1} alignItems="center" paddingLeft={2} paddingRight={2}>
         <box flexGrow={1} minHeight={0} />
         <box height={4} minHeight={0} flexShrink={1} />
-        <box flexShrink={0}>
-          <Logo />
-        </box>
+        <TuiPluginRuntime.Slot name="home_logo" mode="replace">
+          <box flexShrink={0}>
+            <Logo />
+          </box>
+        </TuiPluginRuntime.Slot>
         <box height={1} minHeight={0} flexShrink={1} />
-        <box width="100%" maxWidth={75} zIndex={1000} paddingTop={1} flexShrink={0}>
-          <Prompt
-            ref={(r) => {
-              prompt = r
-              promptRef.set(r)
-            }}
-            hint={Hint}
-            showHistoryHint={false}
-          />
-        </box>
-        <box height={4} minHeight={0} width="100%" maxWidth={75} alignItems="center" paddingTop={3} flexShrink={1}>
-          <Show when={showTips()}>
-            <Tips />
-          </Show>
-        </box>
+        <TuiPluginRuntime.Slot
+          name="home_prompt"
+          mode="replace"
+          workspace_id={workspace()}
+          ref={(r) => {
+            if (r) promptRef.set(r as PromptRef)
+          }}
+        >
+          <box width="100%" maxWidth={75} zIndex={1000} paddingTop={1} flexShrink={0}>
+            <Prompt
+              ref={(r) => {
+                prompt = r
+                promptRef.set(r)
+              }}
+              hint={Hint}
+              right={<TuiPluginRuntime.Slot name="home_prompt_right" workspace_id={workspace()} />}
+              workspaceID={workspace()}
+              showHistoryHint={false}
+            />
+          </box>
+        </TuiPluginRuntime.Slot>
+        <TuiPluginRuntime.Slot name="home_bottom">
+          <box height={4} minHeight={0} width="100%" maxWidth={75} alignItems="center" paddingTop={3} flexShrink={1}>
+            <Show when={showTips()}>
+              <Tips />
+            </Show>
+          </box>
+        </TuiPluginRuntime.Slot>
         <box flexGrow={1} minHeight={0} />
         <Toast />
       </box>
-      <box paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2} flexDirection="row" flexShrink={0} gap={2}>
-        <text fg={theme.textMuted}>{directory()}</text>
-        <Show when={workspace()}>
-          <text fg={theme.textMuted}>workspace {workspace()}</text>
-        </Show>
-        <box gap={1} flexDirection="row" flexShrink={0}>
-          <Show when={mcp()}>
-            <text fg={theme.text}>
-              <Switch>
-                <Match when={mcpError()}>
-                  <span style={{ fg: theme.error }}>⊙ </span>
-                </Match>
-                <Match when={true}>
-                  <span style={{ fg: connectedMcpCount() > 0 ? theme.success : theme.textMuted }}>⊙ </span>
-                </Match>
-              </Switch>
-              {connectedMcpCount()} MCP
-            </text>
-            <text fg={theme.textMuted}>/status</text>
+      <TuiPluginRuntime.Slot name="home_footer">
+        <box paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2} flexDirection="row" flexShrink={0} gap={2}>
+          <text fg={theme.textMuted}>{directory()}</text>
+          <Show when={workspace()}>
+            <text fg={theme.textMuted}>workspace {workspace()}</text>
           </Show>
+          <box gap={1} flexDirection="row" flexShrink={0}>
+            <Show when={mcp()}>
+              <text fg={theme.text}>
+                <Switch>
+                  <Match when={mcpError()}>
+                    <span style={{ fg: theme.error }}>⊙ </span>
+                  </Match>
+                  <Match when={true}>
+                    <span style={{ fg: connectedMcpCount() > 0 ? theme.success : theme.textMuted }}>⊙ </span>
+                  </Match>
+                </Switch>
+                {connectedMcpCount()} MCP
+              </text>
+              <text fg={theme.textMuted}>/status</text>
+            </Show>
+          </box>
+          <box flexGrow={1} />
+          <box flexShrink={0}>
+            <text fg={theme.textMuted}>{Installation.VERSION}</text>
+          </box>
         </box>
-        <box flexGrow={1} />
-        <box flexShrink={0}>
-          <text fg={theme.textMuted}>{Installation.VERSION}</text>
-        </box>
-      </box>
+      </TuiPluginRuntime.Slot>
     </>
   )
 }

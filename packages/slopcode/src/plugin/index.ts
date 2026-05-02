@@ -1,10 +1,9 @@
-import type { Hooks, PluginInput, Plugin as PluginInstance } from "@slopcode-ai/plugin"
+import type { Hooks, PluginInput, Plugin as PluginInstance, PluginModule } from "@slopcode-ai/plugin"
 import { Config } from "../config/config"
 import { Bus } from "../bus"
 import { Log } from "../util/log"
 import { createSlopcodeClient } from "@slopcode-ai/sdk"
 import { Server } from "../server/server"
-import { BunProc } from "../bun"
 import { Instance } from "../project/instance"
 import { Flag } from "../flag/flag"
 import { CodexAuthPlugin } from "./codex"
@@ -13,18 +12,69 @@ import { NamedError } from "@slopcode-ai/util/error"
 import { CopilotAuthPlugin } from "./copilot"
 import { GitlabAuthPlugin } from "./gitlab"
 import { registerAdaptor } from "../control-plane/adaptors"
+import { PluginLoader } from "./loader"
+import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
 
 export namespace Plugin {
   const log = Log.create({ service: "plugin" })
 
   const BUILTIN = ["slopcode-anthropic-auth@0.0.13"]
 
-  // Built-in plugins that are directly imported (not installed from npm)
   const INTERNAL_PLUGINS: PluginInstance[] = [
     CodexAuthPlugin,
     CopilotAuthPlugin,
     GitlabAuthPlugin as unknown as PluginInstance,
   ]
+
+  function message(error: unknown) {
+    if (error instanceof Error) return error.message
+    return String(error)
+  }
+
+  function publishPluginError(text: string) {
+    Bus.publish(Session.Event.Error, {
+      error: new NamedError.Unknown({ message: text }).toObject(),
+    })
+  }
+
+  function isServerPlugin(value: unknown): value is PluginInstance {
+    return typeof value === "function"
+  }
+
+  function getServerPlugin(value: unknown) {
+    if (isServerPlugin(value)) return value
+    if (!value || typeof value !== "object" || !("server" in value)) return
+    if (!isServerPlugin(value.server)) return
+    return value.server
+  }
+
+  function getLegacyPlugins(mod: Record<string, unknown>) {
+    const seen = new Set<unknown>()
+    const result: PluginInstance[] = []
+    for (const entry of Object.values(mod)) {
+      if (seen.has(entry)) continue
+      seen.add(entry)
+      const plugin = getServerPlugin(entry)
+      if (!plugin) throw new TypeError("Plugin export is not a function")
+      result.push(plugin)
+    }
+    return result
+  }
+
+  async function applyPlugin(load: PluginLoader.Loaded, input: PluginInput, hooks: Hooks[]) {
+    const plugin = readV1Plugin(load.mod, load.spec, "server", "detect")
+    if (plugin) {
+      await resolvePluginId(load.source, load.spec, load.target, readPluginId(plugin.id, load.spec), load.pkg)
+      if (typeof plugin.server !== "function") throw new TypeError(`Plugin ${load.spec} must export server()`)
+      hooks.push(await plugin.server(input, load.options))
+      return
+    }
+
+
+    for (const server of getLegacyPlugins(load.mod)) {
+      hooks.push(await server(input, load.options))
+    }
+  }
 
   const state = Instance.state(async () => {
     const client = createSlopcodeClient({
@@ -57,59 +107,59 @@ export namespace Plugin {
       if (init) hooks.push(init)
     }
 
-    let plugins = Flag.SLOPCODE_PURE ? [] : (config.plugin ?? [])
-    if (plugins.length) await Config.waitForDependencies()
-    if (!Flag.SLOPCODE_DISABLE_DEFAULT_PLUGINS && !Flag.SLOPCODE_PURE) {
-      plugins = [...BUILTIN, ...plugins]
-    }
+    const external = Flag.SLOPCODE_PURE ? [] : (config.plugin_origins ?? [])
     if (Flag.SLOPCODE_PURE && (config.plugin?.length || !Flag.SLOPCODE_DISABLE_DEFAULT_PLUGINS)) {
       log.info("skipping external plugins in pure mode", {
         count: (config.plugin?.length ?? 0) + (Flag.SLOPCODE_DISABLE_DEFAULT_PLUGINS ? 0 : BUILTIN.length),
       })
     }
 
-    for (let plugin of plugins) {
-      // ignore old codex plugin since it is supported first party now
-      if (plugin.includes("slopcode-openai-codex-auth") || plugin.includes("slopcode-copilot-auth")) continue
-      log.info("loading plugin", { path: plugin })
-      if (!plugin.startsWith("file://")) {
-        const lastAtIndex = plugin.lastIndexOf("@")
-        const pkg = lastAtIndex > 0 ? plugin.substring(0, lastAtIndex) : plugin
-        const version = lastAtIndex > 0 ? plugin.substring(lastAtIndex + 1) : "latest"
-        plugin = await BunProc.install(pkg, version).catch((err) => {
-          const cause = err instanceof Error ? err.cause : err
-          const detail = cause instanceof Error ? cause.message : String(cause ?? err)
-          log.error("failed to install plugin", { pkg, version, error: detail })
-          Bus.publish(Session.Event.Error, {
-            error: new NamedError.Unknown({
-              message: `Failed to install plugin ${pkg}@${version}: ${detail}`,
-            }).toObject(),
-          })
-          return ""
-        })
-        if (!plugin) continue
-      }
-      // Prevent duplicate initialization when plugins export the same function
-      // as both a named export and default export (e.g., `export const X` and `export default X`).
-      // Object.entries(mod) would return both entries pointing to the same function reference.
-      await import(plugin)
-        .then(async (mod) => {
-          const seen = new Set<PluginInstance>()
-          for (const [_name, fn] of Object.entries<PluginInstance>(mod)) {
-            if (seen.has(fn)) continue
-            seen.add(fn)
-            hooks.push(await fn(input))
+    const items = Flag.SLOPCODE_DISABLE_DEFAULT_PLUGINS || Flag.SLOPCODE_PURE
+      ? external
+      : [
+          ...BUILTIN.map((spec) => ({ spec, source: "", scope: "global" as const })),
+          ...external,
+        ]
+
+    if (items.length) await Config.waitForDependencies()
+
+    const loaded = await PluginLoader.loadExternal({
+      items,
+      kind: "server",
+      report: {
+        start(candidate) {
+          log.info("loading plugin", { path: candidate.plan.spec })
+        },
+        missing(candidate, _retry, text) {
+          log.warn("plugin has no server entrypoint", { path: candidate.plan.spec, message: text })
+        },
+        error(candidate, _retry, stage, error, resolved) {
+          const spec = candidate.plan.spec
+          const cause = error instanceof Error ? (error.cause ?? error) : error
+          const detail = message(cause)
+          if (stage === "install") {
+            const parsed = parsePluginSpecifier(spec)
+            log.error("failed to install plugin", { pkg: parsed.pkg, version: parsed.version, error: detail })
+            publishPluginError(`Failed to install plugin ${parsed.pkg}@${parsed.version}: ${detail}`)
+            return
           }
-        })
-        .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err)
-          log.error("failed to load plugin", { path: plugin, error: message })
-          Bus.publish(Session.Event.Error, {
-            error: new NamedError.Unknown({
-              message: `Failed to load plugin ${plugin}: ${message}`,
-            }).toObject(),
-          })
-        })
+          if (stage === "entry") {
+            log.error("failed to resolve plugin server entry", { path: spec, error: detail })
+            publishPluginError(`Failed to load plugin ${spec}: ${detail}`)
+            return
+          }
+          log.error("failed to load plugin", { path: spec, target: resolved?.entry, error: detail })
+          publishPluginError(`Failed to load plugin ${spec}: ${detail}`)
+        },
+      },
+    })
+
+    for (const load of loaded) {
+      await applyPlugin(load, input, hooks).catch((err) => {
+        const detail = message(err)
+        log.error("failed to load plugin", { path: load.spec, error: detail })
+        publishPluginError(`Failed to load plugin ${load.spec}: ${detail}`)
+      })
     }
 
     return {
@@ -118,18 +168,16 @@ export namespace Plugin {
     }
   })
 
+  type HookName = Exclude<keyof Required<Hooks>, "auth" | "event" | "tool" | "provider" | "config">
   export async function trigger<
-    Name extends Exclude<keyof Required<Hooks>, "auth" | "event" | "tool">,
-    Input = Parameters<Required<Hooks>[Name]>[0],
-    Output = Parameters<Required<Hooks>[Name]>[1],
+    Name extends HookName,
+    Input = Parameters<Extract<Required<Hooks>[Name], (...args: any[]) => unknown>>[0],
+    Output = Parameters<Extract<Required<Hooks>[Name], (...args: any[]) => unknown>>[1],
   >(name: Name, input: Input, output: Output): Promise<Output> {
     if (!name) return output
     for (const hook of await state().then((x) => x.hooks)) {
-      const fn = hook[name]
+      const fn = hook[name] as ((input: Input, output: Output) => Promise<void>) | undefined
       if (!fn) continue
-      // @ts-expect-error if you feel adventurous, please fix the typing, make sure to bump the try-counter if you
-      // give up.
-      // try-counter: 2
       await fn(input, output)
     }
     return output
@@ -143,15 +191,12 @@ export namespace Plugin {
     const hooks = await state().then((x) => x.hooks)
     const config = await Config.get()
     for (const hook of hooks) {
-      // @ts-expect-error this is because we haven't moved plugin to sdk v2
-      await hook.config?.(config)
+      await hook.config?.(config as never)
     }
     Bus.subscribeAll(async (input) => {
       const hooks = await state().then((x) => x.hooks)
       for (const hook of hooks) {
-        hook["event"]?.({
-          event: input,
-        })
+        hook.event?.({ event: input })
       }
     })
   }

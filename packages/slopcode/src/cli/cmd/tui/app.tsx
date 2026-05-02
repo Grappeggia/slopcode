@@ -1,5 +1,5 @@
 import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { createEffect, createSignal, ErrorBoundary, Match, on, onMount, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, ErrorBoundary, Match, on, onMount, Switch } from "solid-js"
 import { Clipboard } from "@tui/util/clipboard"
 import { Selection } from "@tui/util/selection"
 import { MouseButton, TextAttributes } from "@opentui/core"
@@ -24,7 +24,7 @@ import { DialogProvider as DialogProviderList } from "@tui/component/dialog-prov
 import { DialogSessionList } from "@tui/component/dialog-session-list"
 import { DialogWorkspaceList } from "@tui/component/dialog-workspace-list"
 import { DialogConsoleOrg } from "@tui/component/dialog-console-org"
-import { KeybindProvider } from "@tui/context/keybind"
+import { KeybindProvider, useKeybind } from "@tui/context/keybind"
 import { ThemeProvider, useTheme } from "@tui/context/theme"
 import { Home } from "@tui/routes/home"
 import { Session } from "@tui/routes/session"
@@ -41,12 +41,14 @@ import { Provider } from "@/provider/provider"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
 import { writeHeapSnapshot } from "v8"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
-import { TuiConfigProvider } from "./context/tui-config"
+import { TuiConfigProvider, useTuiConfig } from "./context/tui-config"
 import { TuiConfig } from "@/config/tui"
 import { Flag } from "@/flag/flag"
 import { Installation } from "@/installation"
 import { win32DisableProcessedInput, win32FlushInputBuffer, win32InstallCtrlCGuard } from "./win32"
 import { DRAFT_TAB_ID } from "./context/session-tabs-state"
+import { createTuiApi, type RouteMap } from "./plugin/api"
+import { TuiPluginRuntime } from "./plugin/runtime"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -153,6 +155,7 @@ export function tui(input: {
     win32DisableProcessedInput()
 
     const onExit = async () => {
+      await TuiPluginRuntime.dispose().catch((error) => console.error("Failed to dispose TUI plugins", error))
       unguard?.()
       await input.onExit?.()
       resolve()
@@ -218,6 +221,7 @@ export function tui(input: {
 }
 
 function App() {
+  const tuiConfig = useTuiConfig()
   const route = useRoute()
   const dimensions = useTerminalDimensions()
   const renderer = useRenderer()
@@ -226,14 +230,46 @@ function App() {
   const local = useLocal()
   const kv = useKV()
   const command = useCommandDialog()
+  const keybind = useKeybind()
   const sdk = useSDK()
   const toast = useToast()
-  const { theme, mode, setMode } = useTheme()
+  const themeState = useTheme()
+  const { theme, mode, setMode } = themeState
   const sync = useSync()
   const exit = useExit()
   const promptRef = usePromptRef()
   const tabs = useSessionTabs()
   const tabState = useTabState()
+  const routes: RouteMap = new Map()
+  const [routeRev, setRouteRev] = createSignal(0)
+  const routeView = (name: string) => {
+    routeRev()
+    return routes.get(name)?.at(-1)?.render
+  }
+
+  const api = createTuiApi({
+    command,
+    tuiConfig,
+    dialog,
+    keybind,
+    kv,
+    route,
+    routes,
+    bump: () => setRouteRev((value) => value + 1),
+    event: sdk.event,
+    sdk,
+    sync,
+    theme: themeState,
+    toast,
+    renderer,
+  })
+  const [pluginsReady, setPluginsReady] = createSignal(false)
+  TuiPluginRuntime.init({
+    api,
+    config: tuiConfig,
+  })
+    .catch((error) => console.error("Failed to load TUI plugins", error))
+    .finally(() => setPluginsReady(true))
 
   useKeyboard((evt) => {
     if (!Flag.SLOPCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
@@ -783,6 +819,20 @@ function App() {
     })
   })
 
+  const plugin = createMemo(() => {
+    if (!pluginsReady()) return
+    if (route.data.type !== "plugin") return
+    const render = routeView(route.data.id)
+    if (!render) {
+      return (
+        <box flexGrow={1} alignItems="center" justifyContent="center" padding={2}>
+          <text fg={theme.textMuted}>Plugin route {route.data.id} is unavailable.</text>
+        </box>
+      )
+    }
+    return render({ params: route.data.data })
+  })
+
   return (
     <box
       width={dimensions().width}
@@ -806,6 +856,8 @@ function App() {
           <Session />
         </Match>
       </Switch>
+      {plugin()}
+      <TuiPluginRuntime.Slot name="app" />
     </box>
   )
 }

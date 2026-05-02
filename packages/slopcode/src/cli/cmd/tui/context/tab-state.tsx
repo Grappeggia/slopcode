@@ -36,8 +36,8 @@ export const { use: useTabState, provider: TabStateProvider } = createSimpleCont
     })
 
     const currentID = createMemo(() => {
-      if (route.data.type === "home") return DRAFT_TAB_ID
-      return route.data.sessionID
+      if (route.data.type === "session") return route.data.sessionID
+      return DRAFT_TAB_ID
     })
 
     createEffect(() => {
