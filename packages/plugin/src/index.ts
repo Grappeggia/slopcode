@@ -9,13 +9,37 @@ import type {
   Message,
   Part,
   Auth,
-  Config,
+  Config as SDKConfig,
 } from "@slopcode-ai/sdk"
 
 import type { BunShell } from "./shell"
 import { type ToolDefinition } from "./tool"
 
 export * from "./tool"
+
+export type PluginOptions = Record<string, unknown>
+
+export type Config = Omit<SDKConfig, "plugin"> & {
+  plugin?: Array<string | [string, PluginOptions]>
+}
+
+export type PluginModule =
+  | {
+      id?: string
+      server: Plugin
+      tui?: never
+    }
+  | {
+      id?: string
+      tui: unknown
+      server?: never
+    }
+
+type Rule = {
+  key: string
+  op: "eq" | "neq"
+  value: string
+}
 
 export type ProviderContext = {
   source: "env" | "config" | "custom" | "api"
@@ -52,7 +76,7 @@ export type PluginInput = {
   $: BunShell
 }
 
-export type Plugin = (input: PluginInput) => Promise<Hooks>
+export type Plugin = (input: PluginInput, options?: PluginOptions) => Promise<Hooks>
 
 export type AuthHook = {
   provider: string
@@ -68,7 +92,9 @@ export type AuthHook = {
               message: string
               placeholder?: string
               validate?: (value: string) => string | undefined
+              /** @deprecated Use `when` instead */
               condition?: (inputs: Record<string, string>) => boolean
+              when?: Rule
             }
           | {
               type: "select"
@@ -79,7 +105,9 @@ export type AuthHook = {
                 value: string
                 hint?: string
               }>
+              /** @deprecated Use `when` instead */
               condition?: (inputs: Record<string, string>) => boolean
+              when?: Rule
             }
         >
         authorize(inputs?: Record<string, string>): Promise<AuthOuathResult>
@@ -94,7 +122,9 @@ export type AuthHook = {
               message: string
               placeholder?: string
               validate?: (value: string) => string | undefined
+              /** @deprecated Use `when` instead */
               condition?: (inputs: Record<string, string>) => boolean
+              when?: Rule
             }
           | {
               type: "select"
@@ -105,7 +135,9 @@ export type AuthHook = {
                 value: string
                 hint?: string
               }>
+              /** @deprecated Use `when` instead */
               condition?: (inputs: Record<string, string>) => boolean
+              when?: Rule
             }
         >
         authorize?(inputs?: Record<string, string>): Promise<
@@ -165,6 +197,15 @@ export type AuthOuathResult = { url: string; instructions: string } & (
     }
 )
 
+export type ProviderHookContext = {
+  auth?: Auth
+}
+
+export type ProviderHook = {
+  id: string
+  models?: (provider: unknown, ctx: ProviderHookContext) => Promise<Record<string, unknown>>
+}
+
 export interface Hooks {
   event?: (input: { event: Event }) => Promise<void>
   config?: (input: Config) => Promise<void>
@@ -172,6 +213,7 @@ export interface Hooks {
     [key: string]: ToolDefinition
   }
   auth?: AuthHook
+  provider?: ProviderHook
   /**
    * Called when a new message is received
    */

@@ -58,11 +58,12 @@ export function createPlugTask(input: PlugInput) {
         return false
       }
       inspect.stop("No plugin targets found", 1)
-      log.error(`"${mod}" does not expose a server plugin entrypoint in package.json`)
-      log.info('Expected one of: exports["./server"] or package.json main.')
+      log.error(`"${mod}" does not expose plugin entrypoints or themes in package.json`)
+      log.info('Expected one of: exports["./server"], exports["./tui"], package.json main, sc-themes, or oc-themes.')
       return false
     }
-    inspect.stop("Detected server target")
+    const kinds = manifest.targets.map((item) => item.kind).join(" + ")
+    inspect.stop(`Detected ${kinds} target${manifest.targets.length === 1 ? "" : "s"}`)
 
     const patch = spinner()
     patch.start("Updating plugin config...")
@@ -91,14 +92,14 @@ export function createPlugTask(input: PlugInput) {
 
     for (const item of out.items) {
       if (item.mode === "noop") {
-        log.info(`Already configured in ${item.file}`)
+        log.info(`Already configured ${item.kind} plugin in ${item.file}`)
         continue
       }
       if (item.mode === "replace") {
-        log.info(`Replaced in ${item.file}`)
+        log.info(`Replaced ${item.kind} plugin in ${item.file}`)
         continue
       }
-      log.info(`Added to ${item.file}`)
+      log.info(`Added ${item.kind} plugin to ${item.file}`)
     }
 
     log.success(`Installed ${mod}`)

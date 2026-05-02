@@ -1,5 +1,6 @@
 import { test, expect, describe, mock, afterEach } from "bun:test"
 import { Config } from "../../src/config/config"
+import { ConfigPlugin } from "../../src/config/plugin"
 import { Instance } from "../../src/project/instance"
 import { Auth } from "../../src/auth"
 import { AccountStateTable, AccountTable } from "../../src/account/account.sql"
@@ -1918,7 +1919,7 @@ describe("deduplicatePlugins", () => {
 
         const myPlugins = plugins.filter((p) => Config.getPluginName(p) === "my-plugin")
         expect(myPlugins.length).toBe(1)
-        expect(myPlugins[0].startsWith("file://")).toBe(true)
+        expect(ConfigPlugin.pluginSpecifier(myPlugins[0]!).startsWith("file://")).toBe(true)
       },
     })
   })

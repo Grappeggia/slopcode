@@ -380,9 +380,14 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         setStore("mode", mode)
         kv.set("theme_mode", mode)
       },
+      has(theme: string) {
+        return store.themes[theme] !== undefined
+      },
       set(theme: string) {
+        if (store.themes[theme] === undefined) return false
         setStore("active", theme)
         kv.set("theme", theme)
+        return true
       },
       get ready() {
         return store.ready

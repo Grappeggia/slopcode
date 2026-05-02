@@ -1,7 +1,7 @@
 import { Log } from "../util/log"
 import path from "path"
 import { pathToFileURL, fileURLToPath } from "url"
-import { createRequire } from "module"
+
 import os from "os"
 import z from "zod"
 import { ModelsDev } from "../provider/models"
@@ -36,6 +36,7 @@ import { iife } from "@/util/iife"
 import { Account } from "@/account"
 import { ConfigPaths } from "./paths"
 import { Filesystem } from "@/util/filesystem"
+import { ConfigPlugin } from "./plugin"
 
 export namespace Config {
   const ModelId = z.string().meta({ $ref: "https://models.dev/model-schema.json#/$defs/Model" })
@@ -62,11 +63,31 @@ export namespace Config {
 
   const managedDir = managedConfigDir()
 
+  function scope(source: string): ConfigPlugin.Scope {
+    if (!source) return "local"
+    if (/^[a-z]+:\/\//i.test(source) && !source.startsWith("file://")) return "global"
+    const file = source.startsWith("file://") ? fileURLToPath(source) : source
+    if (Filesystem.contains(Instance.directory, file)) return "local"
+    if (Instance.worktree !== "/" && Filesystem.contains(Instance.worktree, file)) return "local"
+    return "global"
+  }
+
+  function origins(config: Info) {
+    if (config.plugin_origins) return config.plugin_origins
+    return (config.plugin ?? []).map((spec) => ({ spec, source: "", scope: "local" as const }))
+  }
+
+  function syncPlugins(config: Info, list: ConfigPlugin.Origin[]) {
+    const plugins = ConfigPlugin.deduplicatePluginOrigins(list)
+    config.plugin_origins = plugins
+    config.plugin = plugins.map((plugin) => plugin.spec)
+  }
+
   // Custom merge function that concatenates array fields instead of replacing them
   function mergeConfigConcatArrays(target: Info, source: Info): Info {
     const merged = mergeDeep(target, source)
-    if (target.plugin && source.plugin) {
-      merged.plugin = Array.from(new Set([...target.plugin, ...source.plugin]))
+    if (target.plugin || source.plugin || target.plugin_origins || source.plugin_origins) {
+      syncPlugins(merged, [...origins(target), ...origins(source)])
     }
     if (target.instructions && source.instructions) {
       merged.instructions = Array.from(new Set([...target.instructions, ...source.instructions]))
@@ -182,7 +203,7 @@ export namespace Config {
       result.command = mergeDeep(result.command ?? {}, await loadCommand(dir))
       result.agent = mergeDeep(result.agent, await loadAgent(dir))
       result.agent = mergeDeep(result.agent, await loadMode(dir))
-      result.plugin.push(...(await loadPlugin(dir)))
+      syncPlugins(result, [...origins(result), ...(await loadPlugin(dir))])
     }
 
     // Inline config content overrides all non-managed config sources.
@@ -263,7 +284,7 @@ export namespace Config {
     result.shell = {
       timeout_ms: result.shell?.timeout_ms ?? 5 * 60 * 1000,
     }
-    result.plugin = deduplicatePlugins(result.plugin ?? [])
+    syncPlugins(result, origins(result))
 
     return {
       config: result,
@@ -492,8 +513,8 @@ export namespace Config {
     return result
   }
 
-  async function loadPlugin(dir: string) {
-    const plugins: string[] = []
+  async function loadPlugin(dir: string): Promise<ConfigPlugin.Origin[]> {
+    const plugins: ConfigPlugin.Origin[] = []
 
     for (const item of await Glob.scan("{plugin,plugins}/*.{ts,js}", {
       cwd: dir,
@@ -501,7 +522,11 @@ export namespace Config {
       dot: true,
       symlink: true,
     })) {
-      plugins.push(pathToFileURL(item).href)
+      plugins.push({
+        spec: pathToFileURL(item).href,
+        scope: scope(dir),
+        source: path.join(dir, "slopcode.json"),
+      })
     }
     return plugins
   }
@@ -516,15 +541,16 @@ export namespace Config {
    * getPluginName("oh-my-slopcode@2.4.3") // "oh-my-slopcode"
    * getPluginName("@scope/pkg@1.0.0") // "@scope/pkg"
    */
-  export function getPluginName(plugin: string): string {
-    if (plugin.startsWith("file://")) {
-      return path.parse(new URL(plugin).pathname).name
+  export function getPluginName(plugin: ConfigPlugin.Spec): string {
+    const spec = ConfigPlugin.pluginSpecifier(plugin)
+    if (spec.startsWith("file://")) {
+      return path.parse(new URL(spec).pathname).name
     }
-    const lastAt = plugin.lastIndexOf("@")
+    const lastAt = spec.lastIndexOf("@")
     if (lastAt > 0) {
-      return plugin.substring(0, lastAt)
+      return spec.substring(0, lastAt)
     }
-    return plugin
+    return spec
   }
 
   /**
@@ -538,14 +564,9 @@ export namespace Config {
    * Since plugins are added in low-to-high priority order,
    * we reverse, deduplicate (keeping first occurrence), then restore order.
    */
-  export function deduplicatePlugins(plugins: string[]): string[] {
-    // seenNames: canonical plugin names for duplicate detection
-    // e.g., "oh-my-slopcode", "@scope/pkg"
+  export function deduplicatePlugins(plugins: ConfigPlugin.Spec[]): ConfigPlugin.Spec[] {
     const seenNames = new Set<string>()
-
-    // uniqueSpecifiers: full plugin specifiers to return
-    // e.g., "oh-my-slopcode@2.4.3", "file:///path/to/plugin.js"
-    const uniqueSpecifiers: string[] = []
+    const uniqueSpecifiers: ConfigPlugin.Spec[] = []
 
     for (const specifier of plugins.toReversed()) {
       const name = getPluginName(specifier)
@@ -867,6 +888,7 @@ export namespace Config {
       model_cycle_favorite: z.string().optional().default("none").describe("Next favorite model"),
       model_cycle_favorite_reverse: z.string().optional().default("none").describe("Previous favorite model"),
       command_list: z.string().optional().default("ctrl+p").describe("List available commands"),
+      plugin_manager: z.string().optional().default("none").describe("Open plugin manager dialog"),
       agent_list: z.string().optional().default("<leader>a").describe("List agents"),
       agent_cycle: z.string().optional().default("tab").describe("Next agent"),
       agent_cycle_reverse: z.string().optional().default("none").describe("Previous agent"),
@@ -1124,7 +1146,7 @@ export namespace Config {
           ignore: z.array(z.string()).optional(),
         })
         .optional(),
-      plugin: z.string().array().optional(),
+      plugin: ConfigPlugin.Spec.array().optional(),
       snapshot: z.boolean().optional(),
       share: z
         .enum(["manual", "auto", "disabled"])
@@ -1364,7 +1386,9 @@ export namespace Config {
       ref: "Config",
     })
 
-  export type Info = z.output<typeof Info>
+  export type Info = z.output<typeof Info> & {
+    plugin_origins?: ConfigPlugin.Origin[]
+  }
 
   export const global = lazy(async () => {
     const legacyDir = path.join(path.dirname(Global.Path.config), product.legacy_id)
@@ -1376,7 +1400,7 @@ export namespace Config {
       path.join(Global.Path.config, "config.json"),
       ...ConfigPaths.fileInDirectory(Global.Path.config, "slopcode"),
     ]) {
-      result = mergeDeep(result, await loadFile(file))
+      result = mergeConfigConcatArrays(result, await loadFile(file))
     }
 
     for (const toml of [path.join(legacyDir, "config"), path.join(Global.Path.config, "config")]) {
@@ -1390,7 +1414,7 @@ export namespace Config {
           const { provider, model, ...rest } = mod.default
           if (provider && model) result.model = `${provider}/${model}`
           result["$schema"] = product.config.schema
-          result = mergeDeep(result, rest)
+          result = mergeConfigConcatArrays(result, rest as Info)
           await Filesystem.writeJson(path.join(Global.Path.config, "config.json"), result)
           await fs.unlink(toml)
         })
@@ -1441,23 +1465,14 @@ export namespace Config {
         )
         await Bun.write(options.path, updated).catch(() => {})
       }
-      const data = parsed.data
-      if (data.plugin && isFile) {
-        for (let i = 0; i < data.plugin.length; i++) {
-          const plugin = data.plugin[i]
-          try {
-            data.plugin[i] = import.meta.resolve!(plugin, options.path)
-          } catch (e) {
-            try {
-              // import.meta.resolve sometimes fails with newly created node_modules
-              const require = createRequire(options.path)
-              const resolvedPath = require.resolve(plugin)
-              data.plugin[i] = pathToFileURL(resolvedPath).href
-            } catch {
-              // Ignore, plugin might be a generic string identifier like "mcp-server"
-            }
+      const data: Info = parsed.data
+      if (data.plugin) {
+        if (isFile) {
+          for (let i = 0; i < data.plugin.length; i++) {
+            data.plugin[i] = await ConfigPlugin.resolvePluginSpec(data.plugin[i], options.path)
           }
         }
+        data.plugin_origins = data.plugin.map((spec) => ({ spec, source, scope: scope(source) }))
       }
       return data
     }

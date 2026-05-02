@@ -78,6 +78,7 @@ import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import { Clipboard } from "../../util/clipboard"
 import { Toast, useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv.tsx"
+import { TuiPluginRuntime } from "../../plugin/runtime"
 import { Editor } from "../../util/editor"
 import stripAnsi from "strip-ansi"
 import { Footer } from "./footer.tsx"
@@ -2070,29 +2071,43 @@ export function Session() {
                         <QuestionPrompt request={questions()[0]} />
                       </Show>
                       <PromptQueuePanel sessionID={route.sessionID} />
-                      <Prompt
+                      <TuiPluginRuntime.Slot
+                        name="session_prompt"
+                        mode="replace"
+                        session_id={route.sessionID}
                         visible={!session()?.parentID && permissions().length === 0 && questions().length === 0}
-                        historyMode={history()}
-                        historyTarget={target()}
-                        onFocus={() => {
-                          setHistoryPart(undefined)
-                          setHistoryPrompt(undefined)
-                          setTarget("prompt")
-                        }}
-                        ref={(r) => {
-                          prompt = r
-                          promptRef.set(r)
-                          // Apply initial prompt when prompt component mounts (e.g., from fork)
-                          if (route.initialPrompt) {
-                            r.set(route.initialPrompt)
-                          }
-                        }}
                         disabled={permissions().length > 0 || questions().length > 0}
-                        onSubmit={() => {
-                          toBottom()
+                        on_submit={() => toBottom()}
+                        ref={(r) => {
+                          if (r) promptRef.set(r as PromptRef)
                         }}
-                        sessionID={route.sessionID}
-                      />
+                      >
+                        <Prompt
+                          visible={!session()?.parentID && permissions().length === 0 && questions().length === 0}
+                          historyMode={history()}
+                          historyTarget={target()}
+                          onFocus={() => {
+                            setHistoryPart(undefined)
+                            setHistoryPrompt(undefined)
+                            setTarget("prompt")
+                          }}
+                          ref={(r) => {
+                            prompt = r
+                            promptRef.set(r)
+                            // Apply initial prompt when prompt component mounts (e.g., from fork)
+                            if (route.initialPrompt) {
+                              r.set(route.initialPrompt)
+                            }
+                          }}
+                          disabled={permissions().length > 0 || questions().length > 0}
+                          onSubmit={() => {
+                            toBottom()
+                          }}
+                          right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
+                          workspaceID={route.workspaceID}
+                          sessionID={route.sessionID}
+                        />
+                      </TuiPluginRuntime.Slot>
                     </box>
                   </Show>
                   <Toast />
