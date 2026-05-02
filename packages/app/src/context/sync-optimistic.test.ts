@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Message, Part } from "@slopcode-ai/sdk/v2/client"
-import { applyOptimisticAdd, applyOptimisticRemove } from "./sync"
+import { applyOptimisticAdd, applyOptimisticRemove } from "./sync-optimistic"
 
 const userMessage = (id: string, sessionID: string): Message => ({
   id,

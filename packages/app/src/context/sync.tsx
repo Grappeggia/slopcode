@@ -8,11 +8,10 @@ import { diffBatches, diffComplete as diffReady, mergeDiffs } from "./session-di
 import { messageBatches, messagePartsComplete } from "./session-message"
 import { useSDK } from "./sdk"
 import type { Message, Part } from "@slopcode-ai/sdk/v2/client"
+import { setOptimisticAdd, setOptimisticRemove, sortParts } from "./sync-optimistic"
 import type { SessionHistory } from "./global-sync/types"
 
-function sortParts(parts: Part[]) {
-  return parts.filter((part) => !!part?.id).sort((a, b) => cmp(a.id, b.id))
-}
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
 function runInflight(map: Map<string, Promise<void>>, key: string, task: () => Promise<void>) {
   const pending = map.get(key)
@@ -38,73 +37,6 @@ const nextFrame = () =>
 const afterPaint = async () => {
   await nextFrame()
   await nextFrame()
-}
-
-const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
-
-type OptimisticStore = {
-  message: Record<string, Message[] | undefined>
-  part: Record<string, Part[] | undefined>
-}
-
-type OptimisticAddInput = {
-  sessionID: string
-  message: Message
-  parts: Part[]
-}
-
-type OptimisticRemoveInput = {
-  sessionID: string
-  messageID: string
-}
-
-export function applyOptimisticAdd(draft: OptimisticStore, input: OptimisticAddInput) {
-  const messages = draft.message[input.sessionID]
-  if (!messages) {
-    draft.message[input.sessionID] = [input.message]
-  }
-  if (messages) {
-    const result = Binary.search(messages, input.message.id, (m) => m.id)
-    messages.splice(result.index, 0, input.message)
-  }
-  draft.part[input.message.id] = sortParts(input.parts)
-}
-
-export function applyOptimisticRemove(draft: OptimisticStore, input: OptimisticRemoveInput) {
-  const messages = draft.message[input.sessionID]
-  if (messages) {
-    const result = Binary.search(messages, input.messageID, (m) => m.id)
-    if (result.found) messages.splice(result.index, 1)
-  }
-  delete draft.part[input.messageID]
-}
-
-function setOptimisticAdd(setStore: (...args: unknown[]) => void, input: OptimisticAddInput) {
-  setStore("message", input.sessionID, (messages: Message[] | undefined) => {
-    if (!messages) return [input.message]
-    const result = Binary.search(messages, input.message.id, (m) => m.id)
-    const next = [...messages]
-    next.splice(result.index, 0, input.message)
-    return next
-  })
-  setStore("part", input.message.id, sortParts(input.parts))
-}
-
-function setOptimisticRemove(setStore: (...args: unknown[]) => void, input: OptimisticRemoveInput) {
-  setStore("message", input.sessionID, (messages: Message[] | undefined) => {
-    if (!messages) return messages
-    const result = Binary.search(messages, input.messageID, (m) => m.id)
-    if (!result.found) return messages
-    const next = [...messages]
-    next.splice(result.index, 1)
-    return next
-  })
-  setStore("part", (part: Record<string, Part[] | undefined>) => {
-    if (!(input.messageID in part)) return part
-    const next = { ...part }
-    delete next[input.messageID]
-    return next
-  })
 }
 
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
