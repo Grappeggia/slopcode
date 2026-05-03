@@ -27,6 +27,9 @@ export const OAUTH_ALLOWED_MODELS = new Set([
   "gpt-5.5-pro",
 ])
 
+const CODEX_MODEL_LIMIT = { context: 400_000, input: 272_000, output: 128_000 }
+const CODEX_LIMIT_MODELS = new Set(["gpt-5.5", "gpt-5.5-pro"])
+
 interface PkceCodes {
   verifier: string
   challenge: string
@@ -375,6 +378,12 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
           if (modelId.includes("codex")) continue
           if (OAUTH_ALLOWED_MODELS.has(modelId)) continue
           delete provider.models[modelId]
+        }
+
+        for (const id of CODEX_LIMIT_MODELS) {
+          const model = provider.models[id]
+          if (!model) continue
+          model.limit = { ...CODEX_MODEL_LIMIT }
         }
 
         if (!provider.models["gpt-5.3-codex"]) {

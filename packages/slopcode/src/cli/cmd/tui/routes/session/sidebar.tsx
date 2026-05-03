@@ -341,9 +341,10 @@ export function Sidebar(props: {
     const total =
       last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
     const model = sync.data.provider.find((x) => x.id === last.providerID)?.models[last.modelID]
+    const limit = model?.limit.input ?? model?.limit.context
     return {
       tokens: total.toLocaleString(),
-      percentage: model?.limit.context ? Math.round((total / model.limit.context) * 100) : null,
+      percentage: limit ? Math.round((total / limit) * 100) : null,
     }
   })
 

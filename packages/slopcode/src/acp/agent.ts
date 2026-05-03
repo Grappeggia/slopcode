@@ -68,7 +68,7 @@ export namespace ACP {
 
     const provider = providers.find((p) => p.id === providerID)
     const model = provider?.models[modelID]
-    return model?.limit.context ?? null
+    return model ? (model.limit.input ?? model.limit.context) : null
   }
 
   async function sendUsageUpdate(
