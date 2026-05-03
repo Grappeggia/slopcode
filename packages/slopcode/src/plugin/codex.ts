@@ -30,6 +30,11 @@ export const OAUTH_ALLOWED_MODELS = new Set([
 const CODEX_MODEL_LIMIT = { context: 400_000, input: 272_000, output: 128_000 }
 const CODEX_LIMIT_MODELS = new Set(["gpt-5.5", "gpt-5.5-pro"])
 
+export function getCodexSessionID(sessionID: string, version: number) {
+  if (version === 0) return sessionID
+  return `${sessionID}-compact-${version}`
+}
+
 interface PkceCodes {
   verifier: string
   challenge: string
@@ -366,6 +371,9 @@ function waitForOAuthCallback(pkce: PkceCodes, state: string): Promise<TokenResp
 }
 
 export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
+  const sessions = new Map<string, number>()
+  const version = (sessionID: string) => sessions.get(sessionID) ?? 0
+
   return {
     auth: {
       provider: "openai",
@@ -629,11 +637,24 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
         },
       ],
     },
+    event: async (input) => {
+      if (input.event.type !== "session.compacted") return
+      const sessionID = input.event.properties.sessionID
+      sessions.set(sessionID, version(sessionID) + 1)
+    },
+    "chat.params": async (input, output) => {
+      if (input.model.providerID !== "openai") return
+      const auth = await Auth.get("openai")
+      if (auth?.type !== "oauth") return
+      output.options.promptCacheKey = getCodexSessionID(input.sessionID, version(input.sessionID))
+    },
     "chat.headers": async (input, output) => {
       if (input.model.providerID !== "openai") return
       output.headers.originator = "slopcode"
       output.headers["User-Agent"] = `slopcode/${Installation.VERSION} (${os.platform()} ${os.release()}; ${os.arch()})`
-      output.headers.session_id = input.sessionID
+      const auth = await Auth.get("openai")
+      output.headers.session_id =
+        auth?.type === "oauth" ? getCodexSessionID(input.sessionID, version(input.sessionID)) : input.sessionID
     },
   }
 }
