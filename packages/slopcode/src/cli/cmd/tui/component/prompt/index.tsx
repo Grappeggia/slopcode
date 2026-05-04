@@ -30,7 +30,7 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { createPromptFilePart, promptFileVirtualText } from "./file-part"
-import { ghostCursor, ghostExtraRows, ghostLayout, ghostVisible, ghostRemainder } from "./ghost.ts"
+import { ghostAcceptWord, ghostCursor, ghostExtraRows, ghostLayout, ghostVisible, ghostRemainder } from "./ghost.ts"
 import { usePromptStash } from "./stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
@@ -712,9 +712,11 @@ export function Prompt(props: PromptProps) {
   }
 
   function acceptGhost() {
-    if (!store.ghost) return false
-    input.insertText(store.ghost)
-    clearGhost()
+    const next = ghostAcceptWord(store.ghost)
+    if (!next) return false
+    input.insertText(next.accept)
+    if (next.remainder) setStore("ghost", next.remainder)
+    else clearGhost()
     return true
   }
 

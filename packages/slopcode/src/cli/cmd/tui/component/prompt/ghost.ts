@@ -83,6 +83,22 @@ export function ghostRemainder(input: string, suggestion: string) {
   return suggestion.slice(input.length)
 }
 
+export function ghostAcceptWord(ghost: string) {
+  if (!ghost) return
+  const match = /^\s*\S+/.exec(ghost)
+  if (!match) {
+    return {
+      accept: ghost,
+      remainder: "",
+    }
+  }
+  const accept = match[0]
+  return {
+    accept,
+    remainder: ghost.slice(accept.length),
+  }
+}
+
 export function ghostLayout(input: { ghost: string; row: number; col: number; width: number; rows: number }) {
   if (!input.ghost) return []
   if (input.width <= 0 || input.rows <= 0) return []

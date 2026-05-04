@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  ghostAcceptWord,
   ghostCursor,
   ghostExtraRows,
   ghostLayout,
@@ -128,6 +129,34 @@ describe("prompt ghost", () => {
 
   test("returns undefined for empty input", () => {
     expect(ghostRemainder("", "hello")).toBeUndefined()
+  })
+
+  test("accepts one ghost word at a time", () => {
+    expect(ghostAcceptWord("tests for route")).toEqual({
+      accept: "tests",
+      remainder: " for route",
+    })
+  })
+
+  test("keeps leading whitespace with the accepted ghost word", () => {
+    expect(ghostAcceptWord(" tests for route")).toEqual({
+      accept: " tests",
+      remainder: " for route",
+    })
+  })
+
+  test("accepts remaining ghost when only one word is left", () => {
+    expect(ghostAcceptWord(" route")).toEqual({
+      accept: " route",
+      remainder: "",
+    })
+  })
+
+  test("accepts whitespace-only ghost as the final remainder", () => {
+    expect(ghostAcceptWord("   ")).toEqual({
+      accept: "   ",
+      remainder: "",
+    })
   })
 
   test("wraps the first ghost row to remaining width", () => {
