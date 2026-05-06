@@ -400,14 +400,11 @@ function pathContainsLength(parent: string, child: string) {
 
 function openEditorSocket(connection: EditorConnection, WebSocketImpl: typeof WebSocket) {
   if (!connection.authToken) return new WebSocketImpl(connection.url)
-  return new WebSocketImpl(
-    connection.url,
-    {
-      headers: {
-        "x-claude-code-ide-authorization": connection.authToken,
-      },
-    } as any,
-  )
+  return new WebSocketImpl(connection.url, {
+    headers: {
+      "x-claude-code-ide-authorization": connection.authToken,
+    },
+  } as any)
 }
 
 function parseMessage(value: unknown) {

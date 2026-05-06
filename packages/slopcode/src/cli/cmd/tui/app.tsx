@@ -370,7 +370,9 @@ function App() {
   createEffect(() => {
     // When using -c, session list is loaded in blocking phase, so we can navigate at "partial"
     if (continued || sync.status === "loading" || !args.continue) return
-    const match = sync.data.session.toSorted((a, b) => b.time.updated - a.time.updated).find((x) => x.parentID === undefined)
+    const match = sync.data.session
+      .toSorted((a, b) => b.time.updated - a.time.updated)
+      .find((x) => x.parentID === undefined)
     if (match) {
       continued = true
       if (args.fork) {

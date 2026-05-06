@@ -26,5 +26,12 @@ export function DialogVariant() {
     })),
   ])
 
-  return <DialogSelect<string> options={options()} title="Select variant" current={local.model.variant.selected()} flat={true} />
+  return (
+    <DialogSelect<string>
+      options={options()}
+      title="Select variant"
+      current={local.model.variant.selected()}
+      flat={true}
+    />
+  )
 }

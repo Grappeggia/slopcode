@@ -589,7 +589,9 @@ export namespace Session {
     const conditions = [eq(SessionTable.project_id, project.id)]
 
     if (input?.workspaceID !== undefined) {
-      conditions.push(input.workspaceID ? eq(SessionTable.workspace_id, input.workspaceID) : isNull(SessionTable.workspace_id))
+      conditions.push(
+        input.workspaceID ? eq(SessionTable.workspace_id, input.workspaceID) : isNull(SessionTable.workspace_id),
+      )
     }
     if (input?.path !== undefined) {
       if (input.path) {

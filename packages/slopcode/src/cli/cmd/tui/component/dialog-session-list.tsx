@@ -28,7 +28,9 @@ export function DialogSessionList(props: { workspaceID?: string | null }) {
   )
   const client = createMemo(() => sdk.clientFor(workspaceID()))
 
-  const filterExplicit = (items: Awaited<ReturnType<ReturnType<typeof client>["session"]["list"]>>["data"] | undefined) => {
+  const filterExplicit = (
+    items: Awaited<ReturnType<ReturnType<typeof client>["session"]["list"]>>["data"] | undefined,
+  ) => {
     const list = items ?? []
     if (props.workspaceID === null) return list.filter((item) => !(item as { workspaceID?: string }).workspaceID)
     if (typeof props.workspaceID === "string")

@@ -161,17 +161,14 @@ export function Prompt(props: PromptProps) {
     const selection = editor.selection()
     if (!selection) return []
 
-    const seen = new Set(
-      store.prompt.parts.filter((part) => part.type === "file").map((part) => part.url),
-    )
+    const seen = new Set(store.prompt.parts.filter((part) => part.type === "file").map((part) => part.url))
     return selection.ranges.flatMap((range) => {
       const part = createPromptFilePart({
         directory: (sync.data.path.directory || process.cwd()).replace(/\/+$/, ""),
         path: resolveEditorPath(selection.filePath),
         lineRange: {
           startLine: range.selection.start.line,
-          endLine:
-            range.selection.end.line > range.selection.start.line ? range.selection.end.line : undefined,
+          endLine: range.selection.end.line > range.selection.start.line ? range.selection.end.line : undefined,
         },
       })
       if (seen.has(part.url)) return []

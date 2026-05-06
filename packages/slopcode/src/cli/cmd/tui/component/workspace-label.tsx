@@ -4,7 +4,8 @@ import { useTheme } from "@tui/context/theme"
 export function WorkspaceLabel(props: { workspaceID?: string }) {
   const sync = useSync()
   const { theme } = useTheme()
-  const status = () => (props.workspaceID ? sync.data.workspace_status[props.workspaceID] ?? "connecting" : "connected")
+  const status = () =>
+    props.workspaceID ? (sync.data.workspace_status[props.workspaceID] ?? "connecting") : "connected"
   const color = () => {
     const value = status()
     if (value === "connected") return theme.success

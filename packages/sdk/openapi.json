@@ -1976,6 +1976,54 @@
         ]
       }
     },
+    "/experimental/workspace/status": {
+      "get": {
+        "operationId": "experimental.workspace.status",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List workspace statuses",
+        "description": "List connection statuses for all workspaces in the current project.",
+        "responses": {
+          "200": {
+            "description": "Workspace statuses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "workspaceID": {
+                        "type": "string",
+                        "pattern": "^wrk.*"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": ["connected", "connecting", "disconnected", "error"]
+                      }
+                    },
+                    "required": ["workspaceID", "status"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.status({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/experimental/workspace/adaptor": {
       "get": {
         "operationId": "experimental.workspace.adaptors",
@@ -2058,6 +2106,77 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/workspace/warp": {
+      "post": {
+        "operationId": "experimental.workspace.warp",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Warp session to workspace",
+        "description": "Move a session between the local project and a workspace.",
+        "responses": {
+          "200": {
+            "description": "Updated session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^wrk.*"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sessionID": {
+                    "type": "string",
+                    "pattern": "^ses.*"
+                  }
+                },
+                "required": ["id", "sessionID"]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.warp({\n  ...\n})"
           }
         ]
       }
@@ -2251,7 +2370,24 @@
             "schema": {
               "type": "string"
             },
-            "description": "Filter sessions by project directory"
+            "description": "Filter sessions by directory"
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "schema": {
+              "type": "string",
+              "enum": ["project"]
+            },
+            "description": "List sessions across the current project"
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter sessions by project-relative path"
           },
           {
             "in": "query",
@@ -2368,6 +2504,10 @@
                   },
                   "permission": {
                     "$ref": "#/components/schemas/PermissionRuleset"
+                  },
+                  "workspaceID": {
+                    "type": "string",
+                    "pattern": "^wrk.*"
                   }
                 }
               }
@@ -9823,6 +9963,10 @@
           "directory": {
             "type": "string"
           },
+          "workspaceID": {
+            "type": "string",
+            "pattern": "^wrk.*"
+          },
           "parentID": {
             "type": "string",
             "pattern": "^ses.*"
@@ -12166,6 +12310,10 @@
           },
           "directory": {
             "type": "string"
+          },
+          "workspaceID": {
+            "type": "string",
+            "pattern": "^wrk.*"
           },
           "parentID": {
             "type": "string",

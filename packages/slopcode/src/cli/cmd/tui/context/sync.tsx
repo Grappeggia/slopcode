@@ -211,7 +211,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
     async function listWorkspaceStatus() {
       const workspace = sdk.client.experimental.workspace as unknown as {
-        status(): Promise<{ data?: Array<{ workspaceID: string; status: "connected" | "connecting" | "disconnected" | "error" }> }>
+        status(): Promise<{
+          data?: Array<{ workspaceID: string; status: "connected" | "connecting" | "disconnected" | "error" }>
+        }>
       }
       const result = await workspace.status().catch(() => ({ data: [] }))
       return Object.fromEntries((result.data ?? []).map((item) => [item.workspaceID, item.status]))
