@@ -18,6 +18,7 @@ import type {
   ProviderAuthMethod,
   VcsInfo,
 } from "@slopcode-ai/sdk/v2"
+import path from "path"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useSDK } from "@tui/context/sdk"
 import { Binary } from "@slopcode-ai/util/binary"
@@ -92,6 +93,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       formatter: [],
       vcs: undefined,
       path: { state: "", config: "", worktree: "", directory: "" },
+      workspace_status: {},
     })
 
     const [store, setStore] = createStore<{
@@ -135,6 +137,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       formatter: FormatterStatus[]
       vcs: VcsInfo | undefined
       path: Path
+      workspace_status: Record<string, "connected" | "connecting" | "disconnected" | "error">
     }>(empty())
 
     const sdk = useSDK()
@@ -190,6 +193,30 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       }, {})
     }
 
+    function sessionListQuery(info: Path = store.path): { scope?: "project"; path?: string } {
+      if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
+      if (!info.worktree || !info.directory) return { scope: "project" }
+      const relative = path.relative(path.resolve(info.worktree), path.resolve(info.directory)).replaceAll("\\", "/")
+      if (relative.startsWith("../") || relative === "..") return { scope: "project" }
+      return {
+        path: relative,
+      }
+    }
+
+    function listSessions(info: Path = store.path) {
+      return sdk.client.session
+        .list({ start: Date.now() - 30 * 24 * 60 * 60 * 1000, ...sessionListQuery(info) })
+        .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
+    }
+
+    async function listWorkspaceStatus() {
+      const workspace = sdk.client.experimental.workspace as unknown as {
+        status(): Promise<{ data?: Array<{ workspaceID: string; status: "connected" | "connecting" | "disconnected" | "error" }> }>
+      }
+      const result = await workspace.status().catch(() => ({ data: [] }))
+      return Object.fromEntries((result.data ?? []).map((item) => [item.workspaceID, item.status]))
+    }
+
     async function syncSession(sessionID: string, force = false) {
       if (!force && fullSyncedSessions.has(sessionID)) return
       const [session, messages, todo, diff] = await Promise.all([
@@ -220,15 +247,17 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     }
 
     async function refresh() {
-      const [permission, question, status] = await Promise.all([
+      const [permission, question, status, workspaceStatus] = await Promise.all([
         sdk.client.permission.list().then((x) => x.data ?? []),
         sdk.client.question.list().then((x) => x.data ?? []),
         sdk.client.session.status().then((x) => x.data ?? {}),
+        listWorkspaceStatus(),
       ])
       batch(() => {
         setStore("permission", reconcile(groupPermission(permission)))
         setStore("question", reconcile(groupQuestion(question)))
         setStore("session_status", reconcile(status))
+        setStore("workspace_status", reconcile(workspaceStatus))
       })
       await Promise.all(Object.keys(store.message).map((sessionID) => syncSession(sessionID, true)))
     }
@@ -502,10 +531,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         fullSyncedSessions.clear()
         delta.clear()
         setStore(reconcile(empty()))
-        const start = Date.now() - 30 * 24 * 60 * 60 * 1000
-        const sessionListPromise = sdk.client.session
-          .list({ start: start })
-          .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
+        const pathPromise = sdk.client.path.get().then((x) => x.data!)
+        const sessionListPromise = pathPromise.then((info) => listSessions(info))
 
         // blocking - include session.list when continuing a session
         const providersPromise = sdk.client.config.providers({}, { throwOnError: true })
@@ -517,6 +544,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           providerListPromise,
           agentsPromise,
           configPromise,
+          pathPromise,
           ...(args.continue ? [sessionListPromise] : []),
         ]
 
@@ -526,6 +554,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             const providerListResponse = providerListPromise.then((x) => x.data!)
             const agentsResponse = agentsPromise.then((x) => x.data ?? [])
             const configResponse = configPromise.then((x) => x.data!)
+            const pathResponse = pathPromise
             const sessionListResponse = args.continue ? sessionListPromise : undefined
 
             return Promise.all([
@@ -533,13 +562,15 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               providerListResponse,
               agentsResponse,
               configResponse,
+              pathResponse,
               ...(sessionListResponse ? [sessionListResponse] : []),
             ]).then((responses) => {
               const providers = responses[0]
               const providerList = responses[1]
               const agents = responses[2]
               const config = responses[3]
-              const sessions = responses[4]
+              const pathInfo = responses[4] as Path
+              const sessions = responses[5] as Session[] | undefined
 
               batch(() => {
                 setStore("provider", reconcile(providers.providers))
@@ -547,6 +578,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 setStore("provider_next", reconcile(providerList))
                 setStore("agent", reconcile(agents))
                 setStore("config", reconcile(config))
+                setStore("path", reconcile(pathInfo))
                 if (sessions !== undefined) setStore("session", reconcile(sessions))
               })
             })
@@ -566,7 +598,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               sdk.client.formatter.status().then((x) => setStore("formatter", reconcile(x.data!))),
               sdk.client.provider.auth().then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
               sdk.client.vcs.get().then((x) => setStore("vcs", reconcile(x.data))),
-              sdk.client.path.get().then((x) => setStore("path", reconcile(x.data!))),
             ]).then(() => {
               setStore("status", "complete")
             })
@@ -613,6 +644,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const match = Binary.search(store.session, sessionID, (s) => s.id)
           if (match.found) return store.session[match.index]
           return undefined
+        },
+        query() {
+          return sessionListQuery()
+        },
+        async refresh() {
+          const list = await listSessions()
+          setStore("session", reconcile(list))
         },
         status(sessionID: string) {
           const session = result.session.get(sessionID)

@@ -24,6 +24,7 @@ import { EmptyBorder } from "@tui/component/border"
 import { useSDK } from "@tui/context/sdk"
 import { useRoute } from "@tui/context/route"
 import { useSync } from "@tui/context/sync"
+import { useEditorContext } from "@tui/context/editor"
 import { sessionWaiting } from "@tui/context/session-tabs-state"
 import { Identifier } from "@/id/id"
 import { createStore, produce, unwrap } from "solid-js/store"
@@ -82,7 +83,7 @@ export type PromptRef = {
   reset(): void
   blur(): void
   focus(): void
-  attachFile(file: string): boolean
+  attachFile(file: string, lineRange?: { startLine: number; endLine?: number }): boolean
   submit(): void
 }
 
@@ -142,6 +143,55 @@ export function Prompt(props: PromptProps) {
   const renderer = useRenderer()
   const { theme, syntax } = useTheme()
   const kv = useKV()
+  const editor = useEditorContext()
+
+  function resolveEditorPath(file: string) {
+    const current = (sync.data.path.directory || process.cwd()).replace(/\/+$/, "")
+    const relative = path.relative(current, file).replaceAll("\\", "/")
+    if (!relative.startsWith("../") && relative !== ".." && !path.isAbsolute(relative)) return relative
+
+    const worktree = sync.data.path.worktree
+    if (!worktree) return file.replaceAll("\\", "/")
+    const fromWorktree = path.relative(worktree, file).replaceAll("\\", "/")
+    if (!fromWorktree.startsWith("../") && fromWorktree !== ".." && !path.isAbsolute(fromWorktree)) return fromWorktree
+    return file.replaceAll("\\", "/")
+  }
+
+  function selectionParts() {
+    const selection = editor.selection()
+    if (!selection) return []
+
+    const seen = new Set(
+      store.prompt.parts.filter((part) => part.type === "file").map((part) => part.url),
+    )
+    return selection.ranges.flatMap((range) => {
+      const part = createPromptFilePart({
+        directory: (sync.data.path.directory || process.cwd()).replace(/\/+$/, ""),
+        path: resolveEditorPath(selection.filePath),
+        lineRange: {
+          startLine: range.selection.start.line,
+          endLine:
+            range.selection.end.line > range.selection.start.line ? range.selection.end.line : undefined,
+        },
+      })
+      if (seen.has(part.url)) return []
+      seen.add(part.url)
+      return [part]
+    })
+  }
+
+  const editorLabel = createMemo(() => {
+    const selection = editor.selection()
+    if (!selection) return
+    const file = resolveEditorPath(selection.filePath)
+    const first = selection.ranges[0]
+    if (!first) return file
+    const start = first.selection.start.line
+    const end = first.selection.end.line
+    const suffix = end > start ? `#${start}-${end}` : `#${start}`
+    const extra = selection.ranges.length > 1 ? ` +${selection.ranges.length - 1}` : ""
+    return `${path.basename(file)}${suffix}${extra}`
+  })
 
   function promptModelWarning() {
     toast.show({
@@ -354,6 +404,17 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
+        title: "Clear editor context",
+        value: "prompt.editor_context.clear",
+        category: "Prompt",
+        hidden: true,
+        enabled: !!editor.selection(),
+        onSelect: (dialog) => {
+          editor.clearSelection()
+          dialog.clear()
+        },
+      },
+      {
         title: "Submit prompt",
         value: "prompt.submit",
         keybind: "input_submit",
@@ -537,12 +598,13 @@ export function Prompt(props: PromptProps) {
     ]
   })
 
-  function addFile(file: string) {
+  function addFile(file: string, lineRange?: { startLine: number; endLine?: number }) {
     if (!input) return false
 
     const part = createPromptFilePart({
       directory: (sync.data.path.directory || process.cwd()).replace(/\/+$/, ""),
       path: file,
+      lineRange,
     })
     const duplicate = store.prompt.parts.some((item) => item.type === "file" && item.url === part.url)
     if (duplicate) return false
@@ -593,8 +655,8 @@ export function Prompt(props: PromptProps) {
     blur() {
       input.blur()
     },
-    attachFile(file) {
-      return addFile(file)
+    attachFile(file, lineRange) {
+      return addFile(file, lineRange)
     },
     set(prompt) {
       loadPrompt(prompt)
@@ -918,6 +980,8 @@ export function Prompt(props: PromptProps) {
 
     // Filter out text parts (pasted content) since they're now expanded inline
     const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
+    const extraParts = store.mode === "shell" ? [] : selectionParts()
+    const promptParts = [...nonTextParts, ...extraParts]
 
     // Capture mode before it gets reset
     const currentMode = store.mode
@@ -961,7 +1025,7 @@ export function Prompt(props: PromptProps) {
           model: `${selectedModel.providerID}/${selectedModel.modelID}`,
           messageID,
           variant,
-          parts: nonTextParts
+          parts: promptParts
             .filter((x) => x.type === "file")
             .map((x) => ({
               id: Identifier.ascending("part"),
@@ -988,7 +1052,7 @@ export function Prompt(props: PromptProps) {
               type: "text",
               text: inputText,
             },
-            ...nonTextParts.map((x) => ({
+            ...promptParts.map((x) => ({
               id: Identifier.ascending("part"),
               ...x,
             })),
@@ -1043,6 +1107,7 @@ export function Prompt(props: PromptProps) {
     if (!props.sessionID) {
       tabState.copySelection(sourceTabID, sessionID)
     }
+    if (extraParts.length > 0) editor.clearSelection()
     input.extmarks.clear()
     setStore("prompt", {
       input: "",
@@ -1235,6 +1300,15 @@ export function Prompt(props: PromptProps) {
   onCleanup(() => {
     if (!pulse) return
     clearTimeout(pulse)
+  })
+
+  onMount(() => {
+    return editor.onMention((mention) => {
+      addFile(resolveEditorPath(mention.filePath), {
+        startLine: mention.lineStart,
+        endLine: mention.lineEnd > mention.lineStart ? mention.lineEnd : undefined,
+      })
+    })
   })
 
   const run = (id: string, fn: () => void) => {
@@ -1766,6 +1840,16 @@ export function Prompt(props: PromptProps) {
                       <text fg={theme.text} wrapMode="none">
                         {keybind.print("variant_cycle")}
                         {muted("variants", "var", true)}
+                      </text>,
+                    )}
+                  </Show>
+                  <Show when={editorLabel()}>
+                    {hint(
+                      "editor-context",
+                      () => command.trigger("prompt.editor_context.clear"),
+                      <text fg={theme.text} wrapMode="none">
+                        editor
+                        <span style={{ fg: theme.textMuted }}>{` ${editorLabel()}`}</span>
                       </text>,
                     )}
                   </Show>

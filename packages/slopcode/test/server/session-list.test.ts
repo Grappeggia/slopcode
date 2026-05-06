@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { mkdir } from "fs/promises"
 import path from "path"
+import { Identifier } from "../../src/id/id"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
 import { Log } from "../../src/util/log"
@@ -85,6 +87,99 @@ describe("Session.list", () => {
 
         const sessions = [...Session.list({ limit: 2 })]
         expect(sessions.length).toBe(2)
+      },
+    })
+  })
+
+  test("filters sessions by project-relative path", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await mkdir(path.join(tmp.path, "packages", "slopcode", "src"), { recursive: true })
+    await mkdir(path.join(tmp.path, "packages", "app"), { recursive: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const root = await Session.create({ title: "root-path" })
+        const parent = await Instance.provide({
+          directory: path.join(tmp.path, "packages", "slopcode"),
+          fn: async () => Session.create({ title: "parent-path" }),
+        })
+        const current = await Instance.provide({
+          directory: path.join(tmp.path, "packages", "slopcode", "src"),
+          fn: async () => Session.create({ title: "current-path" }),
+        })
+        const sibling = await Instance.provide({
+          directory: path.join(tmp.path, "packages", "app"),
+          fn: async () => Session.create({ title: "sibling-path" }),
+        })
+
+        const ids = [
+          ...Session.list({
+            directory: path.join(tmp.path, "packages", "slopcode", "src"),
+            path: "packages/slopcode",
+          }),
+        ].map((session) => session.id)
+
+        expect(ids).toContain(parent.id)
+        expect(ids).toContain(current.id)
+        expect(ids).not.toContain(root.id)
+        expect(ids).not.toContain(sibling.id)
+      },
+    })
+  })
+
+  test("lists all project sessions when scope is project", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await mkdir(path.join(tmp.path, "packages", "slopcode"), { recursive: true })
+    await mkdir(path.join(tmp.path, "packages", "app"), { recursive: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const root = await Session.create({ title: "root-project" })
+        const current = await Instance.provide({
+          directory: path.join(tmp.path, "packages", "slopcode"),
+          fn: async () => Session.create({ title: "current-project" }),
+        })
+        const sibling = await Instance.provide({
+          directory: path.join(tmp.path, "packages", "app"),
+          fn: async () => Session.create({ title: "sibling-project" }),
+        })
+
+        const ids = [
+          ...Session.list({
+            directory: path.join(tmp.path, "packages", "slopcode"),
+            scope: "project",
+          }),
+        ].map((session) => session.id)
+
+        expect(ids).toContain(root.id)
+        expect(ids).toContain(current.id)
+        expect(ids).toContain(sibling.id)
+      },
+    })
+  })
+
+  test("filters sessions by workspace", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const local = await Session.create({ title: "local-workspace" })
+        const workspaceID = Identifier.ascending("workspace")
+        const warped = await Session.create({
+          title: "workspace-only",
+          workspaceID,
+        })
+
+        const localIDs = [...Session.list({ workspaceID: null })].map((session) => session.id)
+        const workspaceIDs = [...Session.list({ workspaceID })].map((session) => session.id)
+
+        expect(localIDs).toContain(local.id)
+        expect(localIDs).not.toContain(warped.id)
+        expect(workspaceIDs).toContain(warped.id)
+        expect(workspaceIDs).not.toContain(local.id)
       },
     })
   })

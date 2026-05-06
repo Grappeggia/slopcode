@@ -7,6 +7,7 @@ import { adjacentTab } from "../context/session-tabs-state"
 import { useKeyboard } from "@opentui/solid"
 import { Logo } from "../component/logo"
 import { Tips } from "../component/tips"
+import { WorkspaceLabel } from "../component/workspace-label"
 import { Locale } from "@/util/locale"
 import { useSync } from "../context/sync"
 import { Toast } from "../ui/toast"
@@ -182,7 +183,7 @@ export function Home() {
         >
           <text fg={theme.textMuted}>{directory()}</text>
           <Show when={workspace()}>
-            <text fg={theme.textMuted}>workspace {workspace()}</text>
+            <WorkspaceLabel workspaceID={workspace()} />
           </Show>
           <box gap={1} flexDirection="row" flexShrink={0}>
             <Show when={mcp()}>

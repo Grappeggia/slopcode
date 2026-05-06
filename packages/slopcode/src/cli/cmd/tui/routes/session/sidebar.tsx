@@ -13,6 +13,7 @@ import { useRoute } from "../../context/route"
 import { useSDK } from "../../context/sdk"
 import { usePromptRef } from "../../context/prompt"
 import { useToast } from "../../ui/toast"
+import { WorkspaceLabel } from "../../component/workspace-label"
 import { SESSION_SIDEBAR_RAIL_WIDTH, SESSION_SIDEBAR_WIDTH } from "./sidebar-layout"
 import type { EditorTab } from "@tui/context/tab-state-store"
 import { TuiPluginRuntime } from "../../plugin/runtime"
@@ -647,7 +648,7 @@ export function Sidebar(props: {
                 <span style={{ fg: theme.text }}>{directory().split("/").at(-1)}</span>
               </text>
               <Show when={route.data.type === "session" && route.data.workspaceID}>
-                <text fg={theme.textMuted}>workspace {route.data.workspaceID}</text>
+                <WorkspaceLabel workspaceID={route.data.workspaceID} />
               </Show>
               <text fg={theme.textMuted}>
                 <span style={{ fg: theme.success }}>•</span> <b>Slop</b>

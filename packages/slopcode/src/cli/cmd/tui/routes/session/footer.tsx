@@ -3,6 +3,7 @@ import { useTheme } from "../../context/theme"
 import { useSync } from "../../context/sync"
 import { useDirectory } from "../../context/directory"
 import { useConnected } from "../../component/dialog-model"
+import { WorkspaceLabel } from "../../component/workspace-label"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
 
@@ -54,7 +55,7 @@ export function Footer() {
       <box flexDirection="row" gap={2}>
         <text fg={theme.textMuted}>{directory()}</text>
         <Show when={route.data.workspaceID}>
-          <text fg={theme.textMuted}>workspace {route.data.workspaceID}</text>
+          <WorkspaceLabel workspaceID={route.data.workspaceID} />
         </Show>
       </box>
       <box gap={2} flexDirection="row" flexShrink={0}>

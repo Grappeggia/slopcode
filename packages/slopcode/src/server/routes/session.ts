@@ -289,7 +289,9 @@ export const SessionRoutes = lazy(() =>
       validator(
         "query",
         z.object({
-          directory: z.string().optional().meta({ description: "Filter sessions by project directory" }),
+          directory: z.string().optional().meta({ description: "Filter sessions by directory" }),
+          scope: z.enum(["project"]).optional().meta({ description: "List sessions across the current project" }),
+          path: z.string().optional().meta({ description: "Filter sessions by project-relative path" }),
           roots: z.coerce.boolean().optional().meta({ description: "Only return root sessions (no parentID)" }),
           start: z.coerce
             .number()
@@ -305,10 +307,14 @@ export const SessionRoutes = lazy(() =>
       ),
       async (c) => {
         const query = c.req.valid("query")
+        const workspaceID = c.req.header("x-slopcode-workspace") ?? undefined
         const limit = query.limit
         const sessions: Session.Info[] = []
         for await (const session of Session.list({
+          workspaceID,
           directory: query.directory,
+          scope: query.scope,
+          path: query.path,
           roots: query.roots,
           start: query.start,
           cursor: query.cursor,
@@ -464,7 +470,11 @@ export const SessionRoutes = lazy(() =>
       validator("json", Session.create.schema.optional()),
       async (c) => {
         const body = c.req.valid("json") ?? {}
-        const session = await Session.create(body)
+        const workspaceID = c.req.header("x-slopcode-workspace") ?? undefined
+        const session = await Session.create({
+          ...body,
+          workspaceID,
+        })
         SessionAutocomplete.begin(session.id)
         return c.json(session)
       },

@@ -1,8 +1,10 @@
 import { Hono } from "hono"
+import { HTTPException } from "hono/http-exception"
 import { describeRoute, resolver, validator } from "hono-openapi"
 import z from "zod"
 import { Workspace } from "../../control-plane/workspace"
 import { Instance } from "../../project/instance"
+import { Session } from "../../session"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
 
@@ -52,6 +54,27 @@ export const WorkspaceRoutes = lazy(() =>
       },
     )
     .get(
+      "/status",
+      describeRoute({
+        summary: "List workspace statuses",
+        description: "List connection statuses for all workspaces in the current project.",
+        operationId: "experimental.workspace.status",
+        responses: {
+          200: {
+            description: "Workspace statuses",
+            content: {
+              "application/json": {
+                schema: resolver(z.array(Workspace.ConnectionStatus)),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        return c.json(await Workspace.status(Instance.project))
+      },
+    )
+    .get(
       "/adaptor",
       describeRoute({
         summary: "List workspace adaptors",
@@ -91,6 +114,49 @@ export const WorkspaceRoutes = lazy(() =>
       }),
       async (c) => {
         return c.json(Workspace.list(Instance.project))
+      },
+    )
+    .post(
+      "/warp",
+      describeRoute({
+        summary: "Warp session to workspace",
+        description: "Move a session between the local project and a workspace.",
+        operationId: "experimental.workspace.warp",
+        responses: {
+          200: {
+            description: "Updated session",
+            content: {
+              "application/json": {
+                schema: resolver(Session.Info),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator("json", Workspace.WarpInput),
+      async (c) => {
+        const body = c.req.valid("json")
+        const session = await Session.get(body.sessionID)
+        const current = session.workspaceID ? await Workspace.get(session.workspaceID) : undefined
+        if (current && current.config.type !== "worktree") {
+          throw new HTTPException(400, { message: "Remote workspace sessions cannot be moved yet" })
+        }
+        if (!body.id) {
+          return c.json(
+            current ? await Session.setWorkspace({ sessionID: body.sessionID, workspaceID: undefined }) : session,
+          )
+        }
+
+        const workspace = await Workspace.get(body.id)
+        if (!workspace) {
+          throw new HTTPException(400, { message: `Workspace not found: ${body.id}` })
+        }
+        if (workspace.config.type !== "worktree") {
+          throw new HTTPException(400, { message: "Remote workspace sessions cannot be moved yet" })
+        }
+        if (session.workspaceID === workspace.id) return c.json(session)
+        return c.json(await Session.setWorkspace({ sessionID: body.sessionID, workspaceID: workspace.id }))
       },
     )
     .delete(

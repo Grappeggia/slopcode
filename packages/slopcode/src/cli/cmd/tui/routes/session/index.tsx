@@ -69,6 +69,7 @@ import { DialogConfirm } from "@tui/ui/dialog-confirm"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
+import { DialogWorkspaceList } from "../../component/dialog-workspace-list"
 import { Sidebar, type SidebarMode } from "./sidebar"
 import { sessionMainWidth, sessionSidebarExpanded, sessionSidebarHeaderVisible } from "./sidebar-layout"
 import { EditorPane, type EditorInfo } from "./editor-pane"
@@ -1163,6 +1164,18 @@ export function Session() {
       },
       onSelect: (dialog) => {
         dialog.replace(() => <DialogSessionRename session={route.sessionID} />)
+      },
+    },
+    {
+      title: "Move session",
+      value: "session.warp",
+      category: "Session",
+      slash: {
+        name: "move",
+        aliases: ["warp"],
+      },
+      onSelect: (dialog) => {
+        dialog.replace(() => <DialogWorkspaceList sessionID={route.sessionID} />)
       },
     },
     {

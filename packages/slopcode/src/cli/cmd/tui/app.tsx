@@ -7,6 +7,7 @@ import { RouteProvider, useRoute } from "@tui/context/route"
 import { SessionTabsProvider, useSessionTabs } from "@tui/context/session-tabs"
 import { TabStateProvider, useTabState } from "@tui/context/tab-state"
 import { EditorConnectionProvider } from "@tui/context/editor-connection"
+import { EditorContextProvider, useEditorContext } from "@tui/context/editor"
 import { SDKProvider, useSDK } from "@tui/context/sdk"
 import { SyncProvider, useSync } from "@tui/context/sync"
 import { DialogProvider, useDialog } from "@tui/ui/dialog"
@@ -15,6 +16,7 @@ import { LocalProvider, useLocal } from "@tui/context/local"
 import { DialogModel, useConnected } from "@tui/component/dialog-model"
 import { DialogModelCompletion } from "@tui/component/dialog-model-completion"
 import { DialogMcp } from "@tui/component/dialog-mcp"
+import { DialogVariant } from "@tui/component/dialog-variant"
 import { DialogStatus } from "@tui/component/dialog-status"
 import { DialogThemeList } from "@tui/component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
@@ -184,25 +186,27 @@ export function tui(input: {
                           <SessionTabsProvider>
                             <TabStateProvider>
                               <EditorConnectionProvider>
-                                <ThemeProvider mode={mode}>
-                                  <LocalProvider>
-                                    <KeybindProvider>
-                                      <PromptStashProvider>
-                                        <DialogProvider>
-                                          <CommandProvider>
-                                            <FrecencyProvider>
-                                              <PromptHistoryProvider>
-                                                <PromptRefProvider>
-                                                  <App />
-                                                </PromptRefProvider>
-                                              </PromptHistoryProvider>
-                                            </FrecencyProvider>
-                                          </CommandProvider>
-                                        </DialogProvider>
-                                      </PromptStashProvider>
-                                    </KeybindProvider>
-                                  </LocalProvider>
-                                </ThemeProvider>
+                                <EditorContextProvider>
+                                  <ThemeProvider mode={mode}>
+                                    <LocalProvider>
+                                      <KeybindProvider>
+                                        <PromptStashProvider>
+                                          <DialogProvider>
+                                            <CommandProvider>
+                                              <FrecencyProvider>
+                                                <PromptHistoryProvider>
+                                                  <PromptRefProvider>
+                                                    <App />
+                                                  </PromptRefProvider>
+                                                </PromptHistoryProvider>
+                                              </FrecencyProvider>
+                                            </CommandProvider>
+                                          </DialogProvider>
+                                        </PromptStashProvider>
+                                      </KeybindProvider>
+                                    </LocalProvider>
+                                  </ThemeProvider>
+                                </EditorContextProvider>
                               </EditorConnectionProvider>
                             </TabStateProvider>
                           </SessionTabsProvider>
@@ -232,6 +236,7 @@ function App() {
   const command = useCommandDialog()
   const keybind = useKeybind()
   const sdk = useSDK()
+  const editor = useEditorContext()
   const toast = useToast()
   const themeState = useTheme()
   const { theme, mode, setMode } = themeState
@@ -334,6 +339,10 @@ function App() {
     }
   })
 
+  createEffect(() => {
+    editor.reconnect(sync.data.path.directory || sdk.directory || process.cwd())
+  })
+
   const args = useArgs()
   onMount(() => {
     if (args.sessionID && !args.fork) {
@@ -361,19 +370,17 @@ function App() {
   createEffect(() => {
     // When using -c, session list is loaded in blocking phase, so we can navigate at "partial"
     if (continued || sync.status === "loading" || !args.continue) return
-    const match = sync.data.session
-      .toSorted((a, b) => b.time.updated - a.time.updated)
-      .find((x) => x.parentID === undefined)?.id
+    const match = sync.data.session.toSorted((a, b) => b.time.updated - a.time.updated).find((x) => x.parentID === undefined)
     if (match) {
       continued = true
       if (args.fork) {
-        sdk.client.session.fork({ sessionID: match }).then((result) => {
+        sdk.client.session.fork({ sessionID: match.id }).then((result) => {
           if (result.data?.id) {
             route.navigate({
               type: "session",
               sessionID: result.data.id,
               source: "fork",
-              workspaceID: route.data.workspaceID,
+              workspaceID: (match as { workspaceID?: string }).workspaceID,
             })
           } else {
             toast.show({ message: "Failed to fork session", variant: "error" })
@@ -382,9 +389,9 @@ function App() {
       } else {
         route.navigate({
           type: "session",
-          sessionID: match,
+          sessionID: match.id,
           source: "switch",
-          workspaceID: route.data.workspaceID,
+          workspaceID: (match as { workspaceID?: string }).workspaceID,
         })
       }
     }
@@ -579,6 +586,19 @@ function App() {
       },
     },
     {
+      title: "Switch model variant",
+      value: "variant.list",
+      keybind: "variant_list",
+      category: "Agent",
+      hidden: local.model.variant.list().length === 0,
+      slash: {
+        name: "variants",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogVariant />)
+      },
+    },
+    {
       title: "Agent cycle reverse",
       value: "agent.cycle.reverse",
       keybind: "agent_cycle_reverse",
@@ -730,6 +750,19 @@ function App() {
           if (!next) renderer.setTerminalTitle("")
           return next
         })
+        dialog.clear()
+      },
+    },
+    {
+      title: kv.get("session_directory_filter_enabled", true)
+        ? "Disable session directory filtering"
+        : "Enable session directory filtering",
+      value: "app.toggle.session_directory_filter",
+      search: "toggle session filtering",
+      category: "System",
+      onSelect: async (dialog) => {
+        kv.set("session_directory_filter_enabled", !kv.get("session_directory_filter_enabled", true))
+        await sync.session.refresh()
         dialog.clear()
       },
     },

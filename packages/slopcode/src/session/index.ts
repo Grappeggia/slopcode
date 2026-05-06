@@ -40,6 +40,13 @@ export namespace Session {
     return (isChild ? childTitlePrefix : parentTitlePrefix) + new Date().toISOString()
   }
 
+  function sessionPath(directory: string) {
+    const relative = path.relative(Instance.project.worktree, directory).replaceAll("\\", "/")
+    if (relative === ".") return ""
+    if (relative.startsWith("../") || relative === "..") return
+    return relative
+  }
+
   export function isDefaultTitle(title: string) {
     return new RegExp(
       `^(${parentTitlePrefix}|${childTitlePrefix})\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$`,
@@ -65,6 +72,7 @@ export namespace Session {
       slug: row.slug,
       projectID: row.project_id,
       directory: row.directory,
+      workspaceID: row.workspace_id ?? undefined,
       parentID: row.parent_id ?? undefined,
       title: row.title,
       version: row.version,
@@ -88,6 +96,7 @@ export namespace Session {
       parent_id: info.parentID,
       slug: info.slug,
       directory: info.directory,
+      workspace_id: info.workspaceID ?? null,
       title: info.title,
       version: info.version,
       share_url: info.share?.url,
@@ -120,6 +129,7 @@ export namespace Session {
       slug: z.string(),
       projectID: z.string(),
       directory: z.string(),
+      workspaceID: Identifier.schema("workspace").optional(),
       parentID: Identifier.schema("session").optional(),
       summary: z
         .object({
@@ -217,6 +227,7 @@ export namespace Session {
         parentID: Identifier.schema("session").optional(),
         title: z.string().optional(),
         permission: Info.shape.permission,
+        workspaceID: Info.shape.workspaceID,
       })
       .optional(),
     async (input) => {
@@ -225,6 +236,7 @@ export namespace Session {
         directory: Instance.directory,
         title: input?.title,
         permission: input?.permission,
+        workspaceID: input?.workspaceID,
       })
     },
   )
@@ -239,8 +251,9 @@ export namespace Session {
       if (!original) throw new Error("session not found")
       const title = getForkedTitle(original.title)
       const session = await createNext({
-        directory: Instance.directory,
+        directory: original.directory,
         title,
+        workspaceID: original.workspaceID,
       })
       const msgs = await messages({ sessionID: input.sessionID })
       const idMap = new Map<string, string>()
@@ -292,6 +305,7 @@ export namespace Session {
     parentID?: string
     directory: string
     permission?: PermissionNext.Ruleset
+    workspaceID?: string
   }) {
     const result: Info = {
       id: Identifier.descending("session", input.id),
@@ -299,6 +313,7 @@ export namespace Session {
       version: Installation.VERSION,
       projectID: Instance.project.id,
       directory: input.directory,
+      workspaceID: input.workspaceID,
       parentID: input.parentID,
       title: input.title ?? createDefaultTitle(!!input.parentID),
       permission: input.permission,
@@ -308,8 +323,14 @@ export namespace Session {
       },
     }
     log.info("created", result)
+    const relative = sessionPath(result.directory)
     Database.use((db) => {
-      db.insert(SessionTable).values(toRow(result)).run()
+      db.insert(SessionTable)
+        .values({
+          ...toRow(result),
+          path: relative ?? null,
+        })
+        .run()
       Database.effect(() =>
         Bus.publish(Event.Created, {
           info: result,
@@ -431,6 +452,30 @@ export namespace Session {
     },
   )
 
+  export const setWorkspace = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+      workspaceID: Info.shape.workspaceID,
+    }),
+    async (input) => {
+      return Database.use((db) => {
+        const row = db
+          .update(SessionTable)
+          .set({
+            workspace_id: input.workspaceID ?? null,
+            time_updated: Date.now(),
+          })
+          .where(eq(SessionTable.id, input.sessionID))
+          .returning()
+          .get()
+        if (!row) throw new NotFoundError({ message: `Session not found: ${input.sessionID}` })
+        const info = fromRow(row)
+        Database.effect(() => Bus.publish(Event.Updated, { info }))
+        return info
+      })
+    },
+  )
+
   export const setRevert = fn(
     z.object({
       sessionID: Identifier.schema("session"),
@@ -530,7 +575,10 @@ export namespace Session {
   )
 
   export function* list(input?: {
+    workspaceID?: string | null
     directory?: string
+    scope?: "project"
+    path?: string
     roots?: boolean
     start?: number
     cursor?: number
@@ -540,7 +588,19 @@ export namespace Session {
     const project = Instance.project
     const conditions = [eq(SessionTable.project_id, project.id)]
 
-    if (input?.directory) {
+    if (input?.workspaceID !== undefined) {
+      conditions.push(input.workspaceID ? eq(SessionTable.workspace_id, input.workspaceID) : isNull(SessionTable.workspace_id))
+    }
+    if (input?.path !== undefined) {
+      if (input.path) {
+        const match = [eq(SessionTable.path, input.path), like(SessionTable.path, `${input.path}/%`)]
+        conditions.push(
+          input.directory
+            ? or(...match, and(isNull(SessionTable.path), eq(SessionTable.directory, input.directory))!)!
+            : or(...match)!,
+        )
+      }
+    } else if (input?.scope !== "project" && input?.directory) {
       conditions.push(eq(SessionTable.directory, input.directory))
     }
     if (input?.roots) {

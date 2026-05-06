@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { mkdir } from "fs/promises"
+import path from "path"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
 import { Server } from "../../src/server/server"
@@ -38,6 +40,38 @@ describe("session.list endpoint", () => {
         expect(nextBody.length).toBe(1)
         expect(nextBody[0].id).toBe(first.id)
         expect(nextPage.headers.get("x-next-cursor")).toBeNull()
+      },
+    })
+  })
+
+  test("supports path filtering", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await mkdir(path.join(tmp.path, "packages", "slopcode", "src"), { recursive: true })
+    await mkdir(path.join(tmp.path, "packages", "app"), { recursive: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        await Instance.provide({
+          directory: path.join(tmp.path, "packages", "slopcode", "src"),
+          fn: async () => Session.create({ title: "route-current" }),
+        })
+        await Instance.provide({
+          directory: path.join(tmp.path, "packages", "app"),
+          fn: async () => Session.create({ title: "route-sibling" }),
+        })
+
+        const app = Server.App()
+        const response = await app.request(
+          `/session?directory=${encodeURIComponent(path.join(tmp.path, "packages", "slopcode", "src"))}&path=${encodeURIComponent("packages/slopcode")}`,
+        )
+        expect(response.status).toBe(200)
+
+        const body = (await response.json()) as Array<{ title: string }>
+        const titles = body.map((item) => item.title)
+
+        expect(titles).toContain("route-current")
+        expect(titles).not.toContain("route-sibling")
       },
     })
   })

@@ -1,4 +1,5 @@
 import z from "zod"
+import { existsSync } from "fs"
 import { Identifier } from "@/id/id"
 import { fn } from "@/util/fn"
 import { Database, eq } from "@/storage/db"
@@ -38,6 +39,17 @@ export namespace Workspace {
       ref: "Workspace",
     })
   export type Info = z.infer<typeof Info>
+
+  export const ConnectionStatus = z.object({
+    workspaceID: Info.shape.id,
+    status: z.enum(["connected", "connecting", "disconnected", "error"]),
+  })
+  export type ConnectionStatus = z.infer<typeof ConnectionStatus>
+
+  export const WarpInput = z.object({
+    id: Info.shape.id.nullable(),
+    sessionID: Identifier.schema("session"),
+  })
 
   export const AdaptorInfo = z.object({
     type: z.string(),
@@ -116,6 +128,29 @@ export namespace Workspace {
     if (!row) return
     return fromRow(row)
   })
+
+  async function connection(space: Info): Promise<ConnectionStatus> {
+    if (space.config.type === "worktree" && typeof space.config.directory === "string") {
+      return {
+        workspaceID: space.id,
+        status: existsSync(space.config.directory) ? "connected" : "error",
+      }
+    }
+
+    const signal = AbortSignal.timeout(1500)
+    const response = await getAdaptor(space.projectID, space.config.type)
+      .request(space.config, "GET", "/global/health", undefined, signal)
+      .catch(() => undefined)
+
+    return {
+      workspaceID: space.id,
+      status: response?.ok ? "connected" : "error",
+    }
+  }
+
+  export async function status(project: Project.Info) {
+    return Promise.all(list(project).map(connection))
+  }
 
   export const remove = fn(Identifier.schema("workspace"), async (id) => {
     const row = Database.use((db) => db.select().from(WorkspaceTable).where(eq(WorkspaceTable.id, id)).get())

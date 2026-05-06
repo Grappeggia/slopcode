@@ -315,7 +315,11 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             if (!current) return undefined
             const key = `${current.providerID}/${current.modelID}`
             const selection = tabState.selection()
-            return selection.variant[key] ?? modelStore.variant[key]
+            const value = selection.variant[key] ?? modelStore.variant[key]
+            return this.list().includes(value ?? "") ? value : undefined
+          },
+          selected() {
+            return this.current() ?? "default"
           },
           list() {
             const current = currentModel()
@@ -326,6 +330,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             return Object.keys(info.variants)
           },
           set(value: string | undefined) {
+            if (value && !this.list().includes(value)) return
             const current = currentModel()
             if (!current) return
             const key = `${current.providerID}/${current.modelID}`

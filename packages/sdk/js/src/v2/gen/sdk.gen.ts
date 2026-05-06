@@ -48,6 +48,9 @@ import type {
   ExperimentalWorkspaceListResponses,
   ExperimentalWorkspaceRemoveErrors,
   ExperimentalWorkspaceRemoveResponses,
+  ExperimentalWorkspaceStatusResponses,
+  ExperimentalWorkspaceWarpErrors,
+  ExperimentalWorkspaceWarpResponses,
   FileListResponses,
   FilePartInput,
   FilePartSource,
@@ -1303,6 +1306,25 @@ export class Workspace extends HeyApiClient {
   }
 
   /**
+   * List workspace statuses
+   *
+   * List connection statuses for all workspaces in the current project.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<ExperimentalWorkspaceStatusResponses, unknown, ThrowOnError>({
+      url: "/experimental/workspace/status",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * List workspace adaptors
    *
    * List all workspace adaptors available for the current project.
@@ -1337,6 +1359,47 @@ export class Workspace extends HeyApiClient {
       url: "/experimental/workspace",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Warp session to workspace
+   *
+   * Move a session between the local project and a workspace.
+   */
+  public warp<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      id?: string | null
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "id" },
+            { in: "body", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalWorkspaceWarpResponses,
+      ExperimentalWorkspaceWarpErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workspace/warp",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }
@@ -1430,6 +1493,8 @@ export class Session2 extends HeyApiClient {
   public list<ThrowOnError extends boolean = false>(
     parameters?: {
       directory?: string
+      scope?: "project"
+      path?: string
       roots?: boolean
       start?: number
       cursor?: number
@@ -1444,6 +1509,8 @@ export class Session2 extends HeyApiClient {
         {
           args: [
             { in: "query", key: "directory" },
+            { in: "query", key: "scope" },
+            { in: "query", key: "path" },
             { in: "query", key: "roots" },
             { in: "query", key: "start" },
             { in: "query", key: "cursor" },
@@ -1471,6 +1538,7 @@ export class Session2 extends HeyApiClient {
       parentID?: string
       title?: string
       permission?: PermissionRuleset
+      workspaceID?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1483,6 +1551,7 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "parentID" },
             { in: "body", key: "title" },
             { in: "body", key: "permission" },
+            { in: "body", key: "workspaceID" },
           ],
         },
       ],

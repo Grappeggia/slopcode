@@ -837,6 +837,7 @@ export type Session = {
   slug: string
   projectID: string
   directory: string
+  workspaceID?: string
   parentID?: string
   summary?: {
     additions: number
@@ -1849,6 +1850,7 @@ export type GlobalSession = {
   slug: string
   projectID: string
   directory: string
+  workspaceID?: string
   parentID?: string
   summary?: {
     additions: number
@@ -3078,6 +3080,28 @@ export type ExperimentalWorkspaceCreateResponses = {
 export type ExperimentalWorkspaceCreateResponse =
   ExperimentalWorkspaceCreateResponses[keyof ExperimentalWorkspaceCreateResponses]
 
+export type ExperimentalWorkspaceStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/experimental/workspace/status"
+}
+
+export type ExperimentalWorkspaceStatusResponses = {
+  /**
+   * Workspace statuses
+   */
+  200: Array<{
+    workspaceID: string
+    status: "connected" | "connecting" | "disconnected" | "error"
+  }>
+}
+
+export type ExperimentalWorkspaceStatusResponse =
+  ExperimentalWorkspaceStatusResponses[keyof ExperimentalWorkspaceStatusResponses]
+
 export type ExperimentalWorkspaceAdaptorsData = {
   body?: never
   path?: never
@@ -3119,6 +3143,37 @@ export type ExperimentalWorkspaceListResponses = {
 
 export type ExperimentalWorkspaceListResponse =
   ExperimentalWorkspaceListResponses[keyof ExperimentalWorkspaceListResponses]
+
+export type ExperimentalWorkspaceWarpData = {
+  body?: {
+    id: string | null
+    sessionID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/experimental/workspace/warp"
+}
+
+export type ExperimentalWorkspaceWarpErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ExperimentalWorkspaceWarpError = ExperimentalWorkspaceWarpErrors[keyof ExperimentalWorkspaceWarpErrors]
+
+export type ExperimentalWorkspaceWarpResponses = {
+  /**
+   * Updated session
+   */
+  200: Session
+}
+
+export type ExperimentalWorkspaceWarpResponse =
+  ExperimentalWorkspaceWarpResponses[keyof ExperimentalWorkspaceWarpResponses]
 
 export type WorktreeResetData = {
   body?: WorktreeResetInput
@@ -3218,9 +3273,17 @@ export type SessionListData = {
   path?: never
   query?: {
     /**
-     * Filter sessions by project directory
+     * Filter sessions by directory
      */
     directory?: string
+    /**
+     * List sessions across the current project
+     */
+    scope?: "project"
+    /**
+     * Filter sessions by project-relative path
+     */
+    path?: string
     /**
      * Only return root sessions (no parentID)
      */
@@ -3259,6 +3322,7 @@ export type SessionCreateData = {
     parentID?: string
     title?: string
     permission?: PermissionRuleset
+    workspaceID?: string
   }
   path?: never
   query?: {

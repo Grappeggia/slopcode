@@ -70,7 +70,7 @@ function DialogWorkspaceCreate(props: { onDone: (workspaceID: string) => Promise
   )
 }
 
-export function DialogWorkspaceList() {
+export function DialogWorkspaceList(props: { sessionID?: string }) {
   const dialog = useDialog()
   const route = useRoute()
   const sdk = useSDK()
@@ -81,24 +81,38 @@ export function DialogWorkspaceList() {
   const [toDelete, setToDelete] = createSignal<string>()
   const [counts, setCounts] = createSignal<CountState>({})
 
+  const status = (workspaceID?: string) => {
+    if (!workspaceID) return "connected"
+    return sync.data.workspace_status[workspaceID] ?? "connecting"
+  }
+
+  const footer = (workspaceID: string | undefined, count: number | null | undefined) => {
+    const label = status(workspaceID)
+    if (count === undefined) return `${label} · Loading sessions...`
+    if (count === null) return `${label} · Sessions unavailable`
+    return `${label} · ${count} session${count === 1 ? "" : "s"}`
+  }
+
   const [workspaces, workspacesCtrl] = createResource(async () => {
     const result = await sdk.client.experimental.workspace.list()
     return result.data ?? []
   })
 
-  const localClient = () => sdk.clientFor(undefined)
+  const countSessions = async (workspaceID?: string) => {
+    const result = await sdk.clientFor(workspaceID).session.list({ roots: true, limit: 200 })
+    const list = result.data ?? []
+    if (workspaceID) return list.filter((item) => (item as { workspaceID?: string }).workspaceID === workspaceID).length
+    return list.filter((item) => !(item as { workspaceID?: string }).workspaceID).length
+  }
 
   const refreshCounts = async (items: NonNullable<ReturnType<typeof workspaces>>) => {
     const entries = await Promise.all([
-      localClient()
-        .session.list({ roots: true, limit: 1 })
-        .then((result) => ["__local__", result.data?.length ?? 0] as const)
+      countSessions()
+        .then((count) => ["__local__", count] as const)
         .catch(() => ["__local__", null] as const),
       ...items.map((workspace) =>
-        sdk
-          .clientFor(workspace.id)
-          .session.list({ roots: true, limit: 1 })
-          .then((result) => [workspace.id, result.data?.length ?? 0] as const)
+        countSessions(workspace.id)
+          .then((count) => [workspace.id, count] as const)
           .catch(() => [workspace.id, null] as const),
       ),
     ])
@@ -123,18 +137,44 @@ export function DialogWorkspaceList() {
     dialog.setSize("large")
   })
 
+  const warp = async (workspaceID?: string) => {
+    if (!props.sessionID) return false
+    const current = route.data.type === "session" ? route.data.workspaceID : undefined
+    if (current === workspaceID) {
+      dialog.clear()
+      return true
+    }
+
+    const workspace = sdk.client.experimental.workspace as unknown as {
+      warp(input: { id: string | null; sessionID: string }): Promise<{ data?: { workspaceID?: string } }>
+    }
+    const result = await workspace.warp({
+      id: workspaceID ?? null,
+      sessionID: props.sessionID,
+    })
+    if (!result.data) {
+      toast.show({ message: "Failed to move session", variant: "error" })
+      return false
+    }
+
+    route.navigate({
+      type: "session",
+      sessionID: props.sessionID,
+      source: "switch",
+      workspaceID,
+    })
+    await sync.bootstrap()
+    dialog.clear()
+    return true
+  }
+
   const options = createMemo(() => [
     {
       title: "Local",
       value: "__local__",
       category: "Workspace",
       description: "Use the local machine",
-      footer:
-        counts()["__local__"] === undefined
-          ? "Loading sessions..."
-          : counts()["__local__"] === null
-            ? "Sessions unavailable"
-            : `${counts()["__local__"]} session${counts()["__local__"] === 1 ? "" : "s"}`,
+      footer: footer(undefined, counts()["__local__"]),
     },
     ...(workspaces() ?? []).map((workspace) => ({
       title:
@@ -148,12 +188,7 @@ export function DialogWorkspaceList() {
         : typeof workspace.config.directory === "string"
           ? workspace.config.directory
           : workspace.id,
-      footer:
-        counts()[workspace.id] === undefined
-          ? "Loading sessions..."
-          : counts()[workspace.id] === null
-            ? "Sessions unavailable"
-            : `${counts()[workspace.id]} session${counts()[workspace.id] === 1 ? "" : "s"}`,
+      footer: footer(workspace.id, counts()[workspace.id]),
     })),
     {
       title: "+ New workspace",
@@ -165,7 +200,7 @@ export function DialogWorkspaceList() {
 
   return (
     <DialogSelect
-      title="Workspaces"
+      title={props.sessionID ? "Move session" : "Workspaces"}
       skipFilter={true}
       options={options()}
       current={currentWorkspaceID()}
@@ -179,6 +214,10 @@ export function DialogWorkspaceList() {
             <DialogWorkspaceCreate
               onDone={async (workspaceID) => {
                 await workspacesCtrl.refetch()
+                if (props.sessionID) {
+                  await warp(workspaceID)
+                  return
+                }
                 await openWorkspaceHome(workspaceID)
               }}
             />
@@ -186,11 +225,19 @@ export function DialogWorkspaceList() {
           return
         }
         if (option.value === "__local__") {
+          if (props.sessionID) {
+            await warp(undefined)
+            return
+          }
           if ((counts()["__local__"] ?? 0) > 0) {
             dialog.replace(() => <DialogSessionList workspaceID={null} />)
             return
           }
           await openWorkspaceHome(undefined)
+          return
+        }
+        if (props.sessionID) {
+          await warp(option.value)
           return
         }
         if ((counts()[option.value] ?? 0) > 0) {

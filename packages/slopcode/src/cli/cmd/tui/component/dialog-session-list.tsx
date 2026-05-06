@@ -28,11 +28,19 @@ export function DialogSessionList(props: { workspaceID?: string | null }) {
   )
   const client = createMemo(() => sdk.clientFor(workspaceID()))
 
+  const filterExplicit = (items: Awaited<ReturnType<ReturnType<typeof client>["session"]["list"]>>["data"] | undefined) => {
+    const list = items ?? []
+    if (props.workspaceID === null) return list.filter((item) => !(item as { workspaceID?: string }).workspaceID)
+    if (typeof props.workspaceID === "string")
+      return list.filter((item) => (item as { workspaceID?: string }).workspaceID === props.workspaceID)
+    return list
+  }
+
   const [listed, listedCtrl] = createResource(
     () => (props.workspaceID === undefined ? undefined : props.workspaceID || "__local__"),
     async () => {
       const result = await client().session.list({ limit: 100 })
-      return result.data ?? []
+      return filterExplicit(result.data)
     },
   )
 
@@ -40,8 +48,12 @@ export function DialogSessionList(props: { workspaceID?: string | null }) {
     () => [search(), workspaceID() ?? "__local__", props.workspaceID === undefined ? "route" : "explicit"] as const,
     async ([query]) => {
       if (!query) return undefined
-      const result = await client().session.list({ search: query, limit: 30 })
-      return result.data ?? []
+      const result = await client().session.list({
+        search: query,
+        limit: 30,
+        ...(props.workspaceID === undefined ? sync.session.query() : {}),
+      })
+      return filterExplicit(result.data)
     },
   )
 
@@ -101,13 +113,15 @@ export function DialogSessionList(props: { workspaceID?: string | null }) {
         setToDelete(undefined)
       }}
       onSelect={async (option) => {
+        const selected = sessions().find((item) => item.id === option.value)
+        const targetWorkspaceID = (selected as { workspaceID?: string } | undefined)?.workspaceID ?? workspaceID()
         route.navigate({
           type: "session",
           sessionID: option.value,
           source: "switch",
-          workspaceID: workspaceID(),
+          workspaceID: targetWorkspaceID,
         })
-        if (workspaceID() !== sdk.workspaceID) {
+        if (targetWorkspaceID !== sdk.workspaceID) {
           await sync.bootstrap()
         }
         dialog.clear()
