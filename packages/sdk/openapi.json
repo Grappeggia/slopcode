@@ -673,6 +673,55 @@
         ]
       }
     },
+    "/pty/shells": {
+      "get": {
+        "operationId": "pty.shells",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List available shells",
+        "description": "Get the shells that can be used for PTY sessions and shell mode.",
+        "responses": {
+          "200": {
+            "description": "Available shells",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "acceptable": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["path", "name", "acceptable"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.pty.shells({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/pty/{ptyID}": {
       "get": {
         "operationId": "pty.get",
@@ -2495,6 +2544,10 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^ses.*"
+                  },
                   "parentID": {
                     "type": "string",
                     "pattern": "^ses.*"
@@ -4142,6 +4195,85 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.message({\n  ...\n})"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "message.update",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Session ID"
+          },
+          {
+            "in": "path",
+            "name": "messageID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Message ID"
+          }
+        ],
+        "summary": "Update message",
+        "description": "Create or update a message in a session.",
+        "responses": {
+          "200": {
+            "description": "Successfully updated message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Message"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.message.update({\n  ...\n})"
           }
         ]
       },
@@ -10716,6 +10848,10 @@
         "description": "Shell command configuration for session-driven shell executions",
         "type": "object",
         "properties": {
+          "program": {
+            "description": "Shell program to use for shell mode, PTY sessions, and the bash tool.",
+            "type": "string"
+          },
           "timeout_ms": {
             "description": "Timeout in milliseconds for session shell commands before the process is terminated (default: 300000).",
             "type": "integer",

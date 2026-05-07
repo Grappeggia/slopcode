@@ -20,7 +20,9 @@ async function remoteRequest(workspace: Workspace.Info, method: string, url: str
     throw new HTTPException(400, { message: `Workspace request failed: ${workspace.id}` })
   }
   if (response.ok) return response
-  throw new HTTPException(400, { message: await response.text().catch(() => `Workspace request failed: ${workspace.id}`) })
+  throw new HTTPException(400, {
+    message: await response.text().catch(() => `Workspace request failed: ${workspace.id}`),
+  })
 }
 
 async function syncRemoteSession(workspace: Workspace.Info, session: Session.Info) {

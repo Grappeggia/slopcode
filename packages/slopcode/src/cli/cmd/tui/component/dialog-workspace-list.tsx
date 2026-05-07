@@ -102,7 +102,8 @@ export function DialogWorkspaceList(props: { sessionID?: string }) {
     const result = await sdk.clientFor(workspace?.id).session.list({ roots: true, limit: 200 })
     const list = result.data ?? []
     if (workspace && workspace.config.type !== "worktree") return list.length
-    if (workspace?.id) return list.filter((item) => (item as { workspaceID?: string }).workspaceID === workspace.id).length
+    if (workspace?.id)
+      return list.filter((item) => (item as { workspaceID?: string }).workspaceID === workspace.id).length
     return list.filter((item) => !(item as { workspaceID?: string }).workspaceID).length
   }
 

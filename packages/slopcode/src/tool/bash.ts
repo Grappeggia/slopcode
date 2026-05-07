@@ -88,9 +88,7 @@ export const BashTool = Tool.define("bash", async () => {
           `The working directory to run the command in. Defaults to ${Instance.directory}. Use this instead of 'cd' commands.`,
         )
         .optional(),
-      description: z
-        .string()
-        .describe(parameterDescription),
+      description: z.string().describe(parameterDescription),
     }),
     async execute(params, ctx) {
       const cwd = params.workdir || Instance.directory

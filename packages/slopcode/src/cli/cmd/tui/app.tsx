@@ -790,7 +790,10 @@ function App() {
       search: "toggle paste summary",
       category: "System",
       onSelect: (dialog) => {
-        kv.set("paste_summary_enabled", !kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary))
+        kv.set(
+          "paste_summary_enabled",
+          !kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary),
+        )
         dialog.clear()
       },
     },

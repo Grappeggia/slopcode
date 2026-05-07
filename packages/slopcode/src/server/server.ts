@@ -286,7 +286,8 @@ export namespace Server {
           }
           if (workspace && workspace.config.type !== "worktree" && shouldProxyRemoteWorkspace(c.req.path)) {
             const url = new URL(c.req.url)
-            const body = c.req.raw.method === "GET" || c.req.raw.method === "HEAD" ? undefined : await c.req.raw.arrayBuffer()
+            const body =
+              c.req.raw.method === "GET" || c.req.raw.method === "HEAD" ? undefined : await c.req.raw.arrayBuffer()
             const response = await getAdaptor(workspace.projectID, workspace.config.type).request(
               workspace.config,
               c.req.raw.method,

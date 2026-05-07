@@ -27,7 +27,12 @@ export function DialogSessionList(props: { workspaceID?: string | null }) {
     props.workspaceID === undefined ? route.data.workspaceID : props.workspaceID || undefined,
   )
   const client = createMemo(() => sdk.clientFor(workspaceID()))
-  const [workspaces] = createResource(async () => sdk.clientFor(undefined).experimental.workspace.list().then((x) => x.data ?? []))
+  const [workspaces] = createResource(async () =>
+    sdk
+      .clientFor(undefined)
+      .experimental.workspace.list()
+      .then((x) => x.data ?? []),
+  )
   const isRemote = createMemo(() => {
     if (typeof props.workspaceID !== "string") return false
     return workspaces()?.find((item) => item.id === props.workspaceID)?.config.type !== "worktree"

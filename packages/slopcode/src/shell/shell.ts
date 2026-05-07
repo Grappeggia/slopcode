@@ -114,7 +114,9 @@ export namespace Shell {
       if (shell) return shell
     }
     if (process.platform === "win32") {
-      return [which("pwsh"), which("powershell"), gitbash(), process.env.COMSPEC || "cmd.exe"].find(Boolean) || "cmd.exe"
+      return (
+        [which("pwsh"), which("powershell"), gitbash(), process.env.COMSPEC || "cmd.exe"].find(Boolean) || "cmd.exe"
+      )
     }
     return fallback()
   }
@@ -146,7 +148,9 @@ export namespace Shell {
                 .filter((line) => line && !line.startsWith("#")),
             ),
           )
-    const unique = Array.from(new Set(files.map((file) => resolve(file)).filter((file): file is string => Boolean(file))))
+    const unique = Array.from(
+      new Set(files.map((file) => resolve(file)).filter((file): file is string => Boolean(file))),
+    )
     return unique.map((file) => ({
       path: file,
       name: resolve(name(file)) ? name(file) : file,

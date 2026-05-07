@@ -1249,7 +1249,8 @@ export function Prompt(props: PromptProps) {
     return shellName()
   })
   const shellExamples = createMemo(() => {
-    if (shellName() === "pwsh" || shellName() === "powershell") return ["Get-ChildItem -LiteralPath .", "git status", "Get-Location"]
+    if (shellName() === "pwsh" || shellName() === "powershell")
+      return ["Get-ChildItem -LiteralPath .", "git status", "Get-Location"]
     if (shellName() === "cmd") return ["dir", "git status", "cd"]
     return props.placeholders?.shell?.length ? props.placeholders.shell : SHELL_PLACEHOLDERS
   })
