@@ -1136,6 +1136,10 @@ export type SessionConfig = {
  */
 export type ShellConfig = {
   /**
+   * Shell program to use for shell mode, PTY sessions, and the bash tool.
+   */
+  program?: string
+  /**
    * Timeout in milliseconds for session shell commands before the process is terminated (default: 300000).
    */
   timeout_ms?: number
@@ -2448,6 +2452,28 @@ export type PtyCreateResponses = {
 
 export type PtyCreateResponse = PtyCreateResponses[keyof PtyCreateResponses]
 
+export type PtyShellsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/pty/shells"
+}
+
+export type PtyShellsResponses = {
+  /**
+   * Available shells
+   */
+  200: Array<{
+    path: string
+    name: string
+    acceptable: boolean
+  }>
+}
+
+export type PtyShellsResponse = PtyShellsResponses[keyof PtyShellsResponses]
+
 export type PtyRemoveData = {
   body?: never
   path: {
@@ -3319,6 +3345,7 @@ export type SessionListResponse = SessionListResponses[keyof SessionListResponse
 
 export type SessionCreateData = {
   body?: {
+    id?: string
     parentID?: string
     title?: string
     permission?: PermissionRuleset
@@ -4159,6 +4186,46 @@ export type SessionMessageResponses = {
 }
 
 export type SessionMessageResponse = SessionMessageResponses[keyof SessionMessageResponses]
+
+export type MessageUpdateData = {
+  body?: Message
+  path: {
+    /**
+     * Session ID
+     */
+    sessionID: string
+    /**
+     * Message ID
+     */
+    messageID: string
+  }
+  query?: {
+    directory?: string
+  }
+  url: "/session/{sessionID}/message/{messageID}"
+}
+
+export type MessageUpdateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type MessageUpdateError = MessageUpdateErrors[keyof MessageUpdateErrors]
+
+export type MessageUpdateResponses = {
+  /**
+   * Successfully updated message
+   */
+  200: Message
+}
+
+export type MessageUpdateResponse = MessageUpdateResponses[keyof MessageUpdateResponses]
 
 export type PartDeleteData = {
   body?: never

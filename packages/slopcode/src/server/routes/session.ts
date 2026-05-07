@@ -1119,6 +1119,44 @@ export const SessionRoutes = lazy(() =>
         return c.json(message)
       },
     )
+    .put(
+      "/:sessionID/message/:messageID",
+      describeRoute({
+        summary: "Update message",
+        description: "Create or update a message in a session.",
+        operationId: "message.update",
+        responses: {
+          200: {
+            description: "Successfully updated message",
+            content: {
+              "application/json": {
+                schema: resolver(MessageV2.Info),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: z.string().meta({ description: "Session ID" }),
+          messageID: z.string().meta({ description: "Message ID" }),
+        }),
+      ),
+      validator("json", MessageV2.Info),
+      async (c) => {
+        const params = c.req.valid("param")
+        const body = c.req.valid("json")
+        if (body.id !== params.messageID || body.sessionID !== params.sessionID) {
+          throw new Error(
+            `Message mismatch: body.id='${body.id}' vs messageID='${params.messageID}', body.sessionID='${body.sessionID}' vs sessionID='${params.sessionID}'`,
+          )
+        }
+        const message = await Session.updateMessage(body)
+        return c.json(message)
+      },
+    )
     .delete(
       "/:sessionID/message/:messageID",
       describeRoute({

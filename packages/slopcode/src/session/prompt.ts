@@ -2176,10 +2176,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       },
     }
     await Session.updatePart(part)
-    const shell = Shell.preferred()
-    const shellName = (
-      process.platform === "win32" ? path.win32.basename(shell, ".exe") : path.basename(shell)
-    ).toLowerCase()
+    const cfg = await Config.get()
+    const shell = Shell.preferred(cfg.shell?.program)
+    const shellName = Shell.name(shell)
 
     const invocations: Record<string, { args: string[] }> = {
       nu: {
@@ -2248,7 +2247,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       },
     })
 
-    const timeout = (await Config.get()).shell?.timeout_ms ?? SHELL_TIMEOUT
+    const timeout = cfg.shell?.timeout_ms ?? SHELL_TIMEOUT
     const decoder = new TextDecoder()
     let output = ""
     let clipped = 0

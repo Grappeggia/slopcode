@@ -27,6 +27,7 @@ import { useSync } from "@tui/context/sync"
 import { useEditorContext } from "@tui/context/editor"
 import { sessionWaiting } from "@tui/context/session-tabs-state"
 import { Identifier } from "@/id/id"
+import { Shell } from "@/shell/shell"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
@@ -1237,6 +1238,24 @@ export function Prompt(props: PromptProps) {
       }),
     ),
   )
+  const shellName = createMemo(() => {
+    const configured = (sync.data.config.shell as { program?: string } | undefined)?.program
+    return Shell.name(Shell.preferred(configured))
+  })
+  const shellDisplay = createMemo(() => {
+    if (shellName() === "pwsh") return "PowerShell"
+    if (shellName() === "powershell") return "Windows PowerShell"
+    if (shellName() === "cmd") return "cmd.exe"
+    return shellName()
+  })
+  const shellExamples = createMemo(() => {
+    if (shellName() === "pwsh" || shellName() === "powershell") return ["Get-ChildItem -LiteralPath .", "git status", "Get-Location"]
+    if (shellName() === "cmd") return ["dir", "git status", "cd"]
+    return props.placeholders?.shell?.length ? props.placeholders.shell : SHELL_PLACEHOLDERS
+  })
+  const pasteSummaryEnabled = createMemo(() =>
+    kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary),
+  )
 
   const placeholderText = createMemo(() => {
     if (props.sessionID) {
@@ -1246,7 +1265,7 @@ export function Prompt(props: PromptProps) {
       return undefined
     }
     if (store.mode === "shell") {
-      const list = props.placeholders?.shell?.length ? props.placeholders.shell : SHELL_PLACEHOLDERS
+      const list = shellExamples()
       return `Run a command... "${list[store.placeholder % list.length]}"`
     }
     const list = props.placeholders?.normal?.length ? props.placeholders.normal : PLACEHOLDERS
@@ -1554,10 +1573,7 @@ export function Prompt(props: PromptProps) {
                   }
 
                   const lineCount = (pastedContent.match(/\n/g)?.length ?? 0) + 1
-                  if (
-                    (lineCount >= 3 || pastedContent.length > 150) &&
-                    !sync.data.config.experimental?.disable_paste_summary
-                  ) {
+                  if ((lineCount >= 3 || pastedContent.length > 150) && pasteSummaryEnabled()) {
                     event.preventDefault()
                     pasteText(pastedContent, `[Pasted ~${lineCount} lines]`)
                     return
@@ -1610,7 +1626,7 @@ export function Prompt(props: PromptProps) {
             </box>
             <box flexDirection="row" flexShrink={0} gap={1} marginTop={1}>
               <text fg={highlight()}>
-                {store.mode === "shell" ? "Shell" : Locale.titlecase(local.agent.current().name)}{" "}
+                {store.mode === "shell" ? shellDisplay() : Locale.titlecase(local.agent.current().name)}{" "}
               </text>
               <Show when={store.mode === "normal"}>
                 <box flexDirection="row" gap={1}>

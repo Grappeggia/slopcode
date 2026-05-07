@@ -98,10 +98,11 @@ export function DialogWorkspaceList(props: { sessionID?: string }) {
     return result.data ?? []
   })
 
-  const countSessions = async (workspaceID?: string) => {
-    const result = await sdk.clientFor(workspaceID).session.list({ roots: true, limit: 200 })
+  const countSessions = async (workspace?: { id: string; config: { type: string } }) => {
+    const result = await sdk.clientFor(workspace?.id).session.list({ roots: true, limit: 200 })
     const list = result.data ?? []
-    if (workspaceID) return list.filter((item) => (item as { workspaceID?: string }).workspaceID === workspaceID).length
+    if (workspace && workspace.config.type !== "worktree") return list.length
+    if (workspace?.id) return list.filter((item) => (item as { workspaceID?: string }).workspaceID === workspace.id).length
     return list.filter((item) => !(item as { workspaceID?: string }).workspaceID).length
   }
 
@@ -111,7 +112,7 @@ export function DialogWorkspaceList(props: { sessionID?: string }) {
         .then((count) => ["__local__", count] as const)
         .catch(() => ["__local__", null] as const),
       ...items.map((workspace) =>
-        countSessions(workspace.id)
+        countSessions(workspace)
           .then((count) => [workspace.id, count] as const)
           .catch(() => [workspace.id, null] as const),
       ),

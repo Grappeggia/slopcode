@@ -282,6 +282,7 @@ export namespace Config {
       turn_timeout_ms: result.session?.turn_timeout_ms ?? DEFAULT_SESSION_TURN_TIMEOUT,
     }
     result.shell = {
+      program: result.shell?.program,
       timeout_ms: result.shell?.timeout_ms ?? 5 * 60 * 1000,
     }
     syncPlugins(result, origins(result))
@@ -1056,6 +1057,7 @@ export namespace Config {
 
   export const Shell = z
     .object({
+      program: z.string().optional().describe("Shell program to use for shell mode, PTY sessions, and the bash tool."),
       timeout_ms: z
         .number()
         .int()

@@ -185,9 +185,10 @@ export namespace Pty {
 
   export async function create(input: CreateInput) {
     const id = Identifier.create("pty", false)
-    const command = input.command || Shell.preferred()
+    const cfg = await Config.get()
+    const command = input.command || Shell.preferred(cfg.shell?.program)
     const args = input.args || []
-    if (command.endsWith("sh")) {
+    if (Shell.posix(command)) {
       args.push("-l")
     }
 
@@ -196,7 +197,7 @@ export namespace Pty {
       Env.merge(input.env, { sessionID: input.sessionID })
     }
     const shellEnv = await Plugin.trigger("shell.env", { cwd, sessionID: input.sessionID }, { env: {} })
-    const idle_timeout_ms = (await Config.get()).pty?.idle_timeout_ms ?? 10 * 60 * 1000
+    const idle_timeout_ms = cfg.pty?.idle_timeout_ms ?? 10 * 60 * 1000
     const env = {
       ...Env.all({ sessionID: input.sessionID }),
       ...input.env,

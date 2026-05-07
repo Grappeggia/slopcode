@@ -3,6 +3,7 @@ import { describeRoute, validator, resolver } from "hono-openapi"
 import { upgradeWebSocket } from "hono/bun"
 import z from "zod"
 import { Pty } from "@/pty"
+import { Shell } from "@/shell/shell"
 import { NotFoundError } from "../../storage/db"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
@@ -53,6 +54,35 @@ export const PtyRoutes = lazy(() =>
       async (c) => {
         const info = await Pty.create(c.req.valid("json"))
         return c.json(info)
+      },
+    )
+    .get(
+      "/shells",
+      describeRoute({
+        summary: "List available shells",
+        description: "Get the shells that can be used for PTY sessions and shell mode.",
+        operationId: "pty.shells",
+        responses: {
+          200: {
+            description: "Available shells",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.array(
+                    z.object({
+                      path: z.string(),
+                      name: z.string(),
+                      acceptable: z.boolean(),
+                    }),
+                  ),
+                ),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        return c.json(await Shell.list())
       },
     )
     .get(

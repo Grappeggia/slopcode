@@ -23,6 +23,7 @@ import { DialogHelp } from "./ui/dialog-help"
 import { CommandProvider, useCommandDialog } from "@tui/component/dialog-command"
 import { DialogAgent } from "@tui/component/dialog-agent"
 import { DialogProvider as DialogProviderList } from "@tui/component/dialog-provider"
+import { DialogShell } from "@tui/component/dialog-shell"
 import { DialogSessionList } from "@tui/component/dialog-session-list"
 import { DialogWorkspaceList } from "@tui/component/dialog-workspace-list"
 import { DialogConsoleOrg } from "@tui/component/dialog-console-org"
@@ -647,6 +648,19 @@ function App() {
       category: "System",
     },
     {
+      title: "Switch shell",
+      value: "shell.list",
+      search: "select default shell",
+      slash: {
+        name: "shells",
+        aliases: ["shell"],
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogShell />)
+      },
+      category: "System",
+    },
+    {
       title: "Switch theme",
       value: "theme.switch",
       keybind: "theme_list",
@@ -765,6 +779,18 @@ function App() {
       onSelect: async (dialog) => {
         kv.set("session_directory_filter_enabled", !kv.get("session_directory_filter_enabled", true))
         await sync.session.refresh()
+        dialog.clear()
+      },
+    },
+    {
+      title: kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary)
+        ? "Disable paste summaries"
+        : "Enable paste summaries",
+      value: "app.toggle.paste_summary",
+      search: "toggle paste summary",
+      category: "System",
+      onSelect: (dialog) => {
+        kv.set("paste_summary_enabled", !kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary))
         dialog.clear()
       },
     },

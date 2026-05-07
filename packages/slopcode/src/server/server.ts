@@ -45,6 +45,7 @@ import { MDNS } from "./mdns"
 import { DaemonAuth } from "@/daemon/auth"
 import { DaemonRuntime } from "@/daemon/runtime"
 import { Identifier } from "@/id/id"
+import { getAdaptor } from "@/control-plane/adaptors"
 import { Workspace } from "@/control-plane/workspace"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
@@ -52,6 +53,26 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 export namespace Server {
   const log = Log.create({ service: "server" })
+  const remoteWorkspaceProxyPrefixes = [
+    "/event",
+    "/path",
+    "/vcs",
+    "/find",
+    "/file",
+    "/session",
+    "/permission",
+    "/question",
+    "/editor",
+    "/pty",
+    "/lsp",
+    "/formatter",
+    "/mcp",
+    "/experimental/resource",
+  ]
+
+  function shouldProxyRemoteWorkspace(path: string) {
+    return remoteWorkspaceProxyPrefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"))
+  }
 
   let _url: URL | undefined
   let _corsWhitelist: string[] = []
@@ -259,12 +280,30 @@ export namespace Server {
               return raw
             }
           })()
-          const target = workspaceID
-            ? await Workspace.get(workspaceID).then((workspace) => {
-                if (!workspace) return undefined
+          const workspace = workspaceID ? await Workspace.get(workspaceID) : undefined
+          if (workspaceID && !workspace) {
+            return c.text(`Workspace not found: ${workspaceID}`, 500)
+          }
+          if (workspace && workspace.config.type !== "worktree" && shouldProxyRemoteWorkspace(c.req.path)) {
+            const url = new URL(c.req.url)
+            const body = c.req.raw.method === "GET" || c.req.raw.method === "HEAD" ? undefined : await c.req.raw.arrayBuffer()
+            const response = await getAdaptor(workspace.projectID, workspace.config.type).request(
+              workspace.config,
+              c.req.raw.method,
+              `${url.pathname}${url.search}`,
+              body,
+              c.req.raw.signal,
+            )
+            if (!response) {
+              return c.text(`Workspace proxy failed: ${workspace.id}`, 500)
+            }
+            return response
+          }
+          const target = workspace
+            ? (() => {
                 const value = workspace.config.directory
                 return typeof value === "string" ? value : workspace.id
-              })
+              })()
             : directory
           if (!target) {
             return c.text(`Workspace not found: ${workspaceID}`, 500)

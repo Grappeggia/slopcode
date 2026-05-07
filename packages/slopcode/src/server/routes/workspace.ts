@@ -2,11 +2,46 @@ import { Hono } from "hono"
 import { HTTPException } from "hono/http-exception"
 import { describeRoute, resolver, validator } from "hono-openapi"
 import z from "zod"
+import { getAdaptor } from "../../control-plane/adaptors"
 import { Workspace } from "../../control-plane/workspace"
 import { Instance } from "../../project/instance"
 import { Session } from "../../session"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
+
+async function remoteRequest(workspace: Workspace.Info, method: string, url: string, body?: unknown) {
+  const response = await getAdaptor(workspace.projectID, workspace.config.type).request(
+    workspace.config,
+    method,
+    url,
+    body === undefined ? undefined : JSON.stringify(body),
+  )
+  if (!response) {
+    throw new HTTPException(400, { message: `Workspace request failed: ${workspace.id}` })
+  }
+  if (response.ok) return response
+  throw new HTTPException(400, { message: await response.text().catch(() => `Workspace request failed: ${workspace.id}`) })
+}
+
+async function syncRemoteSession(workspace: Workspace.Info, session: Session.Info) {
+  const existing = await remoteRequest(workspace, "GET", `/session/${session.id}`).catch(() => undefined)
+  if (!existing) {
+    await remoteRequest(workspace, "POST", "/session", {
+      id: session.id,
+      parentID: session.parentID,
+      title: session.title,
+      permission: session.permission,
+    })
+  }
+
+  const messages = await Session.messages({ sessionID: session.id })
+  for (const message of messages) {
+    await remoteRequest(workspace, "PUT", `/session/${session.id}/message/${message.info.id}`, message.info)
+    for (const part of message.parts) {
+      await remoteRequest(workspace, "PATCH", `/session/${session.id}/message/${message.info.id}/part/${part.id}`, part)
+    }
+  }
+}
 
 export const WorkspaceRoutes = lazy(() =>
   new Hono()
@@ -139,9 +174,6 @@ export const WorkspaceRoutes = lazy(() =>
         const body = c.req.valid("json")
         const session = await Session.get(body.sessionID)
         const current = session.workspaceID ? await Workspace.get(session.workspaceID) : undefined
-        if (current && current.config.type !== "worktree") {
-          throw new HTTPException(400, { message: "Remote workspace sessions cannot be moved yet" })
-        }
         if (!body.id) {
           return c.json(
             current ? await Session.setWorkspace({ sessionID: body.sessionID, workspaceID: undefined }) : session,
@@ -152,10 +184,10 @@ export const WorkspaceRoutes = lazy(() =>
         if (!workspace) {
           throw new HTTPException(400, { message: `Workspace not found: ${body.id}` })
         }
-        if (workspace.config.type !== "worktree") {
-          throw new HTTPException(400, { message: "Remote workspace sessions cannot be moved yet" })
-        }
         if (session.workspaceID === workspace.id) return c.json(session)
+        if (workspace.config.type !== "worktree") {
+          await syncRemoteSession(workspace, session)
+        }
         return c.json(await Session.setWorkspace({ sessionID: body.sessionID, workspaceID: workspace.id }))
       },
     )

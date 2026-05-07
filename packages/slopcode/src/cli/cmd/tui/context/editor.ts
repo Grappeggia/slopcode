@@ -297,6 +297,7 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
         return store.server
       },
       reconnect(nextDirectory?: string) {
+        if ((nextDirectory || process.cwd()) === directory) return
         setStore("selection", undefined)
         reconnectWithDirectory(nextDirectory)
       },
