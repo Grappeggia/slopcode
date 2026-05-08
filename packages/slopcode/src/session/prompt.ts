@@ -822,9 +822,7 @@ export namespace SessionPrompt {
         )
 
         const current = mode === "serial" ? state()[sessionID]?.current : undefined
-        const currentVisible = current
-          ? msgs.some((msg) => msg.info.role === "user" && msg.info.id === current)
-          : false
+        const currentVisible = current ? msgs.some((msg) => msg.info.role === "user" && msg.info.id === current) : false
         let currentMsg: MessageV2.WithParts | undefined
         let lastUser: MessageV2.User | undefined
         let lastAssistant: MessageV2.Assistant | undefined

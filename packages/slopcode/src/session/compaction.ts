@@ -253,7 +253,7 @@ When constructing the summary, try to stick to this template:
               ? { type: "text" as const, text: `[Attached ${part.mime}: ${part.filename ?? "file"}]`, synthetic: true }
               : part.type === "text"
                 ? { ...part, synthetic: true }
-              : part
+                : part
           await Session.updatePart({
             ...replayPart,
             id: Identifier.ascending("part"),
