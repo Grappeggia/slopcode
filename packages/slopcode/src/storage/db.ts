@@ -37,7 +37,6 @@ export namespace Database {
   const ColumnRow = z.object({ name: z.string() })
   const MigrationRow = z.object({ created_at: z.coerce.number() })
 
-
   const state = {
     sqlite: undefined as BunDatabase | undefined,
   }
