@@ -911,6 +911,23 @@ describe("session.message-v2.fromError", () => {
     expect(MessageV2.APIError.isInstance(result)).toBe(true)
   })
 
+  test("classifies 413 status codes as context overflow", () => {
+    const result = MessageV2.fromError(
+      new APICallError({
+        message: "Payload Too Large",
+        url: "https://example.com",
+        requestBodyValues: {},
+        statusCode: 413,
+        responseHeaders: { "content-type": "application/json" },
+        responseBody: '{"error":"too large"}',
+        isRetryable: false,
+      }),
+      { providerID: "test" },
+    )
+
+    expect(MessageV2.ContextOverflowError.isInstance(result)).toBe(true)
+  })
+
   test("serializes unknown inputs", () => {
     const result = MessageV2.fromError(123, { providerID: "test" })
 

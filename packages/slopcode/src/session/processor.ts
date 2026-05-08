@@ -385,34 +385,40 @@ export namespace SessionProcessor {
               })
               const error = MessageV2.fromError(e, { providerID: input.model.providerID, aborted: input.abort.aborted })
               if (MessageV2.ContextOverflowError.isInstance(error)) {
-                // TODO: Handle context overflow error
-              }
-              const retry = SessionRetry.retryable(error)
-              if (retry !== undefined) {
-                attempt++
-                const delay = SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
-                SessionStatus.retry(input.sessionID, {
-                  attempt,
-                  message: retry,
-                  next: Date.now() + delay,
+                needsCompaction = true
+                Bus.publish(Session.Event.Error, {
+                  sessionID: input.sessionID,
+                  error,
+                  viewID: Instance.viewID,
                 })
-                await SessionRetry.sleep(delay, abort).catch(() => {})
-                if (abort.aborted) continue
-                continue
+              } else {
+                const retry = SessionRetry.retryable(error)
+                if (retry !== undefined) {
+                  attempt++
+                  const delay = SessionRetry.delay(attempt, error.name === "APIError" ? error : undefined)
+                  SessionStatus.retry(input.sessionID, {
+                    attempt,
+                    message: retry,
+                    next: Date.now() + delay,
+                  })
+                  await SessionRetry.sleep(delay, abort).catch(() => {})
+                  if (abort.aborted) continue
+                  continue
+                }
+                input.assistantMessage.error =
+                  abort.aborted && !input.abort.aborted
+                    ? new MessageV2.TimeoutError({
+                        message: `Session turn exceeded timeout ${timeout} ms`,
+                        timeout,
+                      }).toObject()
+                    : error
+                Bus.publish(Session.Event.Error, {
+                  sessionID: input.assistantMessage.sessionID,
+                  error: input.assistantMessage.error,
+                  viewID: Instance.viewID,
+                })
+                SessionStatus.set(input.sessionID, { type: "idle" })
               }
-              input.assistantMessage.error =
-                abort.aborted && !input.abort.aborted
-                  ? new MessageV2.TimeoutError({
-                      message: `Session turn exceeded timeout ${timeout} ms`,
-                      timeout,
-                    }).toObject()
-                  : error
-              Bus.publish(Session.Event.Error, {
-                sessionID: input.assistantMessage.sessionID,
-                error: input.assistantMessage.error,
-                viewID: Instance.viewID,
-              })
-              SessionStatus.set(input.sessionID, { type: "idle" })
             }
             if (snapshot) {
               const patch = await Snapshot.patch(snapshot)

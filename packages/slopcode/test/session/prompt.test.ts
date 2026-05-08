@@ -1,5 +1,6 @@
 import path from "path"
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
+import { APICallError } from "ai"
 import { fileURLToPath } from "url"
 import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/session"
@@ -702,6 +703,75 @@ describe("session.prompt agent variant", () => {
 })
 
 describe("session.prompt queue mode", () => {
+  test("replays prompts after a 413 overflow compaction", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        agent: {
+          build: {
+            model: "slopcode/kimi-k2.5-free",
+          },
+        },
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({ title: "Overflow Recovery Test" })
+        const seen: string[] = []
+        let calls = 0
+
+        spyOn(LLM, "stream").mockImplementation(async (input) => {
+          calls++
+          seen.push(JSON.stringify(input.messages))
+          if (calls === 1) return stream({ text: "warmup done", finishReason: "stop" })
+          if (calls === 2) {
+            throw new APICallError({
+              message: "Payload Too Large",
+              url: "https://example.com",
+              requestBodyValues: {},
+              statusCode: 413,
+              responseHeaders: { "content-type": "application/json" },
+              responseBody: '{"error":"too large"}',
+              isRetryable: false,
+            })
+          }
+          if (calls === 3) return stream({ text: "compacted", finishReason: "stop" })
+          if (calls === 4) return stream({ text: "done after compaction", finishReason: "stop" })
+          throw new Error(`unexpected llm call ${calls}`)
+        })
+
+        await SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: "warm up" }],
+        })
+
+        const result = await SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [
+            { type: "text", text: "inspect screenshot" },
+            {
+              type: "file",
+              mime: "image/png",
+              url: "data:image/png;base64,AA==",
+              filename: "tiny.png",
+            },
+          ],
+        })
+
+        expect(calls).toBe(4)
+        expect(text(result)).toBe("done after compaction")
+        expect(seen[2]).not.toContain("data:image/png")
+        expect(seen[3]).toContain("inspect screenshot")
+        expect(seen[3]).toContain("[Attached image/png: tiny.png]")
+        expect(seen[3]).not.toContain("data:image/png")
+      },
+    })
+  })
+
   test("serial waits to process follow-up prompts until current execution completes", async () => {
     await using tmp = await tmpdir({
       git: true,

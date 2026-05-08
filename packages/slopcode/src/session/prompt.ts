@@ -822,6 +822,9 @@ export namespace SessionPrompt {
         )
 
         const current = mode === "serial" ? state()[sessionID]?.current : undefined
+        const currentVisible = current
+          ? msgs.some((msg) => msg.info.role === "user" && msg.info.id === current)
+          : false
         let currentMsg: MessageV2.WithParts | undefined
         let lastUser: MessageV2.User | undefined
         let lastAssistant: MessageV2.Assistant | undefined
@@ -830,7 +833,7 @@ export namespace SessionPrompt {
         let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
         for (let i = msgs.length - 1; i >= 0; i--) {
           const msg = msgs[i]
-          if (!lastUser && msg.info.role === "user" && (!current || msg.info.id === current)) {
+          if (!lastUser && msg.info.role === "user" && (!current || msg.info.id === current || !currentVisible)) {
             lastUser = msg.info as MessageV2.User
             currentMsg = msg
           }
@@ -885,6 +888,9 @@ export namespace SessionPrompt {
           throw e
         })
         const task = tasks.pop()
+        const taskMsg =
+          task && msgs.find((msg) => msg.info.role === "user" && msg.parts.some((part) => part.id === task.id))
+        const taskUser = (taskMsg?.info.role === "user" ? taskMsg.info : lastUser) as MessageV2.User
 
         // pending subtask
         // TODO: centralize "invoke tool" logic
@@ -894,11 +900,11 @@ export namespace SessionPrompt {
           const assistantMessage = (await Session.updateMessage({
             id: Identifier.ascending("message"),
             role: "assistant",
-            parentID: lastUser.id,
+            parentID: taskUser.id,
             sessionID,
             mode: task.agent,
             agent: task.agent,
-            variant: lastUser.variant,
+            variant: taskUser.variant,
             path: {
               cwd: Instance.directory,
               root: Instance.worktree,
@@ -1047,8 +1053,8 @@ export namespace SessionPrompt {
               time: {
                 created: Date.now(),
               },
-              agent: lastUser.agent,
-              model: lastUser.model,
+              agent: taskUser.agent,
+              model: taskUser.model,
             }
             await Session.updateMessage(summaryUserMsg)
             await Session.updatePart({
@@ -1069,10 +1075,11 @@ export namespace SessionPrompt {
           SessionStatus.busy(sessionID, "compacting")
           const result = await SessionCompaction.process({
             messages: msgs,
-            parentID: lastUser.id,
+            parentID: taskUser.id,
             abort,
             sessionID,
             auto: task.auto,
+            overflow: task.overflow,
           })
           if (result === "stop") break
           continue
@@ -1257,6 +1264,7 @@ export namespace SessionPrompt {
             agent: lastUser.agent,
             model: lastUser.model,
             auto: true,
+            overflow: !processor.message.finish,
           })
         }
         continue
