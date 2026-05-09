@@ -6,6 +6,7 @@ import { useConnected } from "../../component/dialog-model"
 import { WorkspaceLabel } from "../../component/workspace-label"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
+import { sessionThreadRoot, sessionTreeIDs } from "./request-tree"
 
 export function Footer() {
   const { theme } = useTheme()
@@ -16,7 +17,8 @@ export function Footer() {
   const lsp = createMemo(() => Object.keys(sync.data.lsp))
   const permissions = createMemo(() => {
     if (route.data.type !== "session") return []
-    return sync.data.permission[route.data.sessionID] ?? []
+    const root = sessionThreadRoot(sync.data.session, route.data.sessionID)
+    return sessionTreeIDs(sync.data.session, root).flatMap((id) => sync.data.permission[id] ?? [])
   })
   const directory = useDirectory()
   const connected = useConnected()

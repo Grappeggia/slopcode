@@ -97,6 +97,7 @@ import { segmentRichText, updateRichTextStream } from "@/cli/render/segment"
 import { RichSegments } from "@/cli/render/tui"
 import type { RichTextStream } from "@/cli/render/types"
 import { useTuiConfig } from "../../context/tui-config"
+import { sessionThreadRoot, sessionTreeIDs } from "./request-tree"
 
 ensureDefaultParsers()
 
@@ -116,6 +117,7 @@ const CUSTOM_TOOL_PARTS = new Set([
   "todowrite",
   "question",
   "skill",
+  "followup_recommendations",
 ])
 const BASH_EXPAND_LINES = 10
 const GENERIC_EXPAND_LINES = 3
@@ -266,11 +268,10 @@ export function Session() {
   const { theme } = useTheme()
   const promptRef = usePromptRef()
   const session = createMemo(() => sync.session.get(route.sessionID))
+  const threadRootID = createMemo(() => sessionThreadRoot(sync.data.session, route.sessionID))
   const children = createMemo(() => {
-    const parentID = session()?.parentID ?? session()?.id
-    return sync.data.session
-      .filter((x) => x.parentID === parentID || x.id === parentID)
-      .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    const ids = new Set(sessionTreeIDs(sync.data.session, threadRootID()))
+    return sync.data.session.filter((item) => ids.has(item.id))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
   const permissions = createMemo(() => {
@@ -2078,7 +2079,7 @@ export function Session() {
                     </scrollbox>
                     <box flexShrink={0}>
                       <Show when={permissions().length > 0}>
-                        <PermissionPrompt requests={permissions()} />
+                        <PermissionPrompt requests={permissions()} sessionID={threadRootID()} />
                       </Show>
                       <Show when={permissions().length === 0 && questions().length > 0}>
                         <QuestionPrompt request={questions()[0]} />
@@ -2803,6 +2804,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={props.part.tool === "skill"}>
           <Skill {...toolprops} />
         </Match>
+        <Match when={props.part.tool === "followup_recommendations"}>
+          <FollowupRecommendations {...toolprops} />
+        </Match>
         <Match when={true}>
           <GenericTool {...toolprops} />
         </Match>
@@ -2851,6 +2855,60 @@ function GenericTool(props: ToolProps<any>) {
             <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>
           </Show>
         </box>
+      </BlockTool>
+    </Show>
+  )
+}
+
+function FollowupRecommendations(props: ToolProps<any>) {
+  const { theme } = useTheme()
+  const items = createMemo(() => {
+    const list = props.metadata.recommendations
+    if (!Array.isArray(list)) return [] as Record<string, unknown>[]
+    return list.filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item))
+  })
+
+  const ready = createMemo(() => items().length > 0 || !!props.output)
+
+  return (
+    <Show
+      when={ready()}
+      fallback={
+        <InlineTool icon="o" pending="Preparing next actions..." complete={false} part={props.part}>
+          Suggested next actions
+        </InlineTool>
+      }
+    >
+      <BlockTool title="# Suggested next actions" part={props.part}>
+        <Show when={items().length > 0} fallback={<text fg={theme.text}>{props.output ?? ""}</text>}>
+          <box flexDirection="column" gap={1}>
+            <For each={items()}>
+              {(item) => {
+                const label = typeof item.label === "string" ? item.label : "Recommendation"
+                const reason = typeof item.reason === "string" ? item.reason : ""
+                const tail = [
+                  typeof item.command === "string" ? `$ ${item.command}` : "",
+                  typeof item.path === "string" ? item.path : "",
+                  typeof item.agent === "string" ? `@${item.agent}` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" • ")
+
+                return (
+                  <box flexDirection="column">
+                    <text fg={theme.text}>{"- " + label}</text>
+                    <Show when={reason}>
+                      <text fg={theme.textMuted}>{reason}</text>
+                    </Show>
+                    <Show when={tail}>
+                      <text fg={theme.textMuted}>{tail}</text>
+                    </Show>
+                  </box>
+                )
+              }}
+            </For>
+          </box>
+        </Show>
       </BlockTool>
     </Show>
   )

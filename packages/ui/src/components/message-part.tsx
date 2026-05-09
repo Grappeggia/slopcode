@@ -50,6 +50,10 @@ import { TextShimmer } from "./text-shimmer"
 import { AnimatedCountList } from "./tool-count-summary"
 import { ToolStatusTitle } from "./tool-status-title"
 
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
 interface Diagnostic {
   range: {
     start: { line: number; character: number }
@@ -1933,5 +1937,63 @@ ToolRegistry.register({
     )
 
     return <BasicTool icon="brain" status={props.status} trigger={trigger()} hideDetails />
+  },
+})
+
+ToolRegistry.register({
+  name: "followup_recommendations",
+  render(props) {
+    const items = createMemo(() => {
+      const meta = props.metadata?.recommendations
+      if (!Array.isArray(meta)) return [] as Record<string, unknown>[]
+      return meta.filter(record)
+    })
+
+    const subtitle = createMemo(() => {
+      const count = items().length
+      if (!count) return ""
+      return `${count} recommendation${count === 1 ? "" : "s"}`
+    })
+
+    return (
+      <BasicTool
+        {...props}
+        defaultOpen
+        icon="checklist"
+        trigger={{
+          title: "Suggested next actions",
+          subtitle: subtitle(),
+        }}
+      >
+        <Show when={items().length > 0} fallback={<Show when={props.output}>{(output) => <Markdown text={output()} />}</Show>}>
+          <div data-component="question-answers">
+            <For each={items()}>
+              {(item) => {
+                const label = typeof item.label === "string" ? item.label : "Recommendation"
+                const reason = typeof item.reason === "string" ? item.reason : ""
+                const tail = [
+                  typeof item.command === "string" ? `command: ${item.command}` : "",
+                  typeof item.path === "string" ? `path: ${item.path}` : "",
+                  typeof item.agent === "string" ? `agent: @${item.agent}` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" • ")
+                return (
+                  <div data-slot="question-answer-item">
+                    <div data-slot="question-text">{label}</div>
+                    <Show when={reason}>
+                      <div data-slot="answer-text">{reason}</div>
+                    </Show>
+                    <Show when={tail}>
+                      <div data-slot="answer-text">{tail}</div>
+                    </Show>
+                  </div>
+                )
+              }}
+            </For>
+          </div>
+        </Show>
+      </BasicTool>
+    )
   },
 })

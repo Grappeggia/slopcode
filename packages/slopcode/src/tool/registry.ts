@@ -26,6 +26,7 @@ import { Flag } from "@/flag/flag"
 import { Log } from "@/util/log"
 import { LspTool } from "./lsp"
 import { Truncate } from "./truncation"
+import { FollowupRecommendationsTool } from "./recommendation"
 
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "../util/glob"
@@ -115,6 +116,7 @@ export namespace ToolRegistry {
       // TodoReadTool,
       WebSearchTool,
       CodeSearchTool,
+      FollowupRecommendationsTool,
       SkillTool,
       ApplyPatchTool,
       ...(Flag.SLOPCODE_EXPERIMENTAL_LSP_TOOL ? [LspTool] : []),

@@ -64,6 +64,23 @@ const SHELL_OUTPUT_LIMIT = Truncate.MAX_BYTES
 const SHELL_METADATA_LIMIT = 30_000
 const SHELL_TIMEOUT = 5 * 60 * 1000
 
+function followupReminder(agent: Agent.Info) {
+  if (agent.hidden) return ""
+  if (agent.name === "plan") {
+    return `<system-reminder>
+Before you end a plan-mode turn, call the followup_recommendations tool once if you can confidently predict a few high-value next steps. Keep it concrete and concise. Good plan-mode recommendations include clarifications to resolve, verification steps to run in build mode, likely follow-up inspections, or the next action after plan approval. Do not use it for generic filler.
+</system-reminder>`
+  }
+  if (agent.name === "build") {
+    return `<system-reminder>
+Before you end a build-mode turn, call the followup_recommendations tool once if you can confidently predict a few high-value next steps. Prefer concrete follow-ups such as tests to run, manual verification, files to inspect, commit/PR/release actions, or the next fix if a command failed. Do not use it for generic filler.
+</system-reminder>`
+  }
+  return `<system-reminder>
+Before you end your turn, call the followup_recommendations tool once if you can confidently predict a few high-value next steps the user is likely to want next. Keep the suggestions concrete, concise, and specific to the current progress. Skip it if you have nothing useful to recommend.
+</system-reminder>`
+}
+
 export namespace SessionPrompt {
   const log = Log.create({ service: "session.prompt" })
 
@@ -1928,29 +1945,30 @@ export namespace SessionPrompt {
     const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
     if (!userMessage) return input.messages
 
+    const pushReminder = (text: string) => {
+      if (!text) return
+      userMessage.parts.push({
+        id: Identifier.ascending("part"),
+        messageID: userMessage.info.id,
+        sessionID: userMessage.info.sessionID,
+        type: "text",
+        text,
+        synthetic: true,
+      })
+    }
+
+    const pushFollowupReminder = () => pushReminder(followupReminder(input.agent))
+
     // Original logic when experimental plan mode is disabled
     if (!Flag.SLOPCODE_EXPERIMENTAL_PLAN_MODE) {
       if (input.agent.name === "plan") {
-        userMessage.parts.push({
-          id: Identifier.ascending("part"),
-          messageID: userMessage.info.id,
-          sessionID: userMessage.info.sessionID,
-          type: "text",
-          text: PROMPT_PLAN,
-          synthetic: true,
-        })
+        pushReminder(PROMPT_PLAN)
       }
       const wasPlan = input.messages.some((msg) => msg.info.role === "assistant" && msg.info.agent === "plan")
       if (wasPlan && input.agent.name === "build") {
-        userMessage.parts.push({
-          id: Identifier.ascending("part"),
-          messageID: userMessage.info.id,
-          sessionID: userMessage.info.sessionID,
-          type: "text",
-          text: BUILD_SWITCH,
-          synthetic: true,
-        })
+        pushReminder(BUILD_SWITCH)
       }
+      pushFollowupReminder()
       return input.messages
     }
 
@@ -1973,6 +1991,7 @@ export namespace SessionPrompt {
         })
         userMessage.parts.push(part)
       }
+      pushFollowupReminder()
       return input.messages
     }
 
@@ -2067,8 +2086,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         synthetic: true,
       })
       userMessage.parts.push(part)
+      pushFollowupReminder()
       return input.messages
     }
+    pushFollowupReminder()
     return input.messages
   }
 

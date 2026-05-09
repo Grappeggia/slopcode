@@ -128,7 +128,7 @@ function TextBody(props: { title: string; description?: string; icon?: string })
   )
 }
 
-export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
+export function PermissionPrompt(props: { requests: PermissionRequest[]; sessionID?: string }) {
   const sdk = useSDK()
   const sync = useSync()
   const dialog = useDialog()
@@ -176,11 +176,28 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
     return part(request)?.state.input ?? {}
   }
 
+  function firstPattern(request?: PermissionRequest) {
+    return request?.patterns.find((item): item is string => typeof item === "string") ?? ""
+  }
+
+  function sessionTitle(request?: PermissionRequest) {
+    return session(request)?.title?.trim() || request?.sessionID || ""
+  }
+
+  function sourceLabel(request?: PermissionRequest) {
+    if (!request || !props.sessionID || request.sessionID === props.sessionID) return ""
+    return `Child session: ${sessionTitle(request)}`
+  }
+
   const { theme } = useTheme()
 
   const focused = createMemo(() => requests()[store.focused] ?? requests()[0])
   const selected = createMemo(() => requests().filter((item) => store.selected.includes(item.id)))
-  const planned = createMemo(() => requests().length > 0 && requests().every((item) => item.kind === "forecast"))
+  const selectedCount = createMemo(() => selected().length)
+  const forecastCount = createMemo(() => requests().filter((item) => item.kind === "forecast").length)
+  const blockingCount = createMemo(() => requests().length - forecastCount())
+  const planned = createMemo(() => requests().length > 0 && blockingCount() === 0)
+  const mixed = createMemo(() => blockingCount() > 0 && forecastCount() > 0)
   const child = createMemo(() => selected().some((item) => session(item)?.parentID))
 
   function toggle(id: string) {
@@ -250,20 +267,27 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
 
     if (permission === "edit") {
       const raw = request.metadata?.filepath
-      const filepath = typeof raw === "string" ? raw : ""
+      const filepath = typeof raw === "string" && raw ? raw : firstPattern(request)
+      const diff = typeof request.metadata?.diff === "string" ? request.metadata.diff : ""
       return {
         icon: "->",
-        title: `Edit ${normalizePath(filepath)}`,
-        body: <EditBody request={request} />,
+        title: filepath ? `Edit ${normalizePath(filepath)}` : "Edit file",
+        body: diff ? (
+          <EditBody request={request} />
+        ) : (
+          <box paddingLeft={1}>
+            <text fg={theme.textMuted}>{filepath ? "Path: " + normalizePath(filepath) : "No diff provided"}</text>
+          </box>
+        ),
       }
     }
 
     if (permission === "read") {
       const raw = data.filePath
-      const filePath = typeof raw === "string" ? raw : ""
+      const filePath = typeof raw === "string" && raw ? raw : firstPattern(request)
       return {
         icon: "->",
-        title: `Read ${normalizePath(filePath)}`,
+        title: filePath ? `Read ${normalizePath(filePath)}` : "Read file",
         body: (
           <Show when={filePath}>
             <box paddingLeft={1}>
@@ -306,10 +330,10 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
 
     if (permission === "list") {
       const raw = data.path
-      const dir = typeof raw === "string" ? raw : ""
+      const dir = typeof raw === "string" && raw ? raw : firstPattern(request)
       return {
         icon: "->",
-        title: `List ${normalizePath(dir)}`,
+        title: dir ? `List ${normalizePath(dir)}` : "List directory",
         body: (
           <Show when={dir}>
             <box paddingLeft={1}>
@@ -453,13 +477,16 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
     const tool = part(request)?.tool ?? request?.permission
 
     if (tool === "edit") {
-      const filepath = typeof request?.metadata?.filepath === "string" ? request.metadata.filepath : ""
-      return `Edit ${normalizePath(filepath)}`
+      const raw = typeof request?.metadata?.filepath === "string" ? request.metadata.filepath : ""
+      const filepath = raw || firstPattern(request)
+      if (filepath) return `Edit ${normalizePath(filepath)}`
+      return "Edit file"
     }
 
     if (tool === "read") {
-      const filePath = typeof data.filePath === "string" ? data.filePath : ""
-      return `Read ${normalizePath(filePath)}`
+      const filePath = (typeof data.filePath === "string" ? data.filePath : "") || firstPattern(request)
+      if (filePath) return `Read ${normalizePath(filePath)}`
+      return "Read file"
     }
 
     if (tool === "glob") {
@@ -477,8 +504,9 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
     }
 
     if (tool === "list") {
-      const dir = typeof data.path === "string" ? data.path : ""
-      return `List ${normalizePath(dir)}`
+      const dir = (typeof data.path === "string" ? data.path : "") || firstPattern(request)
+      if (dir) return `List ${normalizePath(dir)}`
+      return "List directory"
     }
 
     if (tool === "bash") {
@@ -520,6 +548,9 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
     const data = input(request)
     const details = [] as string[]
     const grant = primary === current.title ? "" : `Grants ${current.title}`
+    const source = sourceLabel(request)
+    if (source) details.push(source)
+    if (request?.kind === "forecast") details.push("Planned for build")
     if (grant) details.push(grant)
 
     if (request?.permission === "external_directory") {
@@ -535,9 +566,9 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
     return {
       current,
       primary,
-      secondary: details.join(" • "),
+      secondary: details.filter(Boolean).join(" • "),
       reason: request?.reason,
-      preview: request?.permission === "edit",
+      preview: request?.permission === "edit" && typeof request?.metadata?.diff === "string" && !!request.metadata.diff,
     }
   }
 
@@ -602,17 +633,28 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
             <box flexDirection="column" gap={0}>
               <box flexDirection="row" gap={1} flexShrink={0}>
                 <text fg={theme.warning}>{"△"}</text>
-                <text fg={theme.text}>{planned() ? "Review build permissions" : "Permission required"}</text>
+                <text fg={theme.text}>
+                  {planned() ? "Review build permissions" : mixed() ? "Review permissions" : "Permission required"}
+                </text>
                 <Show when={requests().length > 1}>
                   <text fg={theme.textMuted}>{`(${selected().length}/${requests().length} selected)`}</text>
                 </Show>
               </box>
+              <Show when={planned() || mixed()}>
+                <box paddingLeft={2} flexShrink={0}>
+                  <text fg={theme.textMuted}>
+                    {mixed()
+                      ? `${blockingCount()} need approval now • ${forecastCount()} planned for build`
+                      : `${forecastCount()} planned for build`}
+                  </text>
+                </box>
+              </Show>
               <Show
                 when={requests().length === 1}
                 fallback={
                   <box paddingLeft={2} flexShrink={0}>
                     <text fg={theme.textMuted}>
-                      Each row shows the blocked tool call and the permission it would grant.
+                      Actions apply only to selected rows. Unselected permissions stay pending.
                     </text>
                   </box>
                 }
@@ -629,13 +671,18 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
 
           const body = (
             <Prompt
-              title={planned() ? "Review build permissions" : "Permission required"}
+              title={planned() ? "Review build permissions" : mixed() ? "Review permissions" : "Permission required"}
               header={header()}
               body={
                 <box flexDirection="column" gap={1}>
                   <Show when={requests().length > 1}>
-                    <box paddingLeft={1}>
-                      <text fg={theme.textMuted}>Use up/down to focus and space to toggle the focused permission.</text>
+                    <box paddingLeft={1} flexDirection="column">
+                      <text fg={theme.textMuted}>
+                        Use up/down to focus and space to toggle the focused permission.
+                      </text>
+                      <text fg={theme.textMuted}>
+                        Actions apply only to selected rows. Unselected permissions stay pending.
+                      </text>
                     </box>
                     <scrollbox height={Math.min(Math.max(requests().length * 3, 6), 12)}>
                       <box flexDirection="column">
@@ -684,10 +731,26 @@ export function PermissionPrompt(props: { requests: PermissionRequest[] }) {
                       </text>
                     </box>
                   </Show>
+                  <Show when={requests().length === 1 && row(focused()).secondary}>
+                    <box paddingLeft={1}>
+                      <text fg={theme.textMuted}>{row(focused()).secondary}</text>
+                    </box>
+                  </Show>
+                  <Show when={blockingCount() > 0}>
+                    <box paddingLeft={1}>
+                      <text fg={theme.textMuted}>
+                        Reject stops the selected blocked action for each affected session.
+                      </text>
+                    </box>
+                  </Show>
                   <Show when={requests().length === 1 || row(focused()).preview}>{current().body}</Show>
                 </box>
               }
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={{
+                once: selectedCount() > 1 ? `Allow once (${selectedCount()})` : "Allow once",
+                always: selectedCount() > 1 ? `Allow always (${selectedCount()})` : "Allow always",
+                reject: selectedCount() > 1 ? `Reject (${selectedCount()})` : "Reject",
+              }}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {

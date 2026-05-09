@@ -1,10 +1,12 @@
-import { createEffect, For, Show } from "solid-js"
+import { createEffect, createMemo, For, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
+import { useParams } from "@solidjs/router"
 import { Button } from "@slopcode-ai/ui/button"
 import { DockPrompt } from "@slopcode-ai/ui/dock-prompt"
 import { Icon } from "@slopcode-ai/ui/icon"
 import { useLanguage } from "@/context/language"
+import { useSync } from "@/context/sync"
 
 export function SessionPermissionDock(props: {
   requests: PermissionRequest[]
@@ -12,6 +14,8 @@ export function SessionPermissionDock(props: {
   onDecide: (response: "once" | "always" | "reject", permissionIDs: string[]) => void
 }) {
   const language = useLanguage()
+  const params = useParams()
+  const sync = useSync()
   const [store, setStore] = createStore({
     selected: [] as string[],
     known: [] as string[],
@@ -35,9 +39,28 @@ export function SessionPermissionDock(props: {
   })
 
   const selected = () => props.requests.filter((item) => store.selected.includes(item.id))
+  const selectedCount = createMemo(() => selected().length)
+  const forecastCount = createMemo(() => props.requests.filter((item) => item.kind === "forecast").length)
+  const blockingCount = createMemo(() => props.requests.length - forecastCount())
+  const planned = createMemo(() => props.requests.length > 0 && blockingCount() === 0)
+  const mixed = createMemo(() => blockingCount() > 0 && forecastCount() > 0)
 
   const toggle = (id: string) => {
     setStore("selected", (value) => (value.includes(id) ? value.filter((item) => item !== id) : [...value, id]))
+  }
+
+  const session = (request: PermissionRequest) => sync.data.session.find((item) => item.id === request.sessionID)
+
+  const sourceLabel = (request: PermissionRequest) => {
+    if (request.sessionID === params.id) return ""
+    return `Child session: ${session(request)?.title?.trim() || request.sessionID}`
+  }
+
+  const toolTitle = (request: PermissionRequest) => {
+    const key = `settings.permissions.tool.${request.permission}.title`
+    const value = language.t(key as Parameters<typeof language.t>[0])
+    if (value === key) return request.permission
+    return value
   }
 
   const toolDescription = (request: PermissionRequest) => {
@@ -47,6 +70,14 @@ export function SessionPermissionDock(props: {
     return value
   }
 
+  const headerTitle = createMemo(() => {
+    if (planned()) return "Review build permissions"
+    if (mixed()) return "Review permissions"
+    return language.t("notification.permission.title")
+  })
+
+  const countSuffix = createMemo(() => (selectedCount() > 1 ? ` (${selectedCount()})` : ""))
+
   return (
     <DockPrompt
       kind="permission"
@@ -55,16 +86,24 @@ export function SessionPermissionDock(props: {
           <span data-slot="permission-icon">
             <Icon name="warning" size="normal" />
           </span>
-          <div data-slot="permission-header-title">
-            {props.requests.every((item) => item.kind === "forecast")
-              ? "Review build permissions"
-              : language.t("notification.permission.title")}
+          <div class="min-w-0 flex-1 flex flex-col gap-1">
+            <div data-slot="permission-header-title">{headerTitle()}</div>
+            <Show when={planned() || mixed()}>
+              <div data-slot="permission-hint">
+                {mixed()
+                  ? `${blockingCount()} need approval now • ${forecastCount()} planned for build`
+                  : `${forecastCount()} planned for build`}
+              </div>
+            </Show>
           </div>
         </div>
       }
       footer={
         <>
-          <div class="text-12-regular text-text-weak">{`${selected().length}/${props.requests.length} selected`}</div>
+          <div class="flex flex-col gap-1 text-12-regular text-text-weak">
+            <div>{`${selectedCount()}/${props.requests.length} selected`}</div>
+            <div>Actions affect only checked items. Unchecked permissions stay pending.</div>
+          </div>
           <div data-slot="permission-footer-actions">
             <Button
               variant="ghost"
@@ -77,7 +116,7 @@ export function SessionPermissionDock(props: {
               }
               disabled={props.responding || selected().length === 0}
             >
-              {language.t("ui.permission.deny")}
+              {language.t("ui.permission.deny") + countSuffix()}
             </Button>
             <Button
               variant="secondary"
@@ -90,7 +129,7 @@ export function SessionPermissionDock(props: {
               }
               disabled={props.responding || selected().length === 0}
             >
-              {language.t("ui.permission.allowAlways")}
+              {language.t("ui.permission.allowAlways") + countSuffix()}
             </Button>
             <Button
               variant="primary"
@@ -103,7 +142,7 @@ export function SessionPermissionDock(props: {
               }
               disabled={props.responding || selected().length === 0}
             >
-              {language.t("ui.permission.allowOnce")}
+              {language.t("ui.permission.allowOnce") + countSuffix()}
             </Button>
           </div>
         </>
@@ -112,7 +151,9 @@ export function SessionPermissionDock(props: {
       <Show when={props.requests.length > 1}>
         <div data-slot="permission-row">
           <span data-slot="permission-spacer" aria-hidden="true" />
-          <div data-slot="permission-hint">Use the checked items below to approve only the permissions you want.</div>
+          <div data-slot="permission-hint">
+            Use the checked items below to act on only the permissions you want. Unchecked items stay pending.
+          </div>
         </div>
       </Show>
 
@@ -131,9 +172,12 @@ export function SessionPermissionDock(props: {
                 />
                 <div class="min-w-0 flex-1 flex flex-col gap-2">
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-13-medium text-text-base break-all">{request.permission}</span>
+                    <span class="text-13-medium text-text-base break-all">{toolTitle(request)}</span>
                     <Show when={request.kind === "forecast"}>
                       <span class="text-11-medium uppercase tracking-[0.12em] text-text-weak">planned</span>
+                    </Show>
+                    <Show when={sourceLabel(request)}>
+                      <span class="text-11-medium uppercase tracking-[0.12em] text-text-weak">{sourceLabel(request)}</span>
                     </Show>
                   </div>
                   <Show when={toolDescription(request)}>
