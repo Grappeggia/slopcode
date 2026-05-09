@@ -11,8 +11,10 @@ import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
+import { useProviders } from "@/hooks/use-providers"
 import { DialogSelectFile } from "@/components/dialog-select-file"
 import { DialogSelectModel } from "@/components/dialog-select-model"
+import { DialogSelectModelUnpaid } from "@/components/dialog-select-model-unpaid"
 import { DialogSelectMcp } from "@/components/dialog-select-mcp"
 import { DialogFork } from "@/components/dialog-fork"
 import { showToast } from "@slopcode-ai/ui/toast"
@@ -44,6 +46,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const local = useLocal()
   const permission = usePermission()
   const prompt = usePrompt()
+  const providers = useProviders()
   const sdk = useSDK()
   const sync = useSync()
   const terminal = useTerminal()
@@ -265,7 +268,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       description: language.t("command.model.choose.description"),
       keybind: "mod+'",
       slash: "model",
-      onSelect: () => dialog.show(() => <DialogSelectModel />),
+      onSelect: () =>
+        dialog.show(() => (providers.paid().length > 0 ? <DialogSelectModel /> : <DialogSelectModelUnpaid />)),
     }),
     mcpCommand({
       id: "mcp.toggle",

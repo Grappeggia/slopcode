@@ -335,11 +335,11 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
     }
 
     onMount(() => {
-      document.addEventListener("keydown", handleKeyDown)
+      document.addEventListener("keydown", handleKeyDown, true)
     })
 
     onCleanup(() => {
-      document.removeEventListener("keydown", handleKeyDown)
+      document.removeEventListener("keydown", handleKeyDown, true)
     })
 
     function register(cb: () => CommandOption[]): void

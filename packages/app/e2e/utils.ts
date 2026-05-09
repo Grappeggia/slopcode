@@ -3,6 +3,8 @@ import { base64Encode } from "@slopcode-ai/util/encode"
 
 export const serverHost = process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"
 export const serverPort = process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"
+export const serverUsername = process.env.PLAYWRIGHT_SERVER_USERNAME ?? "slopcode"
+export const serverPassword = process.env.PLAYWRIGHT_SERVER_PASSWORD
 
 export const serverUrl = `http://${serverHost}:${serverPort}`
 export const serverName = `${serverHost}:${serverPort}`
@@ -11,7 +13,13 @@ export const modKey = process.platform === "darwin" ? "Meta" : "Control"
 export const terminalToggleKey = "Control+Backquote"
 
 export function createSdk(directory?: string) {
-  return createSlopcodeClient({ baseUrl: serverUrl, directory, throwOnError: true })
+  const headers = !serverPassword
+    ? undefined
+    : {
+        Authorization: `Basic ${btoa(`${serverUsername}:${serverPassword}`)}`,
+      }
+
+  return createSlopcodeClient({ baseUrl: serverUrl, directory, headers, throwOnError: true })
 }
 
 export async function getWorktree() {

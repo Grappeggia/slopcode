@@ -16,6 +16,7 @@ export const settingsLanguageSelectSelector = '[data-action="settings-language"]
 export const settingsColorSchemeSelector = '[data-action="settings-color-scheme"]'
 export const settingsThemeSelector = '[data-action="settings-theme"]'
 export const settingsFontSelector = '[data-action="settings-font"]'
+export const settingsDefaultAgentSelector = '[data-action="settings-default-agent"]'
 export const settingsNotificationsAgentSelector = '[data-action="settings-notifications-agent"]'
 export const settingsNotificationsPermissionsSelector = '[data-action="settings-notifications-permissions"]'
 export const settingsNotificationsErrorsSelector = '[data-action="settings-notifications-errors"]'

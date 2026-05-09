@@ -24,12 +24,12 @@ async function freePort() {
   })
 }
 
-async function waitForHealth(url: string) {
+async function waitForHealth(url: string, init?: RequestInit) {
   const timeout = Date.now() + 120_000
   const errors: string[] = []
   while (Date.now() < timeout) {
-    const result = await fetch(url)
-      .then((r) => ({ ok: r.ok, error: undefined }))
+    const result = await fetch(url, init)
+      .then((r) => ({ ok: r.ok, error: r.ok ? undefined : `HTTP ${r.status}` }))
       .catch((error) => ({
         ok: false,
         error: error instanceof Error ? error.message : String(error),
@@ -56,8 +56,30 @@ const [serverPort, webPort] = await Promise.all([freePort(), freePort()])
 
 const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-e2e-"))
 const keepSandbox = process.env.SLOPCODE_E2E_KEEP_SANDBOX === "1"
+const username = "slopcode"
+const password = "e2e-password"
+const config = JSON.stringify({
+  provider: {
+    e2e: {
+      name: "E2E Provider",
+      npm: "@ai-sdk/openai-compatible",
+      options: {
+        baseURL: "http://127.0.0.1:1",
+      },
+      models: {
+        "big-pickle": {
+          name: "Big Pickle",
+        },
+        "small-gherkin": {
+          name: "Small Gherkin",
+        },
+      },
+    },
+  },
+})
 
 const serverEnv = {
+
   ...process.env,
   SLOPCODE_DISABLE_SHARE: process.env.SLOPCODE_DISABLE_SHARE ?? "true",
   SLOPCODE_DISABLE_LSP_DOWNLOAD: "true",
@@ -73,14 +95,23 @@ const serverEnv = {
   SLOPCODE_E2E_MESSAGE: "Seeded for UI e2e",
   SLOPCODE_E2E_MODEL: "slopcode/gpt-5-nano",
   SLOPCODE_CLIENT: "app",
+  SLOPCODE_CONFIG_CONTENT: config,
+  SLOPCODE_MODELS_PATH: path.join(os.homedir(), ".cache", "slopcode", "models.json"),
+  SLOPCODE_SERVER_USERNAME: username,
+  SLOPCODE_SERVER_PASSWORD: password,
 } satisfies Record<string, string>
 
 const runnerEnv = {
   ...serverEnv,
   PLAYWRIGHT_SERVER_HOST: "127.0.0.1",
   PLAYWRIGHT_SERVER_PORT: String(serverPort),
+  PLAYWRIGHT_SERVER_USERNAME: username,
+  PLAYWRIGHT_SERVER_PASSWORD: password,
   VITE_SLOPCODE_SERVER_HOST: "127.0.0.1",
   VITE_SLOPCODE_SERVER_PORT: String(serverPort),
+  VITE_SLOPCODE_SERVER_USERNAME: username,
+  VITE_SLOPCODE_SERVER_PASSWORD: password,
+  PLAYWRIGHT_BROWSERS_PATH: path.join(os.homedir(), ".cache", "ms-playwright"),
   PLAYWRIGHT_PORT: String(webPort),
 } satisfies Record<string, string>
 
@@ -159,7 +190,11 @@ try {
     server = servermod.Server.listen({ port: serverPort, hostname: "127.0.0.1" })
     console.log(`slopcode server listening on http://127.0.0.1:${serverPort}`)
 
-    await waitForHealth(`http://127.0.0.1:${serverPort}/global/health`)
+    await waitForHealth(`http://127.0.0.1:${serverPort}/global/health`, {
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`,
+      },
+    })
     runner = Bun.spawn(["bun", "test:e2e", ...extraArgs], {
       cwd: appDir,
       env: runnerEnv,

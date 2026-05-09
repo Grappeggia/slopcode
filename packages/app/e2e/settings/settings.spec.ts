@@ -2,6 +2,7 @@ import { test, expect, settingsKey } from "../fixtures"
 import { closeDialog, openSettings } from "../actions"
 import {
   settingsColorSchemeSelector,
+  settingsDefaultAgentSelector,
   settingsFontSelector,
   settingsLanguageSelectSelector,
   settingsNotificationsAgentSelector,
@@ -14,6 +15,7 @@ import {
   settingsThemeSelector,
   settingsUpdatesStartupSelector,
 } from "../selectors"
+import { createSdk } from "../utils"
 
 test("smoke settings dialog opens, switches tabs, closes", async ({ page, gotoSession }) => {
   await gotoSession()
@@ -24,7 +26,64 @@ test("smoke settings dialog opens, switches tabs, closes", async ({ page, gotoSe
   await expect(dialog.getByRole("button", { name: "Reset to defaults" })).toBeVisible()
   await expect(dialog.getByPlaceholder("Search shortcuts")).toBeVisible()
 
+  await dialog.getByRole("tab", { name: "Agents" }).click()
+  await expect(dialog.getByRole("heading", { name: "Agents" })).toBeVisible()
+
+  await dialog.getByRole("tab", { name: "Commands" }).click()
+  await expect(dialog.getByRole("heading", { name: "Commands" })).toBeVisible()
+
+  await dialog.getByRole("tab", { name: "MCP" }).click()
+  await expect(dialog.getByRole("heading", { name: "MCP" })).toBeVisible()
+
   await closeDialog(page, dialog)
+})
+
+test("selecting a default agent updates config", async ({ page, withProject }) => {
+  await withProject(async ({ directory, gotoSession }) => {
+    const sdk = createSdk(directory)
+    const agents = await sdk.app.agents().then((result) => result.data ?? [])
+    const primary = agents.filter((agent) => agent.mode !== "subagent" && !agent.hidden)
+    const target = primary.find((agent) => agent.name !== "build") ?? primary[0]
+    if (!target) return
+
+    await gotoSession()
+    const dialog = await openSettings(page)
+    await dialog.getByRole("tab", { name: "Agents" }).click()
+
+    const select = dialog.locator(settingsDefaultAgentSelector)
+    await expect(select).toBeVisible()
+    await expect(select.locator('[data-slot="select-select-trigger"]')).toBeVisible()
+    await select.locator('[data-slot="select-select-trigger"]').click()
+    await page.locator('[data-slot="select-select-item"]').filter({ hasText: target.name }).click()
+
+    await expect.poll(async () => await sdk.config.get().then((result) => result.data?.default_agent)).toBe(target.name)
+  })
+})
+
+test("commands tab renders configured slash commands", async ({ page, withProject }) => {
+  await withProject(async ({ directory, gotoSession }) => {
+    const sdk = createSdk(directory)
+    await sdk.global.config.update({
+      config: {
+        command: {
+          shipit: {
+            template: "git status",
+            description: "Check git status",
+            agent: "build",
+          },
+        },
+      },
+    })
+    await expect.poll(async () => await sdk.command.list().then((result) => (result.data ?? []).some((command) => command.name === "shipit"))).toBe(true)
+
+    await gotoSession()
+    const dialog = await openSettings(page)
+    await dialog.getByRole("tab", { name: "Commands" }).click()
+
+    await expect(dialog.getByText("/shipit")).toBeVisible()
+    await expect(dialog.getByText("Check git status")).toBeVisible()
+    await expect(dialog.getByText("git status", { exact: true })).toBeVisible()
+  })
 })
 
 test("changing language updates settings labels", async ({ page, gotoSession }) => {

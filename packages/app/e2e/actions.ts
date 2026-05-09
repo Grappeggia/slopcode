@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { execSync } from "node:child_process"
-import { modKey, serverUrl } from "./utils"
+import { modKey, serverPassword, serverUrl, serverUsername } from "./utils"
 import {
   sessionItemSelector,
   dropdownMenuTriggerSelector,
@@ -139,7 +139,7 @@ export async function openSettings(page: Page) {
 
 export async function seedProjects(page: Page, input: { directory: string; extra?: string[] }) {
   await page.addInitScript(
-    (args: { directory: string; serverUrl: string; extra: string[] }) => {
+    (args: { directory: string; serverUrl: string; username: string; password?: string; extra: string[] }) => {
       const key = "slopcode.global.dat:server"
       const raw = localStorage.getItem(key)
       const parsed = (() => {
@@ -152,10 +152,36 @@ export async function seedProjects(page: Page, input: { directory: string; extra
       })()
 
       const store = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {}
-      const list = Array.isArray(store.list) ? store.list : []
+      const list = Array.isArray(store.list) ? [...store.list] : []
       const lastProject = store.lastProject && typeof store.lastProject === "object" ? store.lastProject : {}
       const projects = store.projects && typeof store.projects === "object" ? store.projects : {}
       const nextProjects = { ...(projects as Record<string, unknown>) }
+
+      if (args.password) {
+        const existing = list.findIndex(
+          (value) =>
+            value &&
+            typeof value === "object" &&
+            (("url" in value && (value as { url?: unknown }).url === args.serverUrl) ||
+              ("http" in value &&
+                value.http &&
+                typeof value.http === "object" &&
+                "url" in value.http &&
+                value.http.url === args.serverUrl)),
+        )
+
+        const entry = {
+          type: "http",
+          http: {
+            url: args.serverUrl,
+            username: args.username,
+            password: args.password,
+          },
+        }
+
+        if (existing >= 0) list.splice(existing, 1, entry)
+        else list.unshift(entry)
+      }
 
       const add = (origin: string, directory: string) => {
         const current = nextProjects[origin]
@@ -187,7 +213,13 @@ export async function seedProjects(page: Page, input: { directory: string; extra
         }),
       )
     },
-    { directory: input.directory, serverUrl, extra: input.extra ?? [] },
+    {
+      directory: input.directory,
+      serverUrl,
+      username: serverUsername,
+      password: serverPassword,
+      extra: input.extra ?? [],
+    },
   )
 }
 
