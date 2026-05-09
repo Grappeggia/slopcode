@@ -919,6 +919,14 @@ export function Prompt(props: PromptProps) {
     if (props.disabled) return
     clearGhost()
     if (autocomplete?.visible) return
+
+    const firstLine = input.plainText.split("\n")[0] ?? ""
+    const pendingSlash = firstLine.match(/^\/(\S*)$/)?.[1]
+    if (pendingSlash !== undefined && !sync.data.command.some((item) => item.name === pendingSlash)) {
+      autocomplete?.showSlash?.()
+      if (autocomplete?.visible) return
+    }
+
     const trimmed = store.prompt.input.trim()
     if (props.sessionID && !trimmed) {
       const paused = promptQueue.snapshot(props.sessionID).paused
@@ -1448,6 +1456,8 @@ export function Prompt(props: PromptProps) {
                     // If no image, let the default paste behavior continue
                   }
                   if (keybind.match("input_clear", e) && store.prompt.input !== "") {
+                    clearGhost()
+                    autocomplete.hide()
                     input.clear()
                     input.extmarks.clear()
                     setStore("prompt", {
@@ -1456,6 +1466,7 @@ export function Prompt(props: PromptProps) {
                     })
                     setStore("mode", "normal")
                     setStore("extmarkToPartIndex", new Map())
+                    e.preventDefault()
                     return
                   }
                   if (keybind.match("app_exit", e)) {

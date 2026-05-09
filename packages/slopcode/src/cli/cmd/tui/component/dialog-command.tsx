@@ -97,7 +97,7 @@ function init() {
       })
     },
     keybinds(enabled: boolean) {
-      setSuspendCount((count) => count + (enabled ? -1 : 1))
+      setSuspendCount((count) => Math.max(0, count + (enabled ? -1 : 1)))
     },
     suspended,
     show() {

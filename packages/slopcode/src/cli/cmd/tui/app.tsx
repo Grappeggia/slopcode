@@ -441,8 +441,8 @@ function App() {
       category: "Session",
       suggested: sync.data.session.length > 0,
       slash: {
-        name: "sessions",
-        aliases: ["resume", "continue"],
+        name: "session",
+        aliases: ["sessions", "resume", "continue"],
       },
       onSelect: () => {
         dialog.replace(() => <DialogSessionList />)

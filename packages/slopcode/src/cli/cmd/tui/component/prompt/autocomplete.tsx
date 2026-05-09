@@ -52,6 +52,8 @@ function extractLineRange(input: string) {
 export type AutocompleteRef = {
   onInput: (value: string) => void
   onKeyDown: (e: KeyEvent) => void
+  showSlash: (cursorOffset?: number) => void
+  hide: () => void
   visible: false | "@" | "/"
 }
 
@@ -477,23 +479,40 @@ export function Autocomplete(props: {
     setStore("selected", 0)
   }
 
-  function show(mode: "@" | "/") {
-    command.keybinds(false)
+  function show(mode: "@" | "/", index = props.input().cursorOffset) {
+    if (!store.visible) command.keybinds(false)
     setStore({
       visible: mode,
-      index: props.input().cursorOffset,
+      index,
     })
   }
 
+  function openSlash(cursorOffset = props.input().cursorOffset) {
+    const trigger = findSlashTrigger(props.input().plainText, cursorOffset)
+    if (!trigger) return
+    show("/", trigger.start)
+  }
+
   function hide() {
+    if (!store.visible) return
     command.keybinds(true)
     setStore("visible", false)
   }
+
+  onCleanup(() => {
+    if (store.visible) command.keybinds(true)
+  })
 
   onMount(() => {
     props.ref({
       get visible() {
         return store.visible
+      },
+      showSlash(cursorOffset) {
+        openSlash(cursorOffset)
+      },
+      hide() {
+        hide()
       },
       onInput(value) {
         if (store.visible) {
@@ -522,8 +541,7 @@ export function Autocomplete(props: {
 
         const slash = findSlashTrigger(value, offset)
         if (slash) {
-          show("/")
-          setStore("index", slash.start)
+          show("/", slash.start)
           return
         }
 
@@ -535,8 +553,7 @@ export function Autocomplete(props: {
         const between = text.slice(idx)
         const before = idx === 0 ? undefined : value[idx - 1]
         if ((before === undefined || /\s/.test(before)) && !between.match(/\s/)) {
-          show("@")
-          setStore("index", idx)
+          show("@", idx)
         }
       },
       onKeyDown(e: KeyEvent) {
@@ -594,8 +611,7 @@ export function Autocomplete(props: {
               cursorOffset === 0 ? undefined : props.input().getTextRange(cursorOffset - 1, cursorOffset)
             const canTrigger = charBeforeCursor === undefined || charBeforeCursor === "" || /\s/.test(charBeforeCursor)
             if (canTrigger) {
-              show("/")
-              setStore("index", cursorOffset)
+              show("/", cursorOffset)
             }
           }
         }
