@@ -49,11 +49,7 @@ export const SettingsMcp: Component = () => {
     return items().filter((item) => {
       const config = child()?.[0].config.mcp?.[item.name]
       const source =
-        config && "type" in config
-          ? config.type === "local"
-            ? config.command.join(" ")
-            : config.url
-          : undefined
+        config && "type" in config ? (config.type === "local" ? config.command.join(" ") : config.url) : undefined
       return [item.name, item.status.status, item.status.status === "failed" ? item.status.error : undefined, source]
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(query))
@@ -117,7 +113,10 @@ export const SettingsMcp: Component = () => {
 
       <div class="flex flex-col gap-6 max-w-[720px]">
         <div class="border border-border-weak-base rounded-lg overflow-hidden bg-surface-raised-base">
-          <Show when={filtered().length > 0} fallback={<div class="py-8 px-4 text-14-regular text-text-weak">{language.t("dialog.mcp.empty")}</div>}>
+          <Show
+            when={filtered().length > 0}
+            fallback={<div class="py-8 px-4 text-14-regular text-text-weak">{language.t("dialog.mcp.empty")}</div>}
+          >
             <For each={filtered()}>
               {(item) => {
                 const config = () => child()?.[0].config.mcp?.[item.name]
@@ -147,12 +146,18 @@ export const SettingsMcp: Component = () => {
                         )}
                       </Show>
                       <Show when={error()}>
-                        {(value) => <span class="text-12-regular text-text-weak whitespace-pre-wrap break-all">{value()}</span>}
+                        {(value) => (
+                          <span class="text-12-regular text-text-weak whitespace-pre-wrap break-all">{value()}</span>
+                        )}
                       </Show>
                     </div>
 
                     <div class="flex-shrink-0">
-                      <Switch checked={item.status.status === "connected"} disabled={loading() === item.name} onChange={() => void toggle(item.name)}>
+                      <Switch
+                        checked={item.status.status === "connected"}
+                        disabled={loading() === item.name}
+                        onChange={() => void toggle(item.name)}
+                      >
                         {item.name}
                       </Switch>
                     </div>

@@ -74,7 +74,12 @@ test("commands tab renders configured slash commands", async ({ page, withProjec
         },
       },
     })
-    await expect.poll(async () => await sdk.command.list().then((result) => (result.data ?? []).some((command) => command.name === "shipit"))).toBe(true)
+    await expect
+      .poll(
+        async () =>
+          await sdk.command.list().then((result) => (result.data ?? []).some((command) => command.name === "shipit")),
+      )
+      .toBe(true)
 
     await gotoSession()
     const dialog = await openSettings(page)

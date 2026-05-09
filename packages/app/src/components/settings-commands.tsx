@@ -27,7 +27,15 @@ export const SettingsCommands: Component = () => {
     const query = filter().trim().toLowerCase()
     if (!query) return commands()
     return commands().filter((command) =>
-      [command.name, command.description, command.template, command.agent, command.model, command.source, ...command.hints]
+      [
+        command.name,
+        command.description,
+        command.template,
+        command.agent,
+        command.model,
+        command.source,
+        ...command.hints,
+      ]
         .filter(Boolean)
         .some((value) => value!.toLowerCase().includes(query)),
     )
@@ -40,7 +48,8 @@ export const SettingsCommands: Component = () => {
           <div class="flex flex-col gap-1">
             <h2 class="text-16-medium text-text-strong">{language.t("settings.commands.title")}</h2>
             <p class="text-14-regular text-text-weak">
-              {language.t("settings.commands.description")} <Link href="https://slopcode.dev/docs/commands">{language.t("common.learnMore")}</Link>
+              {language.t("settings.commands.description")}{" "}
+              <Link href="https://slopcode.dev/docs/commands">{language.t("common.learnMore")}</Link>
             </p>
           </div>
 
@@ -71,22 +80,22 @@ export const SettingsCommands: Component = () => {
         <div class="border border-border-weak-base rounded-lg overflow-hidden bg-surface-raised-base">
           <Show
             when={filtered().length > 0}
-            fallback={<div class="py-8 px-4 text-14-regular text-text-weak">{filter().trim() ? language.t("prompt.popover.emptyCommands") : "No commands configured."}</div>}
+            fallback={
+              <div class="py-8 px-4 text-14-regular text-text-weak">
+                {filter().trim() ? language.t("prompt.popover.emptyCommands") : "No commands configured."}
+              </div>
+            }
           >
             <For each={filtered()}>
               {(command) => (
                 <div class="flex flex-col gap-2 px-4 py-3 border-b border-border-weak-base last:border-none">
                   <div class="flex flex-wrap items-center gap-2">
                     <span class="text-14-medium text-text-strong">/{command.name}</span>
-                    <Show when={command.source}>
-                      {(source) => <Tag>{source()}</Tag>}
-                    </Show>
+                    <Show when={command.source}>{(source) => <Tag>{source()}</Tag>}</Show>
                     <Show when={command.subtask}>
                       <Tag>subtask</Tag>
                     </Show>
-                    <Show when={command.agent}>
-                      {(agent) => <Tag>@{agent()}</Tag>}
-                    </Show>
+                    <Show when={command.agent}>{(agent) => <Tag>@{agent()}</Tag>}</Show>
                   </div>
 
                   <Show when={command.description}>
@@ -103,7 +112,9 @@ export const SettingsCommands: Component = () => {
                     </Show>
                     <Show when={command.hints.length > 0}>
                       <div class="flex flex-wrap gap-1.5">
-                        <For each={command.hints}>{(hint) => <code class="rounded bg-surface-base px-1.5 py-0.5">{hint}</code>}</For>
+                        <For each={command.hints}>
+                          {(hint) => <code class="rounded bg-surface-base px-1.5 py-0.5">{hint}</code>}
+                        </For>
                       </div>
                     </Show>
                   </div>

@@ -79,7 +79,6 @@ const config = JSON.stringify({
 })
 
 const serverEnv = {
-
   ...process.env,
   SLOPCODE_DISABLE_SHARE: process.env.SLOPCODE_DISABLE_SHARE ?? "true",
   SLOPCODE_DISABLE_LSP_DOWNLOAD: "true",

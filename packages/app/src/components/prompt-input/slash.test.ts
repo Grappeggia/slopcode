@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test"
 import type { Prompt } from "@/context/prompt"
 import { promotePromptSlash, removePromptSlash } from "./slash"
 
-const text = (prompt: Prompt) => prompt.filter((part) => part.type !== "image").map((part) => part.content).join("")
+const text = (prompt: Prompt) =>
+  prompt
+    .filter((part) => part.type !== "image")
+    .map((part) => part.content)
+    .join("")
 
 describe("prompt input slash", () => {
   test("removes inline builtin slash commands without deleting the draft", () => {

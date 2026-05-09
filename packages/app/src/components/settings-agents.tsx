@@ -26,7 +26,9 @@ export const SettingsAgents: Component = () => {
     return 2
   }
 
-  const agents = createMemo(() => (child()?.[0].agent ?? []).slice().sort((a, b) => rank(a.mode) - rank(b.mode) || a.name.localeCompare(b.name)))
+  const agents = createMemo(() =>
+    (child()?.[0].agent ?? []).slice().sort((a, b) => rank(a.mode) - rank(b.mode) || a.name.localeCompare(b.name)),
+  )
   const primary = createMemo(() => agents().filter((agent) => agent.mode !== "subagent" && !agent.hidden))
   const selected = createMemo(() => {
     const configured = child()?.[0].config.default_agent
@@ -56,21 +58,28 @@ export const SettingsAgents: Component = () => {
           <div class="flex flex-col gap-1">
             <h2 class="text-16-medium text-text-strong">{language.t("settings.agents.title")}</h2>
             <p class="text-14-regular text-text-weak">
-              {language.t("settings.agents.description")} <Link href="https://slopcode.dev/docs/agents">{language.t("common.learnMore")}</Link>
+              {language.t("settings.agents.description")}{" "}
+              <Link href="https://slopcode.dev/docs/agents">{language.t("common.learnMore")}</Link>
             </p>
           </div>
         </div>
       </div>
 
       <div class="flex flex-col gap-6 max-w-[720px]">
-        <div data-action="settings-default-agent" class="border border-border-weak-base rounded-lg overflow-hidden bg-surface-raised-base">
+        <div
+          data-action="settings-default-agent"
+          class="border border-border-weak-base rounded-lg overflow-hidden bg-surface-raised-base"
+        >
           <div class="flex flex-wrap items-center justify-between gap-4 px-4 py-3 border-b border-border-weak-base last:border-none">
             <div class="flex flex-col gap-0.5 min-w-0">
               <span class="text-14-medium text-text-strong">Default agent</span>
               <span class="text-12-regular text-text-weak">Used when a session does not specify an agent.</span>
             </div>
             <div class="flex-shrink-0">
-              <Show when={options().length > 0} fallback={<span class="text-12-regular text-text-weak">Loading agents...</span>}>
+              <Show
+                when={options().length > 0}
+                fallback={<span class="text-12-regular text-text-weak">Loading agents...</span>}
+              >
                 <Select
                   options={options()}
                   current={options().find((option) => option.value === selected())}
@@ -87,7 +96,10 @@ export const SettingsAgents: Component = () => {
         </div>
 
         <div class="border border-border-weak-base rounded-lg overflow-hidden bg-surface-raised-base">
-          <Show when={agents().length > 0} fallback={<div class="py-8 px-4 text-14-regular text-text-weak">No agents available.</div>}>
+          <Show
+            when={agents().length > 0}
+            fallback={<div class="py-8 px-4 text-14-regular text-text-weak">No agents available.</div>}
+          >
             <For each={agents()}>
               {(agent) => {
                 const model = () => (agent.model ? `${agent.model.providerID}/${agent.model.modelID}` : undefined)
@@ -115,12 +127,8 @@ export const SettingsAgents: Component = () => {
                       <Show when={model()}>
                         {(value) => <code class="rounded bg-surface-base px-1.5 py-0.5 text-text-base">{value()}</code>}
                       </Show>
-                      <Show when={agent.variant}>
-                        {(value) => <span>{value()}</span>}
-                      </Show>
-                      <Show when={agent.steps}>
-                        {(value) => <span>{value()} steps</span>}
-                      </Show>
+                      <Show when={agent.variant}>{(value) => <span>{value()}</span>}</Show>
+                      <Show when={agent.steps}>{(value) => <span>{value()} steps</span>}</Show>
                     </div>
                   </div>
                 )

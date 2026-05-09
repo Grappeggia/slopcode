@@ -88,7 +88,11 @@ const replaceRange = (prompt: Prompt, start: number, end: number, replacement: s
   return reindex(next)
 }
 
-const promptText = (prompt: Prompt) => prompt.filter((part): part is Exclude<Prompt[number], ImageAttachmentPart> => part.type !== "image").map((part) => part.content).join("")
+const promptText = (prompt: Prompt) =>
+  prompt
+    .filter((part): part is Exclude<Prompt[number], ImageAttachmentPart> => part.type !== "image")
+    .map((part) => part.content)
+    .join("")
 
 export function removePromptSlash(prompt: Prompt, cursor: number) {
   const trigger = findSlashTrigger(promptText(prompt), cursor)
