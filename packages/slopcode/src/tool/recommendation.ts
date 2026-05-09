@@ -43,7 +43,11 @@ function rank(priority?: string) {
 function render(list: z.infer<typeof Recommendation>[]) {
   return list
     .flatMap((item) => {
-      const tail = [item.command ? `command: \`${item.command}\`` : "", item.path ? `path: \`${item.path}\`` : "", item.agent ? `agent: @${item.agent}` : ""]
+      const tail = [
+        item.command ? `command: \`${item.command}\`` : "",
+        item.path ? `path: \`${item.path}\`` : "",
+        item.agent ? `agent: @${item.agent}` : "",
+      ]
         .filter(Boolean)
         .join(" • ")
       return [`- ${item.label}${tail ? ` (${tail})` : ""}`, `  ${item.reason}`]

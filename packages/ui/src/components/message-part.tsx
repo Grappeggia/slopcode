@@ -1965,7 +1965,10 @@ ToolRegistry.register({
           subtitle: subtitle(),
         }}
       >
-        <Show when={items().length > 0} fallback={<Show when={props.output}>{(output) => <Markdown text={output()} />}</Show>}>
+        <Show
+          when={items().length > 0}
+          fallback={<Show when={props.output}>{(output) => <Markdown text={output()} />}</Show>}
+        >
           <div data-component="question-answers">
             <For each={items()}>
               {(item) => {

@@ -177,7 +177,9 @@ export function SessionPermissionDock(props: {
                       <span class="text-11-medium uppercase tracking-[0.12em] text-text-weak">planned</span>
                     </Show>
                     <Show when={sourceLabel(request)}>
-                      <span class="text-11-medium uppercase tracking-[0.12em] text-text-weak">{sourceLabel(request)}</span>
+                      <span class="text-11-medium uppercase tracking-[0.12em] text-text-weak">
+                        {sourceLabel(request)}
+                      </span>
                     </Show>
                   </div>
                   <Show when={toolDescription(request)}>

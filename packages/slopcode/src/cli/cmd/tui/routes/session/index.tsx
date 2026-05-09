@@ -2865,7 +2865,9 @@ function FollowupRecommendations(props: ToolProps<any>) {
   const items = createMemo(() => {
     const list = props.metadata.recommendations
     if (!Array.isArray(list)) return [] as Record<string, unknown>[]
-    return list.filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item))
+    return list.filter(
+      (item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item),
+    )
   })
 
   const ready = createMemo(() => items().length > 0 || !!props.output)

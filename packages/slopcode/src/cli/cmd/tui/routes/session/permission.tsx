@@ -677,9 +677,7 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
                 <box flexDirection="column" gap={1}>
                   <Show when={requests().length > 1}>
                     <box paddingLeft={1} flexDirection="column">
-                      <text fg={theme.textMuted}>
-                        Use up/down to focus and space to toggle the focused permission.
-                      </text>
+                      <text fg={theme.textMuted}>Use up/down to focus and space to toggle the focused permission.</text>
                       <text fg={theme.textMuted}>
                         Actions apply only to selected rows. Unselected permissions stay pending.
                       </text>
