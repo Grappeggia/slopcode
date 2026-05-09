@@ -289,7 +289,7 @@ export function Prompt(props: PromptProps) {
     })
   }
 
-  function loadPrompt(prompt: PromptInfo) {
+  function loadPrompt(prompt: PromptInfo, cursorOffset?: number) {
     if (!input || input.isDestroyed) return
     const next = unwrap(prompt)
     input.setText(next.input)
@@ -299,7 +299,7 @@ export function Prompt(props: PromptProps) {
     })
     setStore("mode", next.mode ?? "normal")
     restoreExtmarksFromParts(next.parts)
-    input.gotoBufferEnd()
+    input.cursorOffset = cursorOffset ?? Bun.stringWidth(next.input)
     syncCursor()
   }
 
@@ -1366,6 +1366,14 @@ export function Prompt(props: PromptProps) {
         ref={(r) => (autocomplete = r)}
         anchor={() => anchor}
         input={() => input}
+        prompt={() => ({
+          input: store.prompt.input,
+          parts: store.prompt.parts,
+          mode: store.mode,
+        })}
+        applyPrompt={(prompt, cursorOffset) => {
+          loadPrompt(prompt, cursorOffset)
+        }}
         setPrompt={(cb) => {
           setStore("prompt", produce(cb))
         }}

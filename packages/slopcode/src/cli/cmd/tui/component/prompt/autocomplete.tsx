@@ -10,10 +10,12 @@ import { SplitBorder } from "@tui/component/border"
 import { useCommandDialog } from "@tui/component/dialog-command"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Locale } from "@/util/locale"
+import { findSlashTrigger } from "@slopcode-ai/util/slash"
 import type { PromptInfo } from "./history"
 import { createPromptFilePart } from "./file-part"
 import { useFrecency } from "./frecency"
 import { autocompleteLineHeights, autocompleteLineOffsets, autocompleteLines } from "./autocomplete-layout"
+import { promotePromptSlash, removePromptSlash } from "./slash"
 
 function removeLineRange(input: string) {
   const hashIndex = input.lastIndexOf("#")
@@ -67,6 +69,8 @@ export type AutocompleteOption = {
 export function Autocomplete(props: {
   value: string
   sessionID?: string
+  prompt: () => PromptInfo
+  applyPrompt: (prompt: PromptInfo, cursorOffset?: number) => void
   setPrompt: (input: (prompt: PromptInfo) => void) => void
   setExtmark: (partIndex: number, extmarkId: number) => void
   anchor: () => BoxRenderable
@@ -334,7 +338,16 @@ export function Autocomplete(props: {
   })
 
   const commands = createMemo((): AutocompleteOption[] => {
-    const results: AutocompleteOption[] = [...command.slashes()]
+    const results: AutocompleteOption[] = command.slashes().map((item) => ({
+      display: item.display,
+      description: item.description,
+      aliases: item.aliases,
+      onSelect: () => {
+        const next = removePromptSlash(props.prompt(), props.input().cursorOffset)
+        if (next) props.applyPrompt(next.prompt, next.cursor)
+        item.onSelect?.()
+      },
+    }))
 
     for (const serverCommand of sync.data.command) {
       if (serverCommand.source === "skill") continue
@@ -343,11 +356,9 @@ export function Autocomplete(props: {
         display: "/" + serverCommand.name + label,
         description: serverCommand.description,
         onSelect: () => {
-          const newText = "/" + serverCommand.name + " "
-          const cursor = props.input().logicalCursor
-          props.input().deleteRange(0, 0, cursor.row, cursor.col)
-          props.input().insertText(newText)
-          props.input().cursorOffset = Bun.stringWidth(newText)
+          const next = promotePromptSlash(props.prompt(), props.input().cursorOffset, serverCommand.name)
+          if (!next) return
+          props.applyPrompt(next.prompt, next.cursor)
         },
       })
     }
@@ -475,15 +486,6 @@ export function Autocomplete(props: {
   }
 
   function hide() {
-    const text = props.input().plainText
-    if (store.visible === "/" && !text.endsWith(" ") && text.startsWith("/")) {
-      const cursor = props.input().logicalCursor
-      props.input().deleteRange(0, 0, cursor.row, cursor.col)
-      // Sync the prompt store immediately since onContentChange is async
-      props.setPrompt((draft) => {
-        draft.input = props.input().plainText
-      })
-    }
     command.keybinds(true)
     setStore("visible", false)
   }
@@ -495,13 +497,19 @@ export function Autocomplete(props: {
       },
       onInput(value) {
         if (store.visible) {
+          if (store.visible === "/") {
+            const trigger = findSlashTrigger(value, props.input().cursorOffset)
+            if (!trigger || trigger.start !== store.index) {
+              hide()
+            }
+            return
+          }
+
           if (
             // Typed text before the trigger
             props.input().cursorOffset <= store.index ||
             // There is a space between the trigger and the cursor
-            props.input().getTextRange(store.index, props.input().cursorOffset).match(/\s/) ||
-            // "/<command>" is not the sole content
-            (store.visible === "/" && value.match(/^\S+\s+\S+\s*$/))
+            props.input().getTextRange(store.index, props.input().cursorOffset).match(/\s/)
           ) {
             hide()
           }
@@ -512,10 +520,10 @@ export function Autocomplete(props: {
         const offset = props.input().cursorOffset
         if (offset === 0) return
 
-        // Check for "/" at position 0 - reopen slash commands
-        if (value.startsWith("/") && !value.slice(0, offset).match(/\s/)) {
+        const slash = findSlashTrigger(value, offset)
+        if (slash) {
           show("/")
-          setStore("index", 0)
+          setStore("index", slash.start)
           return
         }
 
@@ -581,7 +589,14 @@ export function Autocomplete(props: {
           }
 
           if (e.name === "/") {
-            if (props.input().cursorOffset === 0) show("/")
+            const cursorOffset = props.input().cursorOffset
+            const charBeforeCursor =
+              cursorOffset === 0 ? undefined : props.input().getTextRange(cursorOffset - 1, cursorOffset)
+            const canTrigger = charBeforeCursor === undefined || charBeforeCursor === "" || /\s/.test(charBeforeCursor)
+            if (canTrigger) {
+              show("/")
+              setStore("index", cursorOffset)
+            }
           }
         }
       },

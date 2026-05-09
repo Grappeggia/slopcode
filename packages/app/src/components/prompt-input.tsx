@@ -53,7 +53,9 @@ import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
 import { promptPlaceholder } from "./prompt-input/placeholder"
 import { PromptQueueDock } from "./prompt-input/queue-dock"
+import { promotePromptSlash, removePromptSlash } from "./prompt-input/slash"
 import { ImagePreview } from "@slopcode-ai/ui/image-preview"
+import { findSlashTrigger } from "@slopcode-ai/util/slash"
 
 interface PromptInputProps {
   class?: string
@@ -432,6 +434,16 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     removeGhostNode()
   }
 
+  const applyPrompt = (next: Prompt, cursor: number) => {
+    mirror.input = true
+    prompt.set(next, cursor)
+    requestAnimationFrame(() => {
+      editorRef.focus()
+      setCursorPosition(editorRef, cursor)
+      queueScroll()
+    })
+  }
+
   const acceptGhost = () => {
     if (!store.ghost) return false
     addPart({ type: "text", content: store.ghost, start: 0, end: 0 })
@@ -447,23 +459,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const clearEditor = () => {
     editorRef.innerHTML = ""
-  }
-
-  const setEditorText = (text: string) => {
-    clearEditor()
-    editorRef.textContent = text
-  }
-
-  const focusEditorEnd = () => {
-    requestAnimationFrame(() => {
-      editorRef.focus()
-      const range = document.createRange()
-      const selection = window.getSelection()
-      range.selectNodeContents(editorRef)
-      range.collapse(false)
-      selection?.removeAllRanges()
-      selection?.addRange(range)
-    })
   }
 
   const currentCursor = () => {
@@ -584,18 +579,19 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const handleSlashSelect = (cmd: SlashCommand | undefined) => {
     if (!cmd) return
+    const cursor = getCursorPosition(editorRef)
+    clearGhost()
     closePopover()
 
     if (cmd.type === "custom") {
-      const text = `/${cmd.trigger} `
-      setEditorText(text)
-      prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
-      focusEditorEnd()
+      const next = promotePromptSlash(prompt.current(), cursor, cmd.trigger)
+      if (!next) return
+      applyPrompt(next.prompt, next.cursor)
       return
     }
 
-    clearEditor()
-    prompt.set([{ type: "text", content: "", start: 0, end: 0 }], 0)
+    const next = removePromptSlash(prompt.current(), cursor)
+    if (next) applyPrompt(next.prompt, next.cursor)
     command.trigger(cmd.id, "slash")
   }
 
@@ -866,13 +862,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
     if (!shellMode) {
       const atMatch = rawText.substring(0, cursorPosition).match(/@(\S*)$/)
-      const slashMatch = rawText.match(/^\/(\S*)$/)
+      const slashMatch = findSlashTrigger(rawText, cursorPosition)
 
       if (atMatch) {
         atOnInput(atMatch[1])
         setStore("popover", "at")
       } else if (slashMatch) {
-        slashOnInput(slashMatch[1])
+        slashOnInput(slashMatch.query)
         setStore("popover", "slash")
       } else {
         closePopover()
