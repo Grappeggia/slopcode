@@ -974,7 +974,7 @@ describe("session.prompt queue mode", () => {
     })
   })
 
-  test("serial prompt runtime is isolated across views on the same session", async () => {
+  test("serial prompt runtime is shared across views on the same session", async () => {
     await using tmp = await tmpdir({
       git: true,
       config: {
@@ -991,14 +991,16 @@ describe("session.prompt queue mode", () => {
       directory: tmp.path,
       fn: async () => {
         const session = await Session.create({ title: "View Queue Test" })
-        const gateA = deferred<void>()
-        const gateB = deferred<void>()
+        const gate = deferred<void>()
+        const seen: string[] = []
         let calls = 0
 
-        spyOn(LLM, "stream").mockImplementation(async () => {
+        spyOn(LLM, "stream").mockImplementation(async (input) => {
           calls++
-          if (calls === 1) return stream({ text: "view a done", finishReason: "stop", wait: gateA.promise })
-          if (calls === 2) return stream({ text: "view b done", finishReason: "stop", wait: gateB.promise })
+          seen.push(JSON.stringify(input.messages))
+          if (calls === 1) return stream({ text: "working", finishReason: "tool-calls", wait: gate.promise })
+          if (calls === 2) return stream({ text: "view a done", finishReason: "stop" })
+          if (calls === 3) return stream({ text: "view b done", finishReason: "stop" })
           throw new Error(`unexpected llm call ${calls}`)
         })
 
@@ -1029,14 +1031,21 @@ describe("session.prompt queue mode", () => {
           },
         })
 
-        await eventually(() => calls === 2)
-        gateA.resolve()
-        gateB.resolve()
+        await eventually(async () => {
+          const messages = await Session.messages({ sessionID: session.id })
+          return messages.filter((msg) => msg.info.role === "user").length === 2
+        })
+        expect(calls).toBe(1)
+        gate.resolve()
 
         const firstResult = await first
         const secondResult = await second
 
-        expect(firstResult.info.id).not.toBe(secondResult.info.id)
+        expect(calls).toBe(3)
+        expect(seen[1]).not.toContain("second prompt")
+        expect(seen[2]).toContain("second prompt")
+        expect(text(firstResult)).toContain("view a done")
+        expect(text(secondResult)).toContain("view b done")
       },
     })
   })

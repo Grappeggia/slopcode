@@ -51,7 +51,7 @@ export namespace SessionStatus {
     ),
   }
 
-  const state = Instance.state(() => {
+  const state = Instance.sharedState(() => {
     const data: Record<string, Info> = {}
     return data
   })

@@ -11,9 +11,11 @@ interface Context {
   viewID?: string
   worktree: string
   project: Project.Info
+  shared: string
 }
 const context = Context.create<Context>("instance")
 const cache = new Map<string, Promise<Context>>()
+const counts = new Map<string, number>()
 
 const disposal = {
   all: undefined as Promise<void> | undefined,
@@ -23,8 +25,14 @@ export const Instance = {
   key(directory: string, viewID?: string) {
     return `${directory}\n${viewID ?? "shared"}`
   },
+  sharedKey(input: { directory: string; worktree: string; projectID: string }) {
+    return `project:${input.projectID}\n${input.worktree === "/" ? input.directory : input.worktree}`
+  },
   scope() {
     return Instance.key(Instance.directory, Instance.viewID)
+  },
+  sharedScope() {
+    return context.use().shared
   },
   async provide<R>(input: { directory: string; viewID?: string; init?: () => Promise<any>; fn: () => R }): Promise<R> {
     const key = Instance.key(input.directory, input.viewID)
@@ -38,10 +46,12 @@ export const Instance = {
           viewID: input.viewID,
           worktree: sandbox,
           project,
+          shared: Instance.sharedKey({ directory: input.directory, worktree: sandbox, projectID: project.id }),
         }
         await context.provide(ctx, async () => {
           await input.init?.()
         })
+        counts.set(ctx.shared, (counts.get(ctx.shared) ?? 0) + 1)
         return ctx
       })
       cache.set(key, existing)
@@ -78,10 +88,23 @@ export const Instance = {
   state<S>(init: () => S, dispose?: (state: Awaited<S>) => Promise<void>): () => S {
     return State.create(() => Instance.scope(), init, dispose)
   },
+  sharedState<S>(init: () => S, dispose?: (state: Awaited<S>) => Promise<void>): () => S {
+    return State.create(() => Instance.sharedScope(), init, dispose)
+  },
   async dispose() {
+    const scope = Instance.scope()
+    const shared = Instance.sharedScope()
     Log.Default.info("disposing instance", { directory: Instance.directory, viewID: Instance.viewID })
-    await State.dispose(Instance.scope())
-    cache.delete(Instance.scope())
+    await State.dispose(scope)
+    cache.delete(scope)
+    const count = counts.get(shared)
+    if (count === 1) {
+      counts.delete(shared)
+      await State.dispose(shared)
+    }
+    if (count && count > 1) {
+      counts.set(shared, count - 1)
+    }
     GlobalBus.emit("event", {
       directory: Instance.directory,
       payload: {

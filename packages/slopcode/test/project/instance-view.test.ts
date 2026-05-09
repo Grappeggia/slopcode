@@ -39,3 +39,33 @@ test("Instance.state isolates state by view id", async () => {
     },
   })
 })
+
+test("Instance.sharedState shares state across view id", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const value = Instance.sharedState(() => ({ count: 0 }))
+
+  await Instance.provide({
+    directory: tmp.path,
+    viewID: "view-a",
+    fn: async () => {
+      value().count = 1
+      expect(value().count).toBe(1)
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    viewID: "view-b",
+    fn: async () => {
+      expect(value().count).toBe(1)
+      value().count = 2
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      expect(value().count).toBe(2)
+    },
+  })
+})

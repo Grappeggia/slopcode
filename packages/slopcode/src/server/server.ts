@@ -47,6 +47,7 @@ import { DaemonRuntime } from "@/daemon/runtime"
 import { Identifier } from "@/id/id"
 import { getAdaptor } from "@/control-plane/adaptors"
 import { Workspace } from "@/control-plane/workspace"
+import { GlobalBus } from "@/bus/global"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -108,7 +109,7 @@ export namespace Server {
   }
 
   const match = (event: { type: string; properties?: unknown }, sessionID?: string, viewID?: string) => {
-    if (viewID) {
+    if (viewID && event.type !== "session.status" && event.type !== "session.idle") {
       const current = view(event)
       if (current && current !== viewID) return false
     }
@@ -615,6 +616,7 @@ export namespace Server {
           async (c) => {
             const input = c.req.valid("query")
             const viewID = Instance.viewID
+            const directory = Instance.directory
             log.info("event connected")
             DaemonRuntime.connect()
             c.header("X-Accel-Buffering", "no")
@@ -635,6 +637,21 @@ export namespace Server {
                   stream.close()
                 }
               })
+              async function forward(event: { type: string; properties?: unknown }) {
+                const current = view(event)
+                if (event.type !== "session.status" && event.type !== "session.idle") return
+                if (current === viewID) return
+                if (!viewID && !current) return
+                if (!match(event, input.sessionID, viewID)) return
+                await stream.writeSSE({
+                  data: JSON.stringify(event),
+                })
+              }
+              function globalHandler(input: { directory?: string; payload: { type: string; properties?: unknown } }) {
+                if (input.directory !== directory) return
+                void forward(input.payload)
+              }
+              GlobalBus.on("event", globalHandler)
 
               // Send heartbeat every 10s to prevent stalled proxy streams.
               const heartbeat = setInterval(() => {
@@ -650,6 +667,7 @@ export namespace Server {
                 stream.onAbort(() => {
                   clearInterval(heartbeat)
                   unsub()
+                  GlobalBus.off("event", globalHandler)
                   DaemonRuntime.disconnect()
                   resolve()
                   log.info("event disconnected")

@@ -103,7 +103,7 @@ export namespace SessionPrompt {
     lock: Promise<void>
   }
 
-  const state = Instance.state(
+  const state = Instance.sharedState(
     () => {
       const data: Record<string, Entry> = {}
       return data
