@@ -40,7 +40,6 @@ function candidate(screen: string) {
     .find((line) => line && /[0-9]/.test(line) && line !== current)
 }
 
-
 describe("dialog model select e2e", () => {
   test("selects a model from the slash dialog and returns focus to the prompt", async () => {
     await using tmp = await tmpdir({ git: true })
