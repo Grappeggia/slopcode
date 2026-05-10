@@ -47,5 +47,4 @@ describe("prompt slash submit e2e", () => {
       await app.stop()
     }
   }, 20_000)
-
 })
