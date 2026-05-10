@@ -300,6 +300,7 @@ export function Prompt(props: PromptProps) {
     setStore("mode", next.mode ?? "normal")
     restoreExtmarksFromParts(next.parts)
     input.cursorOffset = cursorOffset ?? Bun.stringWidth(next.input)
+    autocomplete?.onInput(next.input)
     syncCursor()
   }
 

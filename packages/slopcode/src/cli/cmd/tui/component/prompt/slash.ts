@@ -1,4 +1,5 @@
 import { findSlashTrigger, removeSlashTrigger } from "@slopcode-ai/util/slash"
+import { unwrap } from "solid-js/store"
 import type { PromptInfo } from "./history-store"
 
 type Part = PromptInfo["parts"][number]
@@ -29,7 +30,7 @@ const sourceRange = (part: Part) => {
 
 const shiftParts = (parts: PromptInfo["parts"], delta: number, start = 0) =>
   parts.map((part) => {
-    const next = structuredClone(part)
+    const next = structuredClone(unwrap(part))
     const range = sourceRange(next)
     if (!range) return next
     if (range.end <= start) return next
@@ -46,7 +47,7 @@ export function removePromptSlash(prompt: PromptInfo, cursor: number) {
   return {
     cursor: removed.cursor,
     prompt: {
-      ...structuredClone(prompt),
+      ...structuredClone(unwrap(prompt)),
       input: removed.text,
       parts: shiftParts(prompt.parts, removed.text.length - prompt.input.length, removed.end),
     } satisfies PromptInfo,
