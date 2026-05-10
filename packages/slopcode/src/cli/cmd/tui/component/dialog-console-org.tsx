@@ -1,4 +1,5 @@
 import { createMemo, createResource } from "solid-js"
+import { usePromptRef } from "@tui/context/prompt"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { useDialog } from "@tui/ui/dialog"
 import { useToast } from "@tui/ui/toast"
@@ -6,6 +7,7 @@ import { useTheme } from "@tui/context/theme"
 import { useSDK } from "@tui/context/sdk"
 import { useSync } from "@tui/context/sync"
 import { Account } from "@/account"
+import { dismissPromptSlash } from "../util/prompt-slash"
 
 const host = (url: string) => {
   try {
@@ -17,6 +19,7 @@ const host = (url: string) => {
 
 export function DialogConsoleOrg() {
   const dialog = useDialog()
+  const promptRef = usePromptRef()
   const toast = useToast()
   const { theme } = useTheme()
   const sdk = useSDK()
@@ -69,6 +72,7 @@ export function DialogConsoleOrg() {
         ),
         onSelect: async () => {
           if (item.active) {
+            dismissPromptSlash(promptRef.current)
             dialog.clear()
             return
           }
@@ -79,6 +83,7 @@ export function DialogConsoleOrg() {
             message: `Switched to ${item.orgName}`,
             variant: "info",
           })
+          dismissPromptSlash(promptRef.current)
           dialog.clear()
         },
       }))

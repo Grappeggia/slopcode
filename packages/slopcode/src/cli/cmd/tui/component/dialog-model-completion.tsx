@@ -1,10 +1,12 @@
 import { createMemo } from "solid-js"
+import { usePromptRef } from "@tui/context/prompt"
 import { map, pipe, sortBy } from "remeda"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { useDialog } from "@tui/ui/dialog"
 import { useSDK } from "@tui/context/sdk"
 import { useSync } from "@tui/context/sync"
 import { useToast } from "../ui/toast"
+import { dismissPromptSlash } from "../util/prompt-slash"
 
 function supportsText(model: {
   modalities?: {
@@ -21,6 +23,7 @@ export function DialogModelCompletion(props: { providerID?: string }) {
   const sdk = useSDK()
   const dialog = useDialog()
   const toast = useToast()
+  const promptRef = usePromptRef()
 
   const provider = createMemo(() => {
     if (!props.providerID) return
@@ -91,6 +94,7 @@ export function DialogModelCompletion(props: { providerID?: string }) {
         message: `Autocomplete model set to ${suffix}`,
       })
 
+      dismissPromptSlash(promptRef.current)
       dialog.clear()
     } catch {
       toast.show({

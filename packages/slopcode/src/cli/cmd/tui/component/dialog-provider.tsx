@@ -13,6 +13,8 @@ import type { ProviderAuthAuthorization } from "@slopcode-ai/sdk/v2"
 import { useKeyboard } from "@opentui/solid"
 import { Clipboard } from "@tui/util/clipboard"
 import { useToast } from "../ui/toast"
+import { usePromptRef } from "../context/prompt"
+import { dismissPromptSlash } from "../util/prompt-slash"
 import { Provider } from "@/provider/provider"
 
 const PROVIDER_PRIORITY: Record<string, number> = {
@@ -28,6 +30,7 @@ export function createDialogProviderOptions() {
   const sync = useSync()
   const dialog = useDialog()
   const sdk = useSDK()
+  const promptRef = usePromptRef()
   const options = createMemo(() => {
     return pipe(
       sync.data.provider_next.all,
@@ -120,6 +123,7 @@ async function completeConnection(
   sync: ReturnType<typeof useSync>,
   local: ReturnType<typeof useLocal>,
   toast: ReturnType<typeof useToast>,
+  prompt: ReturnType<typeof usePromptRef>,
   providerID: string,
   title: string,
 ) {
@@ -133,6 +137,7 @@ async function completeConnection(
       local.model.set({ providerID, modelID: models[0].id }, { recent: true })
     }
   }
+  dismissPromptSlash(prompt.current)
   dialog.clear()
   toast.show({ message: `${title} connected`, variant: "success" })
 }
@@ -150,6 +155,7 @@ function AutoMethod(props: AutoMethodProps) {
   const sync = useSync()
   const toast = useToast()
   const local = useLocal()
+  const promptRef = usePromptRef()
 
   useKeyboard((evt) => {
     if (evt.name === "c" && !evt.ctrl && !evt.meta) {
@@ -169,7 +175,7 @@ function AutoMethod(props: AutoMethodProps) {
       dialog.clear()
       return
     }
-    await completeConnection(sdk, dialog, sync, local, toast, props.providerID, props.title)
+    await completeConnection(sdk, dialog, sync, local, toast, promptRef, props.providerID, props.title)
   })
 
   return (
@@ -207,6 +213,7 @@ function CodeMethod(props: CodeMethodProps) {
   const dialog = useDialog()
   const toast = useToast()
   const local = useLocal()
+  const promptRef = usePromptRef()
   const [error, setError] = createSignal(false)
 
   return (
@@ -220,7 +227,7 @@ function CodeMethod(props: CodeMethodProps) {
           code: value,
         })
         if (!error) {
-          await completeConnection(sdk, dialog, sync, local, toast, props.providerID, props.title)
+          await completeConnection(sdk, dialog, sync, local, toast, promptRef, props.providerID, props.title)
           return
         }
         setError(true)
@@ -248,6 +255,7 @@ function ApiMethod(props: ApiMethodProps) {
   const sync = useSync()
   const toast = useToast()
   const local = useLocal()
+  const promptRef = usePromptRef()
   const { theme } = useTheme()
 
   return (
@@ -289,7 +297,7 @@ function ApiMethod(props: ApiMethodProps) {
             key: value,
           },
         })
-        await completeConnection(sdk, dialog, sync, local, toast, props.providerID, props.title)
+        await completeConnection(sdk, dialog, sync, local, toast, promptRef, props.providerID, props.title)
       }}
     />
   )

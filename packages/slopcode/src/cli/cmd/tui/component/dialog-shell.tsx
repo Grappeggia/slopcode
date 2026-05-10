@@ -1,12 +1,15 @@
 import { createMemo, createResource } from "solid-js"
+import { usePromptRef } from "@tui/context/prompt"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { useDialog } from "@tui/ui/dialog"
 import { useSDK } from "@tui/context/sdk"
 import { useSync } from "@tui/context/sync"
 import { useToast } from "@tui/ui/toast"
+import { dismissPromptSlash } from "../util/prompt-slash"
 
 export function DialogShell() {
   const dialog = useDialog()
+  const promptRef = usePromptRef()
   const sdk = useSDK()
   const sync = useSync()
   const toast = useToast()
@@ -60,6 +63,7 @@ export function DialogShell() {
         variant: "success",
         message: program ? `Shell set to ${program}` : "Shell reset to system default",
       })
+      dismissPromptSlash(promptRef.current)
       dialog.clear()
     } catch {
       toast.show({

@@ -1,10 +1,13 @@
 import { DialogSelect, type DialogSelectRef } from "../ui/dialog-select"
+import { usePromptRef } from "../context/prompt"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { onCleanup, onMount } from "solid-js"
+import { dismissPromptSlash } from "../util/prompt-slash"
 
 export function DialogThemeList() {
   const theme = useTheme()
+  const promptRef = usePromptRef()
   const options = Object.keys(theme.all())
     .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
     .map((value) => ({
@@ -31,6 +34,7 @@ export function DialogThemeList() {
       onSelect={(opt) => {
         theme.set(opt.value)
         confirmed = true
+        dismissPromptSlash(promptRef.current)
         dialog.clear()
       }}
       ref={(r) => {
