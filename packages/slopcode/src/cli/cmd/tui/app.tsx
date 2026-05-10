@@ -20,7 +20,7 @@ import { DialogVariant } from "@tui/component/dialog-variant"
 import { DialogStatus } from "@tui/component/dialog-status"
 import { DialogThemeList } from "@tui/component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
-import { CommandProvider, useCommandDialog } from "@tui/component/dialog-command"
+import { CommandDialogBridge, CommandProvider, useCommandDialog } from "@tui/component/dialog-command"
 import { DialogAgent } from "@tui/component/dialog-agent"
 import { DialogProvider as DialogProviderList } from "@tui/component/dialog-provider"
 import { DialogShell } from "@tui/component/dialog-shell"
@@ -192,17 +192,18 @@ export function tui(input: {
                                     <LocalProvider>
                                       <KeybindProvider>
                                         <PromptStashProvider>
-                                          <DialogProvider>
-                                            <CommandProvider>
-                                              <FrecencyProvider>
-                                                <PromptHistoryProvider>
-                                                  <PromptRefProvider>
+                                          <FrecencyProvider>
+                                            <PromptHistoryProvider>
+                                              <PromptRefProvider>
+                                                <CommandProvider>
+                                                  <DialogProvider>
+                                                    <CommandDialogBridge />
                                                     <App />
-                                                  </PromptRefProvider>
-                                                </PromptHistoryProvider>
-                                              </FrecencyProvider>
-                                            </CommandProvider>
-                                          </DialogProvider>
+                                                  </DialogProvider>
+                                                </CommandProvider>
+                                              </PromptRefProvider>
+                                            </PromptHistoryProvider>
+                                          </FrecencyProvider>
                                         </PromptStashProvider>
                                       </KeybindProvider>
                                     </LocalProvider>
