@@ -58,7 +58,6 @@ export function Dialog(
 
 type DialogElement = JSX.Element | (() => JSX.Element)
 
-
 function init() {
   const [store, setStore] = createStore({
     stack: [] as {

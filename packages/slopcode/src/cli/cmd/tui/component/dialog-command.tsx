@@ -61,7 +61,6 @@ function init() {
   const suspended = () => suspendCount() > 0
   const current = () => dialog()
 
-
   useKeyboard((evt) => {
     const open = current()
     if (!open) return
@@ -181,7 +180,6 @@ export function CommandDialogBridge() {
   onCleanup(command.bindDialog(dialog))
   return null
 }
-
 
 function DialogCommand(props: { options: CommandOption[]; suggestedOptions: CommandOption[] }) {
   let ref: DialogSelectRef<string>
