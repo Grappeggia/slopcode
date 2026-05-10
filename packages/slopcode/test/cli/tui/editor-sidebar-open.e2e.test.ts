@@ -189,6 +189,7 @@ import { SyncProvider } from "@tui/context/sync"
 import { SessionTabsProvider } from "@tui/context/session-tabs"
 import { TabStateProvider } from "@tui/context/tab-state"
 import { EditorConnectionProvider } from "@tui/context/editor-connection"
+import { EditorContextProvider } from "@tui/context/editor"
 import { ThemeProvider, useTheme } from "@tui/context/theme"
 import { LocalProvider } from "@tui/context/local"
 import { KeybindProvider } from "@tui/context/keybind"
@@ -227,25 +228,27 @@ render(
                     <SessionTabsProvider>
                       <TabStateProvider>
                         <EditorConnectionProvider>
-                          <ThemeProvider mode="dark">
-                          <LocalProvider>
-                            <KeybindProvider>
-                              <PromptStashProvider>
-                                <DialogProvider>
-                                  <CommandProvider>
-                                    <FrecencyProvider>
-                                      <PromptHistoryProvider>
-                                        <PromptRefProvider>
-                                          <App />
-                                        </PromptRefProvider>
-                                      </PromptHistoryProvider>
-                                    </FrecencyProvider>
-                                  </CommandProvider>
-                                </DialogProvider>
-                              </PromptStashProvider>
-                            </KeybindProvider>
-                          </LocalProvider>
-                        </ThemeProvider>
+                          <EditorContextProvider>
+                            <ThemeProvider mode="dark">
+                              <LocalProvider>
+                                <KeybindProvider>
+                                  <PromptStashProvider>
+                                    <DialogProvider>
+                                      <CommandProvider>
+                                        <FrecencyProvider>
+                                          <PromptHistoryProvider>
+                                            <PromptRefProvider>
+                                              <App />
+                                            </PromptRefProvider>
+                                          </PromptHistoryProvider>
+                                        </FrecencyProvider>
+                                      </CommandProvider>
+                                    </DialogProvider>
+                                  </PromptStashProvider>
+                                </KeybindProvider>
+                              </LocalProvider>
+                            </ThemeProvider>
+                          </EditorContextProvider>
                         </EditorConnectionProvider>
                       </TabStateProvider>
                     </SessionTabsProvider>

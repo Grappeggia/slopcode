@@ -13,6 +13,8 @@ const sdkPath = path.resolve(pkgDir, "src/cli/cmd/tui/context/sdk.tsx")
 const syncPath = path.resolve(pkgDir, "src/cli/cmd/tui/context/sync.tsx")
 const sessionTabsPath = path.resolve(pkgDir, "src/cli/cmd/tui/context/session-tabs.tsx")
 const tabStatePath = path.resolve(pkgDir, "src/cli/cmd/tui/context/tab-state.tsx")
+const editorConnectionPath = path.resolve(pkgDir, "src/cli/cmd/tui/context/editor-connection.tsx")
+const editorContextPath = path.resolve(pkgDir, "src/cli/cmd/tui/context/editor.ts")
 const themePath = path.resolve(pkgDir, "src/cli/cmd/tui/context/theme.tsx")
 const localPath = path.resolve(pkgDir, "src/cli/cmd/tui/context/local.tsx")
 const keybindPath = path.resolve(pkgDir, "src/cli/cmd/tui/context/keybind.tsx")
@@ -166,6 +168,8 @@ import { SDKProvider } from ${JSON.stringify(sdkPath)}
 import { SyncProvider } from ${JSON.stringify(syncPath)}
 import { SessionTabsProvider } from ${JSON.stringify(sessionTabsPath)}
 import { TabStateProvider, useTabState } from ${JSON.stringify(tabStatePath)}
+import { EditorConnectionProvider } from ${JSON.stringify(editorConnectionPath)}
+import { EditorContextProvider } from ${JSON.stringify(editorContextPath)}
 import { ThemeProvider, useTheme } from ${JSON.stringify(themePath)}
 import { LocalProvider } from ${JSON.stringify(localPath)}
 import { KeybindProvider } from ${JSON.stringify(keybindPath)}
@@ -298,25 +302,29 @@ render(
                   <SyncProvider>
                     <SessionTabsProvider>
                       <TabStateProvider>
-                        <ThemeProvider mode="dark">
-                          <LocalProvider>
-                            <KeybindProvider>
-                              <PromptStashProvider>
-                                <DialogProvider>
-                                  <CommandProvider>
-                                    <FrecencyProvider>
-                                      <PromptHistoryProvider>
-                                        <PromptRefProvider>
-                                          <App />
-                                        </PromptRefProvider>
-                                      </PromptHistoryProvider>
-                                    </FrecencyProvider>
-                                  </CommandProvider>
-                                </DialogProvider>
-                              </PromptStashProvider>
-                            </KeybindProvider>
-                          </LocalProvider>
-                        </ThemeProvider>
+                        <EditorConnectionProvider>
+                          <EditorContextProvider>
+                            <ThemeProvider mode="dark">
+                              <LocalProvider>
+                                <KeybindProvider>
+                                  <PromptStashProvider>
+                                    <DialogProvider>
+                                      <CommandProvider>
+                                        <FrecencyProvider>
+                                          <PromptHistoryProvider>
+                                            <PromptRefProvider>
+                                              <App />
+                                            </PromptRefProvider>
+                                          </PromptHistoryProvider>
+                                        </FrecencyProvider>
+                                      </CommandProvider>
+                                    </DialogProvider>
+                                  </PromptStashProvider>
+                                </KeybindProvider>
+                              </LocalProvider>
+                            </ThemeProvider>
+                          </EditorContextProvider>
+                        </EditorConnectionProvider>
                       </TabStateProvider>
                     </SessionTabsProvider>
                   </SyncProvider>
