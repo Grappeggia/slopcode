@@ -8,7 +8,7 @@ import { useSync } from "@tui/context/sync"
 import { useTheme, selectedForeground } from "@tui/context/theme"
 import { SplitBorder } from "@tui/component/border"
 import { useCommandDialog } from "@tui/component/dialog-command"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { Locale } from "@/util/locale"
 import { findSlashTrigger } from "@slopcode-ai/util/slash"
 import type { PromptInfo } from "./history"
@@ -53,6 +53,7 @@ export type AutocompleteRef = {
   onInput: (value: string) => void
   onKeyDown: (e: KeyEvent) => void
   showSlash: (cursorOffset?: number) => void
+  select: () => boolean
   hide: () => void
   visible: false | "@" | "/"
 }
@@ -86,6 +87,7 @@ export function Autocomplete(props: {
   const sync = useSync()
   const command = useCommandDialog()
   const { theme } = useTheme()
+  const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const frecency = useFrecency()
 
@@ -345,9 +347,9 @@ export function Autocomplete(props: {
       description: item.description,
       aliases: item.aliases,
       onSelect: () => {
+        item.onSelect?.()
         const next = removePromptSlash(props.prompt(), props.input().cursorOffset)
         if (next) props.applyPrompt(next.prompt, next.cursor)
-        item.onSelect?.()
       },
     }))
 
@@ -452,10 +454,16 @@ export function Autocomplete(props: {
   }
 
   function select() {
+    if (store.visible === "/") {
+      const trigger = findSlashTrigger(props.input().plainText, props.input().cursorOffset)
+      if (!trigger || trigger.start !== store.index || trigger.query !== search()) return false
+    }
     const selected = options()[store.selected]
-    if (!selected) return
-    hide()
+    if (!selected) return false
     selected.onSelect?.()
+    hide()
+    renderer.requestRender()
+    return true
   }
 
   function expandDirectory() {
@@ -510,6 +518,9 @@ export function Autocomplete(props: {
       },
       showSlash(cursorOffset) {
         openSlash(cursorOffset)
+      },
+      select() {
+        return select()
       },
       hide() {
         hide()
@@ -580,7 +591,7 @@ export function Autocomplete(props: {
             e.preventDefault()
             return
           }
-          if (name === "return") {
+          if (["return", "linefeed", "enter", "kpenter"].includes(name ?? "")) {
             select()
             e.preventDefault()
             return

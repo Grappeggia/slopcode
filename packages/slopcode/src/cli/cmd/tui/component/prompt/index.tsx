@@ -918,7 +918,10 @@ export function Prompt(props: PromptProps) {
   async function submit() {
     if (props.disabled) return
     clearGhost()
-    if (autocomplete?.visible) return
+    if (autocomplete?.visible) {
+      autocomplete.select()
+      return
+    }
 
     const firstLine = input.plainText.split("\n")[0] ?? ""
     const pendingSlash = firstLine.match(/^\/(\S*)$/)?.[1]
