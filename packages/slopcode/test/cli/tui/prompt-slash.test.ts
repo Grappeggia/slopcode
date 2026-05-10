@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { findSlashTrigger, removeSlashTrigger } from "@slopcode-ai/util/slash"
 import { promotePromptSlash, removePromptSlash } from "../../../src/cli/cmd/tui/component/prompt/slash"
+import { dismissPromptSlash } from "../../../src/cli/cmd/tui/util/prompt-slash"
 
 describe("prompt slash", () => {
   test("finds inline slash triggers without matching paths", () => {
@@ -100,5 +101,33 @@ describe("prompt slash", () => {
     if (file?.type !== "file" || !file.source) throw new Error("expected file part")
     expect(file.source.text.start).toBe(15)
     expect(file.source.text.end).toBe(26)
+  })
+
+  test("dismisses slash prompts through a prompt ref", () => {
+    let current = {
+      input: "/move",
+      parts: [],
+      mode: "normal" as const,
+    }
+
+    const prompt = {
+      focused: true,
+      get current() {
+        return current
+      },
+      set(next: typeof current) {
+        current = next
+      },
+      reset() {},
+      blur() {},
+      focus() {},
+      attachFile() {
+        return false
+      },
+      submit() {},
+    }
+
+    expect(dismissPromptSlash(prompt)).toBe(true)
+    expect(current.input).toBe("")
   })
 })

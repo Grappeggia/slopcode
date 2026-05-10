@@ -7,6 +7,8 @@ import { Locale } from "@/util/locale"
 import { useKeybind } from "../context/keybind"
 import { useTheme } from "../context/theme"
 import { useSDK } from "../context/sdk"
+import { usePromptRef } from "../context/prompt"
+import { dismissPromptSlash } from "../util/prompt-slash"
 import { DialogSessionRename } from "./dialog-session-rename"
 import { createDebouncedSignal } from "../util/signal"
 import { sessionWaiting } from "../context/session-tabs-state"
@@ -19,6 +21,7 @@ export function DialogSessionList(props: { workspaceID?: string | null }) {
   const keybind = useKeybind()
   const { theme } = useTheme()
   const sdk = useSDK()
+  const promptRef = usePromptRef()
 
   const [toDelete, setToDelete] = createSignal<string>()
   const [search, setSearch] = createDebouncedSignal("", 150)
@@ -137,6 +140,7 @@ export function DialogSessionList(props: { workspaceID?: string | null }) {
         if (targetWorkspaceID !== sdk.workspaceID) {
           await sync.bootstrap()
         }
+        dismissPromptSlash(promptRef.current)
         dialog.clear()
       }}
       keybind={[

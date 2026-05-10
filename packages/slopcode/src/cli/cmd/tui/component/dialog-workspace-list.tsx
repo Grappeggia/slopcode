@@ -6,7 +6,9 @@ import { useSDK } from "@tui/context/sdk"
 import { useSync } from "@tui/context/sync"
 import { useToast } from "@tui/ui/toast"
 import { useKeybind } from "@tui/context/keybind"
+import { usePromptRef } from "@tui/context/prompt"
 import { Identifier } from "@/id/id"
+import { dismissPromptSlash } from "../util/prompt-slash"
 import { DialogSessionList } from "./dialog-session-list"
 
 type CountState = Record<string, number | null | undefined>
@@ -77,6 +79,7 @@ export function DialogWorkspaceList(props: { sessionID?: string }) {
   const sync = useSync()
   const toast = useToast()
   const keybind = useKeybind()
+  const promptRef = usePromptRef()
 
   const [toDelete, setToDelete] = createSignal<string>()
   const [counts, setCounts] = createSignal<CountState>({})
@@ -129,9 +132,12 @@ export function DialogWorkspaceList(props: { sessionID?: string }) {
 
   const currentWorkspaceID = createMemo(() => route.data.workspaceID ?? "__local__")
 
+  const dismissSlash = () => dismissPromptSlash(promptRef.current)
+
   const openWorkspaceHome = async (workspaceID?: string) => {
     route.navigate({ type: "home", workspaceID })
     await sync.bootstrap()
+    dismissSlash()
     dialog.clear()
   }
 
@@ -143,6 +149,7 @@ export function DialogWorkspaceList(props: { sessionID?: string }) {
     if (!props.sessionID) return false
     const current = route.data.type === "session" ? route.data.workspaceID : undefined
     if (current === workspaceID) {
+      dismissSlash()
       dialog.clear()
       return true
     }
@@ -166,6 +173,7 @@ export function DialogWorkspaceList(props: { sessionID?: string }) {
       workspaceID,
     })
     await sync.bootstrap()
+    dismissSlash()
     dialog.clear()
     return true
   }

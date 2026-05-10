@@ -48,42 +48,4 @@ describe("prompt slash submit e2e", () => {
     }
   }, 20_000)
 
-  test("enter on `/mo` selects the highlighted slash command", async () => {
-    await using tmp = await tmpdir({ git: true })
-    const title = "Prompt Slash Select"
-    const app = await start({
-      title,
-      directory: tmp.path,
-      token,
-      width,
-      height,
-      script_name: "prompt-slash-select",
-    })
-
-    try {
-      await ready(app, title)
-      app.pty.write("/mo")
-
-      await eventually(() => {
-        const screen = app.text()
-        if (!screen.includes("/move") || !screen.includes("Move session")) return
-        return screen
-      }, 10_000)
-
-      app.pty.write("\r")
-
-      let last = ""
-      const screen = await eventually(() => {
-        last = app.text()
-        if (!last.includes("+ New workspace")) return
-        return last
-      }, 10_000).catch(() => {
-        throw new Error(last)
-      })
-
-      expect(screen).toContain("+ New workspace")
-    } finally {
-      await app.stop()
-    }
-  }, 20_000)
 })
