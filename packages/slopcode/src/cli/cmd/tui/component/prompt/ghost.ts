@@ -99,6 +99,18 @@ export function ghostAcceptWord(ghost: string) {
   }
 }
 
+export function ghostAdvance(input: string, ghost: string) {
+  const next = ghostAcceptWord(ghost)
+  if (!next) return
+  const text = input + next.accept
+  return {
+    accept: next.accept,
+    ghost: next.remainder,
+    suggestion: next.remainder ? text + next.remainder : "",
+    text,
+  }
+}
+
 export function ghostLayout(input: { ghost: string; row: number; col: number; width: number; rows: number }) {
   if (!input.ghost) return []
   if (input.width <= 0 || input.rows <= 0) return []

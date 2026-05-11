@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   ghostAcceptWord,
+  ghostAdvance,
   ghostCursor,
   ghostExtraRows,
   ghostLayout,
@@ -135,6 +136,24 @@ describe("prompt ghost", () => {
     expect(ghostAcceptWord("tests for route")).toEqual({
       accept: "tests",
       remainder: " for route",
+    })
+  })
+
+  test("advances repeated word accepts without dropping the remainder", () => {
+    const first = ghostAdvance("write detailed ", "tests for route")
+    expect(first).toEqual({
+      accept: "tests",
+      ghost: " for route",
+      suggestion: "write detailed tests for route",
+      text: "write detailed tests",
+    })
+
+    const second = ghostAdvance(first!.text, first!.ghost)
+    expect(second).toEqual({
+      accept: " for",
+      ghost: " route",
+      suggestion: "write detailed tests for route",
+      text: "write detailed tests for",
     })
   })
 

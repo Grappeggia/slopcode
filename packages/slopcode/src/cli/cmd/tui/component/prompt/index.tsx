@@ -32,7 +32,7 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { createPromptFilePart, promptFileVirtualText } from "./file-part"
-import { ghostAcceptWord, ghostCursor, ghostExtraRows, ghostLayout, ghostVisible, ghostRemainder } from "./ghost.ts"
+import { ghostAdvance, ghostCursor, ghostExtraRows, ghostLayout, ghostVisible, ghostRemainder } from "./ghost.ts"
 import { usePromptStash } from "./stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
@@ -761,6 +761,7 @@ export function Prompt(props: PromptProps) {
   let ghostTimer: Timer | undefined
   let ghostRequest = 0
   const [ghostSuggestion, setGhostSuggestion] = createSignal("")
+  let ghostAccepting = false
 
   function clearGhost() {
     ghostRequest += 1
@@ -773,11 +774,16 @@ export function Prompt(props: PromptProps) {
   }
 
   function acceptGhost() {
-    const next = ghostAcceptWord(store.ghost)
+    const next = ghostAdvance(store.prompt.input, store.ghost)
     if (!next) return false
+    ghostAccepting = true
     input.insertText(next.accept)
-    if (next.remainder) setStore("ghost", next.remainder)
-    else clearGhost()
+    setGhostSuggestion(next.suggestion)
+    setStore("ghost", next.ghost)
+    queueMicrotask(() => {
+      ghostAccepting = false
+      syncCursor()
+    })
     return true
   }
 
@@ -801,7 +807,13 @@ export function Prompt(props: PromptProps) {
 
     const text = store.prompt.input
     const cursor = input.cursorOffset
-    if (!text || cursor !== text.length) {
+    if (cursor !== text.length) {
+      if (ghostAccepting) return
+      clearGhost()
+      return
+    }
+
+    if (!text) {
       clearGhost()
       return
     }
