@@ -145,6 +145,7 @@ export type AuthHook = {
               type: "success"
               key: string
               provider?: string
+              metadata?: Record<string, string>
             }
           | {
               type: "failed"
@@ -161,6 +162,7 @@ export type AuthOuathResult = { url: string; instructions: string } & (
         | ({
             type: "success"
             provider?: string
+            metadata?: Record<string, string>
           } & (
             | {
                 refresh: string
@@ -169,6 +171,7 @@ export type AuthOuathResult = { url: string; instructions: string } & (
                 accountId?: string
               }
             | { key: string }
+
           ))
         | {
             type: "failed"
@@ -181,6 +184,7 @@ export type AuthOuathResult = { url: string; instructions: string } & (
         | ({
             type: "success"
             provider?: string
+            metadata?: Record<string, string>
           } & (
             | {
                 refresh: string
@@ -189,6 +193,7 @@ export type AuthOuathResult = { url: string; instructions: string } & (
                 accountId?: string
               }
             | { key: string }
+
           ))
         | {
             type: "failed"

@@ -14,6 +14,7 @@ export namespace Auth {
       expires: z.number(),
       accountId: z.string().optional(),
       enterpriseUrl: z.string().optional(),
+      metadata: z.record(z.string(), z.string()).optional(),
     })
     .meta({ ref: "OAuth" })
 
@@ -21,6 +22,7 @@ export namespace Auth {
     .object({
       type: z.literal("api"),
       key: z.string(),
+      metadata: z.record(z.string(), z.string()).optional(),
     })
     .meta({ ref: "ApiAuth" })
 

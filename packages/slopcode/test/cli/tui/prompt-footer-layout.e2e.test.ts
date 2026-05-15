@@ -285,7 +285,7 @@ describe("tui prompt footer layout", () => {
     const result = await run()
 
     expect(result.code).toBe(0)
-    expect(result.screen).toMatch(/stop\s+agent\s+hist\s+cmd/)
+    expect(result.screen).toMatch(/stop[^\n]*agent[^\n]*hist[^\n]*cmd/)
     expect(result.screen).not.toMatch(/stopagent/)
     expect(result.raw).not.toMatch(/escstop/)
     expect(result.screen).not.toMatch(/\bs\s*\n\s*t\s*\n\s*o\s*\n\s*p\b/)

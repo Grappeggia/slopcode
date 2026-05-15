@@ -1449,6 +1449,31 @@ export type Config = {
      */
     urls?: Array<string>
   }
+  /**
+   * Reference repositories or local paths available to scout/reference tools
+   */
+  reference?: {
+    [key: string]:
+      | string
+      | {
+          path: string
+        }
+      | {
+          repository: string
+          branch?: string
+        }
+  }
+  /**
+   * Attachment processing configuration, including image size limits and resizing behavior
+   */
+  attachment?: {
+    image?: {
+      auto_resize?: boolean
+      max_width?: number
+      max_height?: number
+      max_base64_bytes?: number
+    }
+  }
   watcher?: {
     ignore?: Array<string>
   }
@@ -1690,11 +1715,17 @@ export type OAuth = {
   expires: number
   accountId?: string
   enterpriseUrl?: string
+  metadata?: {
+    [key: string]: string
+  }
 }
 
 export type ApiAuth = {
   type: "api"
   key: string
+  metadata?: {
+    [key: string]: string
+  }
 }
 
 export type WellKnownAuth = {
@@ -4952,6 +4983,90 @@ export type ProviderOauthCallbackResponses = {
 }
 
 export type ProviderOauthCallbackResponse = ProviderOauthCallbackResponses[keyof ProviderOauthCallbackResponses]
+
+export type V2ModelListData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Project directory for the request instance
+     */
+    directory?: string
+    /**
+     * Workspace ID for the request instance
+     */
+    workspace?: string
+  }
+  url: "/api/model"
+}
+
+export type V2ModelListResponses = {
+  /**
+   * List of models
+   */
+  200: Array<Model>
+}
+
+export type V2ModelListResponse = V2ModelListResponses[keyof V2ModelListResponses]
+
+export type V2ProviderListData = {
+  body?: never
+  path?: never
+  query?: {
+    /**
+     * Project directory for the request instance
+     */
+    directory?: string
+    /**
+     * Workspace ID for the request instance
+     */
+    workspace?: string
+  }
+  url: "/api/provider"
+}
+
+export type V2ProviderListResponses = {
+  /**
+   * List of providers
+   */
+  200: Array<Provider>
+}
+
+export type V2ProviderListResponse = V2ProviderListResponses[keyof V2ProviderListResponses]
+
+export type V2ProviderGetData = {
+  body?: never
+  path: {
+    providerID: string
+  }
+  query?: {
+    /**
+     * Project directory for the request instance
+     */
+    directory?: string
+    /**
+     * Workspace ID for the request instance
+     */
+    workspace?: string
+  }
+  url: "/api/provider/{providerID}"
+}
+
+export type V2ProviderGetErrors = {
+  /**
+   * Provider not found
+   */
+  404: unknown
+}
+
+export type V2ProviderGetResponses = {
+  /**
+   * Provider
+   */
+  200: Provider
+}
+
+export type V2ProviderGetResponse = V2ProviderGetResponses[keyof V2ProviderGetResponses]
 
 export type FindTextData = {
   body?: never

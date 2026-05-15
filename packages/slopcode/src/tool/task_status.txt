@@ -1,0 +1,3 @@
+- Check the status of a background task launched by the task tool with background=true.
+- Use when you need to poll, wait for, or retrieve the result of a background subagent.
+- Pass the task_id returned by the task tool.

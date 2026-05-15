@@ -1,4 +1,9 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test"
+import { tmpdir } from "../fixture/fixture"
+import { Instance } from "../../src/project/instance"
+import { Session } from "../../src/session"
+import { MessageV2 } from "../../src/session/message-v2"
+import { SessionPrompt } from "../../src/session/prompt"
 
 type Rule = {
   permission: string
@@ -6,67 +11,8 @@ type Rule = {
   action: string
 }
 
-const agent = {
-  name: "helper",
-  mode: "subagent" as const,
-  description: "helper agent",
-  permission: [] as Rule[],
-}
-
 let createdPermission: Rule[] = []
 let promptTools: Record<string, boolean> | undefined
-
-mock.module("../../src/agent/agent", () => ({
-  Agent: {
-    list: async () => [agent],
-    get: async (name: string) => (name === agent.name ? agent : undefined),
-  },
-}))
-
-mock.module("../../src/session", () => ({
-  Session: {
-    get: async () => undefined,
-    create: async (input: { permission: Rule[] }) => {
-      createdPermission = input.permission
-      return { id: "subtask-session" }
-    },
-  },
-}))
-
-mock.module("../../src/session/message-v2", () => ({
-  MessageV2: {
-    get: async () => ({
-      info: {
-        role: "assistant",
-        modelID: "model-id",
-        providerID: "provider-id",
-      },
-    }),
-  },
-}))
-
-mock.module("../../src/session/prompt", () => ({
-  SessionPrompt: {
-    cancel: () => {},
-    resolvePromptParts: async (prompt: string) => [{ type: "text", text: prompt }],
-    prompt: async (input: { tools: Record<string, boolean> }) => {
-      promptTools = input.tools
-      return { parts: [{ type: "text", text: "done" }] }
-    },
-  },
-}))
-
-mock.module("../../src/config/config", () => ({
-  Config: {
-    get: async () => ({ experimental: {} }),
-  },
-}))
-
-mock.module("../../src/tool/truncation", () => ({
-  Truncate: {
-    output: async (content: string) => ({ content, truncated: false }),
-  },
-}))
 
 const ctx = {
   sessionID: "session",
@@ -78,39 +24,77 @@ const ctx = {
   ask: async () => {},
 }
 
+async function provide(permission: Record<string, "allow" | "ask" | "deny">, fn: () => Promise<void>) {
+  await using tmp = await tmpdir({
+    config: {
+      agent: {
+        helper: {
+          mode: "subagent",
+          description: "helper agent",
+          permission,
+        },
+      },
+    },
+  })
+  await Instance.provide({ directory: tmp.path, fn })
+}
+
 beforeEach(() => {
-  agent.permission = []
   createdPermission = []
   promptTools = undefined
+  spyOn(Session, "get").mockImplementation((async () => undefined) as any)
+  spyOn(Session, "create").mockImplementation((async (input: { permission: Rule[] }) => {
+    createdPermission = input.permission
+    return { id: "subtask-session" }
+  }) as any)
+  spyOn(MessageV2, "get").mockImplementation((async () => ({
+    info: {
+      role: "assistant",
+      modelID: "model-id",
+      providerID: "provider-id",
+    },
+    parts: [],
+  })) as any)
+  spyOn(SessionPrompt, "cancel").mockImplementation((async () => {}) as any)
+  spyOn(SessionPrompt, "resolvePromptParts").mockImplementation(
+    (async (prompt: string) => [{ type: "text", text: prompt }]) as any,
+  )
+  spyOn(SessionPrompt, "prompt").mockImplementation((async (input: { tools: Record<string, boolean> }) => {
+    promptTools = input.tools
+    return { parts: [{ type: "text", text: "done" }] }
+  }) as any)
+})
+
+afterEach(() => {
+  mock.restore()
 })
 
 describe("tool.task todo permissions", () => {
   test("keeps todo tools enabled when the subagent can use them", async () => {
-    agent.permission = [
-      { permission: "todowrite", pattern: "*", action: "allow" },
-      { permission: "todoread", pattern: "*", action: "allow" },
-    ]
+    await provide({ todowrite: "allow", todoread: "allow" }, async () => {
+      const { TaskTool } = await import("../../src/tool/task")
+      const task = await TaskTool.init()
 
-    const { TaskTool } = await import("../../src/tool/task")
-    const task = await TaskTool.init()
+      await task.execute({ description: "helper task", prompt: "ship it", subagent_type: "helper" }, ctx)
 
-    await task.execute({ description: "helper task", prompt: "ship it", subagent_type: "helper" }, ctx)
-
-    expect(createdPermission.some((rule) => rule.permission === "todowrite" && rule.action === "deny")).toBe(false)
-    expect(createdPermission.some((rule) => rule.permission === "todoread" && rule.action === "deny")).toBe(false)
-    expect(promptTools?.todowrite).toBeUndefined()
-    expect(promptTools?.todoread).toBeUndefined()
+      expect(createdPermission.some((rule) => rule.permission === "todowrite" && rule.action === "deny")).toBe(false)
+      expect(createdPermission.some((rule) => rule.permission === "todoread" && rule.action === "deny")).toBe(false)
+      expect(promptTools?.todowrite).toBeUndefined()
+      expect(promptTools?.todoread).toBeUndefined()
+    })
   })
 
   test("keeps todo tools denied by default for subagents without permission", async () => {
-    const { TaskTool } = await import("../../src/tool/task")
-    const task = await TaskTool.init()
+    await provide({}, async () => {
+      const { TaskTool } = await import("../../src/tool/task")
+      const task = await TaskTool.init()
 
-    await task.execute({ description: "helper task", prompt: "ship it", subagent_type: "helper" }, ctx)
+      await task.execute({ description: "helper task", prompt: "ship it", subagent_type: "helper" }, ctx)
 
-    expect(createdPermission.some((rule) => rule.permission === "todowrite" && rule.action === "deny")).toBe(true)
-    expect(createdPermission.some((rule) => rule.permission === "todoread" && rule.action === "deny")).toBe(true)
-    expect(promptTools?.todowrite).toBe(false)
-    expect(promptTools?.todoread).toBe(false)
+      expect(createdPermission.some((rule) => rule.permission === "todowrite" && rule.action === "deny")).toBe(true)
+      expect(createdPermission.some((rule) => rule.permission === "todoread" && rule.action === "deny")).toBe(true)
+      expect(promptTools?.todowrite).toBe(false)
+      expect(promptTools?.todoread).toBe(false)
+    })
   })
 })

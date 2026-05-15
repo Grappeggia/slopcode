@@ -48,6 +48,44 @@ export namespace Skill {
   const EXTERNAL_SKILL_PATTERN = "skills/**/SKILL.md"
   const SLOPCODE_SKILL_PATTERN = "{skill,skills}/**/SKILL.md"
   const SKILL_PATTERN = "**/SKILL.md"
+  const CUSTOMIZE_SLOPCODE_SKILL_NAME = "customize-slopcode"
+  const CUSTOMIZE_SLOPCODE_SKILL_DESCRIPTION =
+    "Use ONLY when the user is editing or creating SlopCode configuration: slopcode.json, slopcode.jsonc, files under .slopcode/, or files under ~/.config/slopcode/. Also use when creating or fixing SlopCode agents, subagents, skills, plugins, MCP servers, reference repositories, or permission rules."
+  const CUSTOMIZE_SLOPCODE_SKILL_BODY = `# Customizing SlopCode
+
+SlopCode validates its own config strictly and refuses to start when a field is wrong. Treat the published schema as the source of truth:
+
+https://slopcode.dev/config.json
+
+Every SlopCode config should declare:
+
+\`\`\`json
+{ "$schema": "https://slopcode.dev/config.json" }
+\`\`\`
+
+Common config locations:
+- Project config: \`./slopcode.json\`, \`./slopcode.jsonc\`, or \`.slopcode/slopcode.json\`
+- Global config: \`~/.config/slopcode/slopcode.json\`
+- Project agents: \`.slopcode/agent/<name>.md\` or \`.slopcode/agents/<name>.md\`
+- Global agents: \`~/.config/slopcode/agent(s)/<name>.md\`
+- Project skills: \`.slopcode/skill(s)/<name>/SKILL.md\`
+- Global skills: \`~/.config/slopcode/skill(s)/<name>/SKILL.md\`
+
+Configs are deep-merged. Project overrides global. Unknown top-level keys are rejected.
+
+Useful fields include \`model\`, \`small_model\`, \`default_agent\`, \`agent\`, \`command\`, \`provider\`, \`mcp\`, \`plugin\`, \`permission\`, \`reference\`, \`attachment\`, and \`experimental\`.
+
+After changing config-time files, tell the user to restart SlopCode so the new config is loaded.
+`
+
+  function builtin(): Info {
+    return {
+      name: CUSTOMIZE_SLOPCODE_SKILL_NAME,
+      description: CUSTOMIZE_SLOPCODE_SKILL_DESCRIPTION,
+      location: "builtin://customize-slopcode",
+      content: CUSTOMIZE_SLOPCODE_SKILL_BODY,
+    }
+  }
 
   export const state = Instance.state(async () => {
     const skills: Record<string, Info> = {}
@@ -176,11 +214,14 @@ export namespace Skill {
   })
 
   export async function get(name: string) {
+    if (name === CUSTOMIZE_SLOPCODE_SKILL_NAME) return builtin()
     return state().then((x) => x.skills[name])
   }
 
-  export async function all() {
-    return state().then((x) => Object.values(x.skills))
+  export async function all(options?: { builtin?: boolean }) {
+    const skills = await state().then((x) => Object.values(x.skills))
+    if (!options?.builtin) return skills
+    return [builtin(), ...skills]
   }
 
   export async function dirs() {

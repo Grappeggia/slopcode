@@ -369,6 +369,18 @@ export namespace Provider {
         },
       }
     },
+    nvidia: async (provider) => {
+      return {
+        autoload: provider.source === "config",
+        options: {
+          headers: {
+            "HTTP-Referer": "https://slopcode.dev/",
+            "X-Title": "slopcode",
+            "X-BILLING-INVOKE-ORIGIN": "SlopCode",
+          },
+        },
+      }
+    },
     vercel: async () => {
       return {
         autoload: false,
@@ -975,6 +987,17 @@ export namespace Provider {
       if (provider.name) partial.name = provider.name
       if (provider.options) partial.options = provider.options
       mergeProvider(providerID, partial)
+    }
+
+    for (const plugin of await Plugin.list()) {
+      if (!plugin.provider?.models) continue
+      const providerID = plugin.provider.id
+      const provider = providers[providerID]
+      if (!provider || !isProviderAllowed(providerID)) continue
+      const models = await plugin.provider.models(provider, { auth: await Auth.get(providerID) })
+      if (models) {
+        provider.models = mergeDeep(provider.models, models as Record<string, Model>) as Record<string, Model>
+      }
     }
 
     for (const [providerID, provider] of Object.entries(providers)) {

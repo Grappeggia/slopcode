@@ -6,9 +6,10 @@ import { Skill } from "../skill"
 import { PermissionNext } from "../permission/next"
 import { Ripgrep } from "../file/ripgrep"
 import { iife } from "@/util/iife"
+import { Instance } from "@/project/instance"
 
 export const SkillTool = Tool.define("skill", async (ctx) => {
-  const skills = await Skill.all()
+  const skills = await Skill.all({ builtin: true })
 
   // Filter skills by agent permissions if agent provided
   const agent = ctx?.agent
@@ -62,7 +63,7 @@ export const SkillTool = Tool.define("skill", async (ctx) => {
       const skill = await Skill.get(params.name)
 
       if (!skill) {
-        const available = await Skill.all().then((x) => Object.keys(x).join(", "))
+        const available = await Skill.all({ builtin: true }).then((x) => x.map((skill) => skill.name).join(", "))
         throw new Error(`Skill "${params.name}" not found. Available skills: ${available || "none"}`)
       }
 
@@ -73,8 +74,8 @@ export const SkillTool = Tool.define("skill", async (ctx) => {
         metadata: {},
       })
 
-      const dir = path.dirname(skill.location)
-      const base = pathToFileURL(dir).href
+      const dir = skill.location.startsWith("builtin://") ? Instance.directory : path.dirname(skill.location)
+      const base = skill.location.startsWith("builtin://") ? skill.location : pathToFileURL(dir).href
 
       const limit = 10
       const files = await iife(async () => {

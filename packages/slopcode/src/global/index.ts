@@ -24,6 +24,7 @@ export namespace Global {
     cache,
     config,
     state,
+    repos: path.join(data, "repos"),
   }
 }
 
@@ -33,6 +34,7 @@ await Promise.all([
   fs.mkdir(Global.Path.state, { recursive: true }),
   fs.mkdir(Global.Path.log, { recursive: true }),
   fs.mkdir(Global.Path.bin, { recursive: true }),
+  fs.mkdir(Global.Path.repos, { recursive: true }),
 ])
 
 const CACHE_VERSION = "21"

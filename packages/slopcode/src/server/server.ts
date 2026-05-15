@@ -30,6 +30,7 @@ import { FileRoutes } from "./routes/file"
 import { ConfigRoutes } from "./routes/config"
 import { ExperimentalRoutes } from "./routes/experimental"
 import { ProviderRoutes } from "./routes/provider"
+import { V2Routes } from "./routes/v2"
 import { lazy } from "../util/lazy"
 import { InstanceBootstrap } from "../project/bootstrap"
 import { NotFoundError } from "../storage/db"
@@ -69,6 +70,7 @@ export namespace Server {
     "/formatter",
     "/mcp",
     "/experimental/resource",
+    "/api",
   ]
 
   function shouldProxyRemoteWorkspace(path: string) {
@@ -346,6 +348,7 @@ export namespace Server {
         .route("/permission", PermissionRoutes())
         .route("/question", QuestionRoutes())
         .route("/provider", ProviderRoutes())
+        .route("/api", V2Routes())
         .route("/", FileRoutes())
         .route("/mcp", McpRoutes())
         .route("/tui", TuiRoutes())

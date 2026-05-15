@@ -2,6 +2,7 @@ import { createMemo } from "solid-js"
 import { Keybind } from "@/util/keybind"
 import { pipe, mapValues } from "remeda"
 import type { TuiConfig } from "@/config/tui"
+import { Config } from "@/config/config"
 import type { ParsedKey, Renderable } from "@opentui/core"
 import { createStore } from "solid-js/store"
 import { useKeyboard, useRenderer } from "@opentui/solid"
@@ -16,7 +17,7 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
     const config = useTuiConfig()
     const keybinds = createMemo<Record<string, Keybind.Info[]>>(() => {
       return pipe(
-        (config.keybinds ?? {}) as Record<string, string>,
+        Config.Keybinds.parse(config.keybinds ?? {}) as Record<string, string>,
         mapValues((value) => Keybind.parse(value)),
       )
     })
