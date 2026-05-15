@@ -102,7 +102,9 @@ export namespace Config {
   async function fetchRemoteConfigPointer(value: unknown, source: string) {
     if (!record(value) || typeof value.url !== "string") return {}
     const headers = record(value.headers)
-      ? Object.fromEntries(Object.entries(value.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+      ? Object.fromEntries(
+          Object.entries(value.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+        )
       : undefined
     log.debug("fetching remote config pointer", { source, url: value.url })
     const response = await fetch(value.url, { headers })

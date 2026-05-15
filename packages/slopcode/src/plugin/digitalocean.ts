@@ -143,10 +143,13 @@ function stop() {
 
 function wait(state: string) {
   return new Promise<TokenPayload>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pending = undefined
-      reject(new Error("OAuth callback timeout - authorization took too long"))
-    }, 5 * 60 * 1000)
+    const timer = setTimeout(
+      () => {
+        pending = undefined
+        reject(new Error("OAuth callback timeout - authorization took too long"))
+      },
+      5 * 60 * 1000,
+    )
     pending = {
       state,
       resolve(tokens) {
@@ -224,7 +227,9 @@ function cached(raw: string | undefined): Router[] {
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
     return parsed.flatMap((item) =>
-      item && typeof item.name === "string" ? [{ name: item.name, uuid: item.uuid, description: item.description }] : [],
+      item && typeof item.name === "string"
+        ? [{ name: item.name, uuid: item.uuid, description: item.description }]
+        : [],
     )
   } catch {
     return []
@@ -275,7 +280,13 @@ export async function DigitalOceanAuthPlugin(): Promise<Hooks> {
                       mak_name: key.name,
                       oauth_access: tokens.access_token,
                       oauth_expires: String(Date.now() + tokens.expires_in * 1000),
-                      routers: JSON.stringify(list.map((router) => ({ name: router.name, uuid: router.uuid, description: router.description }))),
+                      routers: JSON.stringify(
+                        list.map((router) => ({
+                          name: router.name,
+                          uuid: router.uuid,
+                          description: router.description,
+                        })),
+                      ),
                       routers_fetched_at: String(Date.now()),
                     },
                   }

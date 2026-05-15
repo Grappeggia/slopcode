@@ -32,7 +32,10 @@ export function parseRepositoryReference(input: string): Reference | undefined {
   const remote = githubShorthand(value) ?? hostPath(value) ?? value
 
   if (remote.startsWith("git@")) {
-    const label = remote.replace(/^git@/, "").replace(":", "/").replace(/\.git$/, "")
+    const label = remote
+      .replace(/^git@/, "")
+      .replace(":", "/")
+      .replace(/\.git$/, "")
     return { label, remote, protocol: "ssh:" }
   }
 

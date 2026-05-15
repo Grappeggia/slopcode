@@ -6000,6 +6000,152 @@
         ]
       }
     },
+    "/api/model": {
+      "get": {
+        "operationId": "v2.model.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project directory for the request instance"
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Workspace ID for the request instance"
+          }
+        ],
+        "summary": "List v2 models",
+        "description": "Retrieve available v2 models ordered by release date.",
+        "responses": {
+          "200": {
+            "description": "List of models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Model"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.model.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/provider": {
+      "get": {
+        "operationId": "v2.provider.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project directory for the request instance"
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Workspace ID for the request instance"
+          }
+        ],
+        "summary": "List v2 providers",
+        "description": "Retrieve active v2 AI providers so clients can show provider availability and configuration.",
+        "responses": {
+          "200": {
+            "description": "List of providers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Provider"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.provider.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/provider/{providerID}": {
+      "get": {
+        "operationId": "v2.provider.get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project directory for the request instance"
+          },
+          {
+            "in": "path",
+            "name": "providerID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Workspace ID for the request instance"
+          }
+        ],
+        "summary": "Get v2 provider",
+        "description": "Retrieve a single v2 AI provider so clients can inspect availability and endpoint settings.",
+        "responses": {
+          "200": {
+            "description": "Provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Provider not found"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.provider.get({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/find": {
       "get": {
         "operationId": "find.text",
@@ -11476,6 +11622,72 @@
               }
             }
           },
+          "reference": {
+            "description": "Reference repositories or local paths available to scout/reference tools",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["path"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "repository": {
+                      "type": "string"
+                    },
+                    "branch": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["repository"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "attachment": {
+            "description": "Attachment processing configuration, including image size limits and resizing behavior",
+            "type": "object",
+            "properties": {
+              "image": {
+                "type": "object",
+                "properties": {
+                  "auto_resize": {
+                    "type": "boolean"
+                  },
+                  "max_width": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "max_height": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "max_base64_bytes": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                }
+              }
+            }
+          },
           "watcher": {
             "type": "object",
             "properties": {
@@ -11972,6 +12184,15 @@
           },
           "enterpriseUrl": {
             "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "required": ["type", "refresh", "access", "expires"]
@@ -11985,6 +12206,15 @@
           },
           "key": {
             "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "required": ["type", "key"]

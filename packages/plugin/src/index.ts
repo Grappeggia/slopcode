@@ -171,7 +171,6 @@ export type AuthOuathResult = { url: string; instructions: string } & (
                 accountId?: string
               }
             | { key: string }
-
           ))
         | {
             type: "failed"
@@ -193,7 +192,6 @@ export type AuthOuathResult = { url: string; instructions: string } & (
                 accountId?: string
               }
             | { key: string }
-
           ))
         | {
             type: "failed"

@@ -31,7 +31,9 @@ type ReferenceEntry = NonNullable<Config.Info["reference"]>[string]
 
 function referencePath(value: string) {
   if (value.startsWith("~/")) return path.join(Global.Path.home, value.slice(2))
-  return path.isAbsolute(value) ? value : path.resolve(Instance.worktree === "/" ? Instance.directory : Instance.worktree, value)
+  return path.isAbsolute(value)
+    ? value
+    : path.resolve(Instance.worktree === "/" ? Instance.directory : Instance.worktree, value)
 }
 
 function resolveGit(input: { name: string; repository: string; branch?: string }): Resolved {
@@ -80,7 +82,9 @@ export namespace Reference {
     await Promise.all(
       (await list())
         .filter((reference): reference is Extract<Resolved, { kind: "git" }> => reference.kind === "git")
-        .map((reference) => RepositoryCache.ensure({ reference: reference.reference, branch: reference.branch }).catch(() => undefined)),
+        .map((reference) =>
+          RepositoryCache.ensure({ reference: reference.reference, branch: reference.branch }).catch(() => undefined),
+        ),
     )
   }
 
@@ -92,8 +96,13 @@ export namespace Reference {
     }
     await Promise.all(
       references
-        .filter((reference): reference is Extract<Resolved, { kind: "git" }> => reference.kind === "git" && Filesystem.contains(reference.path, target))
-        .map((reference) => RepositoryCache.ensure({ reference: reference.reference, branch: reference.branch }).catch(() => undefined)),
+        .filter(
+          (reference): reference is Extract<Resolved, { kind: "git" }> =>
+            reference.kind === "git" && Filesystem.contains(reference.path, target),
+        )
+        .map((reference) =>
+          RepositoryCache.ensure({ reference: reference.reference, branch: reference.branch }).catch(() => undefined),
+        ),
     )
   }
 

@@ -21,7 +21,14 @@ afterEach(async () => {
   Config.global.reset()
   await fs.rm(managedConfigDir, { force: true, recursive: true }).catch(() => {})
   for (const dir of [legacyGlobalConfigDir, Global.Path.config]) {
-    for (const file of ["opencode.json", "opencode.jsonc", "slopcode.json", "slopcode.jsonc", "config.json", "config"]) {
+    for (const file of [
+      "opencode.json",
+      "opencode.jsonc",
+      "slopcode.json",
+      "slopcode.jsonc",
+      "config.json",
+      "config",
+    ]) {
       await fs.rm(path.join(dir, file), { force: true }).catch(() => {})
     }
   }

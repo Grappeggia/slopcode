@@ -4,7 +4,10 @@ import { repositoryCachePath, type Reference } from "@/util/repository"
 import { Global } from "@/global"
 
 async function exists(target: string) {
-  return fs.stat(target).then(() => true).catch(() => false)
+  return fs
+    .stat(target)
+    .then(() => true)
+    .catch(() => false)
 }
 
 async function run(args: string[], cwd?: string) {

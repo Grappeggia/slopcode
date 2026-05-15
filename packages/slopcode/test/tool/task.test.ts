@@ -56,9 +56,9 @@ beforeEach(() => {
     parts: [],
   })) as any)
   spyOn(SessionPrompt, "cancel").mockImplementation((async () => {}) as any)
-  spyOn(SessionPrompt, "resolvePromptParts").mockImplementation(
-    (async (prompt: string) => [{ type: "text", text: prompt }]) as any,
-  )
+  spyOn(SessionPrompt, "resolvePromptParts").mockImplementation((async (prompt: string) => [
+    { type: "text", text: prompt },
+  ]) as any)
   spyOn(SessionPrompt, "prompt").mockImplementation((async (input: { tools: Record<string, boolean> }) => {
     promptTools = input.tools
     return { parts: [{ type: "text", text: "done" }] }

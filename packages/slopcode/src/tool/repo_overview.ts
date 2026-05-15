@@ -7,7 +7,17 @@ import { assertExternalDirectory } from "./external-directory"
 import { Instance } from "@/project/instance"
 import { parseRepositoryReference, repositoryCachePath } from "@/util/repository"
 
-const IGNORED_DIRS = new Set([".git", "node_modules", "__pycache__", ".venv", "dist", "build", ".next", "target", "vendor"])
+const IGNORED_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "__pycache__",
+  ".venv",
+  "dist",
+  "build",
+  ".next",
+  "target",
+  "vendor",
+])
 const STRUCTURE_LIMIT = 200
 const DEPENDENCY_FILES = [
   "package.json",
@@ -37,7 +47,10 @@ const parameters = z.object({
 })
 
 async function exists(target: string) {
-  return fs.stat(target).then(() => true).catch(() => false)
+  return fs
+    .stat(target)
+    .then(() => true)
+    .catch(() => false)
 }
 
 function packageManager(files: Set<string>) {
@@ -122,7 +135,8 @@ export const RepoOverviewTool = Tool.define("repo_overview", {
   parameters,
   async execute(params, ctx) {
     const target = resolveTarget(params)
-    const depth = !params.depth || !Number.isInteger(params.depth) || params.depth < 1 || params.depth > 6 ? 3 : params.depth
+    const depth =
+      !params.depth || !Number.isInteger(params.depth) || params.depth < 1 || params.depth > 6 ? 3 : params.depth
 
     await assertExternalDirectory(ctx, target.path, { kind: "directory" })
     await ctx.ask({
@@ -148,7 +162,9 @@ export const RepoOverviewTool = Tool.define("repo_overview", {
     const topLevel = new Set(entries.map((entry) => entry.name))
     const dependencyFiles = DEPENDENCY_FILES.filter((file) => topLevel.has(file))
     const packageJson = topLevel.has("package.json")
-      ? await Bun.file(path.join(target.path, "package.json")).json().catch(() => ({} as Record<string, unknown>))
+      ? await Bun.file(path.join(target.path, "package.json"))
+          .json()
+          .catch(() => ({}) as Record<string, unknown>)
       : {}
     const entrypoints = [
       ...(typeof packageJson.main === "string" ? [`main: ${packageJson.main}`] : []),
