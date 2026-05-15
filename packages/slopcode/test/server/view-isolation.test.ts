@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { Instance } from "../../src/project/instance"
 import { Question } from "../../src/question"
+import { PermissionNext } from "../../src/permission/next"
 import { Server } from "../../src/server/server"
 import { SessionStatus } from "../../src/session/status"
 import { tmpdir } from "../fixture/fixture"
@@ -30,39 +31,21 @@ async function next(reader: ReadableStreamDefaultReader<Uint8Array>, type: strin
   throw new Error(`timed out waiting for ${type}`)
 }
 
-test("server routes isolate question state by view id", async () => {
+test("server routes share question state across view id", async () => {
   await using tmp = await tmpdir({ git: true })
-  let a!: Promise<string[][]>
-  let b!: Promise<string[][]>
+  let answer!: Promise<string[][]>
 
   await Instance.provide({
     directory: tmp.path,
     viewID: "view-a",
     fn: async () => {
-      a = Question.ask({
+      answer = Question.ask({
         sessionID: "ses_a",
         questions: [
           {
             question: "Question A?",
             header: "A",
             options: [{ label: "A", description: "A" }],
-          },
-        ],
-      })
-    },
-  })
-
-  await Instance.provide({
-    directory: tmp.path,
-    viewID: "view-b",
-    fn: async () => {
-      b = Question.ask({
-        sessionID: "ses_b",
-        questions: [
-          {
-            question: "Question B?",
-            header: "B",
-            options: [{ label: "B", description: "B" }],
           },
         ],
       })
@@ -76,27 +59,105 @@ test("server routes isolate question state by view id", async () => {
     ...(json ? { "content-type": "application/json" } : {}),
   })
 
-  const responseA = await app.request("/question", { headers: headers("view-a") })
-  const responseB = await app.request("/question", { headers: headers("view-b") })
-  const listA = (await responseA.json()) as Question.Request[]
-  const listB = (await responseB.json()) as Question.Request[]
+  const response = await app.request("/question?sessionID=ses_a", { headers: headers("view-b") })
+  const list = (await response.json()) as Question.Request[]
 
-  expect(listA.map((item: Question.Request) => item.sessionID)).toEqual(["ses_a"])
-  expect(listB.map((item: Question.Request) => item.sessionID)).toEqual(["ses_b"])
+  expect(list.map((item: Question.Request) => item.sessionID)).toEqual(["ses_a"])
 
-  await app.request(`/question/${listA[0]!.id}/reply?sessionID=ses_a`, {
-    method: "POST",
-    headers: headers("view-a", true),
-    body: JSON.stringify({ answers: [["A"]] }),
-  })
-  await app.request(`/question/${listB[0]!.id}/reply?sessionID=ses_b`, {
+  await app.request(`/question/${list[0]!.id}/reply?sessionID=ses_a`, {
     method: "POST",
     headers: headers("view-b", true),
-    body: JSON.stringify({ answers: [["B"]] }),
+    body: JSON.stringify({ answers: [["A"]] }),
   })
 
-  await expect(a).resolves.toEqual([["A"]])
-  await expect(b).resolves.toEqual([["B"]])
+  await expect(answer).resolves.toEqual([["A"]])
+})
+
+test("server routes share permission state across view id", async () => {
+  await using tmp = await tmpdir({ git: true })
+  let answer!: Promise<void>
+
+  await Instance.provide({
+    directory: tmp.path,
+    viewID: "view-a",
+    fn: async () => {
+      answer = PermissionNext.ask({
+        sessionID: "ses_a",
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      })
+    },
+  })
+
+  const app = Server.App()
+  const headers = (viewID: string, json = false) => ({
+    "x-slopcode-directory": tmp.path,
+    "x-slopcode-view-id": viewID,
+    ...(json ? { "content-type": "application/json" } : {}),
+  })
+
+  const response = await app.request("/permission?sessionID=ses_a", { headers: headers("view-b") })
+  const list = (await response.json()) as PermissionNext.Request[]
+
+  expect(list.map((item: PermissionNext.Request) => item.sessionID)).toEqual(["ses_a"])
+
+  await app.request(`/permission/${list[0]!.id}/reply?sessionID=ses_a`, {
+    method: "POST",
+    headers: headers("view-b", true),
+    body: JSON.stringify({ reply: "once" }),
+  })
+
+  await expect(answer).resolves.toBeUndefined()
+})
+
+test("server streams blocker requests across view id", async () => {
+  await using tmp = await tmpdir({ git: true })
+  const app = Server.App()
+  const headers = (viewID: string, json = false) => ({
+    "x-slopcode-directory": tmp.path,
+    "x-slopcode-view-id": viewID,
+    ...(json ? { "content-type": "application/json" } : {}),
+  })
+
+  const stop = new AbortController()
+  const response = await app.request("/event?sessionID=ses_a", { headers: headers("view-b"), signal: stop.signal })
+  if (!response.body) throw new Error("missing event stream")
+  const reader = response.body.getReader()
+  expect((await next(reader, "server.connected")).type).toBe("server.connected")
+
+  let answer!: Promise<string[][]>
+  await Instance.provide({
+    directory: tmp.path,
+    viewID: "view-a",
+    fn: async () => {
+      answer = Question.ask({
+        sessionID: "ses_a",
+        questions: [
+          {
+            question: "Question A?",
+            header: "A",
+            options: [{ label: "A", description: "A" }],
+          },
+        ],
+      })
+    },
+  })
+
+  const event = await next(reader, "question.asked")
+  expect(event.properties.sessionID).toBe("ses_a")
+  expect(event.properties.viewID).toBe("view-a")
+
+  await app.request(`/question/${event.properties.id}/reply?sessionID=ses_a`, {
+    method: "POST",
+    headers: headers("view-b", true),
+    body: JSON.stringify({ answers: [["A"]] }),
+  })
+  await expect(answer).resolves.toEqual([["A"]])
+
+  stop.abort()
 })
 
 test("server streams session status across view id", async () => {

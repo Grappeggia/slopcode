@@ -4,6 +4,7 @@ import { batch, createMemo, createRoot, getOwner, onCleanup, runWithOwner } from
 import { useParams } from "@solidjs/router"
 import type { PromptHistoryStoredEntry } from "@/components/prompt-input/history"
 import type { FileSelection, SelectedLineRange } from "@/context/file"
+import { usePlatform } from "@/context/platform"
 import { Persist, persisted } from "@/utils/persist"
 import { checksum } from "@slopcode-ai/util/encode"
 
@@ -259,11 +260,15 @@ export function createPromptSessionForTest(store = createPromptStore()) {
   return createPromptSessionState(state, setState)
 }
 
-function createPromptSession(dir: string, id: string | undefined) {
+function createPromptSession(dir: string, id: string | undefined, scope?: string) {
   const legacy = `${dir}/prompt${id ? "/" + id : ""}.v2`
 
   const [store, setStore, _, ready] = persisted(
-    Persist.scoped(dir, id, "prompt", [legacy]),
+    {
+      ...Persist.scoped(dir, id, "prompt", [legacy]),
+      scope,
+      sync: false,
+    },
     createStore<PromptStore>(createPromptStore()),
   )
 
@@ -280,6 +285,8 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
   gate: false,
   init: () => {
     const params = useParams()
+    const platform = usePlatform()
+    const scope = platform.viewID?.()
     const cache = new Map<string, PromptCacheEntry>()
     const owner = getOwner()
 
@@ -303,7 +310,7 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
     }
 
     const load = (dir: string, id: string | undefined) => {
-      const key = `${dir}:${id ?? WORKSPACE_KEY}`
+      const key = `${scope ?? "shared"}:${dir}:${id ?? WORKSPACE_KEY}`
       const existing = cache.get(key)
       if (existing) {
         cache.delete(key)
@@ -314,12 +321,12 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
       const entry = owner
         ? runWithOwner(owner, () =>
             createRoot((dispose) => ({
-              value: createPromptSession(dir, id),
+              value: createPromptSession(dir, id, scope),
               dispose,
             })),
           )!
         : createRoot((dispose) => ({
-            value: createPromptSession(dir, id),
+            value: createPromptSession(dir, id, scope),
             dispose,
           }))
 

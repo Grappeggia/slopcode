@@ -108,8 +108,14 @@ export namespace Server {
     if (record(props.info) && typeof props.info.viewID === "string") return props.info.viewID
   }
 
+  const crossView = (type: string) =>
+    type === "session.status" ||
+    type === "session.idle" ||
+    type.startsWith("permission.") ||
+    type.startsWith("question.")
+
   const match = (event: { type: string; properties?: unknown }, sessionID?: string, viewID?: string) => {
-    if (viewID && event.type !== "session.status" && event.type !== "session.idle") {
+    if (viewID && !crossView(event.type)) {
       const current = view(event)
       if (current && current !== viewID) return false
     }
@@ -639,7 +645,7 @@ export namespace Server {
               })
               async function forward(event: { type: string; properties?: unknown }) {
                 const current = view(event)
-                if (event.type !== "session.status" && event.type !== "session.idle") return
+                if (!crossView(event.type)) return
                 if (current === viewID) return
                 if (!viewID && !current) return
                 if (!match(event, input.sessionID, viewID)) return

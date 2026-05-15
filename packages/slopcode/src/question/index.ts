@@ -81,7 +81,7 @@ export namespace Question {
     ),
   }
 
-  const state = Instance.state(async () => {
+  const state = Instance.sharedState(async () => {
     const pending: Record<
       string,
       {

@@ -299,7 +299,7 @@ test("list - returns empty when no pending", async () => {
   })
 })
 
-test("list - isolates pending questions by view id", async () => {
+test("list - shares pending questions across view ids", async () => {
   await using tmp = await tmpdir({ git: true })
   let a!: Promise<string[][]>
   let b!: Promise<string[][]>
@@ -336,7 +336,7 @@ test("list - isolates pending questions by view id", async () => {
           },
         ],
       })
-      expect((await Question.list()).map((item) => item.sessionID)).toEqual(["ses_b"])
+      expect((await Question.list()).map((item) => item.sessionID)).toEqual(["ses_a", "ses_b"])
     },
   })
 
@@ -344,7 +344,7 @@ test("list - isolates pending questions by view id", async () => {
     directory: tmp.path,
     viewID: "view-a",
     fn: async () => {
-      expect(await Question.list({ sessionID: "ses_b" })).toEqual([])
+      expect((await Question.list()).map((item) => item.sessionID)).toEqual(["ses_a", "ses_b"])
       const pending = await Question.list({ sessionID: "ses_a" })
       await Question.reply({ requestID: pending[0].id, sessionID: "ses_a", answers: [["A"]] })
     },

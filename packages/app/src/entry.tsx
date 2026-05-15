@@ -56,7 +56,62 @@ const writeDefaultServerUrl = (url: string | null) => setStorage(DEFAULT_SERVER_
 
 const viewID = (() => {
   const key = "slopcode.view-id"
+  const ttl = 5_000
+  const prefix = "slopcode.view-id.lease:"
+  const owner = crypto.randomUUID()
   let cached = ""
+
+  const read = (name: string) => {
+    try {
+      return localStorage.getItem(name)
+    } catch {
+      return null
+    }
+  }
+
+  const write = (name: string, value: string | null) => {
+    try {
+      if (value === null) {
+        localStorage.removeItem(name)
+        return
+      }
+      localStorage.setItem(name, value)
+    } catch {
+      return
+    }
+  }
+
+  const active = (id: string) => {
+    const raw = read(prefix + id)
+    if (!raw) return false
+    try {
+      const lease = JSON.parse(raw) as { owner?: string; time?: number }
+      if (lease.owner === owner) return false
+      return typeof lease.time === "number" && Date.now() - lease.time < ttl
+    } catch {
+      return false
+    }
+  }
+
+  const claim = (id: string) => {
+    const renew = () => write(prefix + id, JSON.stringify({ owner, time: Date.now() }))
+    const release = () => {
+      const raw = read(prefix + id)
+      if (!raw) return
+      try {
+        const lease = JSON.parse(raw) as { owner?: string }
+        if (lease.owner === owner) write(prefix + id, null)
+      } catch {
+        return
+      }
+    }
+
+    renew()
+    window.setInterval(renew, Math.floor(ttl / 2))
+    window.addEventListener("pagehide", release, { once: true })
+    window.addEventListener("beforeunload", release, { once: true })
+  }
+
   return () => {
     if (cached) return cached
     if (typeof sessionStorage === "undefined") {
@@ -64,12 +119,9 @@ const viewID = (() => {
       return cached
     }
     const stored = sessionStorage.getItem(key)
-    if (stored) {
-      cached = stored
-      return cached
-    }
-    cached = crypto.randomUUID()
+    cached = stored && !active(stored) ? stored : crypto.randomUUID()
     sessionStorage.setItem(key, cached)
+    claim(cached)
     return cached
   }
 })()

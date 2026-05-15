@@ -123,7 +123,7 @@ export namespace PermissionNext {
     ),
   }
 
-  const state = Instance.state(() => {
+  const state = Instance.sharedState(() => {
     const projectID = Instance.project.id
     const row = Database.use((db) =>
       db.select().from(PermissionTable).where(eq(PermissionTable.project_id, projectID)).get(),

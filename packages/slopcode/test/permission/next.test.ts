@@ -670,7 +670,7 @@ test("ask - checks all patterns and stops on first deny", async () => {
   })
 })
 
-test("list - isolates pending permissions by view id", async () => {
+test("list - shares pending permissions across view ids", async () => {
   await using tmp = await tmpdir({ git: true })
   let a!: Promise<void>
   let b!: Promise<void>
@@ -707,7 +707,7 @@ test("list - isolates pending permissions by view id", async () => {
         ruleset: [],
       })
       const pending = await PermissionNext.list()
-      expect(pending.map((item) => item.id)).toEqual(["permission_view_b"])
+      expect(pending.map((item) => item.id)).toEqual(["permission_view_a", "permission_view_b"])
     },
   })
 
@@ -715,8 +715,10 @@ test("list - isolates pending permissions by view id", async () => {
     directory: tmp.path,
     viewID: "view-a",
     fn: async () => {
-      expect((await PermissionNext.list()).map((item) => item.sessionID)).toEqual(["session_a"])
-      expect(await PermissionNext.list({ sessionID: "session_b" })).toEqual([])
+      expect((await PermissionNext.list()).map((item) => item.sessionID)).toEqual(["session_a", "session_b"])
+      expect((await PermissionNext.list({ sessionID: "session_b" })).map((item) => item.id)).toEqual([
+        "permission_view_b",
+      ])
       await PermissionNext.reply({ requestID: "permission_view_a", sessionID: "session_a", reply: "once" })
     },
   })
