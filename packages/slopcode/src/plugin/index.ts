@@ -11,6 +11,7 @@ import { Session } from "../session"
 import { NamedError } from "@slopcode-ai/util/error"
 import { CopilotAuthPlugin } from "./copilot"
 import { GitlabAuthPlugin } from "./gitlab"
+import { DigitalOceanAuthPlugin } from "./digitalocean"
 import { registerAdaptor } from "../control-plane/adaptors"
 import { PluginLoader } from "./loader"
 import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
@@ -24,6 +25,7 @@ export namespace Plugin {
     CodexAuthPlugin,
     CopilotAuthPlugin,
     GitlabAuthPlugin as unknown as PluginInstance,
+    DigitalOceanAuthPlugin,
   ]
 
   function message(error: unknown) {

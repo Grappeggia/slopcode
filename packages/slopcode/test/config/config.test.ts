@@ -18,9 +18,12 @@ const managedConfigDir = process.env.SLOPCODE_TEST_MANAGED_CONFIG_DIR!
 const legacyGlobalConfigDir = path.join(path.dirname(Global.Path.config), "opencode")
 
 afterEach(async () => {
+  Config.global.reset()
   await fs.rm(managedConfigDir, { force: true, recursive: true }).catch(() => {})
-  for (const file of ["opencode.json", "opencode.jsonc", "slopcode.json", "slopcode.jsonc", "config.json", "config"]) {
-    await fs.rm(path.join(legacyGlobalConfigDir, file), { force: true }).catch(() => {})
+  for (const dir of [legacyGlobalConfigDir, Global.Path.config]) {
+    for (const file of ["opencode.json", "opencode.jsonc", "slopcode.json", "slopcode.jsonc", "config.json", "config"]) {
+      await fs.rm(path.join(dir, file), { force: true }).catch(() => {})
+    }
   }
   await resetDatabase()
 })

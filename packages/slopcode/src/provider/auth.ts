@@ -96,6 +96,7 @@ export namespace ProviderAuth {
           await Auth.set(input.providerID, {
             type: "api",
             key: result.key,
+            metadata: result.metadata,
           })
         }
         if ("refresh" in result) {
@@ -104,6 +105,9 @@ export namespace ProviderAuth {
             access: result.access,
             refresh: result.refresh,
             expires: result.expires,
+          }
+          if (result.metadata) {
+            ;(info as Auth.Info & { metadata?: Record<string, string> }).metadata = result.metadata
           }
           if (result.accountId) {
             info.accountId = result.accountId

@@ -95,6 +95,23 @@ export namespace Config {
     return merged
   }
 
+  function record(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+  }
+
+  async function fetchRemoteConfigPointer(value: unknown, source: string) {
+    if (!record(value) || typeof value.url !== "string") return {}
+    const headers = record(value.headers)
+      ? Object.fromEntries(Object.entries(value.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+      : undefined
+    log.debug("fetching remote config pointer", { source, url: value.url })
+    const response = await fetch(value.url, { headers })
+    if (!response.ok) throw new Error(`failed to fetch remote config from ${value.url}: ${response.status}`)
+    const data = await response.json()
+    if (record(data) && record(data.config)) return data.config
+    return record(data) ? data : {}
+  }
+
   export const state = Instance.state(async () => {
     const auth = await Auth.all()
 
@@ -117,7 +134,10 @@ export namespace Config {
           throw new Error(`failed to fetch remote config from ${key}: ${response.status}`)
         }
         const wellknown = (await response.json()) as any
-        const remoteConfig = wellknown.config ?? {}
+        const remoteConfig = mergeConfigConcatArrays(
+          (wellknown.config ?? {}) as Info,
+          (await fetchRemoteConfigPointer(wellknown.remote_config, wellKnown)) as Info,
+        )
         // Add $schema to prevent load() from trying to write back to a non-existent file
         if (!remoteConfig.$schema) remoteConfig.$schema = product.config.schema
         result = mergeConfigConcatArrays(
@@ -301,8 +321,9 @@ export namespace Config {
 
   export async function installDependencies(dir: string) {
     const pkg = path.join(dir, "package.json")
-    const targetVersion = Installation.isLocal() ? "*" : Installation.VERSION
-    const targetDependency = `npm:@slopcode-ai/plugin@${targetVersion}`
+    const local = Installation.isLocal()
+    const localPlugin = path.resolve(import.meta.dir, "../../../plugin")
+    const targetDependency = local ? `file:${localPlugin}` : `npm:@slopcode-ai/plugin@${Installation.VERSION}`
 
     const json = await Filesystem.readJson<{ dependencies?: Record<string, string> }>(pkg).catch(() => ({
       dependencies: {},
@@ -311,7 +332,15 @@ export namespace Config {
       ...json.dependencies,
       "@slopcode-ai/plugin": targetDependency,
     }
-    await Filesystem.writeJson(pkg, json)
+    const install = local
+      ? {
+          ...json,
+          dependencies: Object.fromEntries(
+            Object.entries(json.dependencies).filter(([name]) => name !== "@slopcode-ai/plugin"),
+          ),
+        }
+      : json
+    await Filesystem.writeJson(pkg, install)
 
     const gitignore = path.join(dir, ".gitignore")
     const hasGitIgnore = await Filesystem.exists(gitignore)
@@ -330,6 +359,13 @@ export namespace Config {
     ).catch((err) => {
       log.warn("failed to install dependencies", { dir, error: err })
     })
+
+    if (local) {
+      await Filesystem.writeJson(pkg, json)
+      await fs.mkdir(path.join(dir, "node_modules", "@slopcode-ai"), { recursive: true })
+      await fs.rm(path.join(dir, "node_modules", "@slopcode-ai", "plugin"), { force: true, recursive: true })
+      await fs.symlink(localPlugin, path.join(dir, "node_modules", "@slopcode-ai", "plugin"), "dir")
+    }
   }
 
   async function isWritable(dir: string) {
@@ -355,6 +391,7 @@ export namespace Config {
 
     const pluginPkg = path.join(nodeModules, "@slopcode-ai", "plugin", "package.json")
     if (!existsSync(pluginPkg)) return true
+    if (Installation.isLocal()) return false
 
     const pkg = path.join(dir, "package.json")
     const pkgExists = await Filesystem.exists(pkg)
@@ -1124,6 +1161,7 @@ export namespace Config {
         .catchall(z.any())
         .optional(),
     })
+
     .strict()
     .meta({
       ref: "ProviderConfig",
@@ -1144,6 +1182,30 @@ export namespace Config {
         .optional()
         .describe("Command configuration, see https://slopcode.dev/docs/commands"),
       skills: Skills.optional().describe("Additional skill folder paths"),
+      reference: z
+        .record(
+          z.string(),
+          z.union([
+            z.string(),
+            z.object({ path: z.string() }).strict(),
+            z.object({ repository: z.string(), branch: z.string().optional() }).strict(),
+          ]),
+        )
+        .optional()
+        .describe("Reference repositories or local paths available to scout/reference tools"),
+      attachment: z
+        .object({
+          image: z
+            .object({
+              auto_resize: z.boolean().optional(),
+              max_width: z.number().int().positive().optional(),
+              max_height: z.number().int().positive().optional(),
+              max_base64_bytes: z.number().int().positive().optional(),
+            })
+            .optional(),
+        })
+        .optional()
+        .describe("Attachment processing configuration, including image size limits and resizing behavior"),
       watcher: z
         .object({
           ignore: z.array(z.string()).optional(),

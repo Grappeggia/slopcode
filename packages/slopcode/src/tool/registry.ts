@@ -7,6 +7,7 @@ import { GrepTool } from "./grep"
 import { BatchTool } from "./batch"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
+import { TaskStatusTool } from "./task_status"
 import { TodoWriteTool, TodoReadTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
@@ -22,6 +23,8 @@ import z from "zod"
 import { Plugin } from "../plugin"
 import { WebSearchTool, hasBraveSearchCredential } from "./websearch"
 import { CodeSearchTool } from "./codesearch"
+import { RepoCloneTool } from "./repo_clone"
+import { RepoOverviewTool } from "./repo_overview"
 import { Flag } from "@/flag/flag"
 import { Log } from "@/util/log"
 import { LspTool } from "./lsp"
@@ -111,11 +114,13 @@ export namespace ToolRegistry {
       EditTool,
       WriteTool,
       TaskTool,
+      ...(Flag.SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS ? [TaskStatusTool] : []),
       WebFetchTool,
       TodoWriteTool,
       // TodoReadTool,
       WebSearchTool,
       CodeSearchTool,
+      ...(Flag.SLOPCODE_EXPERIMENTAL_SCOUT ? [RepoCloneTool, RepoOverviewTool] : []),
       FollowupRecommendationsTool,
       SkillTool,
       ApplyPatchTool,

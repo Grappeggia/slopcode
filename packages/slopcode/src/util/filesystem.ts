@@ -62,12 +62,14 @@ export namespace Filesystem {
         await writeFile(p, encode(content), { mode })
       } else {
         await writeFile(p, encode(content))
+        if (mode) await chmod(p, mode)
       }
     } catch (e) {
       if (isEnoent(e)) {
         await mkdir(dirname(p), { recursive: true })
         if (mode) {
           await writeFile(p, encode(content), { mode })
+          await chmod(p, mode)
         } else {
           await writeFile(p, encode(content))
         }

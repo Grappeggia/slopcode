@@ -27,7 +27,7 @@ describe("plugin.install", () => {
     expect(result.targets).toEqual([{ kind: "server" }])
   })
 
-  test("rejects packages without a server entrypoint", async () => {
+  test("detects tui plugins from package exports", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
         const mod = path.join(dir, "plugin")
@@ -47,9 +47,8 @@ describe("plugin.install", () => {
 
     const result = await readPluginManifest(tmp.extra)
     expect(result).toEqual({
-      ok: false,
-      code: "manifest_no_targets",
-      file: path.join(tmp.extra, "package.json"),
+      ok: true,
+      targets: [{ kind: "tui", opts: undefined }],
     })
   })
 

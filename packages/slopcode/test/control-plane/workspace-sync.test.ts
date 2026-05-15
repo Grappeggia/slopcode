@@ -19,8 +19,8 @@ const seen: string[] = []
 const remote = { type: "testing", name: "remote-a" } as unknown as typeof WorkspaceTable.$inferInsert.config
 
 mock.module("../../src/control-plane/adaptors", () => ({
-  getAdaptor: (config: { type: string }) => {
-    seen.push(config.type)
+  getAdaptor: (_projectID: string, type: string) => {
+    seen.push(type)
     return {
       async create() {
         throw new Error("not used")
@@ -43,6 +43,8 @@ mock.module("../../src/control-plane/adaptors", () => ({
       },
     }
   },
+  listAdaptors: () => [],
+  registerAdaptor: () => {},
 }))
 
 describe("control-plane/workspace.startSyncing", () => {

@@ -10,6 +10,8 @@ import { iife } from "@/util/iife"
 import { defer } from "@/util/defer"
 import { Config } from "../config/config"
 import { PermissionNext } from "@/permission/next"
+import { Flag } from "@/flag/flag"
+import { BackgroundJob } from "@/background/job"
 
 const parameters = z.object({
   description: z.string().describe("A short (3-5 words) description of the task"),
@@ -22,7 +24,32 @@ const parameters = z.object({
     )
     .optional(),
   command: z.string().describe("The command that triggered this task").optional(),
+  background: z
+    .boolean()
+    .describe("When true, launch the subagent in the background and return immediately")
+    .optional(),
 })
+
+function formatOutput(sessionID: string, text: string) {
+  return [
+    `task_id: ${sessionID} (for resuming to continue this task if needed)`,
+    "",
+    "<task_result>",
+    text,
+    "</task_result>",
+  ].join("\n")
+}
+
+function backgroundOutput(sessionID: string) {
+  return [
+    `task_id: ${sessionID} (for polling this task with task_status)`,
+    "state: running",
+    "",
+    "<task_result>",
+    "Background task started. Continue your current work and call task_status when you need the result.",
+    "</task_result>",
+  ].join("\n")
+}
 
 export const TaskTool = Tool.define("task", async (ctx) => {
   const agents = await Agent.list().then((x) => x.filter((a) => a.mode !== "primary"))
@@ -44,6 +71,9 @@ export const TaskTool = Tool.define("task", async (ctx) => {
     parameters,
     async execute(params: z.infer<typeof parameters>, ctx) {
       const config = await Config.get()
+      if (params.background && !Flag.SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS) {
+        throw new Error("Background subagents require SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true")
+      }
 
       // Skip permission check when user explicitly invoked via @ or command subtask
       if (!ctx.extra?.bypassAgentCheck) {
@@ -118,57 +148,72 @@ export const TaskTool = Tool.define("task", async (ctx) => {
         providerID: msg.info.providerID,
       }
 
+      const metadata = {
+        sessionId: session.id,
+        model,
+        ...(params.background ? { background: true } : {}),
+      }
+
       ctx.metadata({
         title: params.description,
-        metadata: {
-          sessionId: session.id,
-          model,
-        },
+        metadata,
       })
 
-      const messageID = Identifier.ascending("message")
+      async function runTask() {
+        const promptParts = await SessionPrompt.resolvePromptParts(params.prompt)
+        const result = await SessionPrompt.prompt({
+          messageID: Identifier.ascending("message"),
+          sessionID: session.id,
+          model: {
+            modelID: model.modelID,
+            providerID: model.providerID,
+          },
+          agent: agent.name,
+          tools: {
+            ...(hasTodoWritePermission ? {} : { todowrite: false }),
+            ...(hasTodoReadPermission ? {} : { todoread: false }),
+            ...(hasTaskPermission ? {} : { task: false }),
+            ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((t) => [t, false])),
+          },
+          parts: promptParts,
+        })
+        return result.parts.findLast((x) => x.type === "text")?.text ?? ""
+      }
+
+      if (params.background) {
+        const existing = BackgroundJob.get(session.id)
+        if (existing?.status === "running") {
+          throw new Error(`Task ${session.id} is already running. Use task_status to check progress.`)
+        }
+        const info = await BackgroundJob.start({
+          id: session.id,
+          type: "task",
+          title: params.description,
+          metadata,
+          run: runTask,
+        })
+        return {
+          title: params.description,
+          metadata: {
+            ...metadata,
+            jobId: info.id,
+          },
+          output: backgroundOutput(session.id),
+        }
+      }
 
       function cancel() {
         void SessionPrompt.cancel(session.id)
       }
       ctx.abort.addEventListener("abort", cancel)
       using _ = defer(() => ctx.abort.removeEventListener("abort", cancel))
-      const promptParts = await SessionPrompt.resolvePromptParts(params.prompt)
 
-      const result = await SessionPrompt.prompt({
-        messageID,
-        sessionID: session.id,
-        model: {
-          modelID: model.modelID,
-          providerID: model.providerID,
-        },
-        agent: agent.name,
-        tools: {
-          ...(hasTodoWritePermission ? {} : { todowrite: false }),
-          ...(hasTodoReadPermission ? {} : { todoread: false }),
-          ...(hasTaskPermission ? {} : { task: false }),
-          ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((t) => [t, false])),
-        },
-        parts: promptParts,
-      })
-
-      const text = result.parts.findLast((x) => x.type === "text")?.text ?? ""
-
-      const output = [
-        `task_id: ${session.id} (for resuming to continue this task if needed)`,
-        "",
-        "<task_result>",
-        text,
-        "</task_result>",
-      ].join("\n")
+      const text = await runTask()
 
       return {
         title: params.description,
-        metadata: {
-          sessionId: session.id,
-          model,
-        },
-        output,
+        metadata,
+        output: formatOutput(session.id, text),
       }
     },
   }
