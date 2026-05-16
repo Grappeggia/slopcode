@@ -22,29 +22,27 @@ function text(parts: MessageV2.Part[]) {
     .join("\n")
     .trim()
 }
+function latest(messages: MessageV2.WithParts[]) {
+  return messages.slice().sort((a, b) => b.info.time.created - a.info.time.created)
+}
 
 function prompts(messages: MessageV2.WithParts[]) {
-  return messages
-    .slice()
-    .reverse()
-    .flatMap((message) => {
-      if (message.info.role !== "user") return []
-      const prompt = text(message.parts)
-      if (!prompt) return []
-      return [
-        {
-          id: message.info.id,
-          prompt,
-          system: message.info.system?.trim() || undefined,
-        },
-      ]
-    })
+  return latest(messages).flatMap((message) => {
+    if (message.info.role !== "user") return []
+    const prompt = text(message.parts)
+    if (!prompt) return []
+    return [
+      {
+        id: message.info.id,
+        prompt,
+        system: message.info.system?.trim() || undefined,
+      },
+    ]
+  })
 }
 
 function replies(messages: MessageV2.WithParts[]) {
-  return messages
-    .slice()
-    .reverse()
+  return latest(messages)
     .flatMap((message) => {
       if (message.info.role !== "assistant") return []
       const value = text(message.parts)

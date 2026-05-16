@@ -10,6 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 const pkg = require("./package.json")
 const supported = {
+  android: ["arm64", "x64"],
   darwin: ["arm64", "x64"],
   linux: ["arm64", "x64"],
   windows: ["x64"],
@@ -91,9 +92,9 @@ function supportsAvx2(platform, arch) {
 }
 
 function names(platform, arch) {
-  const base = `slopcode-bin-${platform}-${arch}`
   const libc = detectLibc(platform, arch)
-  if (libc === "bionic") return []
+  const base = `slopcode-bin-${libc === "bionic" ? "android" : platform}-${arch}`
+  if (libc === "bionic") return [base]
   const avx2 = supportsAvx2(platform, arch)
   const baseline = arch === "x64" && !avx2
 
@@ -141,13 +142,13 @@ function supportedMessage() {
 
 function termuxMessage() {
   return [
-    "SlopCode does not ship a native Android/Termux (bionic) binary yet.",
-    "Run SlopCode inside a Termux proot Linux distro:",
-    "  pkg install proot-distro",
-    "  proot-distro install debian",
-    "  proot-distro login debian",
-    "  apt update && apt install -y curl ca-certificates git",
-    "  curl -fsSL https://slopcode.dev/install | bash",
+    "SlopCode native Termux support needs the Android runtime package.",
+    "Install from Termux with optional npm dependencies enabled:",
+    "  pkg update",
+    "  pkg install nodejs git ripgrep neovim",
+    "  npm install -g slopcode@latest",
+    "If npm skipped optional dependencies, rerun with:",
+    "  npm install -g slopcode@latest --include=optional",
   ].join("\n")
 }
 
@@ -214,11 +215,6 @@ function writeMeta(input) {
 async function main() {
   try {
     const { platform, arch } = detectPlatformAndArch()
-    if (detectLibc(platform, arch) === "bionic") {
-      clearCache()
-      console.log(termuxMessage())
-      return
-    }
 
     if (!(supported[platform] ?? []).includes(arch)) {
       clearCache()
@@ -236,10 +232,15 @@ async function main() {
     const found = findBinary()
     if (!found) {
       clearCache()
-      console.log("No platform binary package detected during postinstall; runtime resolver will handle it")
+      console.log(detectLibc(platform, arch) === "bionic" ? termuxMessage() : "No platform binary package detected during postinstall; runtime resolver will handle it")
       return
     }
 
+    if (found.libc === "bionic") {
+      clearCache()
+      console.log("Android/Termux runtime package detected; runtime resolver will launch it")
+      return
+    }
     clearCache()
     const target = path.join(__dirname, "bin", ".slopcode")
     const { targetPath } = prepareBinDirectory(".slopcode")

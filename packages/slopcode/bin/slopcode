@@ -40,6 +40,7 @@ const archMap = {
   arm: "arm",
 }
 const supported = {
+  android: ["arm64", "x64"],
   darwin: ["arm64", "x64"],
   linux: ["arm64", "x64"],
   windows: ["x64"],
@@ -136,9 +137,8 @@ function supportsAvx2() {
 
 function names(prefix) {
   const kind = libc()
-  if (kind === "bionic") return []
-
-  const base = `${prefix}-${platform}-${arch}`
+  const base = kind === "bionic" ? `${prefix}-android-${arch}` : `${prefix}-${platform}-${arch}`
+  if (kind === "bionic") return [base]
   const avx2 = supportsAvx2()
   const baseline = arch === "x64" && !avx2
 
@@ -206,25 +206,21 @@ function supportedMessage() {
 
 function termuxMessage() {
   return [
-    "SlopCode does not ship a native Android/Termux (bionic) binary yet.",
-    "Run SlopCode inside a Termux proot Linux distro:",
-    "  pkg install proot-distro",
-    "  proot-distro install debian",
-    "  proot-distro login debian",
-    "  apt update && apt install -y curl ca-certificates git",
-    "  curl -fsSL https://slopcode.dev/install | bash",
+    "SlopCode native Termux support needs the Android runtime package.",
+    "Install from Termux with optional npm dependencies enabled:",
+    "  pkg update",
+    "  pkg install nodejs git ripgrep neovim",
+    "  npm install -g slopcode@latest",
+    "If npm skipped optional dependencies, rerun with:",
+    "  npm install -g slopcode@latest --include=optional",
   ].join("\n")
 }
 
-if (libc() === "bionic") {
-  clearCache()
-  console.error(termuxMessage())
-  process.exit(1)
-}
+const useCache = libc() !== "bionic"
 
 const packageNames = names("slopcode-bin")
 const resolvedNames = Array.from(new Set([...packageNames, ...names("slopcode")]))
-const hit = cacheReady(resolvedNames)
+const hit = useCache ? cacheReady(resolvedNames) : undefined
 if (hit) {
   run(hit)
 }
@@ -268,6 +264,10 @@ function findBinary(startDir) {
 
 const resolved = resolveBinary() || findBinary(scriptDir)
 if (!resolved) {
+  if (libc() === "bionic") {
+    console.error(termuxMessage())
+    process.exit(1)
+  }
   console.error(
     "It seems that your package manager failed to install the right version of the slopcode CLI for your platform. You can try manually installing " +
       packageNames.map((n) => `\"${n}\"`).join(" or ") +

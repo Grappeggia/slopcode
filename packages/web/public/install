@@ -118,15 +118,25 @@ if [[ -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == *"/com.termux/"* ]]; then
 fi
 
 if [[ "$is_termux" == "true" ]]; then
-  print_message error "Native Android/Termux binaries are not available yet."
-  print_message info "Run SlopCode inside a Termux proot Linux distro:"
-  print_message info "  pkg install proot-distro"
-  print_message info "  proot-distro install debian"
-  print_message info "  proot-distro login debian"
-  print_message info "Inside Debian, install SlopCode:"
-  print_message info "  apt update && apt install -y curl ca-certificates git"
-  print_message info "  curl -fsSL https://slopcode.dev/install | bash"
-  exit 1
+  print_message info "Installing SlopCode for native Termux (Android/bionic)..."
+  if [[ "$arch" != "arm64" && "$arch" != "x64" ]]; then
+    print_message error "Native Termux install currently supports Android arm64/x64 only (detected $arch)."
+    exit 1
+  fi
+  if ! command -v pkg >/dev/null 2>&1; then
+    print_message error "Termux pkg is required for native Android install."
+    exit 1
+  fi
+  pkg update -y
+  pkg install -y nodejs git ripgrep neovim
+  if ! command -v npm >/dev/null 2>&1; then
+    print_message error "npm was not found after installing nodejs."
+    exit 1
+  fi
+  npm install -g slopcode@latest --include=optional
+  print_message success "SlopCode installed for native Termux."
+  print_message warning "Native Termux supports CLI/server commands. Use proot-distro for the interactive TUI until Bun Android enables FFI."
+  exit 0
 fi
 
 case "$os-$arch" in

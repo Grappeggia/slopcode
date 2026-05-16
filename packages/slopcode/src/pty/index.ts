@@ -2,6 +2,7 @@ import { BusEvent } from "@/bus/bus-event"
 import { Bus } from "@/bus"
 import { type IPty } from "bun-pty"
 import z from "zod"
+import { spawn as child } from "node:child_process"
 import { Identifier } from "../id/id"
 import { Log } from "../util/log"
 import { Instance } from "../project/instance"
@@ -35,8 +36,73 @@ export namespace Pty {
     return out
   }
 
+  function emitter<T>() {
+    const listeners = new Set<(data: T) => void>()
+    return {
+      event(listener: (data: T) => void) {
+        listeners.add(listener)
+        return {
+          dispose() {
+            listeners.delete(listener)
+          },
+        }
+      },
+      fire(data: T) {
+        for (const listener of listeners) listener(data)
+      },
+    }
+  }
+
+  function piped(command: string, args: string[], options: import("bun-pty").IPtyForkOptions): IPty {
+    const proc = child(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: "pipe",
+    })
+    const data = emitter<string>()
+    const exit = emitter<{ exitCode: number; signal?: number | string }>()
+    const size = {
+      cols: options.cols ?? 80,
+      rows: options.rows ?? 24,
+    }
+
+    proc.stdout?.on("data", (chunk) => data.fire(String(chunk)))
+    proc.stderr?.on("data", (chunk) => data.fire(String(chunk)))
+    proc.on("exit", (code, signal) => exit.fire({ exitCode: code ?? 0, signal: signal ?? undefined }))
+
+    return {
+      get pid() {
+        return proc.pid ?? 0
+      },
+      get cols() {
+        return size.cols
+      },
+      get rows() {
+        return size.rows
+      },
+      get process() {
+        return command
+      },
+      onData: data.event,
+      onExit: exit.event,
+      write(input: string) {
+        proc.stdin?.write(input)
+      },
+      resize(cols: number, rows: number) {
+        size.cols = cols
+        size.rows = rows
+      },
+      kill(signal?: string) {
+        proc.kill(signal as NodeJS.Signals | undefined)
+      },
+    }
+  }
   const pty = lazy(async () => {
-    const { spawn } = await import("bun-pty")
+    if (process.platform === "android") return piped
+    const { spawn } = await import("bun-pty").catch((error) => {
+      if (process.env.TERMUX_VERSION) return { spawn: piped }
+      throw error
+    })
     return spawn
   })
 

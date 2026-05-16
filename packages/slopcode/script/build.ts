@@ -61,8 +61,10 @@ console.log(`Loaded ${migrations.length} migrations`)
 const singleFlag = process.argv.includes("--single")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
+const targetFlag = process.argv.find((item) => item.startsWith("--target="))?.slice("--target=".length)
 
 const nvimVersion = "v0.12.1"
+const androidBunVersion = "1.3.14"
 const cliBinary = (os: string) => (os === "win32" ? "slopcode.exe" : "slopcode")
 const nvimBinary = (os: string) => (os === "win32" ? "nvim.exe" : "nvim")
 const alpineVersion = "3.22"
@@ -321,12 +323,163 @@ const nvimBundle = async (item: { os: string; arch: "arm64" | "x64"; abi?: "musl
   await fs.promises.rm(tmp, { recursive: true, force: true })
 }
 
+const androidOpentui = async (name: string, arch: "arm64" | "x64") => {
+  const pkgname = `@opentui/core-android-${arch}`
+  const linux = `@opentui/core-linux-${arch}`
+  let source = path.join(dir, "node_modules", "@opentui", `core-linux-${arch}`, "libopentui.so")
+  if (!fs.existsSync(source)) {
+    const cache = path.join(dir, "dist", ".android-cache")
+    await fs.promises.mkdir(cache, { recursive: true })
+    const meta = await fetch(`https://registry.npmjs.org/${encodeURIComponent(linux)}/${pkg.dependencies["@opentui/core"]}`).then((res) => {
+      if (!res.ok) throw new Error(`Failed to resolve ${linux}: ${res.status} ${res.statusText}`)
+      return res.json() as Promise<{ dist: { tarball: string } }>
+    })
+    const archive = path.join(cache, `opentui-core-linux-${arch}-${pkg.dependencies["@opentui/core"]}.tgz`)
+    if (!(await Bun.file(archive).exists())) {
+      const res = await fetch(meta.dist.tarball)
+      if (!res.ok) throw new Error(`Failed to download ${meta.dist.tarball}: ${res.status} ${res.statusText}`)
+      await Bun.write(archive, await res.arrayBuffer())
+    }
+    const extract = path.join(cache, `opentui-core-linux-${arch}`)
+    await fs.promises.rm(extract, { recursive: true, force: true })
+    await fs.promises.mkdir(extract, { recursive: true })
+    await $`tar -xzf ${archive} -C ${extract}`
+    source = path.join(extract, "package", "libopentui.so")
+  }
+
+  const root = path.join(dir, "dist", name, "node_modules", "@opentui", `core-android-${arch}`)
+  await fs.promises.mkdir(root, { recursive: true })
+  await fs.promises.copyFile(source, path.join(root, "libopentui.so"))
+  await Bun.write(path.join(root, "index.ts"), 'const module = await import("./libopentui.so", { with: { type: "file" } })\nconst path = module.default\nexport default path\n')
+  await Bun.write(
+    path.join(root, "package.json"),
+    JSON.stringify(
+      {
+        name: pkgname,
+        version: pkg.dependencies["@opentui/core"],
+        os: ["android"],
+        cpu: [arch],
+        type: "module",
+        main: "index.ts",
+        module: "index.ts",
+        files: ["index.ts", "libopentui.so"],
+      },
+      null,
+      2,
+    ),
+  )
+}
+
+const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: string, workerPath: string) => {
+  await fs.promises.mkdir(path.join(dir, "dist", name, "bin"), { recursive: true })
+  await fs.promises.mkdir(path.join(dir, "dist", name, "bundle"), { recursive: true })
+  const result = await Bun.build({
+    conditions: ["browser"],
+    tsconfig: "./tsconfig.json",
+    plugins: [solidPlugin],
+    sourcemap: "none",
+    target: "bun",
+    outdir: `dist/${name}/bundle`,
+    entrypoints: ["./src/index.ts", parserWorker, workerPath],
+    naming: "[name].[ext]",
+    define: {
+      SLOPCODE_VERSION: `'${Script.version}'`,
+      SLOPCODE_NVIM_VERSION: `'${nvimVersion}'`,
+      SLOPCODE_MIGRATIONS: JSON.stringify(migrations),
+      OTUI_TREE_SITTER_WORKER_PATH: 'new URL("./parser.worker.js", import.meta.url).href',
+      SLOPCODE_WORKER_PATH: 'new URL("./worker.js", import.meta.url).href',
+      SLOPCODE_CHANNEL: `'${Script.channel}'`,
+      SLOPCODE_LIBC: "'bionic'",
+    },
+  })
+  if (!result.success) {
+    throw new Error(`Build failed for ${name}`)
+  }
+  if (!(await Bun.file(`dist/${name}/bundle/index.js`).exists())) {
+    throw new Error(`Missing Android bundle at dist/${name}/bundle/index.js`)
+  }
+  await androidOpentui(name, arch)
+  await Bun.write(
+    `dist/${name}/bin/slopcode`,
+    [
+      "#!/data/data/com.termux/files/usr/bin/env node",
+      'const childProcess = require("child_process")',
+      'const fs = require("fs")',
+      'const path = require("path")',
+      "const root = path.dirname(path.dirname(__filename))",
+      "const bundle = path.join(root, \"bundle\", \"index.js\")",
+      "const candidates = [",
+      "  process.env.SLOPCODE_BUN_PATH,",
+      "  path.join(root, \"node_modules\", \"bun\", \"bin\", \"bun.exe\"),",
+      "  path.join(root, \"node_modules\", \".bin\", process.platform === \"win32\" ? \"bun.cmd\" : \"bun\"),",
+      "  \"bun\",",
+      "].filter(Boolean)",
+      "const bun = candidates.find((item) => item === \"bun\" || fs.existsSync(item))",
+      "if (!bun) {",
+      '  console.error("SlopCode native Termux support requires Bun. Reinstall with: npm install -g slopcode@latest --include=optional")',
+      "  process.exit(1)",
+      "}",
+      "const result = childProcess.spawnSync(bun, [bundle, ...process.argv.slice(2)], {",
+      "  stdio: \"inherit\",",
+      '  env: {',
+      "    ...process.env,",
+      '    SLOPCODE_BIONIC: "1",',
+      "    SLOPCODE_ENTRYPOINT: bundle,",
+      '    OTUI_NO_NATIVE_RENDER: process.env.OTUI_NO_NATIVE_RENDER ?? "1",',
+      "  },",
+      "})",
+      "if (result.error) {",
+      "  console.error(result.error.message)",
+      "  process.exit(1)",
+      "}",
+      "if (result.signal) {",
+      "  const signals = { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 }",
+      "  process.exit(128 + (signals[result.signal] || 1))",
+      "}",
+      "process.exit(typeof result.status === \"number\" ? result.status : 1)",
+      "",
+    ].join("\n"),
+  )
+  await $`chmod 755 ${path.join(dir, "dist", name, "bin", "slopcode")}`
+  await Bun.write(
+    `dist/${name}/package.json`,
+    JSON.stringify(
+      {
+        name,
+        version: Script.version,
+        repository: {
+          type: "git",
+          url: "https://github.com/teamslop/slopcode",
+        },
+        os: ["android"],
+        cpu: [arch],
+        dependencies: {
+          bun: androidBunVersion,
+          [`@opentui/core-android-${arch}`]: pkg.dependencies["@opentui/core"],
+          ...(arch === "arm64" ? { "@parcel/watcher-android-arm64": pkg.dependencies["@parcel/watcher"] } : {}),
+        },
+        bundleDependencies: [`@opentui/core-android-${arch}`],
+      },
+      null,
+      2,
+    ),
+  )
+}
+
 const allTargets: {
   os: string
   arch: "arm64" | "x64"
   abi?: "musl"
   avx2?: false
 }[] = [
+  {
+    os: "android",
+    arch: "arm64",
+  },
+  {
+    os: "android",
+    arch: "x64",
+  },
   {
     os: "linux",
     arch: "arm64",
@@ -380,26 +533,44 @@ const allTargets: {
   },
 ]
 
-const targets = singleFlag
-  ? allTargets.filter((item) => {
-      if (item.os !== process.platform || item.arch !== process.arch) {
-        return false
-      }
+const targetKey = (item: (typeof allTargets)[number]) =>
+  [
+    item.os === "win32" ? "windows" : item.os,
+    item.arch,
+    item.avx2 === false ? "baseline" : undefined,
+    item.abi,
+  ]
+    .filter(Boolean)
+    .join("-")
 
-      // When building for the current platform, prefer a single native binary by default.
-      // Baseline binaries require additional Bun artifacts and can be flaky to download.
-      if (item.avx2 === false) {
-        return baselineFlag
-      }
+const targetName = (item: (typeof allTargets)[number]) => `${pkg.name}-${targetKey(item)}`
 
-      // also skip abi-specific builds for the same reason
-      if (item.abi !== undefined) {
-        return false
-      }
+const targets = targetFlag
+  ? allTargets.filter((item) => targetKey(item) === targetFlag || targetName(item) === targetFlag)
+  : singleFlag
+    ? allTargets.filter((item) => {
+        if (item.os !== process.platform || item.arch !== process.arch) {
+          return false
+        }
 
-      return true
-    })
-  : allTargets
+        // When building for the current platform, prefer a single native binary by default.
+        // Baseline binaries require additional Bun artifacts and can be flaky to download.
+        if (item.avx2 === false) {
+          return baselineFlag
+        }
+
+        // also skip abi-specific builds for the same reason
+        if (item.abi !== undefined) {
+          return false
+        }
+
+        return true
+      })
+    : allTargets
+
+if (targetFlag && targets.length === 0) {
+  throw new Error(`Unknown build target: ${targetFlag}`)
+}
 
 await $`rm -rf dist`
 
@@ -409,21 +580,18 @@ if (!skipInstall) {
   await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
 }
 for (const item of targets) {
-  const name = [
-    pkg.name,
-    // changing to win32 flags npm for some reason
-    item.os === "win32" ? "windows" : item.os,
-    item.arch,
-    item.avx2 === false ? "baseline" : undefined,
-    item.abi === undefined ? undefined : item.abi,
-  ]
-    .filter(Boolean)
-    .join("-")
+  const name = targetName(item)
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
 
   const parserWorker = fs.realpathSync(path.resolve(dir, "./node_modules/@opentui/core/parser.worker.js"))
   const workerPath = "./src/cli/cmd/tui/worker.ts"
+
+  if (item.os === "android") {
+    await androidBundle(name, item.arch, parserWorker, workerPath)
+    binaries[name] = Script.version
+    continue
+  }
 
   // Use platform-specific bunfs root path based on target OS
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
@@ -555,7 +723,7 @@ if (Script.release) {
   }
 
   for (const key of Object.keys(binaries)) {
-    if (key.includes("linux")) {
+    if (key.includes("linux") || key.includes("android")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
       continue
     }

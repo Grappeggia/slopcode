@@ -2,6 +2,7 @@ import { cmd } from "../cmd"
 import { UI } from "@/cli/ui"
 import { tui } from "./app"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
+import { guard } from "./platform"
 import { TuiConfig } from "@/config/tui"
 import { Instance } from "@/project/instance"
 import { randomUUID } from "crypto"
@@ -44,6 +45,11 @@ export const AttachCommand = cmd({
     const unguard = win32InstallCtrlCGuard()
     try {
       win32DisableProcessedInput()
+      if (guard()) {
+        process.exitCode = 1
+        return
+      }
+
 
       if (args.fork && !args.continue && !args.session) {
         UI.error("--fork requires --continue or --session")

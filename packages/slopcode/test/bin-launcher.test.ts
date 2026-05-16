@@ -196,7 +196,35 @@ describe("bin launcher", () => {
     expect(await Bun.file(path.join(staged.root, "bin", ".slopcode.json")).exists()).toBe(false)
   })
 
-  test("prints Termux guidance instead of resolving Linux binaries", async () => {
+  test("resolves Android runtime package instead of Linux binaries", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const android = path.join(staged.root, "node_modules", "slopcode-bin-android-arm64")
+    await fs.mkdir(path.join(android, "bin"), { recursive: true })
+    await Bun.write(path.join(android, "package.json"), JSON.stringify({ name: "slopcode-bin-android-arm64" }))
+    await script(path.join(android, "bin", "slopcode"), "#!/bin/sh\necho android\n")
+
+    const linux = path.join(staged.root, "node_modules", "slopcode-bin-linux-arm64")
+    await fs.mkdir(path.join(linux, "bin"), { recursive: true })
+    await Bun.write(path.join(linux, "package.json"), JSON.stringify({ name: "slopcode-bin-linux-arm64" }))
+    await script(path.join(linux, "bin", "slopcode"), "#!/bin/sh\necho linux\n")
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        TERMUX_VERSION: "1",
+      },
+      [],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(out.stdout.trim()).toBe("android")
+    expect(out.stderr).not.toContain("proot")
+  })
+
+  test("prints native Termux instructions when Android package is missing", async () => {
     if (process.platform === "win32") return
     const staged = await stageLauncher()
     const pkg = path.join(staged.root, "node_modules", "slopcode-bin-linux-arm64")
@@ -216,13 +244,13 @@ describe("bin launcher", () => {
 
     expect(out.code).toBe(1)
     expect(out.stdout).not.toContain("linux")
-    expect(out.stderr).toContain("Android/Termux")
-    expect(out.stderr).toContain("proot-distro")
+    expect(out.stderr).toContain("Android runtime package")
+    expect(out.stderr).toContain("npm install -g slopcode@latest")
   })
 })
 
 describe("postinstall", () => {
-  test("prints Termux guidance without failing install", async () => {
+  test("prints native Termux instructions without failing install", async () => {
     const file = await stagePostinstall()
     const out = await runPostinstall(file, {
       SLOPCODE_TEST_PLATFORM: "android",
@@ -231,8 +259,28 @@ describe("postinstall", () => {
     })
 
     expect(out.code).toBe(0)
-    expect(out.stdout).toContain("Android/Termux")
-    expect(out.stdout).toContain("proot-distro")
+    expect(out.stdout).toContain("Android runtime package")
+    expect(out.stdout).toContain("npm install -g slopcode@latest")
     expect(out.stderr).toBe("")
+  })
+
+  test("does not cache Android runtime package during postinstall", async () => {
+    const file = await stagePostinstall()
+    const root = path.dirname(file)
+    const pkg = path.join(root, "node_modules", "slopcode-bin-android-arm64")
+    await fs.mkdir(path.join(pkg, "bin"), { recursive: true })
+    await Bun.write(path.join(pkg, "package.json"), JSON.stringify({ name: "slopcode-bin-android-arm64" }))
+    await script(path.join(pkg, "bin", "slopcode"), "#!/bin/sh\necho android\n")
+
+    const out = await runPostinstall(file, {
+      SLOPCODE_TEST_PLATFORM: "android",
+      SLOPCODE_TEST_ARCH: "arm64",
+      TERMUX_VERSION: "1",
+    })
+
+    expect(out.code).toBe(0)
+    expect(out.stdout).toContain("runtime package detected")
+    expect(await Bun.file(path.join(root, "bin", ".slopcode")).exists()).toBe(false)
+    expect(await Bun.file(path.join(root, "bin", ".slopcode.json")).exists()).toBe(false)
   })
 })

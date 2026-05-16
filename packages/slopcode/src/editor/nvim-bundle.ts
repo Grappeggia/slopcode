@@ -71,6 +71,17 @@ export namespace NvimBundle {
     } satisfies Info
   }
 
+  const system = async () => {
+    if (process.platform !== "android") return
+    const result = spawnSync("sh", ["-lc", "command -v nvim"], {
+      encoding: "utf8",
+      timeout: 2000,
+    })
+    const bin = result.status === 0 ? result.stdout.trim() : ""
+    if (!bin) return
+    return complete(path.dirname(path.dirname(bin)))
+  }
+
   const roots = () => {
     const dir = path.dirname(process.execPath)
     return [
@@ -122,6 +133,8 @@ export namespace NvimBundle {
   export async function resolve() {
     const forced = await env()
     if (forced) return forced
+    const native = await system()
+    if (native) return native
     for (const root of roots()) {
       const hit = await complete(root)
       if (hit) return hit

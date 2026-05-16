@@ -52,7 +52,14 @@ export namespace DaemonLauncher {
     })
   }
 
-  function command() {
+  export function command() {
+    if (process.env.SLOPCODE_ENTRYPOINT) {
+      return {
+        args: [process.execPath, process.env.SLOPCODE_ENTRYPOINT],
+        cwd: undefined,
+      }
+    }
+
     if (!Installation.isLocal()) {
       return {
         args: [process.execPath],

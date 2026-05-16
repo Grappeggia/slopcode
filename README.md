@@ -67,16 +67,16 @@ nix run github:teamslop/slopcode#slopcode             # One-off run
 
 #### Termux on Android
 
-SlopCode does not ship native Android/bionic binaries yet. On Android, run the TUI inside a Termux proot Linux distro.
+SlopCode supports native Termux on Android arm64/x64 for CLI and server commands through the npm package. Install the Termux runtime dependencies first:
 
 ```bash
-pkg install proot-distro
-proot-distro install debian
-proot-distro login debian
-# inside Debian
-apt update && apt install -y curl ca-certificates git
-curl -fsSL https://slopcode.dev/install | bash
+pkg update
+pkg install nodejs git ripgrep neovim
+npm install -g slopcode@latest --include=optional
+slopcode --help
 ```
+
+The interactive TUI still requires a proot-distro Linux environment until Bun for Android enables the FFI support required by OpenTUI.
 
 > [!TIP]
 > Remove versions older than 0.1.x before installing.

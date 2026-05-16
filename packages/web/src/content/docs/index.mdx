@@ -25,16 +25,16 @@ brew install slopcode
 curl -fsSL https://teamslop.github.io/apt-slopcode/install.sh | sudo bash
 ```
 
-Android/Termux needs a proot Linux distro because native Android/bionic binaries are not available yet.
+Android/Termux on arm64/x64 uses the native npm package for CLI and server commands with Termux runtime dependencies.
 
 ```bash
-pkg install proot-distro
-proot-distro install debian
-proot-distro login debian
-# inside Debian
-apt update && apt install -y curl ca-certificates git
-curl -fsSL https://slopcode.dev/install | bash
+pkg update
+pkg install nodejs git ripgrep neovim
+npm install -g slopcode@latest --include=optional
+slopcode --help
 ```
+
+The interactive TUI still requires proot-distro until Bun for Android enables the FFI support required by OpenTUI.
 
 ---
 

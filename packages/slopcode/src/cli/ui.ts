@@ -1,7 +1,6 @@
 import z from "zod"
 import { EOL } from "os"
 import { NamedError } from "@slopcode-ai/util/error"
-import { renderSegmentsToAnsi } from "./render/ansi"
 import { segmentRichText } from "./render/segment"
 import { logo as glyphs } from "./logo"
 
@@ -114,6 +113,8 @@ export namespace UI {
 
   export async function markdown(text: string): Promise<string> {
     if (!process.stderr.isTTY) return text
+    if (process.platform === "android") return text
+    const { renderSegmentsToAnsi } = await import("./render/ansi")
     return await renderSegmentsToAnsi(segmentRichText(text))
   }
 }
