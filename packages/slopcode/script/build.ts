@@ -330,7 +330,9 @@ const androidOpentui = async (name: string, arch: "arm64" | "x64") => {
   if (!fs.existsSync(source)) {
     const cache = path.join(dir, "dist", ".android-cache")
     await fs.promises.mkdir(cache, { recursive: true })
-    const meta = await fetch(`https://registry.npmjs.org/${encodeURIComponent(linux)}/${pkg.dependencies["@opentui/core"]}`).then((res) => {
+    const meta = await fetch(
+      `https://registry.npmjs.org/${encodeURIComponent(linux)}/${pkg.dependencies["@opentui/core"]}`,
+    ).then((res) => {
       if (!res.ok) throw new Error(`Failed to resolve ${linux}: ${res.status} ${res.statusText}`)
       return res.json() as Promise<{ dist: { tarball: string } }>
     })
@@ -350,7 +352,10 @@ const androidOpentui = async (name: string, arch: "arm64" | "x64") => {
   const root = path.join(dir, "dist", name, "node_modules", "@opentui", `core-android-${arch}`)
   await fs.promises.mkdir(root, { recursive: true })
   await fs.promises.copyFile(source, path.join(root, "libopentui.so"))
-  await Bun.write(path.join(root, "index.ts"), 'const module = await import("./libopentui.so", { with: { type: "file" } })\nconst path = module.default\nexport default path\n')
+  await Bun.write(
+    path.join(root, "index.ts"),
+    'const module = await import("./libopentui.so", { with: { type: "file" } })\nconst path = module.default\nexport default path\n',
+  )
   await Bun.write(
     path.join(root, "package.json"),
     JSON.stringify(
@@ -407,21 +412,21 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
       'const fs = require("fs")',
       'const path = require("path")',
       "const root = path.dirname(path.dirname(__filename))",
-      "const bundle = path.join(root, \"bundle\", \"index.js\")",
+      'const bundle = path.join(root, "bundle", "index.js")',
       "const candidates = [",
       "  process.env.SLOPCODE_BUN_PATH,",
-      "  path.join(root, \"node_modules\", \"bun\", \"bin\", \"bun.exe\"),",
-      "  path.join(root, \"node_modules\", \".bin\", process.platform === \"win32\" ? \"bun.cmd\" : \"bun\"),",
-      "  \"bun\",",
+      '  path.join(root, "node_modules", "bun", "bin", "bun.exe"),',
+      '  path.join(root, "node_modules", ".bin", process.platform === "win32" ? "bun.cmd" : "bun"),',
+      '  "bun",',
       "].filter(Boolean)",
-      "const bun = candidates.find((item) => item === \"bun\" || fs.existsSync(item))",
+      'const bun = candidates.find((item) => item === "bun" || fs.existsSync(item))',
       "if (!bun) {",
       '  console.error("SlopCode native Termux support requires Bun. Reinstall with: npm install -g slopcode@latest --include=optional")',
       "  process.exit(1)",
       "}",
       "const result = childProcess.spawnSync(bun, [bundle, ...process.argv.slice(2)], {",
-      "  stdio: \"inherit\",",
-      '  env: {',
+      '  stdio: "inherit",',
+      "  env: {",
       "    ...process.env,",
       '    SLOPCODE_BIONIC: "1",',
       "    SLOPCODE_ENTRYPOINT: bundle,",
@@ -436,7 +441,7 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
       "  const signals = { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 }",
       "  process.exit(128 + (signals[result.signal] || 1))",
       "}",
-      "process.exit(typeof result.status === \"number\" ? result.status : 1)",
+      'process.exit(typeof result.status === "number" ? result.status : 1)',
       "",
     ].join("\n"),
   )
@@ -534,12 +539,7 @@ const allTargets: {
 ]
 
 const targetKey = (item: (typeof allTargets)[number]) =>
-  [
-    item.os === "win32" ? "windows" : item.os,
-    item.arch,
-    item.avx2 === false ? "baseline" : undefined,
-    item.abi,
-  ]
+  [item.os === "win32" ? "windows" : item.os, item.arch, item.avx2 === false ? "baseline" : undefined, item.abi]
     .filter(Boolean)
     .join("-")
 

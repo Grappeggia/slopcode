@@ -34,9 +34,10 @@ export namespace FileWatcher {
 
   const watcher = lazy((): typeof import("@parcel/watcher") | undefined => {
     try {
-      const name = process.platform === "android"
-        ? `@parcel/watcher-android-${process.arch}`
-        : `@parcel/watcher-${process.platform}-${process.arch}${process.platform === "linux" ? `-${SLOPCODE_LIBC || "glibc"}` : ""}`
+      const name =
+        process.platform === "android"
+          ? `@parcel/watcher-android-${process.arch}`
+          : `@parcel/watcher-${process.platform}-${process.arch}${process.platform === "linux" ? `-${SLOPCODE_LIBC || "glibc"}` : ""}`
       const binding = require(name)
       return createWrapper(binding) as typeof import("@parcel/watcher")
     } catch (error) {

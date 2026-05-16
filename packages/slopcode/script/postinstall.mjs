@@ -232,7 +232,11 @@ async function main() {
     const found = findBinary()
     if (!found) {
       clearCache()
-      console.log(detectLibc(platform, arch) === "bionic" ? termuxMessage() : "No platform binary package detected during postinstall; runtime resolver will handle it")
+      console.log(
+        detectLibc(platform, arch) === "bionic"
+          ? termuxMessage()
+          : "No platform binary package detected during postinstall; runtime resolver will handle it",
+      )
       return
     }
 

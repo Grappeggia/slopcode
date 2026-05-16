@@ -56,7 +56,6 @@ export const TuiThreadCommand = cmd({
         return
       }
 
-
       if (args.fork && !args.continue && !args.session) {
         UI.error("--fork requires --continue or --session")
         process.exitCode = 1
