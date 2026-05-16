@@ -1,14 +1,99 @@
 ---
 const endpoint = "https://api.github.com/repos/teamslop/slopcode/releases?per_page=12"
 const releaseUrl = "https://github.com/teamslop/slopcode/releases"
+
+type Release = {
+  tag_name: string
+  html_url: string
+  published_at: string
+  body: string | null
+  draft: boolean
+  prerelease: boolean
+}
+
+const parse = (body: string | null) => {
+  if (typeof body !== "string" || body.length === 0) return []
+
+  const lines = body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+  const bullets = lines
+    .filter((line) => line.startsWith("- ") || /^\d+\.\s/.test(line))
+    .map((line) => line.replace(/^-+\s+/, "").replace(/^\d+\.\s+/, "").trim())
+    .filter((line) => line.length > 0 && !line.startsWith("**Thank you"))
+
+  if (bullets.length > 0) return bullets.slice(0, 4)
+
+  const text = lines.find((line) => !line.startsWith("#") && !line.startsWith("**Thank you"))
+  if (!text) return []
+  return [text]
+}
+
+const valid = (release: unknown): release is Release => {
+  if (!release || typeof release !== "object") return false
+  const item = release as Record<string, unknown>
+  return (
+    typeof item.tag_name === "string" &&
+    typeof item.html_url === "string" &&
+    typeof item.published_at === "string" &&
+    (typeof item.body === "string" || item.body === null) &&
+    typeof item.draft === "boolean" &&
+    typeof item.prerelease === "boolean"
+  )
+}
+
+const releases = await fetch(endpoint, {
+  headers: {
+    Accept: "application/vnd.github+json",
+  },
+})
+  .then((response) => (response.ok ? response.json() : []))
+  .then((data: unknown) =>
+    Array.isArray(data)
+      ? data
+          .filter(valid)
+          .filter((release) => !release.draft && !release.prerelease)
+          .slice(0, 10)
+      : [],
+  )
+  .catch(() => [])
+
+const format = (value: string) =>
+  new Intl.DateTimeFormat("en", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(value))
 ---
 
-<div class="release-feed" data-release-feed data-endpoint={endpoint}>
-  <p data-release-loading>Loading latest releases from GitHub...</p>
+<div class="release-feed" data-release-feed data-endpoint={endpoint} data-has-releases={releases.length > 0 ? "true" : "false"}>
+  <p data-release-loading hidden={releases.length > 0}>Loading latest releases from GitHub...</p>
   <p data-release-error hidden>
     Could not load releases right now. <a href={releaseUrl}>View all releases on GitHub</a>.
   </p>
-  <div data-release-list hidden></div>
+  <div data-release-list hidden={releases.length === 0}>
+    {
+      releases.map((release) => (
+        <section>
+          <h3>
+            <a href={release.html_url} target="_blank" rel="noopener noreferrer">
+              {release.tag_name}
+            </a>
+          </h3>
+          <p class="release-date">{format(release.published_at)}</p>
+          {parse(release.body).length > 0 && (
+            <ul>
+              {parse(release.body).map((note) => (
+                <li>{note}</li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ))
+    }
+  </div>
 </div>
 
 <script is:inline>
@@ -48,6 +133,8 @@ const releaseUrl = "https://github.com/teamslop/slopcode/releases"
   }
 
   const render = (node, releases) => {
+    node.replaceChildren()
+
     for (const release of releases) {
       const section = document.createElement("section")
       const title = document.createElement("h3")
@@ -119,12 +206,13 @@ const releaseUrl = "https://github.com/teamslop/slopcode/releases"
       })
       .then((releases) => {
         loading.hidden = true
+        error.hidden = true
         list.hidden = false
         render(list, releases)
       })
       .catch(() => {
         loading.hidden = true
-        error.hidden = false
+        if (list.children.length === 0) error.hidden = false
       })
   }
 </script>
