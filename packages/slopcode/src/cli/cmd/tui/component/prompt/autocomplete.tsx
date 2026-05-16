@@ -347,9 +347,9 @@ export function Autocomplete(props: {
       description: item.description,
       aliases: item.aliases,
       onSelect: () => {
-        item.onSelect?.()
         const next = removePromptSlash(props.prompt(), props.input().cursorOffset)
         if (next) props.applyPrompt(next.prompt, next.cursor)
+        item.onSelect?.()
       },
     }))
 

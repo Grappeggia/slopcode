@@ -73,10 +73,13 @@ describe("dialog model select e2e", () => {
         const screen = app.text()
         if (crash(screen)) throw new Error(screen)
         if (!screen.includes("Select model")) return
+        if (screen.includes("/models")) return
         return screen
       }, 10_000).catch(() => {
         throw new Error(app.text())
       })
+
+      expect(open).not.toContain("/models")
 
       const next = await eventually(() => {
         const screen = app.text()

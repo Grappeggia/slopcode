@@ -49,12 +49,14 @@ async function open(input: { slash: string; title: string; extra?: string }) {
       if (crash(screen)) throw new Error(screen)
       if (!screen.includes(input.title)) return
       if (input.extra && !screen.includes(input.extra)) return
+      if (screen.includes(input.slash)) return
       return screen
     }, 10_000).catch(() => {
       throw new Error(app.text())
     })
 
     expect(screen).toContain(input.title)
+    expect(screen).not.toContain(input.slash)
     expect(screen).not.toContain("A fatal error occurred!")
     expect(screen).not.toContain("context must be used within a context provider")
   } finally {
