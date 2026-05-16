@@ -4,6 +4,7 @@ import os from "os"
 import path from "path"
 
 const launcher = path.join(__dirname, "../bin/slopcode")
+const postinstall = path.join(__dirname, "../script/postinstall.mjs")
 const clean: string[] = []
 
 afterEach(async () => {
@@ -38,6 +39,31 @@ async function run(env: Record<string, string>, args: string[] = [], file = laun
     stdout: proc.stdout ? await new Response(proc.stdout).text() : "",
     stderr: proc.stderr ? await new Response(proc.stderr).text() : "",
   }
+}
+
+async function runPostinstall(file: string, env: Record<string, string>) {
+  const proc = Bun.spawn([process.execPath, file], {
+    env: {
+      ...process.env,
+      ...env,
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+
+  return {
+    code: await proc.exited,
+    stdout: proc.stdout ? await new Response(proc.stdout).text() : "",
+    stderr: proc.stderr ? await new Response(proc.stderr).text() : "",
+  }
+}
+
+async function stagePostinstall() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-staged-postinstall-"))
+  clean.push(dir)
+  await fs.copyFile(postinstall, path.join(dir, "postinstall.mjs"))
+  await Bun.write(path.join(dir, "package.json"), JSON.stringify({ version: "1.2.3" }))
+  return path.join(dir, "postinstall.mjs")
 }
 
 async function stageLauncher() {
@@ -168,5 +194,45 @@ describe("bin launcher", () => {
     expect(out.stdout.trim()).toBe("resolved")
     expect(await Bun.file(path.join(staged.root, "bin", ".slopcode")).exists()).toBe(false)
     expect(await Bun.file(path.join(staged.root, "bin", ".slopcode.json")).exists()).toBe(false)
+  })
+
+  test("prints Termux guidance instead of resolving Linux binaries", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const pkg = path.join(staged.root, "node_modules", "slopcode-bin-linux-arm64")
+    await fs.mkdir(path.join(pkg, "bin"), { recursive: true })
+    await Bun.write(path.join(pkg, "package.json"), JSON.stringify({ name: "slopcode-bin-linux-arm64" }))
+    await script(path.join(pkg, "bin", "slopcode"), "#!/bin/sh\necho linux\n")
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        TERMUX_VERSION: "1",
+      },
+      [],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(1)
+    expect(out.stdout).not.toContain("linux")
+    expect(out.stderr).toContain("Android/Termux")
+    expect(out.stderr).toContain("proot-distro")
+  })
+})
+
+describe("postinstall", () => {
+  test("prints Termux guidance without failing install", async () => {
+    const file = await stagePostinstall()
+    const out = await runPostinstall(file, {
+      SLOPCODE_TEST_PLATFORM: "android",
+      SLOPCODE_TEST_ARCH: "arm64",
+      TERMUX_VERSION: "1",
+    })
+
+    expect(out.code).toBe(0)
+    expect(out.stdout).toContain("Android/Termux")
+    expect(out.stdout).toContain("proot-distro")
+    expect(out.stderr).toBe("")
   })
 })

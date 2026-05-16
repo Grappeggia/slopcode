@@ -16,22 +16,29 @@ const supported = {
 }
 
 function detectPlatformAndArch() {
+  const rawPlatform = process.env.SLOPCODE_TEST_PLATFORM || os.platform()
+  const rawArch = process.env.SLOPCODE_TEST_ARCH || os.arch()
   const platform =
     {
       darwin: "darwin",
       linux: "linux",
       win32: "windows",
-    }[os.platform()] ?? os.platform()
+    }[rawPlatform] ?? rawPlatform
   const arch =
     {
       x64: "x64",
       arm64: "arm64",
       arm: "arm",
-    }[os.arch()] ?? os.arch()
+    }[rawArch] ?? rawArch
   return { platform, arch }
 }
 
+function termuxEnv() {
+  return Boolean(process.env.TERMUX_VERSION || (process.env.PREFIX || "").includes("/com.termux/"))
+}
+
 function detectLibc(platform, arch) {
+  if (platform === "android") return "bionic"
   if (platform !== "linux") return
   const report = process.report?.getReport?.()
   if (typeof report?.header?.glibcVersionRuntime === "string" && report.header.glibcVersionRuntime) {
@@ -51,6 +58,7 @@ function detectLibc(platform, arch) {
   const text = ((result.stdout || "") + (result.stderr || "")).toLowerCase()
   if (text.includes("musl")) return "musl"
   if (text.includes("glibc") || text.includes("gnu libc")) return "glibc"
+  if (text.includes("bionic") || termuxEnv()) return "bionic"
   const loader = arch === "arm64" ? "/lib/ld-musl-aarch64.so.1" : arch === "x64" ? "/lib/ld-musl-x86_64.so.1" : ""
   if (loader && fs.existsSync(loader)) return "musl"
 }
@@ -84,9 +92,10 @@ function supportsAvx2(platform, arch) {
 
 function names(platform, arch) {
   const base = `slopcode-bin-${platform}-${arch}`
+  const libc = detectLibc(platform, arch)
+  if (libc === "bionic") return []
   const avx2 = supportsAvx2(platform, arch)
   const baseline = arch === "x64" && !avx2
-  const libc = detectLibc(platform, arch)
 
   if (platform === "linux") {
     if (libc === "musl") {
@@ -128,6 +137,18 @@ function supportedMessage() {
   return Object.entries(supported)
     .map(([platform, archs]) => `${platform}:${archs.join(",")}`)
     .join(" ")
+}
+
+function termuxMessage() {
+  return [
+    "SlopCode does not ship a native Android/Termux (bionic) binary yet.",
+    "Run SlopCode inside a Termux proot Linux distro:",
+    "  pkg install proot-distro",
+    "  proot-distro install debian",
+    "  proot-distro login debian",
+    "  apt update && apt install -y curl ca-certificates git",
+    "  curl -fsSL https://slopcode.dev/install | bash",
+  ].join("\n")
 }
 
 function findBinary() {
@@ -193,6 +214,12 @@ function writeMeta(input) {
 async function main() {
   try {
     const { platform, arch } = detectPlatformAndArch()
+    if (detectLibc(platform, arch) === "bionic") {
+      clearCache()
+      console.log(termuxMessage())
+      return
+    }
+
     if (!(supported[platform] ?? []).includes(arch)) {
       clearCache()
       console.log(

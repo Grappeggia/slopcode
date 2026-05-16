@@ -25,6 +25,17 @@ brew install slopcode
 curl -fsSL https://teamslop.github.io/apt-slopcode/install.sh | sudo bash
 ```
 
+Android/Termux needs a proot Linux distro because native Android/bionic binaries are not available yet.
+
+```bash
+pkg install proot-distro
+proot-distro install debian
+proot-distro login debian
+# inside Debian
+apt update && apt install -y curl ca-certificates git
+curl -fsSL https://slopcode.dev/install | bash
+```
+
 ---
 
 ## Connect

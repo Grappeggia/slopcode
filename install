@@ -99,6 +99,25 @@ else
       fi
     fi
 
+    is_termux=false
+    if [[ -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == *"/com.termux/"* ]]; then
+      if ! getconf GNU_LIBC_VERSION 2>/dev/null | grep -qi glibc; then
+        is_termux=true
+      fi
+    fi
+
+    if [ "$is_termux" = "true" ]; then
+      echo -e "${RED}Native Android/Termux binaries are not available yet.${NC}"
+      echo -e "Run SlopCode inside a Termux proot Linux distro:"
+      echo -e "  pkg install proot-distro"
+      echo -e "  proot-distro install debian"
+      echo -e "  proot-distro login debian"
+      echo -e "Inside Debian, install SlopCode:"
+      echo -e "  apt update && apt install -y curl ca-certificates git"
+      echo -e "  curl -fsSL https://slopcode.dev/install | bash"
+      exit 1
+    fi
+
     combo="$os-$arch"
     case "$combo" in
       linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64)

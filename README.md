@@ -65,6 +65,19 @@ nix profile install github:teamslop/slopcode#slopcode # Any OS (persistent insta
 nix run github:teamslop/slopcode#slopcode             # One-off run
 ```
 
+#### Termux on Android
+
+SlopCode does not ship native Android/bionic binaries yet. On Android, run the TUI inside a Termux proot Linux distro.
+
+```bash
+pkg install proot-distro
+proot-distro install debian
+proot-distro login debian
+# inside Debian
+apt update && apt install -y curl ca-certificates git
+curl -fsSL https://slopcode.dev/install | bash
+```
+
 > [!TIP]
 > Remove versions older than 0.1.x before installing.
 
