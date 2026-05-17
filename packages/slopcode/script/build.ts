@@ -375,17 +375,18 @@ const androidOpentui = async (name: string, arch: "arm64" | "x64") => {
   )
 }
 
-const androidBunPackage = (arch: "arm64" | "x64") =>
-  `@oven/bun-linux-${arch === "arm64" ? "aarch64" : "x64"}-android`
+const androidBunPackage = (arch: "arm64" | "x64") => `@oven/bun-linux-${arch === "arm64" ? "aarch64" : "x64"}-android`
 
 const androidBun = async (name: string, arch: "arm64" | "x64") => {
   const pkgname = androidBunPackage(arch)
   const cache = path.join(dir, "dist", ".android-cache")
   await fs.promises.mkdir(cache, { recursive: true })
-  const meta = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pkgname)}/${androidBunVersion}`).then((res) => {
-    if (!res.ok) throw new Error(`Failed to resolve ${pkgname}: ${res.status} ${res.statusText}`)
-    return res.json() as Promise<{ dist: { tarball: string } }>
-  })
+  const meta = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pkgname)}/${androidBunVersion}`).then(
+    (res) => {
+      if (!res.ok) throw new Error(`Failed to resolve ${pkgname}: ${res.status} ${res.statusText}`)
+      return res.json() as Promise<{ dist: { tarball: string } }>
+    },
+  )
   const archive = path.join(cache, `${pkgname.replace("@", "").replace("/", "-")}-${androidBunVersion}.tgz`)
   if (!(await Bun.file(archive).exists())) {
     const res = await fetch(meta.dist.tarball)
