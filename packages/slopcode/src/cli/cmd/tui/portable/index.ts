@@ -157,7 +157,8 @@ function session(input: unknown): SessionInfo | undefined {
 
 function permission(input: unknown): PermissionRequest | undefined {
   if (!object(input)) return
-  if (!string(input.id) || !string(input.sessionID) || !string(input.permission) || !Array.isArray(input.patterns)) return
+  if (!string(input.id) || !string(input.sessionID) || !string(input.permission) || !Array.isArray(input.patterns))
+    return
   return input as PermissionRequest
 }
 
@@ -209,7 +210,12 @@ export function parseSseBlock(block: string): PortableEvent | undefined {
 export function parseQuestionAnswer(input: string, info: QuestionInfo) {
   const text = input.trim()
   if (!text) return []
-  const tokens = info.multiple ? text.split(",").map((item) => item.trim()).filter(Boolean) : [text]
+  const tokens = info.multiple
+    ? text
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+    : [text]
   const labels = tokens.flatMap((token) => {
     const index = Number(token)
     const option = Number.isInteger(index) ? info.options[index - 1] : undefined
@@ -248,12 +254,14 @@ export function applyPortableEvent(state: PortableState, event: PortableEvent) {
   if (event.type === "message.part.updated") {
     const next = part(props.part)
     if (!next || next.sessionID !== state.sessionID) return
-    const record = state.messages.get(next.messageID) ?? ensure(state, {
-      id: next.messageID,
-      sessionID: next.sessionID,
-      role: "assistant",
-      time: { created: Date.now() },
-    })
+    const record =
+      state.messages.get(next.messageID) ??
+      ensure(state, {
+        id: next.messageID,
+        sessionID: next.sessionID,
+        role: "assistant",
+        time: { created: Date.now() },
+      })
     record.parts.set(next.id, next)
     return
   }
@@ -264,7 +272,7 @@ export function applyPortableEvent(state: PortableState, event: PortableEvent) {
       state.messages.get(props.messageID) ??
       ensure(state, {
         id: props.messageID,
-        sessionID: string(props.sessionID) ? props.sessionID : state.sessionID ?? "ses_unknown",
+        sessionID: string(props.sessionID) ? props.sessionID : (state.sessionID ?? "ses_unknown"),
         role: "assistant",
         time: { created: Date.now() },
       })
@@ -325,7 +333,10 @@ export function applyPortableEvent(state: PortableState, event: PortableEvent) {
 }
 
 function clean(input: string) {
-  return input.replace(/[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g, "")
+  return input.replace(
+    /[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g,
+    "",
+  )
 }
 
 function wrap(input: string, width: number) {
@@ -343,9 +354,7 @@ function wrap(input: string, width: number) {
 }
 
 function parts(record: MessageRecord, type: string) {
-  return [...record.parts.values()]
-    .filter((item) => item.type === type)
-    .sort((a, b) => a.id.localeCompare(b.id))
+  return [...record.parts.values()].filter((item) => item.type === type).sort((a, b) => a.id.localeCompare(b.id))
 }
 
 function partText(record: MessageRecord) {
@@ -386,7 +395,7 @@ export function renderPortableLines(state: PortableState, width = 80, height = 2
   const footer = (() => {
     if (state.mode === "permission" && state.permission) {
       const patterns = state.permission.patterns
-        .map((item) => (typeof item === "string" ? item : item.pattern ?? "*"))
+        .map((item) => (typeof item === "string" ? item : (item.pattern ?? "*")))
         .join(", ")
       return `permission ${state.permission.permission} ${patterns} | o once, a always, r reject`
     }
@@ -573,7 +582,9 @@ export async function portableTui(input: {
 
   const replyPermission = async (reply: "once" | "always" | "reject") => {
     if (!state.permission) return
-    await request<boolean>("POST", `/permission/${state.permission.id}/reply?sessionID=${state.permission.sessionID}`, { reply })
+    await request<boolean>("POST", `/permission/${state.permission.id}/reply?sessionID=${state.permission.sessionID}`, {
+      reply,
+    })
     state.permission = undefined
     state.mode = "prompt"
     notice(state, `permission ${reply}`)
@@ -681,7 +692,8 @@ export async function portableTui(input: {
       return
     }
     if (text === "\x03") {
-      if (state.status !== "idle" && state.sessionID) void request<boolean>("POST", `/session/${state.sessionID}/abort`, {}).then(schedule)
+      if (state.status !== "idle" && state.sessionID)
+        void request<boolean>("POST", `/session/${state.sessionID}/abort`, {}).then(schedule)
       else stop()
       return
     }
@@ -708,7 +720,8 @@ export async function portableTui(input: {
   }
 
   if (input.args.continue && !state.sessionID) state.sessionID = await last()
-  if (state.sessionID && input.args.fork) state.sessionID = (await request<SessionInfo>("POST", `/session/${state.sessionID}/fork`, {})).id
+  if (state.sessionID && input.args.fork)
+    state.sessionID = (await request<SessionInfo>("POST", `/session/${state.sessionID}/fork`, {})).id
   if (!state.sessionID) await create()
   else await activate(state.sessionID)
 
@@ -726,7 +739,9 @@ export async function portableTui(input: {
   schedule()
 
   if (input.args.prompt) {
-    await submitPrompt(input.args.prompt).catch((error) => notice(state, error instanceof Error ? error.message : String(error), "error"))
+    await submitPrompt(input.args.prompt).catch((error) =>
+      notice(state, error instanceof Error ? error.message : String(error), "error"),
+    )
     schedule()
   }
 
