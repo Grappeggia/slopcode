@@ -142,14 +142,67 @@ function supportedMessage() {
 
 function termuxMessage() {
   return [
-    "SlopCode native Termux support needs the Android runtime package.",
-    "Install from Termux with optional npm dependencies enabled:",
+    "SlopCode native Termux support could not install the Android runtime.",
+    "Install from Termux with:",
     "  pkg update",
-    "  pkg install nodejs git ripgrep neovim",
-    "  npm install -g slopcode@latest",
-    "If npm skipped optional dependencies, rerun with:",
+    "  pkg install nodejs git ripgrep neovim tar",
     "  npm install -g slopcode@latest --include=optional",
+    "If that still fails, install the matching GitHub release asset manually.",
   ].join("\n")
+}
+
+function androidPackage(arch) {
+  return `@slopcode-ai/slopcode-android-${arch}`
+}
+
+function androidTarget(arch) {
+  return path.join(__dirname, "node_modules", "@slopcode-ai", `slopcode-android-${arch}`)
+}
+
+function androidUrl(arch) {
+  return `https://github.com/teamslop/slopcode/releases/download/v${pkg.version}/slopcode-android-${arch}.tar.gz`
+}
+
+async function androidAsset(arch, tmp) {
+  if (process.env.SLOPCODE_ANDROID_ASSET_PATH) return process.env.SLOPCODE_ANDROID_ASSET_PATH
+  const out = path.join(tmp, `slopcode-android-${arch}.tar.gz`)
+  const res = await fetch(process.env.SLOPCODE_ANDROID_ASSET_URL || androidUrl(arch))
+  if (!res.ok) throw new Error(`Failed to download Android runtime: ${res.status} ${res.statusText}`)
+  await fs.promises.writeFile(out, Buffer.from(await res.arrayBuffer()))
+  return out
+}
+
+async function installAndroid(arch) {
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "slopcode-android-"))
+  const target = androidTarget(arch)
+  try {
+    const archive = await androidAsset(arch, tmp)
+    const extract = path.join(tmp, "package")
+    await fs.promises.mkdir(extract, { recursive: true })
+    const result = require("child_process").spawnSync("tar", ["-xzf", archive, "-C", extract], {
+      encoding: "utf8",
+      timeout: 120000,
+    })
+    if (result.status !== 0) {
+      throw new Error((result.stderr || result.stdout || "tar failed").trim())
+    }
+    const binary = path.join(extract, "bin", "slopcode")
+    if (!fs.existsSync(binary)) throw new Error("Downloaded Android runtime is missing bin/slopcode")
+    await fs.promises.rm(target, { recursive: true, force: true })
+    await fs.promises.mkdir(path.dirname(target), { recursive: true })
+    await fs.promises.rename(extract, target)
+    fs.chmodSync(path.join(target, "bin", "slopcode"), 0o755)
+    return {
+      binaryPath: path.join(target, "bin", "slopcode"),
+      binaryName: "slopcode",
+      packageName: androidPackage(arch),
+      platform: "android",
+      arch,
+      libc: "bionic",
+    }
+  } finally {
+    await fs.promises.rm(tmp, { recursive: true, force: true })
+  }
 }
 
 function findBinary() {
@@ -232,11 +285,17 @@ async function main() {
     const found = findBinary()
     if (!found) {
       clearCache()
-      console.log(
-        detectLibc(platform, arch) === "bionic"
-          ? termuxMessage()
-          : "No platform binary package detected during postinstall; runtime resolver will handle it",
-      )
+      if (detectLibc(platform, arch) === "bionic") {
+        try {
+          await installAndroid(arch)
+          console.log("Android/Termux runtime installed from GitHub release asset")
+        } catch (error) {
+          console.log(termuxMessage())
+          console.error(error.message)
+        }
+        return
+      }
+      console.log("No platform binary package detected during postinstall; runtime resolver will handle it")
       return
     }
 

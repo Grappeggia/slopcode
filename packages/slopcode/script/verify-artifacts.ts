@@ -97,6 +97,8 @@ const match = (name: string) => {
   return true
 }
 
+const tarball = (name: string) => `${name.replaceAll("/", "-")}.tgz`
+
 const pack = async (cwd: string, file: string) => {
   await $`bash -lc "rm -f ./*.tgz"`.cwd(cwd)
   await $`bun pm pack --filename ${file}`.cwd(cwd).quiet()
@@ -114,7 +116,7 @@ const stageBinary = async (item: { dir: string; name: string; version: string })
   await Bun.write(file, JSON.stringify(json, null, 2))
   return {
     ...item,
-    tgz: await pack(to, `${item.name}.tgz`),
+    tgz: await pack(to, tarball(item.name)),
   }
 }
 
@@ -154,7 +156,7 @@ const stageRoot = async (input: { name: string; bin: string; description: string
   )
   return {
     name: input.name,
-    tgz: await pack(to, `${input.name}.tgz`),
+    tgz: await pack(to, tarball(input.name)),
   }
 }
 

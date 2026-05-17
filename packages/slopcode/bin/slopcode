@@ -206,13 +206,12 @@ function supportedMessage() {
 
 function termuxMessage() {
   return [
-    "SlopCode native Termux support needs the Android runtime package.",
-    "Install from Termux with optional npm dependencies enabled:",
+    "SlopCode native Termux support could not find the Android runtime.",
+    "Reinstall from Termux with:",
     "  pkg update",
-    "  pkg install nodejs git ripgrep neovim",
-    "  npm install -g slopcode@latest",
-    "If npm skipped optional dependencies, rerun with:",
+    "  pkg install nodejs git ripgrep neovim tar",
     "  npm install -g slopcode@latest --include=optional",
+    "If postinstall could not download the runtime, install the matching GitHub release asset manually.",
   ].join("\n")
 }
 

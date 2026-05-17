@@ -66,6 +66,22 @@ async function stagePostinstall() {
   return path.join(dir, "postinstall.mjs")
 }
 
+async function androidAsset() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-android-asset-"))
+  clean.push(dir)
+  const root = path.join(dir, "package")
+  await fs.mkdir(path.join(root, "bin"), { recursive: true })
+  await Bun.write(path.join(root, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+  await script(path.join(root, "bin", "slopcode"), "#!/bin/sh\necho downloaded\n")
+  const archive = path.join(dir, "slopcode-android-arm64.tar.gz")
+  const proc = Bun.spawn(["tar", "-czf", archive, "-C", root, "."], {
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  expect(await proc.exited).toBe(0)
+  return archive
+}
+
 async function stageLauncher() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-staged-launcher-"))
   clean.push(dir)
@@ -196,7 +212,7 @@ describe("bin launcher", () => {
     expect(await Bun.file(path.join(staged.root, "bin", ".slopcode.json")).exists()).toBe(false)
   })
 
-  test("resolves Android runtime package instead of Linux binaries", async () => {
+  test("resolves Android runtime instead of Linux binaries", async () => {
     if (process.platform === "win32") return
     const staged = await stageLauncher()
     const android = path.join(staged.root, "node_modules", "slopcode-bin-android-arm64")
@@ -224,7 +240,7 @@ describe("bin launcher", () => {
     expect(out.stderr).not.toContain("proot")
   })
 
-  test("prefers scoped Android runtime package", async () => {
+  test("prefers scoped Android runtime", async () => {
     if (process.platform === "win32") return
     const staged = await stageLauncher()
     const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
@@ -271,7 +287,7 @@ describe("bin launcher", () => {
 
     expect(out.code).toBe(1)
     expect(out.stdout).not.toContain("linux")
-    expect(out.stderr).toContain("Android runtime package")
+    expect(out.stderr).toContain("Android runtime")
     expect(out.stderr).toContain("npm install -g slopcode@latest")
   })
 })
@@ -283,15 +299,16 @@ describe("postinstall", () => {
       SLOPCODE_TEST_PLATFORM: "android",
       SLOPCODE_TEST_ARCH: "arm64",
       TERMUX_VERSION: "1",
+      SLOPCODE_ANDROID_ASSET_PATH: "/missing/slopcode-android-arm64.tar.gz",
     })
 
     expect(out.code).toBe(0)
-    expect(out.stdout).toContain("Android runtime package")
+    expect(out.stdout).toContain("Android runtime")
     expect(out.stdout).toContain("npm install -g slopcode@latest")
-    expect(out.stderr).toBe("")
+    expect(out.stderr).toContain("tar")
   })
 
-  test("does not cache Android runtime package during postinstall", async () => {
+  test("does not cache Android runtime during postinstall", async () => {
     const file = await stagePostinstall()
     const root = path.dirname(file)
     const pkg = path.join(root, "node_modules", "slopcode-bin-android-arm64")
@@ -309,5 +326,22 @@ describe("postinstall", () => {
     expect(out.stdout).toContain("runtime package detected")
     expect(await Bun.file(path.join(root, "bin", ".slopcode")).exists()).toBe(false)
     expect(await Bun.file(path.join(root, "bin", ".slopcode.json")).exists()).toBe(false)
+  })
+
+  test("installs Android runtime from release asset fallback", async () => {
+    const file = await stagePostinstall()
+    const root = path.dirname(file)
+    const out = await runPostinstall(file, {
+      SLOPCODE_TEST_PLATFORM: "android",
+      SLOPCODE_TEST_ARCH: "arm64",
+      TERMUX_VERSION: "1",
+      SLOPCODE_ANDROID_ASSET_PATH: await androidAsset(),
+    })
+
+    expect(out.code).toBe(0)
+    expect(out.stdout).toContain("runtime installed")
+    expect(
+      await Bun.file(path.join(root, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode")).exists(),
+    ).toBe(true)
   })
 })

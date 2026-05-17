@@ -723,7 +723,11 @@ if (Script.release) {
   }
 
   for (const key of Object.keys(binaries)) {
-    if (key.includes("linux") || key.includes("android")) {
+    if (key.includes("android")) {
+      await $`tar -czf ../${key}.tar.gz *`.cwd(`dist/${key}`)
+      continue
+    }
+    if (key.includes("linux")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
       continue
     }
