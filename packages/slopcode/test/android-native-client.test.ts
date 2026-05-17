@@ -36,14 +36,21 @@ describe("Android native client", () => {
         },
       })
       try {
-        const proc = Bun.spawn([bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test", "--prompt", "hello"], {
-          stdin: "pipe",
-          stdout: "pipe",
-          stderr: "pipe",
-        })
+        const proc = Bun.spawn(
+          [bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test", "--prompt", "hello"],
+          {
+            stdin: "pipe",
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        )
         proc.stdin.write("/exit\n")
         proc.stdin.end()
-        const [code, stdout, stderr] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+        const [code, stdout, stderr] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ])
         expect(stderr).toBe("")
         expect(code).toBe(0)
         expect(stdout).toContain("SlopCode native Termux client")

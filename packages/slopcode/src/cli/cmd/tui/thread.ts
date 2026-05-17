@@ -12,7 +12,6 @@ import { spawnSync } from "child_process"
 
 import { android, client, guard } from "./platform"
 
-
 export const TuiThreadCommand = cmd({
   command: "$0 [project]",
   describe: "start slopcode tui",

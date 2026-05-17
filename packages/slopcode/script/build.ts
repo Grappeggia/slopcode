@@ -491,7 +491,7 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
       "    ...process.env,",
       '    SLOPCODE_BIONIC: "1",',
       "    SLOPCODE_ENTRYPOINT: bundle,",
-      '    SLOPCODE_ANDROID_ROOT: root,',
+      "    SLOPCODE_ANDROID_ROOT: root,",
       '    OTUI_NO_NATIVE_RENDER: process.env.OTUI_NO_NATIVE_RENDER ?? "1",',
       "  },",
       "})",
