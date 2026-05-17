@@ -30,6 +30,7 @@ describe("Android Termux runtime", () => {
 
   test("Android wrapper preserves entrypoint and no-native renderer mode", async () => {
     const build = await Bun.file(path.join(import.meta.dir, "..", "script", "build.ts")).text()
+    const thread = await Bun.file(path.join(import.meta.dir, "..", "src", "cli", "cmd", "tui", "thread.ts")).text()
 
     expect(build).toContain("SLOPCODE_ENTRYPOINT: bundle")
     expect(build).toContain("@slopcode-ai/slopcode-android-${arch}")
@@ -43,5 +44,7 @@ describe("Android Termux runtime", () => {
     expect(build).toContain("process.exit(typeof result.status ===")
     expect(build).toContain("cwd(`dist/${key}`)")
     expect(build).toContain("cwd(`dist/${key}/bin`)")
+    expect(thread).toContain('await import("./portable")')
+    expect(thread).toContain("SLOPCODE_TERMUX_LEGACY")
   })
 })

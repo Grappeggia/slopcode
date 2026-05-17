@@ -101,6 +101,25 @@ export const TuiThreadCommand = cmd({
       })
 
       if (termux) {
+        if (process.env.SLOPCODE_TERMUX_LEGACY !== "1") {
+          const { portableTui } = await import("./portable")
+          await portableTui({
+            url: daemon.url,
+            headers: daemon.headers,
+            directory: cwd,
+            viewID,
+            args: {
+              continue: args.continue,
+              sessionID: args.session,
+              agent: args.agent,
+              model: args.model,
+              prompt,
+              fork: args.fork,
+            },
+          })
+          return
+        }
+
         const bin = client()
         if (!bin) {
           UI.error("SlopCode Termux client is missing. Reinstall with: npm install -g slopcode@latest")
