@@ -50,7 +50,8 @@ const binaries = await Array.fromAsync(new Bun.Glob("*/package.json").scan({ cwd
     }),
   ).then((arr) => arr.flatMap((item) => (item ? [item] : []))),
 )
-const deps = Object.fromEntries(binaries.map((item) => [item.name, item.version]))
+const publishable = binaries.filter((item) => !item.name.startsWith("@slopcode-ai/slopcode-android-"))
+const deps = Object.fromEntries(publishable.map((item) => [item.name, item.version]))
 console.log("binaries", deps)
 const version = Script.version
 if (binaries.length === 0) {
@@ -375,10 +376,10 @@ const publishPackage = async (name: string) => {
   await publish.cwd(`./dist/${name}`)
 }
 
-for (const binary of binaries) {
+for (const binary of publishable) {
   await publishBinary(binary)
 }
-await verifyNpmTargets(binaries)
+await verifyNpmTargets(publishable)
 await publishPackage(pkg.name)
 await verifyNpmTargets([{ name: pkg.name, version }])
 for (const item of aliases) {
