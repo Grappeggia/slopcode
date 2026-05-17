@@ -375,6 +375,30 @@ const androidOpentui = async (name: string, arch: "arm64" | "x64") => {
   )
 }
 
+const androidBunPackage = (arch: "arm64" | "x64") =>
+  `@oven/bun-linux-${arch === "arm64" ? "aarch64" : "x64"}-android`
+
+const androidBun = async (name: string, arch: "arm64" | "x64") => {
+  const pkgname = androidBunPackage(arch)
+  const cache = path.join(dir, "dist", ".android-cache")
+  await fs.promises.mkdir(cache, { recursive: true })
+  const meta = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pkgname)}/${androidBunVersion}`).then((res) => {
+    if (!res.ok) throw new Error(`Failed to resolve ${pkgname}: ${res.status} ${res.statusText}`)
+    return res.json() as Promise<{ dist: { tarball: string } }>
+  })
+  const archive = path.join(cache, `${pkgname.replace("@", "").replace("/", "-")}-${androidBunVersion}.tgz`)
+  if (!(await Bun.file(archive).exists())) {
+    const res = await fetch(meta.dist.tarball)
+    if (!res.ok) throw new Error(`Failed to download ${meta.dist.tarball}: ${res.status} ${res.statusText}`)
+    await Bun.write(archive, await res.arrayBuffer())
+  }
+  const root = path.join(dir, "dist", name, "node_modules", "@oven", path.basename(pkgname))
+  await fs.promises.rm(root, { recursive: true, force: true })
+  await fs.promises.mkdir(root, { recursive: true })
+  await $`tar -xzf ${archive} -C ${root} --strip-components=1`
+  await $`chmod 755 ${path.join(root, "bin", "bun")}`
+}
+
 const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: string, workerPath: string) => {
   await fs.promises.mkdir(path.join(dir, "dist", name, "bin"), { recursive: true })
   await fs.promises.mkdir(path.join(dir, "dist", name, "bundle"), { recursive: true })
@@ -404,6 +428,7 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
     throw new Error(`Missing Android bundle at dist/${name}/bundle/index.js`)
   }
   await androidOpentui(name, arch)
+  await androidBun(name, arch)
   await Bun.write(
     `dist/${name}/bin/slopcode`,
     [
@@ -415,11 +440,11 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
       'const bundle = path.join(root, "bundle", "index.js")',
       "const candidates = [",
       "  process.env.SLOPCODE_BUN_PATH,",
+      `  path.join(root, "node_modules", "@oven", "${path.basename(androidBunPackage(arch))}", "bin", "bun"),`,
       '  path.join(root, "node_modules", "bun", "bin", "bun.exe"),',
       '  path.join(root, "node_modules", ".bin", process.platform === "win32" ? "bun.cmd" : "bun"),',
-      '  "bun",',
       "].filter(Boolean)",
-      'const bun = candidates.find((item) => item === "bun" || fs.existsSync(item))',
+      "const bun = candidates.find((item) => fs.existsSync(item))",
       "if (!bun) {",
       '  console.error("SlopCode native Termux support requires Bun. Reinstall with: npm install -g slopcode@latest --include=optional")',
       "  process.exit(1)",
@@ -459,11 +484,11 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
         os: ["android"],
         cpu: [arch],
         dependencies: {
-          bun: androidBunVersion,
+          [androidBunPackage(arch)]: androidBunVersion,
           [`@opentui/core-android-${arch}`]: pkg.dependencies["@opentui/core"],
           ...(arch === "arm64" ? { "@parcel/watcher-android-arm64": pkg.dependencies["@parcel/watcher"] } : {}),
         },
-        bundleDependencies: [`@opentui/core-android-${arch}`],
+        bundleDependencies: [androidBunPackage(arch), `@opentui/core-android-${arch}`],
       },
       null,
       2,

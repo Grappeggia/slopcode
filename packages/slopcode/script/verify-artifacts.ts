@@ -236,6 +236,9 @@ const verifyArchives = async () => {
       if (!list.some((item) => item.includes("node_modules/@opentui/core-android-"))) {
         throw new Error(`verify: missing Android OpenTUI runtime in ${file}`)
       }
+      if (!list.some((item) => item.includes("node_modules/@oven/bun-linux-") && item.endsWith("/bin/bun"))) {
+        throw new Error(`verify: missing Android Bun runtime in ${file}`)
+      }
       continue
     }
     if (!list.some((item) => item.endsWith(`neovim/bin/${nvim(file.includes("windows") ? "win32" : "linux")}`))) {
