@@ -224,6 +224,33 @@ describe("bin launcher", () => {
     expect(out.stderr).not.toContain("proot")
   })
 
+  test("prefers scoped Android runtime package", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
+    await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
+    await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho scoped\n")
+
+    const legacy = path.join(staged.root, "node_modules", "slopcode-bin-android-arm64")
+    await fs.mkdir(path.join(legacy, "bin"), { recursive: true })
+    await Bun.write(path.join(legacy, "package.json"), JSON.stringify({ name: "slopcode-bin-android-arm64" }))
+    await script(path.join(legacy, "bin", "slopcode"), "#!/bin/sh\necho legacy\n")
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        TERMUX_VERSION: "1",
+      },
+      [],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(out.stdout.trim()).toBe("scoped")
+  })
+
   test("prints native Termux instructions when Android package is missing", async () => {
     if (process.platform === "win32") return
     const staged = await stageLauncher()

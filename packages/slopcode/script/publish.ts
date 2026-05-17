@@ -59,7 +59,8 @@ if (binaries.length === 0) {
 const otp = process.env.NPM_OTP?.trim()
 const skipPack = process.env.SLOPCODE_SKIP_PACK === "true"
 const registry = (process.env.npm_config_registry ?? "https://registry.npmjs.org").replace(/\/$/, "")
-const exists = (name: string, version: string) => fetch(`${registry}/${name}/${version}`).then((x) => x.ok)
+const npmPath = (name: string) => encodeURIComponent(name).replace(/^%40/, "@")
+const exists = (name: string, version: string) => fetch(`${registry}/${npmPath(name)}/${version}`).then((x) => x.ok)
 const latestRelease = Script.channel === "latest" && Script.release
 const supplemental = process.env.SLOPCODE_ENABLE_SUPPLEMENTAL_CHANNELS === "true"
 const enforceApt = process.env.SLOPCODE_ENFORCE_APT === "true"
@@ -117,7 +118,7 @@ const apkVersion = (value: string) => {
   return normalize(match[1])
 }
 const readNpm = () =>
-  fetch(`${registry}/${pkg.name}/latest`)
+  fetch(`${registry}/${npmPath(pkg.name)}/latest`)
     .then((res) => {
       if (!res.ok) {
         throw new Error(res.statusText)

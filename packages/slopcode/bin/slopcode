@@ -138,7 +138,7 @@ function supportsAvx2() {
 function names(prefix) {
   const kind = libc()
   const base = kind === "bionic" ? `${prefix}-android-${arch}` : `${prefix}-${platform}-${arch}`
-  if (kind === "bionic") return [base]
+  if (kind === "bionic") return [`@slopcode-ai/slopcode-android-${arch}`, base]
   const avx2 = supportsAvx2()
   const baseline = arch === "x64" && !avx2
 

@@ -450,7 +450,7 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
     `dist/${name}/package.json`,
     JSON.stringify(
       {
-        name,
+        name: `@slopcode-ai/slopcode-android-${arch}`,
         version: Script.version,
         repository: {
           type: "git",

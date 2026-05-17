@@ -30,6 +30,7 @@ describe("Android Termux runtime", () => {
     const build = await Bun.file(path.join(import.meta.dir, "..", "script", "build.ts")).text()
 
     expect(build).toContain("SLOPCODE_ENTRYPOINT: bundle")
+    expect(build).toContain("@slopcode-ai/slopcode-android-${arch}")
     expect(build).toContain("OTUI_NO_NATIVE_RENDER")
     expect(build).toContain("process.exit(typeof result.status ===")
   })

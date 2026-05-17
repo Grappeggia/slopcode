@@ -46,8 +46,7 @@ export const AttachCommand = cmd({
     try {
       win32DisableProcessedInput()
       if (guard()) {
-        process.exitCode = 1
-        return
+        process.exit(1)
       }
 
       if (args.fork && !args.continue && !args.session) {

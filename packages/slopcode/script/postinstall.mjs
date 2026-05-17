@@ -94,7 +94,7 @@ function supportsAvx2(platform, arch) {
 function names(platform, arch) {
   const libc = detectLibc(platform, arch)
   const base = `slopcode-bin-${libc === "bionic" ? "android" : platform}-${arch}`
-  if (libc === "bionic") return [base]
+  if (libc === "bionic") return [`@slopcode-ai/slopcode-android-${arch}`, base, `slopcode-android-${arch}`]
   const avx2 = supportsAvx2(platform, arch)
   const baseline = arch === "x64" && !avx2
 
