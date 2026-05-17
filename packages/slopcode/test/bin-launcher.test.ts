@@ -341,7 +341,9 @@ describe("postinstall", () => {
     expect(out.code).toBe(0)
     expect(out.stdout).toContain("runtime installed")
     expect(
-      await Bun.file(path.join(root, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode")).exists(),
+      await Bun.file(
+        path.join(root, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode"),
+      ).exists(),
     ).toBe(true)
   })
 })

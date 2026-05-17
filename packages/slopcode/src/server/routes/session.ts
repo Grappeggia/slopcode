@@ -70,8 +70,7 @@ async function recordAsyncPromptFailure(input: {
   const messages = await Session.messages({ sessionID: input.sessionID }).catch(() => [])
   if (
     messages.some(
-      (item) =>
-        item.info.role === "assistant" && item.info.parentID === input.messageID && !!item.info.time.completed,
+      (item) => item.info.role === "assistant" && item.info.parentID === input.messageID && !!item.info.time.completed,
     )
   )
     return

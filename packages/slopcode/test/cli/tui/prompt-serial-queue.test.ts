@@ -560,5 +560,4 @@ describe("serial prompt queue", () => {
     await eventually(() => calls.length === 1)
     expect(calls).toEqual(["first"])
   })
-
 })
