@@ -2,14 +2,16 @@ import { cmd } from "@/cli/cmd/cmd"
 import { resolveNetworkOptions, withNetworkOptions } from "@/cli/network"
 import { UI } from "@/cli/ui"
 import { upgrade } from "@/cli/upgrade"
+import { DaemonAuth } from "@/daemon/auth"
 import { DaemonLauncher } from "@/daemon/launcher"
 import { TuiConfig } from "@/config/tui"
 import { Instance } from "@/project/instance"
 import { randomUUID } from "crypto"
 import path from "path"
-import { tui } from "./app"
-import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
-import { guard } from "./platform"
+import { spawnSync } from "child_process"
+
+import { android, client, guard } from "./platform"
+
 
 export const TuiThreadCommand = cmd({
   command: "$0 [project]",
@@ -48,10 +50,12 @@ export const TuiThreadCommand = cmd({
         describe: "agent to use",
       }),
   handler: async (args) => {
-    const unguard = win32InstallCtrlCGuard()
+    const termux = android()
+    const win32 = termux ? undefined : await import("./win32")
+    const unguard = win32?.win32InstallCtrlCGuard()
     try {
-      win32DisableProcessedInput()
-      if (guard()) {
+      win32?.win32DisableProcessedInput()
+      if (!termux && guard()) {
         process.exit(1)
       }
 
@@ -96,6 +100,36 @@ export const TuiThreadCommand = cmd({
         viewID,
         network: expose ? network : undefined,
       })
+
+      if (termux) {
+        const bin = client()
+        if (!bin) {
+          UI.error("SlopCode Termux client is missing. Reinstall with: npm install -g slopcode@latest")
+          process.exit(1)
+        }
+        const result = spawnSync(
+          bin,
+          [
+            "--url",
+            daemon.url,
+            "--token",
+            daemon.headers[DaemonAuth.Header] ?? "",
+            ...(args.continue ? ["--continue"] : []),
+            ...(args.session ? ["--session", args.session] : []),
+            ...(args.model ? ["--model", args.model] : []),
+            ...(args.agent ? ["--agent", args.agent] : []),
+            ...(prompt ? ["--prompt", prompt] : []),
+          ],
+          { cwd, stdio: "inherit" },
+        )
+        if (result.error) {
+          UI.error(result.error.message)
+          process.exit(1)
+        }
+        process.exit(typeof result.status === "number" ? result.status : 1)
+      }
+
+      const { tui } = await import("./app")
 
       const tuiPromise = tui({
         url: daemon.url,

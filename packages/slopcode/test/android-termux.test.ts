@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import path from "path"
 import { DaemonLauncher } from "@/daemon/launcher"
-import { native } from "@/cli/cmd/tui/platform"
+import { android, native } from "@/cli/cmd/tui/platform"
 
 const entry = process.env.SLOPCODE_ENTRYPOINT
 
@@ -15,6 +15,8 @@ describe("Android Termux runtime", () => {
     expect(native({ platform: "linux", override: undefined })).toBe(true)
     expect(native({ platform: "android", override: undefined })).toBe(false)
     expect(native({ platform: "android", override: "1" })).toBe(true)
+    expect(android({ platform: "android", override: undefined })).toBe(true)
+    expect(android({ platform: "android", override: "1" })).toBe(false)
   })
 
   test("daemon children reuse bundled entrypoint", () => {
@@ -35,6 +37,9 @@ describe("Android Termux runtime", () => {
     expect(build).toContain('@oven/bun-linux-${arch === "arm64" ? "aarch64" : "x64"}-android')
     expect(build).toContain("candidates.find((item) => fs.existsSync(item))")
     expect(build).not.toContain('item === "bun"')
+    expect(build).toContain("native/android-client/main.rs")
+    expect(build).toContain("SLOPCODE_ANDROID_ROOT")
+    expect(build).toContain('"slopcode-termux"')
     expect(build).toContain("process.exit(typeof result.status ===")
     expect(build).toContain("cwd(`dist/${key}`)")
     expect(build).toContain("cwd(`dist/${key}/bin`)")
