@@ -1099,6 +1099,14 @@ export function Prompt(props: PromptProps) {
             promptQueueReady(sync.data as PromptQueueStore, sessionID) && !promptQueue.snapshot(sessionID).paused,
           done: () => promptQueueDone(sync.data as PromptQueueStore, sessionID, messageID),
           run: send,
+          refresh: async () => {
+            await Promise.all([
+              sync.session.sync(sessionID, true),
+              sdk.client.session.status().then((result) => {
+                sync.set("session_status", result.data ?? {})
+              }),
+            ])
+          },
           reject: (error: unknown) => {
             if (abort(error)) return
             if (paused) promptQueue.setPaused(paused)

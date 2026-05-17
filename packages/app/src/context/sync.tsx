@@ -224,7 +224,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           })
           persistHistory(sdk.directory, input.sessionID, store)
         },
-        async sync(sessionID: string) {
+        async sync(sessionID: string, force = false) {
           const directory = sdk.directory
           const client = sdk.client
           const [store, setStore] = globalSync.child(directory)
@@ -237,7 +237,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const hasMessages = store.message[sessionID] !== undefined
           const hydrated = store.history[sessionID] !== undefined
           const complete = messagePartsComplete(store.message[sessionID], store.part)
-          if (hasSession && hasMessages && hydrated && complete) return
+          if (!force && hasSession && hasMessages && hydrated && complete) return
 
           const count = store.message[sessionID]?.length ?? 0
           const limit = store.history[sessionID]?.limit ?? limitFor(count)
@@ -261,7 +261,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               })
 
           const messagesReq =
-            hasMessages && hydrated
+            !force && hasMessages && hydrated
               ? Promise.resolve()
               : loadMessages({
                   directory,

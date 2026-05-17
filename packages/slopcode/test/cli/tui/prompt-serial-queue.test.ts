@@ -503,4 +503,62 @@ describe("serial prompt queue", () => {
     store.message.ses_1.push(terminal({ id: "asst_2", parentID: "msg_2", finish: "stop" }))
     await eventually(() => !queue.busy("ses_1"))
   })
+
+  test("refreshes active items while waiting for completion", async () => {
+    const calls: string[] = []
+    let done = false
+    let refreshed = 0
+    const queue = createSerialQueue<{
+      key: string
+      ready: () => boolean
+      done: () => boolean
+      refresh: () => Promise<void>
+      run: () => Promise<void>
+    }>({ poll_ms: 5, refresh_ms: 5 })
+
+    queue.push({
+      key: "ses_1",
+      ready: () => true,
+      done: () => done,
+      refresh: async () => {
+        refreshed++
+        done = true
+      },
+      run: async () => {
+        calls.push("first")
+      },
+    })
+
+    await eventually(() => !queue.busy("ses_1"))
+    expect(calls).toEqual(["first"])
+    expect(refreshed).toBeGreaterThan(0)
+  })
+
+  test("refreshes queued items while waiting for readiness", async () => {
+    const calls: string[] = []
+    let ready = false
+    const queue = createSerialQueue<{
+      key: string
+      ready: () => boolean
+      done: () => boolean
+      refresh: () => Promise<void>
+      run: () => Promise<void>
+    }>({ poll_ms: 5, refresh_ms: 5 })
+
+    queue.push({
+      key: "ses_1",
+      ready: () => ready,
+      done: () => true,
+      refresh: async () => {
+        ready = true
+      },
+      run: async () => {
+        calls.push("first")
+      },
+    })
+
+    await eventually(() => calls.length === 1)
+    expect(calls).toEqual(["first"])
+  })
+
 })

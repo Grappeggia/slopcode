@@ -3,6 +3,7 @@ type Item = {
   ready: () => boolean
   done: () => boolean
   run: () => Promise<void>
+  refresh?: () => Promise<void> | void
   reject?: (error: unknown) => void
 }
 
@@ -19,12 +20,19 @@ type Snapshot<T extends Item> = {
   queue: T[]
 }
 
-export function createSerialQueue<T extends Item>(input?: { poll_ms?: number }) {
+export function createSerialQueue<T extends Item>(input?: { poll_ms?: number; refresh_ms?: number }) {
   const poll = input?.poll_ms ?? 32
+  const refresh = input?.refresh_ms ?? 2_000
   const state = new Map<string, Entry<T>>()
   const listeners = new Set<(key: string, snapshot: Snapshot<T>) => void>()
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
-
+  const update = async (item: T, time: number) => {
+    if (!item.refresh) return time
+    const now = Date.now()
+    if (now - time < refresh) return time
+    await Promise.resolve(item.refresh()).catch(() => {})
+    return now
+  }
   const read = (key: string) => {
     const match = state.get(key)
     return {
@@ -65,11 +73,16 @@ export function createSerialQueue<T extends Item>(input?: { poll_ms?: number }) 
     if (entry.running) return
     entry.running = true
 
+    let pending: T | undefined
+    let refreshed = Date.now()
+
     try {
       while (entry.active || entry.paused || entry.queue.length > 0) {
         if (entry.active) {
           const current = entry.active
+          let last = Date.now()
           while (entry.active === current && !current.done()) {
+            last = await update(current, last)
             await sleep(poll)
           }
           if (entry.active === current) {
@@ -87,11 +100,17 @@ export function createSerialQueue<T extends Item>(input?: { poll_ms?: number }) 
         const next = entry.queue[0]
         if (!next) continue
         if (!next.ready()) {
+          if (pending !== next) {
+            pending = next
+            refreshed = Date.now()
+          }
+          refreshed = await update(next, refreshed)
           await sleep(poll)
           continue
         }
 
         entry.queue.shift()
+        pending = undefined
         entry.active = next
         notify(key)
         await next.run().catch((error) => {

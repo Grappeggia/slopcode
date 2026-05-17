@@ -234,7 +234,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return
     }
 
-    const [sessionStore] = globalSync.child(sessionDirectory)
+    const [sessionStore, setSessionStore] = globalSync.child(sessionDirectory)
     const queueMode = sessionStore.config.queue_mode ?? "serial"
 
     input.addToHistory(currentPrompt, mode, { dir: sessionDirectory, id: session.id })
@@ -470,6 +470,14 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         ready: () => idle(sessionStore as Store, session.id),
         done: () => done(sessionStore as Store, session.id, messageID),
         run: send,
+        refresh: async () => {
+          await Promise.all([
+            sync.session.sync(session.id, true),
+            client.session.status().then((result) => {
+              setSessionStore("session_status", result.data ?? {})
+            }),
+          ])
+        },
         reject: fail,
       })
       return

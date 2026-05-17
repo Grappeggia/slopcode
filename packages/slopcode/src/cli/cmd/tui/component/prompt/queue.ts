@@ -15,6 +15,7 @@ export type PromptQueueItem = {
   ready: () => boolean
   done: () => boolean
   run: () => Promise<void>
+  refresh?: () => Promise<void> | void
   reject: (error: unknown) => void
 }
 

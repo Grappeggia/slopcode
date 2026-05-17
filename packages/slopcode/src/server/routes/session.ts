@@ -23,6 +23,7 @@ import { Identifier } from "@/id/id"
 import { SessionProxyMiddleware } from "../../control-plane/session-proxy-middleware"
 import { Config } from "@/config/config"
 import { SessionAutocomplete } from "@/session/autocomplete"
+import { Instance } from "@/project/instance"
 import { AUTOCOMPLETE_FALLBACK_MODELS_BY_PROVIDER } from "./autocomplete-fast-map"
 
 const log = Log.create({ service: "server" })
@@ -58,6 +59,57 @@ function bindAbort(signal: AbortSignal, sessionID: string) {
   }
   signal.addEventListener("abort", abort, { once: true })
   return () => signal.removeEventListener("abort", abort)
+}
+
+async function recordAsyncPromptFailure(input: {
+  sessionID: string
+  messageID: string
+  body: Omit<SessionPrompt.PromptInput, "sessionID">
+  error: unknown
+}) {
+  const messages = await Session.messages({ sessionID: input.sessionID }).catch(() => [])
+  if (
+    messages.some(
+      (item) =>
+        item.info.role === "assistant" && item.info.parentID === input.messageID && !!item.info.time.completed,
+    )
+  )
+    return
+
+  const model = input.body.model ?? { providerID: "unknown", modelID: "unknown" }
+  const agent = input.body.agent ?? "build"
+  const time = Date.now()
+
+  await Session.updateMessage({
+    id: Identifier.ascending("message"),
+    role: "assistant",
+    parentID: input.messageID,
+    sessionID: input.sessionID,
+    mode: agent,
+    agent,
+    variant: input.body.variant,
+    path: {
+      cwd: Instance.directory,
+      root: Instance.worktree,
+    },
+    cost: 0,
+    tokens: {
+      input: 0,
+      output: 0,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    },
+    modelID: model.modelID,
+    providerID: model.providerID,
+    time: {
+      created: time,
+      completed: time,
+    },
+    error: MessageV2.fromError(input.error, { providerID: model.providerID }),
+    finish: "error",
+  })
+  await Session.touch(input.sessionID).catch(() => {})
+  SessionStatus.set(input.sessionID, { type: "idle" })
 }
 
 const AutocompleteInput = z.object({
@@ -1504,8 +1556,12 @@ export const SessionRoutes = lazy(() =>
         return stream(c, async () => {
           const sessionID = c.req.valid("param").sessionID
           const body = c.req.valid("json")
-          void SessionPrompt.prompt({ ...body, sessionID }).catch((error) => {
-            log.error("async prompt failed", { sessionID, error })
+          const messageID = body.messageID ?? Identifier.ascending("message")
+          void SessionPrompt.prompt({ ...body, sessionID, messageID }).catch((error) => {
+            log.error("async prompt failed", { sessionID, messageID, error })
+            void recordAsyncPromptFailure({ sessionID, messageID, body, error }).catch((cause) => {
+              log.error("async prompt failure recording failed", { sessionID, messageID, error: cause })
+            })
           })
         })
       },
