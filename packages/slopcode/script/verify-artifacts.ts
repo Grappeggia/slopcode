@@ -226,6 +226,18 @@ const verifyArchives = async () => {
   const files = await fs.readdir(path.join(dir, "dist"))
   for (const file of files.filter((item) => item.endsWith(".tar.gz"))) {
     const list = await listTar(path.join(dir, "dist", file))
+    if (file.includes("android")) {
+      if (!list.some((item) => item.endsWith("bin/slopcode"))) {
+        throw new Error(`verify: missing Android launcher in ${file}`)
+      }
+      if (!list.some((item) => item.endsWith("bundle/index.js"))) {
+        throw new Error(`verify: missing Android bundle in ${file}`)
+      }
+      if (!list.some((item) => item.includes("node_modules/@opentui/core-android-"))) {
+        throw new Error(`verify: missing Android OpenTUI runtime in ${file}`)
+      }
+      continue
+    }
     if (!list.some((item) => item.endsWith(`neovim/bin/${nvim(file.includes("windows") ? "win32" : "linux")}`))) {
       throw new Error(`verify: missing bundled neovim in ${file}`)
     }
