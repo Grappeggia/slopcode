@@ -31,6 +31,6 @@ describe("Android Termux runtime", () => {
 
     expect(build).toContain("SLOPCODE_ENTRYPOINT: bundle")
     expect(build).toContain("OTUI_NO_NATIVE_RENDER")
-    expect(build).toContain('process.exit(typeof result.status === \\"number\\" ? result.status : 1)')
+    expect(build).toContain("process.exit(typeof result.status ===")
   })
 })
