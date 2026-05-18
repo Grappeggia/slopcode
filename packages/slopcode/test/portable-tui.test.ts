@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test"
+import { PassThrough } from "stream"
 import {
   applyPortableEvent,
   createPortableState,
   parseModel,
   parseQuestionAnswer,
   parseSseBlock,
+  portableTui,
   renderPortableLines,
 } from "@/cli/cmd/tui/portable"
 
@@ -123,5 +125,51 @@ describe("portable Termux TUI", () => {
     expect(parseQuestionAnswer("1, Plan", info)).toEqual(["Build", "Plan"])
     expect(parseQuestionAnswer("custom", { ...info, multiple: false })).toEqual(["custom"])
     expect(parseQuestionAnswer("custom", { ...info, custom: false })).toEqual([])
+  })
+
+  test("creates sessions through /session without a trailing slash", async () => {
+    const seen: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url)
+        seen.push(`${req.method} ${url.pathname}`)
+        if (url.pathname === "/event") {
+          return new Response("", {
+            headers: { "content-type": "text/event-stream" },
+          })
+        }
+        if (req.method === "POST" && url.pathname === "/session") {
+          return Response.json({ id: "ses_test", title: "Test Session" })
+        }
+        if (req.method === "GET" && url.pathname === "/session/ses_test") {
+          return Response.json({ id: "ses_test", title: "Test Session" })
+        }
+        if (req.method === "GET" && url.pathname === "/session/ses_test/message/index") {
+          return Response.json([])
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream
+    const stdout = new PassThrough() as unknown as NodeJS.WriteStream
+
+    try {
+      const run = portableTui({
+        url: `http://127.0.0.1:${server.port}`,
+        directory: "/tmp",
+        args: {},
+        stdin,
+        stdout,
+      })
+      await Bun.sleep(50)
+      stdin.push("\x04")
+      stdin.push(null)
+      await run
+      expect(seen).toContain("POST /session")
+      expect(seen).not.toContain("POST /session/")
+    } finally {
+      server.stop(true)
+    }
   })
 })

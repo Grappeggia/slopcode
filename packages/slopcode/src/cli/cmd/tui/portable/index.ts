@@ -504,7 +504,7 @@ export async function portableTui(input: {
   }
 
   const create = async () => {
-    const next = await request<SessionInfo>("POST", "/session/", {})
+    const next = await request<SessionInfo>("POST", "/session", {})
     await activate(next.id)
     return next.id
   }

@@ -24,7 +24,7 @@ describe("Android native client", () => {
         fetch: async (req: Request) => {
           const url = new URL(req.url)
           seen.push(`${req.method} ${url.pathname}`)
-          if (url.pathname === "/session/") return Response.json({ id: "ses_test" })
+          if (url.pathname === "/session") return Response.json({ id: "ses_test" })
           if (url.pathname === "/session/ses_test/message") {
             const body = (await req.json()) as { parts: Array<{ text: string }> }
             return Response.json({
@@ -55,7 +55,7 @@ describe("Android native client", () => {
         expect(code).toBe(0)
         expect(stdout).toContain("SlopCode native Termux client")
         expect(stdout).toContain("assistant> echo hello")
-        expect(seen).toContain("POST /session/")
+        expect(seen).toContain("POST /session")
         expect(seen).toContain("POST /session/ses_test/message")
       } finally {
         server.stop(true)

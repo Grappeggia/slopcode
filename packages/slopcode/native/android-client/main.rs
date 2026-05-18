@@ -117,7 +117,7 @@ fn create(args: &Args) -> Result<String, String> {
         "{\"permission\":\"edit\",\"action\":\"allow\",\"pattern\":\"*\"}",
         "]}"
     );
-    let res = http(args, "POST", "/session/", Some(body))?;
+    let res = http(args, "POST", "/session", Some(body))?;
     string(&res, "id").ok_or_else(|| format!("failed to create session: {res}"))
 }
 
