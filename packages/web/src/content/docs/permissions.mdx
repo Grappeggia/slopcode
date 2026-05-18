@@ -179,6 +179,18 @@ When SlopCode prompts for approval, the UI offers three outcomes:
 
 The set of patterns that `always` would approve is provided by the tool (for example, bash approvals typically whitelist a safe command prefix like `git status*`).
 
+In the TUI, multiple pending requests are grouped into a review flow so you can clear a batch instead of clicking through one dialog at a time.
+
+Build-heavy runs can also surface preapproval choices for repeated safe commands before the next step starts.
+
+---
+
+## Review
+
+Use `queue_mode: "serial"` when you want approvals to stay in step with queued prompts.
+
+This keeps pauses, resumes, and batched reviews predictable during longer sessions.
+
 ---
 
 ## Agents

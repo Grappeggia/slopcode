@@ -36,6 +36,8 @@ SlopCode supports both new and legacy config names.
 If your setup already uses `opencode` names, you can keep using them. Migrate to
 `slopcode` names whenever it is convenient.
 
+New docs and examples use the `.slopcode` namespace first.
+
 ---
 
 ## Locations
@@ -160,6 +162,8 @@ slopcode run "Hello world"
 ```
 
 The custom directory is loaded after the global config and `.slopcode`/`.opencode` directories, so it **can override** their settings.
+
+Use this when you want to share a reusable `.slopcode` bundle across projects without copying files into every repo.
 
 ---
 
@@ -511,6 +515,34 @@ Choose how SlopCode handles follow-up prompts while a run is still active.
 
 - `serial` - Default mode. Follow-up prompts wait until the current execution fully finishes before starting.
 - `injection` - Preserves the existing behavior. Follow-up prompts are injected into the active execution loop.
+
+`serial` matches the TUI queue controls, including pause, resume, and queued prompt removal.
+
+---
+
+### Autocomplete
+
+Use `autocomplete` to tune model-powered prompt suggestions in the TUI.
+
+```json title="slopcode.json"
+{
+  "$schema": "https://slopcode.dev/config.json",
+  "autocomplete": {
+    "enabled": true,
+    "min_prefix_chars": 12,
+    "debounce_ms": 180,
+    "max_output_tokens": 48
+  }
+}
+```
+
+- `enabled` - Turn prompt autocomplete on or off.
+- `debounce_ms` - Wait before requesting a suggestion.
+- `min_prefix_chars` - Require more typed context before requesting a suggestion.
+- `timeout_ms` - Cancel slow suggestion requests.
+- `max_output_tokens` - Limit suggestion generation size.
+- `max_completion_chars` - Limit how much ghost text reaches the TUI.
+- `provider_model_overrides` - Use a faster or cheaper autocomplete model per provider.
 
 ---
 

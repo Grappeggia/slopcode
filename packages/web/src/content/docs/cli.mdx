@@ -17,6 +17,10 @@ But it also accepts commands as documented on this page. This allows you to inte
 slopcode run "Explain how closures work in JavaScript"
 ```
 
+CLI and server commands work natively in Android Termux on arm64 and x64 when installed from npm with optional dependencies.
+
+The full OpenTUI renderer is still blocked on Android, so interactive Termux sessions fall back to the bundled portable client.
+
 ---
 
 ### tui
@@ -75,6 +79,8 @@ slopcode web --port 4096 --hostname 0.0.0.0
 # In another terminal, attach the TUI to the running backend
 slopcode attach http://10.20.30.40:4096
 ```
+
+This is the recommended way to use a richer desktop TUI with a server running elsewhere, including a Termux-hosted backend.
 
 #### Flags
 
@@ -544,6 +550,8 @@ slopcode upgrade v0.1.48
 | Flag       | Short | Description                                                                                                                                               |
 | ---------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--method` | `-m`  | The installation method that was used; curl, npm, pnpm, yarn, bun, nix, brew, macports, apt, zypper, dnf, yum, apk, pkg, pacman, paru, snap, choco, scoop |
+
+SlopCode also supports `winget` and direct release binaries, so pick the method that matches how you installed it.
 
 ---
 

@@ -25,6 +25,10 @@ brew install slopcode
 curl -fsSL https://teamslop.github.io/apt-slopcode/install.sh | sudo bash
 ```
 
+SlopCode also ships through `winget`, `snap`, `nix profile`, `zypper`, `apk`, `pkg`, `MacPorts`, and release binaries.
+
+See [Platforms](/docs/platforms) when you want the exact command for your system.
+
 Android/Termux on arm64/x64 uses the native npm package for CLI and server commands with Termux runtime dependencies.
 
 ```bash
@@ -35,6 +39,8 @@ slopcode --help
 ```
 
 The interactive TUI still requires proot-distro until Bun for Android enables the FFI support required by OpenTUI.
+
+SlopCode can still attach a portable Termux client, but the native TUI renderer stays disabled on Android for now.
 
 ---
 
@@ -84,7 +90,11 @@ Add request logging to @src/api.ts and include a unit test
 Read these next pages when you need more control.
 
 - [CLI](/docs/cli)
+- [Platforms](/docs/platforms)
+- [Workflows](/docs/workflows)
+- [TUI](/docs/tui)
 - [Providers](/docs/providers)
 - [Configuration](/docs/config)
+- [Permissions](/docs/permissions)
 - [Tools](/docs/tools)
 - [Troubleshooting](/docs/troubleshooting)
