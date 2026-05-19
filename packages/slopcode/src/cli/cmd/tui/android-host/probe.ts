@@ -58,6 +58,7 @@ export async function probe(input: Input = {}): Promise<HostProbe> {
     () => true,
     (error) => (error instanceof Error ? error.message : String(error)),
   )
-  if (imported === true) return { enabled: true, available: true, strategy: "opentui", reason: "opentui-ready", sidecar: bin }
+  if (imported === true)
+    return { enabled: true, available: true, strategy: "opentui", reason: "opentui-ready", sidecar: bin }
   return { enabled: true, available: false, strategy: "fallback", reason: imported, sidecar: bin }
 }

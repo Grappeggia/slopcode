@@ -1,3 +1,3 @@
-const ecConfig = {};
+const ecConfig = {}
 
-export { ecConfig as default };
+export { ecConfig as default }

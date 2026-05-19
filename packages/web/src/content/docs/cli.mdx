@@ -572,39 +572,39 @@ The slopcode CLI takes the following global flags.
 
 SlopCode can be configured using environment variables.
 
-| Variable                              | Type    | Description                                       |
-| ------------------------------------- | ------- | ------------------------------------------------- |
-| `SLOPCODE_AUTO_SHARE`                 | boolean | Automatically share sessions                      |
-| `SLOPCODE_GIT_BASH_PATH`              | string  | Path to Git Bash executable on Windows            |
-| `SLOPCODE_CONFIG`                     | string  | Path to config file                               |
-| `SLOPCODE_TUI_CONFIG`                 | string  | Path to TUI config file                           |
-| `SLOPCODE_CONFIG_DIR`                 | string  | Path to config directory                          |
-| `SLOPCODE_CONFIG_CONTENT`             | string  | Inline json config content                        |
-| `SLOPCODE_DISABLE_AUTOUPDATE`         | boolean | Disable automatic update checks                   |
-| `SLOPCODE_DISABLE_PRUNE`              | boolean | Disable pruning of old data                       |
-| `SLOPCODE_DISABLE_MOUSE`              | boolean | Disable mouse support in the TUI                   |
-| `SLOPCODE_DISABLE_TERMINAL_TITLE`     | boolean | Disable automatic terminal title updates          |
-| `SLOPCODE_PERMISSION`                 | string  | Inlined json permissions config                   |
-| `SLOPCODE_PURE`                       | boolean | Reduce terminal styling and feature detection      |
-| `SLOPCODE_DISABLE_DEFAULT_PLUGINS`    | boolean | Disable default plugins                           |
-| `SLOPCODE_DISABLE_LSP_DOWNLOAD`       | boolean | Disable automatic LSP server downloads            |
-| `SLOPCODE_ENABLE_EXPERIMENTAL_MODELS` | boolean | Enable experimental models                        |
-| `SLOPCODE_DISABLE_AUTOCOMPACT`        | boolean | Disable automatic context compaction              |
-| `SLOPCODE_DISABLE_CLAUDE_CODE`        | boolean | Disable reading from `.claude` (prompt + skills)  |
-| `SLOPCODE_DISABLE_CLAUDE_CODE_PROMPT` | boolean | Disable reading `~/.claude/CLAUDE.md`             |
-| `SLOPCODE_DISABLE_CLAUDE_CODE_SKILLS` | boolean | Disable loading `.claude/skills`                  |
-| `SLOPCODE_DISABLE_EXTERNAL_SKILLS`    | boolean | Disable external `.claude` and `.agents` skills    |
-| `SLOPCODE_DISABLE_MODELS_FETCH`       | boolean | Disable fetching models from remote sources       |
-| `SLOPCODE_DISABLE_PROJECT_CONFIG`     | boolean | Ignore project config files                        |
-| `SLOPCODE_FAKE_VCS`                   | string  | Fake VCS provider for testing purposes            |
-| `SLOPCODE_DISABLE_FILETIME_CHECK`     | boolean | Disable file time checking for optimization       |
-| `SLOPCODE_CLIENT`                     | string  | Client identifier (defaults to `cli`)             |
-| `SLOPCODE_ENABLE_EXA`                 | boolean | Enable Exa web search tools                       |
-| `SLOPCODE_SERVER_PASSWORD`            | string  | Enable basic auth for `serve`/`web`               |
-| `SLOPCODE_SERVER_USERNAME`            | string  | Override basic auth username (default `slopcode`) |
+| Variable                              | Type    | Description                                          |
+| ------------------------------------- | ------- | ---------------------------------------------------- |
+| `SLOPCODE_AUTO_SHARE`                 | boolean | Automatically share sessions                         |
+| `SLOPCODE_GIT_BASH_PATH`              | string  | Path to Git Bash executable on Windows               |
+| `SLOPCODE_CONFIG`                     | string  | Path to config file                                  |
+| `SLOPCODE_TUI_CONFIG`                 | string  | Path to TUI config file                              |
+| `SLOPCODE_CONFIG_DIR`                 | string  | Path to config directory                             |
+| `SLOPCODE_CONFIG_CONTENT`             | string  | Inline json config content                           |
+| `SLOPCODE_DISABLE_AUTOUPDATE`         | boolean | Disable automatic update checks                      |
+| `SLOPCODE_DISABLE_PRUNE`              | boolean | Disable pruning of old data                          |
+| `SLOPCODE_DISABLE_MOUSE`              | boolean | Disable mouse support in the TUI                     |
+| `SLOPCODE_DISABLE_TERMINAL_TITLE`     | boolean | Disable automatic terminal title updates             |
+| `SLOPCODE_PERMISSION`                 | string  | Inlined json permissions config                      |
+| `SLOPCODE_PURE`                       | boolean | Reduce terminal styling and feature detection        |
+| `SLOPCODE_DISABLE_DEFAULT_PLUGINS`    | boolean | Disable default plugins                              |
+| `SLOPCODE_DISABLE_LSP_DOWNLOAD`       | boolean | Disable automatic LSP server downloads               |
+| `SLOPCODE_ENABLE_EXPERIMENTAL_MODELS` | boolean | Enable experimental models                           |
+| `SLOPCODE_DISABLE_AUTOCOMPACT`        | boolean | Disable automatic context compaction                 |
+| `SLOPCODE_DISABLE_CLAUDE_CODE`        | boolean | Disable reading from `.claude` (prompt + skills)     |
+| `SLOPCODE_DISABLE_CLAUDE_CODE_PROMPT` | boolean | Disable reading `~/.claude/CLAUDE.md`                |
+| `SLOPCODE_DISABLE_CLAUDE_CODE_SKILLS` | boolean | Disable loading `.claude/skills`                     |
+| `SLOPCODE_DISABLE_EXTERNAL_SKILLS`    | boolean | Disable external `.claude` and `.agents` skills      |
+| `SLOPCODE_DISABLE_MODELS_FETCH`       | boolean | Disable fetching models from remote sources          |
+| `SLOPCODE_DISABLE_PROJECT_CONFIG`     | boolean | Ignore project config files                          |
+| `SLOPCODE_FAKE_VCS`                   | string  | Fake VCS provider for testing purposes               |
+| `SLOPCODE_DISABLE_FILETIME_CHECK`     | boolean | Disable file time checking for optimization          |
+| `SLOPCODE_CLIENT`                     | string  | Client identifier (defaults to `cli`)                |
+| `SLOPCODE_ENABLE_EXA`                 | boolean | Enable Exa web search tools                          |
+| `SLOPCODE_SERVER_PASSWORD`            | string  | Enable basic auth for `serve`/`web`                  |
+| `SLOPCODE_SERVER_USERNAME`            | string  | Override basic auth username (default `slopcode`)    |
 | `SLOPCODE_ENABLE_QUESTION_TOOL`       | boolean | Enable the question tool for non-interactive clients |
-| `SLOPCODE_MODELS_URL`                 | string  | Custom URL for fetching models configuration      |
-| `SLOPCODE_MODELS_PATH`                | string  | Load model metadata from a local file              |
+| `SLOPCODE_MODELS_URL`                 | string  | Custom URL for fetching models configuration         |
+| `SLOPCODE_MODELS_PATH`                | string  | Load model metadata from a local file                |
 
 ---
 
@@ -612,20 +612,20 @@ SlopCode can be configured using environment variables.
 
 These environment variables enable experimental features that may change or be removed.
 
-| Variable                                        | Type    | Description                             |
-| ----------------------------------------------- | ------- | --------------------------------------- |
-| `SLOPCODE_EXPERIMENTAL`                         | boolean | Enable all experimental features        |
-| `SLOPCODE_EXPERIMENTAL_ICON_DISCOVERY`          | boolean | Enable icon discovery                   |
-| `SLOPCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT`  | boolean | Disable copy on select in TUI           |
-| `SLOPCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | number  | Default timeout for bash commands in ms |
-| `SLOPCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX`        | number  | Max output tokens for LLM responses     |
-| `SLOPCODE_EXPERIMENTAL_FILEWATCHER`             | boolean | Enable file watcher for entire dir      |
-| `SLOPCODE_EXPERIMENTAL_OXFMT`                   | boolean | Enable oxfmt formatter                  |
-| `SLOPCODE_EXPERIMENTAL_LSP_TOOL`                | boolean | Enable experimental LSP tool            |
-| `SLOPCODE_EXPERIMENTAL_DISABLE_FILEWATCHER`     | boolean | Disable file watcher                    |
-| `SLOPCODE_EXPERIMENTAL_EXA`                     | boolean | Enable experimental Exa features        |
-| `SLOPCODE_EXPERIMENTAL_LSP_TY`                  | boolean | Enable experimental LSP type checking   |
-| `SLOPCODE_EXPERIMENTAL_MARKDOWN`                | boolean | Enable experimental markdown features   |
-| `SLOPCODE_EXPERIMENTAL_PLAN_MODE`               | boolean | Enable plan mode                        |
-| `SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS` | boolean | Enable background subagents and `task_status` |
-| `SLOPCODE_EXPERIMENTAL_SCOUT`                 | boolean | Enable reference repo scout tools            |
+| Variable                                        | Type    | Description                                   |
+| ----------------------------------------------- | ------- | --------------------------------------------- |
+| `SLOPCODE_EXPERIMENTAL`                         | boolean | Enable all experimental features              |
+| `SLOPCODE_EXPERIMENTAL_ICON_DISCOVERY`          | boolean | Enable icon discovery                         |
+| `SLOPCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT`  | boolean | Disable copy on select in TUI                 |
+| `SLOPCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | number  | Default timeout for bash commands in ms       |
+| `SLOPCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX`        | number  | Max output tokens for LLM responses           |
+| `SLOPCODE_EXPERIMENTAL_FILEWATCHER`             | boolean | Enable file watcher for entire dir            |
+| `SLOPCODE_EXPERIMENTAL_OXFMT`                   | boolean | Enable oxfmt formatter                        |
+| `SLOPCODE_EXPERIMENTAL_LSP_TOOL`                | boolean | Enable experimental LSP tool                  |
+| `SLOPCODE_EXPERIMENTAL_DISABLE_FILEWATCHER`     | boolean | Disable file watcher                          |
+| `SLOPCODE_EXPERIMENTAL_EXA`                     | boolean | Enable experimental Exa features              |
+| `SLOPCODE_EXPERIMENTAL_LSP_TY`                  | boolean | Enable experimental LSP type checking         |
+| `SLOPCODE_EXPERIMENTAL_MARKDOWN`                | boolean | Enable experimental markdown features         |
+| `SLOPCODE_EXPERIMENTAL_PLAN_MODE`               | boolean | Enable plan mode                              |
+| `SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS`    | boolean | Enable background subagents and `task_status` |
+| `SLOPCODE_EXPERIMENTAL_SCOUT`                   | boolean | Enable reference repo scout tools             |

@@ -1,3 +1,3 @@
-const printHref = "/_astro/print.DNXP8c50.css";
+const printHref = "/_astro/print.DNXP8c50.css"
 
-export { printHref as p };
+export { printHref as p }

@@ -1,58 +1,58 @@
 {
-	"version": 3,
-	"routes": [
-		{
-			"src": "^/docs$",
-			"headers": {
-				"Location": "/"
-			},
-			"status": 301
-		},
-		{
-			"src": "^/docs(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))?$",
-			"headers": {
-				"Location": "/$1"
-			},
-			"status": 301
-		},
-		{
-			"handle": "filesystem"
-		},
-		{
-			"src": "^/_astro/(.*)$",
-			"headers": {
-				"cache-control": "public, max-age=31536000, immutable"
-			},
-			"continue": true
-		},
-		{
-			"src": "^/_server-islands/([^/]+?)/?$",
-			"dest": "_render"
-		},
-		{
-			"src": "^/_image/?$",
-			"dest": "_render"
-		},
-		{
-			"src": "^/docs/?$",
-			"dest": "_render"
-		},
-		{
-			"src": "^/docs(?:/(.*?))?/?$",
-			"dest": "_render"
-		},
-		{
-			"src": "^/s/([^/]+?)/?$",
-			"dest": "_render"
-		},
-		{
-			"src": "^/(.*?)\\.md/?$",
-			"dest": "_render"
-		},
-		{
-			"src": "^/.*$",
-			"dest": "/404.html",
-			"status": 404
-		}
-	]
+  "version": 3,
+  "routes": [
+    {
+      "src": "^/docs$",
+      "headers": {
+        "Location": "/"
+      },
+      "status": 301
+    },
+    {
+      "src": "^/docs(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))?$",
+      "headers": {
+        "Location": "/$1"
+      },
+      "status": 301
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "^/_astro/(.*)$",
+      "headers": {
+        "cache-control": "public, max-age=31536000, immutable"
+      },
+      "continue": true
+    },
+    {
+      "src": "^/_server-islands/([^/]+?)/?$",
+      "dest": "_render"
+    },
+    {
+      "src": "^/_image/?$",
+      "dest": "_render"
+    },
+    {
+      "src": "^/docs/?$",
+      "dest": "_render"
+    },
+    {
+      "src": "^/docs(?:/(.*?))?/?$",
+      "dest": "_render"
+    },
+    {
+      "src": "^/s/([^/]+?)/?$",
+      "dest": "_render"
+    },
+    {
+      "src": "^/(.*?)\\.md/?$",
+      "dest": "_render"
+    },
+    {
+      "src": "^/.*$",
+      "dest": "/404.html",
+      "status": 404
+    }
+  ]
 }

@@ -1,9 +1,234 @@
-import { A as AstroError, U as UnknownContentCollectionError, a as createComponent, l as RenderUndefinedEntryError, k as escape, u as unescapeHTML, b as renderTemplate, f as AstroUserError, n as renderUniqueStylesheet, o as renderScriptElement, p as createHeadAndContent, r as renderComponent } from './astro/server_CGASYgNY.mjs';
-import { r as removeBase, i as isRemotePath, p as prependForwardSlash } from './path_Cvt6sEOY.mjs';
-import { V as VALID_INPUT_FORMATS } from './consts_BmVDRGlB.mjs';
-import { u as unflatten } from './parse_C2112eaN.mjs';
+import {
+  A as AstroError,
+  U as UnknownContentCollectionError,
+  a as createComponent,
+  l as RenderUndefinedEntryError,
+  k as escape,
+  u as unescapeHTML,
+  b as renderTemplate,
+  f as AstroUserError,
+  n as renderUniqueStylesheet,
+  o as renderScriptElement,
+  p as createHeadAndContent,
+  r as renderComponent,
+} from "./astro/server_CGASYgNY.mjs"
+import { r as removeBase, i as isRemotePath, p as prependForwardSlash } from "./path_Cvt6sEOY.mjs"
+import { V as VALID_INPUT_FORMATS } from "./consts_BmVDRGlB.mjs"
+import { u as unflatten } from "./parse_C2112eaN.mjs"
 
-var e=e=>Object.prototype.toString.call(e),t=e=>ArrayBuffer.isView(e)&&!(e instanceof DataView),o=t=>"[object Date]"===e(t),n=t=>"[object RegExp]"===e(t),r=t=>"[object Error]"===e(t),s=t=>"[object Boolean]"===e(t),l=t=>"[object Number]"===e(t),i=t=>"[object String]"===e(t),c=Array.isArray,u=Object.getOwnPropertyDescriptor,a=Object.prototype.propertyIsEnumerable,f=Object.getOwnPropertySymbols,p=Object.prototype.hasOwnProperty,h=Object.keys;function d(e){const t=h(e),o=f(e);for(let n=0;n<o.length;n++)a.call(e,o[n])&&t.push(o[n]);return t}function b(e,t){return !u(e,t)?.writable}function y(e,u){if("object"==typeof e&&null!==e){let a;if(c(e))a=[];else if(o(e))a=new Date(e.getTime?e.getTime():e);else if(n(e))a=new RegExp(e);else if(r(e))a={message:e.message};else if(s(e)||l(e)||i(e))a=Object(e);else {if(t(e))return e.slice();a=Object.create(Object.getPrototypeOf(e));}const f=u.includeSymbols?d:h;for(const t of f(e))a[t]=e[t];return a}return e}var g={includeSymbols:false,immutable:false};function m(e,t,o=g){const n=[],r=[];let s=true;const l=o.includeSymbols?d:h,i=!!o.immutable;return function e(u){const a=i?y(u,o):u,f={};let h=true;const d={node:a,node_:u,path:[].concat(n),parent:r[r.length-1],parents:r,key:n[n.length-1],isRoot:0===n.length,level:n.length,circular:void 0,isLeaf:false,notLeaf:true,notRoot:true,isFirst:false,isLast:false,update:function(e,t=false){d.isRoot||(d.parent.node[d.key]=e),d.node=e,t&&(h=false);},delete:function(e){delete d.parent.node[d.key],e&&(h=false);},remove:function(e){c(d.parent.node)?d.parent.node.splice(d.key,1):delete d.parent.node[d.key],e&&(h=false);},keys:null,before:function(e){f.before=e;},after:function(e){f.after=e;},pre:function(e){f.pre=e;},post:function(e){f.post=e;},stop:function(){s=false;},block:function(){h=false;}};if(!s)return d;function g(){if("object"==typeof d.node&&null!==d.node){d.keys&&d.node_===d.node||(d.keys=l(d.node)),d.isLeaf=0===d.keys.length;for(let e=0;e<r.length;e++)if(r[e].node_===u){d.circular=r[e];break}}else d.isLeaf=true,d.keys=null;d.notLeaf=!d.isLeaf,d.notRoot=!d.isRoot;}g();const m=t(d,d.node);if(void 0!==m&&d.update&&d.update(m),f.before&&f.before(d,d.node),!h)return d;if("object"==typeof d.node&&null!==d.node&&!d.circular){r.push(d),g();for(const[t,o]of Object.entries(d.keys??[])){n.push(o),f.pre&&f.pre(d,d.node[o],o);const r=e(d.node[o]);i&&p.call(d.node,o)&&!b(d.node,o)&&(d.node[o]=r.node),r.isLast=!!d.keys?.length&&+t==d.keys.length-1,r.isFirst=0==+t,f.post&&f.post(d,r),n.pop();}r.pop();}return f.after&&f.after(d,d.node),d}(e).node}var j=class{#e;#t;constructor(e,t=g){this.#e=e,this.#t=t;}get(e){let t=this.#e;for(let o=0;t&&o<e.length;o++){const n=e[o];if(!p.call(t,n)||!this.#t.includeSymbols&&"symbol"==typeof n)return;t=t[n];}return t}has(e){let t=this.#e;for(let o=0;t&&o<e.length;o++){const n=e[o];if(!p.call(t,n)||!this.#t.includeSymbols&&"symbol"==typeof n)return  false;t=t[n];}return  true}set(e,t){let o=this.#e,n=0;for(n=0;n<e.length-1;n++){const t=e[n];p.call(o,t)||(o[t]={}),o=o[t];}return o[e[n]]=t,t}map(e){return m(this.#e,e,{immutable:true,includeSymbols:!!this.#t.includeSymbols})}forEach(e){return this.#e=m(this.#e,e,this.#t),this.#e}reduce(e,t){const o=1===arguments.length;let n=o?this.#e:t;return this.forEach(((t,r)=>{t.isRoot&&o||(n=e(t,n,r));})),n}paths(){const e=[];return this.forEach((t=>{e.push(t.path);})),e}nodes(){const e=[];return this.forEach((t=>{e.push(t.node);})),e}clone(){const e=[],o=[],n=this.#t;return t(this.#e)?this.#e.slice():function t(r){for(let t=0;t<e.length;t++)if(e[t]===r)return o[t];if("object"==typeof r&&null!==r){const s=y(r,n);e.push(r),o.push(s);const l=n.includeSymbols?d:h;for(const e of l(r))s[e]=t(r[e]);return e.pop(),o.pop(),s}return r}(this.#e)}};
+var e = (e) => Object.prototype.toString.call(e),
+  t = (e) => ArrayBuffer.isView(e) && !(e instanceof DataView),
+  o = (t) => "[object Date]" === e(t),
+  n = (t) => "[object RegExp]" === e(t),
+  r = (t) => "[object Error]" === e(t),
+  s = (t) => "[object Boolean]" === e(t),
+  l = (t) => "[object Number]" === e(t),
+  i = (t) => "[object String]" === e(t),
+  c = Array.isArray,
+  u = Object.getOwnPropertyDescriptor,
+  a = Object.prototype.propertyIsEnumerable,
+  f = Object.getOwnPropertySymbols,
+  p = Object.prototype.hasOwnProperty,
+  h = Object.keys
+function d(e) {
+  const t = h(e),
+    o = f(e)
+  for (let n = 0; n < o.length; n++) a.call(e, o[n]) && t.push(o[n])
+  return t
+}
+function b(e, t) {
+  return !u(e, t)?.writable
+}
+function y(e, u) {
+  if ("object" == typeof e && null !== e) {
+    let a
+    if (c(e)) a = []
+    else if (o(e)) a = new Date(e.getTime ? e.getTime() : e)
+    else if (n(e)) a = new RegExp(e)
+    else if (r(e)) a = { message: e.message }
+    else if (s(e) || l(e) || i(e)) a = Object(e)
+    else {
+      if (t(e)) return e.slice()
+      a = Object.create(Object.getPrototypeOf(e))
+    }
+    const f = u.includeSymbols ? d : h
+    for (const t of f(e)) a[t] = e[t]
+    return a
+  }
+  return e
+}
+var g = { includeSymbols: false, immutable: false }
+function m(e, t, o = g) {
+  const n = [],
+    r = []
+  let s = true
+  const l = o.includeSymbols ? d : h,
+    i = !!o.immutable
+  return (function e(u) {
+    const a = i ? y(u, o) : u,
+      f = {}
+    let h = true
+    const d = {
+      node: a,
+      node_: u,
+      path: [].concat(n),
+      parent: r[r.length - 1],
+      parents: r,
+      key: n[n.length - 1],
+      isRoot: 0 === n.length,
+      level: n.length,
+      circular: void 0,
+      isLeaf: false,
+      notLeaf: true,
+      notRoot: true,
+      isFirst: false,
+      isLast: false,
+      update: function (e, t = false) {
+        ;(d.isRoot || (d.parent.node[d.key] = e), (d.node = e), t && (h = false))
+      },
+      delete: function (e) {
+        ;(delete d.parent.node[d.key], e && (h = false))
+      },
+      remove: function (e) {
+        ;(c(d.parent.node) ? d.parent.node.splice(d.key, 1) : delete d.parent.node[d.key], e && (h = false))
+      },
+      keys: null,
+      before: function (e) {
+        f.before = e
+      },
+      after: function (e) {
+        f.after = e
+      },
+      pre: function (e) {
+        f.pre = e
+      },
+      post: function (e) {
+        f.post = e
+      },
+      stop: function () {
+        s = false
+      },
+      block: function () {
+        h = false
+      },
+    }
+    if (!s) return d
+    function g() {
+      if ("object" == typeof d.node && null !== d.node) {
+        ;((d.keys && d.node_ === d.node) || (d.keys = l(d.node)), (d.isLeaf = 0 === d.keys.length))
+        for (let e = 0; e < r.length; e++)
+          if (r[e].node_ === u) {
+            d.circular = r[e]
+            break
+          }
+      } else ((d.isLeaf = true), (d.keys = null))
+      ;((d.notLeaf = !d.isLeaf), (d.notRoot = !d.isRoot))
+    }
+    g()
+    const m = t(d, d.node)
+    if ((void 0 !== m && d.update && d.update(m), f.before && f.before(d, d.node), !h)) return d
+    if ("object" == typeof d.node && null !== d.node && !d.circular) {
+      ;(r.push(d), g())
+      for (const [t, o] of Object.entries(d.keys ?? [])) {
+        ;(n.push(o), f.pre && f.pre(d, d.node[o], o))
+        const r = e(d.node[o])
+        ;(i && p.call(d.node, o) && !b(d.node, o) && (d.node[o] = r.node),
+          (r.isLast = !!d.keys?.length && +t == d.keys.length - 1),
+          (r.isFirst = 0 == +t),
+          f.post && f.post(d, r),
+          n.pop())
+      }
+      r.pop()
+    }
+    return (f.after && f.after(d, d.node), d)
+  })(e).node
+}
+var j = class {
+  #e
+  #t
+  constructor(e, t = g) {
+    ;((this.#e = e), (this.#t = t))
+  }
+  get(e) {
+    let t = this.#e
+    for (let o = 0; t && o < e.length; o++) {
+      const n = e[o]
+      if (!p.call(t, n) || (!this.#t.includeSymbols && "symbol" == typeof n)) return
+      t = t[n]
+    }
+    return t
+  }
+  has(e) {
+    let t = this.#e
+    for (let o = 0; t && o < e.length; o++) {
+      const n = e[o]
+      if (!p.call(t, n) || (!this.#t.includeSymbols && "symbol" == typeof n)) return false
+      t = t[n]
+    }
+    return true
+  }
+  set(e, t) {
+    let o = this.#e,
+      n = 0
+    for (n = 0; n < e.length - 1; n++) {
+      const t = e[n]
+      ;(p.call(o, t) || (o[t] = {}), (o = o[t]))
+    }
+    return ((o[e[n]] = t), t)
+  }
+  map(e) {
+    return m(this.#e, e, { immutable: true, includeSymbols: !!this.#t.includeSymbols })
+  }
+  forEach(e) {
+    return ((this.#e = m(this.#e, e, this.#t)), this.#e)
+  }
+  reduce(e, t) {
+    const o = 1 === arguments.length
+    let n = o ? this.#e : t
+    return (
+      this.forEach((t, r) => {
+        ;(t.isRoot && o) || (n = e(t, n, r))
+      }),
+      n
+    )
+  }
+  paths() {
+    const e = []
+    return (
+      this.forEach((t) => {
+        e.push(t.path)
+      }),
+      e
+    )
+  }
+  nodes() {
+    const e = []
+    return (
+      this.forEach((t) => {
+        e.push(t.node)
+      }),
+      e
+    )
+  }
+  clone() {
+    const e = [],
+      o = [],
+      n = this.#t
+    return t(this.#e)
+      ? this.#e.slice()
+      : (function t(r) {
+          for (let t = 0; t < e.length; t++) if (e[t] === r) return o[t]
+          if ("object" == typeof r && null !== r) {
+            const s = y(r, n)
+            ;(e.push(r), o.push(s))
+            const l = n.includeSymbols ? d : h
+            for (const e of l(r)) s[e] = t(r[e])
+            return (e.pop(), o.pop(), s)
+          }
+          return r
+        })(this.#e)
+  }
+}
 
 /*
 How it works:
@@ -11,239 +236,238 @@ How it works:
 */
 
 class Node {
-	value;
-	next;
+  value
+  next
 
-	constructor(value) {
-		this.value = value;
-	}
+  constructor(value) {
+    this.value = value
+  }
 }
 
 class Queue {
-	#head;
-	#tail;
-	#size;
+  #head
+  #tail
+  #size
 
-	constructor() {
-		this.clear();
-	}
+  constructor() {
+    this.clear()
+  }
 
-	enqueue(value) {
-		const node = new Node(value);
+  enqueue(value) {
+    const node = new Node(value)
 
-		if (this.#head) {
-			this.#tail.next = node;
-			this.#tail = node;
-		} else {
-			this.#head = node;
-			this.#tail = node;
-		}
+    if (this.#head) {
+      this.#tail.next = node
+      this.#tail = node
+    } else {
+      this.#head = node
+      this.#tail = node
+    }
 
-		this.#size++;
-	}
+    this.#size++
+  }
 
-	dequeue() {
-		const current = this.#head;
-		if (!current) {
-			return;
-		}
+  dequeue() {
+    const current = this.#head
+    if (!current) {
+      return
+    }
 
-		this.#head = this.#head.next;
-		this.#size--;
+    this.#head = this.#head.next
+    this.#size--
 
-		// Clean up tail reference when queue becomes empty
-		if (!this.#head) {
-			this.#tail = undefined;
-		}
+    // Clean up tail reference when queue becomes empty
+    if (!this.#head) {
+      this.#tail = undefined
+    }
 
-		return current.value;
-	}
+    return current.value
+  }
 
-	peek() {
-		if (!this.#head) {
-			return;
-		}
+  peek() {
+    if (!this.#head) {
+      return
+    }
 
-		return this.#head.value;
+    return this.#head.value
 
-		// TODO: Node.js 18.
-		// return this.#head?.value;
-	}
+    // TODO: Node.js 18.
+    // return this.#head?.value;
+  }
 
-	clear() {
-		this.#head = undefined;
-		this.#tail = undefined;
-		this.#size = 0;
-	}
+  clear() {
+    this.#head = undefined
+    this.#tail = undefined
+    this.#size = 0
+  }
 
-	get size() {
-		return this.#size;
-	}
+  get size() {
+    return this.#size
+  }
 
-	* [Symbol.iterator]() {
-		let current = this.#head;
+  *[Symbol.iterator]() {
+    let current = this.#head
 
-		while (current) {
-			yield current.value;
-			current = current.next;
-		}
-	}
+    while (current) {
+      yield current.value
+      current = current.next
+    }
+  }
 
-	* drain() {
-		while (this.#head) {
-			yield this.dequeue();
-		}
-	}
+  *drain() {
+    while (this.#head) {
+      yield this.dequeue()
+    }
+  }
 }
 
 function pLimit(concurrency) {
-	validateConcurrency(concurrency);
+  validateConcurrency(concurrency)
 
-	const queue = new Queue();
-	let activeCount = 0;
+  const queue = new Queue()
+  let activeCount = 0
 
-	const resumeNext = () => {
-		if (activeCount < concurrency && queue.size > 0) {
-			queue.dequeue()();
-			// Since `pendingCount` has been decreased by one, increase `activeCount` by one.
-			activeCount++;
-		}
-	};
+  const resumeNext = () => {
+    if (activeCount < concurrency && queue.size > 0) {
+      queue.dequeue()()
+      // Since `pendingCount` has been decreased by one, increase `activeCount` by one.
+      activeCount++
+    }
+  }
 
-	const next = () => {
-		activeCount--;
+  const next = () => {
+    activeCount--
 
-		resumeNext();
-	};
+    resumeNext()
+  }
 
-	const run = async (function_, resolve, arguments_) => {
-		const result = (async () => function_(...arguments_))();
+  const run = async (function_, resolve, arguments_) => {
+    const result = (async () => function_(...arguments_))()
 
-		resolve(result);
+    resolve(result)
 
-		try {
-			await result;
-		} catch {}
+    try {
+      await result
+    } catch {}
 
-		next();
-	};
+    next()
+  }
 
-	const enqueue = (function_, resolve, arguments_) => {
-		// Queue `internalResolve` instead of the `run` function
-		// to preserve asynchronous context.
-		new Promise(internalResolve => {
-			queue.enqueue(internalResolve);
-		}).then(
-			run.bind(undefined, function_, resolve, arguments_),
-		);
+  const enqueue = (function_, resolve, arguments_) => {
+    // Queue `internalResolve` instead of the `run` function
+    // to preserve asynchronous context.
+    new Promise((internalResolve) => {
+      queue.enqueue(internalResolve)
+    }).then(run.bind(undefined, function_, resolve, arguments_))
 
-		(async () => {
-			// This function needs to wait until the next microtask before comparing
-			// `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
-			// after the `internalResolve` function is dequeued and called. The comparison in the if-statement
-			// needs to happen asynchronously as well to get an up-to-date value for `activeCount`.
-			await Promise.resolve();
+    ;(async () => {
+      // This function needs to wait until the next microtask before comparing
+      // `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
+      // after the `internalResolve` function is dequeued and called. The comparison in the if-statement
+      // needs to happen asynchronously as well to get an up-to-date value for `activeCount`.
+      await Promise.resolve()
 
-			if (activeCount < concurrency) {
-				resumeNext();
-			}
-		})();
-	};
+      if (activeCount < concurrency) {
+        resumeNext()
+      }
+    })()
+  }
 
-	const generator = (function_, ...arguments_) => new Promise(resolve => {
-		enqueue(function_, resolve, arguments_);
-	});
+  const generator = (function_, ...arguments_) =>
+    new Promise((resolve) => {
+      enqueue(function_, resolve, arguments_)
+    })
 
-	Object.defineProperties(generator, {
-		activeCount: {
-			get: () => activeCount,
-		},
-		pendingCount: {
-			get: () => queue.size,
-		},
-		clearQueue: {
-			value() {
-				queue.clear();
-			},
-		},
-		concurrency: {
-			get: () => concurrency,
+  Object.defineProperties(generator, {
+    activeCount: {
+      get: () => activeCount,
+    },
+    pendingCount: {
+      get: () => queue.size,
+    },
+    clearQueue: {
+      value() {
+        queue.clear()
+      },
+    },
+    concurrency: {
+      get: () => concurrency,
 
-			set(newConcurrency) {
-				validateConcurrency(newConcurrency);
-				concurrency = newConcurrency;
+      set(newConcurrency) {
+        validateConcurrency(newConcurrency)
+        concurrency = newConcurrency
 
-				queueMicrotask(() => {
-					// eslint-disable-next-line no-unmodified-loop-condition
-					while (activeCount < concurrency && queue.size > 0) {
-						resumeNext();
-					}
-				});
-			},
-		},
-	});
+        queueMicrotask(() => {
+          // eslint-disable-next-line no-unmodified-loop-condition
+          while (activeCount < concurrency && queue.size > 0) {
+            resumeNext()
+          }
+        })
+      },
+    },
+  })
 
-	return generator;
+  return generator
 }
 
 function validateConcurrency(concurrency) {
-	if (!((Number.isInteger(concurrency) || concurrency === Number.POSITIVE_INFINITY) && concurrency > 0)) {
-		throw new TypeError('Expected `concurrency` to be a number from 1 and up');
-	}
+  if (!((Number.isInteger(concurrency) || concurrency === Number.POSITIVE_INFINITY) && concurrency > 0)) {
+    throw new TypeError("Expected `concurrency` to be a number from 1 and up")
+  }
 }
 
-const CONTENT_IMAGE_FLAG = "astroContentImageFlag";
-const IMAGE_IMPORT_PREFIX = "__ASTRO_IMAGE_";
-const CONTENT_LAYER_TYPE = "content_layer";
+const CONTENT_IMAGE_FLAG = "astroContentImageFlag"
+const IMAGE_IMPORT_PREFIX = "__ASTRO_IMAGE_"
+const CONTENT_LAYER_TYPE = "content_layer"
 
 function imageSrcToImportId(imageSrc, filePath) {
-  imageSrc = removeBase(imageSrc, IMAGE_IMPORT_PREFIX);
+  imageSrc = removeBase(imageSrc, IMAGE_IMPORT_PREFIX)
   if (isRemotePath(imageSrc)) {
-    return;
+    return
   }
-  const ext = imageSrc.split(".").at(-1)?.toLowerCase();
+  const ext = imageSrc.split(".").at(-1)?.toLowerCase()
   if (!ext || !VALID_INPUT_FORMATS.includes(ext)) {
-    return;
+    return
   }
-  const params = new URLSearchParams(CONTENT_IMAGE_FLAG);
+  const params = new URLSearchParams(CONTENT_IMAGE_FLAG)
   if (filePath) {
-    params.set("importer", filePath);
+    params.set("importer", filePath)
   }
-  return `${imageSrc}?${params.toString()}`;
+  return `${imageSrc}?${params.toString()}`
 }
 
 class ImmutableDataStore {
-  _collections = /* @__PURE__ */ new Map();
+  _collections = /* @__PURE__ */ new Map()
   constructor() {
-    this._collections = /* @__PURE__ */ new Map();
+    this._collections = /* @__PURE__ */ new Map()
   }
   get(collectionName, key) {
-    return this._collections.get(collectionName)?.get(String(key));
+    return this._collections.get(collectionName)?.get(String(key))
   }
   entries(collectionName) {
-    const collection = this._collections.get(collectionName) ?? /* @__PURE__ */ new Map();
-    return [...collection.entries()];
+    const collection = this._collections.get(collectionName) ?? /* @__PURE__ */ new Map()
+    return [...collection.entries()]
   }
   values(collectionName) {
-    const collection = this._collections.get(collectionName) ?? /* @__PURE__ */ new Map();
-    return [...collection.values()];
+    const collection = this._collections.get(collectionName) ?? /* @__PURE__ */ new Map()
+    return [...collection.values()]
   }
   keys(collectionName) {
-    const collection = this._collections.get(collectionName) ?? /* @__PURE__ */ new Map();
-    return [...collection.keys()];
+    const collection = this._collections.get(collectionName) ?? /* @__PURE__ */ new Map()
+    return [...collection.keys()]
   }
   has(collectionName, key) {
-    const collection = this._collections.get(collectionName);
+    const collection = this._collections.get(collectionName)
     if (collection) {
-      return collection.has(String(key));
+      return collection.has(String(key))
     }
-    return false;
+    return false
   }
   hasCollection(collectionName) {
-    return this._collections.has(collectionName);
+    return this._collections.has(collectionName)
   }
   collections() {
-    return this._collections;
+    return this._collections
   }
   /**
    * Attempts to load a DataStore from the virtual module.
@@ -251,214 +475,219 @@ class ImmutableDataStore {
    */
   static async fromModule() {
     try {
-      const data = await import('./_astro_data-layer-content_DuKhFML4.mjs');
+      const data = await import("./_astro_data-layer-content_DuKhFML4.mjs")
       if (data.default instanceof Map) {
-        return ImmutableDataStore.fromMap(data.default);
+        return ImmutableDataStore.fromMap(data.default)
       }
-      const map = unflatten(data.default);
-      return ImmutableDataStore.fromMap(map);
-    } catch {
-    }
-    return new ImmutableDataStore();
+      const map = unflatten(data.default)
+      return ImmutableDataStore.fromMap(map)
+    } catch {}
+    return new ImmutableDataStore()
   }
   static async fromMap(data) {
-    const store = new ImmutableDataStore();
-    store._collections = data;
-    return store;
+    const store = new ImmutableDataStore()
+    store._collections = data
+    return store
   }
 }
 function dataStoreSingleton() {
-  let instance = void 0;
+  let instance = void 0
   return {
     get: async () => {
       if (!instance) {
-        instance = ImmutableDataStore.fromModule();
+        instance = ImmutableDataStore.fromModule()
       }
-      return instance;
+      return instance
     },
     set: (store) => {
-      instance = store;
-    }
-  };
-}
-const globalDataStore = dataStoreSingleton();
-
-const __vite_import_meta_env__ = {"ASSETS_PREFIX": undefined, "BASE_URL": "/", "DEV": false, "MODE": "production", "PROD": true, "SITE": "https://dev.slopcode.ai", "SSR": true};
-function getImporterFilename() {
-  const stackLine = new Error().stack?.split("\n")?.[3];
-  if (!stackLine) {
-    return null;
+      instance = store
+    },
   }
-  const match = /\/(src\/.*?):\d+:\d+/.exec(stackLine);
-  return match?.[1] ?? null;
+}
+const globalDataStore = dataStoreSingleton()
+
+const __vite_import_meta_env__ = {
+  ASSETS_PREFIX: undefined,
+  BASE_URL: "/",
+  DEV: false,
+  MODE: "production",
+  PROD: true,
+  SITE: "https://dev.slopcode.ai",
+  SSR: true,
+}
+function getImporterFilename() {
+  const stackLine = new Error().stack?.split("\n")?.[3]
+  if (!stackLine) {
+    return null
+  }
+  const match = /\/(src\/.*?):\d+:\d+/.exec(stackLine)
+  return match?.[1] ?? null
 }
 function defineCollection(config) {
   if ("loader" in config) {
     if (config.type && config.type !== CONTENT_LAYER_TYPE) {
       throw new AstroUserError(
-        `Collections that use the Content Layer API must have a \`loader\` defined and no \`type\` set. Check your collection definitions in ${getImporterFilename() ?? "your content config file"}.`
-      );
+        `Collections that use the Content Layer API must have a \`loader\` defined and no \`type\` set. Check your collection definitions in ${getImporterFilename() ?? "your content config file"}.`,
+      )
     }
-    config.type = CONTENT_LAYER_TYPE;
+    config.type = CONTENT_LAYER_TYPE
   }
-  if (!config.type) config.type = "content";
-  return config;
+  if (!config.type) config.type = "content"
+  return config
 }
-function createCollectionToGlobResultMap({
-  globResult,
-  contentDir
-}) {
-  const collectionToGlobResultMap = {};
+function createCollectionToGlobResultMap({ globResult, contentDir }) {
+  const collectionToGlobResultMap = {}
   for (const key in globResult) {
-    const keyRelativeToContentDir = key.replace(new RegExp(`^${contentDir}`), "");
-    const segments = keyRelativeToContentDir.split("/");
-    if (segments.length <= 1) continue;
-    const collection = segments[0];
-    collectionToGlobResultMap[collection] ??= {};
-    collectionToGlobResultMap[collection][key] = globResult[key];
+    const keyRelativeToContentDir = key.replace(new RegExp(`^${contentDir}`), "")
+    const segments = keyRelativeToContentDir.split("/")
+    if (segments.length <= 1) continue
+    const collection = segments[0]
+    collectionToGlobResultMap[collection] ??= {}
+    collectionToGlobResultMap[collection][key] = globResult[key]
   }
-  return collectionToGlobResultMap;
+  return collectionToGlobResultMap
 }
 function createGetCollection({
   contentCollectionToEntryMap,
   dataCollectionToEntryMap,
   getRenderEntryImport,
-  cacheEntriesByCollection
+  cacheEntriesByCollection,
 }) {
   return async function getCollection(collection, filter) {
-    const hasFilter = typeof filter === "function";
-    const store = await globalDataStore.get();
-    let type;
+    const hasFilter = typeof filter === "function"
+    const store = await globalDataStore.get()
+    let type
     if (collection in contentCollectionToEntryMap) {
-      type = "content";
+      type = "content"
     } else if (collection in dataCollectionToEntryMap) {
-      type = "data";
+      type = "data"
     } else if (store.hasCollection(collection)) {
-      const { default: imageAssetMap } = await import('./content-assets_DleWbedO.mjs');
-      const result = [];
+      const { default: imageAssetMap } = await import("./content-assets_DleWbedO.mjs")
+      const result = []
       for (const rawEntry of store.values(collection)) {
-        const data = updateImageReferencesInData(rawEntry.data, rawEntry.filePath, imageAssetMap);
+        const data = updateImageReferencesInData(rawEntry.data, rawEntry.filePath, imageAssetMap)
         let entry = {
           ...rawEntry,
           data,
-          collection
-        };
+          collection,
+        }
         if (entry.legacyId) {
-          entry = emulateLegacyEntry(entry);
+          entry = emulateLegacyEntry(entry)
         }
         if (hasFilter && !filter(entry)) {
-          continue;
+          continue
         }
-        result.push(entry);
+        result.push(entry)
       }
-      return result;
+      return result
     } else {
       console.warn(
         `The collection ${JSON.stringify(
-          collection
-        )} does not exist or is empty. Please check your content config file for errors.`
-      );
-      return [];
+          collection,
+        )} does not exist or is empty. Please check your content config file for errors.`,
+      )
+      return []
     }
     const lazyImports = Object.values(
-      type === "content" ? contentCollectionToEntryMap[collection] : dataCollectionToEntryMap[collection]
-    );
-    let entries = [];
-    if (!Object.assign(__vite_import_meta_env__, { _: process.env._ })?.DEV && cacheEntriesByCollection.has(collection)) {
-      entries = cacheEntriesByCollection.get(collection);
+      type === "content" ? contentCollectionToEntryMap[collection] : dataCollectionToEntryMap[collection],
+    )
+    let entries = []
+    if (
+      !Object.assign(__vite_import_meta_env__, { _: process.env._ })?.DEV &&
+      cacheEntriesByCollection.has(collection)
+    ) {
+      entries = cacheEntriesByCollection.get(collection)
     } else {
-      const limit = pLimit(10);
+      const limit = pLimit(10)
       entries = await Promise.all(
-        lazyImports.map(
-          (lazyImport) => limit(async () => {
-            const entry = await lazyImport();
-            return type === "content" ? {
-              id: entry.id,
-              slug: entry.slug,
-              body: entry.body,
-              collection: entry.collection,
-              data: entry.data,
-              async render() {
-                return render({
-                  collection: entry.collection,
+        lazyImports.map((lazyImport) =>
+          limit(async () => {
+            const entry = await lazyImport()
+            return type === "content"
+              ? {
                   id: entry.id,
-                  renderEntryImport: await getRenderEntryImport(collection, entry.slug)
-                });
-              }
-            } : {
-              id: entry.id,
-              collection: entry.collection,
-              data: entry.data
-            };
-          })
-        )
-      );
-      cacheEntriesByCollection.set(collection, entries);
+                  slug: entry.slug,
+                  body: entry.body,
+                  collection: entry.collection,
+                  data: entry.data,
+                  async render() {
+                    return render({
+                      collection: entry.collection,
+                      id: entry.id,
+                      renderEntryImport: await getRenderEntryImport(collection, entry.slug),
+                    })
+                  },
+                }
+              : {
+                  id: entry.id,
+                  collection: entry.collection,
+                  data: entry.data,
+                }
+          }),
+        ),
+      )
+      cacheEntriesByCollection.set(collection, entries)
     }
     if (hasFilter) {
-      return entries.filter(filter);
+      return entries.filter(filter)
     } else {
-      return entries.slice();
+      return entries.slice()
     }
-  };
+  }
 }
 function emulateLegacyEntry({ legacyId, ...entry }) {
   const legacyEntry = {
     ...entry,
     id: legacyId,
-    slug: entry.id
-  };
+    slug: entry.id,
+  }
   return {
     ...legacyEntry,
     // Define separately so the render function isn't included in the object passed to `renderEntry()`
-    render: () => renderEntry(legacyEntry)
-  };
+    render: () => renderEntry(legacyEntry),
+  }
 }
-function createGetEntry({
-  getEntryImport,
-  getRenderEntryImport,
-  collectionNames
-}) {
+function createGetEntry({ getEntryImport, getRenderEntryImport, collectionNames }) {
   return async function getEntry(collectionOrLookupObject, _lookupId) {
-    let collection, lookupId;
+    let collection, lookupId
     if (typeof collectionOrLookupObject === "string") {
-      collection = collectionOrLookupObject;
+      collection = collectionOrLookupObject
       if (!_lookupId)
         throw new AstroError({
           ...UnknownContentCollectionError,
-          message: "`getEntry()` requires an entry identifier as the second argument."
-        });
-      lookupId = _lookupId;
+          message: "`getEntry()` requires an entry identifier as the second argument.",
+        })
+      lookupId = _lookupId
     } else {
-      collection = collectionOrLookupObject.collection;
-      lookupId = "id" in collectionOrLookupObject ? collectionOrLookupObject.id : collectionOrLookupObject.slug;
+      collection = collectionOrLookupObject.collection
+      lookupId = "id" in collectionOrLookupObject ? collectionOrLookupObject.id : collectionOrLookupObject.slug
     }
-    const store = await globalDataStore.get();
+    const store = await globalDataStore.get()
     if (store.hasCollection(collection)) {
-      const entry2 = store.get(collection, lookupId);
+      const entry2 = store.get(collection, lookupId)
       if (!entry2) {
-        console.warn(`Entry ${collection} → ${lookupId} was not found.`);
-        return;
+        console.warn(`Entry ${collection} → ${lookupId} was not found.`)
+        return
       }
-      const { default: imageAssetMap } = await import('./content-assets_DleWbedO.mjs');
-      entry2.data = updateImageReferencesInData(entry2.data, entry2.filePath, imageAssetMap);
+      const { default: imageAssetMap } = await import("./content-assets_DleWbedO.mjs")
+      entry2.data = updateImageReferencesInData(entry2.data, entry2.filePath, imageAssetMap)
       if (entry2.legacyId) {
-        return emulateLegacyEntry({ ...entry2, collection });
+        return emulateLegacyEntry({ ...entry2, collection })
       }
       return {
         ...entry2,
-        collection
-      };
+        collection,
+      }
     }
     if (!collectionNames.has(collection)) {
       console.warn(
-        `The collection ${JSON.stringify(collection)} does not exist. Please ensure it is defined in your content config.`
-      );
-      return void 0;
+        `The collection ${JSON.stringify(collection)} does not exist. Please ensure it is defined in your content config.`,
+      )
+      return void 0
     }
-    const entryImport = await getEntryImport(collection, lookupId);
-    if (typeof entryImport !== "function") return void 0;
-    const entry = await entryImport();
+    const entryImport = await getEntryImport(collection, lookupId)
+    if (typeof entryImport !== "function") return void 0
+    const entry = await entryImport()
     if (entry._internal.type === "content") {
       return {
         id: entry.id,
@@ -470,234 +699,242 @@ function createGetEntry({
           return render({
             collection: entry.collection,
             id: entry.id,
-            renderEntryImport: await getRenderEntryImport(collection, lookupId)
-          });
-        }
-      };
+            renderEntryImport: await getRenderEntryImport(collection, lookupId),
+          })
+        },
+      }
     } else if (entry._internal.type === "data") {
       return {
         id: entry.id,
         collection: entry.collection,
-        data: entry.data
-      };
+        data: entry.data,
+      }
     }
-    return void 0;
-  };
+    return void 0
+  }
 }
-const CONTENT_LAYER_IMAGE_REGEX = /__ASTRO_IMAGE_="([^"]+)"/g;
+const CONTENT_LAYER_IMAGE_REGEX = /__ASTRO_IMAGE_="([^"]+)"/g
 async function updateImageReferencesInBody(html, fileName) {
-  const { default: imageAssetMap } = await import('./content-assets_DleWbedO.mjs');
-  const imageObjects = /* @__PURE__ */ new Map();
-  const { getImage } = await import('./_astro_assets_TaW-aiTr.mjs').then(n => n._);
+  const { default: imageAssetMap } = await import("./content-assets_DleWbedO.mjs")
+  const imageObjects = /* @__PURE__ */ new Map()
+  const { getImage } = await import("./_astro_assets_TaW-aiTr.mjs").then((n) => n._)
   for (const [_full, imagePath] of html.matchAll(CONTENT_LAYER_IMAGE_REGEX)) {
     try {
-      const decodedImagePath = JSON.parse(imagePath.replaceAll("&#x22;", '"'));
-      let image;
+      const decodedImagePath = JSON.parse(imagePath.replaceAll("&#x22;", '"'))
+      let image
       if (URL.canParse(decodedImagePath.src)) {
-        image = await getImage(decodedImagePath);
+        image = await getImage(decodedImagePath)
       } else {
-        const id = imageSrcToImportId(decodedImagePath.src, fileName);
-        const imported = imageAssetMap.get(id);
+        const id = imageSrcToImportId(decodedImagePath.src, fileName)
+        const imported = imageAssetMap.get(id)
         if (!id || imageObjects.has(id) || !imported) {
-          continue;
+          continue
         }
-        image = await getImage({ ...decodedImagePath, src: imported });
+        image = await getImage({ ...decodedImagePath, src: imported })
       }
-      imageObjects.set(imagePath, image);
+      imageObjects.set(imagePath, image)
     } catch {
-      throw new Error(`Failed to parse image reference: ${imagePath}`);
+      throw new Error(`Failed to parse image reference: ${imagePath}`)
     }
   }
   return html.replaceAll(CONTENT_LAYER_IMAGE_REGEX, (full, imagePath) => {
-    const image = imageObjects.get(imagePath);
+    const image = imageObjects.get(imagePath)
     if (!image) {
-      return full;
+      return full
     }
-    const { index, ...attributes } = image.attributes;
+    const { index, ...attributes } = image.attributes
     return Object.entries({
       ...attributes,
       src: image.src,
-      srcset: image.srcSet.attribute
-    }).map(([key, value]) => value ? `${key}="${escape(value)}"` : "").join(" ");
-  });
+      srcset: image.srcSet.attribute,
+    })
+      .map(([key, value]) => (value ? `${key}="${escape(value)}"` : ""))
+      .join(" ")
+  })
 }
 function updateImageReferencesInData(data, fileName, imageAssetMap) {
-  return new j(data).map(function(ctx, val) {
+  return new j(data).map(function (ctx, val) {
     if (typeof val === "string" && val.startsWith(IMAGE_IMPORT_PREFIX)) {
-      const src = val.replace(IMAGE_IMPORT_PREFIX, "");
-      const id = imageSrcToImportId(src, fileName);
+      const src = val.replace(IMAGE_IMPORT_PREFIX, "")
+      const id = imageSrcToImportId(src, fileName)
       if (!id) {
-        ctx.update(src);
-        return;
+        ctx.update(src)
+        return
       }
-      const imported = imageAssetMap?.get(id);
+      const imported = imageAssetMap?.get(id)
       if (imported) {
-        ctx.update(imported);
+        ctx.update(imported)
       } else {
-        ctx.update(src);
+        ctx.update(src)
       }
     }
-  });
+  })
 }
 async function renderEntry(entry) {
   if (!entry) {
-    throw new AstroError(RenderUndefinedEntryError);
+    throw new AstroError(RenderUndefinedEntryError)
   }
   if ("render" in entry && !("legacyId" in entry)) {
-    return entry.render();
+    return entry.render()
   }
   if (entry.deferredRender) {
     try {
-      const { default: contentModules } = await import('./content-modules_E-jUvBBk.mjs');
-      const renderEntryImport = contentModules.get(entry.filePath);
+      const { default: contentModules } = await import("./content-modules_E-jUvBBk.mjs")
+      const renderEntryImport = contentModules.get(entry.filePath)
       return render({
         collection: "",
         id: entry.id,
-        renderEntryImport
-      });
+        renderEntryImport,
+      })
     } catch (e) {
-      console.error(e);
+      console.error(e)
     }
   }
-  const html = entry?.rendered?.metadata?.imagePaths?.length && entry.filePath ? await updateImageReferencesInBody(entry.rendered.html, entry.filePath) : entry?.rendered?.html;
-  const Content = createComponent(() => renderTemplate`${unescapeHTML(html)}`);
+  const html =
+    entry?.rendered?.metadata?.imagePaths?.length && entry.filePath
+      ? await updateImageReferencesInBody(entry.rendered.html, entry.filePath)
+      : entry?.rendered?.html
+  const Content = createComponent(() => renderTemplate`${unescapeHTML(html)}`)
   return {
     Content,
     headings: entry?.rendered?.metadata?.headings ?? [],
-    remarkPluginFrontmatter: entry?.rendered?.metadata?.frontmatter ?? {}
-  };
+    remarkPluginFrontmatter: entry?.rendered?.metadata?.frontmatter ?? {},
+  }
 }
-async function render({
-  collection,
-  id,
-  renderEntryImport
-}) {
+async function render({ collection, id, renderEntryImport }) {
   const UnexpectedRenderError = new AstroError({
     ...UnknownContentCollectionError,
-    message: `Unexpected error while rendering ${String(collection)} → ${String(id)}.`
-  });
-  if (typeof renderEntryImport !== "function") throw UnexpectedRenderError;
-  const baseMod = await renderEntryImport();
-  if (baseMod == null || typeof baseMod !== "object") throw UnexpectedRenderError;
-  const { default: defaultMod } = baseMod;
+    message: `Unexpected error while rendering ${String(collection)} → ${String(id)}.`,
+  })
+  if (typeof renderEntryImport !== "function") throw UnexpectedRenderError
+  const baseMod = await renderEntryImport()
+  if (baseMod == null || typeof baseMod !== "object") throw UnexpectedRenderError
+  const { default: defaultMod } = baseMod
   if (isPropagatedAssetsModule(defaultMod)) {
-    const { collectedStyles, collectedLinks, collectedScripts, getMod } = defaultMod;
-    if (typeof getMod !== "function") throw UnexpectedRenderError;
-    const propagationMod = await getMod();
-    if (propagationMod == null || typeof propagationMod !== "object") throw UnexpectedRenderError;
+    const { collectedStyles, collectedLinks, collectedScripts, getMod } = defaultMod
+    if (typeof getMod !== "function") throw UnexpectedRenderError
+    const propagationMod = await getMod()
+    if (propagationMod == null || typeof propagationMod !== "object") throw UnexpectedRenderError
     const Content = createComponent({
       factory(result, baseProps, slots) {
-        let styles = "", links = "", scripts = "";
+        let styles = "",
+          links = "",
+          scripts = ""
         if (Array.isArray(collectedStyles)) {
-          styles = collectedStyles.map((style) => {
-            return renderUniqueStylesheet(result, {
-              type: "inline",
-              content: style
-            });
-          }).join("");
+          styles = collectedStyles
+            .map((style) => {
+              return renderUniqueStylesheet(result, {
+                type: "inline",
+                content: style,
+              })
+            })
+            .join("")
         }
         if (Array.isArray(collectedLinks)) {
-          links = collectedLinks.map((link) => {
-            return renderUniqueStylesheet(result, {
-              type: "external",
-              src: prependForwardSlash(link)
-            });
-          }).join("");
+          links = collectedLinks
+            .map((link) => {
+              return renderUniqueStylesheet(result, {
+                type: "external",
+                src: prependForwardSlash(link),
+              })
+            })
+            .join("")
         }
         if (Array.isArray(collectedScripts)) {
-          scripts = collectedScripts.map((script) => renderScriptElement(script)).join("");
+          scripts = collectedScripts.map((script) => renderScriptElement(script)).join("")
         }
-        let props = baseProps;
+        let props = baseProps
         if (id.endsWith("mdx")) {
           props = {
             components: propagationMod.components ?? {},
-            ...baseProps
-          };
+            ...baseProps,
+          }
         }
         return createHeadAndContent(
           unescapeHTML(styles + links + scripts),
-          renderTemplate`${renderComponent(
-            result,
-            "Content",
-            propagationMod.Content,
-            props,
-            slots
-          )}`
-        );
+          renderTemplate`${renderComponent(result, "Content", propagationMod.Content, props, slots)}`,
+        )
       },
-      propagation: "self"
-    });
+      propagation: "self",
+    })
     return {
       Content,
       headings: propagationMod.getHeadings?.() ?? [],
-      remarkPluginFrontmatter: propagationMod.frontmatter ?? {}
-    };
+      remarkPluginFrontmatter: propagationMod.frontmatter ?? {},
+    }
   } else if (baseMod.Content && typeof baseMod.Content === "function") {
     return {
       Content: baseMod.Content,
       headings: baseMod.getHeadings?.() ?? [],
-      remarkPluginFrontmatter: baseMod.frontmatter ?? {}
-    };
+      remarkPluginFrontmatter: baseMod.frontmatter ?? {},
+    }
   } else {
-    throw UnexpectedRenderError;
+    throw UnexpectedRenderError
   }
 }
 function isPropagatedAssetsModule(module) {
-  return typeof module === "object" && module != null && "__astroPropagation" in module;
+  return typeof module === "object" && module != null && "__astroPropagation" in module
 }
 
 // astro-head-inject
 
-const contentDir = '/src/content/';
+const contentDir = "/src/content/"
 
-const contentEntryGlob = "";
+const contentEntryGlob = ""
 const contentCollectionToEntryMap = createCollectionToGlobResultMap({
-	globResult: contentEntryGlob,
-	contentDir,
-});
+  globResult: contentEntryGlob,
+  contentDir,
+})
 
-const dataEntryGlob = "";
+const dataEntryGlob = ""
 const dataCollectionToEntryMap = createCollectionToGlobResultMap({
-	globResult: dataEntryGlob,
-	contentDir,
-});
+  globResult: dataEntryGlob,
+  contentDir,
+})
 const collectionToEntryMap = createCollectionToGlobResultMap({
-	globResult: { ...contentEntryGlob, ...dataEntryGlob },
-	contentDir,
-});
+  globResult: { ...contentEntryGlob, ...dataEntryGlob },
+  contentDir,
+})
 
-let lookupMap = {};
-lookupMap = {};
+let lookupMap = {}
+lookupMap = {}
 
-const collectionNames = new Set(Object.keys(lookupMap));
+const collectionNames = new Set(Object.keys(lookupMap))
 
 function createGlobLookup(glob) {
-	return async (collection, lookupId) => {
-		const filePath = lookupMap[collection]?.entries[lookupId];
+  return async (collection, lookupId) => {
+    const filePath = lookupMap[collection]?.entries[lookupId]
 
-		if (!filePath) return undefined;
-		return glob[collection][filePath];
-	};
+    if (!filePath) return undefined
+    return glob[collection][filePath]
+  }
 }
 
-const renderEntryGlob = "";
+const renderEntryGlob = ""
 const collectionToRenderEntryMap = createCollectionToGlobResultMap({
-	globResult: renderEntryGlob,
-	contentDir,
-});
+  globResult: renderEntryGlob,
+  contentDir,
+})
 
-const cacheEntriesByCollection = new Map();
+const cacheEntriesByCollection = new Map()
 const getCollection = createGetCollection({
-	contentCollectionToEntryMap,
-	dataCollectionToEntryMap,
-	getRenderEntryImport: createGlobLookup(collectionToRenderEntryMap),
-	cacheEntriesByCollection,
-});
+  contentCollectionToEntryMap,
+  dataCollectionToEntryMap,
+  getRenderEntryImport: createGlobLookup(collectionToRenderEntryMap),
+  cacheEntriesByCollection,
+})
 
 const getEntry = createGetEntry({
-	getEntryImport: createGlobLookup(collectionToEntryMap),
-	getRenderEntryImport: createGlobLookup(collectionToRenderEntryMap),
-	collectionNames,
-});
+  getEntryImport: createGlobLookup(collectionToEntryMap),
+  getRenderEntryImport: createGlobLookup(collectionToRenderEntryMap),
+  collectionNames,
+})
 
-export { CONTENT_LAYER_TYPE as C, getEntry as a, defineCollection as d, getCollection as g, pLimit as p, renderEntry as r };
+export {
+  CONTENT_LAYER_TYPE as C,
+  getEntry as a,
+  defineCollection as d,
+  getCollection as g,
+  pLimit as p,
+  renderEntry as r,
+}

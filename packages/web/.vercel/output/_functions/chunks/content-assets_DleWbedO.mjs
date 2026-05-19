@@ -1,3 +1,3 @@
-const contentAssets = new Map();
+const contentAssets = new Map()
 
-export { contentAssets as default };
+export { contentAssets as default }

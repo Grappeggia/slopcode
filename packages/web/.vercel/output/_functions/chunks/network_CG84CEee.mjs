@@ -1,8 +1,8 @@
 async function getMod() {
-						return import('./network_CRrU7y0s.mjs');
-					}
-					const collectedLinks = [];
-					const collectedStyles = [];
-					const defaultMod = { __astroPropagation: true, getMod, collectedLinks, collectedStyles, collectedScripts: [] };
+  return import("./network_CRrU7y0s.mjs")
+}
+const collectedLinks = []
+const collectedStyles = []
+const defaultMod = { __astroPropagation: true, getMod, collectedLinks, collectedStyles, collectedScripts: [] }
 
-export { defaultMod as default };
+export { defaultMod as default }
