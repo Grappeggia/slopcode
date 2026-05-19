@@ -1,9 +1,9 @@
 ---
 title: IDE
-description: The SlopCode extension for VS Code, Cursor, and other IDEs
+description: The SlopCode extension for VS Code, Cursor, Zed, and other IDEs
 ---
 
-SlopCode integrates with VS Code, Cursor, or any IDE that supports a terminal. Just run `slopcode` in the terminal to get started.
+SlopCode integrates with VS Code, Cursor, Zed, or any IDE that supports a terminal. Just run `slopcode` in the terminal to get started.
 
 ---
 
@@ -31,6 +31,20 @@ If on the other hand you want to use your own IDE when you run `/editor` or `/ex
 ### Manual Install
 
 Search for **SlopCode** in the Extension Marketplace and click **Install**.
+
+---
+
+## Zed
+
+SlopCode also ships a Zed agent extension. The extension downloads the matching SlopCode release binary for your platform and runs `slopcode acp` as an agent server.
+
+Use Zed's extension manager to install **SlopCode**, then configure providers with the normal CLI flow:
+
+```bash
+slopcode auth login
+```
+
+You can still run `slopcode` in Zed's integrated terminal when you prefer the full TUI.
 
 ---
 

@@ -47,16 +47,21 @@ SlopCode has a list of keybinds that you can customize through `tui.json`.
     "messages_last_user": "none",
     "messages_toggle_conceal": "<leader>h",
     "model_list": "<leader>m",
+    "model_provider_list": "ctrl+a",
+    "model_favorite_toggle": "ctrl+f",
+    "model_show_all_toggle": "ctrl+o",
     "model_cycle_recent": "f2",
     "model_cycle_recent_reverse": "shift+f2",
     "model_cycle_favorite": "none",
     "model_cycle_favorite_reverse": "none",
     "variant_cycle": "ctrl+t",
+    "variant_list": "none",
     "history_mode_toggle": "ctrl+y",
     "command_list": "ctrl+p",
     "agent_list": "<leader>a",
     "agent_cycle": "tab",
     "agent_cycle_reverse": "shift+tab",
+    "permission_auto_accept_toggle": "shift+tab",
     "input_clear": "ctrl+c",
     "input_paste": "ctrl+v",
     "input_submit": "return",
@@ -151,6 +156,20 @@ Use `history_previous` and `history_next` to move through history-mode prompt en
 :::tip
 By default, `history_mode_toggle` is `ctrl+y`.
 :::
+
+---
+
+## Model dialog keybinds
+
+These keybinds apply while the model dialog is open:
+
+| Keybind | Default | Action |
+| ------- | ------- | ------ |
+| `model_provider_list` | `ctrl+a` | Open provider selection or connect another provider |
+| `model_favorite_toggle` | `ctrl+f` | Favorite or unfavorite the selected model |
+| `model_show_all_toggle` | `ctrl+o` | Toggle between the latest filtered model list and all models |
+
+Use favorites for the models you switch to often, and use show-all when a provider has older or hidden models that are not in the default list.
 
 ---
 

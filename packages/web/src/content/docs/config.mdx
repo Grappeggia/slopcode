@@ -227,6 +227,57 @@ Available options:
 
 [Learn more about the server here](/docs/server).
 
+### Runtime
+
+Use runtime options when you need to tune long-running local processes, shell behavior, or session limits.
+
+```json title="slopcode.json"
+{
+  "$schema": "https://slopcode.dev/config.json",
+  "daemon": {
+    "idle_timeout_ms": 1800000
+  },
+  "pty": {
+    "idle_timeout_ms": 600000
+  },
+  "session": {
+    "turn_timeout_ms": 900000
+  },
+  "shell": {
+    "program": "/bin/zsh",
+    "timeout_ms": 300000
+  }
+}
+```
+
+Available options:
+
+- `daemon.idle_timeout_ms` - How long the shared local daemon stays alive while idle.
+- `pty.idle_timeout_ms` - How long orphaned pseudo-terminals stay alive.
+- `session.turn_timeout_ms` - Maximum time for a single model turn before it is aborted.
+- `shell.program` - Shell executable used for shell mode, PTY sessions, and the `bash` tool.
+- `shell.timeout_ms` - Maximum time for session shell commands before termination.
+
+You can set `shell.program` from the TUI with `/shells`.
+
+---
+
+### Reference repos
+
+Use `reference` to name local paths or Git repositories that scout tools can inspect.
+
+```json title="slopcode.json"
+{
+  "$schema": "https://slopcode.dev/config.json",
+  "reference": {
+    "sdk": { "repository": "teamslop/slopcode", "branch": "dev" },
+    "design": { "path": "../design-system" }
+  }
+}
+```
+
+Reference repository tools require `SLOPCODE_EXPERIMENTAL_SCOUT=true` (or `SLOPCODE_EXPERIMENTAL=true`). `repo_clone` caches remote repositories, and `repo_overview` summarizes cached repositories or configured local paths.
+
 ---
 
 ### Tools

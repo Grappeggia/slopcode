@@ -27,6 +27,56 @@ Give me a quick summary of the codebase.
 
 ---
 
+## Navigate
+
+The main TUI adds a session strip, draft tabs, an open-files sidebar, and a file explorer so you can move between active threads without leaving the terminal.
+
+Use the sidebar to jump between files, or keep drafts open while another session is still running.
+
+---
+
+## Edit
+
+SlopCode includes an embedded editor with bundled Neovim support for focused edits inside the TUI.
+
+Use it when you want to inspect or patch files without switching to a separate terminal pane.
+
+---
+
+## Queue
+
+Follow-up prompts are queued by default, so one run finishes before the next one starts.
+
+You can pause the active item, resume it ahead of queued work, and remove queued prompts when priorities change.
+
+---
+
+## Suggest
+
+Prompt input supports model-powered autocomplete with ghost text.
+
+Suggestions stay inline, and history mode hides them when you switch to timeline navigation.
+
+Use `/models-completion` to choose a different model for prompt autocomplete. This does not change the active chat model; it only changes the fast model SlopCode uses for inline suggestions.
+
+---
+
+## Trust edits
+
+The TUI can auto-accept edit permission prompts for the current session. This keeps focused patch series moving while still leaving command and external-directory approvals under your normal permission rules.
+
+Use the `permission_auto_accept_toggle` keybind when you want to turn this edit-only shortcut on or off.
+
+---
+
+## Track
+
+The prompt bar shows the current phase, queue state, and token pressure while a run is active.
+
+This makes it easier to notice when a long task is still planning, executing, or nearing the context limit.
+
+---
+
 ## File references
 
 You can reference files in your messages using `@`. This does a fuzzy file search in the current working directory.
@@ -52,6 +102,8 @@ Start a message with `!` to run a shell command.
 ```
 
 The output of the command is added to the conversation as a tool result.
+
+Use `/shells` to pick the default shell SlopCode should use for `!` commands, PTY sessions, and the `bash` tool. The selected shell is saved as `shell.program` in your global config.
 
 ---
 
@@ -165,13 +217,23 @@ Create or update `AGENTS.md` file. [Learn more](/docs/rules).
 
 ### models
 
-List available models.
+List available models. The model dialog lets you favorite models, jump to provider selection, and toggle between the latest filtered list and all available models.
 
 ```bash frame="none"
 /models
 ```
 
 **Keybind:** `ctrl+x m`
+
+---
+
+### models-completion
+
+Choose model overrides for prompt autocomplete. Use this when you want chat responses on a large model but inline suggestions from a faster or cheaper model.
+
+```bash frame="none"
+/models-completion
+```
 
 ---
 
@@ -215,6 +277,16 @@ List and switch between sessions. _Aliases_: `/resume`, `/continue`
 ```
 
 **Keybind:** `ctrl+x l`
+
+---
+
+### shells
+
+Choose the shell executable used by shell mode, PTY sessions, and the `bash` tool. _Alias_: `/shell`
+
+```bash frame="none"
+/shells
+```
 
 ---
 
@@ -293,9 +365,19 @@ While history mode is active, `up` and `down` move between prompts, `left` and `
 
 Pressing `space` expands or collapses tool output, and opens a child task session when the selected item supports it.
 
+History mode also lets you inspect prompts, traces, tool output, and visible reasoning blocks from one place.
+
 Use `history_mode_toggle` (defaults to `ctrl+y`) to exit history mode and return to normal edit mode.
 
 Unlike normal prompt input history (`history_previous` and `history_next`), history mode navigates rendered session content instead of cycling through text in the input box.
+
+---
+
+## Move
+
+Workspace switching lets the TUI retarget the current session to another folder without closing the app.
+
+Warping is useful when you need the same conversation context in a nearby repo or sibling package.
 
 ---
 
@@ -382,7 +464,8 @@ You can customize TUI behavior through `tui.json` (or `tui.jsonc`).
   "scroll_acceleration": {
     "enabled": true
   },
-  "diff_style": "auto"
+  "diff_style": "auto",
+  "mouse": false
 }
 ```
 
@@ -395,6 +478,7 @@ This is separate from `slopcode.json`, which configures server/runtime behavior.
 - `scroll_acceleration.enabled` - Enable macOS-style scroll acceleration for smooth, natural scrolling. When enabled, scroll speed increases with rapid scrolling gestures and stays precise for slower movements. **This setting takes precedence over `scroll_speed` and overrides it when enabled.**
 - `scroll_speed` - Controls how fast the TUI scrolls when using scroll commands (minimum: `0.001`, supports decimal values). Defaults to `3`. **Note: This is ignored if `scroll_acceleration.enabled` is set to `true`.**
 - `diff_style` - Controls diff rendering. `"auto"` adapts to terminal width, `"stacked"` always shows a single-column layout.
+- `mouse` - Enables mouse capture. Set it to `false` to preserve native terminal mouse behavior like selection and scrollback.
 
 Use `SLOPCODE_TUI_CONFIG` to load a custom TUI config path.
 

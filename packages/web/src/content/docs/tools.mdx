@@ -344,6 +344,79 @@ Each question includes a header, the question text, and a list of options. Users
 
 ---
 
+### task
+
+Launch a subagent for a focused unit of work.
+
+```json title="slopcode.json" {4}
+{
+  "$schema": "https://slopcode.dev/config.json",
+  "permission": {
+    "task": "allow"
+  }
+}
+```
+
+Subagents run in child sessions. When `SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`, the tool can also accept `background: true` and return immediately.
+
+---
+
+### task_status
+
+Check the status of a background subagent.
+
+::::note
+This tool is only available when `SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` (or `SLOPCODE_EXPERIMENTAL=true`).
+::::
+
+Use it with the `task_id` returned by a background `task` call. Set `wait: true` when you want to block until the task finishes or times out.
+
+---
+
+### followup_recommendations
+
+Suggest concrete next actions near the end of a response.
+
+Recommendations can point to tests, verification commands, commits, pull requests, or follow-up fixes. They are advisory only; they do not execute commands or change files.
+
+---
+
+### repo_clone (experimental)
+
+Clone a reference repository into SlopCode's managed cache.
+
+::::note
+This tool is only available when `SLOPCODE_EXPERIMENTAL_SCOUT=true` (or `SLOPCODE_EXPERIMENTAL=true`).
+::::
+
+The repository can be a Git URL, a host/path reference, or a GitHub `owner/repo` shorthand. Use the `reference` config to make commonly inspected repositories available to scout workflows.
+
+---
+
+### repo_overview (experimental)
+
+Summarize the structure, entrypoints, dependencies, and ecosystem hints for a cached reference repository or local path.
+
+::::note
+This tool is only available when `SLOPCODE_EXPERIMENTAL_SCOUT=true` (or `SLOPCODE_EXPERIMENTAL=true`).
+::::
+
+`repo_overview` is useful when a subagent needs context from a related repository without copying that repository into the current workspace.
+
+---
+
+### plan_permissions (experimental)
+
+Queue likely build-mode permissions for review before switching from plan mode to build mode.
+
+::::note
+This tool is only available when `SLOPCODE_EXPERIMENTAL_PLAN_MODE=true` (or `SLOPCODE_EXPERIMENTAL=true`) in the CLI client.
+::::
+
+The forecast helps you review expected access early. It does not grant the underlying `bash`, `edit`, or external-directory permissions by itself.
+
+---
+
 ## Custom tools
 
 Custom tools let you define your own functions that the LLM can call. These are defined in your config file and can execute arbitrary code.

@@ -57,6 +57,16 @@ Prompt input supports model-powered autocomplete with ghost text.
 
 Suggestions stay inline, and history mode hides them when you switch to timeline navigation.
 
+Use `/models-completion` to choose a different model for prompt autocomplete. This does not change the active chat model; it only changes the fast model SlopCode uses for inline suggestions.
+
+---
+
+## Trust edits
+
+The TUI can auto-accept edit permission prompts for the current session. This keeps focused patch series moving while still leaving command and external-directory approvals under your normal permission rules.
+
+Use the `permission_auto_accept_toggle` keybind when you want to turn this edit-only shortcut on or off.
+
 ---
 
 ## Track
@@ -92,6 +102,8 @@ Start a message with `!` to run a shell command.
 ```
 
 The output of the command is added to the conversation as a tool result.
+
+Use `/shells` to pick the default shell SlopCode should use for `!` commands, PTY sessions, and the `bash` tool. The selected shell is saved as `shell.program` in your global config.
 
 ---
 
@@ -205,13 +217,23 @@ Create or update `AGENTS.md` file. [Learn more](/docs/rules).
 
 ### models
 
-List available models.
+List available models. The model dialog lets you favorite models, jump to provider selection, and toggle between the latest filtered list and all available models.
 
 ```bash frame="none"
 /models
 ```
 
 **Keybind:** `ctrl+x m`
+
+---
+
+### models-completion
+
+Choose model overrides for prompt autocomplete. Use this when you want chat responses on a large model but inline suggestions from a faster or cheaper model.
+
+```bash frame="none"
+/models-completion
+```
 
 ---
 
@@ -255,6 +277,16 @@ List and switch between sessions. _Aliases_: `/resume`, `/continue`
 ```
 
 **Keybind:** `ctrl+x l`
+
+---
+
+### shells
+
+Choose the shell executable used by shell mode, PTY sessions, and the `bash` tool. _Alias_: `/shell`
+
+```bash frame="none"
+/shells
+```
 
 ---
 

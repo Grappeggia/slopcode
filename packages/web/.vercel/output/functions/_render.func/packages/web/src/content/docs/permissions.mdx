@@ -141,6 +141,10 @@ SlopCode permissions are keyed by tool name, plus a couple of safety guards:
 - `todoread`, `todowrite` — reading/updating the todo list
 - `webfetch` — fetching a URL (matches the URL)
 - `websearch`, `codesearch` — web/code search (matches the query)
+- `followup_recommendations` — suggested next actions (non-mutating)
+- `repo_clone`, `repo_overview` — scout/reference repository tools
+- `plan_permissions` — permission forecasts before leaving plan mode
+- `task_status` — background subagent status checks
 - `external_directory` — triggered when a tool touches paths outside the project working directory
 - `doom_loop` — triggered when the same tool call repeats 3 times with identical input
 
@@ -178,6 +182,28 @@ When SlopCode prompts for approval, the UI offers three outcomes:
 - `reject` — deny the request
 
 The set of patterns that `always` would approve is provided by the tool (for example, bash approvals typically whitelist a safe command prefix like `git status*`).
+
+In the TUI, multiple pending requests are grouped into a review flow so you can clear a batch instead of clicking through one dialog at a time.
+
+Build-heavy runs can also surface preapproval choices for repeated safe commands before the next step starts.
+
+The TUI can also auto-accept edit prompts for the current session. This shortcut only replies to `edit` permission requests, and the configured rules still decide whether those edits are allowed, denied, or must be asked.
+
+---
+
+## Forecast access
+
+Plan mode can queue likely build-mode permissions before switching to implementation. The `plan_permissions` forecast lets you review expected `bash`, `edit`, or external-directory needs early.
+
+Forecasting does not grant the underlying tool permissions by itself. It only prepares the review flow so you can approve, narrow, or reject likely requests before build mode starts.
+
+---
+
+## Review
+
+Use `queue_mode: "serial"` when you want approvals to stay in step with queued prompts.
+
+This keeps pauses, resumes, and batched reviews predictable during longer sessions.
 
 ---
 

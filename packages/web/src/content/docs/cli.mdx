@@ -582,8 +582,10 @@ SlopCode can be configured using environment variables.
 | `SLOPCODE_CONFIG_CONTENT`             | string  | Inline json config content                        |
 | `SLOPCODE_DISABLE_AUTOUPDATE`         | boolean | Disable automatic update checks                   |
 | `SLOPCODE_DISABLE_PRUNE`              | boolean | Disable pruning of old data                       |
+| `SLOPCODE_DISABLE_MOUSE`              | boolean | Disable mouse support in the TUI                   |
 | `SLOPCODE_DISABLE_TERMINAL_TITLE`     | boolean | Disable automatic terminal title updates          |
 | `SLOPCODE_PERMISSION`                 | string  | Inlined json permissions config                   |
+| `SLOPCODE_PURE`                       | boolean | Reduce terminal styling and feature detection      |
 | `SLOPCODE_DISABLE_DEFAULT_PLUGINS`    | boolean | Disable default plugins                           |
 | `SLOPCODE_DISABLE_LSP_DOWNLOAD`       | boolean | Disable automatic LSP server downloads            |
 | `SLOPCODE_ENABLE_EXPERIMENTAL_MODELS` | boolean | Enable experimental models                        |
@@ -591,14 +593,18 @@ SlopCode can be configured using environment variables.
 | `SLOPCODE_DISABLE_CLAUDE_CODE`        | boolean | Disable reading from `.claude` (prompt + skills)  |
 | `SLOPCODE_DISABLE_CLAUDE_CODE_PROMPT` | boolean | Disable reading `~/.claude/CLAUDE.md`             |
 | `SLOPCODE_DISABLE_CLAUDE_CODE_SKILLS` | boolean | Disable loading `.claude/skills`                  |
+| `SLOPCODE_DISABLE_EXTERNAL_SKILLS`    | boolean | Disable external `.claude` and `.agents` skills    |
 | `SLOPCODE_DISABLE_MODELS_FETCH`       | boolean | Disable fetching models from remote sources       |
+| `SLOPCODE_DISABLE_PROJECT_CONFIG`     | boolean | Ignore project config files                        |
 | `SLOPCODE_FAKE_VCS`                   | string  | Fake VCS provider for testing purposes            |
 | `SLOPCODE_DISABLE_FILETIME_CHECK`     | boolean | Disable file time checking for optimization       |
 | `SLOPCODE_CLIENT`                     | string  | Client identifier (defaults to `cli`)             |
 | `SLOPCODE_ENABLE_EXA`                 | boolean | Enable Exa web search tools                       |
 | `SLOPCODE_SERVER_PASSWORD`            | string  | Enable basic auth for `serve`/`web`               |
 | `SLOPCODE_SERVER_USERNAME`            | string  | Override basic auth username (default `slopcode`) |
+| `SLOPCODE_ENABLE_QUESTION_TOOL`       | boolean | Enable the question tool for non-interactive clients |
 | `SLOPCODE_MODELS_URL`                 | string  | Custom URL for fetching models configuration      |
+| `SLOPCODE_MODELS_PATH`                | string  | Load model metadata from a local file              |
 
 ---
 
@@ -621,3 +627,5 @@ These environment variables enable experimental features that may change or be r
 | `SLOPCODE_EXPERIMENTAL_LSP_TY`                  | boolean | Enable experimental LSP type checking   |
 | `SLOPCODE_EXPERIMENTAL_MARKDOWN`                | boolean | Enable experimental markdown features   |
 | `SLOPCODE_EXPERIMENTAL_PLAN_MODE`               | boolean | Enable plan mode                        |
+| `SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS` | boolean | Enable background subagents and `task_status` |
+| `SLOPCODE_EXPERIMENTAL_SCOUT`                 | boolean | Enable reference repo scout tools            |

@@ -110,6 +110,35 @@ if [[ "$os" == "darwin" && "$arch" == "x64" ]]; then
   fi
 fi
 
+is_termux=false
+if [[ -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == *"/com.termux/"* ]]; then
+  if ! getconf GNU_LIBC_VERSION 2>/dev/null | grep -qi glibc; then
+    is_termux=true
+  fi
+fi
+
+if [[ "$is_termux" == "true" ]]; then
+  print_message info "Installing SlopCode for native Termux (Android/bionic)..."
+  if [[ "$arch" != "arm64" && "$arch" != "x64" ]]; then
+    print_message error "Native Termux install currently supports Android arm64/x64 only (detected $arch)."
+    exit 1
+  fi
+  if ! command -v pkg >/dev/null 2>&1; then
+    print_message error "Termux pkg is required for native Android install."
+    exit 1
+  fi
+  pkg update -y
+  pkg install -y nodejs git ripgrep neovim
+  if ! command -v npm >/dev/null 2>&1; then
+    print_message error "npm was not found after installing nodejs."
+    exit 1
+  fi
+  npm install -g slopcode@latest --include=optional
+  print_message success "SlopCode installed for native Termux."
+  print_message warning "Native Termux supports CLI/server commands. Use proot-distro for the interactive TUI until Bun Android enables FFI."
+  exit 0
+fi
+
 case "$os-$arch" in
   linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64) ;;
   *)

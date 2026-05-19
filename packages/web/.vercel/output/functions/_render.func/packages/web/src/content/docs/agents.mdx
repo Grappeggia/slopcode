@@ -128,6 +128,16 @@ Hidden system agent that creates session summaries. It runs automatically and is
 
 ---
 
+## Background subagents
+
+Subagents can run in the background when `SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` (or `SLOPCODE_EXPERIMENTAL=true`). This is best for independent research, long codebase scans, or work that can continue while the main session handles another task.
+
+A background `task` call returns a `task_id` immediately. Use `task_status` with that ID to poll later, or set `wait: true` when you want to wait for completion.
+
+Background subagents still use the same agent permissions as foreground subagents. They do not bypass `task`, `bash`, `edit`, or external-directory approval rules.
+
+---
+
 ## Configure
 
 You can customize the built-in agents or create your own through configuration. Agents can be configured in two ways:
