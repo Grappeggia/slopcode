@@ -359,7 +359,6 @@ function pLimit(concurrency) {
     new Promise((internalResolve) => {
       queue.enqueue(internalResolve)
     }).then(run.bind(undefined, function_, resolve, arguments_))
-
     ;(async () => {
       // This function needs to wait until the next microtask before comparing
       // `activeCount` to `concurrency`, because `activeCount` is updated asynchronously
