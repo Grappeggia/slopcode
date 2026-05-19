@@ -101,6 +101,28 @@ export const TuiThreadCommand = cmd({
       })
 
       if (termux) {
+        const { androidHostTui } = await import("./android-host")
+        if (
+          await androidHostTui({
+            url: daemon.url,
+            config,
+            directory: cwd,
+            viewID,
+            headers: daemon.headers,
+            args: {
+              continue: args.continue,
+              sessionID: args.session,
+              agent: args.agent,
+              model: args.model,
+              prompt,
+              fork: args.fork,
+            },
+            onExit: async () => {},
+          })
+        ) {
+          return
+        }
+
         if (process.env.SLOPCODE_TERMUX_LEGACY !== "1") {
           const { portableTui } = await import("./portable")
           await portableTui({
