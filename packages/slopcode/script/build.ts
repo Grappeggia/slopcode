@@ -434,6 +434,16 @@ const androidClient = async (name: string, arch: "arm64" | "x64") => {
   await $`chmod 755 ${bin}`
 }
 
+const androidHost = async (name: string, arch: "arm64" | "x64") => {
+  const rust = androidRust(arch)
+  const bin = path.join(dir, "dist", name, "bin", "slopcode-android-host")
+  const linker = path.join(androidNdk(), "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", rust.linker)
+  if (!fs.existsSync(linker)) throw new Error(`Missing Android linker at ${linker}`)
+  await $`rustup target add ${rust.target}`
+  await $`rustc --target ${rust.target} -C linker=${linker} -C opt-level=z -C strip=symbols native/android-host/main.rs -o ${bin}`
+  await $`chmod 755 ${bin}`
+}
+
 const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: string, workerPath: string) => {
   await fs.promises.mkdir(path.join(dir, "dist", name, "bin"), { recursive: true })
   await fs.promises.mkdir(path.join(dir, "dist", name, "bundle"), { recursive: true })
@@ -465,6 +475,7 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
   await androidOpentui(name, arch)
   await androidBun(name, arch)
   await androidClient(name, arch)
+  await androidHost(name, arch)
   await Bun.write(
     `dist/${name}/bin/slopcode`,
     [
@@ -492,6 +503,7 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
       '    SLOPCODE_BIONIC: "1",',
       "    SLOPCODE_ENTRYPOINT: bundle,",
       "    SLOPCODE_ANDROID_ROOT: root,",
+      '    SLOPCODE_ANDROID_HOST_PATH: path.join(root, "bin", "slopcode-android-host"),',
       '    OTUI_NO_NATIVE_RENDER: process.env.OTUI_NO_NATIVE_RENDER ?? "1",',
       "  },",
       "})",

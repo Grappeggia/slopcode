@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import path from "path"
+import fs from "fs"
 import { DaemonLauncher } from "@/daemon/launcher"
-import { android, native } from "@/cli/cmd/tui/platform"
+import { android, client, native } from "@/cli/cmd/tui/platform"
 
 const entry = process.env.SLOPCODE_ENTRYPOINT
 
@@ -17,6 +18,16 @@ describe("Android Termux runtime", () => {
     expect(native({ platform: "android", override: "1" })).toBe(true)
     expect(android({ platform: "android", override: undefined })).toBe(true)
     expect(android({ platform: "android", override: "1" })).toBe(false)
+  })
+
+  test("resolves bundled Termux client only when present", async () => {
+    const root = await fs.promises.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "slopcode-android-"))
+    const bin = path.join(root, "bin")
+    await fs.promises.mkdir(bin)
+    expect(client(root)).toBeUndefined()
+    await Bun.write(path.join(bin, "slopcode-termux"), "")
+    expect(client(root)).toBe(path.join(bin, "slopcode-termux"))
+    await fs.promises.rm(root, { recursive: true, force: true })
   })
 
   test("daemon children reuse bundled entrypoint", () => {
@@ -41,10 +52,14 @@ describe("Android Termux runtime", () => {
     expect(build).toContain("native/android-client/main.rs")
     expect(build).toContain("SLOPCODE_ANDROID_ROOT")
     expect(build).toContain('"slopcode-termux"')
+    expect(build).toContain("native/android-host/main.rs")
+    expect(build).toContain("SLOPCODE_ANDROID_HOST_PATH")
+    expect(build).toContain('"slopcode-android-host"')
     expect(build).toContain("process.exit(typeof result.status ===")
     expect(build).toContain("cwd(`dist/${key}`)")
     expect(build).toContain("cwd(`dist/${key}/bin`)")
     expect(thread).toContain('await import("./portable")')
     expect(thread).toContain("SLOPCODE_TERMUX_LEGACY")
+    expect(thread).toContain('await import("./android-host")')
   })
 })
