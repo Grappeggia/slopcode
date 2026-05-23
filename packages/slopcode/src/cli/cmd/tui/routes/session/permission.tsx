@@ -374,7 +374,9 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         body: (
           <Show when={command}>
             <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
-              <Line fg={theme.text} clamp>{"$ " + command}</Line>
+              <Line fg={theme.text} clamp>
+                {"$ " + command}
+              </Line>
             </box>
           </Show>
         ),
@@ -390,7 +392,9 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         body: (
           <Show when={desc}>
             <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
-              <Line fg={theme.text} clamp>{"o " + desc}</Line>
+              <Line fg={theme.text} clamp>
+                {"o " + desc}
+              </Line>
             </box>
           </Show>
         ),
@@ -462,7 +466,13 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
             <box paddingLeft={1} gap={1} backgroundColor={theme.backgroundPanel}>
               <Line>Patterns</Line>
               <box flexDirection="column" backgroundColor={theme.backgroundPanel}>
-                <For each={patterns}>{(item) => <Line fg={theme.text} clamp>{"- " + item}</Line>}</For>
+                <For each={patterns}>
+                  {(item) => (
+                    <Line fg={theme.text} clamp>
+                      {"- " + item}
+                    </Line>
+                  )}
+                </For>
               </box>
             </box>
           </Show>
@@ -613,7 +623,9 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
                   <For each={selected()}>
                     {(request) => (
                       <box flexDirection="column" gap={0} backgroundColor={theme.backgroundPanel}>
-                        <Line fg={theme.text} clamp>{row(request).primary}</Line>
+                        <Line fg={theme.text} clamp>
+                          {row(request).primary}
+                        </Line>
                         <Show when={row(request).secondary}>
                           <Line clamp>{row(request).secondary}</Line>
                         </Show>
@@ -836,7 +848,14 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
       borderColor={theme.error}
       customBorderChars={SplitBorder.customBorderChars}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1} backgroundColor={theme.backgroundPanel}>
+      <box
+        gap={1}
+        paddingLeft={1}
+        paddingRight={3}
+        paddingTop={1}
+        paddingBottom={1}
+        backgroundColor={theme.backgroundPanel}
+      >
         <box flexDirection="row" gap={1} paddingLeft={1} backgroundColor={theme.backgroundPanel}>
           <text fg={theme.error} bg={theme.backgroundPanel}>
             {"△"}
