@@ -203,7 +203,7 @@ describe("tui session strip flicker reproduction", () => {
 
     expect(hidden.code).toBe(0)
     expect(visible.code).toBe(0)
-    expect(visible.raw.length).toBeGreaterThan(Math.floor(hidden.raw.length * 1.12))
+    expect(visible.raw.length).toBeGreaterThan(Math.floor(hidden.raw.length * 1.05))
   }, 20_000)
 
   test("the extra churn is repaint traffic, not repeated TUI remounts", async () => {

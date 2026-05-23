@@ -257,7 +257,7 @@ async function runCase(op: "method" | "latest" | "upgrade", env: Record<string, 
     stderr: "pipe",
     env: {
       ...process.env,
-      PATH: `${dir}:${process.env.PATH || ""}`,
+      PATH: `${dir}${path.delimiter}${process.env.PATH || ""}`,
       SLOPCODE_TEST_LOG: log,
       INSTALLATION_PATH: installationPath,
       OP: op,
