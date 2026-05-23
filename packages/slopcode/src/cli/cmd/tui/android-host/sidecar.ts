@@ -1,23 +1,37 @@
+import { DaemonAuth } from "@/daemon/auth"
+import type { TuiConfig } from "@/config/tui"
 import { spawn } from "child_process"
-import { encode, type HostFrame } from "./protocol"
+import type { Args } from "../context/args"
 
-export function frame(input: { seq?: number; width?: number; height?: number; text: string }): HostFrame {
-  return {
-    type: "frame",
-    version: 1,
-    seq: input.seq ?? 1,
-    width: input.width ?? process.stdout.columns ?? 80,
-    height: input.height ?? process.stdout.rows ?? 24,
-    text: input.text,
-  }
-}
-
-export async function run(input: { path: string; text: string }) {
-  const child = spawn(input.path, [], { stdio: ["pipe", "inherit", "inherit"] })
-  child.stdin.write(encode({ type: "hello", version: 1 }))
-  child.stdin.write(encode(frame({ text: input.text })))
-  child.stdin.write(encode({ type: "exit", version: 1, code: 0 }))
-  child.stdin.end()
+export async function run(input: {
+  path: string
+  url: string
+  args: Args
+  config: TuiConfig.Info
+  directory?: string
+  viewID?: string
+  headers?: RequestInit["headers"]
+}) {
+  const headers = new Headers(input.headers)
+  const token = headers.get(DaemonAuth.Header) ?? ""
+  const child = spawn(
+    input.path,
+    [
+      "--url",
+      input.url,
+      "--token",
+      token,
+      ...(input.directory ? ["--cwd", input.directory] : []),
+      ...(input.viewID ? ["--view-id", input.viewID] : []),
+      ...(input.args.continue ? ["--continue"] : []),
+      ...(input.args.sessionID ? ["--session", input.args.sessionID] : []),
+      ...(input.args.fork ? ["--fork"] : []),
+      ...(input.args.model ? ["--model", input.args.model] : []),
+      ...(input.args.agent ? ["--agent", input.args.agent] : []),
+      ...(input.args.prompt ? ["--prompt", input.args.prompt] : []),
+    ],
+    { cwd: input.directory, stdio: "inherit" },
+  )
   return new Promise<void>((resolve, reject) => {
     child.on("error", reject)
     child.on("exit", (code) => {

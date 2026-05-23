@@ -65,4 +65,33 @@ describe("Android native client", () => {
       await fs.rm(dir, { recursive: true, force: true })
     }
   })
+
+  test("builds the native Android sidecar self-test", async () => {
+    if (process.platform === "win32") return
+    const check = Bun.spawn(["rustc", "--version"], { stdout: "pipe", stderr: "pipe" })
+    if ((await check.exited) !== 0) return
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-native-host-"))
+    try {
+      const bin = path.join(dir, "slopcode-android-host")
+      const build = Bun.spawn(["rustc", "native/android-host/main.rs", "-O", "-o", bin], {
+        cwd: path.join(import.meta.dir, ".."),
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      expect(await build.exited).toBe(0)
+
+      const proc = Bun.spawn([bin, "--self-test"], { stdout: "pipe", stderr: "pipe" })
+      const [code, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ])
+      expect(stderr).toBe("")
+      expect(code).toBe(0)
+      expect(stdout).toContain("slopcode-android-host ok")
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
 })

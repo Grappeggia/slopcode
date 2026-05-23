@@ -2,25 +2,23 @@ import { describe, expect, test } from "bun:test"
 import path from "path"
 import { decode, encode } from "@/cli/cmd/tui/android-host/protocol"
 import { probe, sidecar, wanted } from "@/cli/cmd/tui/android-host/probe"
-import { frame } from "@/cli/cmd/tui/android-host/sidecar"
 
 describe("Android host", () => {
   test("encodes and validates the IPC protocol", () => {
-    const item = frame({ width: 80, height: 24, text: "SlopCode\nAndroid" })
-
-    expect(decode(encode(item))).toEqual(item)
+    expect(decode(encode({ type: "hello", version: 1 }))).toEqual({ type: "hello", version: 1 })
     expect(decode("{")).toBeUndefined()
     expect(decode(JSON.stringify({ version: 1, type: "frame" }))).toBeUndefined()
   })
 
   test("selects Android host modes explicitly", () => {
-    expect(wanted()).toBe("opentui")
-    expect(wanted("")).toBe("opentui")
+    expect(wanted()).toBe("sidecar")
+    expect(wanted("")).toBe("sidecar")
     expect(wanted("0")).toBeUndefined()
     expect(wanted("false")).toBeUndefined()
     expect(wanted("portable")).toBeUndefined()
     expect(wanted("sidecar")).toBe("sidecar")
-    expect(wanted("1")).toBe("opentui")
+    expect(wanted("1")).toBe("sidecar")
+    expect(wanted("opentui")).toBe("opentui")
     expect(sidecar({ root: "/tmp/slopcode" })).toBe(path.join("/tmp/slopcode", "bin", "slopcode-android-host"))
   })
 
@@ -40,7 +38,7 @@ describe("Android host", () => {
       strategy: "fallback",
       reason: "android-host-disabled",
     })
-    expect(await probe({ platform: "android", importer: async () => ({}) })).toMatchObject({
+    expect(await probe({ platform: "android", host: "opentui", importer: async () => ({}) })).toMatchObject({
       enabled: true,
       available: true,
       strategy: "opentui",
@@ -49,6 +47,7 @@ describe("Android host", () => {
     expect(
       await probe({
         platform: "android",
+        host: "opentui",
         importer: async () => {
           throw new Error("bun:ffi unavailable")
         },

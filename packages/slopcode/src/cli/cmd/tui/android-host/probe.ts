@@ -27,8 +27,8 @@ export function sidecar(input: Pick<Input, "root" | "sidecar"> = {}) {
 export function wanted(value = process.env.SLOPCODE_ANDROID_HOST) {
   const text = value?.toLowerCase()
   if (text === "0" || text === "false" || text === "off" || text === "portable") return
-  if (text === "sidecar") return "sidecar"
-  return "opentui"
+  if (text === "opentui" || text === "shared") return "opentui"
+  return "sidecar"
 }
 
 export async function probe(input: Input = {}): Promise<HostProbe> {

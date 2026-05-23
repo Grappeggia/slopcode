@@ -40,13 +40,12 @@ describe("Android Termux runtime", () => {
     })
   })
 
-  test("Android wrapper preserves entrypoint and no-native renderer mode", async () => {
+  test("Android wrapper preserves entrypoint and sidecar host mode", async () => {
     const build = await Bun.file(path.join(import.meta.dir, "..", "script", "build.ts")).text()
     const thread = await Bun.file(path.join(import.meta.dir, "..", "src", "cli", "cmd", "tui", "thread.ts")).text()
 
     expect(build).toContain("SLOPCODE_ENTRYPOINT: bundle")
     expect(build).toContain("@slopcode-ai/slopcode-android-${arch}")
-    expect(build).toContain("OTUI_NO_NATIVE_RENDER")
     expect(build).toContain('@oven/bun-linux-${arch === "arm64" ? "aarch64" : "x64"}-android')
     expect(build).toContain("candidates.find((item) => fs.existsSync(item))")
     expect(build).not.toContain('item === "bun"')
@@ -55,7 +54,7 @@ describe("Android Termux runtime", () => {
     expect(build).toContain('"slopcode-termux"')
     expect(build).toContain("native/android-host/main.rs")
     expect(build).toContain("SLOPCODE_ANDROID_HOST_PATH")
-    expect(build).toContain("SLOPCODE_ANDROID_HOST: process.env.SLOPCODE_ANDROID_HOST ??")
+    expect(build).toContain('SLOPCODE_ANDROID_HOST: process.env.SLOPCODE_ANDROID_HOST ?? "sidecar"')
     expect(build).toContain('"slopcode-android-host"')
     expect(build).toContain("process.exit(typeof result.status ===")
     expect(build).toContain("cwd(`dist/${key}`)")

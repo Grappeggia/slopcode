@@ -39,17 +39,21 @@ export async function androidHostTui(input: {
       )
   }
   if (status.strategy === "sidecar" && status.sidecar) {
-    await run({
+    return run({
       path: status.sidecar,
-      text: [
-        "SlopCode Android host sidecar",
-        "",
-        "The Termux sidecar IPC renderer is packaged and reachable.",
-        "Default Android startup now tries the shared OpenTUI app before falling back.",
-        "Set SLOPCODE_ANDROID_HOST=portable to force the portable fallback.",
-      ].join("\n"),
-    })
-    return true
+      url: input.url,
+      args: input.args,
+      config: input.config,
+      directory: input.directory,
+      viewID: input.viewID,
+      headers: input.headers,
+    }).then(
+      () => true,
+      (error) => {
+        UI.println(UI.Style.TEXT_WARNING_BOLD + "Android sidecar TUI failed: " + UI.Style.TEXT_NORMAL + text(error))
+        return false
+      },
+    )
   }
   return false
 }
