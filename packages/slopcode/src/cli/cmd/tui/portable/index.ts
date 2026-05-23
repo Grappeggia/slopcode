@@ -392,13 +392,16 @@ export function renderPortableLines(state: PortableState, width = 80, height = 2
     if (text || toolLines(record).length > 0) body.push("")
   }
   for (const item of state.notices) body.push(...wrap(`${item.kind}: ${item.text}`, width))
+  if (state.mode === "permission" && state.permission) {
+    body.push(...wrap(`permission requested: ${state.permission.permission}`, width))
+    body.push(
+      ...state.permission.patterns.flatMap((item) =>
+        wrap(`  ${typeof item === "string" ? item : (item.pattern ?? "*")}`, width),
+      ),
+    )
+  }
   const footer = (() => {
-    if (state.mode === "permission" && state.permission) {
-      const patterns = state.permission.patterns
-        .map((item) => (typeof item === "string" ? item : (item.pattern ?? "*")))
-        .join(", ")
-      return `permission ${state.permission.permission} ${patterns} | o once, a always, r reject`
-    }
+    if (state.mode === "permission" && state.permission) return "permission | o once, a always, r reject"
     if (state.mode === "question" && state.question) {
       const item = state.question.request.questions[state.question.index]
       if (!item) return "question | enter answer"

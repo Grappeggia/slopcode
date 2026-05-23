@@ -276,8 +276,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         icon: "⚙",
         title: "No permission selected",
         body: (
-          <box paddingLeft={1}>
-            <text fg={theme.textMuted}>Select one or more permissions to continue.</text>
+          <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+            <Line>Select one or more permissions to continue.</Line>
           </box>
         ),
       }
@@ -296,8 +296,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         body: diff ? (
           <EditBody request={request} />
         ) : (
-          <box paddingLeft={1}>
-            <text fg={theme.textMuted}>{filepath ? "Path: " + normalizePath(filepath) : "No diff provided"}</text>
+          <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+            <Line clamp>{filepath ? "Path: " + normalizePath(filepath) : "No diff provided"}</Line>
           </box>
         ),
       }
@@ -311,8 +311,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         title: filePath ? `Read ${normalizePath(filePath)}` : "Read file",
         body: (
           <Show when={filePath}>
-            <box paddingLeft={1}>
-              <text fg={theme.textMuted}>{"Path: " + normalizePath(filePath)}</text>
+            <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+              <Line clamp>{"Path: " + normalizePath(filePath)}</Line>
             </box>
           </Show>
         ),
@@ -326,8 +326,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         title: `Glob "${pattern}"`,
         body: (
           <Show when={pattern}>
-            <box paddingLeft={1}>
-              <text fg={theme.textMuted}>{"Pattern: " + pattern}</text>
+            <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+              <Line clamp>{"Pattern: " + pattern}</Line>
             </box>
           </Show>
         ),
@@ -341,8 +341,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         title: `Grep "${pattern}"`,
         body: (
           <Show when={pattern}>
-            <box paddingLeft={1}>
-              <text fg={theme.textMuted}>{"Pattern: " + pattern}</text>
+            <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+              <Line clamp>{"Pattern: " + pattern}</Line>
             </box>
           </Show>
         ),
@@ -357,8 +357,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         title: dir ? `List ${normalizePath(dir)}` : "List directory",
         body: (
           <Show when={dir}>
-            <box paddingLeft={1}>
-              <text fg={theme.textMuted}>{"Path: " + normalizePath(dir)}</text>
+            <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+              <Line clamp>{"Path: " + normalizePath(dir)}</Line>
             </box>
           </Show>
         ),
@@ -373,8 +373,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         title,
         body: (
           <Show when={command}>
-            <box paddingLeft={1}>
-              <text fg={theme.text}>{"$ " + command}</text>
+            <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+              <Line fg={theme.text} clamp>{"$ " + command}</Line>
             </box>
           </Show>
         ),
@@ -389,8 +389,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         title: `${Locale.titlecase(type)} Task`,
         body: (
           <Show when={desc}>
-            <box paddingLeft={1}>
-              <text fg={theme.text}>{"o " + desc}</text>
+            <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+              <Line fg={theme.text} clamp>{"o " + desc}</Line>
             </box>
           </Show>
         ),
@@ -404,8 +404,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         title: `WebFetch ${url}`,
         body: (
           <Show when={url}>
-            <box paddingLeft={1}>
-              <text fg={theme.textMuted}>{"URL: " + url}</text>
+            <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+              <Line clamp>{"URL: " + url}</Line>
             </box>
           </Show>
         ),
@@ -419,8 +419,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         title: `Exa Web Search "${query}"`,
         body: (
           <Show when={query}>
-            <box paddingLeft={1}>
-              <text fg={theme.textMuted}>{"Query: " + query}</text>
+            <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+              <Line clamp>{"Query: " + query}</Line>
             </box>
           </Show>
         ),
@@ -434,8 +434,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         title: `Exa Code Search "${query}"`,
         body: (
           <Show when={query}>
-            <box paddingLeft={1}>
-              <text fg={theme.textMuted}>{"Query: " + query}</text>
+            <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+              <Line clamp>{"Query: " + query}</Line>
             </box>
           </Show>
         ),
@@ -459,10 +459,10 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         title: `Access external directory ${dir}`,
         body: (
           <Show when={patterns.length > 0}>
-            <box paddingLeft={1} gap={1}>
-              <text fg={theme.textMuted}>Patterns</text>
-              <box>
-                <For each={patterns}>{(item) => <text fg={theme.text}>{"- " + item}</text>}</For>
+            <box paddingLeft={1} gap={1} backgroundColor={theme.backgroundPanel}>
+              <Line>Patterns</Line>
+              <box flexDirection="column" backgroundColor={theme.backgroundPanel}>
+                <For each={patterns}>{(item) => <Line fg={theme.text} clamp>{"- " + item}</Line>}</For>
               </box>
             </box>
           </Show>
@@ -475,8 +475,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
         icon: "o",
         title: "Continue after repeated failures",
         body: (
-          <box paddingLeft={1}>
-            <text fg={theme.textMuted}>This keeps the session running despite repeated failures.</text>
+          <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+            <Line>This keeps the session running despite repeated failures.</Line>
           </box>
         ),
       }
@@ -486,8 +486,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
       icon: "*",
       title: `Call tool ${permission}`,
       body: (
-        <box paddingLeft={1}>
-          <text fg={theme.textMuted}>{"Tool: " + permission}</text>
+        <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+          <Line clamp>{"Tool: " + permission}</Line>
         </box>
       ),
     }
@@ -608,18 +608,18 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
                 <TextBody title={"This will allow " + selected()[0]!.permission + " until SlopCode is restarted."} />
               </Match>
               <Match when={true}>
-                <box paddingLeft={1} gap={1}>
-                  <text fg={theme.textMuted}>This will allow the selected permissions until SlopCode is restarted</text>
+                <box paddingLeft={1} gap={1} backgroundColor={theme.backgroundPanel}>
+                  <Line>This will allow the selected permissions until SlopCode is restarted.</Line>
                   <For each={selected()}>
                     {(request) => (
-                      <box flexDirection="column" gap={0}>
-                        <text fg={theme.text}>{row(request).primary}</text>
+                      <box flexDirection="column" gap={0} backgroundColor={theme.backgroundPanel}>
+                        <Line fg={theme.text} clamp>{row(request).primary}</Line>
                         <Show when={row(request).secondary}>
-                          <text fg={theme.textMuted}>{row(request).secondary}</text>
+                          <Line clamp>{row(request).secondary}</Line>
                         </Show>
-                        <box paddingLeft={1} flexDirection="column">
+                        <box paddingLeft={1} flexDirection="column" backgroundColor={theme.backgroundPanel}>
                           <For each={request.always.length > 0 ? request.always : request.patterns}>
-                            {(pattern) => <text fg={theme.textMuted}>{"- " + pattern}</text>}
+                            {(pattern) => <Line clamp>{"- " + pattern}</Line>}
                           </For>
                         </box>
                       </box>
@@ -807,6 +807,14 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
   const narrow = createMemo(() => dimensions().width < 80)
   const dialog = useDialog()
 
+  function Line(props: { children?: JSX.Element; fg?: typeof theme.text; bg?: typeof theme.backgroundPanel }) {
+    return (
+      <text fg={props.fg ?? theme.textMuted} bg={props.bg ?? theme.backgroundPanel} width="100%" wrapMode="word">
+        {props.children}
+      </text>
+    )
+  }
+
   useKeyboard((evt) => {
     if (dialog.stack.length > 0) return
 
@@ -828,13 +836,17 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
       borderColor={theme.error}
       customBorderChars={SplitBorder.customBorderChars}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
-        <box flexDirection="row" gap={1} paddingLeft={1}>
-          <text fg={theme.error}>{"△"}</text>
-          <text fg={theme.text}>Reject permission</text>
+      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1} backgroundColor={theme.backgroundPanel}>
+        <box flexDirection="row" gap={1} paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+          <text fg={theme.error} bg={theme.backgroundPanel}>
+            {"△"}
+          </text>
+          <text fg={theme.text} bg={theme.backgroundPanel} wrapMode="none" overflow="hidden">
+            Reject permission
+          </text>
         </box>
-        <box paddingLeft={1}>
-          <text fg={theme.textMuted}>Tell SlopCode what to do differently</text>
+        <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+          <Line>Tell SlopCode what to do differently</Line>
         </box>
       </box>
       <box
@@ -857,12 +869,12 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
           cursorColor={theme.primary}
           keyBindings={textareaKeybindings()}
         />
-        <box flexDirection="row" gap={2} flexShrink={0}>
-          <text fg={theme.text}>
-            enter <span style={{ fg: theme.textMuted }}>confirm</span>
+        <box flexDirection="row" gap={2} flexShrink={0} backgroundColor={theme.backgroundElement}>
+          <text fg={theme.text} bg={theme.backgroundElement} wrapMode="none">
+            enter confirm
           </text>
-          <text fg={theme.text}>
-            esc <span style={{ fg: theme.textMuted }}>cancel</span>
+          <text fg={theme.text} bg={theme.backgroundElement} wrapMode="none">
+            esc cancel
           </text>
         </box>
       </box>
