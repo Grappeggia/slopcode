@@ -191,7 +191,12 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
 
   const { theme } = useTheme()
 
-  function Line(props: { children?: JSX.Element; fg?: typeof theme.text; bg?: typeof theme.backgroundPanel; clamp?: boolean }) {
+  function Line(props: {
+    children?: JSX.Element
+    fg?: typeof theme.text
+    bg?: typeof theme.backgroundPanel
+    clamp?: boolean
+  }) {
     const bg = () => props.bg ?? theme.backgroundPanel
     if (props.clamp) {
       return (
@@ -713,12 +718,18 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
                                 onMouseDown={() => setStore("focused", index())}
                                 onMouseUp={() => toggle(request.id)}
                               >
-                                <Line fg={active() ? theme.secondary : picked() ? theme.text : theme.textMuted} bg={bg()} clamp>
+                                <Line
+                                  fg={active() ? theme.secondary : picked() ? theme.text : theme.textMuted}
+                                  bg={bg()}
+                                  clamp
+                                >
                                   {`${picked() ? "[x]" : "[ ]"} ${item().primary}`}
                                 </Line>
                                 <Show when={item().secondary}>
                                   <box paddingLeft={4} backgroundColor={bg()}>
-                                    <Line bg={bg()} clamp>{item().secondary}</Line>
+                                    <Line bg={bg()} clamp>
+                                      {item().secondary}
+                                    </Line>
                                   </box>
                                 </Show>
                                 <Show when={item().reason}>
