@@ -4,6 +4,10 @@ import type { Args } from "../context/args"
 import { probe } from "./probe"
 import { run } from "./sidecar"
 
+function text(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export async function androidHostTui(input: {
   url: string
   args: Args
@@ -24,19 +28,25 @@ export async function androidHostTui(input: {
     return false
   }
   if (status.strategy === "opentui") {
-    const { tui } = await import("../app")
-    await tui(input)
-    return true
+    return import("../app")
+      .then((app) => app.tui(input))
+      .then(
+        () => true,
+        (error) => {
+          UI.println(UI.Style.TEXT_WARNING_BOLD + "Android shared TUI failed: " + UI.Style.TEXT_NORMAL + text(error))
+          return false
+        },
+      )
   }
   if (status.strategy === "sidecar" && status.sidecar) {
     await run({
       path: status.sidecar,
       text: [
-        "SlopCode Android host spike",
+        "SlopCode Android host sidecar",
         "",
         "The Termux sidecar IPC renderer is packaged and reachable.",
-        "Set SLOPCODE_ANDROID_HOST=1 after the OpenTUI Android backend is available to run the full app.tsx tree.",
-        "Portable TUI remains the default fallback.",
+        "Default Android startup now tries the shared OpenTUI app before falling back.",
+        "Set SLOPCODE_ANDROID_HOST=portable to force the portable fallback.",
       ].join("\n"),
     })
     return true

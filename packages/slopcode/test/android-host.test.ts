@@ -14,9 +14,11 @@ describe("Android host", () => {
   })
 
   test("selects Android host modes explicitly", () => {
-    expect(wanted("")).toBeUndefined()
+    expect(wanted()).toBe("opentui")
+    expect(wanted("")).toBe("opentui")
     expect(wanted("0")).toBeUndefined()
     expect(wanted("false")).toBeUndefined()
+    expect(wanted("portable")).toBeUndefined()
     expect(wanted("sidecar")).toBe("sidecar")
     expect(wanted("1")).toBe("opentui")
     expect(sidecar({ root: "/tmp/slopcode" })).toBe(path.join("/tmp/slopcode", "bin", "slopcode-android-host"))
@@ -33,12 +35,12 @@ describe("Android host", () => {
       strategy: "fallback",
       reason: "not-android",
     })
-    expect(await probe({ platform: "android" })).toMatchObject({
+    expect(await probe({ platform: "android", host: "0" })).toMatchObject({
       enabled: false,
       strategy: "fallback",
       reason: "android-host-disabled",
     })
-    expect(await probe({ platform: "android", host: "1", importer: async () => ({}) })).toMatchObject({
+    expect(await probe({ platform: "android", importer: async () => ({}) })).toMatchObject({
       enabled: true,
       available: true,
       strategy: "opentui",
@@ -47,7 +49,6 @@ describe("Android host", () => {
     expect(
       await probe({
         platform: "android",
-        host: "1",
         importer: async () => {
           throw new Error("bun:ffi unavailable")
         },

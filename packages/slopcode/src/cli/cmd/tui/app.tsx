@@ -147,7 +147,7 @@ export function tui(input: {
   onExit?: () => Promise<void>
 }) {
   // promise to prevent immediate exit
-  return new Promise<void>(async (resolve) => {
+  return new Promise<void>(async (resolve, reject) => {
     const unguard = win32InstallCtrlCGuard()
     win32DisableProcessedInput()
 
@@ -163,8 +163,12 @@ export function tui(input: {
       await input.onExit?.()
       resolve()
     }
+    const fail = (error: unknown) => {
+      unguard?.()
+      reject(error)
+    }
 
-    render(() => {
+    void render(() => {
       return (
         <ErrorBoundary
           fallback={(error, reset) => <ErrorComponent error={error} reset={reset} onExit={onExit} mode={mode} />}
@@ -222,7 +226,7 @@ export function tui(input: {
           </ArgsProvider>
         </ErrorBoundary>
       )
-    }, rendererConfig(input.config))
+    }, rendererConfig(input.config)).catch(fail)
   })
 }
 

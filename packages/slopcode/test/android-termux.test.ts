@@ -54,6 +54,7 @@ describe("Android Termux runtime", () => {
     expect(build).toContain('"slopcode-termux"')
     expect(build).toContain("native/android-host/main.rs")
     expect(build).toContain("SLOPCODE_ANDROID_HOST_PATH")
+    expect(build).toContain("SLOPCODE_ANDROID_HOST: process.env.SLOPCODE_ANDROID_HOST ??")
     expect(build).toContain('"slopcode-android-host"')
     expect(build).toContain("process.exit(typeof result.status ===")
     expect(build).toContain("cwd(`dist/${key}`)")

@@ -376,7 +376,7 @@ export function renderPortableLines(state: PortableState, width = 80, height = 2
   const session = state.sessionID ? state.sessions.get(state.sessionID) : undefined
   const model = state.model ? ` model ${state.model}` : ""
   const agent = state.agent ? ` agent ${state.agent}` : ""
-  const header = `SlopCode Termux | ${state.status}${model}${agent}`
+  const header = `SlopCode Android fallback | ${state.status}${model}${agent}`
   const title = session?.title ?? state.sessionID ?? "new session"
   const body: string[] = []
   body.push(`session ${title}`)
@@ -734,7 +734,7 @@ export async function portableTui(input: {
   stdin.on("data", onData)
   stdin.resume()
   process.on("SIGWINCH", draw)
-  notice(state, "native Termux interactive mode")
+  notice(state, "portable fallback active; shared Android TUI was unavailable")
   notice(state, "type /help for commands")
   schedule()
 

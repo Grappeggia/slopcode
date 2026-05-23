@@ -25,14 +25,14 @@ export function sidecar(input: Pick<Input, "root" | "sidecar"> = {}) {
 }
 
 export function wanted(value = process.env.SLOPCODE_ANDROID_HOST) {
-  if (!value || value === "0" || value === "false") return
-  if (value === "sidecar") return "sidecar"
+  const text = value?.toLowerCase()
+  if (text === "0" || text === "false" || text === "off" || text === "portable") return
+  if (text === "sidecar") return "sidecar"
   return "opentui"
 }
 
 export async function probe(input: Input = {}): Promise<HostProbe> {
   const platform = input.platform ?? process.platform
-  const mode = wanted(input.host)
   const bin = sidecar({
     root: input.root ?? process.env.SLOPCODE_ANDROID_ROOT,
     sidecar: input.sidecar ?? process.env.SLOPCODE_ANDROID_HOST_PATH,
@@ -44,6 +44,8 @@ export async function probe(input: Input = {}): Promise<HostProbe> {
   if (input.tui === "1") {
     return { enabled: true, available: true, strategy: "opentui", reason: "legacy-native-override", sidecar: bin }
   }
+
+  const mode = wanted(input.host)
   if (!mode) {
     return { enabled: false, available: false, strategy: "fallback", reason: "android-host-disabled", sidecar: bin }
   }

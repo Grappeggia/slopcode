@@ -1,6 +1,32 @@
 ---
 const endpoint = "https://api.github.com/repos/teamslop/slopcode/releases?per_page=12"
 const releaseUrl = "https://github.com/teamslop/slopcode/releases"
+const fallback: Release[] = [
+  {
+    tag_name: "v0.2.116",
+    html_url: `${releaseUrl}/tag/v0.2.116`,
+    published_at: "2026-05-23T00:00:00Z",
+    body: [
+      "- Try the shared OpenTUI TUI by default on Android.",
+      "- Keep the portable Android fallback explicit and diagnostic.",
+      "- Add Android startup coverage for the shared TUI path.",
+    ].join("\n"),
+    draft: false,
+    prerelease: false,
+  },
+  {
+    tag_name: "v0.2.115",
+    html_url: `${releaseUrl}/tag/v0.2.115`,
+    published_at: "2026-05-23T00:00:00Z",
+    body: [
+      "- Add experimental Android host probing for the shared OpenTUI TUI path.",
+      "- Package a Termux host sidecar and keep portable TUI as fallback.",
+      "- Add Android host protocol, routing, and artifact tests.",
+    ].join("\n"),
+    draft: false,
+    prerelease: false,
+  },
+]
 
 type Release = {
   tag_name: string
@@ -59,6 +85,7 @@ const releases = await fetch(endpoint, {
       : [],
   )
   .catch(() => [])
+const entries = releases.length > 0 ? releases : fallback
 
 const format = (value: string) =>
   new Intl.DateTimeFormat("en", {
@@ -68,14 +95,14 @@ const format = (value: string) =>
   }).format(new Date(value))
 ---
 
-<div class="release-feed" data-release-feed data-endpoint={endpoint} data-has-releases={releases.length > 0 ? "true" : "false"}>
-  <p data-release-loading hidden={releases.length > 0}>Loading latest releases from GitHub...</p>
+<div class="release-feed" data-release-feed data-endpoint={endpoint} data-has-releases={entries.length > 0 ? "true" : "false"}>
+  <p data-release-loading hidden={entries.length > 0}>Loading latest releases from GitHub...</p>
   <p data-release-error hidden>
     Could not load releases right now. <a href={releaseUrl}>View all releases on GitHub</a>.
   </p>
-  <div data-release-list hidden={releases.length === 0}>
+  <div data-release-list hidden={entries.length === 0}>
     {
-      releases.map((release) => (
+      entries.map((release) => (
         <section>
           <h3>
             <a href={release.html_url} target="_blank" rel="noopener noreferrer">

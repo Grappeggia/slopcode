@@ -83,6 +83,7 @@ describe("portable Termux TUI", () => {
     })
 
     expect(state.connected).toBe(true)
+    expect(renderPortableLines(state, 80, 20).join("\n")).toContain("SlopCode Android fallback")
     expect(state.status).toBe("running")
     expect(state.mode).toBe("permission")
     expect(renderPortableLines(state, 80, 20).join("\n")).toContain("Assistant: hi")
