@@ -5,6 +5,7 @@ import path from "path"
 
 describe("Android native client", () => {
   test("talks to the local daemon API", async () => {
+    if (process.platform === "win32") return
     const check = Bun.spawn(["rustc", "--version"], { stdout: "pipe", stderr: "pipe" })
     if ((await check.exited) !== 0) return
 

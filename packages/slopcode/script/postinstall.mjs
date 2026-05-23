@@ -277,7 +277,7 @@ async function main() {
       return
     }
 
-    if (os.platform() === "win32") {
+    if (platform === "windows") {
       console.log("Windows detected: binary setup not needed (using packaged .exe)")
       return
     }

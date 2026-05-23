@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import path from "path"
 import fs from "fs"
+import os from "os"
 import { DaemonLauncher } from "@/daemon/launcher"
 import { android, client, native } from "@/cli/cmd/tui/platform"
 
@@ -21,7 +22,7 @@ describe("Android Termux runtime", () => {
   })
 
   test("resolves bundled Termux client only when present", async () => {
-    const root = await fs.promises.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "slopcode-android-"))
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "slopcode-android-"))
     const bin = path.join(root, "bin")
     await fs.promises.mkdir(bin)
     expect(client(root)).toBeUndefined()

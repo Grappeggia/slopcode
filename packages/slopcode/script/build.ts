@@ -62,6 +62,7 @@ const singleFlag = process.argv.includes("--single")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const targetFlag = process.argv.find((item) => item.startsWith("--target="))?.slice("--target=".length)
+const releaseFlag = Script.release
 
 const nvimVersion = "v0.12.1"
 const androidBunVersion = "1.3.14"
@@ -641,7 +642,9 @@ const targets = targetFlag
 
         return true
       })
-    : allTargets
+    : releaseFlag
+      ? allTargets
+      : allTargets.filter((item) => item.os !== "android")
 
 if (targetFlag && targets.length === 0) {
   throw new Error(`Unknown build target: ${targetFlag}`)
