@@ -191,6 +191,22 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
 
   const { theme } = useTheme()
 
+  function Line(props: { children?: JSX.Element; fg?: typeof theme.text; bg?: typeof theme.backgroundPanel; clamp?: boolean }) {
+    const bg = () => props.bg ?? theme.backgroundPanel
+    if (props.clamp) {
+      return (
+        <text fg={props.fg ?? theme.textMuted} bg={bg()} width="100%" wrapMode="none" overflow="hidden">
+          {props.children}
+        </text>
+      )
+    }
+    return (
+      <text fg={props.fg ?? theme.textMuted} bg={bg()} width="100%" wrapMode="word">
+        {props.children}
+      </text>
+    )
+  }
+
   const focused = createMemo(() => requests()[store.focused] ?? requests()[0])
   const selected = createMemo(() => requests().filter((item) => store.selected.includes(item.id)))
   const selectedCount = createMemo(() => selected().length)
@@ -641,29 +657,29 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
                 </Show>
               </box>
               <Show when={planned() || mixed()}>
-                <box paddingLeft={2} flexShrink={0}>
-                  <text fg={theme.textMuted}>
+                <box paddingLeft={2} flexShrink={0} backgroundColor={theme.backgroundPanel}>
+                  <Line>
                     {mixed()
-                      ? `${blockingCount()} need approval now • ${forecastCount()} planned for build`
+                      ? `${blockingCount()} need approval now - ${forecastCount()} planned for build`
                       : `${forecastCount()} planned for build`}
-                  </text>
+                  </Line>
                 </box>
               </Show>
               <Show
                 when={requests().length === 1}
                 fallback={
-                  <box paddingLeft={2} flexShrink={0}>
-                    <text fg={theme.textMuted}>
-                      Actions apply only to selected rows. Unselected permissions stay pending.
-                    </text>
+                  <box paddingLeft={2} flexShrink={0} backgroundColor={theme.backgroundPanel}>
+                    <Line>Actions apply only to selected rows. Unselected permissions stay pending.</Line>
                   </box>
                 }
               >
-                <box flexDirection="row" gap={1} paddingLeft={2} flexShrink={0}>
-                  <text fg={theme.textMuted} flexShrink={0}>
+                <box flexDirection="row" gap={1} paddingLeft={2} flexShrink={0} backgroundColor={theme.backgroundPanel}>
+                  <text fg={theme.textMuted} bg={theme.backgroundPanel} flexShrink={0}>
                     {current().icon}
                   </text>
-                  <text fg={theme.text}>{current().title}</text>
+                  <text fg={theme.text} bg={theme.backgroundPanel} wrapMode="none" overflow="hidden">
+                    {current().title}
+                  </text>
                 </box>
               </Show>
             </box>
@@ -676,11 +692,8 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
               body={
                 <box flexDirection="column" gap={1}>
                   <Show when={requests().length > 1}>
-                    <box paddingLeft={1} flexDirection="column">
-                      <text fg={theme.textMuted}>Use up/down to focus and space to toggle the focused permission.</text>
-                      <text fg={theme.textMuted}>
-                        Actions apply only to selected rows. Unselected permissions stay pending.
-                      </text>
+                    <box paddingLeft={1} flexDirection="column" backgroundColor={theme.backgroundPanel}>
+                      <Line>Use up/down to focus and space to toggle the focused permission.</Line>
                     </box>
                     <scrollbox height={Math.min(Math.max(requests().length * 3, 6), 12)}>
                       <box flexDirection="column">
@@ -689,29 +702,30 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
                             const active = () => index() === store.focused
                             const picked = () => store.selected.includes(request.id)
                             const item = () => row(request)
+                            const bg = () => (active() ? theme.backgroundElement : theme.backgroundPanel)
                             return (
                               <box
                                 flexDirection="column"
                                 paddingLeft={1}
                                 paddingRight={1}
-                                backgroundColor={active() ? theme.backgroundElement : undefined}
+                                backgroundColor={bg()}
                                 onMouseOver={() => setStore("focused", index())}
                                 onMouseDown={() => setStore("focused", index())}
                                 onMouseUp={() => toggle(request.id)}
                               >
-                                <text fg={active() ? theme.secondary : picked() ? theme.text : theme.textMuted}>
+                                <Line fg={active() ? theme.secondary : picked() ? theme.text : theme.textMuted} bg={bg()} clamp>
                                   {`${picked() ? "[x]" : "[ ]"} ${item().primary}`}
-                                </text>
+                                </Line>
                                 <Show when={item().secondary}>
-                                  <box paddingLeft={4}>
-                                    <text fg={theme.textMuted}>{item().secondary}</text>
+                                  <box paddingLeft={4} backgroundColor={bg()}>
+                                    <Line bg={bg()} clamp>{item().secondary}</Line>
                                   </box>
                                 </Show>
                                 <Show when={item().reason}>
-                                  <box paddingLeft={4}>
-                                    <text fg={theme.textMuted}>
+                                  <box paddingLeft={4} backgroundColor={bg()}>
+                                    <Line bg={bg()} clamp>
                                       {(request.kind === "forecast" ? "Planned need: " : "Reason: ") + item().reason}
-                                    </text>
+                                    </Line>
                                   </box>
                                 </Show>
                               </box>
@@ -722,23 +736,20 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
                     </scrollbox>
                   </Show>
                   <Show when={requests().length === 1 && focused()?.reason}>
-                    <box paddingLeft={1}>
-                      <text fg={theme.textMuted}>
-                        {focused()!.kind === "forecast" ? "Planned need: " : "Reason: "}
-                        {focused()!.reason}
-                      </text>
+                    <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+                      <Line>
+                        {(focused()!.kind === "forecast" ? "Planned need: " : "Reason: ") + focused()!.reason}
+                      </Line>
                     </box>
                   </Show>
                   <Show when={requests().length === 1 && row(focused()).secondary}>
-                    <box paddingLeft={1}>
-                      <text fg={theme.textMuted}>{row(focused()).secondary}</text>
+                    <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+                      <Line clamp>{row(focused()).secondary}</Line>
                     </box>
                   </Show>
                   <Show when={blockingCount() > 0}>
-                    <box paddingLeft={1}>
-                      <text fg={theme.textMuted}>
-                        Reject stops the selected blocked action for each affected session.
-                      </text>
+                    <box paddingLeft={1} backgroundColor={theme.backgroundPanel}>
+                      <Line>Reject stops the selected blocked action for each affected session.</Line>
                     </box>
                   </Show>
                   <Show when={requests().length === 1 || row(focused()).preview}>{current().body}</Show>
