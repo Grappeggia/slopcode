@@ -74,9 +74,10 @@ async function androidAsset() {
   await Bun.write(path.join(root, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
   await script(path.join(root, "bin", "slopcode"), "#!/bin/sh\necho downloaded\n")
   const archive = path.join(dir, "slopcode-android-arm64.tar.gz")
-  const proc = Bun.spawn(["tar", "-czf", archive, "-C", root, "."], {
+  const proc = Bun.spawn(["tar", "-czf", path.basename(archive), "-C", path.basename(root), "."], {
     stdout: "pipe",
     stderr: "pipe",
+    cwd: dir,
   })
   expect(await proc.exited).toBe(0)
   return archive
