@@ -1,6 +1,6 @@
 use std::env;
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -122,6 +122,11 @@ fn run() -> Result<(), String> {
     let done = Arc::new(AtomicBool::new(false));
 
     let mut term = Terminal::start()?;
+    {
+        let mut locked = state.lock().map_err(|_| "state lock failed")?;
+        locked.notice("starting native Android sidecar");
+        draw(&locked, term.size());
+    }
     initialize(&client, &args, &state, &dirty)?;
     spawn_events(client.clone(), state.clone(), dirty.clone(), done.clone());
 
@@ -437,7 +442,7 @@ fn spawn_events(client: Client, state: Arc<Mutex<State>>, dirty: Arc<AtomicBool>
 
 fn events_once(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, done: &Arc<AtomicBool>) -> Result<(), String> {
     let url = parse_url(&client.url)?;
-    let mut stream = TcpStream::connect((url.host.as_str(), url.port)).map_err(|err| format!("connect {}:{}: {err}", url.host, url.port))?;
+    let mut stream = connect(&url.host, url.port)?;
     stream.write_all(format!("GET {}{} HTTP/1.1\r\nHost: {}:{}\r\nAccept: text/event-stream\r\nx-slopcode-daemon-token: {}\r\nConnection: close\r\n\r\n", url.base, "/event", url.host, url.port, client.token).as_bytes()).map_err(|err| err.to_string())?;
     let mut raw = Vec::new();
     let mut buf = [0u8; 4096];
@@ -561,14 +566,67 @@ impl Client {
     fn request(&self, method: &str, path: &str, body: Option<&str>) -> Result<String, String> {
         let url = parse_url(&self.url)?;
         let body = body.unwrap_or("");
-        let mut stream = TcpStream::connect((url.host.as_str(), url.port)).map_err(|err| format!("connect {}:{}: {err}", url.host, url.port))?;
-        stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
+        let mut stream = connect(&url.host, url.port)?;
+        stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+        stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
         let request = format!("{method} {}{} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\nContent-Type: application/json\r\nx-slopcode-daemon-token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", url.base, path, url.host, url.port, self.token, body.len(), body);
         stream.write_all(request.as_bytes()).map_err(|err| err.to_string())?;
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw).map_err(|err| err.to_string())?;
-        response(&raw)
+        response(&read_response(&mut stream)?)
     }
+}
+
+fn connect(host: &str, port: u16) -> Result<TcpStream, String> {
+    let addrs = (host, port).to_socket_addrs().map_err(|err| format!("resolve {host}:{port}: {err}"))?;
+    let mut last = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
+            Ok(stream) => return Ok(stream),
+            Err(err) => last = Some(err),
+        }
+    }
+    Err(format!("connect {host}:{port}: {}", last.map(|err| err.to_string()).unwrap_or_else(|| String::from("no address"))))
+}
+
+fn read_response(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 4096];
+    let split = loop {
+        let count = stream.read(&mut buf).map_err(|err| err.to_string())?;
+        if count == 0 {
+            return if raw.is_empty() { Err(String::from("empty http response")) } else { Ok(raw) };
+        }
+        raw.extend_from_slice(&buf[..count]);
+        if let Some(pos) = find(&raw, b"\r\n\r\n") {
+            break pos;
+        }
+    };
+    let head = String::from_utf8_lossy(&raw[..split]).to_ascii_lowercase();
+    if head.contains("transfer-encoding: chunked") {
+        while !raw.windows(5).any(|item| item == b"0\r\n\r\n") {
+            let count = stream.read(&mut buf).map_err(|err| err.to_string())?;
+            if count == 0 {
+                break;
+            }
+            raw.extend_from_slice(&buf[..count]);
+        }
+        return Ok(raw);
+    }
+    if let Some(len) = content_length(&head) {
+        while raw.len().saturating_sub(split + 4) < len {
+            let count = stream.read(&mut buf).map_err(|err| err.to_string())?;
+            if count == 0 {
+                break;
+            }
+            raw.extend_from_slice(&buf[..count]);
+        }
+    }
+    Ok(raw)
+}
+
+fn content_length(head: &str) -> Option<usize> {
+    head.lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .and_then(|value| value.trim().parse::<usize>().ok())
 }
 
 fn response(raw: &[u8]) -> Result<String, String> {
@@ -729,8 +787,15 @@ fn json(input: &str) -> String {
 }
 
 fn string(input: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{}\":\"", key);
-    let start = input.find(&needle)? + needle.len();
+    let needle = format!("\"{}\":", key);
+    let mut start = input.find(&needle)? + needle.len();
+    while input.as_bytes().get(start).is_some_and(|b| b.is_ascii_whitespace()) {
+        start += 1;
+    }
+    if input.as_bytes().get(start) != Some(&b'\"') {
+        return None;
+    }
+    start += 1;
     let mut out = String::new();
     let mut escaped = false;
     for ch in input[start..].chars() {
