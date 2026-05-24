@@ -41,6 +41,7 @@ import { SessionProcessor } from "./processor"
 import { TaskTool } from "@/tool/task"
 import { Tool } from "@/tool/tool"
 import { PermissionNext } from "@/permission/next"
+import { Question } from "@/question"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
 import { iife } from "@/util/iife"
@@ -548,6 +549,31 @@ export namespace SessionPrompt {
     return MessageV2.AbortedError.isInstance(reason) || (reason instanceof DOMException && reason.name === "AbortError")
   }
 
+  function signalReason(signal: AbortSignal) {
+    if (signal.reason instanceof Error) return signal.reason
+    return new DOMException("Aborted", "AbortError")
+  }
+
+  async function abortable<T>(promise: Promise<T>, signal: AbortSignal) {
+    signal.throwIfAborted()
+    let cleanup = () => {}
+    const abort = new Promise<never>((_, reject) => {
+      const done = () => reject(signalReason(signal))
+      if (signal.aborted) return done()
+      signal.addEventListener("abort", done, { once: true })
+      cleanup = () => signal.removeEventListener("abort", done)
+    })
+    try {
+      return await Promise.race([promise, abort])
+    } finally {
+      cleanup()
+    }
+  }
+
+  async function cancelGates(sessionID: string, reason: unknown) {
+    await Promise.all([PermissionNext.cancel(sessionID, reason), Question.cancel(sessionID, reason)])
+  }
+
   async function admit(input: {
     sessionID: string
     messageID: string
@@ -723,13 +749,14 @@ export namespace SessionPrompt {
     log.info("cancel", { sessionID })
     const entry = state()[sessionID]
     if (!entry) {
+      await cancelGates(sessionID, reason)
       SessionStatus.set(sessionID, { type: "idle" })
       return
     }
+    const error = aborted(reason) ? abortReason(reason) : reason
     await withLock(entry, () => {
       const current = entry.current
       const active = aborted(reason) && !!current && entry.running && !entry.pending.has(current)
-      const error = aborted(reason) ? abortReason(reason) : reason
       entry.abort.abort()
       if (active) {
         entry.queued = []
@@ -757,17 +784,18 @@ export namespace SessionPrompt {
       delete state()[sessionID]
       SessionStatus.set(sessionID, { type: "idle" })
     })
+    await cancelGates(sessionID, error)
   }
 
   export async function pause(sessionID: string, reason: unknown = new DOMException("Paused", "AbortError")) {
     log.info("pause", { sessionID })
     const entry = state()[sessionID]
     if (!entry) return false
-    return withLock(entry, () => {
+    const error = aborted(reason) ? abortReason(reason) : reason
+    const paused = await withLock(entry, () => {
       const current = entry.current
-      if (!current || entry.pending.has(current)) return false
+      if (!current) return false
       if (entry.paused === current) return true
-      const error = aborted(reason) ? abortReason(reason) : reason
       entry.paused = current
       entry.abort.abort()
       const waiters = entry.waiters[current] ?? []
@@ -778,6 +806,8 @@ export namespace SessionPrompt {
       SessionStatus.set(sessionID, { type: "idle" })
       return true
     })
+    if (paused) await cancelGates(sessionID, error)
+    return paused
   }
 
   export async function resume(sessionID: string) {
@@ -963,14 +993,17 @@ export namespace SessionPrompt {
             subagent_type: task.agent,
             command: task.command,
           }
-          await Plugin.trigger(
-            "tool.execute.before",
-            {
-              tool: "task",
-              sessionID,
-              callID: part.id,
-            },
-            { args: taskArgs },
+          await abortable(
+            Plugin.trigger(
+              "tool.execute.before",
+              {
+                tool: "task",
+                sessionID,
+                callID: part.id,
+              },
+              { args: taskArgs },
+            ),
+            abort,
           )
           let executionError: Error | undefined
           const taskAgent = await Agent.get(task.agent)
@@ -1000,7 +1033,7 @@ export namespace SessionPrompt {
               })
             },
           }
-          const result = await taskTool.execute(taskArgs, taskCtx).catch((error) => {
+          const result = await abortable(taskTool.execute(taskArgs, taskCtx), abort).catch((error) => {
             executionError = error
             log.error("subtask execution failed", { error, agent: task.agent, description: task.description })
             return undefined
@@ -1011,15 +1044,18 @@ export namespace SessionPrompt {
             sessionID,
             messageID: assistantMessage.id,
           }))
-          await Plugin.trigger(
-            "tool.execute.after",
-            {
-              tool: "task",
-              sessionID,
-              callID: part.id,
-              args: taskArgs,
-            },
-            result,
+          await abortable(
+            Plugin.trigger(
+              "tool.execute.after",
+              {
+                tool: "task",
+                sessionID,
+                callID: part.id,
+                args: taskArgs,
+              },
+              result,
+            ),
+            abort,
           )
           assistantMessage.finish = "tool-calls"
           assistantMessage.time.completed = Date.now()
@@ -1411,18 +1447,21 @@ export namespace SessionPrompt {
         inputSchema: jsonSchema(schema as any),
         async execute(args, options) {
           const ctx = context(args, options)
-          await Plugin.trigger(
-            "tool.execute.before",
-            {
-              tool: item.id,
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-            },
-            {
-              args,
-            },
+          await abortable(
+            Plugin.trigger(
+              "tool.execute.before",
+              {
+                tool: item.id,
+                sessionID: ctx.sessionID,
+                callID: ctx.callID,
+              },
+              {
+                args,
+              },
+            ),
+            ctx.abort,
           )
-          const result = await item.execute(args, ctx)
+          const result = await abortable(item.execute(args, ctx), ctx.abort)
           const output = {
             ...result,
             attachments: result.attachments?.map((attachment) => ({
@@ -1432,15 +1471,18 @@ export namespace SessionPrompt {
               messageID: input.processor.message.id,
             })),
           }
-          await Plugin.trigger(
-            "tool.execute.after",
-            {
-              tool: item.id,
-              sessionID: ctx.sessionID,
-              callID: ctx.callID,
-              args,
-            },
-            output,
+          await abortable(
+            Plugin.trigger(
+              "tool.execute.after",
+              {
+                tool: item.id,
+                sessionID: ctx.sessionID,
+                callID: ctx.callID,
+                args,
+              },
+              output,
+            ),
+            ctx.abort,
           )
           return output
         },
@@ -1457,16 +1499,19 @@ export namespace SessionPrompt {
       item.execute = async (args, opts) => {
         const ctx = context(args, opts)
 
-        await Plugin.trigger(
-          "tool.execute.before",
-          {
-            tool: key,
-            sessionID: ctx.sessionID,
-            callID: opts.toolCallId,
-          },
-          {
-            args,
-          },
+        await abortable(
+          Plugin.trigger(
+            "tool.execute.before",
+            {
+              tool: key,
+              sessionID: ctx.sessionID,
+              callID: opts.toolCallId,
+            },
+            {
+              args,
+            },
+          ),
+          ctx.abort,
         )
 
         await ctx.ask({
@@ -1476,17 +1521,20 @@ export namespace SessionPrompt {
           always: ["*"],
         })
 
-        const result = await execute(args, opts)
+        const result = (await abortable(execute(args, opts), ctx.abort)) as Awaited<ReturnType<typeof execute>>
 
-        await Plugin.trigger(
-          "tool.execute.after",
-          {
-            tool: key,
-            sessionID: ctx.sessionID,
-            callID: opts.toolCallId,
-            args,
-          },
-          result,
+        await abortable(
+          Plugin.trigger(
+            "tool.execute.after",
+            {
+              tool: key,
+              sessionID: ctx.sessionID,
+              callID: opts.toolCallId,
+              args,
+            },
+            result,
+          ),
+          ctx.abort,
         )
 
         const textParts: string[] = []

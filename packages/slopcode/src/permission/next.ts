@@ -434,6 +434,21 @@ export namespace PermissionNext {
     }
   }
 
+  export async function cancel(sessionID: string, reason: unknown = new DOMException("Aborted", "AbortError")) {
+    const s = await state()
+    for (const [id, pending] of Object.entries(s.pending)) {
+      if (pending.info.sessionID !== sessionID) continue
+      delete s.pending[id]
+      Bus.publish(Event.Replied, {
+        sessionID: pending.info.sessionID,
+        requestID: pending.info.id,
+        reply: "reject",
+        viewID: Instance.viewID,
+      })
+      pending.reject(reason)
+    }
+  }
+
   export async function list(input?: { sessionID?: string }) {
     const s = await state()
     const list = Object.values(s.pending).map((x) => x.info)

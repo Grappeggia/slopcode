@@ -9,6 +9,8 @@ import { SessionPrompt } from "../../src/session/prompt"
 import { LLM } from "../../src/session/llm"
 import { Log } from "../../src/util/log"
 import { tmpdir } from "../fixture/fixture"
+import { PermissionNext } from "../../src/permission/next"
+import { Question } from "../../src/question"
 
 Log.init({ print: false })
 
@@ -58,6 +60,42 @@ function live() {
         await Bun.sleep(10)
         yield { type: "text-delta", id: "txt-0", text: "." }
       }
+    })(),
+  } as unknown as Awaited<ReturnType<typeof LLM.stream>>
+}
+
+function blockedPermission(sessionID: string) {
+  return {
+    fullStream: (async function* () {
+      yield { type: "start" }
+      await PermissionNext.ask({
+        sessionID,
+        permission: "read",
+        patterns: ["secret.env"],
+        always: ["*"],
+        metadata: {},
+        ruleset: [],
+      })
+      yield { type: "finish" }
+    })(),
+  } as unknown as Awaited<ReturnType<typeof LLM.stream>>
+}
+
+function blockedQuestion(sessionID: string) {
+  return {
+    fullStream: (async function* () {
+      yield { type: "start" }
+      await Question.ask({
+        sessionID,
+        questions: [
+          {
+            question: "Continue?",
+            header: "Continue",
+            options: [{ label: "Yes", description: "Continue" }],
+          },
+        ],
+      })
+      yield { type: "finish" }
     })(),
   } as unknown as Awaited<ReturnType<typeof LLM.stream>>
 }
@@ -637,6 +675,190 @@ describe("session.prompt pause and resume", () => {
       },
     })
   })
+
+  test("replaces a single paused prompt blocked on permission", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        queue_mode: "serial",
+        agent: {
+          build: {
+            model: "slopcode/kimi-k2.5-free",
+          },
+        },
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({ title: "Permission Replace Test" })
+        const seen: string[] = []
+        let calls = 0
+
+        spyOn(LLM, "stream").mockImplementation(async (input) => {
+          calls++
+          seen.push(JSON.stringify(input.messages))
+          if (calls === 1) return blockedPermission(session.id)
+          if (calls === 2) return stream({ text: "replacement done", finishReason: "stop" })
+          throw new Error(`unexpected llm call ${calls}`)
+        })
+
+        const first = SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: "first prompt" }],
+        })
+
+        await eventually(async () => (await PermissionNext.list({ sessionID: session.id })).length === 1)
+        expect(await SessionPrompt.pause(session.id)).toBe(true)
+        expect(await PermissionNext.list({ sessionID: session.id })).toHaveLength(0)
+
+        const error = await first.then(
+          () => undefined,
+          (cause) => cause as { name?: string },
+        )
+        expect(error?.name).toBe("MessageAbortedError")
+
+        const next = await SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          front: true,
+          parts: [{ type: "text", text: "replacement prompt" }],
+        })
+
+        expect(calls).toBe(2)
+        expect(text(next)).toBe("replacement done")
+        expect(seen[1]).toContain("replacement prompt")
+        expect(seen[1]).not.toContain("first prompt")
+      },
+    })
+  })
+
+  test("replaces a single paused prompt blocked on question", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        queue_mode: "serial",
+        agent: {
+          build: {
+            model: "slopcode/kimi-k2.5-free",
+          },
+        },
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({ title: "Question Replace Test" })
+        const seen: string[] = []
+        let calls = 0
+
+        spyOn(LLM, "stream").mockImplementation(async (input) => {
+          calls++
+          seen.push(JSON.stringify(input.messages))
+          if (calls === 1) return blockedQuestion(session.id)
+          if (calls === 2) return stream({ text: "replacement done", finishReason: "stop" })
+          throw new Error(`unexpected llm call ${calls}`)
+        })
+
+        const first = SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: "first prompt" }],
+        })
+
+        await eventually(async () => (await Question.list({ sessionID: session.id })).length === 1)
+        expect(await SessionPrompt.pause(session.id)).toBe(true)
+        expect(await Question.list({ sessionID: session.id })).toHaveLength(0)
+
+        const error = await first.then(
+          () => undefined,
+          (cause) => cause as { name?: string },
+        )
+        expect(error?.name).toBe("MessageAbortedError")
+
+        const next = await SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          front: true,
+          parts: [{ type: "text", text: "replacement prompt" }],
+        })
+
+        expect(calls).toBe(2)
+        expect(text(next)).toBe("replacement done")
+        expect(seen[1]).toContain("replacement prompt")
+        expect(seen[1]).not.toContain("first prompt")
+      },
+    })
+  })
+
+  test("replaces a paused prompt before it leaves pending state", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        queue_mode: "serial",
+        agent: {
+          build: {
+            model: "slopcode/kimi-k2.5-free",
+          },
+        },
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({ title: "Pending Replace Test" })
+        const gate = deferred<void>()
+        const seen: string[] = []
+        let touches = 0
+        let calls = 0
+
+        spyOn(Session, "touch").mockImplementation(
+          (async () => {
+            touches++
+            if (touches === 1) await gate.promise
+          }) as never,
+        )
+        spyOn(LLM, "stream").mockImplementation(async (input) => {
+          calls++
+          seen.push(JSON.stringify(input.messages))
+          if (calls === 1) return stream({ text: "replacement done", finishReason: "stop" })
+          throw new Error(`unexpected llm call ${calls}`)
+        })
+
+        const first = SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: "first prompt" }],
+        })
+
+        await eventually(() => touches === 1)
+        expect(await SessionPrompt.pause(session.id)).toBe(true)
+
+        const next = SessionPrompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          front: true,
+          parts: [{ type: "text", text: "replacement prompt" }],
+        })
+        gate.resolve()
+
+        const error = await first.then(
+          () => undefined,
+          (cause) => cause as { name?: string },
+        )
+        expect(error?.name).toBe("MessageAbortedError")
+        expect(text(await next)).toBe("replacement done")
+        expect(calls).toBe(1)
+        expect(seen[0]).toContain("replacement prompt")
+        expect(seen[0]).not.toContain("first prompt")
+      },
+    })
+  })
+
 })
 
 describe("session.prompt agent variant", () => {

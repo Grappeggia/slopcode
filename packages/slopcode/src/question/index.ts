@@ -173,6 +173,20 @@ export namespace Question {
     }
   }
 
+  export async function cancel(sessionID: string, reason: unknown = new DOMException("Aborted", "AbortError")) {
+    const s = await state()
+    for (const [id, pending] of Object.entries(s.pending)) {
+      if (pending.info.sessionID !== sessionID) continue
+      delete s.pending[id]
+      Bus.publish(Event.Rejected, {
+        sessionID: pending.info.sessionID,
+        requestID: pending.info.id,
+        viewID: Instance.viewID,
+      })
+      pending.reject(reason)
+    }
+  }
+
   export async function list(input?: { sessionID?: string }) {
     const list = await state().then((x) => Object.values(x.pending).map((x) => x.info))
     if (!input?.sessionID) return list
