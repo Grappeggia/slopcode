@@ -816,12 +816,10 @@ describe("session.prompt pause and resume", () => {
         let touches = 0
         let calls = 0
 
-        spyOn(Session, "touch").mockImplementation(
-          (async () => {
-            touches++
-            if (touches === 1) await gate.promise
-          }) as never,
-        )
+        spyOn(Session, "touch").mockImplementation((async () => {
+          touches++
+          if (touches === 1) await gate.promise
+        }) as never)
         spyOn(LLM, "stream").mockImplementation(async (input) => {
           calls++
           seen.push(JSON.stringify(input.messages))
@@ -858,7 +856,6 @@ describe("session.prompt pause and resume", () => {
       },
     })
   })
-
 })
 
 describe("session.prompt agent variant", () => {
