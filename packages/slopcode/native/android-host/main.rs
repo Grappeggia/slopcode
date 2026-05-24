@@ -2,10 +2,12 @@ use std::env;
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Default)]
 struct Args {
@@ -777,8 +779,14 @@ fn parse_model(input: &str) -> Option<(String, String)> {
 }
 
 fn id(prefix: &str) -> String {
+    let head = match prefix {
+        "message" => "msg",
+        "part" => "prt",
+        _ => prefix,
+    };
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
-    format!("{prefix}_{now}")
+    let count = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{head}_{now:013}{count:04}")
 }
 
 fn json(input: &str) -> String {

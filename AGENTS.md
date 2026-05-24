@@ -5,6 +5,7 @@
 - Before publishing a release or npm package, rebase the publish branch/worktree onto the latest remote base branch tip (`origin/dev` here, or `origin/main` in repos that use `main`) so npm publishes always start from the current base.
 - Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
 - For UI or layout work that could apply to both clients, prioritize the TUI implementation in `packages/slopcode` first unless the user explicitly asks for web-only behavior.
+- For Android/Termux interactive or TUI issues, reproduce through adb on an Android emulator with Termux and npm preinstalled before claiming a fix.
 - When publishing a release or npm package, update the GitHub release notes as part of the default flow and make sure the changelog is visible on `slopcode.dev` as well. Do not leave releases with placeholder notes; write clear changelogs as at most 3 very short bullet points covering the shipped changes.
 - The default release flow is `bun run release patch` from a clean worktree. Use `minor`, `major`, or an explicit version only when the user explicitly asks for a different bump.
 - When asked to ship, rebase onto `origin/dev`, test and iterate until passing, commit and push the implementation, then cut the release with the default release flow.
