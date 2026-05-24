@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/bin/sh
 ':' //; runner="$(command -v node || command -v bun || true)"; [ -n "$runner" ] || { echo "slopcode requires bun or node in PATH" >&2; exit 127; }; exec "$runner" "$0" "$@"
 
 const childProcess = require("child_process")

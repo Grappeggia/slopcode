@@ -173,4 +173,49 @@ describe("portable Termux TUI", () => {
       server.stop(true)
     }
   })
+
+  test("handles multiline paste, cursor editing, and history", async () => {
+    const bodies: Array<{ parts?: Array<{ text?: string }> }> = []
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url)
+        if (url.pathname === "/event") return new Response("", { headers: { "content-type": "text/event-stream" } })
+        if (req.method === "POST" && url.pathname === "/session") return Response.json({ id: "ses_test", title: "Test Session" })
+        if (req.method === "GET" && url.pathname === "/session/ses_test") return Response.json({ id: "ses_test", title: "Test Session" })
+        if (req.method === "GET" && url.pathname === "/session/ses_test/message/index") return Response.json([])
+        if (req.method === "POST" && url.pathname === "/session/ses_test/prompt_async") {
+          bodies.push((await req.json()) as { parts?: Array<{ text?: string }> })
+          return new Response(null, { status: 204 })
+        }
+        return new Response("not found", { status: 404 })
+      },
+    })
+    const stdin = new PassThrough() as unknown as NodeJS.ReadStream
+    const stdout = new PassThrough() as unknown as NodeJS.WriteStream
+
+    try {
+      const run = portableTui({
+        url: `http://127.0.0.1:${server.port}`,
+        directory: "/tmp",
+        args: {},
+        stdin,
+        stdout,
+      })
+      await Bun.sleep(50)
+      stdin.push("\x1b[200~hello\nworld\x1b[201~\r")
+      await Bun.sleep(50)
+      stdin.push("first\r")
+      await Bun.sleep(50)
+      stdin.push("\x1b[A again\r")
+      await Bun.sleep(50)
+      stdin.push("\x04")
+      stdin.push(null)
+      await run
+      expect(bodies.map((item) => item.parts?.[0]?.text)).toEqual(["hello\nworld", "first", "first again"])
+    } finally {
+      server.stop(true)
+    }
+  })
+
 })

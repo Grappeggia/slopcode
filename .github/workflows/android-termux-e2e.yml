@@ -1,0 +1,50 @@
+name: android-termux-e2e
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "27 6 * * *"
+
+jobs:
+  termux:
+    name: shipped package on Termux
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: sdkmanager "ndk;27.1.12297006"
+
+      - name: Build Android x64 package
+        run: bun --cwd packages/slopcode run script/build.ts --target=android-x64
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
+
+      - name: Run Termux package smoke
+        uses: reactivecircus/android-emulator-runner@v2
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
+          SLOPCODE_ANDROID_BOOTSTRAP: "1"
+        with:
+          api-level: 35
+          arch: x86_64
+          target: default
+          profile: pixel_6
+          emulator-options: -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect
+          script: |
+            curl -L -o /tmp/termux.apk https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3+github-debug_universal.apk
+            adb install /tmp/termux.apk
+            adb shell monkey -p com.termux 1
+            sleep 8
+            bun --cwd packages/slopcode run script/android-termux-e2e.ts

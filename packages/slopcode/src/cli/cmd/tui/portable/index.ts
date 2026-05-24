@@ -1,4 +1,5 @@
 import { Identifier } from "@/id/id"
+import { promptHistoryPath, readPromptHistory, writePromptHistory } from "@/cli/cmd/tui/component/prompt/history-store"
 
 export type PortableArgs = {
   model?: string
@@ -94,8 +95,10 @@ export type PortableState = {
   variant?: string
   status: string
   input: string
+  cursor: number
   history: string[]
   historyIndex?: number
+  historyDraft?: string
   mode: "prompt" | "permission" | "question"
   permission?: PermissionRequest
   question?: {
@@ -118,6 +121,7 @@ export function createPortableState(args: PortableArgs = {}): PortableState {
     agent: args.agent,
     status: "starting",
     input: "",
+    cursor: 0,
     history: [],
     mode: "prompt",
     sessions: new Map(),
@@ -183,6 +187,56 @@ function ensure(state: PortableState, message: MessageInfo) {
 function notice(state: PortableState, text: string, kind: Notice["kind"] = "info") {
   state.notices.push({ id: Identifier.ascending("message"), text, kind })
   if (state.notices.length > 20) state.notices.shift()
+}
+
+const commands = ["/new", "/sessions", "/session", "/continue", "/model", "/agent", "/interrupt", "/help", "/exit", "/quit"]
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function insert(state: PortableState, text: string) {
+  state.input = state.input.slice(0, state.cursor) + text + state.input.slice(state.cursor)
+  state.cursor += text.length
+}
+
+function backspace(state: PortableState) {
+  if (state.cursor === 0) return
+  state.input = state.input.slice(0, state.cursor - 1) + state.input.slice(state.cursor)
+  state.cursor--
+}
+
+function remove(state: PortableState) {
+  if (state.cursor >= state.input.length) return
+  state.input = state.input.slice(0, state.cursor) + state.input.slice(state.cursor + 1)
+}
+
+function wordLeft(state: PortableState) {
+  while (state.cursor > 0 && /\s/.test(state.input[state.cursor - 1] ?? "")) state.cursor--
+  while (state.cursor > 0 && !/\s/.test(state.input[state.cursor - 1] ?? "")) state.cursor--
+}
+
+function wordRight(state: PortableState) {
+  while (state.cursor < state.input.length && !/\s/.test(state.input[state.cursor] ?? "")) state.cursor++
+  while (state.cursor < state.input.length && /\s/.test(state.input[state.cursor] ?? "")) state.cursor++
+}
+
+function deleteWordBefore(state: PortableState) {
+  while (state.cursor > 0 && /\s/.test(state.input[state.cursor - 1] ?? "")) backspace(state)
+  while (state.cursor > 0 && !/\s/.test(state.input[state.cursor - 1] ?? "")) backspace(state)
+}
+
+function complete(state: PortableState) {
+  if (state.cursor !== state.input.length || !state.input.startsWith("/") || state.input.includes(" ")) return
+  const matches = commands.filter((item) => item.startsWith(state.input))
+  if (matches.length === 1) {
+    state.input = `${matches[0]} `
+    state.cursor = state.input.length
+  }
+}
+
+function shown(input: string, cursor: number) {
+  return input.slice(0, cursor) + "|" + input.slice(cursor)
 }
 
 export function parseModel(input?: string) {
@@ -408,10 +462,11 @@ export function renderPortableLines(state: PortableState, width = 80, height = 2
       const options = item.options.map((option, index) => `${index + 1}) ${option.label}`).join("  ")
       return `${item.header}: ${item.question} ${options} > ${state.question.input}`
     }
-    return `> ${state.input}`
+    return `> ${shown(state.input, clamp(state.cursor, 0, state.input.length))}`
   })()
-  const maxBody = Math.max(1, height - 3)
-  return [header.slice(0, width), ...body.slice(-maxBody), footer.slice(0, width)]
+  const footerLines = wrap(footer, width)
+  const maxBody = Math.max(1, height - 1 - footerLines.length)
+  return [header.slice(0, width), ...body.slice(-maxBody), ...footerLines.map((item) => item.slice(0, width))]
 }
 
 function screen(lines: string[], width: number, height: number) {
@@ -443,6 +498,8 @@ export async function portableTui(input: {
   let done: (() => void) | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let raw = false
+  let paste: string | undefined
+  let historyFile: string | undefined
 
   const base = input.url.endsWith("/") ? input.url : input.url + "/"
   const url = (path: string) => new URL(path.replace(/^\//, ""), base).toString()
@@ -462,6 +519,21 @@ export async function portableTui(input: {
     if (!res.ok) throw new Error(`${method} ${path} failed: ${res.status} ${await res.text()}`)
     if (res.status === 204) return undefined as T
     return (await res.json()) as T
+  }
+
+  const loadHistory = (sessionID?: string) => {
+    historyFile = promptHistoryPath({ dir: input.directory, sessionID })
+    state.history = readPromptHistory(historyFile).history.map((item) => item.input).filter(Boolean)
+    state.historyIndex = undefined
+    state.historyDraft = undefined
+  }
+
+  const saveHistory = () => {
+    if (!historyFile) return
+    void writePromptHistory(
+      historyFile,
+      state.history.map((item) => ({ input: item, mode: "normal" as const, parts: [] })),
+    ).catch(() => {})
   }
 
   const draw = () => {
@@ -503,6 +575,7 @@ export async function portableTui(input: {
   const activate = async (sessionID: string) => {
     state.sessionID = sessionID
     state.status = "idle"
+    loadHistory(sessionID)
     await sync(sessionID)
   }
 
@@ -530,8 +603,11 @@ export async function portableTui(input: {
       ...(state.variant ? { variant: state.variant } : {}),
       parts: [{ id: Identifier.ascending("part"), type: "text", text: trimmed }],
     })
-    state.history.push(trimmed)
+    if (state.history.at(-1) !== trimmed) state.history.push(trimmed)
+    if (state.history.length > 50) state.history = state.history.slice(-50)
     state.historyIndex = undefined
+    state.historyDraft = undefined
+    saveHistory()
     state.status = "sent"
     return true
   }
@@ -669,6 +745,7 @@ export async function portableTui(input: {
     }
     const text = state.input
     state.input = ""
+    state.cursor = 0
     const keep = await submitPrompt(text).catch((error) => {
       notice(state, error instanceof Error ? error.message : String(error), "error")
       return true
@@ -679,10 +756,105 @@ export async function portableTui(input: {
 
   const history = (step: 1 | -1) => {
     if (state.history.length === 0) return
+    if (state.historyIndex === undefined) state.historyDraft = state.input
     const index = state.historyIndex ?? state.history.length
-    const next = Math.max(0, Math.min(state.history.length - 1, index + step))
+    if (step === 1 && index >= state.history.length - 1) {
+      state.historyIndex = undefined
+      state.input = state.historyDraft ?? ""
+      state.cursor = state.input.length
+      return
+    }
+    const next = clamp(index + step, 0, state.history.length - 1)
     state.historyIndex = next
     state.input = state.history[next] ?? ""
+    state.cursor = state.input.length
+  }
+
+  const promptData = (text: string) => {
+    for (let i = 0; i < text.length; ) {
+      if (paste !== undefined) {
+        const end = text.indexOf("\x1b[201~", i)
+        if (end < 0) {
+          paste += text.slice(i)
+          return
+        }
+        insert(state, (paste + text.slice(i, end)).replace(/\r\n/g, "\n").replace(/\r/g, "\n"))
+        paste = undefined
+        i = end + "\x1b[201~".length
+        continue
+      }
+      const rest = text.slice(i)
+      if (rest.startsWith("\x1b[200~")) {
+        paste = ""
+        i += "\x1b[200~".length
+        continue
+      }
+      if (rest.startsWith("\x1b[A")) {
+        history(-1)
+        i += 3
+        continue
+      }
+      if (rest.startsWith("\x1b[B")) {
+        history(1)
+        i += 3
+        continue
+      }
+      if (rest.startsWith("\x1b[D")) {
+        state.cursor = Math.max(0, state.cursor - 1)
+        i += 3
+        continue
+      }
+      if (rest.startsWith("\x1b[C")) {
+        state.cursor = Math.min(state.input.length, state.cursor + 1)
+        i += 3
+        continue
+      }
+      if (rest.startsWith("\x1b[H") || rest.startsWith("\x1b[1~")) {
+        state.cursor = 0
+        i += rest.startsWith("\x1b[1~") ? 4 : 3
+        continue
+      }
+      if (rest.startsWith("\x1b[F") || rest.startsWith("\x1b[4~")) {
+        state.cursor = state.input.length
+        i += rest.startsWith("\x1b[4~") ? 4 : 3
+        continue
+      }
+      if (rest.startsWith("\x1b[3~")) {
+        remove(state)
+        i += 4
+        continue
+      }
+      if (rest.startsWith("\x1bb") || rest.startsWith("\x1bB")) {
+        wordLeft(state)
+        i += 2
+        continue
+      }
+      if (rest.startsWith("\x1bf") || rest.startsWith("\x1bF")) {
+        wordRight(state)
+        i += 2
+        continue
+      }
+      const ch = text[i] ?? ""
+      i++
+      if (ch === "\x03") {
+        if (state.status !== "idle" && state.sessionID) void request<boolean>("POST", `/session/${state.sessionID}/abort`, {}).then(schedule)
+        else stop()
+      } else if (ch === "\x04") {
+        if (state.input) remove(state)
+        else stop()
+      } else if (ch === "\r" || ch === "\n") void submit()
+      else if (ch === "\t") complete(state)
+      else if (ch === "\x01") state.cursor = 0
+      else if (ch === "\x05") state.cursor = state.input.length
+      else if (ch === "\x15") {
+        state.input = state.input.slice(state.cursor)
+        state.cursor = 0
+      } else if (ch === "\x0b") state.input = state.input.slice(0, state.cursor)
+      else if (ch === "\x17") deleteWordBefore(state)
+      else if (ch === "\u007f" || ch === "\b") backspace(state)
+      else if (ch === "\f") draw()
+      else if (ch >= " " && ch !== "\u007f") insert(state, ch)
+    }
   }
 
   const onData = (data: Buffer) => {
@@ -694,31 +866,14 @@ export async function portableTui(input: {
       else if (text === "r" || text === "\x1b") void replyPermission("reject").then(schedule)
       return
     }
-    if (text === "\x03") {
-      if (state.status !== "idle" && state.sessionID)
-        void request<boolean>("POST", `/session/${state.sessionID}/abort`, {}).then(schedule)
-      else stop()
-      return
-    }
-    if (text === "\x04") {
-      stop()
-      return
-    }
-    if (text === "\x1b[A") history(-1)
-    else if (text === "\x1b[B") history(1)
-    else {
+    if (state.mode === "question") {
       for (const ch of text) {
-        if (ch === "\r" || ch === "\n") void submit()
-        else if (ch === "\u007f" || ch === "\b") {
-          if (state.mode === "question" && state.question) state.question.input = state.question.input.slice(0, -1)
-          else state.input = state.input.slice(0, -1)
-        } else if (ch === "\f") draw()
-        else if (ch >= " " && ch !== "\u007f") {
-          if (state.mode === "question" && state.question) state.question.input += ch
-          else state.input += ch
-        }
+        if (ch === "\x03" || ch === "\x04") stop()
+        else if (ch === "\r" || ch === "\n") void submit()
+        else if (ch === "\u007f" || ch === "\b") state.question ? (state.question.input = state.question.input.slice(0, -1)) : undefined
+        else if (ch >= " " && ch !== "\u007f") state.question ? (state.question.input += ch) : undefined
       }
-    }
+    } else promptData(text)
     schedule()
   }
 

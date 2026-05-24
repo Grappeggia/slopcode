@@ -286,6 +286,7 @@ describe("editor tab persistence e2e", () => {
       const tab = locate(second, "route.tsx")
       expect(tab).toBeDefined()
       click(pty, tab!.row, tab!.col)
+      await Bun.sleep(500)
 
       const start = await eventually(() => {
         const screen = frame(raw, width, height).join("\n")

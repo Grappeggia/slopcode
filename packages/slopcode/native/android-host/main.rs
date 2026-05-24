@@ -37,16 +37,150 @@ struct Permission {
     patterns: Vec<String>,
 }
 
+#[derive(Clone, Default)]
+struct Buffer {
+    text: String,
+    cursor: usize,
+}
+
+impl Buffer {
+    fn len(&self) -> usize {
+        self.text.chars().count()
+    }
+
+    fn byte(&self, index: usize) -> usize {
+        if index == 0 {
+            return 0;
+        }
+        self.text.char_indices().nth(index).map(|item| item.0).unwrap_or(self.text.len())
+    }
+
+    fn set(&mut self, text: String) {
+        self.text = text;
+        self.cursor = self.len();
+    }
+
+    fn clear(&mut self) -> String {
+        self.cursor = 0;
+        std::mem::take(&mut self.text)
+    }
+
+    fn insert(&mut self, text: &str) {
+        self.text.insert_str(self.byte(self.cursor), text);
+        self.cursor += text.chars().count();
+    }
+
+    fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let start = self.byte(self.cursor - 1);
+        let end = self.byte(self.cursor);
+        self.text.replace_range(start..end, "");
+        self.cursor -= 1;
+    }
+
+    fn delete(&mut self) {
+        if self.cursor >= self.len() {
+            return;
+        }
+        let start = self.byte(self.cursor);
+        let end = self.byte(self.cursor + 1);
+        self.text.replace_range(start..end, "");
+    }
+
+    fn left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    fn right(&mut self) {
+        self.cursor = (self.cursor + 1).min(self.len());
+    }
+
+    fn home(&mut self) {
+        self.cursor = 0;
+    }
+
+    fn end(&mut self) {
+        self.cursor = self.len();
+    }
+
+    fn kill_before(&mut self) {
+        let end = self.byte(self.cursor);
+        self.text.replace_range(0..end, "");
+        self.cursor = 0;
+    }
+
+    fn kill_after(&mut self) {
+        let start = self.byte(self.cursor);
+        self.text.replace_range(start.., "");
+    }
+
+    fn delete_word_before(&mut self) {
+        while self.cursor > 0 && self.text.chars().nth(self.cursor - 1).is_some_and(char::is_whitespace) {
+            self.backspace();
+        }
+        while self.cursor > 0 && self.text.chars().nth(self.cursor - 1).is_some_and(|ch| !ch.is_whitespace()) {
+            self.backspace();
+        }
+    }
+
+    fn word_left(&mut self) {
+        while self.cursor > 0 && self.text.chars().nth(self.cursor - 1).is_some_and(char::is_whitespace) {
+            self.left();
+        }
+        while self.cursor > 0 && self.text.chars().nth(self.cursor - 1).is_some_and(|ch| !ch.is_whitespace()) {
+            self.left();
+        }
+    }
+
+    fn word_right(&mut self) {
+        while self.cursor < self.len() && self.text.chars().nth(self.cursor).is_some_and(|ch| !ch.is_whitespace()) {
+            self.right();
+        }
+        while self.cursor < self.len() && self.text.chars().nth(self.cursor).is_some_and(char::is_whitespace) {
+            self.right();
+        }
+    }
+
+    fn rendered(&self) -> String {
+        let index = self.byte(self.cursor);
+        format!("{}|{}", &self.text[..index], &self.text[index..])
+    }
+}
+
+struct QuestionItem {
+    header: String,
+    question: String,
+    options: Vec<String>,
+    multiple: bool,
+    custom: bool,
+}
+
+struct Question {
+    id: String,
+    session: String,
+    items: Vec<QuestionItem>,
+    index: usize,
+    answers: Vec<Vec<String>>,
+    input: Buffer,
+}
+
 struct State {
     session: Option<String>,
     title: String,
     status: String,
-    input: String,
+    input: Buffer,
+    history: Vec<String>,
+    history_index: Option<usize>,
+    history_draft: String,
+    paste: Option<String>,
     model: Option<String>,
     agent: Option<String>,
     messages: Vec<Message>,
     notices: Vec<String>,
     permission: Option<Permission>,
+    question: Option<Question>,
 }
 
 impl State {
@@ -55,12 +189,17 @@ impl State {
             session: args.session.clone(),
             title: String::from("new session"),
             status: String::from("starting"),
-            input: String::new(),
+            input: Buffer::default(),
+            history: Vec::new(),
+            history_index: None,
+            history_draft: String::new(),
+            paste: None,
             model: args.model.clone(),
             agent: args.agent.clone(),
             messages: Vec::new(),
             notices: Vec::new(),
             permission: None,
+            question: None,
         }
     }
 
@@ -85,6 +224,47 @@ impl State {
             tools: Vec::new(),
         });
         self.messages.last_mut().unwrap()
+    }
+
+    fn history_push(&mut self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        if self.history.last().is_some_and(|item| item == text) {
+            self.history_index = None;
+            self.history_draft.clear();
+            return;
+        }
+        self.history.push(text.to_string());
+        if self.history.len() > 50 {
+            self.history.remove(0);
+        }
+        self.history_index = None;
+        self.history_draft.clear();
+    }
+
+    fn history_move(&mut self, step: i32) {
+        if self.history.is_empty() {
+            return;
+        }
+        if self.history_index.is_none() {
+            self.history_draft = self.input.text.clone();
+        }
+        let base = self.history_index.unwrap_or(self.history.len());
+        if step < 0 {
+            let next = base.saturating_sub(1);
+            self.history_index = Some(next);
+            self.input.set(self.history[next].clone());
+            return;
+        }
+        if base + 1 >= self.history.len() {
+            self.history_index = None;
+            self.input.set(std::mem::take(&mut self.history_draft));
+            return;
+        }
+        let next = base + 1;
+        self.history_index = Some(next);
+        self.input.set(self.history[next].clone());
     }
 }
 
@@ -141,7 +321,7 @@ fn run() -> Result<(), String> {
             let locked = state.lock().map_err(|_| "state lock failed")?;
             draw(&locked, term.size());
         }
-        let mut buf = [0u8; 32];
+        let mut buf = [0u8; 4096];
         let count = io::stdin().read(&mut buf).unwrap_or(0);
         if count > 0 && input(&client, &state, &dirty, &done, &buf[..count])? {
             break;
@@ -283,6 +463,7 @@ fn submit_prompt(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicB
     client.request("POST", &format!("/session/{session}/prompt_async"), Some(&body))?;
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
+        locked.history_push(trimmed);
         locked.status = String::from("sent");
     }
     dirty.store(true, Ordering::SeqCst);
@@ -365,59 +546,39 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, 
 }
 
 fn input(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, done: &Arc<AtomicBool>, data: &[u8]) -> Result<bool, String> {
-    if data == [3] {
-        let (busy, session) = {
-            let locked = state.lock().map_err(|_| "state lock failed")?;
-            (locked.status != "idle", locked.session.clone())
-        };
-        if busy {
-            if let Some(session) = session {
-                client.request("POST", &format!("/session/{session}/abort"), Some("{}"))?;
-            }
-            return Ok(false);
-        }
-        done.store(true, Ordering::SeqCst);
-        return Ok(true);
-    }
-    if data == [4] {
-        done.store(true, Ordering::SeqCst);
-        return Ok(true);
-    }
-    if data == b"\x1b[A" || data == b"\x1b[B" {
-        return Ok(false);
-    }
-
+    let text = String::from_utf8_lossy(data).to_string();
     let mut submit = None;
+    let mut exit = false;
+    let mut permission = None;
+    let mut question = None;
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
         if locked.permission.is_some() {
-            let reply = match data {
-                b"o" => Some("once"),
-                b"a" => Some("always"),
-                b"r" | b"\x1b" => Some("reject"),
+            let reply = match text.as_str() {
+                "o" => Some("once"),
+                "a" => Some("always"),
+                "r" | "\x1b" => Some("reject"),
                 _ => None,
             };
             if let Some(reply) = reply {
                 let perm = locked.permission.take().unwrap();
-                drop(locked);
-                client.request("POST", &format!("/permission/{}/reply?sessionID={}", perm.id, perm.session), Some(&format!("{{\"reply\":{}}}", json(reply))))?;
-                dirty.store(true, Ordering::SeqCst);
+                permission = Some((perm.id, perm.session, reply.to_string()));
             }
-            return Ok(false);
+        } else if locked.question.is_some() {
+            question_input(&mut locked, &text, &mut question, &mut exit);
+        } else {
+            prompt_input(&mut locked, &text, &mut submit, &mut exit);
         }
-        for ch in String::from_utf8_lossy(data).chars() {
-            match ch {
-                '\r' | '\n' => {
-                    submit = Some(locked.input.clone());
-                    locked.input.clear();
-                }
-                '\u{7f}' | '\u{8}' => {
-                    locked.input.pop();
-                }
-                ch if ch >= ' ' => locked.input.push(ch),
-                _ => {}
-            }
-        }
+    }
+    if let Some((id, session, reply)) = permission {
+        client.request("POST", &format!("/permission/{id}/reply?sessionID={session}"), Some(&format!("{{\"reply\":{}}}", json(&reply))))?;
+    }
+    if let Some((id, session, body)) = question {
+        client.request("POST", &format!("/question/{id}/reply?sessionID={session}"), Some(&body))?;
+    }
+    if exit {
+        done.store(true, Ordering::SeqCst);
+        return Ok(true);
     }
     if let Some(text) = submit {
         if !submit_prompt(client, state, dirty, &text)? {
@@ -426,6 +587,212 @@ fn input(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, do
     }
     dirty.store(true, Ordering::SeqCst);
     Ok(false)
+}
+
+const COMMANDS: [&str; 10] = ["/new", "/sessions", "/session", "/continue", "/model", "/agent", "/interrupt", "/help", "/exit", "/quit"];
+
+fn prompt_input(state: &mut State, text: &str, submit: &mut Option<String>, exit: &mut bool) {
+    let mut index = 0;
+    while index < text.len() {
+        if let Some(paste) = state.paste.as_mut() {
+            if let Some(end) = text[index..].find("\x1b[201~") {
+                paste.push_str(&text[index..index + end]);
+                let value = state.paste.take().unwrap();
+                state.input.insert(&normalize_paste(&value));
+                index += end + "\x1b[201~".len();
+                continue;
+            }
+            paste.push_str(&text[index..]);
+            break;
+        }
+        let rest = &text[index..];
+        if rest.starts_with("\x1b[200~") {
+            state.paste = Some(String::new());
+            index += "\x1b[200~".len();
+            continue;
+        }
+        if rest.starts_with("\x1b[A") {
+            state.history_move(-1);
+            index += 3;
+            continue;
+        }
+        if rest.starts_with("\x1b[B") {
+            state.history_move(1);
+            index += 3;
+            continue;
+        }
+        if rest.starts_with("\x1b[D") {
+            state.input.left();
+            index += 3;
+            continue;
+        }
+        if rest.starts_with("\x1b[C") {
+            state.input.right();
+            index += 3;
+            continue;
+        }
+        if rest.starts_with("\x1b[H") || rest.starts_with("\x1b[1~") {
+            state.input.home();
+            index += if rest.starts_with("\x1b[1~") { 4 } else { 3 };
+            continue;
+        }
+        if rest.starts_with("\x1b[F") || rest.starts_with("\x1b[4~") {
+            state.input.end();
+            index += if rest.starts_with("\x1b[4~") { 4 } else { 3 };
+            continue;
+        }
+        if rest.starts_with("\x1b[3~") {
+            state.input.delete();
+            index += 4;
+            continue;
+        }
+        if rest.starts_with("\x1bb") || rest.starts_with("\x1bB") {
+            state.input.word_left();
+            index += 2;
+            continue;
+        }
+        if rest.starts_with("\x1bf") || rest.starts_with("\x1bF") {
+            state.input.word_right();
+            index += 2;
+            continue;
+        }
+        let ch = rest.chars().next().unwrap();
+        index += ch.len_utf8();
+        match ch {
+            '\u{3}' => *exit = true,
+            '\u{4}' => {
+                if state.input.text.is_empty() {
+                    *exit = true;
+                } else {
+                    state.input.delete();
+                }
+            }
+            '\r' | '\n' => {
+                *submit = Some(state.input.clear());
+                state.history_index = None;
+                state.history_draft.clear();
+            }
+            '\t' => complete_command(&mut state.input),
+            '\u{1}' => state.input.home(),
+            '\u{5}' => state.input.end(),
+            '\u{15}' => state.input.kill_before(),
+            '\u{b}' => state.input.kill_after(),
+            '\u{17}' => state.input.delete_word_before(),
+            '\u{7f}' | '\u{8}' => state.input.backspace(),
+            ch if ch >= ' ' => state.input.insert(&ch.to_string()),
+            _ => {}
+        }
+    }
+}
+
+fn question_input(state: &mut State, text: &str, reply: &mut Option<(String, String, String)>, exit: &mut bool) {
+    let mut index = 0;
+    while index < text.len() {
+        let rest = &text[index..];
+        if rest.starts_with("\x1b[D") {
+            if let Some(question) = state.question.as_mut() {
+                question.input.left();
+            }
+            index += 3;
+            continue;
+        }
+        if rest.starts_with("\x1b[C") {
+            if let Some(question) = state.question.as_mut() {
+                question.input.right();
+            }
+            index += 3;
+            continue;
+        }
+        let ch = rest.chars().next().unwrap();
+        index += ch.len_utf8();
+        match ch {
+            '\u{3}' | '\u{4}' => *exit = true,
+            '\r' | '\n' => {
+                if let Some(body) = question_submit(state) {
+                    if let Some(active) = state.question.take() {
+                        *reply = Some((active.id, active.session, body));
+                    }
+                }
+            }
+            '\u{1}' => {
+                if let Some(question) = state.question.as_mut() {
+                    question.input.home();
+                }
+            }
+            '\u{5}' => {
+                if let Some(question) = state.question.as_mut() {
+                    question.input.end();
+                }
+            }
+            '\u{7f}' | '\u{8}' => {
+                if let Some(question) = state.question.as_mut() {
+                    question.input.backspace();
+                }
+            }
+            ch if ch >= ' ' => {
+                if let Some(question) = state.question.as_mut() {
+                    question.input.insert(&ch.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn question_submit(state: &mut State) -> Option<String> {
+    let question = state.question.as_mut()?;
+    let item = question.items.get(question.index)?;
+    let answer = parse_answer(&question.input.text, item);
+    if answer.is_empty() {
+        state.notice("answer required");
+        return None;
+    }
+    question.answers.push(answer);
+    question.input.clear();
+    if question.index + 1 < question.items.len() {
+        question.index += 1;
+        return None;
+    }
+    Some(format!("{{\"answers\":[{}]}}", question.answers.iter().map(|items| format!("[{}]", items.iter().map(|item| json(item)).collect::<Vec<_>>().join(","))).collect::<Vec<_>>().join(",")))
+}
+
+fn parse_answer(input: &str, question: &QuestionItem) -> Vec<String> {
+    let text = input.trim();
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let tokens = if question.multiple { text.split(',').map(str::trim).filter(|item| !item.is_empty()).collect::<Vec<_>>() } else { vec![text] };
+    let result = tokens
+        .iter()
+        .flat_map(|token| {
+            let index = token.parse::<usize>().ok().and_then(|item| question.options.get(item.saturating_sub(1)));
+            if let Some(label) = index {
+                return vec![label.clone()];
+            }
+            if let Some(label) = question.options.iter().find(|item| item.eq_ignore_ascii_case(token)) {
+                return vec![label.clone()];
+            }
+            if question.custom {
+                return vec![token.to_string()];
+            }
+            Vec::new()
+        })
+        .collect::<Vec<_>>();
+    if question.multiple { result } else { result.into_iter().take(1).collect() }
+}
+
+fn normalize_paste(input: &str) -> String {
+    input.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn complete_command(input: &mut Buffer) {
+    if input.cursor != input.len() || !input.text.starts_with('/') || input.text.contains(' ') {
+        return;
+    }
+    let matches = COMMANDS.iter().filter(|item| item.starts_with(&input.text)).collect::<Vec<_>>();
+    if matches.len() == 1 {
+        input.set(format!("{} ", matches[0]));
+    }
 }
 
 fn spawn_events(client: Client, state: Arc<Mutex<State>>, dirty: Arc<AtomicBool>, done: Arc<AtomicBool>) {
@@ -539,10 +906,54 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
                 }
             }
             "permission.replied" => locked.permission = None,
+            "question.asked" => {
+                if same_session(&locked, &props) {
+                    if let Some(next) = question_from_props(&props) {
+                        locked.question = Some(next);
+                        locked.notice("question requested");
+                    }
+                }
+            }
+            "question.replied" | "question.rejected" => {
+                if same_session(&locked, &props) {
+                    locked.question = None;
+                }
+            }
             "session.error" => locked.notice(string(&props, "name").unwrap_or_else(|| String::from("session error"))),
             _ => {}
         }
     }
+}
+
+fn question_from_props(props: &str) -> Option<Question> {
+    let id = string(props, "id")?;
+    let session = string(props, "sessionID")?;
+    let items = objects(&array_value(props, "questions")?)
+        .into_iter()
+        .map(|item| {
+            let options = array_value(&item, "options")
+                .map(|value| objects(&value).into_iter().filter_map(|option| string(&option, "label")).collect::<Vec<_>>())
+                .unwrap_or_default();
+            QuestionItem {
+                header: string(&item, "header").unwrap_or_else(|| String::from("Question")),
+                question: string(&item, "question").unwrap_or_default(),
+                options,
+                multiple: boolean(&item, "multiple").unwrap_or(false),
+                custom: boolean(&item, "custom").unwrap_or(true),
+            }
+        })
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        return None;
+    }
+    Some(Question {
+        id,
+        session,
+        items,
+        index: 0,
+        answers: Vec::new(),
+        input: Buffer::default(),
+    })
 }
 
 fn apply_part(state: &mut State, message: &str, part: &str) {
@@ -722,20 +1133,30 @@ fn draw(state: &State, size: (usize, usize)) {
     for notice in &state.notices {
         lines.extend(wrap(&format!("info: {notice}"), width));
     }
-    let footer = if let Some(permission) = &state.permission {
-        format!("permission {} {} | o once, a always, r reject", permission.permission, permission.patterns.join(", "))
-    } else {
-        format!("> {}", state.input)
-    };
-    let body_height = height.saturating_sub(1);
+    let footer = footer_lines(state, width);
+    let body_height = height.saturating_sub(footer.len());
     let start = lines.len().saturating_sub(body_height);
     let mut rows = lines[start..].iter().map(|item| pad(item, width)).collect::<Vec<_>>();
     while rows.len() < body_height {
         rows.push(" ".repeat(width));
     }
-    rows.push(pad(&crop(&footer, width), width));
+    rows.extend(footer.into_iter().map(|item| pad(&crop(&item, width), width)));
     print!("\x1b[H{}", rows.join("\n"));
     io::stdout().flush().ok();
+}
+
+fn footer_lines(state: &State, width: usize) -> Vec<String> {
+    if let Some(permission) = &state.permission {
+        return wrap(&format!("permission {} {} | o once, a always, r reject", permission.permission, permission.patterns.join(", ")), width);
+    }
+    if let Some(question) = &state.question {
+        if let Some(item) = question.items.get(question.index) {
+            let options = item.options.iter().enumerate().map(|(index, option)| format!("{}) {}", index + 1, option)).collect::<Vec<_>>().join("  ");
+            return wrap(&format!("{}: {} {} > {}", item.header, item.question, options, question.input.rendered()), width);
+        }
+        return vec![String::from("question | enter answer")];
+    }
+    wrap(&format!("> {}", state.input.rendered()).replace('\n', "\n  "), width)
 }
 
 fn wrap(input: &str, width: usize) -> Vec<String> {
@@ -870,6 +1291,21 @@ fn object_value(input: &str, key: &str) -> Option<String> {
 
 fn array_value(input: &str, key: &str) -> Option<String> {
     value(input, key).filter(|item| item.starts_with('['))
+}
+
+fn boolean(input: &str, key: &str) -> Option<bool> {
+    let needle = format!("\"{}\":", key);
+    let mut index = input.find(&needle)? + needle.len();
+    while input.as_bytes().get(index).is_some_and(|b| b.is_ascii_whitespace()) {
+        index += 1;
+    }
+    if input[index..].starts_with("true") {
+        return Some(true);
+    }
+    if input[index..].starts_with("false") {
+        return Some(false);
+    }
+    None
 }
 
 fn value(input: &str, key: &str) -> Option<String> {
