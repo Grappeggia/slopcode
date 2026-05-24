@@ -5308,6 +5308,129 @@
         ]
       }
     },
+    "/permission/approved": {
+      "get": {
+        "operationId": "permission.approved.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List approved permissions",
+        "description": "Get saved Always Allow permission rules for the current project.",
+        "responses": {
+          "200": {
+            "description": "Saved permission rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionRuleset"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.permission.approved.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/permission/approved/revoke": {
+      "post": {
+        "operationId": "permission.approved.revoke",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Revoke approved permission",
+        "description": "Remove a saved Always Allow permission rule for the current project.",
+        "responses": {
+          "200": {
+            "description": "Number of removed rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "permission": {
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  },
+                  "action": {
+                    "$ref": "#/components/schemas/PermissionAction"
+                  }
+                },
+                "required": ["permission", "pattern"]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.permission.approved.revoke({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/permission/approved/clear": {
+      "post": {
+        "operationId": "permission.approved.clear",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Clear approved permissions",
+        "description": "Remove all saved Always Allow permission rules for the current project.",
+        "responses": {
+          "200": {
+            "description": "Number of removed rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.permission.approved.clear({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/permission": {
       "get": {
         "operationId": "permission.list",

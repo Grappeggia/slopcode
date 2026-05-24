@@ -615,7 +615,9 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
               <Match
                 when={selected().length === 1 && selected()[0]?.always.length === 1 && selected()[0]?.always[0] === "*"}
               >
-                <TextBody title={"This will remember " + selected()[0]!.permission + " for this project until revoked."} />
+                <TextBody
+                  title={"This will remember " + selected()[0]!.permission + " for this project until revoked."}
+                />
               </Match>
               <Match when={true}>
                 <box paddingLeft={1} gap={1} backgroundColor={theme.backgroundPanel}>

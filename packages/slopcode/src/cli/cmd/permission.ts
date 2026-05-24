@@ -13,7 +13,9 @@ function table(rules: PermissionNext.Ruleset) {
     `${"-".repeat(permission)}  ${"-".repeat(action)}  ${"-".repeat("Pattern".length)}`,
   ]
   return lines
-    .concat(rules.map((rule) => `${rule.permission.padEnd(permission)}  ${rule.action.padEnd(action)}  ${rule.pattern}`))
+    .concat(
+      rules.map((rule) => `${rule.permission.padEnd(permission)}  ${rule.action.padEnd(action)}  ${rule.pattern}`),
+    )
     .join(EOL)
 }
 
