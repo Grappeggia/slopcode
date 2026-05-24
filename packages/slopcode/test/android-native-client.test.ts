@@ -172,7 +172,12 @@ describe("Android native client", () => {
           if (url.pathname === "/session/ses_sidecar") return json({ id: "ses_sidecar", title: "Prompt Session" })
           if (url.pathname === "/session/ses_sidecar/message/index") return json([])
           if (url.pathname === "/session/ses_sidecar/prompt_async" && req.method === "POST") {
-            bodies.push((await req.json()) as { messageID?: string; parts?: Array<{ id?: string; type?: string; text?: string }> })
+            bodies.push(
+              (await req.json()) as {
+                messageID?: string
+                parts?: Array<{ id?: string; type?: string; text?: string }>
+              },
+            )
             return new Response(null, { status: 204 })
           }
           if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\n\n')
@@ -180,14 +185,21 @@ describe("Android native client", () => {
         },
       })
       try {
-        const proc = Bun.spawn([bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test", "--prompt", "hello"], {
-          stdin: "pipe",
-          stdout: "pipe",
-          stderr: "pipe",
-        })
+        const proc = Bun.spawn(
+          [bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test", "--prompt", "hello"],
+          {
+            stdin: "pipe",
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        )
         proc.stdin.write("/exit\n")
         proc.stdin.end()
-        const [code] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+        const [code] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ])
         expect(code).toBe(0)
         expect(bodies.length).toBe(1)
         expect(bodies[0]?.messageID?.startsWith("msg_")).toBe(true)
@@ -200,5 +212,4 @@ describe("Android native client", () => {
       await fs.rm(dir, { recursive: true, force: true })
     }
   })
-
 })
