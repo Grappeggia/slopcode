@@ -93,6 +93,10 @@ import type {
   PartUpdateErrors,
   PartUpdateResponses,
   PathGetResponses,
+  PermissionAction,
+  PermissionApprovedClearResponses,
+  PermissionApprovedListResponses,
+  PermissionApprovedRevokeResponses,
   PermissionListResponses,
   PermissionReplyErrors,
   PermissionReplyResponses,
@@ -2776,6 +2780,85 @@ export class Part extends HeyApiClient {
   }
 }
 
+export class Approved extends HeyApiClient {
+  /**
+   * List approved permissions
+   *
+   * Get saved Always Allow permission rules for the current project.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<PermissionApprovedListResponses, unknown, ThrowOnError>({
+      url: "/permission/approved",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Revoke approved permission
+   *
+   * Remove a saved Always Allow permission rule for the current project.
+   */
+  public revoke<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      permission?: string
+      pattern?: string
+      action?: PermissionAction
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "body", key: "permission" },
+            { in: "body", key: "pattern" },
+            { in: "body", key: "action" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<PermissionApprovedRevokeResponses, unknown, ThrowOnError>({
+      url: "/permission/approved/revoke",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Clear approved permissions
+   *
+   * Remove all saved Always Allow permission rules for the current project.
+   */
+  public clear<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).post<PermissionApprovedClearResponses, unknown, ThrowOnError>({
+      url: "/permission/approved/clear",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Permission extends HeyApiClient {
   /**
    * Respond to permission
@@ -2887,6 +2970,11 @@ export class Permission extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _approved?: Approved
+  get approved(): Approved {
+    return (this._approved ??= new Approved({ client: this.client }))
   }
 }
 

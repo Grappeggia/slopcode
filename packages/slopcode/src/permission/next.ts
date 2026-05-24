@@ -153,6 +153,63 @@ export namespace PermissionNext {
     }
   })
 
+  function dedupe(ruleset: Ruleset): Ruleset {
+    const seen = new Set<string>()
+    return ruleset.filter((rule) => {
+      const key = JSON.stringify([rule.permission, rule.pattern, rule.action])
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }
+
+  function save(ruleset: Ruleset) {
+    const data = dedupe(ruleset)
+    const now = Date.now()
+    Database.use((db) =>
+      db
+        .insert(PermissionTable)
+        .values({ project_id: Instance.project.id, data, time_created: now, time_updated: now })
+        .onConflictDoUpdate({ target: PermissionTable.project_id, set: { data, time_updated: now } })
+        .run(),
+    )
+    return data
+  }
+
+  function resolve(permission: string, pattern: string, ruleset: Ruleset, approved: Ruleset) {
+    const rule = evaluate(permission, pattern, ruleset)
+    if (rule.action !== "ask") return rule
+    const stored = evaluate(permission, pattern, approved)
+    if (stored.action === "allow") return stored
+    return rule
+  }
+
+  export async function listApproved() {
+    return (await state()).approved
+  }
+
+  export async function removeApproved(input: { permission: string; pattern: string; action?: Action }) {
+    const s = await state()
+    const next = s.approved.filter(
+      (rule) =>
+        rule.permission !== input.permission ||
+        rule.pattern !== input.pattern ||
+        (input.action !== undefined && rule.action !== input.action),
+    )
+    const removed = s.approved.length - next.length
+    if (removed === 0) return 0
+    s.approved = save(next)
+    return removed
+  }
+
+  export async function clearApproved() {
+    const s = await state()
+    const removed = s.approved.length
+    if (removed === 0) return 0
+    s.approved = save([])
+    return removed
+  }
+
   function consume(
     granted: Array<{
       sessionID: string
@@ -189,7 +246,7 @@ export namespace PermissionNext {
       const { ruleset, ...request } = input
       const patterns = [] as string[]
       for (const pattern of request.patterns ?? []) {
-        const rule = evaluate(request.permission, pattern, ruleset, s.approved)
+        const rule = resolve(request.permission, pattern, ruleset, s.approved)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny")
           throw new DeniedError(ruleset.filter((r) => Wildcard.match(request.permission, r.permission)))
@@ -226,7 +283,7 @@ export namespace PermissionNext {
       const list = s.forecast[input.sessionID] ?? []
       const next = input.requests.flatMap((item) => {
         const patterns = item.patterns.filter(
-          (pattern) => evaluate(item.permission, pattern, input.ruleset, s.approved).action === "ask",
+          (pattern) => resolve(item.permission, pattern, input.ruleset, s.approved).action === "ask",
         )
         if (patterns.length === 0) return []
         const always = (item.always ?? patterns).filter((pattern, index, array) => array.indexOf(pattern) === index)
@@ -359,6 +416,7 @@ export namespace PermissionNext {
           })
         }
 
+        s.approved = save(s.approved)
         existing.resolve()
 
         const sessionID = existing.info.sessionID
@@ -378,10 +436,6 @@ export namespace PermissionNext {
           pending.resolve()
         }
 
-        // TODO: we don't save the permission ruleset to disk yet until there's
-        // UI to manage it
-        // db().insert(PermissionTable).values({ projectID: Instance.project.id, data: s.approved })
-        //   .onConflictDoUpdate({ target: PermissionTable.projectID, set: { data: s.approved } }).run()
         return true
       }
       return true

@@ -615,11 +615,11 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
               <Match
                 when={selected().length === 1 && selected()[0]?.always.length === 1 && selected()[0]?.always[0] === "*"}
               >
-                <TextBody title={"This will allow " + selected()[0]!.permission + " until SlopCode is restarted."} />
+                <TextBody title={"This will remember " + selected()[0]!.permission + " for this project until revoked."} />
               </Match>
               <Match when={true}>
                 <box paddingLeft={1} gap={1} backgroundColor={theme.backgroundPanel}>
-                  <Line>This will allow the selected permissions until SlopCode is restarted.</Line>
+                  <Line>This will remember the selected permissions for this project until revoked.</Line>
                   <For each={selected()}>
                     {(request) => (
                       <box flexDirection="column" gap={0} backgroundColor={theme.backgroundPanel}>

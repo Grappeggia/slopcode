@@ -4690,6 +4690,65 @@ export type PermissionReplyResponses = {
 
 export type PermissionReplyResponse = PermissionReplyResponses[keyof PermissionReplyResponses]
 
+export type PermissionApprovedListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/permission/approved"
+}
+
+export type PermissionApprovedListResponses = {
+  /**
+   * Saved permission rules
+   */
+  200: PermissionRuleset
+}
+
+export type PermissionApprovedListResponse = PermissionApprovedListResponses[keyof PermissionApprovedListResponses]
+
+export type PermissionApprovedRevokeData = {
+  body?: {
+    permission: string
+    pattern: string
+    action?: PermissionAction
+  }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/permission/approved/revoke"
+}
+
+export type PermissionApprovedRevokeResponses = {
+  /**
+   * Number of removed rules
+   */
+  200: number
+}
+
+export type PermissionApprovedRevokeResponse =
+  PermissionApprovedRevokeResponses[keyof PermissionApprovedRevokeResponses]
+
+export type PermissionApprovedClearData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/permission/approved/clear"
+}
+
+export type PermissionApprovedClearResponses = {
+  /**
+   * Number of removed rules
+   */
+  200: number
+}
+
+export type PermissionApprovedClearResponse = PermissionApprovedClearResponses[keyof PermissionApprovedClearResponses]
+
 export type PermissionListData = {
   body?: never
   path?: never

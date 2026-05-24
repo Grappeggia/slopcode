@@ -3,6 +3,7 @@ import os from "os"
 import { PermissionNext } from "../../src/permission/next"
 import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
+import { bootstrap } from "../../src/cli/bootstrap"
 
 // fromConfig tests
 
@@ -565,44 +566,137 @@ test("reply - reject throws RejectedError", async () => {
   })
 })
 
-test("reply - always persists approval and resolves", async () => {
+test("reply - always persists approval across restarts", async () => {
   await using tmp = await tmpdir({ git: true })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const askPromise = PermissionNext.ask({
-        id: "permission_test3",
-        sessionID: "session_test",
-        permission: "bash",
-        patterns: ["ls"],
-        metadata: {},
-        always: ["ls"],
-        ruleset: [],
-      })
+  await bootstrap(tmp.path, async () => {
+    const ask = PermissionNext.ask({
+      id: "permission_persist",
+      sessionID: "session_test",
+      permission: "bash",
+      patterns: ["ls"],
+      metadata: {},
+      always: ["ls", "ls"],
+      ruleset: [],
+    })
 
-      await PermissionNext.reply({
-        requestID: "permission_test3",
-        reply: "always",
-      })
+    await PermissionNext.reply({
+      requestID: "permission_persist",
+      reply: "always",
+    })
 
-      await expect(askPromise).resolves.toBeUndefined()
-    },
+    await expect(ask).resolves.toBeUndefined()
+    expect(await PermissionNext.listApproved()).toEqual([{ permission: "bash", pattern: "ls", action: "allow" }])
   })
-  // Re-provide to reload state with stored permissions
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      // Stored approval should allow without asking
-      const result = await PermissionNext.ask({
-        sessionID: "session_test2",
+
+  await bootstrap(tmp.path, async () => {
+    const result = await PermissionNext.ask({
+      sessionID: "session_test2",
+      permission: "bash",
+      patterns: ["ls"],
+      metadata: {},
+      always: [],
+      ruleset: [],
+    })
+    expect(result).toBeUndefined()
+  })
+})
+
+test("reply - once does not persist approval", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await bootstrap(tmp.path, async () => {
+    const ask = PermissionNext.ask({
+      id: "permission_once",
+      sessionID: "session_once",
+      permission: "bash",
+      patterns: ["pwd"],
+      metadata: {},
+      always: ["pwd"],
+      ruleset: [],
+    })
+    await PermissionNext.reply({ requestID: "permission_once", reply: "once" })
+    await expect(ask).resolves.toBeUndefined()
+  })
+
+  await bootstrap(tmp.path, async () => {
+    const ask = PermissionNext.ask({
+      id: "permission_once_after",
+      sessionID: "session_once_after",
+      permission: "bash",
+      patterns: ["pwd"],
+      metadata: {},
+      always: [],
+      ruleset: [],
+    })
+    expect((await PermissionNext.list({ sessionID: "session_once_after" })).map((item) => item.id)).toEqual([
+      "permission_once_after",
+    ])
+    await PermissionNext.reply({ requestID: "permission_once_after", reply: "reject" })
+    await expect(ask).rejects.toBeInstanceOf(PermissionNext.RejectedError)
+  })
+})
+
+test("ask - config deny overrides persisted approval", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await bootstrap(tmp.path, async () => {
+    const ask = PermissionNext.ask({
+      id: "permission_deny_persist",
+      sessionID: "session_deny_persist",
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git *"],
+      ruleset: [],
+    })
+    await PermissionNext.reply({ requestID: "permission_deny_persist", reply: "always" })
+    await expect(ask).resolves.toBeUndefined()
+  })
+
+  await bootstrap(tmp.path, async () => {
+    await expect(
+      PermissionNext.ask({
+        sessionID: "session_deny_after",
         permission: "bash",
-        patterns: ["ls"],
+        patterns: ["git status"],
         metadata: {},
         always: [],
-        ruleset: [],
-      })
-      expect(result).toBeUndefined()
-    },
+        ruleset: [{ permission: "bash", pattern: "git status", action: "deny" }],
+      }),
+    ).rejects.toBeInstanceOf(PermissionNext.DeniedError)
+  })
+})
+
+test("removeApproved - revokes persisted approval", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await bootstrap(tmp.path, async () => {
+    const ask = PermissionNext.ask({
+      id: "permission_remove_persist",
+      sessionID: "session_remove_persist",
+      permission: "bash",
+      patterns: ["bun test"],
+      metadata: {},
+      always: ["bun *"],
+      ruleset: [],
+    })
+    await PermissionNext.reply({ requestID: "permission_remove_persist", reply: "always" })
+    await expect(ask).resolves.toBeUndefined()
+  })
+
+  await bootstrap(tmp.path, async () => {
+    expect(await PermissionNext.removeApproved({ permission: "bash", pattern: "bun *", action: "allow" })).toBe(1)
+    const ask = PermissionNext.ask({
+      id: "permission_remove_after",
+      sessionID: "session_remove_after",
+      permission: "bash",
+      patterns: ["bun test"],
+      metadata: {},
+      always: [],
+      ruleset: [],
+    })
+    expect((await PermissionNext.list({ sessionID: "session_remove_after" })).map((item) => item.id)).toEqual([
+      "permission_remove_after",
+    ])
+    await PermissionNext.reply({ requestID: "permission_remove_after", reply: "reject" })
+    await expect(ask).rejects.toBeInstanceOf(PermissionNext.RejectedError)
   })
 })
 

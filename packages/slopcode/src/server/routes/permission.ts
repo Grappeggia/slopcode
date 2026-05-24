@@ -53,6 +53,78 @@ export const PermissionRoutes = lazy(() =>
         return c.json(true)
       },
     )
+
+    .get(
+      "/approved",
+      describeRoute({
+        summary: "List approved permissions",
+        description: "Get saved Always Allow permission rules for the current project.",
+        operationId: "permission.approved.list",
+        responses: {
+          200: {
+            description: "Saved permission rules",
+            content: {
+              "application/json": {
+                schema: resolver(PermissionNext.Ruleset),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        return c.json(await PermissionNext.listApproved())
+      },
+    )
+    .post(
+      "/approved/revoke",
+      describeRoute({
+        summary: "Revoke approved permission",
+        description: "Remove a saved Always Allow permission rule for the current project.",
+        operationId: "permission.approved.revoke",
+        responses: {
+          200: {
+            description: "Number of removed rules",
+            content: {
+              "application/json": {
+                schema: resolver(z.number()),
+              },
+            },
+          },
+        },
+      }),
+      validator(
+        "json",
+        z.object({
+          permission: z.string(),
+          pattern: z.string(),
+          action: PermissionNext.Action.optional(),
+        }),
+      ),
+      async (c) => {
+        return c.json(await PermissionNext.removeApproved(c.req.valid("json")))
+      },
+    )
+    .post(
+      "/approved/clear",
+      describeRoute({
+        summary: "Clear approved permissions",
+        description: "Remove all saved Always Allow permission rules for the current project.",
+        operationId: "permission.approved.clear",
+        responses: {
+          200: {
+            description: "Number of removed rules",
+            content: {
+              "application/json": {
+                schema: resolver(z.number()),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        return c.json(await PermissionNext.clearApproved())
+      },
+    )
     .get(
       "/",
       describeRoute({
