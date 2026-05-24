@@ -42,7 +42,8 @@ async function adbSerial() {
     .filter((item) => item[1] === "device")
     .map((item) => item[0])
   if (devices.length === 0) throw new Error("android e2e: no adb device")
-  if (devices.length > 1) throw new Error(`android e2e: multiple adb devices (${devices.join(", ")}); set SLOPCODE_ANDROID_SERIAL`)
+  if (devices.length > 1)
+    throw new Error(`android e2e: multiple adb devices (${devices.join(", ")}); set SLOPCODE_ANDROID_SERIAL`)
   return devices[0]
 }
 
@@ -51,7 +52,13 @@ const adbRun = (args: string[], options?: ExecOptions) => exec(["adb", "-s", ser
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 const adb = (...args: string[]) => adbRun(args)
 const termux = (command: string, options?: ExecOptions) =>
-  adbRun(["shell", `run-as com.termux ${sh} -lc ${quote(`export PREFIX=/data/data/com.termux/files/usr HOME=${home} TMPDIR=/data/data/com.termux/files/usr/tmp PATH=/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin; cd ${home}; ${command}`)}`], options)
+  adbRun(
+    [
+      "shell",
+      `run-as com.termux ${sh} -lc ${quote(`export PREFIX=/data/data/com.termux/files/usr HOME=${home} TMPDIR=/data/data/com.termux/files/usr/tmp PATH=/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin; cd ${home}; ${command}`)}`,
+    ],
+    options,
+  )
 
 async function exists(target: string) {
   return fs.access(target).then(
@@ -78,7 +85,9 @@ async function stage() {
   const androidName = process.env.SLOPCODE_ANDROID_TARGET ?? "slopcode-android-x64"
   const androidFrom = path.join(dir, "dist", androidName)
   if (!(await exists(path.join(androidFrom, "package.json")))) {
-    throw new Error(`android e2e: missing ${androidFrom}; run bun --cwd packages/slopcode run script/build.ts --target=android-x64`)
+    throw new Error(
+      `android e2e: missing ${androidFrom}; run bun --cwd packages/slopcode run script/build.ts --target=android-x64`,
+    )
   }
 
   const androidTo = path.join(work, androidName)
@@ -127,7 +136,9 @@ async function installTermux() {
   if (process.env.SLOPCODE_ANDROID_BOOTSTRAP !== "1") {
     throw new Error("android e2e: Termux is missing node/npm; set SLOPCODE_ANDROID_BOOTSTRAP=1 to install them")
   }
-  await termux("apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confnew upgrade && DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confnew install openssl nodejs npm")
+  await termux(
+    "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confnew upgrade && DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confnew install openssl nodejs npm",
+  )
 }
 
 function e2eSource(androidPackage: string) {
@@ -212,7 +223,9 @@ try {
   const script = path.join(staged.work, "android-termux-e2e.mjs")
   await Bun.write(script, e2eSource(staged.androidPackage))
   await adb("push", script, `${tmp}/slopcode-android-termux-e2e.mjs`)
-  await termux(`npm install -g --include=optional --ignore-scripts=false ${tmp}/slopcode-android-runtime.tgz ${tmp}/slopcode-root.tgz && node ${tmp}/slopcode-android-termux-e2e.mjs`)
+  await termux(
+    `npm install -g --include=optional --ignore-scripts=false ${tmp}/slopcode-android-runtime.tgz ${tmp}/slopcode-root.tgz && node ${tmp}/slopcode-android-termux-e2e.mjs`,
+  )
   console.log("android e2e: ok")
 } finally {
   await fs.rm(staged.work, { recursive: true, force: true })

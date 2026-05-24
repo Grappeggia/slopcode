@@ -189,7 +189,18 @@ function notice(state: PortableState, text: string, kind: Notice["kind"] = "info
   if (state.notices.length > 20) state.notices.shift()
 }
 
-const commands = ["/new", "/sessions", "/session", "/continue", "/model", "/agent", "/interrupt", "/help", "/exit", "/quit"]
+const commands = [
+  "/new",
+  "/sessions",
+  "/session",
+  "/continue",
+  "/model",
+  "/agent",
+  "/interrupt",
+  "/help",
+  "/exit",
+  "/quit",
+]
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
@@ -523,7 +534,9 @@ export async function portableTui(input: {
 
   const loadHistory = (sessionID?: string) => {
     historyFile = promptHistoryPath({ dir: input.directory, sessionID })
-    state.history = readPromptHistory(historyFile).history.map((item) => item.input).filter(Boolean)
+    state.history = readPromptHistory(historyFile)
+      .history.map((item) => item.input)
+      .filter(Boolean)
     state.historyIndex = undefined
     state.historyDraft = undefined
   }
@@ -837,7 +850,8 @@ export async function portableTui(input: {
       const ch = text[i] ?? ""
       i++
       if (ch === "\x03") {
-        if (state.status !== "idle" && state.sessionID) void request<boolean>("POST", `/session/${state.sessionID}/abort`, {}).then(schedule)
+        if (state.status !== "idle" && state.sessionID)
+          void request<boolean>("POST", `/session/${state.sessionID}/abort`, {}).then(schedule)
         else stop()
       } else if (ch === "\x04") {
         if (state.input) remove(state)
@@ -870,7 +884,8 @@ export async function portableTui(input: {
       for (const ch of text) {
         if (ch === "\x03" || ch === "\x04") stop()
         else if (ch === "\r" || ch === "\n") void submit()
-        else if (ch === "\u007f" || ch === "\b") state.question ? (state.question.input = state.question.input.slice(0, -1)) : undefined
+        else if (ch === "\u007f" || ch === "\b")
+          state.question ? (state.question.input = state.question.input.slice(0, -1)) : undefined
         else if (ch >= " " && ch !== "\u007f") state.question ? (state.question.input += ch) : undefined
       }
     } else promptData(text)

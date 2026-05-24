@@ -181,8 +181,10 @@ describe("portable Termux TUI", () => {
       async fetch(req) {
         const url = new URL(req.url)
         if (url.pathname === "/event") return new Response("", { headers: { "content-type": "text/event-stream" } })
-        if (req.method === "POST" && url.pathname === "/session") return Response.json({ id: "ses_test", title: "Test Session" })
-        if (req.method === "GET" && url.pathname === "/session/ses_test") return Response.json({ id: "ses_test", title: "Test Session" })
+        if (req.method === "POST" && url.pathname === "/session")
+          return Response.json({ id: "ses_test", title: "Test Session" })
+        if (req.method === "GET" && url.pathname === "/session/ses_test")
+          return Response.json({ id: "ses_test", title: "Test Session" })
         if (req.method === "GET" && url.pathname === "/session/ses_test/message/index") return Response.json([])
         if (req.method === "POST" && url.pathname === "/session/ses_test/prompt_async") {
           bodies.push((await req.json()) as { parts?: Array<{ text?: string }> })
@@ -217,5 +219,4 @@ describe("portable Termux TUI", () => {
       server.stop(true)
     }
   })
-
 })

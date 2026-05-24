@@ -229,7 +229,8 @@ describe("Android native client", () => {
       expect(await build.exited).toBe(0)
 
       const bodies: Array<{ parts?: Array<{ text?: string }> }> = []
-      const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } })
+      const json = (value: unknown) =>
+        new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } })
       const server = Bun.serve({
         port: 0,
         async fetch(req) {
@@ -276,7 +277,6 @@ describe("Android native client", () => {
     }
   })
 
-
   test("answers sidecar question prompts", async () => {
     if (process.platform === "win32") return
     const check = Bun.spawn(["rustc", "--version"], { stdout: "pipe", stderr: "pipe" })
@@ -293,7 +293,8 @@ describe("Android native client", () => {
       expect(await build.exited).toBe(0)
 
       const replies: Array<{ answers?: string[][] }> = []
-      const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } })
+      const json = (value: unknown) =>
+        new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } })
       const server = Bun.serve({
         port: 0,
         async fetch(req) {
@@ -324,7 +325,11 @@ describe("Android native client", () => {
         await Bun.sleep(100)
         proc.stdin.write("\x04")
         proc.stdin.end()
-        const [code] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+        const [code] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ])
         expect(code).toBe(0)
         expect(replies).toEqual([{ answers: [["Yes"]] }])
       } finally {
@@ -334,5 +339,4 @@ describe("Android native client", () => {
       await fs.rm(dir, { recursive: true, force: true })
     }
   })
-
 })
