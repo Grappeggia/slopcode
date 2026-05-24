@@ -3,25 +3,25 @@ const endpoint = "https://api.github.com/repos/teamslop/slopcode/releases?per_pa
 const releaseUrl = "https://github.com/teamslop/slopcode/releases"
 const fallback: Release[] = [
   {
-    tag_name: "v0.2.116",
-    html_url: `${releaseUrl}/tag/v0.2.116`,
-    published_at: "2026-05-23T00:00:00Z",
+    tag_name: "v0.2.124",
+    html_url: `${releaseUrl}/tag/v0.2.124`,
+    published_at: "2026-05-24T21:29:38Z",
     body: [
-      "- Try the shared OpenTUI TUI by default on Android.",
-      "- Keep the portable Android fallback explicit and diagnostic.",
-      "- Add Android startup coverage for the shared TUI path.",
+      "- Improved Android/Termux native TUI input parity with cursor editing, history, paste, and questions.",
+      "- Matched portable fallback composer behavior for paste, history, and editing shortcuts.",
+      "- Added shipped-package Termux E2E coverage and launcher compatibility.",
     ].join("\n"),
     draft: false,
     prerelease: false,
   },
   {
-    tag_name: "v0.2.115",
-    html_url: `${releaseUrl}/tag/v0.2.115`,
-    published_at: "2026-05-23T00:00:00Z",
+    tag_name: "v0.2.123",
+    html_url: `${releaseUrl}/tag/v0.2.123`,
+    published_at: "2026-05-24T19:28:37Z",
     body: [
-      "- Add experimental Android host probing for the shared OpenTUI TUI path.",
-      "- Package a Termux host sidecar and keep portable TUI as fallback.",
-      "- Add Android host protocol, routing, and artifact tests.",
+      "- Fix Android Termux sidecar prompt IDs.",
+      "- Add native sidecar prompt coverage.",
+      "- Document adb Termux/npm repro requirements.",
     ].join("\n"),
     draft: false,
     prerelease: false,
