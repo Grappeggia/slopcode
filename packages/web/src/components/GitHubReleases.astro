@@ -3,6 +3,18 @@ const endpoint = "https://api.github.com/repos/teamslop/slopcode/releases?per_pa
 const releaseUrl = "https://github.com/teamslop/slopcode/releases"
 const fallback: Release[] = [
   {
+    tag_name: "v0.2.125",
+    html_url: `${releaseUrl}/tag/v0.2.125`,
+    published_at: "2026-05-25T02:25:42Z",
+    body: [
+      "- Added Android/Termux parity harness with smoke and parity modes.",
+      "- Covered composer editing, questions, and layout capture in shipped-package E2E.",
+      "- Stabilized Windows install shims and TUI timing tests.",
+    ].join("\n"),
+    draft: false,
+    prerelease: false,
+  },
+  {
     tag_name: "v0.2.124",
     html_url: `${releaseUrl}/tag/v0.2.124`,
     published_at: "2026-05-24T21:29:38Z",
