@@ -4,6 +4,8 @@ import fs from "fs"
 import os from "os"
 import { DaemonLauncher } from "@/daemon/launcher"
 import { android, client, native } from "@/cli/cmd/tui/platform"
+import { active, parity } from "../script/android-termux-parity"
+import { e2eSource } from "../script/android-termux-e2e"
 
 const entry = process.env.SLOPCODE_ENTRYPOINT
 
@@ -62,5 +64,38 @@ describe("Android Termux runtime", () => {
     expect(thread).toContain('await import("./portable")')
     expect(thread).toContain("SLOPCODE_TERMUX_LEGACY")
     expect(thread).toContain('await import("./android-host")')
+  })
+
+  test("Android E2E declares phase 0/1 parity coverage and phase 3 gaps", () => {
+    const ids = parity.map((item) => item.id)
+
+    expect(active("smoke").map((item) => item.id)).toEqual(["smoke.install"])
+    expect(active("parity").map((item) => item.id)).toEqual([
+      "smoke.install",
+      "composer.submit",
+      "composer.editing",
+      "dialogs.question",
+      "layout.capture",
+    ])
+    expect(ids).toContain("tabs.rich")
+    expect(ids).toContain("sidebar.files")
+    expect(ids).toContain("editor.diff")
+    expect(parity.filter((item) => !item.active).every((item) => item.phase === 3 && !!item.missing)).toBe(true)
+  })
+
+  test("Android E2E generated Termux runner is valid JavaScript", async () => {
+    const check = Bun.spawn(["node", "--version"], { stdout: "pipe", stderr: "pipe" })
+    if ((await check.exited) !== 0) return
+
+    const file = path.join(os.tmpdir(), `slopcode-android-termux-runner-${process.pid}.mjs`)
+    await Bun.write(file, e2eSource("@slopcode-ai/slopcode-android-x64"))
+    try {
+      const proc = Bun.spawn(["node", "--check", file], { stdout: "pipe", stderr: "pipe" })
+      const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()])
+      expect(stderr).toBe("")
+      expect(code).toBe(0)
+    } finally {
+      await fs.promises.rm(file, { force: true })
+    }
   })
 })

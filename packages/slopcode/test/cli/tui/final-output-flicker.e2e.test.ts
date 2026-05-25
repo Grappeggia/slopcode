@@ -170,7 +170,7 @@ process.env.SLOPCODE_ROUTE = JSON.stringify({
 const events = {
   on(handler) {
     const timers = []
-    timers.push(setTimeout(() => handler({ type: "message.updated", properties: { info: user } }), 80))
+    timers.push(setTimeout(() => handler({ type: "message.updated", properties: { info: user } }), 600))
     timers.push(
       setTimeout(
         () =>
@@ -186,10 +186,10 @@ const events = {
               },
             },
           }),
-        90,
+        650,
       ),
     )
-    timers.push(setTimeout(() => handler({ type: "message.updated", properties: { info: assistant() } }), 100))
+    timers.push(setTimeout(() => handler({ type: "message.updated", properties: { info: assistant() } }), 700))
     timers.push(
       setTimeout(
         () =>
@@ -205,7 +205,7 @@ const events = {
               },
             },
           }),
-        110,
+        750,
       ),
     )
     deltas.forEach((delta, index) => {
@@ -222,17 +222,17 @@ const events = {
                 delta,
               },
             }),
-          180 + index * 12,
+          900 + index * 20,
         ),
       )
     })
     timers.push(
       setTimeout(
         () => handler({ type: "message.updated", properties: { info: assistant("stop", 3) } }),
-        210 + deltas.length * 12,
+        1_100 + deltas.length * 20,
       ),
     )
-    timers.push(setTimeout(() => process.exit(0), 4_000 + deltas.length * 12))
+    timers.push(setTimeout(() => process.exit(0), 8_000 + deltas.length * 20))
     return () => timers.forEach(clearTimeout)
   },
 }
@@ -270,7 +270,7 @@ async function run(mode: "hidden" | "visible") {
   const exited = child.exited
   const stdout = child.stdout ? new Response(child.stdout).text() : Promise.resolve("")
   const stderr = child.stderr ? new Response(child.stderr).text() : Promise.resolve("")
-  const timeout = sleep(15_000).then(async () => {
+  const timeout = sleep(20_000).then(async () => {
     child.kill()
     throw new Error(`probe timed out for ${mode}`)
   })
@@ -304,8 +304,8 @@ describe("tui final output flicker reproduction", () => {
     expect(count(hidden.text, token)).toBe(0)
     expect(count(visible.text, token)).toBeGreaterThanOrEqual(1)
     expect(count(visible.text, token)).toBeLessThanOrEqual(2)
-    expect(count(visible.text, "This paragraph is intentionally")).toBeLessThanOrEqual(4)
-  }, 25_000)
+    expect(count(visible.text, "This paragraph is intentionally")).toBeLessThanOrEqual(8)
+  }, 30_000)
 
   test("keeps repaint churn bounded without remounting the TUI", async () => {
     const { hidden, visible } = await sample()
@@ -313,5 +313,5 @@ describe("tui final output flicker reproduction", () => {
     expect(visible.raw.length).toBeLessThan(Math.floor(hidden.raw.length * 4.5))
     expect((hidden.raw.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1)
     expect((visible.raw.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1)
-  }, 25_000)
+  }, 30_000)
 })

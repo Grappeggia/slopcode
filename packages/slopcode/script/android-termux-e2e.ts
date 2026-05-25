@@ -4,14 +4,16 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { fileURLToPath } from "url"
-import { Script } from "@slopcode-ai/script"
+
 import pkg from "../package.json"
+import { parity } from "./android-termux-parity"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 const root = path.resolve(dir, "../..")
 const sh = "/data/data/com.termux/files/usr/bin/sh"
 const home = "/data/data/com.termux/files/home"
 const tmp = "/data/local/tmp"
+const mode = process.env.SLOPCODE_ANDROID_E2E_MODE ?? "smoke"
 
 process.chdir(dir)
 
@@ -47,8 +49,12 @@ async function adbSerial() {
   return devices[0]
 }
 
-const serial = await adbSerial()
-const adbRun = (args: string[], options?: ExecOptions) => exec(["adb", "-s", serial, ...args], options)
+let serial: string | undefined
+async function androidSerial() {
+  serial ??= await adbSerial()
+  return serial
+}
+const adbRun = async (args: string[], options?: ExecOptions) => exec(["adb", "-s", await androidSerial(), ...args], options)
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 const adb = (...args: string[]) => adbRun(args)
 const termux = (command: string, options?: ExecOptions) =>
@@ -81,6 +87,7 @@ async function pack(cwd: string, name: string) {
 }
 
 async function stage() {
+  const version = (await import("@slopcode-ai/script")).Script.version
   const work = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-android-termux-e2e-"))
   const androidName = process.env.SLOPCODE_ANDROID_TARGET ?? "slopcode-android-x64"
   const androidFrom = path.join(dir, "dist", androidName)
@@ -106,7 +113,7 @@ async function stage() {
     JSON.stringify(
       {
         name: pkg.name,
-        version: Script.version,
+        version,
         license: pkg.license,
         description: "The open source AI slopcoding agent.",
         homepage: "https://slopcode.dev",
@@ -141,92 +148,308 @@ async function installTermux() {
   )
 }
 
-function e2eSource(androidPackage: string) {
+export function e2eSource(androidPackage: string) {
   return `import { createServer } from "node:http"
 import { spawn, spawnSync } from "node:child_process"
+import fs from "node:fs"
 import path from "node:path"
+import { setTimeout as sleep } from "node:timers/promises"
 
+const matrix = ${JSON.stringify(parity, null, 2)}
+const mode = process.env.SLOPCODE_ANDROID_E2E_MODE || "smoke"
 const root = spawnSync("npm", ["root", "-g"], { encoding: "utf8" }).stdout.trim()
 const host = path.join(root, ${JSON.stringify(androidPackage)}, "bin", "slopcode-android-host")
 const cliPath = path.join(root, "slopcode", "bin", "slopcode")
-const cli = spawnSync(cliPath, ["--version"], { encoding: "utf8" })
-if (cli.status !== 0) throw new Error(cli.error?.message || cli.stderr || cli.stdout || "slopcode --version failed")
-const self = spawnSync(host, ["--self-test"], { encoding: "utf8" })
-if (self.status !== 0 || !self.stdout.includes("slopcode-android-host ok")) throw new Error(self.stderr || self.stdout || "sidecar self-test failed")
+const resultPath = path.join(process.env.HOME || ".", "android-termux-e2e-result.json")
+const results = []
 
-const bodies = []
-const server = createServer((req, res) => {
-  const url = new URL(req.url || "/", "http://127.0.0.1")
-  if (url.pathname === "/session" && req.method === "POST") {
-    res.writeHead(200, { "content-type": "application/json" })
-    res.end(JSON.stringify({ id: "ses_termux" }))
-    return
+function wide(char) {
+  const code = char.codePointAt(0) || 0
+  return code >= 0x1100 ? 2 : 1
+}
+
+function frame(raw, width, height) {
+  const rows = Array.from({ length: height }, () => Array.from({ length: width }, () => " "))
+  let x = 0
+  let y = 0
+  let saved = { x: 0, y: 0 }
+  let best = ""
+  const snapshot = () => {
+    const value = rows.map((row) => row.join("")).join("\\n")
+    if (value.trim()) best = value
+    return value
   }
-  if (url.pathname === "/session/ses_termux") {
-    res.writeHead(200, { "content-type": "application/json" })
-    res.end(JSON.stringify({ id: "ses_termux", title: "Termux E2E" }))
-    return
+  const clear = () => rows.forEach((row) => row.fill(" "))
+  const clearLine = (mode = 0) => {
+    if (mode === 1) {
+      for (let i = 0; i <= x && i < width; i++) rows[y][i] = " "
+      return
+    }
+    if (mode === 2) {
+      rows[y].fill(" ")
+      return
+    }
+    for (let i = x; i < width; i++) rows[y][i] = " "
   }
-  if (url.pathname === "/session/ses_termux/message/index") {
-    res.writeHead(200, { "content-type": "application/json" })
-    res.end("[]")
-    return
+  const put = (char) => {
+    const cell = Math.max(1, wide(char))
+    if (y >= height) return
+    if (x >= width) {
+      x = 0
+      y++
+      if (y >= height) return
+    }
+    rows[y][x] = char
+    if (cell > 1 && x + 1 < width) rows[y][x + 1] = " "
+    x += cell
+    snapshot()
   }
-  if (url.pathname === "/session/ses_termux/prompt_async" && req.method === "POST") {
+  for (let i = 0; i < raw.length; ) {
+    const char = raw[i]
+    if (char === "\\u001b") {
+      const next = raw[i + 1]
+      if (next === "[") {
+        let j = i + 2
+        while (j < raw.length) {
+          const code = raw.charCodeAt(j)
+          if (code >= 0x40 && code <= 0x7e) break
+          j++
+        }
+        const body = raw.slice(i + 2, j)
+        const tail = raw[j]
+        const value = Number(body) || 0
+        if (tail === "H" || tail === "f") {
+          const [row, col] = body.split(";").map((item) => Number(item) || 1)
+          y = Math.max(0, Math.min(height - 1, row - 1))
+          x = Math.max(0, Math.min(width - 1, col - 1))
+        }
+        if (tail === "A") y = Math.max(0, y - (value || 1))
+        if (tail === "B") y = Math.min(height - 1, y + (value || 1))
+        if (tail === "C") x = Math.min(width - 1, x + (value || 1))
+        if (tail === "D") x = Math.max(0, x - (value || 1))
+        if (tail === "G") x = Math.max(0, Math.min(width - 1, value - 1))
+        if (tail === "d") y = Math.max(0, Math.min(height - 1, value - 1))
+        if (tail === "J" && (value === 2 || value === 3)) clear()
+        if (tail === "K") clearLine(value)
+        if (tail === "s") saved = { x, y }
+        if (tail === "u") {
+          x = saved.x
+          y = saved.y
+        }
+        if ((tail === "h" || tail === "l") && body === "?1049") {
+          clear()
+          x = 0
+          y = 0
+        }
+        i = j + 1
+        continue
+      }
+      if (next === "]") {
+        let j = i + 2
+        while (j < raw.length) {
+          if (raw[j] === "\\u0007") {
+            j++
+            break
+          }
+          if (raw[j] === "\\u001b" && raw[j + 1] === "\\\\") {
+            j += 2
+            break
+          }
+          j++
+        }
+        i = j
+        continue
+      }
+      i += 2
+      continue
+    }
+    if (char === "\\r") {
+      x = 0
+      i++
+      continue
+    }
+    if (char === "\\n") {
+      y = Math.min(height - 1, y + 1)
+      i++
+      continue
+    }
+    if (char === "\\b") {
+      x = Math.max(0, x - 1)
+      i++
+      continue
+    }
+    const code = raw.codePointAt(i)
+    if (!code) {
+      i++
+      continue
+    }
+    put(String.fromCodePoint(code))
+    i += code > 0xffff ? 2 : 1
+  }
+  const value = snapshot()
+  return (value.trim() ? value : best).split("\\n")
+}
+
+function text(raw, width, height) {
+  return frame(raw, width, height).join("\\n")
+}
+
+function json(res, value, status = 200) {
+  res.writeHead(status, { "content-type": "application/json" })
+  res.end(JSON.stringify(value))
+}
+
+function selected() {
+  return matrix.filter((item) => item.active && (mode === "parity" ? item.mode === "smoke" || item.mode === "parity" : item.mode === "smoke"))
+}
+
+function read(req) {
+  return new Promise((resolve) => {
     let body = ""
     req.on("data", (chunk) => (body += chunk))
-    req.on("end", () => {
-      bodies.push(JSON.parse(body))
+    req.on("end", () => resolve(body ? JSON.parse(body) : {}))
+  })
+}
+
+async function runHost(input) {
+  const state = { bodies: [], replies: [] }
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url || "/", "http://127.0.0.1")
+    if (url.pathname === "/session" && req.method === "POST") return json(res, { id: "ses_termux" })
+    if (url.pathname === "/session/ses_termux") return json(res, { id: "ses_termux", title: input.title })
+    if (url.pathname === "/session/ses_termux/message/index") return json(res, input.messages || [])
+    if (url.pathname === "/session/ses_termux/prompt_async" && req.method === "POST") {
+      state.bodies.push(await read(req))
       res.writeHead(204)
       res.end()
-    })
-    return
-  }
-  if (url.pathname === "/event") {
-    res.writeHead(200, { "content-type": "text/event-stream" })
-    res.write('data: {"type":"server.connected"}\\n\\n')
-    setTimeout(() => res.end(), 1000)
-    return
-  }
-  res.writeHead(200, { "content-type": "application/json" })
-  res.end("{}")
-})
-
-await new Promise((resolve, reject) => {
-  server.listen(0, "127.0.0.1", () => {
-    const address = server.address()
-    if (!address || typeof address === "string") return reject(new Error("missing mock server port"))
-    const child = spawn(host, ["--url", "http://127.0.0.1:" + address.port, "--token", "test", "--prompt", "hello"], { stdio: ["pipe", "pipe", "pipe"] })
-    let stderr = ""
-    child.stderr.on("data", (chunk) => (stderr += chunk))
-    setTimeout(() => child.stdin.end("/exit\\r"), 150)
-    child.on("exit", (code) => {
-      server.close()
-      if (code !== 0) return reject(new Error(stderr || "sidecar exited " + code))
-      const body = bodies[0]
-      if (!body?.messageID?.startsWith("msg_") || !body?.parts?.[0]?.id?.startsWith("prt_") || body?.parts?.[0]?.text !== "hello") {
-        return reject(new Error("unexpected prompt body " + JSON.stringify(body)))
+      return
+    }
+    if (url.pathname === "/question/que_termux/reply" && req.method === "POST") {
+      state.replies.push(await read(req))
+      return json(res, {})
+    }
+    if (url.pathname === "/event") {
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.write('data: {"type":"server.connected"}\\n\\n')
+      if (input.question) {
+        res.write('data: {"type":"question.asked","properties":{"id":"que_termux","sessionID":"ses_termux","questions":[{"header":"Mode","question":"Pick one","options":[{"label":"Yes","description":"ok"}]}]}}\\n\\n')
       }
-      resolve()
-    })
+      setTimeout(() => res.end(), 1000)
+      return
+    }
+    return json(res, {})
   })
-})
-console.log("android termux e2e ok")
+
+  try {
+    await new Promise((resolve, reject) => server.listen(0, "127.0.0.1", (error) => (error ? reject(error) : resolve())))
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("missing mock server port")
+    const child = spawn(host, ["--url", "http://127.0.0.1:" + address.port, "--token", "test", ...(input.args || [])], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, COLUMNS: String(input.width || 100), LINES: String(input.height || 30), TERM: "xterm-256color" },
+    })
+    let stdout = ""
+    let stderr = ""
+    child.stdout.on("data", (chunk) => (stdout += chunk))
+    child.stderr.on("data", (chunk) => (stderr += chunk))
+    const exit = new Promise((resolve, reject) => {
+      child.on("error", reject)
+      child.on("exit", (code) => resolve(code))
+    })
+    for (const step of input.steps || [{ delay: 150, text: "/exit\\r" }]) {
+      await sleep(step.delay)
+      child.stdin.write(step.text)
+    }
+    child.stdin.end()
+    const code = await Promise.race([
+      exit,
+      sleep(input.timeout || 8000).then(() => {
+        child.kill()
+        throw new Error("host timed out")
+      }),
+    ])
+    if (code !== 0) throw new Error(stderr || stdout || "sidecar exited " + code)
+    return { ...state, stdout, stderr, screen: text(stdout, input.width || 100, input.height || 30) }
+  } finally {
+    server.close()
+  }
+}
+
+function assert(value, message) {
+  if (!value) throw new Error(message)
+}
+
+const actions = {
+  "smoke.install": async () => {
+    const cli = spawnSync(cliPath, ["--version"], { encoding: "utf8" })
+    assert(cli.status === 0, cli.error?.message || cli.stderr || cli.stdout || "slopcode --version failed")
+    const self = spawnSync(host, ["--self-test"], { encoding: "utf8" })
+    assert(self.status === 0 && self.stdout.includes("slopcode-android-host ok"), self.stderr || self.stdout || "sidecar self-test failed")
+  },
+  "composer.submit": async () => {
+    const run = await runHost({ title: "Submit Session", args: ["--prompt", "hello"], steps: [{ delay: 150, text: "/exit\\r" }] })
+    const body = run.bodies[0]
+    assert(body?.messageID?.startsWith("msg_"), "missing message id " + JSON.stringify(body))
+    assert(body?.parts?.[0]?.id?.startsWith("prt_"), "missing part id " + JSON.stringify(body))
+    assert(body?.parts?.[0]?.text === "hello", "unexpected prompt body " + JSON.stringify(body))
+  },
+  "composer.editing": async () => {
+    const run = await runHost({
+      title: "Input Session",
+      steps: [
+        { delay: 100, text: "\\x1b[200~hello\\nworld\\x1b[201~\\r" },
+        { delay: 100, text: "first\\r" },
+        { delay: 100, text: "\\x1b[A again\\r" },
+        { delay: 100, text: "\\x04" },
+      ],
+    })
+    assert(JSON.stringify(run.bodies.map((item) => item.parts?.[0]?.text)) === JSON.stringify(["hello\\nworld", "first", "first again"]), "unexpected editing bodies " + JSON.stringify(run.bodies))
+  },
+  "dialogs.question": async () => {
+    const run = await runHost({ title: "Question Session", question: true, steps: [{ delay: 200, text: "1\\r" }, { delay: 100, text: "\\x04" }] })
+    assert(JSON.stringify(run.replies) === JSON.stringify([{ answers: [["Yes"]] }]), "unexpected replies " + JSON.stringify(run.replies))
+  },
+  "layout.capture": async () => {
+    const run = await runHost({ title: "Layout Session", width: 80, height: 24, steps: [{ delay: 1500, text: "/exit\\r" }] })
+    assert(run.screen.includes("Layout Session") || run.stdout.includes("Layout Session"), "screen missing title\\n" + run.screen + "\\nraw:\\n" + run.stdout)
+    assert(run.screen.includes("SlopCode") || run.stdout.includes("SlopCode"), "screen missing chrome\\n" + run.screen + "\\nraw:\\n" + run.stdout)
+  },
+}
+
+for (const item of selected()) {
+  const started = Date.now()
+  try {
+    await actions[item.id]()
+    results.push({ id: item.id, ok: true, ms: Date.now() - started })
+    console.log("android termux e2e ok", item.id)
+  } catch (error) {
+    results.push({ id: item.id, ok: false, ms: Date.now() - started, error: error instanceof Error ? error.message : String(error) })
+    fs.writeFileSync(resultPath, JSON.stringify({ mode, matrix, results }, null, 2))
+    throw error
+  }
+}
+
+fs.writeFileSync(resultPath, JSON.stringify({ mode, matrix, results }, null, 2))
+console.log("android termux e2e matrix", JSON.stringify({ mode, active: selected().map((item) => item.id), pending: matrix.filter((item) => !item.active).map((item) => item.id), results }))
 `
 }
 
-const staged = await stage()
-try {
-  await installTermux()
-  await adb("push", staged.android, `${tmp}/slopcode-android-runtime.tgz`)
-  await adb("push", staged.cli, `${tmp}/slopcode-root.tgz`)
-  const script = path.join(staged.work, "android-termux-e2e.mjs")
-  await Bun.write(script, e2eSource(staged.androidPackage))
-  await adb("push", script, `${tmp}/slopcode-android-termux-e2e.mjs`)
-  await termux(
-    `npm install -g --include=optional --ignore-scripts=false ${tmp}/slopcode-android-runtime.tgz ${tmp}/slopcode-root.tgz && node ${tmp}/slopcode-android-termux-e2e.mjs`,
-  )
-  console.log("android e2e: ok")
-} finally {
-  await fs.rm(staged.work, { recursive: true, force: true })
+export async function main() {
+  const staged = await stage()
+  try {
+    await installTermux()
+    await adb("push", staged.android, `${tmp}/slopcode-android-runtime.tgz`)
+    await adb("push", staged.cli, `${tmp}/slopcode-root.tgz`)
+    const script = path.join(staged.work, "android-termux-e2e.mjs")
+    await Bun.write(script, e2eSource(staged.androidPackage))
+    await adb("push", script, `${tmp}/slopcode-android-termux-e2e.mjs`)
+    await termux(
+      `export SLOPCODE_ANDROID_E2E_MODE=${quote(mode)}; npm install -g --include=optional --ignore-scripts=false ${tmp}/slopcode-android-runtime.tgz ${tmp}/slopcode-root.tgz && node ${tmp}/slopcode-android-termux-e2e.mjs`,
+    )
+    console.log(`android e2e: ok (${mode})`)
+  } finally {
+    await fs.rm(staged.work, { recursive: true, force: true })
+  }
 }
+
+if (import.meta.main) await main()

@@ -2,6 +2,14 @@ name: android-termux-e2e
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Android E2E mode
+        type: choice
+        default: smoke
+        options:
+          - smoke
+          - parity
   schedule:
     - cron: "27 6 * * *"
 
@@ -31,11 +39,12 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
 
-      - name: Run Termux package smoke
+      - name: Run Termux package parity harness
         uses: reactivecircus/android-emulator-runner@v2
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
           SLOPCODE_ANDROID_BOOTSTRAP: "1"
+          SLOPCODE_ANDROID_E2E_MODE: ${{ github.event.inputs.mode || 'smoke' }}
         with:
           api-level: 35
           arch: x86_64
