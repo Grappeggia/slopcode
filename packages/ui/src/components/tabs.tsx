@@ -78,6 +78,9 @@ function TabsTrigger(props: ParentProps<TabsTriggerProps>) {
         }
       }}
     >
+      <div data-slot="tabs-trigger-divider" aria-hidden="true">
+        |
+      </div>
       <Kobalte.Trigger
         {...rest}
         data-slot="tabs-trigger"

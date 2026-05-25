@@ -348,7 +348,7 @@ slopcode github [command]
 slopcode github install
 slopcode github run
 slopcode import <file>
-slopcode import https://opncd.ai/s/abc123
+slopcode import https://slopcode.dev/share/abc123
 slopcode import session.json
 slopcode mcp [command]
 slopcode mcp add
@@ -834,7 +834,7 @@ slopcode/gpt-5.1-codex
 slopcode/gpt-5.2-codex
 slopcode/kimi-k2
 openrouter/google/gemini-2.5-flash
-opncd.ai/s/<share-id>
+slopcode.dev/share/<share-id>
 packages/*/AGENTS.md
 plugins/
 project/

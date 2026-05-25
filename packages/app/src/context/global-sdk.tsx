@@ -17,6 +17,7 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
     const server = useServer()
     const platform = usePlatform()
     const abort = new AbortController()
+    const viewID = platform.viewID?.()
 
     const eventFetch = (() => {
       if (!platform.fetch || !server.current) return
@@ -36,6 +37,7 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
       signal: abort.signal,
       fetch: eventFetch,
       server: currentServer.http,
+      viewID,
     })
     const emitter = createGlobalEmitter<{
       [key: string]: Event
@@ -210,6 +212,7 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
       server: server.current.http,
       fetch: platform.fetch,
       throwOnError: true,
+      viewID,
     })
 
     return {
@@ -222,6 +225,7 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
         return createSdkForServer({
           server: s.http,
           fetch: platform.fetch,
+          viewID,
           ...opts,
         })
       },

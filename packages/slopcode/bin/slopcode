@@ -1,10 +1,11 @@
-#!/usr/bin/env sh
+#!/bin/sh
 ':' //; runner="$(command -v node || command -v bun || true)"; [ -n "$runner" ] || { echo "slopcode requires bun or node in PATH" >&2; exit 127; }; exec "$runner" "$0" "$@"
 
 const childProcess = require("child_process")
 const fs = require("fs")
 const path = require("path")
 const os = require("os")
+const pkg = require("../package.json")
 
 function run(target) {
   const result = childProcess.spawnSync(target, process.argv.slice(2), {
@@ -25,13 +26,9 @@ if (envPath) {
 
 const scriptPath = fs.realpathSync(__filename)
 const scriptDir = path.dirname(scriptPath)
-
-//
 const cached = path.join(scriptDir, ".slopcode")
-if (fs.existsSync(cached)) {
-  run(cached)
-}
-
+const meta = path.join(scriptDir, ".slopcode.json")
+const sidecar = path.join(scriptDir, "neovim")
 const platformMap = {
   darwin: "darwin",
   linux: "linux",
@@ -42,39 +39,80 @@ const archMap = {
   arm64: "arm64",
   arm: "arm",
 }
-
-let platform = platformMap[os.platform()]
-if (!platform) {
-  platform = os.platform()
+const supported = {
+  android: ["arm64", "x64"],
+  darwin: ["arm64", "x64"],
+  linux: ["arm64", "x64"],
+  windows: ["x64"],
 }
-let arch = archMap[os.arch()]
+
+const rawPlatform = process.env.SLOPCODE_TEST_PLATFORM || os.platform()
+const rawArch = process.env.SLOPCODE_TEST_ARCH || os.arch()
+let platform = platformMap[rawPlatform]
+if (!platform) {
+  platform = rawPlatform
+}
+let arch = archMap[rawArch]
 if (!arch) {
-  arch = os.arch()
+  arch = rawArch
 }
 const binary = platform === "windows" ? "slopcode.exe" : "slopcode"
+
+function remove(target) {
+  if (!fs.existsSync(target)) return
+  fs.rmSync(target, { recursive: true, force: true })
+}
+
+function clearCache() {
+  remove(cached)
+  remove(meta)
+  remove(sidecar)
+}
+
+function termuxEnv() {
+  return Boolean(process.env.TERMUX_VERSION || (process.env.PREFIX || "").includes("/com.termux/"))
+}
+
+function libc() {
+  if (platform === "android") return "bionic"
+  if (platform !== "linux") return
+  const report = process.report?.getReport?.()
+  if (typeof report?.header?.glibcVersionRuntime === "string" && report.header.glibcVersionRuntime) {
+    return "glibc"
+  }
+  if (fs.existsSync("/etc/alpine-release")) return "musl"
+  const getconf = childProcess.spawnSync("getconf", ["GNU_LIBC_VERSION"], {
+    encoding: "utf8",
+    timeout: 1500,
+  })
+  const fromGetconf = ((getconf.stdout || "") + (getconf.stderr || "")).toLowerCase()
+  if (getconf.status === 0 && fromGetconf.includes("glibc")) return "glibc"
+  const result = childProcess.spawnSync("ldd", ["--version"], {
+    encoding: "utf8",
+    timeout: 1500,
+  })
+  const text = ((result.stdout || "") + (result.stderr || "")).toLowerCase()
+  if (text.includes("musl")) return "musl"
+  if (text.includes("glibc") || text.includes("gnu libc")) return "glibc"
+  if (text.includes("bionic") || termuxEnv()) return "bionic"
+  const loader = arch === "arm64" ? "/lib/ld-musl-aarch64.so.1" : arch === "x64" ? "/lib/ld-musl-x86_64.so.1" : ""
+  if (loader && fs.existsSync(loader)) return "musl"
+}
 
 function supportsAvx2() {
   if (arch !== "x64") return false
 
   if (platform === "linux") {
-    try {
-      return /(^|\s)avx2(\s|$)/i.test(fs.readFileSync("/proc/cpuinfo", "utf8"))
-    } catch {
-      return false
-    }
+    return /(^|\s)avx2(\s|$)/i.test(fs.readFileSync("/proc/cpuinfo", "utf8"))
   }
 
   if (platform === "darwin") {
-    try {
-      const result = childProcess.spawnSync("sysctl", ["-n", "hw.optional.avx2_0"], {
-        encoding: "utf8",
-        timeout: 1500,
-      })
-      if (result.status !== 0) return false
-      return (result.stdout || "").trim() === "1"
-    } catch {
-      return false
-    }
+    const result = childProcess.spawnSync("sysctl", ["-n", "hw.optional.avx2_0"], {
+      encoding: "utf8",
+      timeout: 1500,
+    })
+    if (result.status !== 0) return false
+    return (result.stdout || "").trim() === "1"
   }
 
   if (platform === "windows") {
@@ -82,59 +120,43 @@ function supportsAvx2() {
       '(Add-Type -MemberDefinition "[DllImport(""kernel32.dll"")] public static extern bool IsProcessorFeaturePresent(int ProcessorFeature);" -Name Kernel32 -Namespace Win32 -PassThru)::IsProcessorFeaturePresent(40)'
 
     for (const exe of ["powershell.exe", "pwsh.exe", "pwsh", "powershell"]) {
-      try {
-        const result = childProcess.spawnSync(exe, ["-NoProfile", "-NonInteractive", "-Command", cmd], {
-          encoding: "utf8",
-          timeout: 3000,
-          windowsHide: true,
-        })
-        if (result.status !== 0) continue
-        const out = (result.stdout || "").trim().toLowerCase()
-        if (out === "true" || out === "1") return true
-        if (out === "false" || out === "0") return false
-      } catch {
-        continue
-      }
+      const result = childProcess.spawnSync(exe, ["-NoProfile", "-NonInteractive", "-Command", cmd], {
+        encoding: "utf8",
+        timeout: 3000,
+        windowsHide: true,
+      })
+      if (result.error || result.status !== 0) continue
+      const out = (result.stdout || "").trim().toLowerCase()
+      if (out === "true" || out === "1") return true
+      if (out === "false" || out === "0") return false
     }
-
-    return false
   }
 
   return false
 }
 
 function names(prefix) {
-  const base = `${prefix}-${platform}-${arch}`
+  const kind = libc()
+  const base = kind === "bionic" ? `${prefix}-android-${arch}` : `${prefix}-${platform}-${arch}`
+  if (kind === "bionic") return [`@slopcode-ai/slopcode-android-${arch}`, base]
   const avx2 = supportsAvx2()
   const baseline = arch === "x64" && !avx2
 
   if (platform === "linux") {
-    const musl = (() => {
-      try {
-        if (fs.existsSync("/etc/alpine-release")) return true
-      } catch {
-        // ignore
-      }
-
-      try {
-        const result = childProcess.spawnSync("ldd", ["--version"], { encoding: "utf8" })
-        const text = ((result.stdout || "") + (result.stderr || "")).toLowerCase()
-        if (text.includes("musl")) return true
-      } catch {
-        // ignore
-      }
-
-      return false
-    })()
-
-    if (musl) {
+    if (kind === "musl") {
       if (arch === "x64") {
         if (baseline) return [`${base}-baseline-musl`, `${base}-musl`, `${base}-baseline`, base]
         return [`${base}-musl`, `${base}-baseline-musl`, base, `${base}-baseline`]
       }
       return [`${base}-musl`, base]
     }
-
+    if (kind === "glibc") {
+      if (arch === "x64") {
+        if (baseline) return [`${base}-baseline`, base, `${base}-baseline-musl`, `${base}-musl`]
+        return [base, `${base}-baseline`, `${base}-musl`, `${base}-baseline-musl`]
+      }
+      return [base, `${base}-musl`]
+    }
     if (arch === "x64") {
       if (baseline) return [`${base}-baseline`, base, `${base}-baseline-musl`, `${base}-musl`]
       return [base, `${base}-baseline`, `${base}-musl`, `${base}-baseline-musl`]
@@ -149,7 +171,77 @@ function names(prefix) {
   return [base]
 }
 
-const resolvedNames = Array.from(new Set([...names("slopcode-bin"), ...names("slopcode")]))
+function readMeta() {
+  if (!fs.existsSync(meta)) return
+  try {
+    return JSON.parse(fs.readFileSync(meta, "utf8"))
+  } catch {
+    return
+  }
+}
+
+function cacheReady(names) {
+  if (!fs.existsSync(cached)) return
+  const info = readMeta()
+  if (!info) return
+  if (info.version !== pkg.version) return
+  if (info.platform !== platform || info.arch !== arch) return
+  if (info.binary !== binary) return
+  if (platform === "linux" && info.libc !== libc()) return
+  if (typeof info.package !== "string" || !names.includes(info.package)) return
+  if (info.sidecar === true && !fs.existsSync(sidecar)) return
+  return cached
+}
+
+function unsupported() {
+  const hit = supported[platform]
+  return !hit || !hit.includes(arch)
+}
+
+function supportedMessage() {
+  return Object.entries(supported)
+    .map(([platform, archs]) => `${platform}:${archs.join(",")}`)
+    .join(" ")
+}
+
+function termuxMessage() {
+  return [
+    "SlopCode native Termux support could not find the Android runtime.",
+    "Reinstall from Termux with:",
+    "  pkg update",
+    "  pkg install nodejs git ripgrep neovim tar",
+    "  npm install -g slopcode@latest --include=optional",
+    "If postinstall could not download the runtime, install the matching GitHub release asset manually.",
+  ].join("\n")
+}
+
+const useCache = libc() !== "bionic"
+
+const packageNames = names("slopcode-bin")
+const resolvedNames = Array.from(new Set([...packageNames, ...names("slopcode")]))
+const hit = useCache ? cacheReady(resolvedNames) : undefined
+if (hit) {
+  run(hit)
+}
+clearCache()
+
+if (unsupported()) {
+  console.error(`Unsupported platform ${platform}/${arch}. Supported targets: ${supportedMessage()}`)
+  process.exit(1)
+}
+
+function resolveBinary() {
+  for (const name of resolvedNames) {
+    try {
+      const candidate = require.resolve(`${name}/bin/${binary}`, {
+        paths: [scriptDir],
+      })
+      if (fs.existsSync(candidate)) return { path: candidate, package: name }
+    } catch {
+      continue
+    }
+  }
+}
 
 function findBinary(startDir) {
   let current = startDir
@@ -158,7 +250,7 @@ function findBinary(startDir) {
     if (fs.existsSync(modules)) {
       for (const name of resolvedNames) {
         const candidate = path.join(modules, name, "bin", binary)
-        if (fs.existsSync(candidate)) return candidate
+        if (fs.existsSync(candidate)) return { path: candidate, package: name }
       }
     }
     const parent = path.dirname(current)
@@ -169,14 +261,19 @@ function findBinary(startDir) {
   }
 }
 
-const resolved = findBinary(scriptDir)
+const resolved = resolveBinary() || findBinary(scriptDir)
 if (!resolved) {
+  if (libc() === "bionic") {
+    console.error(termuxMessage())
+    process.exit(1)
+  }
   console.error(
     "It seems that your package manager failed to install the right version of the slopcode CLI for your platform. You can try manually installing " +
-      resolvedNames.map((n) => `\"${n}\"`).join(" or ") +
+      packageNames.map((n) => `\"${n}\"`).join(" or ") +
       " package",
   )
   process.exit(1)
 }
 
-run(resolved)
+run(resolved.path)
+

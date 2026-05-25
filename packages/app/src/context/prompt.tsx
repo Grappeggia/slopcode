@@ -1,8 +1,10 @@
-import { createStore, type SetStoreFunction } from "solid-js/store"
+import { createStore, type SetStoreFunction, type Store } from "solid-js/store"
 import { createSimpleContext } from "@slopcode-ai/ui/context"
-import { batch, createMemo, createRoot, onCleanup } from "solid-js"
+import { batch, createMemo, createRoot, getOwner, onCleanup, runWithOwner } from "solid-js"
 import { useParams } from "@solidjs/router"
-import type { FileSelection } from "@/context/file"
+import type { PromptHistoryStoredEntry } from "@/components/prompt-input/history"
+import type { FileSelection, SelectedLineRange } from "@/context/file"
+import { usePlatform } from "@/context/platform"
 import { Persist, persisted } from "@/utils/persist"
 import { checksum } from "@slopcode-ai/util/encode"
 
@@ -52,6 +54,20 @@ export type ContextItem = FileContextItem
 
 export const DEFAULT_PROMPT: Prompt = [{ type: "text", content: "", start: 0, end: 0 }]
 
+type PromptStore = {
+  prompt: Prompt
+  cursor?: number
+  context: {
+    items: (ContextItem & { key: string })[]
+  }
+  history: {
+    normal: PromptHistoryStoredEntry[]
+    shell: PromptHistoryStoredEntry[]
+  }
+}
+
+type PromptHistoryMode = "normal" | "shell"
+
 function isSelectionEqual(a?: FileSelection, b?: FileSelection) {
   if (!a && !b) return true
   if (!a || !b) return false
@@ -100,6 +116,30 @@ function clonePrompt(prompt: Prompt): Prompt {
   return prompt.map(clonePart)
 }
 
+function clonePromptHistorySelection(selection: SelectedLineRange): SelectedLineRange {
+  return {
+    start: selection.start,
+    end: selection.end,
+    ...(selection.side ? { side: selection.side } : {}),
+    ...(selection.endSide ? { endSide: selection.endSide } : {}),
+  }
+}
+
+function clonePromptHistoryEntry(entry: PromptHistoryStoredEntry): PromptHistoryStoredEntry {
+  if (Array.isArray(entry)) return clonePrompt(entry)
+  return {
+    prompt: clonePrompt(entry.prompt),
+    comments: entry.comments.map((comment) => ({
+      ...comment,
+      selection: clonePromptHistorySelection(comment.selection),
+    })),
+  }
+}
+
+function clonePromptHistory(entries: PromptHistoryStoredEntry[]) {
+  return entries.map(clonePromptHistoryEntry)
+}
+
 function contextItemKey(item: ContextItem) {
   if (item.type !== "file") return item.type
   const start = item.selection?.startLine
@@ -120,15 +160,7 @@ function isCommentItem(item: ContextItem | (ContextItem & { key: string })) {
   return item.type === "file" && !!item.comment?.trim()
 }
 
-function createPromptActions(
-  setStore: SetStoreFunction<{
-    prompt: Prompt
-    cursor?: number
-    context: {
-      items: (ContextItem & { key: string })[]
-    }
-  }>,
-) {
+function createPromptActions(setStore: SetStoreFunction<PromptStore>) {
   return {
     set(prompt: Prompt, cursorPosition?: number) {
       const next = clonePrompt(prompt)
@@ -156,35 +188,29 @@ type PromptCacheEntry = {
   dispose: VoidFunction
 }
 
-function createPromptSession(dir: string, id: string | undefined) {
-  const legacy = `${dir}/prompt${id ? "/" + id : ""}.v2`
+function createPromptStore(): PromptStore {
+  return {
+    prompt: clonePrompt(DEFAULT_PROMPT),
+    cursor: undefined,
+    context: {
+      items: [],
+    },
+    history: {
+      normal: [],
+      shell: [],
+    },
+  }
+}
 
-  const [store, setStore, _, ready] = persisted(
-    Persist.scoped(dir, id, "prompt", [legacy]),
-    createStore<{
-      prompt: Prompt
-      cursor?: number
-      context: {
-        items: (ContextItem & { key: string })[]
-      }
-    }>({
-      prompt: clonePrompt(DEFAULT_PROMPT),
-      cursor: undefined,
-      context: {
-        items: [],
-      },
-    }),
-  )
-
+function createPromptSessionState(store: Store<PromptStore>, setStore: SetStoreFunction<PromptStore>) {
   const actions = createPromptActions(setStore)
 
   return {
-    ready,
-    current: createMemo(() => store.prompt),
-    cursor: createMemo(() => store.cursor),
-    dirty: createMemo(() => !isPromptEqual(store.prompt, DEFAULT_PROMPT)),
+    current: () => store.prompt,
+    cursor: () => store.cursor,
+    dirty: () => !isPromptEqual(store.prompt, DEFAULT_PROMPT),
     context: {
-      items: createMemo(() => store.context.items),
+      items: () => store.context.items,
       add(item: ContextItem) {
         const key = contextItemKey(item)
         if (store.context.items.find((x) => x.key === key)) return
@@ -214,8 +240,43 @@ function createPromptSession(dir: string, id: string | undefined) {
         ])
       },
     },
+    history: {
+      normal: () => store.history.normal,
+      shell: () => store.history.shell,
+      entries(mode: PromptHistoryMode) {
+        return store.history[mode]
+      },
+      set(mode: PromptHistoryMode, entries: PromptHistoryStoredEntry[]) {
+        setStore("history", mode, clonePromptHistory(entries))
+      },
+    },
     set: actions.set,
     reset: actions.reset,
+  }
+}
+
+export function createPromptSessionForTest(store = createPromptStore()) {
+  const [state, setState] = createStore<PromptStore>(store)
+  return createPromptSessionState(state, setState)
+}
+
+function createPromptSession(dir: string, id: string | undefined, scope?: string) {
+  const legacy = `${dir}/prompt${id ? "/" + id : ""}.v2`
+
+  const [store, setStore, _, ready] = persisted(
+    {
+      ...Persist.scoped(dir, id, "prompt", [legacy]),
+      scope,
+      sync: false,
+    },
+    createStore<PromptStore>(createPromptStore()),
+  )
+
+  const session = createPromptSessionState(store, setStore)
+
+  return {
+    ready,
+    ...session,
   }
 }
 
@@ -224,7 +285,10 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
   gate: false,
   init: () => {
     const params = useParams()
+    const platform = usePlatform()
+    const scope = platform.viewID?.()
     const cache = new Map<string, PromptCacheEntry>()
+    const owner = getOwner()
 
     const disposeAll = () => {
       for (const entry of cache.values()) {
@@ -246,7 +310,7 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
     }
 
     const load = (dir: string, id: string | undefined) => {
-      const key = `${dir}:${id ?? WORKSPACE_KEY}`
+      const key = `${scope ?? "shared"}:${dir}:${id ?? WORKSPACE_KEY}`
       const existing = cache.get(key)
       if (existing) {
         cache.delete(key)
@@ -254,16 +318,24 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
         return existing.value
       }
 
-      const entry = createRoot((dispose) => ({
-        value: createPromptSession(dir, id),
-        dispose,
-      }))
+      const entry = owner
+        ? runWithOwner(owner, () =>
+            createRoot((dispose) => ({
+              value: createPromptSession(dir, id, scope),
+              dispose,
+            })),
+          )!
+        : createRoot((dispose) => ({
+            value: createPromptSession(dir, id, scope),
+            dispose,
+          }))
 
       cache.set(key, entry)
       prune()
       return entry.value
     }
 
+    const resolve = (target?: { dir?: string; id?: string }) => load(target?.dir ?? params.dir!, target?.id)
     const session = createMemo(() => load(params.dir!, params.id))
 
     return {
@@ -279,6 +351,14 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
         updateComment: (path: string, commentID: string, next: Partial<FileContextItem> & { comment?: string }) =>
           session().context.updateComment(path, commentID, next),
         replaceComments: (items: FileContextItem[]) => session().context.replaceComments(items),
+      },
+      history: {
+        normal: () => session().history.normal(),
+        shell: () => session().history.shell(),
+        entries: (mode: PromptHistoryMode, target?: { dir?: string; id?: string }) =>
+          resolve(target).history.entries(mode),
+        set: (mode: PromptHistoryMode, entries: PromptHistoryStoredEntry[], target?: { dir?: string; id?: string }) =>
+          resolve(target).history.set(mode, entries),
       },
       set: (prompt: Prompt, cursorPosition?: number) => session().set(prompt, cursorPosition),
       reset: () => session().reset(),

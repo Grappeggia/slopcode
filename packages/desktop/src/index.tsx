@@ -44,6 +44,26 @@ let update: Update | null = null
 
 const deepLinkEvent = "slopcode:deep-link"
 
+const viewID = (() => {
+  const key = "slopcode.view-id"
+  let cached = ""
+  return () => {
+    if (cached) return cached
+    if (typeof sessionStorage === "undefined") {
+      cached = crypto.randomUUID()
+      return cached
+    }
+    const stored = sessionStorage.getItem(key)
+    if (stored) {
+      cached = stored
+      return cached
+    }
+    cached = crypto.randomUUID()
+    sessionStorage.setItem(key, cached)
+    return cached
+  }
+})()
+
 const emitDeepLinks = (urls: string[]) => {
   if (urls.length === 0) return
   window.__SLOPCODE__ ??= {}
@@ -82,6 +102,7 @@ const createPlatform = (): Platform => {
     platform: "desktop",
     os,
     version: pkg.version,
+    viewID,
 
     async openDirectoryPickerDialog(opts) {
       const defaultPath = await wslHome()

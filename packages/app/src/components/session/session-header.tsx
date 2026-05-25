@@ -20,6 +20,7 @@ import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
+import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { decode64 } from "@/utils/base64"
 import { Persist, persisted } from "@/utils/persist"
@@ -228,6 +229,7 @@ export function SessionHeader() {
   const server = useServer()
   const sync = useSync()
   const platform = usePlatform()
+  const settings = useSettings()
   const language = useLanguage()
 
   const projectDirectory = createMemo(() => decode64(params.dir) ?? "")
@@ -248,6 +250,12 @@ export function SessionHeader() {
   const showShare = createMemo(() => shareEnabled() && !!currentSession())
   const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
   const view = createMemo(() => layout.view(sessionKey))
+  const panelOpen = createMemo(() => view().reviewPanel.opened() || layout.fileTree.opened())
+  const toggleFileTree = () => {
+    const next = !layout.fileTree.opened()
+    layout.fileTree.toggle()
+    if (next) view().sidePanel.expand()
+  }
   const os = createMemo(() => detectOS(platform))
 
   const [exists, setExists] = createStore<Partial<Record<OpenApp, boolean>>>({
@@ -356,14 +364,15 @@ export function SessionHeader() {
 
   return (
     <>
-      <Show when={centerMount()}>
+      <Show when={settings.general.showTitleBarTools() ? centerMount() : undefined}>
         {(mount) => (
           <Portal mount={mount()}>
             <Button
               type="button"
               variant="ghost"
               size="small"
-              class="hidden md:flex w-[240px] max-w-full min-w-0 pl-0.5 pr-2 items-center gap-2 justify-between rounded-md border border-border-weak-base bg-surface-panel shadow-none cursor-default"
+              class="hidden md:flex w-[240px] lg:w-[360px] xl:w-[420px] min-w-0 px-1.5 items-center gap-1.5 justify-between rounded-md border border-border-weak-base bg-surface-panel shadow-none cursor-default"
+              data-action="session-titlebar-search"
               onClick={() => command.trigger("file.open")}
               aria-label={language.t("session.header.searchFiles")}
             >
@@ -385,11 +394,25 @@ export function SessionHeader() {
           </Portal>
         )}
       </Show>
-      <Show when={rightMount()}>
+      <Show when={settings.general.showTitleBarTools() ? rightMount() : undefined}>
         {(mount) => (
           <Portal mount={mount()}>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-1.5 xl:gap-2">
               <StatusPopover />
+              <Show when={!panelOpen()}>
+                <TooltipKeybind title={language.t("command.palette")} keybind={command.keybind("command.palette")}>
+                  <Button
+                    variant="ghost"
+                    class="titlebar-icon w-7 h-6 p-0 box-border"
+                    onClick={() => command.show()}
+                    aria-label={language.t("command.palette")}
+                  >
+                    <div class="relative flex items-center justify-center size-4">
+                      <Icon name="magnifying-glass" size="small" class="text-icon-weak" />
+                    </div>
+                  </Button>
+                </TooltipKeybind>
+              </Show>
               <Show when={projectDirectory()}>
                 <div class="hidden xl:flex items-center">
                   <Show
@@ -398,7 +421,7 @@ export function SessionHeader() {
                       <div class="flex h-[24px] box-border items-center rounded-md border border-border-weak-base bg-surface-panel overflow-hidden">
                         <Button
                           variant="ghost"
-                          class="rounded-none h-full py-0 pr-3 pl-0.5 gap-1.5 border-none shadow-none"
+                          class="rounded-none h-full py-0 pr-2 pl-1 gap-1.5 border-none shadow-none"
                           onClick={copyPath}
                           aria-label={language.t("session.header.open.copyPath")}
                         >
@@ -414,7 +437,7 @@ export function SessionHeader() {
                       <div class="flex h-[24px] box-border items-center rounded-md border border-border-weak-base bg-surface-panel overflow-hidden">
                         <Button
                           variant="ghost"
-                          class="rounded-none h-full py-0 pr-3 pl-0.5 gap-1.5 border-none shadow-none disabled:!cursor-default"
+                          class="rounded-none h-full py-0 pr-2 pl-1 gap-1.5 border-none shadow-none disabled:!cursor-default"
                           classList={{
                             "bg-surface-raised-base-active": opening(),
                           }}
@@ -444,7 +467,7 @@ export function SessionHeader() {
                             icon="chevron-down"
                             variant="ghost"
                             disabled={opening()}
-                            class="rounded-none h-full w-[24px] p-0 border-none shadow-none data-[expanded]:bg-surface-raised-base-active disabled:!cursor-default"
+                            class="rounded-none h-full w-5 p-0 border-none shadow-none data-[expanded]:bg-surface-raised-base-active disabled:!cursor-default"
                             classList={{
                               "bg-surface-raised-base-active": opening(),
                             }}
@@ -522,7 +545,7 @@ export function SessionHeader() {
                     triggerProps={{
                       variant: "ghost",
                       class:
-                        "rounded-md h-[24px] px-3 border border-border-weak-base bg-surface-panel shadow-none data-[expanded]:bg-surface-base-active",
+                        "rounded-md h-[24px] px-2.5 border border-border-weak-base bg-surface-panel shadow-none data-[expanded]:bg-surface-base-active",
                       classList: {
                         "rounded-r-none": share.shareUrl() !== undefined,
                         "border-r-0": share.shareUrl() !== undefined,
@@ -611,15 +634,15 @@ export function SessionHeader() {
                   </Show>
                 </div>
               </Show>
-              <div class="flex items-center gap-1">
-                <div class="hidden md:flex items-center gap-1 shrink-0">
+              <div class="flex items-center gap-0.5">
+                <div class="hidden md:flex items-center gap-0.5 shrink-0">
                   <TooltipKeybind
                     title={language.t("command.terminal.toggle")}
                     keybind={command.keybind("terminal.toggle")}
                   >
                     <Button
                       variant="ghost"
-                      class="group/terminal-toggle titlebar-icon w-8 h-6 p-0 box-border"
+                      class="group/terminal-toggle titlebar-icon w-7 h-6 p-0 box-border"
                       onClick={() => view().terminal.toggle()}
                       aria-label={language.t("command.terminal.toggle")}
                       aria-expanded={view().terminal.opened()}
@@ -651,7 +674,7 @@ export function SessionHeader() {
                   >
                     <Button
                       variant="ghost"
-                      class="group/review-toggle titlebar-icon w-8 h-6 p-0 box-border"
+                      class="group/review-toggle titlebar-icon w-7 h-6 p-0 box-border"
                       onClick={() => view().reviewPanel.toggle()}
                       aria-label={language.t("command.review.toggle")}
                       aria-expanded={view().reviewPanel.opened()}
@@ -683,8 +706,8 @@ export function SessionHeader() {
                   >
                     <Button
                       variant="ghost"
-                      class="titlebar-icon w-8 h-6 p-0 box-border"
-                      onClick={() => layout.fileTree.toggle()}
+                      class="titlebar-icon w-7 h-6 p-0 box-border"
+                      onClick={toggleFileTree}
                       aria-label={language.t("command.fileTree.toggle")}
                       aria-expanded={layout.fileTree.opened()}
                       aria-controls="file-tree-panel"

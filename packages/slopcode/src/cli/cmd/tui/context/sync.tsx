@@ -18,6 +18,7 @@ import type {
   ProviderAuthMethod,
   VcsInfo,
 } from "@slopcode-ai/sdk/v2"
+import path from "path"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useSDK } from "@tui/context/sdk"
 import { Binary } from "@slopcode-ai/util/binary"
@@ -25,13 +26,76 @@ import { createSimpleContext } from "./helper"
 import type { Snapshot } from "@/snapshot"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { useKV } from "./kv"
+import { batch, createEffect, onMount } from "solid-js"
 import { Log } from "@/util/log"
 import type { Path } from "@slopcode-ai/sdk"
+
+type Delta = {
+  sessionID: string
+  messageID: string
+  partID: string
+  field: string
+  delta: string
+}
+
+const deltaKey = (input: Delta) => `${input.messageID}:${input.partID}:${input.field}`
+
+function mergeByID<T extends { id: string }>(saved: T[], live?: T[]) {
+  const by = new Map(saved.map((item) => [item.id, item]))
+  for (const item of live ?? []) {
+    by.set(item.id, item)
+  }
+  return Array.from(by.values()).toSorted((a, b) => a.id.localeCompare(b.id))
+}
+
+function applyDelta(part: Part, input: Delta) {
+  const data = part as Record<string, unknown>
+  const value = data[input.field]
+  if (typeof value === "string") {
+    data[input.field] = value + input.delta
+    return true
+  }
+  if (value === undefined) {
+    data[input.field] = input.delta
+    return true
+  }
+  return false
+}
 
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
   init: () => {
+    const empty = () => ({
+      provider_next: {
+        all: [],
+        default: {},
+        connected: [],
+      },
+      provider_auth: {},
+      config: {},
+      status: "loading" as const,
+      agent: [],
+      permission: {},
+      question: {},
+      command: [],
+      provider: [],
+      provider_default: {},
+      session: [],
+      session_status: {},
+      session_diff: {},
+      todo: {},
+      message: {},
+      part: {},
+      lsp: [],
+      mcp: {},
+      mcp_resource: {},
+      formatter: [],
+      vcs: undefined,
+      path: { state: "", config: "", worktree: "", directory: "" },
+      workspace_status: {},
+    })
+
     const [store, setStore] = createStore<{
       status: "loading" | "partial" | "complete"
       provider: Provider[]
@@ -73,40 +137,139 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       formatter: FormatterStatus[]
       vcs: VcsInfo | undefined
       path: Path
-    }>({
-      provider_next: {
-        all: [],
-        default: {},
-        connected: [],
-      },
-      provider_auth: {},
-      config: {},
-      status: "loading",
-      agent: [],
-      permission: {},
-      question: {},
-      command: [],
-      provider: [],
-      provider_default: {},
-      session: [],
-      session_status: {},
-      session_diff: {},
-      todo: {},
-      message: {},
-      part: {},
-      lsp: [],
-      mcp: {},
-      mcp_resource: {},
-      formatter: [],
-      vcs: undefined,
-      path: { state: "", config: "", worktree: "", directory: "" },
-    })
+      workspace_status: Record<string, "connected" | "connecting" | "disconnected" | "error">
+    }>(empty())
 
     const sdk = useSDK()
+    const kv = useKV()
+    const [autoaccept] = kv.signal<"none" | "edit">("permission_auto_accept", "edit")
+    const fullSyncedSessions = new Set<string>()
+    const delta = new Map<string, Delta>()
+
+    function remember(input: Delta) {
+      const key = deltaKey(input)
+      const prev = delta.get(key)
+      if (prev) {
+        prev.delta += input.delta
+        return
+      }
+      delta.set(key, { ...input })
+    }
+
+    function replay(messageID: string, parts: Part[] | undefined) {
+      if (!parts) return
+      for (const [key, item] of delta) {
+        if (item.messageID !== messageID) continue
+        const match = Binary.search(parts, item.partID, (part) => part.id)
+        if (!match.found) continue
+        const part = parts[match.index]
+        if (!part || !applyDelta(part, item)) continue
+        delta.delete(key)
+      }
+    }
+
+    function replayStore(messageID: string) {
+      if (!store.part[messageID]) return
+      setStore(
+        "part",
+        messageID,
+        produce((draft) => {
+          replay(messageID, draft)
+        }),
+      )
+    }
+
+    function groupPermission(list: PermissionRequest[]) {
+      return list.reduce<Record<string, PermissionRequest[]>>((acc, item) => {
+        ;(acc[item.sessionID] ??= []).push(item)
+        return acc
+      }, {})
+    }
+
+    function groupQuestion(list: QuestionRequest[]) {
+      return list.reduce<Record<string, QuestionRequest[]>>((acc, item) => {
+        ;(acc[item.sessionID] ??= []).push(item)
+        return acc
+      }, {})
+    }
+
+    function sessionListQuery(info: Path = store.path): { scope?: "project"; path?: string } {
+      if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
+      if (!info.worktree || !info.directory) return { scope: "project" }
+      const relative = path.relative(path.resolve(info.worktree), path.resolve(info.directory)).replaceAll("\\", "/")
+      if (relative.startsWith("../") || relative === "..") return { scope: "project" }
+      return {
+        path: relative,
+      }
+    }
+
+    function listSessions(info: Path = store.path) {
+      return sdk.client.session
+        .list({ start: Date.now() - 30 * 24 * 60 * 60 * 1000, ...sessionListQuery(info) })
+        .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
+    }
+
+    async function listWorkspaceStatus() {
+      const workspace = sdk.client.experimental.workspace as unknown as {
+        status(): Promise<{
+          data?: Array<{ workspaceID: string; status: "connected" | "connecting" | "disconnected" | "error" }>
+        }>
+      }
+      const result = await workspace.status().catch(() => ({ data: [] }))
+      return Object.fromEntries((result.data ?? []).map((item) => [item.workspaceID, item.status]))
+    }
+
+    async function syncSession(sessionID: string, force = false) {
+      if (!force && fullSyncedSessions.has(sessionID)) return
+      const [session, messages, todo, diff] = await Promise.all([
+        sdk.client.session.get({ sessionID }, { throwOnError: true }),
+        sdk.client.session.messages({ sessionID, limit: 100 }),
+        sdk.client.session.todo({ sessionID }),
+        sdk.client.session.diff({ sessionID }),
+      ])
+      setStore(
+        produce((draft) => {
+          const match = Binary.search(draft.session, sessionID, (s) => s.id)
+          if (match.found) draft.session[match.index] = session.data!
+          if (!match.found) draft.session.splice(match.index, 0, session.data!)
+          draft.todo[sessionID] = todo.data ?? []
+          const list = messages.data ?? []
+          draft.message[sessionID] = mergeByID(
+            list.map((item) => item.info),
+            draft.message[sessionID],
+          )
+          for (const message of list) {
+            draft.part[message.info.id] = mergeByID(message.parts, draft.part[message.info.id])
+            replay(message.info.id, draft.part[message.info.id])
+          }
+          draft.session_diff[sessionID] = diff.data ?? []
+        }),
+      )
+      fullSyncedSessions.add(sessionID)
+    }
+
+    async function refresh() {
+      const [permission, question, status, workspaceStatus] = await Promise.all([
+        sdk.client.permission.list().then((x) => x.data ?? []),
+        sdk.client.question.list().then((x) => x.data ?? []),
+        sdk.client.session.status().then((x) => x.data ?? {}),
+        listWorkspaceStatus(),
+      ])
+      batch(() => {
+        setStore("permission", reconcile(groupPermission(permission)))
+        setStore("question", reconcile(groupQuestion(question)))
+        setStore("session_status", reconcile(status))
+        setStore("workspace_status", reconcile(workspaceStatus))
+      })
+      await Promise.all(Object.keys(store.message).map((sessionID) => syncSession(sessionID, true)))
+    }
 
     sdk.event.listen((e) => {
       const event = e.details
       switch (event.type) {
+        case "server.connected":
+          void refresh()
+          break
         case "server.instance.disposed":
           bootstrap()
           break
@@ -127,6 +290,14 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
         case "permission.asked": {
           const request = event.properties
+          if (autoaccept() === "edit" && request.permission === "edit") {
+            sdk.client.permission.reply({
+              reply: "once",
+              requestID: request.id,
+              sessionID: request.sessionID,
+            })
+            break
+          }
           const requests = store.permission[request.sessionID]
           if (!requests) {
             setStore("permission", request.sessionID, [request])
@@ -282,11 +453,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const parts = store.part[event.properties.part.messageID]
           if (!parts) {
             setStore("part", event.properties.part.messageID, [event.properties.part])
+            replayStore(event.properties.part.messageID)
             break
           }
           const result = Binary.search(parts, event.properties.part.id, (p) => p.id)
           if (result.found) {
             setStore("part", event.properties.part.messageID, result.index, reconcile(event.properties.part))
+            replayStore(event.properties.part.messageID)
             break
           }
           setStore(
@@ -296,22 +469,29 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               draft.splice(result.index, 0, event.properties.part)
             }),
           )
+          replayStore(event.properties.part.messageID)
           break
         }
 
         case "message.part.delta": {
-          const parts = store.part[event.properties.messageID]
-          if (!parts) break
-          const result = Binary.search(parts, event.properties.partID, (p) => p.id)
-          if (!result.found) break
+          const input = event.properties
+          const parts = store.part[input.messageID]
+          if (!parts) {
+            remember(input)
+            break
+          }
+          const result = Binary.search(parts, input.partID, (p) => p.id)
+          if (!result.found) {
+            remember(input)
+            break
+          }
           setStore(
             "part",
-            event.properties.messageID,
+            input.messageID,
             produce((draft) => {
               const part = draft[result.index]
-              const field = event.properties.field as keyof typeof part
-              const existing = part[field] as string | undefined
-              ;(part[field] as string) = (existing ?? "") + event.properties.delta
+              if (!part || applyDelta(part, input)) return
+              remember(input)
             }),
           )
           break
@@ -346,92 +526,111 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const exit = useExit()
     const args = useArgs()
 
-    async function bootstrap() {
-      console.log("bootstrapping")
-      const start = Date.now() - 30 * 24 * 60 * 60 * 1000
-      const sessionListPromise = sdk.client.session
-        .list({ start: start })
-        .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
+    let bootstrapping: Promise<void> | undefined
+    function bootstrap() {
+      if (bootstrapping) return bootstrapping
+      bootstrapping = (async () => {
+        fullSyncedSessions.clear()
+        delta.clear()
+        setStore(reconcile(empty()))
+        const pathPromise = sdk.client.path.get().then((x) => x.data!)
+        const sessionListPromise = pathPromise.then((info) => listSessions(info))
 
-      // blocking - include session.list when continuing a session
-      const providersPromise = sdk.client.config.providers({}, { throwOnError: true })
-      const providerListPromise = sdk.client.provider.list({}, { throwOnError: true })
-      const agentsPromise = sdk.client.app.agents({}, { throwOnError: true })
-      const configPromise = sdk.client.config.get({}, { throwOnError: true })
-      const blockingRequests: Promise<unknown>[] = [
-        providersPromise,
-        providerListPromise,
-        agentsPromise,
-        configPromise,
-        ...(args.continue ? [sessionListPromise] : []),
-      ]
+        // blocking - include session.list when continuing a session
+        const providersPromise = sdk.client.config.providers({}, { throwOnError: true })
+        const providerListPromise = sdk.client.provider.list({}, { throwOnError: true })
+        const agentsPromise = sdk.client.app.agents({}, { throwOnError: true })
+        const configPromise = sdk.client.config.get({}, { throwOnError: true })
+        const blockingRequests: Promise<unknown>[] = [
+          providersPromise,
+          providerListPromise,
+          agentsPromise,
+          configPromise,
+          pathPromise,
+          ...(args.continue ? [sessionListPromise] : []),
+        ]
 
-      await Promise.all(blockingRequests)
-        .then(() => {
-          const providersResponse = providersPromise.then((x) => x.data!)
-          const providerListResponse = providerListPromise.then((x) => x.data!)
-          const agentsResponse = agentsPromise.then((x) => x.data ?? [])
-          const configResponse = configPromise.then((x) => x.data!)
-          const sessionListResponse = args.continue ? sessionListPromise : undefined
+        await Promise.all(blockingRequests)
+          .then(() => {
+            const providersResponse = providersPromise.then((x) => x.data!)
+            const providerListResponse = providerListPromise.then((x) => x.data!)
+            const agentsResponse = agentsPromise.then((x) => x.data ?? [])
+            const configResponse = configPromise.then((x) => x.data!)
+            const pathResponse = pathPromise
+            const sessionListResponse = args.continue ? sessionListPromise : undefined
 
-          return Promise.all([
-            providersResponse,
-            providerListResponse,
-            agentsResponse,
-            configResponse,
-            ...(sessionListResponse ? [sessionListResponse] : []),
-          ]).then((responses) => {
-            const providers = responses[0]
-            const providerList = responses[1]
-            const agents = responses[2]
-            const config = responses[3]
-            const sessions = responses[4]
+            return Promise.all([
+              providersResponse,
+              providerListResponse,
+              agentsResponse,
+              configResponse,
+              pathResponse,
+              ...(sessionListResponse ? [sessionListResponse] : []),
+            ]).then((responses) => {
+              const providers = responses[0]
+              const providerList = responses[1]
+              const agents = responses[2]
+              const config = responses[3]
+              const pathInfo = responses[4] as Path
+              const sessions = responses[5] as Session[] | undefined
 
-            batch(() => {
-              setStore("provider", reconcile(providers.providers))
-              setStore("provider_default", reconcile(providers.default))
-              setStore("provider_next", reconcile(providerList))
-              setStore("agent", reconcile(agents))
-              setStore("config", reconcile(config))
-              if (sessions !== undefined) setStore("session", reconcile(sessions))
+              batch(() => {
+                setStore("provider", reconcile(providers.providers))
+                setStore("provider_default", reconcile(providers.default))
+                setStore("provider_next", reconcile(providerList))
+                setStore("agent", reconcile(agents))
+                setStore("config", reconcile(config))
+                setStore("path", reconcile(pathInfo))
+                if (sessions !== undefined) setStore("session", reconcile(sessions))
+              })
             })
           })
-        })
-        .then(() => {
-          if (store.status !== "complete") setStore("status", "partial")
-          // non-blocking
-          Promise.all([
-            ...(args.continue ? [] : [sessionListPromise.then((sessions) => setStore("session", reconcile(sessions)))]),
-            sdk.client.command.list().then((x) => setStore("command", reconcile(x.data ?? []))),
-            sdk.client.lsp.status().then((x) => setStore("lsp", reconcile(x.data!))),
-            sdk.client.mcp.status().then((x) => setStore("mcp", reconcile(x.data!))),
-            sdk.client.experimental.resource.list().then((x) => setStore("mcp_resource", reconcile(x.data ?? {}))),
-            sdk.client.formatter.status().then((x) => setStore("formatter", reconcile(x.data!))),
-            sdk.client.session.status().then((x) => {
-              setStore("session_status", reconcile(x.data!))
-            }),
-            sdk.client.provider.auth().then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
-            sdk.client.vcs.get().then((x) => setStore("vcs", reconcile(x.data))),
-            sdk.client.path.get().then((x) => setStore("path", reconcile(x.data!))),
-          ]).then(() => {
-            setStore("status", "complete")
+          .then(() => {
+            if (store.status !== "complete") setStore("status", "partial")
+            // non-blocking
+            Promise.all([
+              ...(args.continue
+                ? []
+                : [sessionListPromise.then((sessions) => setStore("session", reconcile(sessions)))]),
+              refresh(),
+              sdk.client.command.list().then((x) => setStore("command", reconcile(x.data ?? []))),
+              sdk.client.lsp.status().then((x) => setStore("lsp", reconcile(x.data!))),
+              sdk.client.mcp.status().then((x) => setStore("mcp", reconcile(x.data!))),
+              sdk.client.experimental.resource.list().then((x) => setStore("mcp_resource", reconcile(x.data ?? {}))),
+              sdk.client.formatter.status().then((x) => setStore("formatter", reconcile(x.data!))),
+              sdk.client.provider.auth().then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
+              sdk.client.vcs.get().then((x) => setStore("vcs", reconcile(x.data))),
+            ]).then(() => {
+              setStore("status", "complete")
+            })
           })
-        })
-        .catch(async (e) => {
-          Log.Default.error("tui bootstrap failed", {
-            error: e instanceof Error ? e.message : String(e),
-            name: e instanceof Error ? e.name : undefined,
-            stack: e instanceof Error ? e.stack : undefined,
+          .catch(async (e) => {
+            Log.Default.error("tui bootstrap failed", {
+              error: e instanceof Error ? e.message : String(e),
+              name: e instanceof Error ? e.name : undefined,
+              stack: e instanceof Error ? e.stack : undefined,
+            })
+            await exit(e)
           })
-          await exit(e)
-        })
+      })().finally(() => {
+        bootstrapping = undefined
+      })
+      return bootstrapping
     }
 
+    let scope = sdk.workspaceID
+
     onMount(() => {
-      bootstrap()
+      void bootstrap()
     })
 
-    const fullSyncedSessions = new Set<string>()
+    createEffect(() => {
+      const next = sdk.workspaceID
+      if (next === scope) return
+      scope = next
+      void bootstrap()
+    })
+
     const result = {
       data: store,
       set: setStore,
@@ -441,11 +640,19 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       get ready() {
         return store.status !== "loading"
       },
+
       session: {
         get(sessionID: string) {
           const match = Binary.search(store.session, sessionID, (s) => s.id)
           if (match.found) return store.session[match.index]
           return undefined
+        },
+        query() {
+          return sessionListQuery()
+        },
+        async refresh() {
+          const list = await listSessions()
+          setStore("session", reconcile(list))
         },
         status(sessionID: string) {
           const session = result.session.get(sessionID)
@@ -457,28 +664,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           if (last.role === "user") return "working"
           return last.time.completed ? "idle" : "working"
         },
-        async sync(sessionID: string) {
-          if (fullSyncedSessions.has(sessionID)) return
-          const [session, messages, todo, diff] = await Promise.all([
-            sdk.client.session.get({ sessionID }, { throwOnError: true }),
-            sdk.client.session.messages({ sessionID, limit: 100 }),
-            sdk.client.session.todo({ sessionID }),
-            sdk.client.session.diff({ sessionID }),
-          ])
-          setStore(
-            produce((draft) => {
-              const match = Binary.search(draft.session, sessionID, (s) => s.id)
-              if (match.found) draft.session[match.index] = session.data!
-              if (!match.found) draft.session.splice(match.index, 0, session.data!)
-              draft.todo[sessionID] = todo.data ?? []
-              draft.message[sessionID] = messages.data!.map((x) => x.info)
-              for (const message of messages.data!) {
-                draft.part[message.info.id] = message.parts
-              }
-              draft.session_diff[sessionID] = diff.data ?? []
-            }),
-          )
-          fullSyncedSessions.add(sessionID)
+        async sync(sessionID: string, force = false) {
+          await syncSession(sessionID, force)
         },
       },
       bootstrap,

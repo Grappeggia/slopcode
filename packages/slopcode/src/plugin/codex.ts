@@ -4,6 +4,7 @@ import { Installation } from "../installation"
 import { Auth, OAUTH_DUMMY_KEY } from "../auth"
 import os from "os"
 import { ProviderTransform } from "@/provider/transform"
+import { setTimeout as sleep } from "node:timers/promises"
 
 const log = Log.create({ service: "plugin.codex" })
 
@@ -12,6 +13,27 @@ const ISSUER = "https://auth.openai.com"
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 const OAUTH_PORT = 1455
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000
+
+export const OAUTH_ALLOWED_MODELS = new Set([
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-max",
+  "gpt-5.1-codex-mini",
+  "gpt-5.2",
+  "gpt-5.2-codex",
+  "gpt-5.3-codex",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.5",
+  "gpt-5.5-pro",
+])
+
+const CODEX_MODEL_LIMIT = { context: 400_000, input: 272_000, output: 128_000 }
+const CODEX_LIMIT_MODELS = new Set(["gpt-5.5", "gpt-5.5-pro"])
+
+export function getCodexSessionID(sessionID: string, version: number) {
+  if (version === 0) return sessionID
+  return `${sessionID}-compact-${version}`
+}
 
 interface PkceCodes {
   verifier: string
@@ -349,6 +371,9 @@ function waitForOAuthCallback(pkce: PkceCodes, state: string): Promise<TokenResp
 }
 
 export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
+  const sessions = new Map<string, number>()
+  const version = (sessionID: string) => sessions.get(sessionID) ?? 0
+
   return {
     auth: {
       provider: "openai",
@@ -357,18 +382,16 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
         if (auth.type !== "oauth") return {}
 
         // Filter models to only allowed Codex models for OAuth
-        const allowedModels = new Set([
-          "gpt-5.1-codex-max",
-          "gpt-5.1-codex-mini",
-          "gpt-5.2",
-          "gpt-5.2-codex",
-          "gpt-5.3-codex",
-          "gpt-5.1-codex",
-        ])
         for (const modelId of Object.keys(provider.models)) {
           if (modelId.includes("codex")) continue
-          if (allowedModels.has(modelId)) continue
+          if (OAUTH_ALLOWED_MODELS.has(modelId)) continue
           delete provider.models[modelId]
+        }
+
+        for (const id of CODEX_LIMIT_MODELS) {
+          const model = provider.models[id]
+          if (!model) continue
+          model.limit = { ...CODEX_MODEL_LIMIT }
         }
 
         if (!provider.models["gpt-5.3-codex"]) {
@@ -602,7 +625,7 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
                     return { type: "failed" as const }
                   }
 
-                  await Bun.sleep(interval + OAUTH_POLLING_SAFETY_MARGIN_MS)
+                  await sleep(interval + OAUTH_POLLING_SAFETY_MARGIN_MS)
                 }
               },
             }
@@ -614,11 +637,24 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
         },
       ],
     },
+    event: async (input) => {
+      if (input.event.type !== "session.compacted") return
+      const sessionID = input.event.properties.sessionID
+      sessions.set(sessionID, version(sessionID) + 1)
+    },
+    "chat.params": async (input, output) => {
+      if (input.model.providerID !== "openai") return
+      const auth = await Auth.get("openai")
+      if (auth?.type !== "oauth") return
+      output.options.promptCacheKey = getCodexSessionID(input.sessionID, version(input.sessionID))
+    },
     "chat.headers": async (input, output) => {
       if (input.model.providerID !== "openai") return
       output.headers.originator = "slopcode"
       output.headers["User-Agent"] = `slopcode/${Installation.VERSION} (${os.platform()} ${os.release()}; ${os.arch()})`
-      output.headers.session_id = input.sessionID
+      const auth = await Auth.get("openai")
+      output.headers.session_id =
+        auth?.type === "oauth" ? getCodexSessionID(input.sessionID, version(input.sessionID)) : input.sessionID
     },
   }
 }

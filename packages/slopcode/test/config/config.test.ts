@@ -1,8 +1,12 @@
 import { test, expect, describe, mock, afterEach } from "bun:test"
 import { Config } from "../../src/config/config"
+import { ConfigPlugin } from "../../src/config/plugin"
 import { Instance } from "../../src/project/instance"
 import { Auth } from "../../src/auth"
+import { AccountStateTable, AccountTable } from "../../src/account/account.sql"
+import { Database } from "../../src/storage/db"
 import { tmpdir } from "../fixture/fixture"
+import { resetDatabase } from "../fixture/db"
 import path from "path"
 import fs from "fs/promises"
 import { pathToFileURL } from "url"
@@ -14,10 +18,21 @@ const managedConfigDir = process.env.SLOPCODE_TEST_MANAGED_CONFIG_DIR!
 const legacyGlobalConfigDir = path.join(path.dirname(Global.Path.config), "opencode")
 
 afterEach(async () => {
+  Config.global.reset()
   await fs.rm(managedConfigDir, { force: true, recursive: true }).catch(() => {})
-  for (const file of ["opencode.json", "opencode.jsonc", "slopcode.json", "slopcode.jsonc", "config.json", "config"]) {
-    await fs.rm(path.join(legacyGlobalConfigDir, file), { force: true }).catch(() => {})
+  for (const dir of [legacyGlobalConfigDir, Global.Path.config]) {
+    for (const file of [
+      "opencode.json",
+      "opencode.jsonc",
+      "slopcode.json",
+      "slopcode.jsonc",
+      "config.json",
+      "config",
+    ]) {
+      await fs.rm(path.join(dir, file), { force: true }).catch(() => {})
+    }
   }
+  await resetDatabase()
 })
 
 async function writeManagedSettings(settings: object, filename = "slopcode.json") {
@@ -36,6 +51,7 @@ test("loads config with defaults when no files exist", async () => {
     fn: async () => {
       const config = await Config.get()
       expect(config.username).toBeDefined()
+      expect(config.session?.turn_timeout_ms).toBe(Config.DEFAULT_SESSION_TURN_TIMEOUT)
     },
   })
 })
@@ -171,6 +187,55 @@ test("loads legacy global opencode config directory", async () => {
   })
 })
 
+test("writes global updates to slopcode config without mutating legacy opencode config", async () => {
+  await using tmp = await tmpdir({
+    init: async () => {
+      for (const file of ["slopcode.jsonc", "slopcode.json", "config.json", "opencode.json", "opencode.jsonc"]) {
+        await fs.rm(path.join(Global.Path.config, file), { force: true }).catch(() => {})
+      }
+      await fs.mkdir(legacyGlobalConfigDir, { recursive: true })
+      await Filesystem.write(
+        path.join(legacyGlobalConfigDir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          model: "global/legacy",
+          username: "global-legacy-user",
+        }),
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      Config.global.reset()
+      const legacyPath = path.join(legacyGlobalConfigDir, "opencode.json")
+      const legacyBefore = await Filesystem.readText(legacyPath)
+
+      await Config.updateGlobal({
+        autocomplete: {
+          provider_model_overrides: {
+            openai: "codex-mini-latest",
+          },
+        },
+      })
+
+      const legacyAfter = await Filesystem.readText(legacyPath)
+      expect(legacyAfter).toBe(legacyBefore)
+
+      const modernPath = path.join(Global.Path.config, "slopcode.jsonc")
+      expect(await Filesystem.exists(modernPath)).toBe(true)
+
+      const modern = JSON.parse(await Filesystem.readText(modernPath))
+      expect(modern.autocomplete?.provider_model_overrides?.openai).toBe("codex-mini-latest")
+
+      const global = await Config.getGlobal()
+      expect(global.model).toBe("global/legacy")
+      expect(global.autocomplete?.provider_model_overrides?.openai).toBe("codex-mini-latest")
+    },
+  })
+})
+
 test("ignores legacy tui keys in slopcode config", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -215,6 +280,82 @@ test("loads JSONC config file", async () => {
       expect(config.username).toBe("testuser")
     },
   })
+})
+
+test("parses experimental.hashline_edit and experimental.hashline_autocorrect", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await writeConfig(dir, {
+        $schema: "https://opencode.ai/config.json",
+        experimental: {
+          hashline_edit: true,
+          hashline_autocorrect: true,
+        },
+      })
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.experimental?.hashline_edit).toBe(true)
+      expect(config.experimental?.hashline_autocorrect).toBe(true)
+    },
+  })
+})
+
+test("defaults queue_mode to serial and accepts explicit override", async () => {
+  await using defaults = await tmpdir({
+    init: async (dir) => {
+      await writeConfig(dir, {
+        $schema: "https://slopcode.dev/config.json",
+      })
+    },
+  })
+  await Instance.provide({
+    directory: defaults.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.queue_mode).toBe("serial")
+    },
+  })
+
+  await using injection = await tmpdir({
+    init: async (dir) => {
+      await writeConfig(dir, {
+        $schema: "https://slopcode.dev/config.json",
+        queue_mode: "injection",
+      })
+    },
+  })
+  await Instance.provide({
+    directory: injection.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.queue_mode).toBe("injection")
+    },
+  })
+})
+
+test("rejects invalid queue_mode", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Filesystem.write(
+        path.join(dir, "slopcode.json"),
+        JSON.stringify({
+          $schema: "https://slopcode.dev/config.json",
+          queue_mode: "parallel",
+        }),
+      )
+    },
+  })
+
+  await expect(
+    Instance.provide({
+      directory: tmp.path,
+      fn: async () => Config.get(),
+    }),
+  ).rejects.toThrow(/ConfigInvalidError/)
 })
 
 test("merges multiple config files with correct precedence", async () => {
@@ -1650,6 +1791,62 @@ test("project config overrides remote well-known config", async () => {
   }
 })
 
+test("loads remote config from the active org account", async () => {
+  Database.use((db) => {
+    db.insert(AccountTable)
+      .values({
+        id: "acc-1",
+        email: "dev@example.com",
+        url: "https://console.example.com",
+        access_token: "access-1",
+        refresh_token: "refresh-1",
+        token_expiry: Date.now() + 10 * 60_000,
+        time_created: 1,
+        time_updated: 1,
+      })
+      .run()
+    db.insert(AccountStateTable)
+      .values({
+        id: 1,
+        active_account_id: "acc-1",
+        active_org_id: "org-1",
+      })
+      .run()
+  })
+
+  let fetched = false
+  const originalFetch = globalThis.fetch
+  const mockFetch = mock((input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input.toString())
+    if (url.pathname === "/api/orgs") {
+      return Promise.resolve(new Response(JSON.stringify([{ id: "org-1", name: "Acme" }]), { status: 200 }))
+    }
+    if (url.pathname === "/api/config") {
+      fetched = true
+      expect(new Headers(init?.headers).get("x-org-id")).toBe("org-1")
+      return Promise.resolve(
+        new Response(JSON.stringify({ config: { instructions: ["remote-instruction-123"] } }), { status: 200 }),
+      )
+    }
+    return Promise.resolve(new Response("not found", { status: 404 }))
+  })
+  globalThis.fetch = mockFetch as unknown as typeof fetch
+
+  try {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const config = await Config.get()
+        expect(fetched).toBe(true)
+        expect(config.instructions).toContain("remote-instruction-123")
+      },
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 describe("getPluginName", () => {
   test("extracts name from file:// URL", () => {
     expect(Config.getPluginName("file:///path/to/plugin/foo.js")).toBe("foo")
@@ -1732,7 +1929,7 @@ describe("deduplicatePlugins", () => {
 
         const myPlugins = plugins.filter((p) => Config.getPluginName(p) === "my-plugin")
         expect(myPlugins.length).toBe(1)
-        expect(myPlugins[0].startsWith("file://")).toBe(true)
+        expect(ConfigPlugin.pluginSpecifier(myPlugins[0]!).startsWith("file://")).toBe(true)
       },
     })
   })

@@ -1,36 +1,35 @@
-import { onCleanup, Show, Match, Switch, createMemo, createEffect, on, onMount } from "solid-js"
-import { createMediaQuery } from "@solid-primitives/media"
-import { createResizeObserver } from "@solid-primitives/resize-observer"
-import { useLocal } from "@/context/local"
-import { selectionFromLines, useFile, type FileSelection, type SelectedLineRange } from "@/context/file"
-import { createStore } from "solid-js/store"
-import { ResizeHandle } from "@slopcode-ai/ui/resize-handle"
-import { Select } from "@slopcode-ai/ui/select"
+import type { UserMessage } from "@slopcode-ai/sdk/v2"
+import { useDialog } from "@slopcode-ai/ui/context/dialog"
 import { createAutoScroll } from "@slopcode-ai/ui/hooks"
 import { Mark } from "@slopcode-ai/ui/logo"
-
-import { useSync } from "@/context/sync"
-import { useLayout } from "@/context/layout"
-import { checksum, base64Encode } from "@slopcode-ai/util/encode"
-import { useDialog } from "@slopcode-ai/ui/context/dialog"
-import { useLanguage } from "@/context/language"
-import { useNavigate, useParams } from "@solidjs/router"
-import { UserMessage } from "@slopcode-ai/sdk/v2"
-import { useSDK } from "@/context/sdk"
-import { usePrompt } from "@/context/prompt"
+import { ResizeHandle } from "@slopcode-ai/ui/resize-handle"
+import { Select } from "@slopcode-ai/ui/select"
+import { base64Encode, checksum } from "@slopcode-ai/util/encode"
+import { createMediaQuery } from "@solid-primitives/media"
+import { createResizeObserver } from "@solid-primitives/resize-observer"
+import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
+import { createEffect, createMemo, Match, on, onCleanup, onMount, Show, Switch, untrack } from "solid-js"
+import { createStore } from "solid-js/store"
+import { NewSessionView, SessionHeader } from "@/components/session"
 import { useComments } from "@/context/comments"
-import { SessionHeader, NewSessionView } from "@/components/session"
-import { same } from "@/utils/same"
+import { type FileSelection, type SelectedLineRange, selectionFromLines, useFile } from "@/context/file"
+import { useLanguage } from "@/context/language"
+import { SESSION_SIDE_PANEL_RAIL_WIDTH, useLayout } from "@/context/layout"
+import { useLocal } from "@/context/local"
+import { usePrompt } from "@/context/prompt"
+import { useSDK } from "@/context/sdk"
+import { useSync } from "@/context/sync"
+import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
 import { createOpenReviewFile } from "@/pages/session/helpers"
-import { createScrollSpy } from "@/pages/session/scroll-spy"
-import { SessionReviewTab, type DiffStyle, type SessionReviewTabProps } from "@/pages/session/review-tab"
-import { TerminalPanel } from "@/pages/session/terminal-panel"
 import { MessageTimeline } from "@/pages/session/message-timeline"
-import { useSessionCommands } from "@/pages/session/use-session-commands"
-import { SessionComposerRegion, createSessionComposerState } from "@/pages/session/composer"
+import { type DiffStyle, SessionReviewTab, type SessionReviewTabProps } from "@/pages/session/review-tab"
+import { createScrollSpy } from "@/pages/session/scroll-spy"
 import { SessionMobileTabs } from "@/pages/session/session-mobile-tabs"
 import { SessionSidePanel } from "@/pages/session/session-side-panel"
+import { TerminalPanel } from "@/pages/session/terminal-panel"
+import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
+import { same } from "@/utils/same"
 
 export default function Page() {
   const layout = useLayout()
@@ -44,6 +43,19 @@ export default function Page() {
   const sdk = useSDK()
   const prompt = usePrompt()
   const comments = useComments()
+  const [searchParams, setSearchParams] = useSearchParams<{ prompt?: string }>()
+
+  createEffect(() => {
+    if (!untrack(() => prompt.ready())) return
+    prompt.ready()
+    untrack(() => {
+      if (params.id || !prompt.ready()) return
+      const text = searchParams.prompt
+      if (!text) return
+      prompt.set([{ type: "text", content: text, start: 0, end: text.length }], text.length)
+      setSearchParams({ ...searchParams, prompt: undefined })
+    })
+  })
 
   const [ui, setUi] = createStore({
     pendingMessage: undefined as string | undefined,
@@ -99,11 +111,16 @@ export default function Page() {
   )
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
-  const desktopReviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
-  const desktopFileTreeOpen = createMemo(() => isDesktop() && layout.fileTree.opened())
-  const desktopSidePanelOpen = createMemo(() => desktopReviewOpen() || desktopFileTreeOpen())
+  const desktopSidePanelOpen = createMemo(
+    () => isDesktop() && (view().reviewPanel.opened() || layout.fileTree.opened()),
+  )
+  const desktopSidePanelCollapsed = createMemo(() => desktopSidePanelOpen() && view().sidePanel.collapsed())
+  const desktopReviewOpen = createMemo(
+    () => desktopSidePanelOpen() && !desktopSidePanelCollapsed() && view().reviewPanel.opened(),
+  )
   const sessionPanelWidth = createMemo(() => {
     if (!desktopSidePanelOpen()) return "100%"
+    if (desktopSidePanelCollapsed()) return `calc(100% - ${SESSION_SIDE_PANEL_RAIL_WIDTH}px)`
     if (desktopReviewOpen()) return `${layout.session.width()}px`
     return `calc(100% - ${layout.fileTree.width()}px)`
   })
@@ -210,20 +227,16 @@ export default function Page() {
   )
 
   const [store, setStore] = createStore({
-    messageId: undefined as string | undefined,
-    turnStart: 0,
-    mobileTab: "session" as "session" | "changes",
-    changes: "session" as "session" | "turn",
     newSessionWorktree: "main",
   })
 
   const turnDiffs = createMemo(() => lastUserMessage()?.summary?.diffs ?? [])
-  const reviewDiffs = createMemo(() => (store.changes === "session" ? diffs() : turnDiffs()))
+  const reviewDiffs = createMemo(() => (view().changes() === "session" ? diffs() : turnDiffs()))
 
   const renderedUserMessages = createMemo(
     () => {
       const msgs = visibleUserMessages()
-      const start = store.turnStart
+      const start = view().turnStart()
       if (start <= 0) return msgs
       if (start >= msgs.length) return emptyUserMessages
       return msgs.slice(start)
@@ -242,19 +255,19 @@ export default function Page() {
   })
 
   const activeMessage = createMemo(() => {
-    if (!store.messageId) return lastUserMessage()
-    const found = visibleUserMessages()?.find((m) => m.id === store.messageId)
+    if (!view().messageId()) return lastUserMessage()
+    const found = visibleUserMessages()?.find((m) => m.id === view().messageId())
     return found ?? lastUserMessage()
   })
   const setActiveMessage = (message: UserMessage | undefined) => {
-    setStore("messageId", message?.id)
+    view().setMessageId(message?.id)
   }
 
   function navigateMessageByOffset(offset: number) {
     const msgs = visibleUserMessages()
     if (msgs.length === 0) return
 
-    const current = store.messageId
+    const current = view().messageId()
     const base = current ? msgs.findIndex((m) => m.id === current) : msgs.length
     const currentIndex = base === -1 ? msgs.length : base
     const targetIndex = currentIndex + offset
@@ -315,7 +328,7 @@ export default function Page() {
       () => visibleUserMessages().at(-1)?.id,
       (lastId, prevLastId) => {
         if (lastId && prevLastId && lastId > prevLastId) {
-          setStore("messageId", undefined)
+          view().setMessageId(undefined)
         }
       },
       { defer: true },
@@ -325,9 +338,10 @@ export default function Page() {
   createEffect(
     on(
       sessionKey,
-      () => {
-        setStore("messageId", undefined)
-        setStore("changes", "session")
+      (_, prev) => {
+        if (!prev) return
+        view().setMessageId(undefined)
+        view().setChanges("session")
       },
       { defer: true },
     ),
@@ -462,7 +476,7 @@ export default function Page() {
       .filter((tab) => tab !== "context" && tab !== "review"),
   )
 
-  const mobileChanges = createMemo(() => !isDesktop() && store.mobileTab === "changes")
+  const mobileChanges = createMemo(() => !isDesktop() && view().mobileTab() === "changes")
   const reviewTab = createMemo(() => isDesktop())
 
   const fileTreeTab = () => layout.fileTree.tab()
@@ -478,7 +492,11 @@ export default function Page() {
     on(
       sessionKey,
       () => {
-        setTree({ reviewScroll: undefined, pendingDiff: undefined, activeDiff: undefined })
+        setTree({
+          reviewScroll: undefined,
+          pendingDiff: undefined,
+          activeDiff: undefined,
+        })
       },
       { defer: true },
     ),
@@ -510,11 +528,11 @@ export default function Page() {
   const changesTitle = () => (
     <Select
       options={changesOptionsList}
-      current={store.changes}
+      current={view().changes()}
       label={(option) =>
         option === "session" ? language.t("ui.sessionReview.title") : language.t("ui.sessionReview.title.lastTurn")
       }
-      onSelect={(option) => option && setStore("changes", option)}
+      onSelect={(option) => option && view().setChanges(option)}
       variant="ghost"
       size="small"
       valueClass="text-14-medium"
@@ -536,7 +554,7 @@ export default function Page() {
     emptyClass: string
   }) => (
     <Switch>
-      <Match when={store.changes === "turn" && !!params.id}>
+      <Match when={view().changes() === "turn" && !!params.id}>
         <SessionReviewTab
           title={changesTitle()}
           empty={emptyTurn()}
@@ -586,7 +604,7 @@ export default function Page() {
         <SessionReviewTab
           title={changesTitle()}
           empty={
-            store.changes === "turn" ? (
+            view().changes() === "turn" ? (
               emptyTurn()
             ) : (
               <div class={input.emptyClass}>
@@ -766,13 +784,9 @@ export default function Page() {
   createEffect(() => {
     const id = params.id
     if (!id) return
-
-    const wants = isDesktop()
-      ? desktopFileTreeOpen() || (desktopReviewOpen() && activeTab() === "review")
-      : store.mobileTab === "changes"
-    if (!wants) return
-    if (sync.data.session_diff[id] !== undefined) return
+    if (!hasReview()) return
     if (sync.status === "loading") return
+    if (sync.session.diffComplete(id)) return
 
     void sync.session.diff(id)
   })
@@ -815,8 +829,8 @@ export default function Page() {
   let scrollStateTarget: HTMLDivElement | undefined
   const scrollSpy = createScrollSpy({
     onActive: (id) => {
-      if (id === store.messageId) return
-      setStore("messageId", id)
+      if (id === view().messageId()) return
+      view().setMessageId(id)
     },
   })
 
@@ -845,7 +859,7 @@ export default function Page() {
   }
 
   const resumeScroll = () => {
-    setStore("messageId", undefined)
+    view().setMessageId(undefined)
     autoScroll.forceScrollToBottom()
     clearMessageHash()
 
@@ -859,7 +873,7 @@ export default function Page() {
       autoScroll.userScrolled,
       (scrolled) => {
         if (scrolled) return
-        setStore("messageId", undefined)
+        view().setMessageId(undefined)
         clearMessageHash()
       },
       { defer: true },
@@ -914,7 +928,7 @@ export default function Page() {
 
   function scheduleTurnBackfill() {
     if (turnHandle !== undefined) return
-    if (store.turnStart <= 0) return
+    if (view().turnStart() <= 0) return
 
     if (window.requestIdleCallback) {
       turnIdle = true
@@ -933,7 +947,7 @@ export default function Page() {
   }
 
   function backfillTurns() {
-    const start = store.turnStart
+    const start = view().turnStart()
     if (start <= 0) return
 
     const next = start - turnBatch
@@ -941,7 +955,7 @@ export default function Page() {
 
     const el = scroller
     if (!el) {
-      setStore("turnStart", nextStart)
+      view().setTurnStart(nextStart)
       scheduleTurnBackfill()
       return
     }
@@ -949,7 +963,7 @@ export default function Page() {
     const beforeTop = el.scrollTop
     const beforeHeight = el.scrollHeight
 
-    setStore("turnStart", nextStart)
+    view().setTurnStart(nextStart)
 
     requestAnimationFrame(() => {
       const delta = el.scrollHeight - beforeHeight
@@ -962,15 +976,18 @@ export default function Page() {
 
   createEffect(
     on(
-      () => [params.id, messagesReady()] as const,
-      ([id, ready]) => {
+      () => [params.id, messagesReady(), view().hasTurnStart()] as const,
+      ([id, ready, hasTurnStart]) => {
         cancelTurnBackfill()
-        setStore("turnStart", 0)
         if (!id || !ready) return
+        if (hasTurnStart) {
+          scheduleTurnBackfill()
+          return
+        }
 
         const len = visibleUserMessages().length
         const start = len > turnInit ? len - turnInit : 0
-        setStore("turnStart", start)
+        view().setTurnStart(start)
         scheduleTurnBackfill()
       },
       { defer: true },
@@ -1002,12 +1019,12 @@ export default function Page() {
     sessionID: () => params.id,
     messagesReady,
     visibleUserMessages,
-    turnStart: () => store.turnStart,
-    currentMessageId: () => store.messageId,
+    turnStart: () => view().turnStart(),
+    currentMessageId: () => view().messageId(),
     pendingMessage: () => ui.pendingMessage,
     setPendingMessage: (value) => setUi("pendingMessage", value),
     setActiveMessage,
-    setTurnStart: (value) => setStore("turnStart", value),
+    setTurnStart: (value) => view().setTurnStart(value),
     scheduleTurnBackfill,
     autoScroll,
     scroller: () => scroller,
@@ -1033,11 +1050,11 @@ export default function Page() {
       <div class="flex-1 min-h-0 flex flex-col md:flex-row">
         <SessionMobileTabs
           open={!isDesktop() && !!params.id}
-          mobileTab={store.mobileTab}
+          mobileTab={view().mobileTab()}
           hasReview={hasReview()}
           reviewCount={reviewCount()}
-          onSession={() => setStore("mobileTab", "session")}
-          onChanges={() => setStore("mobileTab", "changes")}
+          onSession={() => view().setMobileTab("session")}
+          onChanges={() => view().setMobileTab("changes")}
         />
 
         {/* Session panel */}
@@ -1085,14 +1102,14 @@ export default function Page() {
                       const root = scroller
                       if (root) scheduleScrollState(root)
                     }}
-                    turnStart={store.turnStart}
-                    onRenderEarlier={() => setStore("turnStart", 0)}
+                    turnStart={view().turnStart()}
+                    onRenderEarlier={() => view().setTurnStart(0)}
                     historyMore={historyMore()}
                     historyLoading={historyLoading()}
                     onLoadEarlier={() => {
                       const id = params.id
                       if (!id) return
-                      setStore("turnStart", 0)
+                      view().setTurnStart(0)
                       sync.session.history.loadMore(id)
                     }}
                     renderedUserMessages={renderedUserMessages()}

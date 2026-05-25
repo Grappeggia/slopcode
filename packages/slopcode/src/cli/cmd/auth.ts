@@ -13,16 +13,41 @@ import { Instance } from "../../project/instance"
 import type { Hooks } from "@slopcode-ai/plugin"
 import { Process } from "../../util/process"
 import { text } from "node:stream/consumers"
+import { setTimeout as sleep } from "node:timers/promises"
 
 type PluginAuth = NonNullable<Hooks["auth"]>
+
+const extraProviders = {
+  "brave-search": {
+    name: "Brave Search",
+    hint: "web search tool",
+    env: ["BRAVE_SEARCH_API_KEY"],
+    url: "https://api.search.brave.com/app/keys",
+  },
+} as const
+
+function providerName(provider: string, database: Record<string, { name?: string }>) {
+  return database[provider]?.name || extraProviders[provider as keyof typeof extraProviders]?.name || provider
+}
 
 /**
  * Handle plugin-based authentication flow.
  * Returns true if auth was handled, false if it should fall through to default handling.
  */
-async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string): Promise<boolean> {
+async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, methodName?: string): Promise<boolean> {
   let index = 0
-  if (plugin.auth.methods.length > 1) {
+  if (methodName) {
+    const match = plugin.auth.methods.findIndex((x) => x.label.toLowerCase() === methodName.toLowerCase())
+    if (match === -1) {
+      prompts.log.error(
+        `Unknown method "${methodName}" for ${provider}. Available: ${plugin.auth.methods.map((x) => x.label).join(", ")}`,
+      )
+      process.exit(1)
+    }
+    index = match
+  }
+
+  if (!methodName && plugin.auth.methods.length > 1) {
     const method = await prompts.select({
       message: "Login method",
       options: [
@@ -35,16 +60,24 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string):
     if (prompts.isCancel(method)) throw new UI.CancelledError()
     index = parseInt(method)
   }
+
   const method = plugin.auth.methods[index]
 
   // Handle prompts for all auth types
-  await Bun.sleep(10)
+  await sleep(10)
   const inputs: Record<string, string> = {}
   if (method.prompts) {
     for (const prompt of method.prompts) {
-      if (prompt.condition && !prompt.condition(inputs)) {
-        continue
+      const when = ("when" in prompt ? prompt.when : undefined) as
+        | { key: string; op: "eq" | "neq"; value: string }
+        | undefined
+      if (when) {
+        const value = inputs[when.key]
+        if (value === undefined) continue
+        const matches = when.op === "eq" ? value === when.value : value !== when.value
+        if (!matches) continue
       }
+      if (prompt.condition && !prompt.condition(inputs)) continue
       if (prompt.type === "select") {
         const value = await prompts.select({
           message: prompt.message,
@@ -201,6 +234,14 @@ export const AuthCommand = cmd({
   async handler() {},
 })
 
+export const ProvidersCommand = cmd({
+  command: "providers",
+  describe: "manage AI providers and credentials",
+  builder: (yargs) =>
+    yargs.command(AuthListCommand).command(AuthLoginCommand).command(AuthLogoutCommand).demandCommand(),
+  async handler() {},
+})
+
 export const AuthListCommand = cmd({
   command: "list",
   aliases: ["ls"],
@@ -215,8 +256,7 @@ export const AuthListCommand = cmd({
     const database = await ModelsDev.get()
 
     for (const [providerID, result] of results) {
-      const name = database[providerID]?.name || providerID
-      prompts.log.info(`${name} ${UI.Style.TEXT_DIM}${result.type}`)
+      prompts.log.info(`${providerName(providerID, database)} ${UI.Style.TEXT_DIM}${result.type}`)
     }
 
     prompts.outro(`${results.length} credentials`)
@@ -225,6 +265,17 @@ export const AuthListCommand = cmd({
     const activeEnvVars: Array<{ provider: string; envVar: string }> = []
 
     for (const [providerID, provider] of Object.entries(database)) {
+      for (const envVar of provider.env) {
+        if (process.env[envVar]) {
+          activeEnvVars.push({
+            provider: provider.name || providerID,
+            envVar,
+          })
+        }
+      }
+    }
+
+    for (const [providerID, provider] of Object.entries(extraProviders)) {
       for (const envVar of provider.env) {
         if (process.env[envVar]) {
           activeEnvVars.push({
@@ -252,10 +303,21 @@ export const AuthLoginCommand = cmd({
   command: "login [url]",
   describe: "log in to a provider",
   builder: (yargs) =>
-    yargs.positional("url", {
-      describe: "slopcode auth provider",
-      type: "string",
-    }),
+    yargs
+      .positional("url", {
+        describe: "slopcode auth provider",
+        type: "string",
+      })
+      .option("provider", {
+        alias: ["p"],
+        describe: "provider id or name to log in to (skips provider selection)",
+        type: "string",
+      })
+      .option("method", {
+        alias: ["m"],
+        describe: "login method label (skips method selection)",
+        type: "string",
+      }),
   async handler(args) {
     await Instance.provide({
       directory: process.cwd(),
@@ -263,7 +325,8 @@ export const AuthLoginCommand = cmd({
         UI.empty()
         prompts.intro("Add credential")
         if (args.url) {
-          const wellknown = await fetch(`${args.url}/.well-known/slopcode`).then((x) => x.json() as any)
+          const url = args.url.replace(/\/+$/, "")
+          const wellknown = await fetch(`${url}/.well-known/slopcode`).then((x) => x.json() as any)
           prompts.log.info(`Running \`${wellknown.auth.command.join(" ")}\``)
           const proc = Process.spawn(wellknown.auth.command, {
             stdout: "pipe",
@@ -279,12 +342,12 @@ export const AuthLoginCommand = cmd({
             prompts.outro("Done")
             return
           }
-          await Auth.set(args.url, {
+          await Auth.set(url, {
             type: "wellknown",
             key: wellknown.auth.env,
             token: token.trim(),
           })
-          prompts.log.success("Logged into " + args.url)
+          prompts.log.success("Logged into " + url)
           prompts.outro("Done")
           return
         }
@@ -321,60 +384,80 @@ export const AuthLoginCommand = cmd({
           enabled,
           providerNames: Object.fromEntries(Object.entries(config.provider ?? {}).map(([id, p]) => [id, p.name])),
         })
-        let provider = await prompts.autocomplete({
-          message: "Select provider",
-          maxItems: 8,
-          options: [
-            ...pipe(
-              providers,
-              values(),
-              sortBy(
-                (x) => priority[x.id] ?? 99,
-                (x) => x.name ?? x.id,
-              ),
-              map((x) => ({
-                label: x.name,
-                value: x.id,
-                hint: {
-                  slopcode: "recommended",
-                  anthropic: "Claude Max or API key",
-                  openai: "ChatGPT Plus/Pro or API key",
-                }[x.id],
-              })),
+        const options = [
+          ...pipe(
+            providers,
+            values(),
+            sortBy(
+              (x) => priority[x.id] ?? 99,
+              (x) => x.name ?? x.id,
             ),
-            ...pluginProviders.map((x) => ({
+            map((x) => ({
               label: x.name,
               value: x.id,
-              hint: "plugin",
+              hint: {
+                slopcode: "recommended",
+                anthropic: "Claude Max or API key",
+                openai: "ChatGPT Plus/Pro or API key",
+              }[x.id],
             })),
-            {
-              value: "other",
-              label: "Other",
-            },
-          ],
-        })
+          ),
+          ...pluginProviders.map((x) => ({
+            label: x.name,
+            value: x.id,
+            hint: "plugin",
+          })),
+          ...Object.entries(extraProviders).map(([id, provider]) => ({
+            label: provider.name,
+            value: id,
+            hint: provider.hint,
+          })),
+        ]
 
-        if (prompts.isCancel(provider)) throw new UI.CancelledError()
+        let provider: string
+        if (args.provider) {
+          const input = args.provider
+          const byID = options.find((x) => x.value === input)
+          const byName = options.find((x) => x.label.toLowerCase() === input.toLowerCase())
+          const match = byID ?? byName
+          if (!match) {
+            prompts.log.error(`Unknown provider "${input}"`)
+            process.exit(1)
+          }
+          provider = match.value
+        } else {
+          const selected = await prompts.autocomplete({
+            message: "Select provider",
+            maxItems: 8,
+            options: [
+              ...options,
+              {
+                value: "other",
+                label: "Other",
+              },
+            ],
+          })
+          if (prompts.isCancel(selected)) throw new UI.CancelledError()
+          provider = selected as string
+        }
 
         const plugin = await Plugin.list().then((x) => x.findLast((x) => x.auth?.provider === provider))
         if (plugin && plugin.auth) {
-          const handled = await handlePluginAuth({ auth: plugin.auth }, provider)
+          const handled = await handlePluginAuth({ auth: plugin.auth }, provider, args.method)
           if (handled) return
         }
 
         if (provider === "other") {
-          provider = await prompts.text({
+          const custom = await prompts.text({
             message: "Enter provider id",
             validate: (x) => (x && x.match(/^[0-9a-z-]+$/) ? undefined : "a-z, 0-9 and hyphens only"),
           })
-          if (prompts.isCancel(provider)) throw new UI.CancelledError()
-          provider = provider.replace(/^@ai-sdk\//, "")
-          if (prompts.isCancel(provider)) throw new UI.CancelledError()
+          if (prompts.isCancel(custom)) throw new UI.CancelledError()
+          provider = custom.replace(/^@ai-sdk\//, "")
 
-          // Check if a plugin provides auth for this custom provider
           const customPlugin = await Plugin.list().then((x) => x.findLast((x) => x.auth?.provider === provider))
           if (customPlugin && customPlugin.auth) {
-            const handled = await handlePluginAuth({ auth: customPlugin.auth }, provider)
+            const handled = await handlePluginAuth({ auth: customPlugin.auth }, provider, args.method)
             if (handled) return
           }
 
@@ -401,6 +484,10 @@ export const AuthLoginCommand = cmd({
           prompts.log.info("You can create an api key at https://vercel.link/ai-gateway-token")
         }
 
+        if (provider === "brave-search") {
+          prompts.log.info(`Create an api key at ${extraProviders["brave-search"].url}`)
+        }
+
         if (["cloudflare", "cloudflare-ai-gateway"].includes(provider)) {
           prompts.log.info(
             "Cloudflare AI Gateway can be configured with CLOUDFLARE_GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_API_TOKEN environment variables. Read more: https://slopcode.dev/docs/providers/#cloudflare-ai-gateway",
@@ -424,9 +511,14 @@ export const AuthLoginCommand = cmd({
 })
 
 export const AuthLogoutCommand = cmd({
-  command: "logout",
+  command: "logout [provider]",
   describe: "log out from a configured provider",
-  async handler() {
+  builder: (yargs) =>
+    yargs.positional("provider", {
+      describe: "provider id or name to remove",
+      type: "string",
+    }),
+  async handler(args) {
     UI.empty()
     const credentials = await Auth.all().then((x) => Object.entries(x))
     prompts.intro("Remove credential")
@@ -435,15 +527,28 @@ export const AuthLogoutCommand = cmd({
       return
     }
     const database = await ModelsDev.get()
+    if (args.provider) {
+      const input = args.provider.toLowerCase()
+      const match = credentials.find(
+        ([key]) => key.toLowerCase() === input || providerName(key, database).toLowerCase() === input,
+      )
+      if (!match) {
+        prompts.log.error(`Unknown provider \"${args.provider}\"`)
+        return
+      }
+      await Auth.remove(match[0])
+      prompts.outro(`Logged out from ${providerName(match[0], database)}`)
+      return
+    }
     const providerID = await prompts.select({
       message: "Select provider",
       options: credentials.map(([key, value]) => ({
-        label: (database[key]?.name || key) + UI.Style.TEXT_DIM + " (" + value.type + ")",
+        label: providerName(key, database) + UI.Style.TEXT_DIM + " (" + value.type + ")",
         value: key,
       })),
     })
     if (prompts.isCancel(providerID)) throw new UI.CancelledError()
     await Auth.remove(providerID)
-    prompts.outro("Logout successful")
+    prompts.outro(`Logged out from ${providerName(providerID, database)}`)
   },
 })

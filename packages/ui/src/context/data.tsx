@@ -1,4 +1,4 @@
-import type { Message, Session, Part, FileDiff, SessionStatus, ProviderListResponse } from "@slopcode-ai/sdk/v2"
+import type { Message, Session, Part, SessionDiffEntry, SessionStatus, ProviderListResponse } from "@slopcode-ai/sdk/v2"
 import { createSimpleContext } from "./helper"
 import { PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 
@@ -9,7 +9,7 @@ type Data = {
     [sessionID: string]: SessionStatus
   }
   session_diff: {
-    [sessionID: string]: FileDiff[]
+    [sessionID: string]: SessionDiffEntry[]
   }
   session_diff_preload?: {
     [sessionID: string]: PreloadMultiFileDiffResult<any>[]

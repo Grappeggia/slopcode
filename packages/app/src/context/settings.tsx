@@ -25,6 +25,8 @@ export interface Settings {
     showReasoningSummaries: boolean
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
+    showSessionProgressBar: boolean
+    showTitleBarTools: boolean
   }
   updates: {
     startup: boolean
@@ -32,6 +34,7 @@ export interface Settings {
   appearance: {
     fontSize: number
     font: string
+    terminalFont: string
   }
   keybinds: Record<string, string>
   permissions: {
@@ -48,6 +51,8 @@ const defaultSettings: Settings = {
     showReasoningSummaries: false,
     shellToolPartsExpanded: true,
     editToolPartsExpanded: false,
+    showSessionProgressBar: true,
+    showTitleBarTools: true,
   },
   updates: {
     startup: true,
@@ -55,6 +60,7 @@ const defaultSettings: Settings = {
   appearance: {
     fontSize: 14,
     font: "ibm-plex-mono",
+    terminalFont: "ibm-plex-mono",
   },
   keybinds: {},
   permissions: {
@@ -96,6 +102,10 @@ const monoFonts: Record<string, string> = {
 
 export function monoFontFamily(font: string | undefined) {
   return monoFonts[font ?? defaultSettings.appearance.font] ?? monoFonts[defaultSettings.appearance.font]
+}
+
+export function terminalFontFamily(font: string | undefined) {
+  return monoFontFamily(font ?? defaultSettings.appearance.terminalFont)
 }
 
 function withFallback<T>(read: () => T | undefined, fallback: T) {
@@ -147,6 +157,20 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setEditToolPartsExpanded(value: boolean) {
           setStore("general", "editToolPartsExpanded", value)
         },
+        showSessionProgressBar: withFallback(
+          () => store.general?.showSessionProgressBar,
+          defaultSettings.general.showSessionProgressBar,
+        ),
+        setShowSessionProgressBar(value: boolean) {
+          setStore("general", "showSessionProgressBar", value)
+        },
+        showTitleBarTools: withFallback(
+          () => store.general?.showTitleBarTools,
+          defaultSettings.general.showTitleBarTools,
+        ),
+        setShowTitleBarTools(value: boolean) {
+          setStore("general", "showTitleBarTools", value)
+        },
       },
       updates: {
         startup: withFallback(() => store.updates?.startup, defaultSettings.updates.startup),
@@ -162,6 +186,10 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         font: withFallback(() => store.appearance?.font, defaultSettings.appearance.font),
         setFont(value: string) {
           setStore("appearance", "font", value)
+        },
+        terminalFont: withFallback(() => store.appearance?.terminalFont, defaultSettings.appearance.terminalFont),
+        setTerminalFont(value: string) {
+          setStore("appearance", "terminalFont", value)
         },
       },
       keybinds: {

@@ -298,3 +298,94 @@ test("list - returns empty when no pending", async () => {
     },
   })
 })
+
+test("list - shares pending questions across view ids", async () => {
+  await using tmp = await tmpdir({ git: true })
+  let a!: Promise<string[][]>
+  let b!: Promise<string[][]>
+
+  await Instance.provide({
+    directory: tmp.path,
+    viewID: "view-a",
+    fn: async () => {
+      a = Question.ask({
+        sessionID: "ses_a",
+        questions: [
+          {
+            question: "Question A?",
+            header: "A",
+            options: [{ label: "A", description: "A" }],
+          },
+        ],
+      })
+      expect((await Question.list()).map((item) => item.sessionID)).toEqual(["ses_a"])
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    viewID: "view-b",
+    fn: async () => {
+      b = Question.ask({
+        sessionID: "ses_b",
+        questions: [
+          {
+            question: "Question B?",
+            header: "B",
+            options: [{ label: "B", description: "B" }],
+          },
+        ],
+      })
+      expect((await Question.list()).map((item) => item.sessionID)).toEqual(["ses_a", "ses_b"])
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    viewID: "view-a",
+    fn: async () => {
+      expect((await Question.list()).map((item) => item.sessionID)).toEqual(["ses_a", "ses_b"])
+      const pending = await Question.list({ sessionID: "ses_a" })
+      await Question.reply({ requestID: pending[0].id, sessionID: "ses_a", answers: [["A"]] })
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    viewID: "view-b",
+    fn: async () => {
+      const pending = await Question.list({ sessionID: "ses_b" })
+      await Question.reply({ requestID: pending[0].id, sessionID: "ses_b", answers: [["B"]] })
+    },
+  })
+
+  await expect(a).resolves.toEqual([["A"]])
+  await expect(b).resolves.toEqual([["B"]])
+})
+
+test("reply and reject ignore mismatched session ids", async () => {
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const askPromise = Question.ask({
+        sessionID: "ses_a",
+        questions: [
+          {
+            question: "Question A?",
+            header: "A",
+            options: [{ label: "A", description: "A" }],
+          },
+        ],
+      })
+
+      const [pending] = await Question.list()
+      expect(await Question.reply({ requestID: pending.id, sessionID: "ses_b", answers: [["B"]] })).toBe(false)
+      expect(await Question.reject(pending.id, "ses_b")).toBe(false)
+      expect((await Question.list({ sessionID: "ses_a" })).length).toBe(1)
+
+      await Question.reply({ requestID: pending.id, sessionID: "ses_a", answers: [["A"]] })
+      await expect(askPromise).resolves.toEqual([["A"]])
+    },
+  })
+})

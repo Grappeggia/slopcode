@@ -1,0 +1,319 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP="slopcode"
+
+MUTED='\033[0;2m'
+RED='\033[0;31m'
+ORANGE='\033[38;5;214m'
+NC='\033[0m'
+
+usage() {
+  cat <<EOF
+SlopCode Installer
+
+Usage: install [options]
+
+Options:
+  -h, --help              Display this help message
+  -v, --version <version> Install a specific version (e.g., 0.0.4)
+      --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
+
+Examples:
+  curl -fsSL https://slopcode.dev/install | bash
+  curl -fsSL https://slopcode.dev/install | bash -s -- --version 0.0.4
+  SLOPCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://slopcode.dev/install | bash
+EOF
+}
+
+print_message() {
+  local level="$1"
+  local message="$2"
+  local color=""
+  case "$level" in
+    info) color="$NC" ;;
+    warning) color="$ORANGE" ;;
+    error) color="$RED" ;;
+  esac
+  echo -e "${color}${message}${NC}"
+}
+
+requested_version="${VERSION:-}"
+no_modify_path=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -v|--version)
+      if [[ -n "${2:-}" ]]; then
+        requested_version="$2"
+        shift 2
+      else
+        print_message error "Error: --version requires a version argument"
+        exit 1
+      fi
+      ;;
+    --no-modify-path)
+      no_modify_path=true
+      shift
+      ;;
+    *)
+      print_message warning "Warning: Unknown option '$1'"
+      shift
+      ;;
+  esac
+done
+
+resolve_install_dir() {
+  if [[ -n "${SLOPCODE_INSTALL_DIR:-}" ]]; then
+    echo "$SLOPCODE_INSTALL_DIR"
+    return
+  fi
+
+  if [[ -n "${XDG_BIN_DIR:-}" ]]; then
+    echo "$XDG_BIN_DIR"
+    return
+  fi
+
+  if [[ -d "$HOME/bin" ]] || mkdir -p "$HOME/bin" 2>/dev/null; then
+    echo "$HOME/bin"
+    return
+  fi
+
+  echo "$HOME/.slopcode/bin"
+}
+
+INSTALL_DIR="$(resolve_install_dir)"
+mkdir -p "$INSTALL_DIR"
+
+raw_os=$(uname -s)
+os=$(echo "$raw_os" | tr '[:upper:]' '[:lower:]')
+case "$raw_os" in
+  Darwin*) os="darwin" ;;
+  Linux*) os="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) os="windows" ;;
+esac
+
+arch=$(uname -m)
+case "$arch" in
+  aarch64|arm64) arch="arm64" ;;
+  x86_64|amd64) arch="x64" ;;
+esac
+
+if [[ "$os" == "darwin" && "$arch" == "x64" ]]; then
+  rosetta_flag=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
+  if [[ "$rosetta_flag" == "1" ]]; then
+    arch="arm64"
+  fi
+fi
+
+case "$os-$arch" in
+  linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64) ;;
+  *)
+    print_message error "Unsupported OS/Arch: $os/$arch"
+    exit 1
+    ;;
+esac
+
+if ! command -v curl >/dev/null 2>&1; then
+  print_message error "Error: 'curl' is required but not installed"
+  exit 1
+fi
+
+if ! command -v tar >/dev/null 2>&1; then
+  print_message error "Error: 'tar' is required but not installed"
+  exit 1
+fi
+
+is_musl=false
+if [[ "$os" == "linux" ]]; then
+  if [[ -f /etc/alpine-release ]]; then
+    is_musl=true
+  fi
+  if command -v ldd >/dev/null 2>&1; then
+    if ldd --version 2>&1 | grep -qi musl; then
+      is_musl=true
+    fi
+  fi
+fi
+
+needs_baseline=false
+if [[ "$arch" == "x64" ]]; then
+  if [[ "$os" == "linux" ]]; then
+    if ! grep -qwi avx2 /proc/cpuinfo 2>/dev/null; then
+      needs_baseline=true
+    fi
+  fi
+
+  if [[ "$os" == "darwin" ]]; then
+    avx2=$(sysctl -n hw.optional.avx2_0 2>/dev/null || echo 0)
+    if [[ "$avx2" != "1" ]]; then
+      needs_baseline=true
+    fi
+  fi
+
+  if [[ "$os" == "windows" ]]; then
+    ps='(Add-Type -MemberDefinition "[DllImport(""kernel32.dll"")] public static extern bool IsProcessorFeaturePresent(int ProcessorFeature);" -Name Kernel32 -Namespace Win32 -PassThru)::IsProcessorFeaturePresent(40)'
+    out=""
+    if command -v powershell.exe >/dev/null 2>&1; then
+      out=$(powershell.exe -NoProfile -NonInteractive -Command "$ps" 2>/dev/null || true)
+    elif command -v pwsh >/dev/null 2>&1; then
+      out=$(pwsh -NoProfile -NonInteractive -Command "$ps" 2>/dev/null || true)
+    fi
+    out=$(echo "$out" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    if [[ "$out" != "true" && "$out" != "1" ]]; then
+      needs_baseline=true
+    fi
+  fi
+fi
+
+if [[ -z "$requested_version" ]]; then
+  meta=$(curl -fsSL "https://registry.npmjs.org/slopcode/latest")
+  requested_version=$(printf '%s' "$meta" | awk -F'"version":"' 'NF>1 { split($2,a,"\""); print a[1]; exit }')
+  if [[ -z "$requested_version" ]]; then
+    print_message error "Failed to detect latest slopcode version"
+    exit 1
+  fi
+fi
+
+requested_version="${requested_version#v}"
+
+base_pkg="slopcode-bin-${os}-${arch}"
+candidate_packages=()
+
+add_candidate() {
+  local item="$1"
+  local existing
+  for existing in "${candidate_packages[@]}"; do
+    if [[ "$existing" == "$item" ]]; then
+      return
+    fi
+  done
+  candidate_packages+=("$item")
+}
+
+if [[ "$is_musl" == "true" && "$needs_baseline" == "true" ]]; then
+  add_candidate "${base_pkg}-baseline-musl"
+fi
+
+if [[ "$is_musl" == "true" ]]; then
+  add_candidate "${base_pkg}-musl"
+fi
+
+if [[ "$needs_baseline" == "true" ]]; then
+  add_candidate "${base_pkg}-baseline"
+fi
+
+add_candidate "$base_pkg"
+
+tmp_dir="${TMPDIR:-/tmp}/slopcode_install_$$"
+mkdir -p "$tmp_dir"
+trap 'rm -rf "$tmp_dir"' EXIT
+
+selected_pkg=""
+for pkg in "${candidate_packages[@]}"; do
+  url="https://registry.npmjs.org/${pkg}/-/${pkg}-${requested_version}.tgz"
+  if curl -fsSL "$url" -o "$tmp_dir/pkg.tgz"; then
+    selected_pkg="$pkg"
+    break
+  fi
+done
+
+if [[ -z "$selected_pkg" ]]; then
+  print_message error "Could not find a binary package for $os/$arch (version $requested_version)"
+  print_message info "Checked: ${candidate_packages[*]}"
+  exit 1
+fi
+
+print_message info "\n${MUTED}Installing ${NC}${APP}${MUTED} version ${NC}${requested_version}${MUTED} (${selected_pkg})${NC}"
+
+tar -xzf "$tmp_dir/pkg.tgz" -C "$tmp_dir"
+
+binary_path="$tmp_dir/package/bin/slopcode"
+if [[ ! -f "$binary_path" ]]; then
+  binary_path="$tmp_dir/package/bin/slopcode.exe"
+fi
+
+if [[ ! -f "$binary_path" ]]; then
+  print_message error "Installer package is missing the slopcode binary"
+  exit 1
+fi
+
+cp "$binary_path" "$INSTALL_DIR/slopcode"
+chmod 755 "$INSTALL_DIR/slopcode"
+
+add_to_path() {
+  local config_file="$1"
+  local command="$2"
+
+  if grep -Fxq "$command" "$config_file"; then
+    print_message info "Command already exists in $config_file, skipping write."
+  elif [[ -w "$config_file" ]]; then
+    echo -e "\n# slopcode" >> "$config_file"
+    echo "$command" >> "$config_file"
+    print_message info "${MUTED}Added ${NC}${APP}${MUTED} to PATH in ${NC}$config_file"
+  else
+    print_message warning "Manually add this to $config_file (or similar):"
+    print_message info "  $command"
+  fi
+}
+
+XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+current_shell=$(basename "${SHELL:-}")
+case "$current_shell" in
+  fish)
+    config_files="$HOME/.config/fish/config.fish"
+    ;;
+  zsh)
+    config_files="${ZDOTDIR:-$HOME}/.zshrc ${ZDOTDIR:-$HOME}/.zshenv $XDG_CONFIG_HOME/zsh/.zshrc $XDG_CONFIG_HOME/zsh/.zshenv"
+    ;;
+  bash)
+    config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile $XDG_CONFIG_HOME/bash/.bashrc $XDG_CONFIG_HOME/bash/.bash_profile"
+    ;;
+  ash|sh)
+    config_files="$HOME/.ashrc $HOME/.profile /etc/profile"
+    ;;
+  *)
+    config_files="$HOME/.bashrc $HOME/.bash_profile $HOME/.profile"
+    ;;
+esac
+
+if [[ "$no_modify_path" != "true" ]]; then
+  config_file=""
+  for file in $config_files; do
+    if [[ -f "$file" ]]; then
+      config_file="$file"
+      break
+    fi
+  done
+
+  if [[ -z "$config_file" ]]; then
+    print_message warning "No shell config file found. Add this manually:"
+    print_message info "  export PATH=$INSTALL_DIR:\$PATH"
+  elif [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+    case "$current_shell" in
+      fish)
+        add_to_path "$config_file" "fish_add_path $INSTALL_DIR"
+        ;;
+      *)
+        add_to_path "$config_file" "export PATH=$INSTALL_DIR:\$PATH"
+        ;;
+    esac
+  fi
+fi
+
+if [[ -n "${GITHUB_ACTIONS-}" && "${GITHUB_ACTIONS}" == "true" ]]; then
+  echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+  print_message info "Added $INSTALL_DIR to GITHUB_PATH"
+fi
+
+echo -e ""
+echo -e "${MUTED}SlopCode installed.${NC}"
+echo -e ""
+echo -e "${MUTED}Run:${NC}"
+echo -e "  ${APP} --version"
+echo -e "  ${APP}"
+echo -e ""

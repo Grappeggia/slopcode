@@ -9,6 +9,7 @@ import { Lock } from "../util/lock"
 import { PackageRegistry } from "./registry"
 import { proxied } from "@/util/proxied"
 import { Process } from "../util/process"
+import { BunRuntime } from "./runtime"
 
 export namespace BunProc {
   const log = Log.create({ service: "bun" })
@@ -43,7 +44,7 @@ export namespace BunProc {
   }
 
   export function which() {
-    return process.execPath
+    return BunRuntime.which()
   }
 
   export const InstallFailedError = NamedError.create(

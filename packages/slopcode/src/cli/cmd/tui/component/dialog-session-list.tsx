@@ -2,37 +2,89 @@ import { useDialog } from "@tui/ui/dialog"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { useRoute } from "@tui/context/route"
 import { useSync } from "@tui/context/sync"
-import { createMemo, createSignal, createResource, onMount, Show } from "solid-js"
+import { createMemo, createResource, createSignal, onMount } from "solid-js"
 import { Locale } from "@/util/locale"
 import { useKeybind } from "../context/keybind"
 import { useTheme } from "../context/theme"
 import { useSDK } from "../context/sdk"
+import { usePromptRef } from "../context/prompt"
+import { dismissPromptSlash } from "../util/prompt-slash"
 import { DialogSessionRename } from "./dialog-session-rename"
-import { useKV } from "../context/kv"
 import { createDebouncedSignal } from "../util/signal"
+import { sessionWaiting } from "../context/session-tabs-state"
 import { Spinner } from "./spinner"
 
-export function DialogSessionList() {
+export function DialogSessionList(props: { workspaceID?: string | null }) {
   const dialog = useDialog()
   const route = useRoute()
   const sync = useSync()
   const keybind = useKeybind()
   const { theme } = useTheme()
   const sdk = useSDK()
-  const kv = useKV()
+  const promptRef = usePromptRef()
 
   const [toDelete, setToDelete] = createSignal<string>()
   const [search, setSearch] = createDebouncedSignal("", 150)
 
-  const [searchResults] = createResource(search, async (query) => {
-    if (!query) return undefined
-    const result = await sdk.client.session.list({ search: query, limit: 30 })
-    return result.data ?? []
+  const workspaceID = createMemo(() =>
+    props.workspaceID === undefined ? route.data.workspaceID : props.workspaceID || undefined,
+  )
+  const client = createMemo(() => sdk.clientFor(workspaceID()))
+  const [workspaces] = createResource(async () =>
+    sdk
+      .clientFor(undefined)
+      .experimental.workspace.list()
+      .then((x) => x.data ?? []),
+  )
+  const isRemote = createMemo(() => {
+    if (typeof props.workspaceID !== "string") return false
+    return workspaces()?.find((item) => item.id === props.workspaceID)?.config.type !== "worktree"
   })
 
-  const currentSessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
+  const filterExplicit = (
+    items: Awaited<ReturnType<ReturnType<typeof client>["session"]["list"]>>["data"] | undefined,
+  ) => {
+    const list = items ?? []
+    if (props.workspaceID === null) return list.filter((item) => !(item as { workspaceID?: string }).workspaceID)
+    if (isRemote()) return list
+    if (typeof props.workspaceID === "string")
+      return list.filter((item) => (item as { workspaceID?: string }).workspaceID === props.workspaceID)
+    return list
+  }
 
-  const sessions = createMemo(() => searchResults() ?? sync.data.session)
+  const [listed, listedCtrl] = createResource(
+    () => (props.workspaceID === undefined ? undefined : props.workspaceID || "__local__"),
+    async () => {
+      const result = await client().session.list({ limit: 100 })
+      return filterExplicit(result.data)
+    },
+  )
+
+  const [searchResults] = createResource(
+    () => [search(), workspaceID() ?? "__local__", props.workspaceID === undefined ? "route" : "explicit"] as const,
+    async ([query]) => {
+      if (!query) return undefined
+      const result = await client().session.list({
+        search: query,
+        limit: 30,
+        ...(props.workspaceID === undefined ? sync.session.query() : {}),
+      })
+      return filterExplicit(result.data)
+    },
+  )
+
+  const currentSessionID = createMemo(() => {
+    if (route.data.type !== "session") return undefined
+    if (route.data.workspaceID !== workspaceID()) return undefined
+    return route.data.sessionID
+  })
+
+  const sessions = createMemo(() => {
+    const searched = searchResults()
+    if (searched) return searched
+    if (props.workspaceID !== undefined) return listed() ?? []
+    return sync.data.session
+  })
 
   const options = createMemo(() => {
     const today = new Date().toDateString()
@@ -41,20 +93,23 @@ export function DialogSessionList() {
       .toSorted((a, b) => b.time.updated - a.time.updated)
       .map((x) => {
         const date = new Date(x.time.updated)
-        let category = date.toDateString()
-        if (category === today) {
-          category = "Today"
-        }
+        const category = date.toDateString() === today ? "Today" : date.toDateString()
         const isDeleting = toDelete() === x.id
         const status = sync.data.session_status?.[x.id]
-        const isWorking = status?.type === "busy"
+        const isWaiting = sessionWaiting({
+          sessionID: x.id,
+          sessions: sync.data.session,
+          permission: sync.data.permission,
+          question: sync.data.question,
+        })
+        const isWorking = !isWaiting && (status?.type === "busy" || status?.type === "retry")
         return {
           title: isDeleting ? `Press ${keybind.print("session_delete")} again to confirm` : x.title,
           bg: isDeleting ? theme.error : undefined,
           value: x.id,
           category,
           footer: Locale.time(x.time.updated),
-          gutter: isWorking ? <Spinner /> : undefined,
+          gutter: isWorking ? <Spinner /> : isWaiting ? <text fg={theme.textMuted}>■</text> : undefined,
         }
       })
   })
@@ -73,11 +128,19 @@ export function DialogSessionList() {
       onMove={() => {
         setToDelete(undefined)
       }}
-      onSelect={(option) => {
+      onSelect={async (option) => {
+        const selected = sessions().find((item) => item.id === option.value)
+        const targetWorkspaceID = (selected as { workspaceID?: string } | undefined)?.workspaceID ?? workspaceID()
         route.navigate({
           type: "session",
           sessionID: option.value,
+          source: "switch",
+          workspaceID: targetWorkspaceID,
         })
+        if (targetWorkspaceID !== sdk.workspaceID) {
+          await sync.bootstrap()
+        }
+        dismissPromptSlash(promptRef.current)
         dialog.clear()
       }}
       keybind={[
@@ -86,9 +149,10 @@ export function DialogSessionList() {
           title: "delete",
           onTrigger: async (option) => {
             if (toDelete() === option.value) {
-              sdk.client.session.delete({
-                sessionID: option.value,
-              })
+              await client().session.delete({ sessionID: option.value })
+              if (props.workspaceID !== undefined) {
+                await listedCtrl.refetch()
+              }
               setToDelete(undefined)
               return
             }
@@ -99,7 +163,7 @@ export function DialogSessionList() {
           keybind: keybind.all.session_rename?.[0],
           title: "rename",
           onTrigger: async (option) => {
-            dialog.replace(() => <DialogSessionRename session={option.value} />)
+            dialog.replace(() => <DialogSessionRename session={option.value} workspaceID={workspaceID()} />)
           },
         },
       ]}

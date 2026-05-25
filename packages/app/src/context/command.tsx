@@ -22,6 +22,8 @@ function normalizeKey(key: string) {
   if (key === ",") return "comma"
   if (key === "+") return "plus"
   if (key === " ") return "space"
+  if (key === "{") return "["
+  if (key === "}") return "]"
   return key.toLowerCase()
 }
 
@@ -333,11 +335,11 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
     }
 
     onMount(() => {
-      document.addEventListener("keydown", handleKeyDown)
+      document.addEventListener("keydown", handleKeyDown, true)
     })
 
     onCleanup(() => {
-      document.removeEventListener("keydown", handleKeyDown)
+      document.removeEventListener("keydown", handleKeyDown, true)
     })
 
     function register(cb: () => CommandOption[]): void

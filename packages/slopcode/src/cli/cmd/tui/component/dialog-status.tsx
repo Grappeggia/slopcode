@@ -13,10 +13,15 @@ export function DialogStatus() {
   const dialog = useDialog()
 
   const enabledFormatters = createMemo(() => sync.data.formatter.filter((f) => f.enabled))
+  const specifier = (value: string | [string, Record<string, unknown>]) => {
+    if (Array.isArray(value)) return value[0]
+    return value
+  }
 
   const plugins = createMemo(() => {
     const list = sync.data.config.plugin ?? []
-    const result = list.map((value) => {
+    const result = list.map((raw) => {
+      const value = specifier(raw)
       if (value.startsWith("file://")) {
         const path = fileURLToPath(value)
         const parts = path.split("/")

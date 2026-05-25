@@ -1,5 +1,6 @@
 import { createMemo, createSignal } from "solid-js"
 import { useLocal } from "@tui/context/local"
+import { usePromptRef } from "@tui/context/prompt"
 import { useSync } from "@tui/context/sync"
 import { map, pipe, flatMap, entries, filter, sortBy, take } from "remeda"
 import { DialogSelect } from "@tui/ui/dialog-select"
@@ -7,6 +8,28 @@ import { useDialog } from "@tui/ui/dialog"
 import { createDialogProviderOptions, DialogProvider } from "./dialog-provider"
 import { useKeybind } from "../context/keybind"
 import * as fuzzysort from "fuzzysort"
+import type { Provider } from "@slopcode-ai/sdk/v2"
+import { dismissPromptSlash } from "../util/prompt-slash"
+
+function pickLatest(models: [string, Provider["models"][string]][]) {
+  const picks: Record<string, [string, Provider["models"][string]]> = {}
+  for (const item of models) {
+    const model = item[0]
+    const info = item[1]
+    const key = info.family ?? model
+    const prev = picks[key]
+    if (!prev) {
+      picks[key] = item
+      continue
+    }
+    if (info.release_date !== prev[1].release_date) {
+      if (info.release_date > prev[1].release_date) picks[key] = item
+      continue
+    }
+    if (model > prev[0]) picks[key] = item
+  }
+  return Object.values(picks)
+}
 
 export function useConnected() {
   const sync = useSync()
@@ -17,10 +40,12 @@ export function useConnected() {
 
 export function DialogModel(props: { providerID?: string }) {
   const local = useLocal()
+  const promptRef = usePromptRef()
   const sync = useSync()
   const dialog = useDialog()
   const keybind = useKeybind()
   const [query, setQuery] = createSignal("")
+  const [all, setAll] = createSignal(false)
 
   const connected = useConnected()
   const providers = createDialogProviderOptions()
@@ -50,6 +75,7 @@ export function DialogModel(props: { providerID?: string }) {
             disabled: provider.id === "slopcode" && model.id.includes("-nano"),
             footer: model.cost?.input === 0 && provider.id === "slopcode" ? "Free" : undefined,
             onSelect: () => {
+              dismissPromptSlash(promptRef.current)
               dialog.clear()
               local.model.set({ providerID: provider.id, modelID: model.id }, { recent: true })
             },
@@ -72,8 +98,8 @@ export function DialogModel(props: { providerID?: string }) {
         (provider) => provider.id !== "slopcode",
         (provider) => provider.name,
       ),
-      flatMap((provider) =>
-        pipe(
+      flatMap((provider) => {
+        const items = pipe(
           provider.models,
           entries(),
           filter(([_, info]) => info.status !== "deprecated"),
@@ -88,6 +114,7 @@ export function DialogModel(props: { providerID?: string }) {
             disabled: provider.id === "slopcode" && model.includes("-nano"),
             footer: info.cost?.input === 0 && provider.id === "slopcode" ? "Free" : undefined,
             onSelect() {
+              dismissPromptSlash(promptRef.current)
               dialog.clear()
               local.model.set({ providerID: provider.id, modelID: model }, { recent: true })
             },
@@ -104,8 +131,9 @@ export function DialogModel(props: { providerID?: string }) {
             (x) => x.footer !== "Free",
             (x) => x.title,
           ),
-        ),
-      ),
+        )
+        return items
+      }),
     )
 
     const popularProviders = !connected()
@@ -152,6 +180,13 @@ export function DialogModel(props: { providerID?: string }) {
           disabled: !connected(),
           onTrigger: (option) => {
             local.model.toggleFavorite(option.value as { providerID: string; modelID: string })
+          },
+        },
+        {
+          keybind: keybind.all.model_show_all_toggle?.[0],
+          title: all() ? "Show latest only" : "Show all models",
+          onTrigger: () => {
+            setAll((value) => !value)
           },
         },
       ]}

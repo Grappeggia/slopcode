@@ -125,7 +125,7 @@ function TodoList(props: { todos: Todo[]; open: boolean }) {
     if (!(el instanceof HTMLElement)) return
 
     const topFade = 16
-    const bottomFade = 44
+    const bottomFade = 24
     const container = scrollRef.getBoundingClientRect()
     const rect = el.getBoundingClientRect()
     const top = rect.top - container.top + scrollRef.scrollTop
@@ -157,7 +157,7 @@ function TodoList(props: { todos: Todo[]; open: boolean }) {
   return (
     <div class="relative">
       <div
-        class="px-3 pb-11 flex flex-col gap-1.5 max-h-42 overflow-y-auto no-scrollbar"
+        class="px-3 pb-6 flex flex-col gap-1.5 max-h-42 overflow-y-auto no-scrollbar"
         ref={scrollRef}
         style={{ "overflow-anchor": "none" }}
         onScroll={(e) => {

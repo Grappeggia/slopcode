@@ -122,3 +122,61 @@ test("keyboard shortcuts navigate titlebar history", async ({ page, slug, sdk, g
     })
   })
 })
+
+test("session switches restore prompt history for the selected session", async ({ page, slug, sdk, gotoSession }) => {
+  await page.setViewportSize({ width: 1400, height: 800 })
+
+  const stamp = Date.now()
+  const firstPrompt = `history one ${stamp}`
+  const secondPrompt = `history two ${stamp}`
+
+  await withSession(sdk, `e2e titlebar prompt history 1 ${stamp}`, async (one) => {
+    await withSession(sdk, `e2e titlebar prompt history 2 ${stamp}`, async (two) => {
+      const prompt = page.locator(promptSelector)
+      const back = page.getByRole("button", { name: "Back" })
+      const forward = page.getByRole("button", { name: "Forward" })
+
+      await gotoSession(one.id)
+      await prompt.click()
+      await page.keyboard.type(firstPrompt)
+      await page.keyboard.press("Enter")
+
+      await openSidebar(page)
+
+      const second = page.locator(`[data-session-id="${two.id}"] a`).first()
+      await expect(second).toBeVisible()
+      await second.scrollIntoViewIfNeeded()
+      await second.click()
+
+      await expect(page).toHaveURL(new RegExp(`/${slug}/session/${two.id}(?:\\?|#|$)`))
+      await expect(prompt).toBeVisible()
+
+      await prompt.click()
+      await page.keyboard.type(secondPrompt)
+      await page.keyboard.press("Enter")
+
+      await expect(back).toBeVisible()
+      await expect(back).toBeEnabled()
+      await back.click()
+
+      await expect(page).toHaveURL(new RegExp(`/${slug}/session/${one.id}(?:\\?|#|$)`))
+      await expect(prompt).toBeVisible()
+
+      await prompt.click()
+      await page.keyboard.press("ArrowUp")
+      await expect(prompt).toContainText(firstPrompt)
+
+      await expect(forward).toBeVisible()
+      await expect(forward).toBeEnabled()
+      await forward.click()
+
+      await expect(page).toHaveURL(new RegExp(`/${slug}/session/${two.id}(?:\\?|#|$)`))
+      await expect(prompt).toBeVisible()
+
+      await prompt.click()
+      await page.keyboard.press("ArrowUp")
+      await expect(prompt).toContainText(secondPrompt)
+      await expect(prompt).not.toContainText(firstPrompt)
+    })
+  })
+})

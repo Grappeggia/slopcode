@@ -8,6 +8,11 @@ import { pipeline } from "stream/promises"
 import { Glob } from "./glob"
 
 export namespace Filesystem {
+  const encode = (content: string | Buffer | Uint8Array) => {
+    if (typeof content === "string") return content
+    return Uint8Array.from(content)
+  }
+
   // Fast sync version for metadata checks
   export async function exists(p: string): Promise<boolean> {
     return existsSync(p)
@@ -54,17 +59,19 @@ export namespace Filesystem {
   export async function write(p: string, content: string | Buffer | Uint8Array, mode?: number): Promise<void> {
     try {
       if (mode) {
-        await writeFile(p, content, { mode })
+        await writeFile(p, encode(content), { mode })
       } else {
-        await writeFile(p, content)
+        await writeFile(p, encode(content))
+        if (mode) await chmod(p, mode)
       }
     } catch (e) {
       if (isEnoent(e)) {
         await mkdir(dirname(p), { recursive: true })
         if (mode) {
-          await writeFile(p, content, { mode })
+          await writeFile(p, encode(content), { mode })
+          await chmod(p, mode)
         } else {
-          await writeFile(p, content)
+          await writeFile(p, encode(content))
         }
         return
       }

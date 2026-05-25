@@ -47,6 +47,7 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
     const answers = questions().map((_, i) => store.answers[i] ?? [])
     sdk.client.question.reply({
       requestID: props.request.id,
+      sessionID: props.request.sessionID,
       answers,
     })
   }
@@ -54,6 +55,7 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
   function reject() {
     sdk.client.question.reject({
       requestID: props.request.id,
+      sessionID: props.request.sessionID,
     })
   }
 
@@ -69,6 +71,7 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
     if (single()) {
       sdk.client.question.reply({
         requestID: props.request.id,
+        sessionID: props.request.sessionID,
         answers: [[answer]],
       })
       return

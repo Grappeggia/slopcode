@@ -99,6 +99,8 @@ export function DialogMessage(props: {
               sessionID: result.data!.id,
               type: "session",
               initialPrompt,
+              source: "fork",
+              workspaceID: route.data.workspaceID,
             })
             dialog.clear()
           },

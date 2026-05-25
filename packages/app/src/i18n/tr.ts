@@ -49,6 +49,8 @@ export const dict = {
   "command.session.new": "Yeni oturum",
   "command.file.open": "Dosya aç",
   "command.tab.close": "Sekmeyi kapat",
+  "command.tab.previous": "Önceki sekme",
+  "command.tab.next": "Sonraki sekme",
   "command.context.addSelection": "Seçimi bağlama ekle",
   "command.context.addSelection.description": "Mevcut dosyadan seçili satırları ekle",
   "command.input.focus": "Girişi odakla",

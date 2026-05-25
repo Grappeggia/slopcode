@@ -19,7 +19,25 @@ export async function upgrade() {
   }
 
   if (method === "unknown") return
-  if (method === "apt" || method === "snap") {
+  if (method === "yarn") {
+    const yarn = await Installation.yarnContext().catch(() => ({ mode: "unknown" as const }))
+    if (yarn.mode !== "classic") {
+      await Bus.publish(Installation.Event.UpdateAvailable, { version: latest })
+      return
+    }
+  }
+  if (
+    method === "apt" ||
+    method === "zypper" ||
+    method === "dnf" ||
+    method === "yum" ||
+    method === "apk" ||
+    method === "pkg" ||
+    method === "macports" ||
+    method === "pacman" ||
+    method === "paru" ||
+    method === "snap"
+  ) {
     await Bus.publish(Installation.Event.UpdateAvailable, { version: latest })
     return
   }

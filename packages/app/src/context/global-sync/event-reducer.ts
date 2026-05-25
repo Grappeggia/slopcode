@@ -12,6 +12,7 @@ import type {
   Todo,
 } from "@slopcode-ai/sdk/v2/client"
 import type { State, VcsCache } from "./types"
+import { mergeDiffs } from "../session-diff"
 import { trimSessions } from "./session-trim"
 
 export function applyGlobalEvent(input: {
@@ -48,6 +49,7 @@ function cleanupSessionCaches(
   if (!sessionID) return
   const hasAny =
     store.message[sessionID] !== undefined ||
+    store.history[sessionID] !== undefined ||
     store.session_diff[sessionID] !== undefined ||
     store.todo[sessionID] !== undefined ||
     store.permission[sessionID] !== undefined ||
@@ -66,6 +68,7 @@ function cleanupSessionCaches(
         }
       }
       delete draft.message[sessionID]
+      if (draft.history) delete draft.history[sessionID]
       delete draft.session_diff[sessionID]
       delete draft.todo[sessionID]
       delete draft.permission[sessionID]
@@ -73,6 +76,12 @@ function cleanupSessionCaches(
       delete draft.session_status[sessionID]
     }),
   )
+}
+
+function sessionForMessage(store: Store<State>, messageID: string) {
+  for (const [sessionID, messages] of Object.entries(store.message)) {
+    if (messages?.some((message) => message.id === messageID)) return sessionID
+  }
 }
 
 export function applyDirectoryEvent(input: {
@@ -84,6 +93,7 @@ export function applyDirectoryEvent(input: {
   loadLsp: () => void
   vcsCache?: VcsCache
   setSessionTodo?: (sessionID: string, todos: Todo[] | undefined) => void
+  persistHistory?: (sessionID: string) => void
 }) {
   const event = input.event
   switch (event.type) {
@@ -118,6 +128,7 @@ export function applyDirectoryEvent(input: {
           )
         }
         cleanupSessionCaches(input.store, input.setStore, info.id, input.setSessionTodo)
+        input.persistHistory?.(info.id)
         if (info.parentID) break
         input.setStore("sessionTotal", (value) => Math.max(0, value - 1))
         break
@@ -144,13 +155,14 @@ export function applyDirectoryEvent(input: {
         )
       }
       cleanupSessionCaches(input.store, input.setStore, info.id, input.setSessionTodo)
+      input.persistHistory?.(info.id)
       if (info.parentID) break
       input.setStore("sessionTotal", (value) => Math.max(0, value - 1))
       break
     }
     case "session.diff": {
       const props = event.properties as { sessionID: string; diff: FileDiff[] }
-      input.setStore("session_diff", props.sessionID, reconcile(props.diff, { key: "file" }))
+      input.setStore("session_diff", props.sessionID, (current) => mergeDiffs(current, props.diff))
       break
     }
     case "todo.updated": {
@@ -169,11 +181,13 @@ export function applyDirectoryEvent(input: {
       const messages = input.store.message[info.sessionID]
       if (!messages) {
         input.setStore("message", info.sessionID, [info])
+        input.persistHistory?.(info.sessionID)
         break
       }
       const result = Binary.search(messages, info.id, (m) => m.id)
       if (result.found) {
         input.setStore("message", info.sessionID, result.index, reconcile(info))
+        input.persistHistory?.(info.sessionID)
         break
       }
       input.setStore(
@@ -183,6 +197,7 @@ export function applyDirectoryEvent(input: {
           draft.splice(result.index, 0, info)
         }),
       )
+      input.persistHistory?.(info.sessionID)
       break
     }
     case "message.removed": {
@@ -197,6 +212,7 @@ export function applyDirectoryEvent(input: {
           delete draft.part[props.messageID]
         }),
       )
+      input.persistHistory?.(props.sessionID)
       break
     }
     case "message.part.updated": {
@@ -204,11 +220,13 @@ export function applyDirectoryEvent(input: {
       const parts = input.store.part[part.messageID]
       if (!parts) {
         input.setStore("part", part.messageID, [part])
+        input.persistHistory?.(part.sessionID)
         break
       }
       const result = Binary.search(parts, part.id, (p) => p.id)
       if (result.found) {
         input.setStore("part", part.messageID, result.index, reconcile(part))
+        input.persistHistory?.(part.sessionID)
         break
       }
       input.setStore(
@@ -218,6 +236,7 @@ export function applyDirectoryEvent(input: {
           draft.splice(result.index, 0, part)
         }),
       )
+      input.persistHistory?.(part.sessionID)
       break
     }
     case "message.part.removed": {
@@ -236,6 +255,8 @@ export function applyDirectoryEvent(input: {
             if (list.length === 0) delete draft.part[props.messageID]
           }),
         )
+        const sessionID = sessionForMessage(input.store, props.messageID)
+        if (sessionID) input.persistHistory?.(sessionID)
       }
       break
     }
@@ -255,6 +276,8 @@ export function applyDirectoryEvent(input: {
           ;(part[field] as string) = (existing ?? "") + props.delta
         }),
       )
+      const sessionID = sessionForMessage(input.store, props.messageID)
+      if (sessionID) input.persistHistory?.(sessionID)
       break
     }
     case "vcs.branch.updated": {

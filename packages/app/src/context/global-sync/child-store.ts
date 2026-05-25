@@ -1,15 +1,17 @@
 import { createRoot, createEffect, getOwner, onCleanup, runWithOwner, type Accessor, type Owner } from "solid-js"
 import { createStore, type SetStoreFunction, type Store } from "solid-js/store"
 import { Persist, persisted } from "@/utils/persist"
-import type { VcsInfo } from "@slopcode-ai/sdk/v2/client"
+import type { Message, Part, VcsInfo } from "@slopcode-ai/sdk/v2/client"
 import {
   DIR_IDLE_TTL_MS,
   MAX_DIR_STORES,
   type ChildOptions,
   type DirState,
+  type HistoryCache,
   type IconCache,
   type MetaCache,
   type ProjectMeta,
+  type SessionHistory,
   type State,
   type VcsCache,
 } from "./types"
@@ -26,6 +28,7 @@ export function createChildStoreManager(input: {
   const vcsCache = new Map<string, VcsCache>()
   const metaCache = new Map<string, MetaCache>()
   const iconCache = new Map<string, IconCache>()
+  const historyCache = new Map<string, HistoryCache>()
   const lifecycle = new Map<string, DirState>()
   const pins = new Map<string, number>()
   const ownerPins = new WeakMap<object, Set<string>>()
@@ -92,6 +95,7 @@ export function createChildStoreManager(input: {
     vcsCache.delete(directory)
     metaCache.delete(directory)
     iconCache.delete(directory)
+    historyCache.delete(directory)
     lifecycle.delete(directory)
     const dispose = disposers.get(directory)
     if (dispose) {
@@ -152,6 +156,15 @@ export function createChildStoreManager(input: {
       if (!icon) throw new Error("Failed to create persisted project icon")
       iconCache.set(directory, { store: icon[0], setStore: icon[1], ready: icon[3] })
 
+      const history = runWithOwner(input.owner, () =>
+        persisted(
+          Persist.workspace(directory, "history", ["history.v1"]),
+          createStore({ value: {} as Record<string, SessionHistory | undefined> }),
+        ),
+      )
+      if (!history) throw new Error("Failed to create persisted session history")
+      historyCache.set(directory, { store: history[0], setStore: history[1], ready: history[3] })
+
       const init = () =>
         createRoot((dispose) => {
           const child = createStore<State>({
@@ -177,6 +190,7 @@ export function createChildStoreManager(input: {
             limit: 5,
             message: {},
             part: {},
+            history: {},
           })
           children[directory] = child
           disposers.set(directory, dispose)
@@ -192,6 +206,21 @@ export function createChildStoreManager(input: {
           })
           createEffect(() => {
             child[1]("icon", icon[0].value)
+          })
+          createEffect(() => {
+            if (!history[3]()) return
+            const value = history[0].value
+            for (const [sessionID, entry] of Object.entries(value)) {
+              if (!entry) continue
+              child[1]("message", sessionID, entry.message as Message[])
+              child[1]("history", sessionID, {
+                limit: entry.limit,
+                complete: entry.complete,
+              })
+              for (const [messageID, parts] of Object.entries(entry.part)) {
+                child[1]("part", messageID, parts as Part[])
+              }
+            }
           })
         })
 
@@ -253,6 +282,7 @@ export function createChildStoreManager(input: {
     runEviction,
     vcsCache,
     metaCache,
+    historyCache,
     iconCache,
   }
 }

@@ -3,8 +3,10 @@ import { useTheme } from "../../context/theme"
 import { useSync } from "../../context/sync"
 import { useDirectory } from "../../context/directory"
 import { useConnected } from "../../component/dialog-model"
+import { WorkspaceLabel } from "../../component/workspace-label"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
+import { sessionThreadRoot, sessionTreeIDs } from "./request-tree"
 
 export function Footer() {
   const { theme } = useTheme()
@@ -15,7 +17,8 @@ export function Footer() {
   const lsp = createMemo(() => Object.keys(sync.data.lsp))
   const permissions = createMemo(() => {
     if (route.data.type !== "session") return []
-    return sync.data.permission[route.data.sessionID] ?? []
+    const root = sessionThreadRoot(sync.data.session, route.data.sessionID)
+    return sessionTreeIDs(sync.data.session, root).flatMap((id) => sync.data.permission[id] ?? [])
   })
   const directory = useDirectory()
   const connected = useConnected()
@@ -51,7 +54,12 @@ export function Footer() {
 
   return (
     <box flexDirection="row" justifyContent="space-between" gap={1} flexShrink={0}>
-      <text fg={theme.textMuted}>{directory()}</text>
+      <box flexDirection="row" gap={2}>
+        <text fg={theme.textMuted}>{directory()}</text>
+        <Show when={route.data.workspaceID}>
+          <WorkspaceLabel workspaceID={route.data.workspaceID} />
+        </Show>
+      </box>
       <box gap={2} flexDirection="row" flexShrink={0}>
         <Switch>
           <Match when={store.welcome}>

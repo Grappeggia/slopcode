@@ -34,9 +34,11 @@ export namespace FileWatcher {
 
   const watcher = lazy((): typeof import("@parcel/watcher") | undefined => {
     try {
-      const binding = require(
-        `@parcel/watcher-${process.platform}-${process.arch}${process.platform === "linux" ? `-${SLOPCODE_LIBC || "glibc"}` : ""}`,
-      )
+      const name =
+        process.platform === "android"
+          ? `@parcel/watcher-android-${process.arch}`
+          : `@parcel/watcher-${process.platform}-${process.arch}${process.platform === "linux" ? `-${SLOPCODE_LIBC || "glibc"}` : ""}`
+      const binding = require(name)
       return createWrapper(binding) as typeof import("@parcel/watcher")
     } catch (error) {
       log.error("failed to load watcher binding", { error })
@@ -51,6 +53,7 @@ export namespace FileWatcher {
       const backend = (() => {
         if (process.platform === "win32") return "windows"
         if (process.platform === "darwin") return "fs-events"
+        if (process.platform === "android") return "inotify"
         if (process.platform === "linux") return "inotify"
       })()
       if (!backend) {

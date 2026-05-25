@@ -19,7 +19,7 @@ import { checksum } from "@slopcode-ai/util/encode"
 import { createEffect, createMemo, createSignal, For, Match, Show, Switch, untrack, type JSX } from "solid-js"
 import { onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
-import { type FileContent, type FileDiff } from "@slopcode-ai/sdk/v2"
+import { type FileContent, type SessionDiffEntry } from "@slopcode-ai/sdk/v2"
 import { PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 import { type SelectedLineRange } from "@pierre/diffs"
 import { Dynamic } from "solid-js/web"
@@ -63,6 +63,8 @@ export type SessionReviewCommentActions = {
 
 export type SessionReviewFocus = { file: string; id: string }
 
+type ReviewDiff = SessionDiffEntry & { preloaded?: PreloadMultiFileDiffResult<any> }
+
 export interface SessionReviewProps {
   title?: JSX.Element
   empty?: JSX.Element
@@ -86,7 +88,7 @@ export interface SessionReviewProps {
   classList?: Record<string, boolean | undefined>
   classes?: { root?: string; header?: string; container?: string }
   actions?: JSX.Element
-  diffs: (FileDiff & { preloaded?: PreloadMultiFileDiffResult<any> })[]
+  diffs: ReviewDiff[]
   onViewFile?: (file: string) => void
   readFile?: (path: string) => Promise<FileContent | undefined>
 }
@@ -440,7 +442,7 @@ export const SessionReview = (props: SessionReviewProps) => {
 
   const selectionSide = (range: SelectedLineRange) => range.endSide ?? range.side ?? "additions"
 
-  const selectionPreview = (diff: FileDiff, range: SelectedLineRange) => {
+  const selectionPreview = (diff: SessionDiffEntry, range: SelectedLineRange) => {
     const side = selectionSide(range)
     const contents = side === "deletions" ? diff.before : diff.after
     if (typeof contents !== "string" || contents.length === 0) return undefined
@@ -626,7 +628,9 @@ export const SessionReview = (props: SessionReviewProps) => {
                 let wrapper: HTMLDivElement | undefined
 
                 const diff = createMemo(() => diffs().get(file))
-                const item = () => diff()!
+                const item = createMemo<ReviewDiff>(
+                  () => diff() ?? ({ file, additions: 0, deletions: 0 } satisfies ReviewDiff),
+                )
 
                 const expanded = createMemo(() => open().includes(file))
                 const force = () => !!store.force[file]
@@ -634,8 +638,8 @@ export const SessionReview = (props: SessionReviewProps) => {
                 const comments = createMemo(() => (props.comments ?? []).filter((c) => c.file === file))
                 const commentedLines = createMemo(() => comments().map((c) => c.selection))
 
-                const beforeText = () => (typeof item().before === "string" ? item().before : "")
-                const afterText = () => (typeof item().after === "string" ? item().after : "")
+                const beforeText = () => item().before ?? ""
+                const afterText = () => item().after ?? ""
                 const changedLines = () => item().additions + item().deletions
                 const mediaKind = createMemo(() => mediaKindFromPath(file))
 
@@ -645,10 +649,18 @@ export const SessionReview = (props: SessionReviewProps) => {
                   if (mediaKind()) return false
                   return changedLines() > MAX_DIFF_CHANGED_LINES
                 })
+                const hydrated = () => typeof item().before === "string" && typeof item().after === "string"
 
-                const isAdded = () => item().status === "added" || (beforeText().length === 0 && afterText().length > 0)
-                const isDeleted = () =>
-                  item().status === "deleted" || (afterText().length === 0 && beforeText().length > 0)
+                const isAdded = () => {
+                  const before = beforeText()
+                  const after = afterText()
+                  return item().status === "added" || (before.length === 0 && after.length > 0)
+                }
+                const isDeleted = () => {
+                  const before = beforeText()
+                  const after = afterText()
+                  return item().status === "deleted" || (after.length === 0 && before.length > 0)
+                }
 
                 const selectedLines = createMemo(() => {
                   const current = selection()
@@ -828,6 +840,11 @@ export const SessionReview = (props: SessionReviewProps) => {
                                     {i18n.t("ui.sessionReview.largeDiff.renderAnyway")}
                                   </Button>
                                 </div>
+                              </div>
+                            </Match>
+                            <Match when={!hydrated()}>
+                              <div data-slot="session-review-loading" class="px-4 py-6 text-12-regular text-text-weak">
+                                {i18n.t("ui.list.loading")}
                               </div>
                             </Match>
                             <Match when={true}>

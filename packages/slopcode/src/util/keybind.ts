@@ -42,6 +42,7 @@ export namespace Keybind {
     if (info.shift) parts.push("shift")
     if (info.name) {
       if (info.name === "delete") parts.push("del")
+      else if (info.name === "escape") parts.push("esc")
       else parts.push(info.name)
     }
 
@@ -52,6 +53,12 @@ export namespace Keybind {
     }
 
     return result
+  }
+
+  export function nextLeader(input: { active: boolean; name?: string; keep?: boolean }) {
+    if (!input.active) return false
+    if (!input.name) return input.active
+    return input.keep === true
   }
 
   export function parse(key: string): Info[] {

@@ -15,6 +15,7 @@ import {
 import { A, useNavigate, useParams } from "@solidjs/router"
 import { useLayout, LocalProject } from "@/context/layout"
 import { useGlobalSync } from "@/context/global-sync"
+import { messageBatches } from "@/context/session-message"
 import { Persist, persisted } from "@/utils/persist"
 import { base64Encode } from "@slopcode-ai/util/encode"
 import { decode64 } from "@/utils/base64"
@@ -43,6 +44,7 @@ import { retry } from "@slopcode-ai/util/retry"
 import { playSound, soundSrc } from "@/utils/sound"
 import { createAim } from "@/utils/aim"
 import { Worktree as WorktreeState } from "@/utils/worktree"
+import { setSessionHandoff } from "@/pages/session/handoff"
 
 import { useDialog } from "@slopcode-ai/ui/context/dialog"
 import { useTheme, type ColorScheme } from "@slopcode-ai/ui/theme"
@@ -66,7 +68,12 @@ import {
   syncWorkspaceOrder,
   workspaceKey,
 } from "./layout/helpers"
-import { collectOpenProjectDeepLinks, deepLinkEvent, drainPendingDeepLinks } from "./layout/deep-links"
+import {
+  collectNewSessionDeepLinks,
+  collectOpenProjectDeepLinks,
+  deepLinkEvent,
+  drainPendingDeepLinks,
+} from "./layout/deep-links"
 import { createInlineEditorController } from "./layout/inline-editor"
 import {
   LocalWorkspace,
@@ -692,12 +699,11 @@ export default function Layout(props: ParentProps) {
   async function prefetchMessages(directory: string, sessionID: string, token: number) {
     const [store, setStore] = globalSync.child(directory, { bootstrap: false })
 
-    return retry(() => globalSDK.client.session.messages({ directory, sessionID, limit: prefetchChunk }))
-      .then((messages) => {
+    return retry(() => globalSDK.client.session.messageIndex({ directory, sessionID, limit: prefetchChunk }))
+      .then(async (messages) => {
         if (prefetchToken.value !== token) return
 
-        const items = (messages.data ?? []).filter((x) => !!x?.info?.id)
-        const next = items.map((x) => x.info).filter((m): m is Message => !!m?.id)
+        const next = (messages.data ?? []).filter((m): m is Message => !!m?.id)
         const sorted = mergeByID([], next)
 
         const current = store.message[sessionID] ?? []
@@ -706,17 +712,20 @@ export default function Layout(props: ParentProps) {
           sorted,
         )
 
+        setStore("message", sessionID, reconcile(merged, { key: "id" }))
+
+        const batchIDs = messageBatches(merged, store.part, 20)[0]
+        if (!batchIDs || batchIDs.length === 0) return
+
+        const chunk = await retry(() =>
+          globalSDK.client.session.messageChunk({ directory, sessionID, messageIDs: batchIDs }),
+        )
+        if (prefetchToken.value !== token) return
+
         batch(() => {
-          setStore("message", sessionID, reconcile(merged, { key: "id" }))
-
-          for (const message of items) {
-            const currentParts = store.part[message.info.id] ?? []
-            const mergedParts = mergeByID(
-              currentParts.filter((item): item is (typeof currentParts)[number] & { id: string } => !!item?.id),
-              message.parts.filter((item): item is (typeof message.parts)[number] & { id: string } => !!item?.id),
-            )
-
-            setStore("part", message.info.id, reconcile(mergedParts, { key: "id" }))
+          batchIDs.forEach((messageID) => setStore("part", messageID, []))
+          for (const item of chunk.data ?? []) {
+            setStore("part", item.messageID, reconcile(item.parts ?? [], { key: "id" }))
           }
         })
       })
@@ -1157,8 +1166,19 @@ export default function Layout(props: ParentProps) {
 
   const handleDeepLinks = (urls: string[]) => {
     if (!server.isLocal()) return
+
     for (const directory of collectOpenProjectDeepLinks(urls)) {
       openProject(directory)
+    }
+
+    for (const link of collectNewSessionDeepLinks(urls)) {
+      openProject(link.directory, false)
+      const slug = base64Encode(link.directory)
+      if (link.prompt) {
+        setSessionHandoff(slug, { prompt: link.prompt })
+      }
+      const href = link.prompt ? `/${slug}/session?prompt=${encodeURIComponent(link.prompt)}` : `/${slug}/session`
+      navigateWithSidebarReset(href)
     }
   }
 

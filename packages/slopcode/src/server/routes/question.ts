@@ -5,6 +5,7 @@ import { Question } from "../../question"
 import z from "zod"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
+import { NotFoundError } from "../../storage/db"
 
 export const QuestionRoutes = lazy(() =>
   new Hono()
@@ -25,8 +26,14 @@ export const QuestionRoutes = lazy(() =>
           },
         },
       }),
+      validator(
+        "query",
+        z.object({
+          sessionID: z.string().optional(),
+        }),
+      ),
       async (c) => {
-        const questions = await Question.list()
+        const questions = await Question.list(c.req.valid("query"))
         return c.json(questions)
       },
     )
@@ -54,14 +61,22 @@ export const QuestionRoutes = lazy(() =>
           requestID: z.string(),
         }),
       ),
+      validator(
+        "query",
+        z.object({
+          sessionID: z.string().optional(),
+        }),
+      ),
       validator("json", Question.Reply),
       async (c) => {
         const params = c.req.valid("param")
         const json = c.req.valid("json")
-        await Question.reply({
+        const ok = await Question.reply({
           requestID: params.requestID,
           answers: json.answers,
+          sessionID: c.req.valid("query").sessionID,
         })
+        if (!ok) throw new NotFoundError({ message: "Question request not found" })
         return c.json(true)
       },
     )
@@ -89,9 +104,16 @@ export const QuestionRoutes = lazy(() =>
           requestID: z.string(),
         }),
       ),
+      validator(
+        "query",
+        z.object({
+          sessionID: z.string().optional(),
+        }),
+      ),
       async (c) => {
         const params = c.req.valid("param")
-        await Question.reject(params.requestID)
+        const ok = await Question.reject(params.requestID, c.req.valid("query").sessionID)
+        if (!ok) throw new NotFoundError({ message: "Question request not found" })
         return c.json(true)
       },
     ),

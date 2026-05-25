@@ -32,6 +32,22 @@ describe("command keybind helpers", () => {
     expect(matchKeybind(keybinds, new KeyboardEvent("keydown", { key: ",", ctrlKey: true, altKey: true }))).toBe(false)
   })
 
+  test("matchKeybind normalizes shifted bracket keys", () => {
+    // Browsers report Shift+[ as '{' and Shift+] as '}' - test with explicit ctrl and meta
+    const prevCtrl = parseKeybind("ctrl+shift+[")
+    const nextCtrl = parseKeybind("ctrl+shift+]")
+    const prevMeta = parseKeybind("meta+shift+[")
+    const nextMeta = parseKeybind("meta+shift+]")
+    expect(matchKeybind(prevCtrl, new KeyboardEvent("keydown", { key: "{", ctrlKey: true, shiftKey: true }))).toBe(true)
+    expect(matchKeybind(nextCtrl, new KeyboardEvent("keydown", { key: "}", ctrlKey: true, shiftKey: true }))).toBe(true)
+    expect(matchKeybind(prevMeta, new KeyboardEvent("keydown", { key: "{", metaKey: true, shiftKey: true }))).toBe(true)
+    expect(matchKeybind(nextMeta, new KeyboardEvent("keydown", { key: "}", metaKey: true, shiftKey: true }))).toBe(true)
+    // Unshifted brackets should not match
+    expect(matchKeybind(prevCtrl, new KeyboardEvent("keydown", { key: "[", ctrlKey: true, shiftKey: false }))).toBe(
+      false,
+    )
+  })
+
   test("formatKeybind returns human readable output", () => {
     const display = formatKeybind("ctrl+alt+arrowup")
 

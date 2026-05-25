@@ -7,6 +7,7 @@ import { TuiEvent } from "@/cli/cmd/tui/event"
 import { AsyncQueue } from "../../util/queue"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
+import { Instance } from "@/project/instance"
 
 const TuiRequest = z.object({
   path: z.string(),
@@ -15,16 +16,46 @@ const TuiRequest = z.object({
 
 type TuiRequest = z.infer<typeof TuiRequest>
 
-const request = new AsyncQueue<TuiRequest>()
-const response = new AsyncQueue<any>()
+const requests = new Map<string, AsyncQueue<TuiRequest>>()
+const responses = new Map<string, AsyncQueue<unknown>>()
+
+function queueKey() {
+  return Instance.viewID ?? "shared"
+}
+
+function requestQueue() {
+  const key = queueKey()
+  const existing = requests.get(key)
+  if (existing) return existing
+  const next = new AsyncQueue<TuiRequest>()
+  requests.set(key, next)
+  return next
+}
+
+function responseQueue() {
+  const key = queueKey()
+  const existing = responses.get(key)
+  if (existing) return existing
+  const next = new AsyncQueue<unknown>()
+  responses.set(key, next)
+  return next
+}
+
+function scoped<T extends Record<string, unknown>>(properties: T): T {
+  if (!Instance.viewID) return properties
+  return {
+    ...properties,
+    viewID: Instance.viewID,
+  }
+}
 
 export async function callTui(ctx: Context) {
   const body = await ctx.req.json()
-  request.push({
+  requestQueue().push({
     path: ctx.req.path,
     body,
   })
-  return response.next()
+  return responseQueue().next()
 }
 
 const TuiControlRoutes = new Hono()
@@ -46,7 +77,7 @@ const TuiControlRoutes = new Hono()
       },
     }),
     async (c) => {
-      const req = await request.next()
+      const req = await requestQueue().next()
       return c.json(req)
     },
   )
@@ -70,7 +101,7 @@ const TuiControlRoutes = new Hono()
     validator("json", z.any()),
     async (c) => {
       const body = c.req.valid("json")
-      response.push(body)
+      responseQueue().push(body)
       return c.json(true)
     },
   )
@@ -97,7 +128,7 @@ export const TuiRoutes = lazy(() =>
       }),
       validator("json", TuiEvent.PromptAppend.properties),
       async (c) => {
-        await Bus.publish(TuiEvent.PromptAppend, c.req.valid("json"))
+        await Bus.publish(TuiEvent.PromptAppend, scoped(c.req.valid("json")))
         return c.json(true)
       },
     )
@@ -121,6 +152,7 @@ export const TuiRoutes = lazy(() =>
       async (c) => {
         await Bus.publish(TuiEvent.CommandExecute, {
           command: "help.show",
+          viewID: Instance.viewID,
         })
         return c.json(true)
       },
@@ -145,6 +177,7 @@ export const TuiRoutes = lazy(() =>
       async (c) => {
         await Bus.publish(TuiEvent.CommandExecute, {
           command: "session.list",
+          viewID: Instance.viewID,
         })
         return c.json(true)
       },
@@ -169,6 +202,7 @@ export const TuiRoutes = lazy(() =>
       async (c) => {
         await Bus.publish(TuiEvent.CommandExecute, {
           command: "session.list",
+          viewID: Instance.viewID,
         })
         return c.json(true)
       },
@@ -193,6 +227,7 @@ export const TuiRoutes = lazy(() =>
       async (c) => {
         await Bus.publish(TuiEvent.CommandExecute, {
           command: "model.list",
+          viewID: Instance.viewID,
         })
         return c.json(true)
       },
@@ -217,6 +252,7 @@ export const TuiRoutes = lazy(() =>
       async (c) => {
         await Bus.publish(TuiEvent.CommandExecute, {
           command: "prompt.submit",
+          viewID: Instance.viewID,
         })
         return c.json(true)
       },
@@ -241,6 +277,7 @@ export const TuiRoutes = lazy(() =>
       async (c) => {
         await Bus.publish(TuiEvent.CommandExecute, {
           command: "prompt.clear",
+          viewID: Instance.viewID,
         })
         return c.json(true)
       },
@@ -283,6 +320,7 @@ export const TuiRoutes = lazy(() =>
             messages_last: "session.last",
             agent_cycle: "agent.cycle",
           }[command],
+          viewID: Instance.viewID,
         })
         return c.json(true)
       },
@@ -306,7 +344,7 @@ export const TuiRoutes = lazy(() =>
       }),
       validator("json", TuiEvent.ToastShow.properties),
       async (c) => {
-        await Bus.publish(TuiEvent.ToastShow, c.req.valid("json"))
+        await Bus.publish(TuiEvent.ToastShow, scoped(c.req.valid("json")))
         return c.json(true)
       },
     )
@@ -345,7 +383,7 @@ export const TuiRoutes = lazy(() =>
       ),
       async (c) => {
         const evt = c.req.valid("json")
-        await Bus.publish(Object.values(TuiEvent).find((def) => def.type === evt.type)!, evt.properties)
+        await Bus.publish(Object.values(TuiEvent).find((def) => def.type === evt.type)!, scoped(evt.properties))
         return c.json(true)
       },
     )
@@ -371,7 +409,7 @@ export const TuiRoutes = lazy(() =>
       async (c) => {
         const { sessionID } = c.req.valid("json")
         await Session.get(sessionID)
-        await Bus.publish(TuiEvent.SessionSelect, { sessionID })
+        await Bus.publish(TuiEvent.SessionSelect, { sessionID, viewID: Instance.viewID })
         return c.json(true)
       },
     )

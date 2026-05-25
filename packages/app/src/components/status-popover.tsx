@@ -30,6 +30,10 @@ const pluginEmptyMessage = (value: string, file: string): JSXElement => {
     </>
   )
 }
+const pluginLabel = (plugin: string | [string, Record<string, unknown>]) => {
+  if (Array.isArray(plugin)) return plugin[0]
+  return plugin
+}
 
 const listServersByHealth = (
   list: ServerConnection.Any[],
@@ -203,11 +207,11 @@ export function StatusPopover() {
       triggerProps={{
         variant: "ghost",
         class:
-          "rounded-md h-[24px] pr-3 pl-0.5 gap-2 border border-border-weak-base bg-surface-panel shadow-none data-[expanded]:bg-surface-base-active",
+          "rounded-md h-[24px] pr-2 pl-1 gap-1.5 border border-border-weak-base bg-surface-panel shadow-none data-[expanded]:bg-surface-base-active",
         style: { scale: 1 },
       }}
       trigger={
-        <div class="flex items-center gap-0.5">
+        <div class="flex items-center gap-1">
           <div class="size-4 flex items-center justify-center">
             <div
               classList={{
@@ -403,7 +407,7 @@ export function StatusPopover() {
                     {(plugin) => (
                       <div class="flex items-center gap-2 w-full px-2 py-1">
                         <div class="size-1.5 rounded-full shrink-0 bg-icon-success-base" />
-                        <span class="text-14-regular text-text-base truncate">{plugin}</span>
+                        <span class="text-14-regular text-text-base truncate">{pluginLabel(plugin)}</span>
                       </div>
                     )}
                   </For>

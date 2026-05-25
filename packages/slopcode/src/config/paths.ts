@@ -3,21 +3,17 @@ import os from "os"
 import z from "zod"
 import { type ParseError as JsoncParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser"
 import { NamedError } from "@slopcode-ai/util/error"
+import { configNames, product } from "@slopcode-ai/util/product"
 import { Filesystem } from "@/util/filesystem"
 import { Flag } from "@/flag/flag"
 import { Global } from "@/global"
 
 export namespace ConfigPaths {
-  const configDirs = [".opencode", ".slopcode"]
-
-  function names(name: string) {
-    if (name === "slopcode") return ["opencode", "slopcode"]
-    return [name]
-  }
+  const configDirs = [...product.config.dirs]
 
   export async function projectFiles(name: string, directory: string, worktree: string) {
     const files: string[] = []
-    for (const base of names(name)) {
+    for (const base of configNames(name)) {
       for (const file of [`${base}.jsonc`, `${base}.json`]) {
         const found = await Filesystem.findUp(file, directory, worktree)
         for (const resolved of found.toReversed()) {
@@ -56,7 +52,7 @@ export namespace ConfigPaths {
   }
 
   export function fileInDirectory(dir: string, name: string) {
-    return names(name).flatMap((item) => [path.join(dir, `${item}.jsonc`), path.join(dir, `${item}.json`)])
+    return configNames(name).flatMap((item) => [path.join(dir, `${item}.jsonc`), path.join(dir, `${item}.json`)])
   }
 
   export const JsonError = NamedError.create(

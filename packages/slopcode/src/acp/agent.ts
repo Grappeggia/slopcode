@@ -68,7 +68,7 @@ export namespace ACP {
 
     const provider = providers.find((p) => p.id === providerID)
     const model = provider?.models[modelID]
-    return model?.limit.context ?? null
+    return model ? (model.limit.input ?? model.limit.context) : null
   }
 
   async function sendUsageUpdate(
@@ -212,6 +212,7 @@ export namespace ACP {
                   await this.sdk.permission.reply({
                     requestID: permission.id,
                     reply: "reject",
+                    sessionID: permission.sessionID,
                     directory,
                   })
                   return undefined
@@ -222,6 +223,7 @@ export namespace ACP {
                 await this.sdk.permission.reply({
                   requestID: permission.id,
                   reply: "reject",
+                  sessionID: permission.sessionID,
                   directory,
                 })
                 return
@@ -246,6 +248,7 @@ export namespace ACP {
               await this.sdk.permission.reply({
                 requestID: permission.id,
                 reply: res.outcome.optionId as "once" | "always" | "reject",
+                sessionID: permission.sessionID,
                 directory,
               })
             })

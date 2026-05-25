@@ -6,6 +6,7 @@ import { Persist, persisted } from "@/utils/persist"
 import { createScopedCache } from "@/utils/scoped-cache"
 import { uuid } from "@/utils/uuid"
 import type { SelectedLineRange } from "@/context/file"
+import { usePlatform } from "@/context/platform"
 
 export type LineComment = {
   id: string
@@ -166,11 +167,15 @@ export function createCommentSessionForTest(comments: Record<string, LineComment
   return createCommentSessionState(store, setStore)
 }
 
-function createCommentSession(dir: string, id: string | undefined) {
+function createCommentSession(dir: string, id: string | undefined, scope?: string) {
   const legacy = `${dir}/comments${id ? "/" + id : ""}.v1`
 
   const [store, setStore, _, ready] = persisted(
-    Persist.scoped(dir, id, "comments", [legacy]),
+    {
+      ...Persist.scoped(dir, id, "comments", [legacy]),
+      scope,
+      sync: false,
+    },
     createStore<CommentStore>({
       comments: {},
     }),
@@ -200,11 +205,13 @@ export const { use: useComments, provider: CommentsProvider } = createSimpleCont
   gate: false,
   init: () => {
     const params = useParams()
+    const platform = usePlatform()
+    const scope = platform.viewID?.()
     const cache = createScopedCache(
       (key) => {
         const decoded = decodeSessionKey(key)
         return createRoot((dispose) => ({
-          value: createCommentSession(decoded.dir, decoded.id === WORKSPACE_KEY ? undefined : decoded.id),
+          value: createCommentSession(decoded.dir, decoded.id === WORKSPACE_KEY ? undefined : decoded.id, scope),
           dispose,
         }))
       },

@@ -6,7 +6,7 @@ import { Identifier } from "../id/id"
 import { LSP } from "../lsp"
 import { Snapshot } from "@/snapshot"
 import { fn } from "@/util/fn"
-import { Database, eq, desc, inArray } from "@/storage/db"
+import { Database, and, desc, eq, inArray, lt } from "@/storage/db"
 import { MessageTable, PartTable } from "./session.sql"
 import { ProviderTransform } from "@/provider/transform"
 import { STATUS_CODES } from "http"
@@ -16,9 +16,26 @@ import { iife } from "@/util/iife"
 import { type SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
 
+interface FetchDecompressionError extends Error {
+  code: "ZlibError"
+  errno: number
+  path: string
+}
+
 export namespace MessageV2 {
+  export function isMedia(mime: string) {
+    return mime.startsWith("image/") || mime === "application/pdf"
+  }
+
   export const OutputLengthError = NamedError.create("MessageOutputLengthError", z.object({}))
   export const AbortedError = NamedError.create("MessageAbortedError", z.object({ message: z.string() }))
+  export const TimeoutError = NamedError.create(
+    "MessageTimeoutError",
+    z.object({
+      message: z.string(),
+      timeout: z.number(),
+    }),
+  )
   export const StructuredOutputError = NamedError.create(
     "StructuredOutputError",
     z.object({
@@ -196,6 +213,7 @@ export namespace MessageV2 {
   export const CompactionPart = PartBase.extend({
     type: z.literal("compaction"),
     auto: z.boolean(),
+    overflow: z.boolean().optional(),
   }).meta({
     ref: "CompactionPart",
   })
@@ -253,6 +271,7 @@ export namespace MessageV2 {
         write: z.number(),
       }),
     }),
+    metadata: z.record(z.string(), z.any()).optional(),
   }).meta({
     ref: "StepFinishPart",
   })
@@ -400,6 +419,7 @@ export namespace MessageV2 {
         NamedError.Unknown.Schema,
         OutputLengthError.Schema,
         AbortedError.Schema,
+        TimeoutError.Schema,
         StructuredOutputError.Schema,
         ContextOverflowError.Schema,
         APIError.Schema,
@@ -488,7 +508,17 @@ export namespace MessageV2 {
   })
   export type WithParts = z.infer<typeof WithParts>
 
-  export function toModelMessages(input: WithParts[], model: Provider.Model): ModelMessage[] {
+  export const PartChunk = z.object({
+    messageID: Identifier.schema("message"),
+    parts: Part.array(),
+  })
+  export type PartChunk = z.infer<typeof PartChunk>
+
+  export function toModelMessages(
+    input: WithParts[],
+    model: Provider.Model,
+    options?: { stripMedia?: boolean },
+  ): ModelMessage[] {
     const result: UIMessage[] = []
     const toolNames = new Set<string>()
     // Track media from tool results that need to be injected as user messages
@@ -562,13 +592,22 @@ export namespace MessageV2 {
               text: part.text,
             })
           // text/plain and directory files are converted into text parts, ignore them
-          if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory")
-            userMessage.parts.push({
-              type: "file",
-              url: part.url,
-              mediaType: part.mime,
-              filename: part.filename,
-            })
+          if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory") {
+            if (options?.stripMedia && isMedia(part.mime)) {
+              userMessage.parts.push({
+                type: "text",
+                text: `[Attached ${part.mime}: ${part.filename ?? "file"}]`,
+              })
+            }
+            if (!(options?.stripMedia && isMedia(part.mime))) {
+              userMessage.parts.push({
+                type: "file",
+                url: part.url,
+                mediaType: part.mime,
+                filename: part.filename,
+              })
+            }
+          }
 
           if (part.type === "compaction") {
             userMessage.parts.push({
@@ -618,12 +657,11 @@ export namespace MessageV2 {
             toolNames.add(part.tool)
             if (part.state.status === "completed") {
               const outputText = part.state.time.compacted ? "[Old tool result content cleared]" : part.state.output
-              const attachments = part.state.time.compacted ? [] : (part.state.attachments ?? [])
+              const attachments = part.state.time.compacted || options?.stripMedia ? [] : (part.state.attachments ?? [])
 
               // For providers that don't support media in tool results, extract media files
               // (images, PDFs) to be sent as a separate user message
-              const isMediaAttachment = (a: { mime: string }) =>
-                a.mime.startsWith("image/") || a.mime === "application/pdf"
+              const isMediaAttachment = (a: { mime: string }) => isMedia(a.mime)
               const mediaAttachments = attachments.filter(isMediaAttachment)
               const nonMediaAttachments = attachments.filter((a) => !isMediaAttachment(a))
               if (!supportsMediaInToolResults && mediaAttachments.length > 0) {
@@ -712,6 +750,57 @@ export namespace MessageV2 {
       },
     )
   }
+
+  export const index = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+      limit: z.number().optional(),
+      cursor: z.number().optional(),
+    }),
+    async (input) => {
+      const rows = Database.use((db) => {
+        const where = input.cursor
+          ? and(eq(MessageTable.session_id, input.sessionID), lt(MessageTable.time_created, input.cursor))
+          : eq(MessageTable.session_id, input.sessionID)
+        return db
+          .select()
+          .from(MessageTable)
+          .where(where)
+          .orderBy(desc(MessageTable.time_created))
+          .limit(input.limit ?? 400)
+          .all()
+      })
+      return rows.map((row) => ({ ...row.data, id: row.id, sessionID: row.session_id }) as MessageV2.Info)
+    },
+  )
+
+  export const chunk = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+      messageIDs: z.array(Identifier.schema("message")).min(1).max(100),
+    }),
+    async (input) => {
+      const rows = Database.use((db) =>
+        db
+          .select()
+          .from(PartTable)
+          .where(and(eq(PartTable.session_id, input.sessionID), inArray(PartTable.message_id, input.messageIDs)))
+          .orderBy(PartTable.message_id, PartTable.id)
+          .all(),
+      )
+      const map = new Map<string, MessageV2.Part[]>()
+      for (const row of rows) {
+        const part = { ...row.data, id: row.id, sessionID: row.session_id, messageID: row.message_id } as MessageV2.Part
+        const list = map.get(row.message_id)
+        if (list) list.push(part)
+        else map.set(row.message_id, [part])
+      }
+      return input.messageIDs.map((messageID) => ({
+        messageID,
+        parts: map.get(messageID) ?? [],
+      }))
+    },
+  )
 
   export const stream = fn(Identifier.schema("session"), async function* (sessionID) {
     const size = 50
@@ -808,7 +897,7 @@ export namespace MessageV2 {
     return result
   }
 
-  export function fromError(e: unknown, ctx: { providerID: string }) {
+  export function fromError(e: unknown, ctx: { providerID: string; aborted?: boolean }) {
     switch (true) {
       case e instanceof DOMException && e.name === "AbortError":
         return new MessageV2.AbortedError(
@@ -840,6 +929,23 @@ export namespace MessageV2 {
           },
           { cause: e },
         ).toObject()
+      case e instanceof Error && (e as FetchDecompressionError).code === "ZlibError": {
+        const error = e as FetchDecompressionError
+        if (ctx.aborted) {
+          return new MessageV2.AbortedError({ message: error.message }, { cause: error }).toObject()
+        }
+        return new MessageV2.APIError(
+          {
+            message: "Response decompression failed",
+            isRetryable: true,
+            metadata: {
+              code: error.code,
+              message: error.message,
+            },
+          },
+          { cause: error },
+        ).toObject()
+      }
       case APICallError.isInstance(e):
         const parsed = ProviderError.parseAPICallError({
           providerID: ctx.providerID,

@@ -53,6 +53,21 @@ To run SlopCode in the root of the slopcode repo itself:
 bun dev .
 ```
 
+### Pulling upstream updates
+
+This fork is intended to pull/rebase updates from upstream into SlopCode. Do not push to upstream.
+
+```bash
+git remote add upstream https://github.com/sst/opencode.git
+# block accidental pushes to upstream
+git remote set-url --push upstream DISABLED
+git fetch upstream
+git checkout dev
+git rebase upstream/dev
+```
+
+If `upstream` already exists, skip the `git remote add upstream ...` command and keep the fetch-only push URL.
+
 ### Building a "localcode"
 
 To compile a standalone executable:
@@ -68,6 +83,21 @@ Then run it with:
 ```
 
 Replace `<platform>` with your platform (e.g., `darwin-arm64`, `linux-x64`).
+
+### Releasing
+
+Trigger releases from a clean worktree:
+
+```bash
+bun run release patch
+bun run release minor
+bun run release major
+bun run release 1.2.3
+```
+
+`bun run release` updates version metadata, creates the release commit and tag, builds the CLI locally, uploads the prebuilt release assets to GitHub, and then dispatches `.github/workflows/publish.yml` on `dev` to publish those artifacts via npm trusted publishing.
+
+Once the published npm packages trust `teamslop/slopcode/.github/workflows/publish.yml`, no local OTP or npm token is needed. GitHub Actions only handles the publish step and release finalization. Use the Actions UI only if you want to trigger the workflow manually.
 
 - Core pieces:
   - `packages/slopcode`: SlopCode core business logic & server.

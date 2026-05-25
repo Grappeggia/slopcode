@@ -25,10 +25,15 @@ export function DialogConfirm(props: DialogConfirmProps) {
       if (store.active === "confirm") props.onConfirm?.()
       if (store.active === "cancel") props.onCancel?.()
       dialog.clear()
+      evt.preventDefault()
+      evt.stopPropagation()
+      return
     }
 
     if (evt.name === "left" || evt.name === "right") {
       setStore("active", store.active === "confirm" ? "cancel" : "confirm")
+      evt.preventDefault()
+      evt.stopPropagation()
     }
   })
   return (
@@ -37,7 +42,14 @@ export function DialogConfirm(props: DialogConfirmProps) {
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           {props.title}
         </text>
-        <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+        <text
+          fg={theme.textMuted}
+          onMouseUp={(evt) => {
+            evt.preventDefault()
+            evt.stopPropagation()
+            dialog.clear()
+          }}
+        >
           esc
         </text>
       </box>
@@ -52,6 +64,8 @@ export function DialogConfirm(props: DialogConfirmProps) {
               paddingRight={1}
               backgroundColor={key === store.active ? theme.primary : undefined}
               onMouseUp={(evt) => {
+                evt.preventDefault()
+                evt.stopPropagation()
                 if (key === "confirm") props.onConfirm?.()
                 if (key === "cancel") props.onCancel?.()
                 dialog.clear()

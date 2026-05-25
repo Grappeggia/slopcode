@@ -177,7 +177,7 @@ describe("applyDirectoryEvent", () => {
         todo: { ses_1: [] },
         permission: { ses_1: [] },
         question: { ses_1: [] },
-        session_status: { ses_1: { type: "busy" } },
+        session_status: { ses_1: { type: "busy", phase: "running", since: 1, updated: 1 } },
       }),
     )
 
@@ -223,7 +223,7 @@ describe("applyDirectoryEvent", () => {
           todo: { [item.info.id]: [] },
           permission: { [item.info.id]: [] },
           question: { [item.info.id]: [] },
-          session_status: { [item.info.id]: { type: "busy" } },
+          session_status: { [item.info.id]: { type: "busy", phase: "running", since: 1, updated: 1 } },
         }),
       )
 

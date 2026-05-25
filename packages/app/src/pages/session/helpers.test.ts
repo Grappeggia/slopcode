@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { createOpenReviewFile, createOpenSessionFileTab, focusTerminalById, getTabReorderIndex } from "./helpers"
+import {
+  adjacentTab,
+  createOpenReviewFile,
+  createOpenSessionFileTab,
+  focusTerminalById,
+  getTabReorderIndex,
+  visibleTabs,
+} from "./helpers"
 
 describe("createOpenReviewFile", () => {
   test("opens and loads selected review file", () => {
@@ -84,5 +91,49 @@ describe("getTabReorderIndex", () => {
 
   test("returns undefined for unknown droppable id", () => {
     expect(getTabReorderIndex(["a", "b", "c"], "a", "missing")).toBeUndefined()
+  })
+})
+
+describe("visibleTabs", () => {
+  test("includes review first when reviewTab is true", () => {
+    expect(visibleTabs({ reviewTab: true, contextOpen: false, openedTabs: ["a"] })).toEqual(["review", "a"])
+  })
+
+  test("includes context after review when both open", () => {
+    expect(visibleTabs({ reviewTab: true, contextOpen: true, openedTabs: ["a"] })).toEqual(["review", "context", "a"])
+  })
+
+  test("omits review when reviewTab is false", () => {
+    expect(visibleTabs({ reviewTab: false, contextOpen: true, openedTabs: ["a"] })).toEqual(["context", "a"])
+  })
+
+  test("returns only file tabs when review and context are closed", () => {
+    expect(visibleTabs({ reviewTab: false, contextOpen: false, openedTabs: ["a", "b"] })).toEqual(["a", "b"])
+  })
+})
+
+describe("adjacentTab", () => {
+  test("returns next tab", () => {
+    expect(adjacentTab(["review", "a", "b"], "review", 1)).toBe("a")
+  })
+
+  test("returns previous tab", () => {
+    expect(adjacentTab(["review", "a", "b"], "a", -1)).toBe("review")
+  })
+
+  test("wraps from last to first", () => {
+    expect(adjacentTab(["a", "b", "c"], "c", 1)).toBe("a")
+  })
+
+  test("wraps from first to last", () => {
+    expect(adjacentTab(["a", "b", "c"], "a", -1)).toBe("c")
+  })
+
+  test("returns first tab when active is not in list", () => {
+    expect(adjacentTab(["a", "b"], "unknown", 1)).toBe("a")
+  })
+
+  test("returns undefined for empty list", () => {
+    expect(adjacentTab([], "a", 1)).toBeUndefined()
   })
 })

@@ -32,7 +32,7 @@ import { applyDirectoryEvent, applyGlobalEvent } from "./global-sync/event-reduc
 import { createRefreshQueue } from "./global-sync/queue"
 import { estimateRootSessionTotal, loadRootSessionsWithFallback } from "./global-sync/session-load"
 import { trimSessions } from "./global-sync/session-trim"
-import type { ProjectMeta } from "./global-sync/types"
+import type { ProjectMeta, SessionHistory } from "./global-sync/types"
 import { SESSION_RECENT_LIMIT } from "./global-sync/types"
 import { sanitizeProject } from "./global-sync/utils"
 import { usePlatform } from "./platform"
@@ -250,6 +250,28 @@ function createGlobalSync() {
     return promise
   }
 
+  const persistHistory = (directory: string, store: ReturnType<typeof children.ensureChild>[0], sessionID: string) => {
+    const messages = store.message[sessionID]
+    const history = store.history[sessionID]
+    if (!messages || !history) {
+      historyApi.write(directory, sessionID, undefined)
+      return
+    }
+
+    historyApi.write(directory, sessionID, {
+      message: messages,
+      part: Object.fromEntries(
+        messages.flatMap((message) => {
+          const parts = store.part[message.id]
+          if (parts === undefined) return []
+          return [[message.id, parts] as const]
+        }),
+      ),
+      limit: history.limit,
+      complete: history.complete,
+    })
+  }
+
   const unsub = globalSDK.event.listen((e) => {
     const directory = e.name
     const event = e.details
@@ -287,6 +309,7 @@ function createGlobalSync() {
       push: queue.push,
       setSessionTodo,
       vcsCache: children.vcsCache.get(directory),
+      persistHistory: (sessionID) => persistHistory(directory, store, sessionID),
       loadLsp: () => {
         sdkFor(directory)
           .lsp.status()
@@ -334,6 +357,20 @@ function createGlobalSync() {
     },
   }
 
+  const historyApi = {
+    read(directory: string, sessionID: string) {
+      return children.historyCache.get(directory)?.store.value[sessionID]
+    },
+    write(directory: string, sessionID: string, value: SessionHistory | undefined) {
+      const cache = children.historyCache.get(directory)
+      if (!cache) return
+      cache.setStore("value", sessionID, value)
+    },
+    ready(directory: string) {
+      return children.historyCache.get(directory)?.ready() ?? false
+    },
+  }
+
   const updateConfig = async (config: Config) => {
     setGlobalStore("reload", "pending")
     return globalSDK.client.global.config
@@ -361,6 +398,7 @@ function createGlobalSync() {
     bootstrap,
     updateConfig,
     project: projectApi,
+    history: historyApi,
     todo: {
       set: setSessionTodo,
     },

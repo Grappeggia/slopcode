@@ -211,16 +211,19 @@ export namespace Worktree {
       .catch(() => false)
   }
 
-  function outputText(input: Uint8Array | undefined) {
+  type ShellBytes = Buffer | Uint8Array
+  type ShellResult = { stdout?: ShellBytes; stderr?: ShellBytes }
+
+  function outputText(input: ShellBytes | undefined) {
     if (!input?.length) return ""
-    return new TextDecoder().decode(input).trim()
+    return new TextDecoder().decode(Uint8Array.from(input)).trim()
   }
 
-  function errorText(result: { stdout?: Uint8Array; stderr?: Uint8Array }) {
+  function errorText(result: ShellResult) {
     return [outputText(result.stderr), outputText(result.stdout)].filter(Boolean).join("\n")
   }
 
-  function failed(result: { stdout?: Uint8Array; stderr?: Uint8Array }) {
+  function failed(result: ShellResult) {
     return [outputText(result.stderr), outputText(result.stdout)].filter(Boolean).flatMap((chunk) =>
       chunk
         .split("\n")
@@ -422,7 +425,7 @@ export namespace Worktree {
     }
 
     const directory = await canonical(input.directory)
-    const locate = async (stdout: Uint8Array | undefined) => {
+    const locate = async (stdout: ShellBytes | undefined) => {
       const lines = outputText(stdout)
         .split("\n")
         .map((line) => line.trim())

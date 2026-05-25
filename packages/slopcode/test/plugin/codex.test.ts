@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import {
+  OAUTH_ALLOWED_MODELS,
   parseJwtClaims,
   extractAccountIdFromClaims,
   extractAccountId,
+  getCodexSessionID,
   type IdTokenClaims,
 } from "../../src/plugin/codex"
 
@@ -13,6 +15,24 @@ function createTestJwt(payload: object): string {
 }
 
 describe("plugin.codex", () => {
+  describe("OAUTH_ALLOWED_MODELS", () => {
+    test("includes GPT-5.5 models", () => {
+      expect(OAUTH_ALLOWED_MODELS.has("gpt-5.5")).toBe(true)
+      expect(OAUTH_ALLOWED_MODELS.has("gpt-5.5-pro")).toBe(true)
+    })
+  })
+
+  describe("getCodexSessionID", () => {
+    test("uses the local session before compaction", () => {
+      expect(getCodexSessionID("ses_123", 0)).toBe("ses_123")
+    })
+
+    test("rotates the remote session after compaction", () => {
+      expect(getCodexSessionID("ses_123", 1)).toBe("ses_123-compact-1")
+      expect(getCodexSessionID("ses_123", 2)).toBe("ses_123-compact-2")
+    })
+  })
+
   describe("parseJwtClaims", () => {
     test("parses valid JWT with claims", () => {
       const payload = { email: "test@example.com", chatgpt_account_id: "acc-123" }

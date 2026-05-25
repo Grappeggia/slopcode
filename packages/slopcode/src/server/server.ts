@@ -13,6 +13,7 @@ import { NamedError } from "@slopcode-ai/util/error"
 import { LSP } from "../lsp"
 import { Format } from "../format"
 import { TuiRoutes } from "./routes/tui"
+import { EditorRoutes } from "./routes/editor"
 import { Instance } from "../project/instance"
 import { Vcs } from "../project/vcs"
 import { Agent } from "../agent/agent"
@@ -29,6 +30,7 @@ import { FileRoutes } from "./routes/file"
 import { ConfigRoutes } from "./routes/config"
 import { ExperimentalRoutes } from "./routes/experimental"
 import { ProviderRoutes } from "./routes/provider"
+import { V2Routes } from "./routes/v2"
 import { lazy } from "../util/lazy"
 import { InstanceBootstrap } from "../project/bootstrap"
 import { NotFoundError } from "../storage/db"
@@ -39,16 +41,91 @@ import { errors } from "./error"
 import { QuestionRoutes } from "./routes/question"
 import { PermissionRoutes } from "./routes/permission"
 import { GlobalRoutes } from "./routes/global"
+import { DaemonRoutes } from "./routes/daemon"
 import { MDNS } from "./mdns"
+import { DaemonAuth } from "@/daemon/auth"
+import { DaemonRuntime } from "@/daemon/runtime"
+import { Identifier } from "@/id/id"
+import { getAdaptor } from "@/control-plane/adaptors"
+import { Workspace } from "@/control-plane/workspace"
+import { GlobalBus } from "@/bus/global"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
 
 export namespace Server {
   const log = Log.create({ service: "server" })
+  const remoteWorkspaceProxyPrefixes = [
+    "/event",
+    "/path",
+    "/vcs",
+    "/find",
+    "/file",
+    "/session",
+    "/permission",
+    "/question",
+    "/editor",
+    "/pty",
+    "/lsp",
+    "/formatter",
+    "/mcp",
+    "/experimental/resource",
+    "/api",
+  ]
+
+  function shouldProxyRemoteWorkspace(path: string) {
+    return remoteWorkspaceProxyPrefixes.some((prefix) => path === prefix || path.startsWith(prefix + "/"))
+  }
 
   let _url: URL | undefined
   let _corsWhitelist: string[] = []
+  let _daemonToken: string | undefined
+
+  function secure(input: { daemonToken?: string }) {
+    if (input.daemonToken) return
+    if (Flag.SLOPCODE_SERVER_PASSWORD) return
+    throw new Error(
+      "SLOPCODE_SERVER_PASSWORD is required to start the slopcode server. Refusing to run an unauthenticated server.",
+    )
+  }
+
+  const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null
+
+  const session = (event: { type: string; properties?: unknown }) => {
+    const props = event.properties
+    if (!record(props)) return
+    if (typeof props.sessionID === "string") return props.sessionID
+    if (record(props.part) && typeof props.part.sessionID === "string") return props.part.sessionID
+    if (record(props.info)) {
+      if (typeof props.info.sessionID === "string") return props.info.sessionID
+      if (event.type.startsWith("session.") && typeof props.info.id === "string") return props.info.id
+    }
+  }
+
+  const view = (event: { type: string; properties?: unknown }) => {
+    const props = event.properties
+    if (!record(props)) return
+    if (typeof props.viewID === "string") return props.viewID
+    if (typeof props.view_id === "string") return props.view_id
+    if (record(props.info) && typeof props.info.viewID === "string") return props.info.viewID
+  }
+
+  const crossView = (type: string) =>
+    type === "session.status" ||
+    type === "session.idle" ||
+    type.startsWith("permission.") ||
+    type.startsWith("question.")
+
+  const match = (event: { type: string; properties?: unknown }, sessionID?: string, viewID?: string) => {
+    if (viewID && !crossView(event.type)) {
+      const current = view(event)
+      if (current && current !== viewID) return false
+    }
+    if (!sessionID) return true
+    const next = session(event)
+    if (!next) return true
+    return next === sessionID
+  }
 
   export function url(): URL {
     return _url ?? new URL("http://localhost:4096")
@@ -77,14 +154,21 @@ export namespace Server {
             status: 500,
           })
         })
-        .use((c, next) => {
+        .use(async (c, next) => {
           // Allow CORS preflight requests to succeed without auth.
           // Browser clients sending Authorization headers will preflight with OPTIONS.
           if (c.req.method === "OPTIONS") return next()
+          if (_daemonToken) {
+            const token = c.req.header(DaemonAuth.Header) || c.req.query("daemonToken")
+            if (DaemonAuth.valid(token)) return next()
+          }
           const password = Flag.SLOPCODE_SERVER_PASSWORD
-          if (!password) return next()
-          const username = Flag.SLOPCODE_SERVER_USERNAME ?? "slopcode"
-          return basicAuth({ username, password })(c, next)
+          if (password) {
+            const username = Flag.SLOPCODE_SERVER_USERNAME ?? "slopcode"
+            return basicAuth({ username, password })(c, next)
+          }
+          if (_daemonToken) return c.text("Unauthorized", 401)
+          return next()
         })
         .use(async (c, next) => {
           const skipLogging = c.req.path === "/log"
@@ -130,6 +214,7 @@ export namespace Server {
           }),
         )
         .route("/global", GlobalRoutes())
+        .route("/daemon", DaemonRoutes())
         .put(
           "/auth/:providerID",
           describeRoute({
@@ -195,6 +280,8 @@ export namespace Server {
         .use(async (c, next) => {
           if (c.req.path === "/log") return next()
           const raw = c.req.query("directory") || c.req.header("x-slopcode-directory") || process.cwd()
+          const workspaceID = c.req.query("workspace") || c.req.header("x-slopcode-workspace") || undefined
+          const viewID = c.req.query("viewID") || c.req.header("x-slopcode-view-id") || undefined
           const directory = (() => {
             try {
               return decodeURIComponent(raw)
@@ -202,12 +289,40 @@ export namespace Server {
               return raw
             }
           })()
+          const workspace = workspaceID ? await Workspace.get(workspaceID) : undefined
+          if (workspaceID && !workspace) {
+            return c.text(`Workspace not found: ${workspaceID}`, 500)
+          }
+          if (workspace && workspace.config.type !== "worktree" && shouldProxyRemoteWorkspace(c.req.path)) {
+            const url = new URL(c.req.url)
+            const body =
+              c.req.raw.method === "GET" || c.req.raw.method === "HEAD" ? undefined : await c.req.raw.arrayBuffer()
+            const response = await getAdaptor(workspace.projectID, workspace.config.type).request(
+              workspace.config,
+              c.req.raw.method,
+              `${url.pathname}${url.search}`,
+              body,
+              c.req.raw.signal,
+            )
+            if (!response) {
+              return c.text(`Workspace proxy failed: ${workspace.id}`, 500)
+            }
+            return response
+          }
+          const target = workspace
+            ? (() => {
+                const value = workspace.config.directory
+                return typeof value === "string" ? value : workspace.id
+              })()
+            : directory
+          if (!target) {
+            return c.text(`Workspace not found: ${workspaceID}`, 500)
+          }
           return Instance.provide({
-            directory,
+            directory: target,
+            viewID,
             init: InstanceBootstrap,
-            async fn() {
-              return next()
-            },
+            fn: () => next(),
           })
         })
         .get(
@@ -226,12 +341,14 @@ export namespace Server {
         .use(validator("query", z.object({ directory: z.string().optional() })))
         .route("/project", ProjectRoutes())
         .route("/pty", PtyRoutes())
+        .route("/editor", EditorRoutes())
         .route("/config", ConfigRoutes())
         .route("/experimental", ExperimentalRoutes())
         .route("/session", SessionRoutes())
         .route("/permission", PermissionRoutes())
         .route("/question", QuestionRoutes())
         .route("/provider", ProviderRoutes())
+        .route("/api", V2Routes())
         .route("/", FileRoutes())
         .route("/mcp", McpRoutes())
         .route("/tui", TuiRoutes())
@@ -499,8 +616,18 @@ export namespace Server {
               },
             },
           }),
+          validator(
+            "query",
+            z.object({
+              sessionID: Identifier.schema("session").optional(),
+            }),
+          ),
           async (c) => {
+            const input = c.req.valid("query")
+            const viewID = Instance.viewID
+            const directory = Instance.directory
             log.info("event connected")
+            DaemonRuntime.connect()
             c.header("X-Accel-Buffering", "no")
             c.header("X-Content-Type-Options", "nosniff")
             return streamSSE(c, async (stream) => {
@@ -511,6 +638,7 @@ export namespace Server {
                 }),
               })
               const unsub = Bus.subscribeAll(async (event) => {
+                if (!match(event, input.sessionID, viewID)) return
                 await stream.writeSSE({
                   data: JSON.stringify(event),
                 })
@@ -518,6 +646,21 @@ export namespace Server {
                   stream.close()
                 }
               })
+              async function forward(event: { type: string; properties?: unknown }) {
+                const current = view(event)
+                if (!crossView(event.type)) return
+                if (current === viewID) return
+                if (!viewID && !current) return
+                if (!match(event, input.sessionID, viewID)) return
+                await stream.writeSSE({
+                  data: JSON.stringify(event),
+                })
+              }
+              function globalHandler(input: { directory?: string; payload: { type: string; properties?: unknown } }) {
+                if (input.directory !== directory) return
+                void forward(input.payload)
+              }
+              GlobalBus.on("event", globalHandler)
 
               // Send heartbeat every 10s to prevent stalled proxy streams.
               const heartbeat = setInterval(() => {
@@ -533,6 +676,8 @@ export namespace Server {
                 stream.onAbort(() => {
                   clearInterval(heartbeat)
                   unsub()
+                  GlobalBus.off("event", globalHandler)
+                  DaemonRuntime.disconnect()
                   resolve()
                   log.info("event disconnected")
                 })
@@ -579,8 +724,12 @@ export namespace Server {
     mdns?: boolean
     mdnsDomain?: string
     cors?: string[]
+    daemonToken?: string
   }) {
+    secure(opts)
     _corsWhitelist = opts.cors ?? []
+    _daemonToken = opts.daemonToken
+    DaemonAuth.set(opts.daemonToken)
 
     const args = {
       hostname: opts.hostname,
@@ -615,6 +764,8 @@ export namespace Server {
     const originalStop = server.stop.bind(server)
     server.stop = async (closeActiveConnections?: boolean) => {
       if (shouldPublishMDNS) MDNS.unpublish()
+      _daemonToken = undefined
+      DaemonAuth.set(undefined)
       return originalStop(closeActiveConnections)
     }
 

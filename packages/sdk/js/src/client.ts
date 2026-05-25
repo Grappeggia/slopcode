@@ -5,7 +5,7 @@ import { type Config } from "./gen/client/types.gen.js"
 import { SlopcodeClient } from "./gen/sdk.gen.js"
 export { type Config as SlopcodeClientConfig, SlopcodeClient }
 
-export function createSlopcodeClient(config?: Config & { directory?: string }) {
+export function createSlopcodeClient(config?: Config & { directory?: string; viewID?: string }) {
   if (!config?.fetch) {
     const customFetch: any = (req: any) => {
       // @ts-ignore
@@ -22,6 +22,13 @@ export function createSlopcodeClient(config?: Config & { directory?: string }) {
     config.headers = {
       ...config.headers,
       "x-slopcode-directory": encodeURIComponent(config.directory),
+    }
+  }
+
+  if (config?.viewID) {
+    config.headers = {
+      ...config.headers,
+      "x-slopcode-view-id": config.viewID,
     }
   }
 

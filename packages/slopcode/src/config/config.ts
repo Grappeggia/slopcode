@@ -1,7 +1,7 @@
 import { Log } from "../util/log"
 import path from "path"
 import { pathToFileURL, fileURLToPath } from "url"
-import { createRequire } from "module"
+
 import os from "os"
 import z from "zod"
 import { ModelsDev } from "../provider/models"
@@ -10,6 +10,7 @@ import { Global } from "../global"
 import fs from "fs/promises"
 import { lazy } from "../util/lazy"
 import { NamedError } from "@slopcode-ai/util/error"
+import { product } from "@slopcode-ai/util/product"
 import { Flag } from "../flag/flag"
 import { Auth } from "../auth"
 import {
@@ -32,25 +33,27 @@ import { Glob } from "../util/glob"
 import { PackageRegistry } from "@/bun/registry"
 import { proxied } from "@/util/proxied"
 import { iife } from "@/util/iife"
-import { Control } from "@/control"
+import { Account } from "@/account"
 import { ConfigPaths } from "./paths"
 import { Filesystem } from "@/util/filesystem"
+import { ConfigPlugin } from "./plugin"
 
 export namespace Config {
   const ModelId = z.string().meta({ $ref: "https://models.dev/model-schema.json#/$defs/Model" })
 
   const log = Log.create({ service: "config" })
+  export const DEFAULT_SESSION_TURN_TIMEOUT = 150 * 60 * 1000
 
   // Managed settings directory for enterprise deployments (highest priority, admin-controlled)
   // These settings override all user and project settings
   function systemManagedConfigDir(): string {
     switch (process.platform) {
       case "darwin":
-        return "/Library/Application Support/slopcode"
+        return `/Library/Application Support/${product.id}`
       case "win32":
-        return path.join(process.env.ProgramData || "C:\\ProgramData", "slopcode")
+        return path.join(process.env.ProgramData || "C:\\ProgramData", product.id)
       default:
-        return "/etc/slopcode"
+        return `/etc/${product.id}`
     }
   }
 
@@ -60,16 +63,55 @@ export namespace Config {
 
   const managedDir = managedConfigDir()
 
+  function scope(source: string): ConfigPlugin.Scope {
+    if (!source) return "local"
+    if (/^[a-z]+:\/\//i.test(source) && !source.startsWith("file://")) return "global"
+    const file = source.startsWith("file://") ? fileURLToPath(source) : source
+    if (Filesystem.contains(Instance.directory, file)) return "local"
+    if (Instance.worktree !== "/" && Filesystem.contains(Instance.worktree, file)) return "local"
+    return "global"
+  }
+
+  function origins(config: Info) {
+    if (config.plugin_origins) return config.plugin_origins
+    return (config.plugin ?? []).map((spec) => ({ spec, source: "", scope: "local" as const }))
+  }
+
+  function syncPlugins(config: Info, list: ConfigPlugin.Origin[]) {
+    const plugins = ConfigPlugin.deduplicatePluginOrigins(list)
+    config.plugin_origins = plugins
+    config.plugin = plugins.map((plugin) => plugin.spec)
+  }
+
   // Custom merge function that concatenates array fields instead of replacing them
   function mergeConfigConcatArrays(target: Info, source: Info): Info {
     const merged = mergeDeep(target, source)
-    if (target.plugin && source.plugin) {
-      merged.plugin = Array.from(new Set([...target.plugin, ...source.plugin]))
+    if (target.plugin || source.plugin || target.plugin_origins || source.plugin_origins) {
+      syncPlugins(merged, [...origins(target), ...origins(source)])
     }
     if (target.instructions && source.instructions) {
       merged.instructions = Array.from(new Set([...target.instructions, ...source.instructions]))
     }
     return merged
+  }
+
+  function record(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+  }
+
+  async function fetchRemoteConfigPointer(value: unknown, source: string) {
+    if (!record(value) || typeof value.url !== "string") return {}
+    const headers = record(value.headers)
+      ? Object.fromEntries(
+          Object.entries(value.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+        )
+      : undefined
+    log.debug("fetching remote config pointer", { source, url: value.url })
+    const response = await fetch(value.url, { headers })
+    if (!response.ok) throw new Error(`failed to fetch remote config from ${value.url}: ${response.status}`)
+    const data = await response.json()
+    if (record(data) && record(data.config)) return data.config
+    return record(data) ? data : {}
   }
 
   export const state = Instance.state(async () => {
@@ -87,28 +129,49 @@ export namespace Config {
     for (const [key, value] of Object.entries(auth)) {
       if (value.type === "wellknown") {
         process.env[value.key] = value.token
-        log.debug("fetching remote config", { url: `${key}/.well-known/slopcode` })
-        const response = await fetch(`${key}/.well-known/slopcode`)
+        const wellKnown = `${key}/${product.config.well_known}`
+        log.debug("fetching remote config", { url: wellKnown })
+        const response = await fetch(wellKnown)
         if (!response.ok) {
           throw new Error(`failed to fetch remote config from ${key}: ${response.status}`)
         }
         const wellknown = (await response.json()) as any
-        const remoteConfig = wellknown.config ?? {}
+        const remoteConfig = mergeConfigConcatArrays(
+          (wellknown.config ?? {}) as Info,
+          (await fetchRemoteConfigPointer(wellknown.remote_config, wellKnown)) as Info,
+        )
         // Add $schema to prevent load() from trying to write back to a non-existent file
-        if (!remoteConfig.$schema) remoteConfig.$schema = "https://slopcode.dev/config.json"
+        if (!remoteConfig.$schema) remoteConfig.$schema = product.config.schema
         result = mergeConfigConcatArrays(
           result,
           await load(JSON.stringify(remoteConfig), {
-            dir: path.dirname(`${key}/.well-known/slopcode`),
-            source: `${key}/.well-known/slopcode`,
+            dir: path.dirname(wellKnown),
+            source: wellKnown,
           }),
         )
         log.debug("loaded remote config from well-known", { url: key })
       }
     }
 
-    const token = await Control.token()
-    if (token) {
+    const active = await Account.activeOrg().catch(() => undefined)
+    if (active) {
+      const remote = await Account.config(active.account.id, active.org.id).catch(() => undefined)
+      if (remote) {
+        const source = `${active.account.url}/api/config`
+        const next = { ...remote }
+        if (!next.$schema) next.$schema = product.config.schema
+        result = mergeConfigConcatArrays(
+          result,
+          await load(JSON.stringify(next), {
+            dir: path.dirname(source),
+            source,
+          }),
+        )
+        log.debug("loaded remote config from active org", {
+          source,
+          orgID: active.org.id,
+        })
+      }
     }
 
     // Global user config overrides remote config.
@@ -162,7 +225,7 @@ export namespace Config {
       result.command = mergeDeep(result.command ?? {}, await loadCommand(dir))
       result.agent = mergeDeep(result.agent, await loadAgent(dir))
       result.agent = mergeDeep(result.agent, await loadMode(dir))
-      result.plugin.push(...(await loadPlugin(dir)))
+      syncPlugins(result, [...origins(result), ...(await loadPlugin(dir))])
     }
 
     // Inline config content overrides all non-managed config sources.
@@ -230,7 +293,21 @@ export namespace Config {
       result.compaction = { ...result.compaction, prune: false }
     }
 
-    result.plugin = deduplicatePlugins(result.plugin ?? [])
+    result.queue_mode ??= "serial"
+    result.daemon = {
+      idle_timeout_ms: result.daemon?.idle_timeout_ms ?? 30 * 60 * 1000,
+    }
+    result.pty = {
+      idle_timeout_ms: result.pty?.idle_timeout_ms ?? 10 * 60 * 1000,
+    }
+    result.session = {
+      turn_timeout_ms: result.session?.turn_timeout_ms ?? DEFAULT_SESSION_TURN_TIMEOUT,
+    }
+    result.shell = {
+      program: result.shell?.program,
+      timeout_ms: result.shell?.timeout_ms ?? 5 * 60 * 1000,
+    }
+    syncPlugins(result, origins(result))
 
     return {
       config: result,
@@ -246,8 +323,9 @@ export namespace Config {
 
   export async function installDependencies(dir: string) {
     const pkg = path.join(dir, "package.json")
-    const targetVersion = Installation.isLocal() ? "*" : Installation.VERSION
-    const targetDependency = `npm:@slopcode-ai/plugin@${targetVersion}`
+    const local = Installation.isLocal()
+    const localPlugin = path.resolve(import.meta.dir, "../../../plugin")
+    const targetDependency = local ? `file:${localPlugin}` : `npm:@slopcode-ai/plugin@${Installation.VERSION}`
 
     const json = await Filesystem.readJson<{ dependencies?: Record<string, string> }>(pkg).catch(() => ({
       dependencies: {},
@@ -256,7 +334,15 @@ export namespace Config {
       ...json.dependencies,
       "@slopcode-ai/plugin": targetDependency,
     }
-    await Filesystem.writeJson(pkg, json)
+    const install = local
+      ? {
+          ...json,
+          dependencies: Object.fromEntries(
+            Object.entries(json.dependencies).filter(([name]) => name !== "@slopcode-ai/plugin"),
+          ),
+        }
+      : json
+    await Filesystem.writeJson(pkg, install)
 
     const gitignore = path.join(dir, ".gitignore")
     const hasGitIgnore = await Filesystem.exists(gitignore)
@@ -275,6 +361,13 @@ export namespace Config {
     ).catch((err) => {
       log.warn("failed to install dependencies", { dir, error: err })
     })
+
+    if (local) {
+      await Filesystem.writeJson(pkg, json)
+      await fs.mkdir(path.join(dir, "node_modules", "@slopcode-ai"), { recursive: true })
+      await fs.rm(path.join(dir, "node_modules", "@slopcode-ai", "plugin"), { force: true, recursive: true })
+      await fs.symlink(localPlugin, path.join(dir, "node_modules", "@slopcode-ai", "plugin"), "dir")
+    }
   }
 
   async function isWritable(dir: string) {
@@ -300,6 +393,7 @@ export namespace Config {
 
     const pluginPkg = path.join(nodeModules, "@slopcode-ai", "plugin", "package.json")
     if (!existsSync(pluginPkg)) return true
+    if (Installation.isLocal()) return false
 
     const pkg = path.join(dir, "package.json")
     const pkgExists = await Filesystem.exists(pkg)
@@ -459,8 +553,8 @@ export namespace Config {
     return result
   }
 
-  async function loadPlugin(dir: string) {
-    const plugins: string[] = []
+  async function loadPlugin(dir: string): Promise<ConfigPlugin.Origin[]> {
+    const plugins: ConfigPlugin.Origin[] = []
 
     for (const item of await Glob.scan("{plugin,plugins}/*.{ts,js}", {
       cwd: dir,
@@ -468,7 +562,11 @@ export namespace Config {
       dot: true,
       symlink: true,
     })) {
-      plugins.push(pathToFileURL(item).href)
+      plugins.push({
+        spec: pathToFileURL(item).href,
+        scope: scope(dir),
+        source: path.join(dir, "slopcode.json"),
+      })
     }
     return plugins
   }
@@ -483,15 +581,16 @@ export namespace Config {
    * getPluginName("oh-my-slopcode@2.4.3") // "oh-my-slopcode"
    * getPluginName("@scope/pkg@1.0.0") // "@scope/pkg"
    */
-  export function getPluginName(plugin: string): string {
-    if (plugin.startsWith("file://")) {
-      return path.parse(new URL(plugin).pathname).name
+  export function getPluginName(plugin: ConfigPlugin.Spec): string {
+    const spec = ConfigPlugin.pluginSpecifier(plugin)
+    if (spec.startsWith("file://")) {
+      return path.parse(new URL(spec).pathname).name
     }
-    const lastAt = plugin.lastIndexOf("@")
+    const lastAt = spec.lastIndexOf("@")
     if (lastAt > 0) {
-      return plugin.substring(0, lastAt)
+      return spec.substring(0, lastAt)
     }
-    return plugin
+    return spec
   }
 
   /**
@@ -505,14 +604,9 @@ export namespace Config {
    * Since plugins are added in low-to-high priority order,
    * we reverse, deduplicate (keeping first occurrence), then restore order.
    */
-  export function deduplicatePlugins(plugins: string[]): string[] {
-    // seenNames: canonical plugin names for duplicate detection
-    // e.g., "oh-my-slopcode", "@scope/pkg"
+  export function deduplicatePlugins(plugins: ConfigPlugin.Spec[]): ConfigPlugin.Spec[] {
     const seenNames = new Set<string>()
-
-    // uniqueSpecifiers: full plugin specifiers to return
-    // e.g., "oh-my-slopcode@2.4.3", "file:///path/to/plugin.js"
-    const uniqueSpecifiers: string[] = []
+    const uniqueSpecifiers: ConfigPlugin.Spec[] = []
 
     for (const specifier of plugins.toReversed()) {
       const name = getPluginName(specifier)
@@ -554,6 +648,7 @@ export namespace Config {
         .describe("OAuth client ID. If not provided, dynamic client registration (RFC 7591) will be attempted."),
       clientSecret: z.string().optional().describe("OAuth client secret (if required by the authorization server)"),
       scope: z.string().optional().describe("OAuth scopes to request during authorization"),
+      redirectUri: z.string().optional().describe("Override the OAuth redirect URI used for browser callbacks"),
     })
     .strict()
     .meta({
@@ -777,12 +872,24 @@ export namespace Config {
       session_new: z.string().optional().default("<leader>n").describe("Create a new session"),
       session_list: z.string().optional().default("<leader>l").describe("List all sessions"),
       session_timeline: z.string().optional().default("<leader>g").describe("Show session timeline"),
+      session_files: z.string().optional().default("<leader>f").describe("Open file explorer"),
+      session_tabs_previous: z
+        .string()
+        .optional()
+        .default("<leader>[")
+        .describe("Activate the previous session tab in the strip"),
+      session_tabs_next: z
+        .string()
+        .optional()
+        .default("<leader>]")
+        .describe("Activate the next session tab in the strip"),
       session_fork: z.string().optional().default("none").describe("Fork session from message"),
       session_rename: z.string().optional().default("ctrl+r").describe("Rename session"),
       session_delete: z.string().optional().default("ctrl+d").describe("Delete session"),
       stash_delete: z.string().optional().default("ctrl+d").describe("Delete stash entry"),
       model_provider_list: z.string().optional().default("ctrl+a").describe("Open provider list from model dialog"),
       model_favorite_toggle: z.string().optional().default("ctrl+f").describe("Toggle model favorite status"),
+      model_show_all_toggle: z.string().optional().default("ctrl+o").describe("Toggle showing all models"),
       session_share: z.string().optional().default("none").describe("Share current session"),
       session_unshare: z.string().optional().default("none").describe("Unshare current session"),
       session_interrupt: z.string().optional().default("escape").describe("Interrupt current session"),
@@ -821,11 +928,18 @@ export namespace Config {
       model_cycle_favorite: z.string().optional().default("none").describe("Next favorite model"),
       model_cycle_favorite_reverse: z.string().optional().default("none").describe("Previous favorite model"),
       command_list: z.string().optional().default("ctrl+p").describe("List available commands"),
+      plugin_manager: z.string().optional().default("none").describe("Open plugin manager dialog"),
       agent_list: z.string().optional().default("<leader>a").describe("List agents"),
       agent_cycle: z.string().optional().default("tab").describe("Next agent"),
-      agent_cycle_reverse: z.string().optional().default("shift+tab").describe("Previous agent"),
+      agent_cycle_reverse: z.string().optional().default("none").describe("Previous agent"),
+      permission_auto_accept_toggle: z
+        .string()
+        .optional()
+        .default("shift+tab")
+        .describe("Toggle auto-accept mode for permissions"),
       variant_cycle: z.string().optional().default("ctrl+t").describe("Cycle model variants"),
-      history_mode_toggle: z.string().optional().default("ctrl+h,ctrl+j").describe("Toggle history navigation mode"),
+      variant_list: z.string().optional().default("none").describe("List model variants"),
+      history_mode_toggle: z.string().optional().default("ctrl+y").describe("Toggle history navigation mode"),
       input_clear: z.string().optional().default("ctrl+c").describe("Clear input field"),
       input_paste: z.string().optional().default("ctrl+v").describe("Paste from clipboard"),
       input_submit: z.string().optional().default("return").describe("Submit input"),
@@ -936,6 +1050,67 @@ export namespace Config {
       ref: "ServerConfig",
     })
 
+  export const Daemon = z
+    .object({
+      idle_timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Idle timeout in milliseconds before the shared local daemon exits (default: 1800000)."),
+    })
+    .strict()
+    .meta({
+      ref: "DaemonConfig",
+    })
+
+  export const Pty = z
+    .object({
+      idle_timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Idle timeout in milliseconds before an orphaned PTY is removed (default: 600000)."),
+    })
+    .strict()
+    .meta({
+      ref: "PtyConfig",
+    })
+
+  export const Session = z
+    .object({
+      turn_timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          `Timeout in milliseconds for a single session turn before it is aborted (default: ${DEFAULT_SESSION_TURN_TIMEOUT}).`,
+        ),
+    })
+    .strict()
+    .meta({
+      ref: "SessionConfig",
+    })
+
+  export const Shell = z
+    .object({
+      program: z.string().optional().describe("Shell program to use for shell mode, PTY sessions, and the bash tool."),
+      timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          "Timeout in milliseconds for session shell commands before the process is terminated (default: 300000).",
+        ),
+    })
+    .strict()
+    .meta({
+      ref: "ShellConfig",
+    })
+
   export const Layout = z.enum(["auto", "stretch"]).meta({
     ref: "LayoutConfig",
   })
@@ -988,6 +1163,7 @@ export namespace Config {
         .catchall(z.any())
         .optional(),
     })
+
     .strict()
     .meta({
       ref: "ProviderConfig",
@@ -999,17 +1175,45 @@ export namespace Config {
       $schema: z.string().optional().describe("JSON schema reference for configuration validation"),
       logLevel: Log.Level.optional().describe("Log level"),
       server: Server.optional().describe("Server configuration for slopcode serve and web commands"),
+      daemon: Daemon.optional().describe("Shared local daemon configuration for TUI sessions"),
+      pty: Pty.optional().describe("Pseudo-terminal configuration for detached terminal sessions"),
+      session: Session.optional().describe("Session runtime configuration for turn processing limits"),
+      shell: Shell.optional().describe("Shell command configuration for session-driven shell executions"),
       command: z
         .record(z.string(), Command)
         .optional()
         .describe("Command configuration, see https://slopcode.dev/docs/commands"),
       skills: Skills.optional().describe("Additional skill folder paths"),
+      reference: z
+        .record(
+          z.string(),
+          z.union([
+            z.string(),
+            z.object({ path: z.string() }).strict(),
+            z.object({ repository: z.string(), branch: z.string().optional() }).strict(),
+          ]),
+        )
+        .optional()
+        .describe("Reference repositories or local paths available to scout/reference tools"),
+      attachment: z
+        .object({
+          image: z
+            .object({
+              auto_resize: z.boolean().optional(),
+              max_width: z.number().int().positive().optional(),
+              max_height: z.number().int().positive().optional(),
+              max_base64_bytes: z.number().int().positive().optional(),
+            })
+            .optional(),
+        })
+        .optional()
+        .describe("Attachment processing configuration, including image size limits and resizing behavior"),
       watcher: z
         .object({
           ignore: z.array(z.string()).optional(),
         })
         .optional(),
-      plugin: z.string().array().optional(),
+      plugin: ConfigPlugin.Spec.array().optional(),
       snapshot: z.boolean().optional(),
       share: z
         .enum(["manual", "auto", "disabled"])
@@ -1147,6 +1351,10 @@ export namespace Config {
           url: z.string().optional().describe("Enterprise URL"),
         })
         .optional(),
+      queue_mode: z
+        .enum(["serial", "injection"])
+        .optional()
+        .describe("How follow-up prompts are handled while a session is already running (default: serial)"),
       compaction: z
         .object({
           auto: z.boolean().optional().describe("Enable automatic compaction when context is full (default: true)"),
@@ -1159,10 +1367,69 @@ export namespace Config {
             .describe("Token buffer for compaction. Leaves enough window to avoid overflow during compaction."),
         })
         .optional(),
+      autocomplete: z
+        .object({
+          enabled: z.boolean().optional().describe("Enable model-powered prompt autocomplete (default: true)"),
+          debounce_ms: z
+            .number()
+            .int()
+            .min(0)
+            .optional()
+            .describe("Debounce delay in milliseconds before requesting autocomplete (default: 180)"),
+          min_prefix_chars: z
+            .number()
+            .int()
+            .min(0)
+            .optional()
+            .describe("Minimum prefix characters required to request autocomplete (default: 12)"),
+          timeout_ms: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe("Timeout in milliseconds for autocomplete requests (default: 4000)"),
+          max_output_tokens: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe("Maximum output tokens for autocomplete generation (default: 48)"),
+          max_completion_chars: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe("Maximum completion characters returned to the client (default: 96)"),
+          provider_model_overrides: z
+            .record(z.string(), z.union([z.string(), z.null()]))
+            .optional()
+            .describe(
+              "Override autocomplete model per provider. Key is provider ID, value is model ID. Set null to use the selected model for that provider.",
+            ),
+          model_strategy: z
+            .enum(["same_exact", "family_fast", "custom_map"])
+            .optional()
+            .describe("@deprecated Legacy autocomplete routing strategy. Ignored by runtime."),
+          model_map: z
+            .record(z.string(), z.string())
+            .optional()
+            .describe("@deprecated Legacy autocomplete model map. Ignored by runtime."),
+        })
+        .optional(),
       experimental: z
         .object({
           disable_paste_summary: z.boolean().optional(),
           batch_tool: z.boolean().optional().describe("Enable the batch tool"),
+          hashline_edit: z
+            .boolean()
+            .optional()
+            .describe("Enable hashline-backed edit/read tool behavior (default true, set false to disable)"),
+          hashline_autocorrect: z
+            .boolean()
+            .optional()
+            .describe(
+              "Enable hashline autocorrect cleanup for copied prefixes and formatting artifacts (default true)",
+            ),
           openTelemetry: z
             .boolean()
             .optional()
@@ -1186,10 +1453,12 @@ export namespace Config {
       ref: "Config",
     })
 
-  export type Info = z.output<typeof Info>
+  export type Info = z.output<typeof Info> & {
+    plugin_origins?: ConfigPlugin.Origin[]
+  }
 
   export const global = lazy(async () => {
-    const legacyDir = path.join(path.dirname(Global.Path.config), "opencode")
+    const legacyDir = path.join(path.dirname(Global.Path.config), product.legacy_id)
     let result: Info = {}
 
     for (const file of [
@@ -1198,7 +1467,7 @@ export namespace Config {
       path.join(Global.Path.config, "config.json"),
       ...ConfigPaths.fileInDirectory(Global.Path.config, "slopcode"),
     ]) {
-      result = mergeDeep(result, await loadFile(file))
+      result = mergeConfigConcatArrays(result, await loadFile(file))
     }
 
     for (const toml of [path.join(legacyDir, "config"), path.join(Global.Path.config, "config")]) {
@@ -1211,8 +1480,8 @@ export namespace Config {
         .then(async (mod) => {
           const { provider, model, ...rest } = mod.default
           if (provider && model) result.model = `${provider}/${model}`
-          result["$schema"] = "https://slopcode.dev/config.json"
-          result = mergeDeep(result, rest)
+          result["$schema"] = product.config.schema
+          result = mergeConfigConcatArrays(result, rest as Info)
           await Filesystem.writeJson(path.join(Global.Path.config, "config.json"), result)
           await fs.unlink(toml)
         })
@@ -1255,27 +1524,22 @@ export namespace Config {
     const parsed = Info.safeParse(normalized)
     if (parsed.success) {
       if (!parsed.data.$schema && isFile) {
-        parsed.data.$schema = "https://slopcode.dev/config.json"
-        const updated = original.replace(/^\s*\{/, '{\n  "$schema": "https://slopcode.dev/config.json",')
+        parsed.data.$schema = product.config.schema
+        const updated = original.replace(
+          /^\s*\{/,
+          `{
+  "$schema": "${product.config.schema}",`,
+        )
         await Bun.write(options.path, updated).catch(() => {})
       }
-      const data = parsed.data
-      if (data.plugin && isFile) {
-        for (let i = 0; i < data.plugin.length; i++) {
-          const plugin = data.plugin[i]
-          try {
-            data.plugin[i] = import.meta.resolve!(plugin, options.path)
-          } catch (e) {
-            try {
-              // import.meta.resolve sometimes fails with newly created node_modules
-              const require = createRequire(options.path)
-              const resolvedPath = require.resolve(plugin)
-              data.plugin[i] = pathToFileURL(resolvedPath).href
-            } catch {
-              // Ignore, plugin might be a generic string identifier like "mcp-server"
-            }
+      const data: Info = parsed.data
+      if (data.plugin) {
+        if (isFile) {
+          for (let i = 0; i < data.plugin.length; i++) {
+            data.plugin[i] = await ConfigPlugin.resolvePluginSpec(data.plugin[i], options.path)
           }
         }
+        data.plugin_origins = data.plugin.map((spec) => ({ spec, source, scope: scope(source) }))
       }
       return data
     }
@@ -1312,19 +1576,11 @@ export namespace Config {
   }
 
   function globalConfigFile() {
-    const legacyDir = path.join(path.dirname(Global.Path.config), "opencode")
-    const candidates = [
-      path.join(Global.Path.config, "slopcode.jsonc"),
-      path.join(Global.Path.config, "slopcode.json"),
-      path.join(Global.Path.config, "config.json"),
-      path.join(Global.Path.config, "opencode.jsonc"),
-      path.join(Global.Path.config, "opencode.json"),
-      path.join(legacyDir, "slopcode.jsonc"),
-      path.join(legacyDir, "slopcode.json"),
-      path.join(legacyDir, "opencode.jsonc"),
-      path.join(legacyDir, "opencode.json"),
-      path.join(legacyDir, "config.json"),
-    ]
+    // Legacy OpenCode config is read-only for compatibility.
+    // New writes should always target SlopCode-owned paths.
+    const candidates = product.config.global_files
+      .filter((file) => !file.startsWith(product.legacy_id))
+      .map((file) => path.join(Global.Path.config, file))
     for (const file of candidates) {
       if (existsSync(file)) return file
     }

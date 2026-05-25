@@ -62,7 +62,7 @@ const run = async () => {
   const tar = await fetchReady(tarball, wait)
   const sha256 = new Bun.CryptoHasher("sha256").update(await tar.arrayBuffer()).digest("hex")
   const formula = `class Slopcode < Formula
-  desc "The open source AI coding agent."
+  desc "The open source AI slopcoding agent."
   homepage "https://slopcode.dev"
   url "${tarball}"
   sha256 "${sha256}"

@@ -7,14 +7,10 @@ import { MetaProvider } from "@solidjs/meta"
 import { addons } from "storybook/preview-api"
 import { GLOBALS_UPDATED } from "storybook/internal/core-events"
 import { createJSXDecorator, definePreview } from "storybook-solidjs-vite"
-import { Code } from "@slopcode-ai/ui/code"
-import { CodeComponentProvider } from "@slopcode-ai/ui/context/code"
-import { DialogProvider } from "@slopcode-ai/ui/context/dialog"
-import { DiffComponentProvider } from "@slopcode-ai/ui/context/diff"
-import { MarkedProvider } from "@slopcode-ai/ui/context/marked"
-import { Diff } from "@slopcode-ai/ui/diff"
-import { ThemeProvider, useTheme, type ColorScheme } from "@slopcode-ai/ui/theme"
-import { Font } from "@slopcode-ai/ui/font"
+import { DialogProvider } from "@opencode-ai/ui/context/dialog"
+import { MarkedProvider } from "@opencode-ai/ui/context/marked"
+import { ThemeProvider, useTheme, type ColorScheme } from "@opencode-ai/ui/theme"
+import { Font } from "@opencode-ai/ui/font"
 
 function resolveScheme(value: unknown): ColorScheme {
   if (value === "light" || value === "dark" || value === "system") return value
@@ -58,20 +54,16 @@ const frame = createJSXDecorator((Story, context) => {
         <Scheme value={scheme} />
         <DialogProvider>
           <MarkedProvider>
-            <DiffComponentProvider component={Diff}>
-              <CodeComponentProvider component={Code}>
-                <div
-                  style={{
-                    "min-height": "100vh",
-                    padding: "24px",
-                    "background-color": "var(--background-base)",
-                    color: "var(--text-base)",
-                  }}
-                >
-                  <Story />
-                </div>
-              </CodeComponentProvider>
-            </DiffComponentProvider>
+            <div
+              style={{
+                "min-height": "100vh",
+                padding: "24px",
+                "background-color": "var(--background-base)",
+                color: "var(--text-base)",
+              }}
+            >
+              <Story />
+            </div>
           </MarkedProvider>
         </DialogProvider>
       </ThemeProvider>

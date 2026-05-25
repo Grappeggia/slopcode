@@ -211,7 +211,7 @@ export default function () {
               <Show when={info().title}>
                 <Title>{info().title} | SlopCode</Title>
               </Show>
-              <Meta name="description" content="slopcode - The AI coding agent built for the terminal." />
+              <Meta name="description" content="slopcode - The AI slopcoding agent built for the terminal." />
               <Meta property="og:image" content={ogImage()} />
               <Meta name="twitter:image" content={ogImage()} />
               <ClientOnlyWorkerPoolProvider>

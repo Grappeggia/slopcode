@@ -1,5 +1,5 @@
 import { createEffect, on, onCleanup, type JSX } from "solid-js"
-import type { FileDiff } from "@slopcode-ai/sdk/v2"
+import type { SessionDiffEntry } from "@slopcode-ai/sdk/v2"
 import { SessionReview } from "@slopcode-ai/ui/session-review"
 import type {
   SessionReviewCommentActions,
@@ -16,7 +16,7 @@ export type DiffStyle = "unified" | "split"
 export interface SessionReviewTabProps {
   title?: JSX.Element
   empty?: JSX.Element
-  diffs: () => FileDiff[]
+  diffs: () => SessionDiffEntry[]
   view: () => ReturnType<ReturnType<typeof useLayout>["view"]>
   diffStyle: DiffStyle
   onDiffStyleChange?: (style: DiffStyle) => void
@@ -39,7 +39,7 @@ export interface SessionReviewTabProps {
 
 export function StickyAddButton(props: { children: JSX.Element }) {
   return (
-    <div class="bg-background-stronger h-full shrink-0 sticky right-0 z-10 flex items-center justify-center pr-3">
+    <div class="relative bg-background-stronger h-full shrink-0 z-10 flex items-center justify-center pr-3 border-b border-border-weak-base">
       {props.children}
     </div>
   )

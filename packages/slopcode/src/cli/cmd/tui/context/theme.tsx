@@ -42,6 +42,7 @@ import { createStore, produce } from "solid-js/store"
 import { Global } from "@/global"
 import { Filesystem } from "@/util/filesystem"
 import { useTuiConfig } from "./tui-config"
+import { createSubtleSyntaxStyle, createSyntaxStyle } from "@/cli/render/syntax"
 
 type ThemeColors = {
   primary: RGBA
@@ -317,13 +318,11 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     onMount(init)
 
     function resolveSystemTheme() {
-      console.log("resolveSystemTheme")
       renderer
         .getPalette({
           size: 16,
         })
         .then((colors) => {
-          console.log(colors.palette)
           if (!colors.palette[0]) {
             if (store.active === "system") {
               setStore(
@@ -381,9 +380,14 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
         setStore("mode", mode)
         kv.set("theme_mode", mode)
       },
+      has(theme: string) {
+        return store.themes[theme] !== undefined
+      },
       set(theme: string) {
+        if (store.themes[theme] === undefined) return false
         setStore("active", theme)
         kv.set("theme", theme)
+        return true
       },
       get ready() {
         return store.ready
@@ -620,31 +624,11 @@ function generateMutedTextColor(bg: RGBA, isDark: boolean): RGBA {
 }
 
 function generateSyntax(theme: Theme) {
-  return SyntaxStyle.fromTheme(getSyntaxRules(theme))
+  return createSyntaxStyle(theme)
 }
 
 function generateSubtleSyntax(theme: Theme) {
-  const rules = getSyntaxRules(theme)
-  return SyntaxStyle.fromTheme(
-    rules.map((rule) => {
-      if (rule.style.foreground) {
-        const fg = rule.style.foreground
-        return {
-          ...rule,
-          style: {
-            ...rule.style,
-            foreground: RGBA.fromInts(
-              Math.round(fg.r * 255),
-              Math.round(fg.g * 255),
-              Math.round(fg.b * 255),
-              Math.round(theme.thinkingOpacity * 255),
-            ),
-          },
-        }
-      }
-      return rule
-    }),
-  )
+  return createSubtleSyntaxStyle(theme)
 }
 
 function getSyntaxRules(theme: Theme) {
@@ -681,6 +665,12 @@ function getSyntaxRules(theme: Theme) {
         foreground: theme.background,
         background: theme.warning,
         bold: true,
+      },
+    },
+    {
+      scope: ["extmark.ghost"],
+      style: {
+        foreground: theme.textMuted,
       },
     },
     {

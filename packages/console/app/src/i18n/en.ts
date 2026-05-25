@@ -77,12 +77,12 @@ export const dict = {
   "error.reloadAmountMin": "Reload amount must be at least ${{amount}}",
   "error.reloadTriggerMin": "Balance trigger must be at least ${{amount}}",
 
-  "app.meta.description": "SlopCode - The open source coding agent.",
+  "app.meta.description": "SlopCode - The open source AI slopcoding agent.",
 
-  "home.title": "SlopCode | The open source AI coding agent",
+  "home.title": "SlopCode | The open source AI slopcoding agent",
 
-  "temp.title": "slopcode | AI coding agent built for the terminal",
-  "temp.hero.title": "The AI coding agent built for the terminal",
+  "temp.title": "slopcode | AI slopcoding agent built for the terminal",
+  "temp.hero.title": "The AI slopcoding agent built for the terminal",
   "temp.zen": "slopcode zen",
   "temp.getStarted": "Get Started",
   "temp.feature.native.title": "Native TUI",
@@ -103,7 +103,7 @@ export const dict = {
   "home.banner.downloadNow": "Download now",
   "home.banner.downloadBetaNow": "Download the desktop beta now",
 
-  "home.hero.title": "The open source AI coding agent",
+  "home.hero.title": "The open source AI slopcoding agent",
   "home.hero.subtitle.a": "Free models included or connect any model from any provider,",
   "home.hero.subtitle.b": "including Claude, GPT, Gemini and more.",
 
@@ -127,7 +127,7 @@ export const dict = {
   "home.what.anyEditor.body": "Available as a terminal interface, desktop app, and IDE extension",
   "home.what.readDocs": "Read docs",
 
-  "home.growth.title": "The open source AI coding agent",
+  "home.growth.title": "The open source AI slopcoding agent",
   "home.growth.body":
     "With over <strong>{{stars}}</strong> GitHub stars, <strong>{{contributors}}</strong> contributors, and over <strong>{{commits}}</strong> commits, SlopCode is used and trusted by over <strong>{{monthlyUsers}}</strong> developers every month.",
   "home.growth.githubStars": "GitHub Stars",

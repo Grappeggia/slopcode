@@ -46,14 +46,15 @@ async function main() {
   await $`git config user.name "Aiden Cline"`
   await $`git config user.email "63023139+rekram1-node@users.noreply.github.com "`
 
-  // Sync fork with upstream (force reset to match exactly)
-  console.log(`🔄 Syncing fork with upstream...`)
+  // Pull upstream updates into the fork (force reset to match exactly)
+  console.log(`🔄 Pulling upstream updates into fork...`)
   await $`git remote add upstream https://github.com/${UPSTREAM_REPO}.git`
+  await $`git remote set-url --push upstream DISABLED`
   await $`git fetch upstream`
   await $`git checkout main`
   await $`git reset --hard upstream/main`
   await $`git push origin main --force`
-  console.log(`✅ Fork synced (force reset to upstream)`)
+  console.log(`✅ Fork updated from upstream (force reset)`)
 
   // Create a new branch
   const branchName = `update-${EXTENSION_NAME}-${cleanVersion}`

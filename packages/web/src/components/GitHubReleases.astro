@@ -1,0 +1,299 @@
+---
+const endpoint = "https://api.github.com/repos/teamslop/slopcode/releases?per_page=12"
+const releaseUrl = "https://github.com/teamslop/slopcode/releases"
+const fallback: Release[] = [
+  {
+    tag_name: "v0.2.125",
+    html_url: `${releaseUrl}/tag/v0.2.125`,
+    published_at: "2026-05-25T02:25:42Z",
+    body: [
+      "- Added Android/Termux parity harness with smoke and parity modes.",
+      "- Covered composer editing, questions, and layout capture in shipped-package E2E.",
+      "- Stabilized Windows install shims and TUI timing tests.",
+    ].join("\n"),
+    draft: false,
+    prerelease: false,
+  },
+  {
+    tag_name: "v0.2.124",
+    html_url: `${releaseUrl}/tag/v0.2.124`,
+    published_at: "2026-05-24T21:29:38Z",
+    body: [
+      "- Improved Android/Termux native TUI input parity with cursor editing, history, paste, and questions.",
+      "- Matched portable fallback composer behavior for paste, history, and editing shortcuts.",
+      "- Added shipped-package Termux E2E coverage and launcher compatibility.",
+    ].join("\n"),
+    draft: false,
+    prerelease: false,
+  },
+  {
+    tag_name: "v0.2.123",
+    html_url: `${releaseUrl}/tag/v0.2.123`,
+    published_at: "2026-05-24T19:28:37Z",
+    body: [
+      "- Fix Android Termux sidecar prompt IDs.",
+      "- Add native sidecar prompt coverage.",
+      "- Document adb Termux/npm repro requirements.",
+    ].join("\n"),
+    draft: false,
+    prerelease: false,
+  },
+]
+
+type Release = {
+  tag_name: string
+  html_url: string
+  published_at: string
+  body: string | null
+  draft: boolean
+  prerelease: boolean
+}
+
+const parse = (body: string | null) => {
+  if (typeof body !== "string" || body.length === 0) return []
+
+  const lines = body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+  const bullets = lines
+    .filter((line) => line.startsWith("- ") || /^\d+\.\s/.test(line))
+    .map((line) => line.replace(/^-+\s+/, "").replace(/^\d+\.\s+/, "").trim())
+    .filter((line) => line.length > 0 && !line.startsWith("**Thank you"))
+
+  if (bullets.length > 0) return bullets.slice(0, 4)
+
+  const text = lines.find((line) => !line.startsWith("#") && !line.startsWith("**Thank you"))
+  if (!text) return []
+  return [text]
+}
+
+const valid = (release: unknown): release is Release => {
+  if (!release || typeof release !== "object") return false
+  const item = release as Record<string, unknown>
+  return (
+    typeof item.tag_name === "string" &&
+    typeof item.html_url === "string" &&
+    typeof item.published_at === "string" &&
+    (typeof item.body === "string" || item.body === null) &&
+    typeof item.draft === "boolean" &&
+    typeof item.prerelease === "boolean"
+  )
+}
+
+const releases = await fetch(endpoint, {
+  headers: {
+    Accept: "application/vnd.github+json",
+  },
+})
+  .then((response) => (response.ok ? response.json() : []))
+  .then((data: unknown) =>
+    Array.isArray(data)
+      ? data
+          .filter(valid)
+          .filter((release) => !release.draft && !release.prerelease)
+          .slice(0, 10)
+      : [],
+  )
+  .catch(() => [])
+const entries = releases.length > 0 ? releases : fallback
+
+const format = (value: string) =>
+  new Intl.DateTimeFormat("en", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(value))
+---
+
+<div class="release-feed" data-release-feed data-endpoint={endpoint} data-has-releases={entries.length > 0 ? "true" : "false"}>
+  <p data-release-loading hidden={entries.length > 0}>Loading latest releases from GitHub...</p>
+  <p data-release-error hidden>
+    Could not load releases right now. <a href={releaseUrl}>View all releases on GitHub</a>.
+  </p>
+  <div data-release-list hidden={entries.length === 0}>
+    {
+      entries.map((release) => (
+        <section>
+          <h3>
+            <a href={release.html_url} target="_blank" rel="noopener noreferrer">
+              {release.tag_name}
+            </a>
+          </h3>
+          <p class="release-date">{format(release.published_at)}</p>
+          {parse(release.body).length > 0 && (
+            <ul>
+              {parse(release.body).map((note) => (
+                <li>{note}</li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ))
+    }
+  </div>
+</div>
+
+<script is:inline>
+  const feeds = document.querySelectorAll("[data-release-feed]")
+
+  const parseNotes = (body) => {
+    if (typeof body !== "string" || body.length === 0) return []
+
+    const lines = body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+
+    const bullets = lines
+      .filter((line) => line.startsWith("- ") || /^\d+\.\s/.test(line))
+      .map((line) => line.replace(/^-+\s+/, "").replace(/^\d+\.\s+/, "").trim())
+      .filter((line) => line.length > 0 && !line.startsWith("**Thank you"))
+
+    if (bullets.length > 0) return bullets.slice(0, 4)
+
+    const text = lines.find((line) => !line.startsWith("#") && !line.startsWith("**Thank you"))
+    if (!text) return []
+    return [text]
+  }
+
+  const formatDate = (value) => {
+    if (typeof value !== "string" || value.length === 0) return ""
+
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return ""
+
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    }).format(date)
+  }
+
+  const render = (node, releases) => {
+    node.replaceChildren()
+
+    for (const release of releases) {
+      const section = document.createElement("section")
+      const title = document.createElement("h3")
+      const link = document.createElement("a")
+
+      link.href = release.html_url
+      link.textContent = release.tag_name
+      link.target = "_blank"
+      link.rel = "noopener noreferrer"
+
+      title.append(link)
+      section.append(title)
+
+      const date = formatDate(release.published_at)
+      if (date) {
+        const meta = document.createElement("p")
+        meta.className = "release-date"
+        meta.textContent = date
+        section.append(meta)
+      }
+
+      const notes = parseNotes(release.body)
+      if (notes.length > 0) {
+        const list = document.createElement("ul")
+        for (const note of notes) {
+          const item = document.createElement("li")
+          item.textContent = note
+          list.append(item)
+        }
+        section.append(list)
+      }
+
+      node.append(section)
+    }
+  }
+
+  for (const feed of feeds) {
+    if (!(feed instanceof HTMLElement)) continue
+
+    const endpoint = feed.dataset.endpoint
+    const loading = feed.querySelector("[data-release-loading]")
+    const error = feed.querySelector("[data-release-error]")
+    const list = feed.querySelector("[data-release-list]")
+
+    if (
+      typeof endpoint !== "string" ||
+      !(loading instanceof HTMLElement) ||
+      !(error instanceof HTMLElement) ||
+      !(list instanceof HTMLElement)
+    ) {
+      continue
+    }
+
+    fetch(endpoint, {
+      headers: {
+        Accept: "application/vnd.github+json",
+      },
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load releases")
+        return response.json()
+      })
+      .then((data) => {
+        if (!Array.isArray(data)) throw new Error("Invalid release payload")
+
+        return data
+          .filter((release) => release && !release.draft && !release.prerelease)
+          .slice(0, 10)
+      })
+      .then((releases) => {
+        loading.hidden = true
+        error.hidden = true
+        list.hidden = false
+        render(list, releases)
+      })
+      .catch(() => {
+        loading.hidden = true
+        if (list.children.length === 0) error.hidden = false
+      })
+  }
+</script>
+
+<style>
+  .release-feed [data-release-loading],
+  .release-feed [data-release-error] {
+    margin: 0.5rem 0 0;
+    color: var(--sl-color-text-secondary);
+  }
+
+  .release-feed [data-release-list] {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+
+  .release-feed [data-release-list] > section {
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.75rem;
+    padding: 1rem;
+    background: var(--sl-color-bg-nav);
+  }
+
+  .release-feed h3 {
+    margin: 0;
+    font-size: var(--sl-text-xl);
+  }
+
+  .release-feed .release-date {
+    margin: 0.4rem 0 0.8rem;
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-text-secondary);
+  }
+
+  .release-feed ul {
+    margin: 0;
+  }
+
+  @media (min-width: 48rem) {
+    .release-feed [data-release-list] {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+</style>

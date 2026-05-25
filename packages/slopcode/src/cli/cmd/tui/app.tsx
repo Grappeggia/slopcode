@@ -1,33 +1,40 @@
 import { render, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
+import { createEffect, createMemo, createSignal, ErrorBoundary, Match, on, onMount, Switch } from "solid-js"
 import { Clipboard } from "@tui/util/clipboard"
 import { Selection } from "@tui/util/selection"
 import { MouseButton, TextAttributes } from "@opentui/core"
 import { RouteProvider, useRoute } from "@tui/context/route"
-import { Switch, Match, createEffect, untrack, ErrorBoundary, createSignal, onMount, batch, Show, on } from "solid-js"
-import { win32DisableProcessedInput, win32FlushInputBuffer, win32InstallCtrlCGuard } from "./win32"
-import { Installation } from "@/installation"
-import { Flag } from "@/flag/flag"
-import { DialogProvider, useDialog } from "@tui/ui/dialog"
-import { DialogProvider as DialogProviderList } from "@tui/component/dialog-provider"
+import { SessionTabsProvider, useSessionTabs } from "@tui/context/session-tabs"
+import { TabStateProvider, useTabState } from "@tui/context/tab-state"
+import { EditorConnectionProvider } from "@tui/context/editor-connection"
+import { EditorContextProvider, useEditorContext } from "@tui/context/editor"
 import { SDKProvider, useSDK } from "@tui/context/sdk"
 import { SyncProvider, useSync } from "@tui/context/sync"
+import { DialogProvider, useDialog } from "@tui/ui/dialog"
+
 import { LocalProvider, useLocal } from "@tui/context/local"
 import { DialogModel, useConnected } from "@tui/component/dialog-model"
+import { DialogModelCompletion } from "@tui/component/dialog-model-completion"
 import { DialogMcp } from "@tui/component/dialog-mcp"
+import { DialogVariant } from "@tui/component/dialog-variant"
 import { DialogStatus } from "@tui/component/dialog-status"
 import { DialogThemeList } from "@tui/component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
-import { CommandProvider, useCommandDialog } from "@tui/component/dialog-command"
+import { CommandDialogBridge, CommandProvider, useCommandDialog } from "@tui/component/dialog-command"
 import { DialogAgent } from "@tui/component/dialog-agent"
+import { DialogProvider as DialogProviderList } from "@tui/component/dialog-provider"
+import { DialogShell } from "@tui/component/dialog-shell"
 import { DialogSessionList } from "@tui/component/dialog-session-list"
-import { KeybindProvider } from "@tui/context/keybind"
+import { DialogWorkspaceList } from "@tui/component/dialog-workspace-list"
+import { DialogConsoleOrg } from "@tui/component/dialog-console-org"
+import { KeybindProvider, useKeybind } from "@tui/context/keybind"
 import { ThemeProvider, useTheme } from "@tui/context/theme"
 import { Home } from "@tui/routes/home"
 import { Session } from "@tui/routes/session"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
-import { DialogAlert } from "./ui/dialog-alert"
+
 import { ToastProvider, useToast } from "./ui/toast"
 import { ExitProvider, useExit } from "./context/exit"
 import { Session as SessionApi } from "@/session"
@@ -37,8 +44,14 @@ import { Provider } from "@/provider/provider"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
 import { writeHeapSnapshot } from "v8"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
-import { TuiConfigProvider } from "./context/tui-config"
+import { TuiConfigProvider, useTuiConfig } from "./context/tui-config"
 import { TuiConfig } from "@/config/tui"
+import { Flag } from "@/flag/flag"
+import { Installation } from "@/installation"
+import { win32DisableProcessedInput, win32FlushInputBuffer, win32InstallCtrlCGuard } from "./win32"
+import { DRAFT_TAB_ID } from "./context/session-tabs-state"
+import { createTuiApi, type RouteMap } from "./plugin/api"
+import { TuiPluginRuntime } from "./plugin/runtime"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -102,18 +115,39 @@ async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
 
 import type { EventSource } from "./context/sdk"
 
+function rendererConfig(config: TuiConfig.Info) {
+  return {
+    targetFps: 60,
+    gatherStats: false,
+    exitOnCtrlC: false,
+    useKittyKeyboard: {},
+    autoFocus: false,
+    openConsoleOnError: false,
+    useMouse: !Flag.SLOPCODE_DISABLE_MOUSE && (config.mouse ?? true),
+    consoleOptions: {
+      keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" as const }],
+      onCopySelection: (text: string) => {
+        Clipboard.copy(text).catch((error) => {
+          console.error(`Failed to copy console selection to clipboard: ${error}`)
+        })
+      },
+    },
+  }
+}
+
 export function tui(input: {
   url: string
   args: Args
   config: TuiConfig.Info
   directory?: string
+  viewID?: string
   fetch?: typeof fetch
   headers?: RequestInit["headers"]
   events?: EventSource
   onExit?: () => Promise<void>
 }) {
   // promise to prevent immediate exit
-  return new Promise<void>(async (resolve) => {
+  return new Promise<void>(async (resolve, reject) => {
     const unguard = win32InstallCtrlCGuard()
     win32DisableProcessedInput()
 
@@ -124,82 +158,80 @@ export function tui(input: {
     win32DisableProcessedInput()
 
     const onExit = async () => {
+      await TuiPluginRuntime.dispose().catch((error) => console.error("Failed to dispose TUI plugins", error))
       unguard?.()
       await input.onExit?.()
       resolve()
     }
+    const fail = (error: unknown) => {
+      unguard?.()
+      reject(error)
+    }
 
-    render(
-      () => {
-        return (
-          <ErrorBoundary
-            fallback={(error, reset) => <ErrorComponent error={error} reset={reset} onExit={onExit} mode={mode} />}
-          >
-            <ArgsProvider {...input.args}>
-              <ExitProvider onExit={onExit}>
-                <KVProvider>
-                  <ToastProvider>
-                    <RouteProvider>
-                      <TuiConfigProvider config={input.config}>
-                        <SDKProvider
-                          url={input.url}
-                          directory={input.directory}
-                          fetch={input.fetch}
-                          headers={input.headers}
-                          events={input.events}
-                        >
-                          <SyncProvider>
-                            <ThemeProvider mode={mode}>
-                              <LocalProvider>
-                                <KeybindProvider>
-                                  <PromptStashProvider>
-                                    <DialogProvider>
-                                      <CommandProvider>
-                                        <FrecencyProvider>
-                                          <PromptHistoryProvider>
-                                            <PromptRefProvider>
-                                              <App />
-                                            </PromptRefProvider>
-                                          </PromptHistoryProvider>
-                                        </FrecencyProvider>
-                                      </CommandProvider>
-                                    </DialogProvider>
-                                  </PromptStashProvider>
-                                </KeybindProvider>
-                              </LocalProvider>
-                            </ThemeProvider>
-                          </SyncProvider>
-                        </SDKProvider>
-                      </TuiConfigProvider>
-                    </RouteProvider>
-                  </ToastProvider>
-                </KVProvider>
-              </ExitProvider>
-            </ArgsProvider>
-          </ErrorBoundary>
-        )
-      },
-      {
-        targetFps: 60,
-        gatherStats: false,
-        exitOnCtrlC: false,
-        useKittyKeyboard: {},
-        autoFocus: false,
-        openConsoleOnError: false,
-        consoleOptions: {
-          keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
-          onCopySelection: (text) => {
-            Clipboard.copy(text).catch((error) => {
-              console.error(`Failed to copy console selection to clipboard: ${error}`)
-            })
-          },
-        },
-      },
-    )
+    void render(() => {
+      return (
+        <ErrorBoundary
+          fallback={(error, reset) => <ErrorComponent error={error} reset={reset} onExit={onExit} mode={mode} />}
+        >
+          <ArgsProvider {...input.args}>
+            <ExitProvider onExit={onExit}>
+              <KVProvider>
+                <ToastProvider>
+                  <RouteProvider>
+                    <TuiConfigProvider config={input.config}>
+                      <SDKProvider
+                        url={input.url}
+                        directory={input.directory}
+                        viewID={input.viewID}
+                        fetch={input.fetch}
+                        headers={input.headers}
+                        events={input.events}
+                      >
+                        <SyncProvider>
+                          <SessionTabsProvider>
+                            <TabStateProvider>
+                              <EditorConnectionProvider>
+                                <EditorContextProvider>
+                                  <ThemeProvider mode={mode}>
+                                    <LocalProvider>
+                                      <KeybindProvider>
+                                        <PromptStashProvider>
+                                          <FrecencyProvider>
+                                            <PromptHistoryProvider>
+                                              <PromptRefProvider>
+                                                <CommandProvider>
+                                                  <DialogProvider>
+                                                    <CommandDialogBridge />
+                                                    <App />
+                                                  </DialogProvider>
+                                                </CommandProvider>
+                                              </PromptRefProvider>
+                                            </PromptHistoryProvider>
+                                          </FrecencyProvider>
+                                        </PromptStashProvider>
+                                      </KeybindProvider>
+                                    </LocalProvider>
+                                  </ThemeProvider>
+                                </EditorContextProvider>
+                              </EditorConnectionProvider>
+                            </TabStateProvider>
+                          </SessionTabsProvider>
+                        </SyncProvider>
+                      </SDKProvider>
+                    </TuiConfigProvider>
+                  </RouteProvider>
+                </ToastProvider>
+              </KVProvider>
+            </ExitProvider>
+          </ArgsProvider>
+        </ErrorBoundary>
+      )
+    }, rendererConfig(input.config)).catch(fail)
   })
 }
 
 function App() {
+  const tuiConfig = useTuiConfig()
   const route = useRoute()
   const dimensions = useTerminalDimensions()
   const renderer = useRenderer()
@@ -208,12 +240,47 @@ function App() {
   const local = useLocal()
   const kv = useKV()
   const command = useCommandDialog()
+  const keybind = useKeybind()
   const sdk = useSDK()
+  const editor = useEditorContext()
   const toast = useToast()
-  const { theme, mode, setMode } = useTheme()
+  const themeState = useTheme()
+  const { theme, mode, setMode } = themeState
   const sync = useSync()
   const exit = useExit()
   const promptRef = usePromptRef()
+  const tabs = useSessionTabs()
+  const tabState = useTabState()
+  const routes: RouteMap = new Map()
+  const [routeRev, setRouteRev] = createSignal(0)
+  const routeView = (name: string) => {
+    routeRev()
+    return routes.get(name)?.at(-1)?.render
+  }
+
+  const api = createTuiApi({
+    command,
+    tuiConfig,
+    dialog,
+    keybind,
+    kv,
+    route,
+    routes,
+    bump: () => setRouteRev((value) => value + 1),
+    event: sdk.event,
+    sdk,
+    sync,
+    theme: themeState,
+    toast,
+    renderer,
+  })
+  const [pluginsReady, setPluginsReady] = createSignal(false)
+  TuiPluginRuntime.init({
+    api,
+    config: tuiConfig,
+  })
+    .catch((error) => console.error("Failed to load TUI plugins", error))
+    .finally(() => setPluginsReady(true))
 
   useKeyboard((evt) => {
     if (!Flag.SLOPCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
@@ -256,10 +323,6 @@ function App() {
   }
   const [terminalTitleEnabled, setTerminalTitleEnabled] = createSignal(kv.get("terminal_title_enabled", true))
 
-  createEffect(() => {
-    console.log(JSON.stringify(route.data))
-  })
-
   // Update terminal window title based on current route and session
   createEffect(() => {
     if (!terminalTitleEnabled() || Flag.SLOPCODE_DISABLE_TERMINAL_TITLE) return
@@ -282,28 +345,31 @@ function App() {
     }
   })
 
+  createEffect(() => {
+    editor.reconnect(sync.data.path.directory || sdk.directory || process.cwd())
+  })
+
   const args = useArgs()
   onMount(() => {
-    batch(() => {
-      if (args.agent) local.agent.set(args.agent)
-      if (args.model) {
-        const { providerID, modelID } = Provider.parseModel(args.model)
-        if (!providerID || !modelID)
-          return toast.show({
-            variant: "warning",
-            message: `Invalid model format: ${args.model}`,
-            duration: 3000,
-          })
-        local.model.set({ providerID, modelID }, { recent: true })
-      }
-      // Handle --session without --fork immediately (fork is handled in createEffect below)
-      if (args.sessionID && !args.fork) {
-        route.navigate({
-          type: "session",
-          sessionID: args.sessionID,
+    if (args.sessionID && !args.fork) {
+      route.navigate({
+        type: "session",
+        sessionID: args.sessionID,
+        source: "switch",
+        workspaceID: route.data.workspaceID,
+      })
+    }
+    if (args.agent) local.agent.set(args.agent)
+    if (args.model) {
+      const { providerID, modelID } = Provider.parseModel(args.model)
+      if (!providerID || !modelID)
+        return toast.show({
+          variant: "warning",
+          message: `Invalid model format: ${args.model}`,
+          duration: 3000,
         })
-      }
-    })
+      local.model.set({ providerID, modelID }, { recent: true })
+    }
   })
 
   let continued = false
@@ -312,19 +378,29 @@ function App() {
     if (continued || sync.status === "loading" || !args.continue) return
     const match = sync.data.session
       .toSorted((a, b) => b.time.updated - a.time.updated)
-      .find((x) => x.parentID === undefined)?.id
+      .find((x) => x.parentID === undefined)
     if (match) {
       continued = true
       if (args.fork) {
-        sdk.client.session.fork({ sessionID: match }).then((result) => {
+        sdk.client.session.fork({ sessionID: match.id }).then((result) => {
           if (result.data?.id) {
-            route.navigate({ type: "session", sessionID: result.data.id })
+            route.navigate({
+              type: "session",
+              sessionID: result.data.id,
+              source: "fork",
+              workspaceID: (match as { workspaceID?: string }).workspaceID,
+            })
           } else {
             toast.show({ message: "Failed to fork session", variant: "error" })
           }
         })
       } else {
-        route.navigate({ type: "session", sessionID: match })
+        route.navigate({
+          type: "session",
+          sessionID: match.id,
+          source: "switch",
+          workspaceID: (match as { workspaceID?: string }).workspaceID,
+        })
       }
     }
   })
@@ -338,7 +414,12 @@ function App() {
     forked = true
     sdk.client.session.fork({ sessionID: args.sessionID }).then((result) => {
       if (result.data?.id) {
-        route.navigate({ type: "session", sessionID: result.data.id })
+        route.navigate({
+          type: "session",
+          sessionID: result.data.id,
+          source: "fork",
+          workspaceID: route.data.workspaceID,
+        })
       } else {
         toast.show({ message: "Failed to fork session", variant: "error" })
       }
@@ -365,11 +446,23 @@ function App() {
       category: "Session",
       suggested: sync.data.session.length > 0,
       slash: {
-        name: "sessions",
-        aliases: ["resume", "continue"],
+        name: "session",
+        aliases: ["sessions", "resume", "continue"],
       },
       onSelect: () => {
         dialog.replace(() => <DialogSessionList />)
+      },
+    },
+    {
+      title: "Workspaces",
+      value: "workspace.list",
+      category: "Session",
+      slash: {
+        name: "workspaces",
+        aliases: ["workspace"],
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogWorkspaceList />)
       },
     },
     {
@@ -383,13 +476,12 @@ function App() {
         aliases: ["clear"],
       },
       onSelect: () => {
-        const current = promptRef.current
-        // Don't require focus - if there's any text, preserve it
-        const currentPrompt = current?.current?.input ? current.current : undefined
-        route.navigate({
-          type: "home",
-          initialPrompt: currentPrompt,
-        })
+        const current = promptRef.current?.current
+        const currentPrompt = current && (current.input || current.parts.length > 0) ? current : undefined
+        tabState.copySelection(tabState.currentID(), DRAFT_TAB_ID)
+        if (currentPrompt) tabState.setPrompt(DRAFT_TAB_ID, currentPrompt)
+        else tabState.clearPrompt(DRAFT_TAB_ID)
+        tabs.openDraft()
         dialog.clear()
       },
     },
@@ -404,6 +496,17 @@ function App() {
       },
       onSelect: () => {
         dialog.replace(() => <DialogModel />)
+      },
+    },
+    {
+      title: "Autocomplete model overrides",
+      value: "model.completion.list",
+      category: "Agent",
+      slash: {
+        name: "models-completion",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogModelCompletion />)
       },
     },
     {
@@ -461,6 +564,7 @@ function App() {
     {
       title: "Toggle MCPs",
       value: "mcp.list",
+      search: "toggle mcps",
       category: "Agent",
       slash: {
         name: "mcps",
@@ -490,6 +594,19 @@ function App() {
       },
     },
     {
+      title: "Switch model variant",
+      value: "variant.list",
+      keybind: "variant_list",
+      category: "Agent",
+      hidden: local.model.variant.list().length === 0,
+      slash: {
+        name: "variants",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogVariant />)
+      },
+    },
+    {
       title: "Agent cycle reverse",
       value: "agent.cycle.reverse",
       keybind: "agent_cycle_reverse",
@@ -512,6 +629,18 @@ function App() {
       category: "Provider",
     },
     {
+      title: "Switch console org",
+      value: "console.orgs",
+      slash: {
+        name: "orgs",
+        aliases: ["console"],
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogConsoleOrg />)
+      },
+      category: "Provider",
+    },
+    {
       title: "View status",
       keybind: "status_view",
       value: "slopcode.status",
@@ -520,6 +649,19 @@ function App() {
       },
       onSelect: () => {
         dialog.replace(() => <DialogStatus />)
+      },
+      category: "System",
+    },
+    {
+      title: "Switch shell",
+      value: "shell.list",
+      search: "select default shell",
+      slash: {
+        name: "shells",
+        aliases: ["shell"],
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogShell />)
       },
       category: "System",
     },
@@ -536,8 +678,9 @@ function App() {
       category: "System",
     },
     {
-      title: "Toggle appearance",
+      title: mode() === "dark" ? "Light mode" : "Dark mode",
       value: "theme.switch_mode",
+      search: "toggle appearance",
       onSelect: (dialog) => {
         setMode(mode() === "dark" ? "light" : "dark")
         dialog.clear()
@@ -567,6 +710,7 @@ function App() {
     },
     {
       title: "Toggle debug panel",
+      search: "toggle debug",
       category: "System",
       value: "app.debug",
       onSelect: (dialog) => {
@@ -576,6 +720,7 @@ function App() {
     },
     {
       title: "Toggle console",
+      search: "toggle console",
       category: "System",
       value: "app.console",
       onSelect: (dialog) => {
@@ -616,6 +761,7 @@ function App() {
     {
       title: terminalTitleEnabled() ? "Disable terminal title" : "Enable terminal title",
       value: "terminal.title.toggle",
+      search: "toggle terminal title",
       keybind: "terminal_title_toggle",
       category: "System",
       onSelect: (dialog) => {
@@ -629,8 +775,37 @@ function App() {
       },
     },
     {
+      title: kv.get("session_directory_filter_enabled", true)
+        ? "Disable session directory filtering"
+        : "Enable session directory filtering",
+      value: "app.toggle.session_directory_filter",
+      search: "toggle session filtering",
+      category: "System",
+      onSelect: async (dialog) => {
+        kv.set("session_directory_filter_enabled", !kv.get("session_directory_filter_enabled", true))
+        await sync.session.refresh()
+        dialog.clear()
+      },
+    },
+    {
+      title: kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary)
+        ? "Disable paste summaries"
+        : "Enable paste summaries",
+      value: "app.toggle.paste_summary",
+      search: "toggle paste summary",
+      category: "System",
+      onSelect: (dialog) => {
+        kv.set(
+          "paste_summary_enabled",
+          !kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary),
+        )
+        dialog.clear()
+      },
+    },
+    {
       title: kv.get("animations_enabled", true) ? "Disable animations" : "Enable animations",
       value: "app.toggle.animations",
+      search: "toggle animations",
       category: "System",
       onSelect: (dialog) => {
         kv.set("animations_enabled", !kv.get("animations_enabled", true))
@@ -640,6 +815,7 @@ function App() {
     {
       title: kv.get("diff_wrap_mode", "word") === "word" ? "Disable diff wrapping" : "Enable diff wrapping",
       value: "app.toggle.diffwrap",
+      search: "toggle diff wrapping",
       category: "System",
       onSelect: (dialog) => {
         const current = kv.get("diff_wrap_mode", "word")
@@ -648,20 +824,6 @@ function App() {
       },
     },
   ])
-
-  createEffect(() => {
-    const currentModel = local.model.current()
-    if (!currentModel) return
-    if (currentModel.providerID === "openrouter" && !kv.get("openrouter_warning", false)) {
-      untrack(() => {
-        DialogAlert.show(
-          dialog,
-          "Warning",
-          "While openrouter is a convenient way to access LLMs your request will often be routed to subpar providers that do not work well in our testing.\n\nFor reliable access to models check out SlopCode Zen\nhttps://slopcode.dev/zen",
-        ).then(() => kv.set("openrouter_warning", true))
-      })
-    }
-  })
 
   sdk.event.on(TuiEvent.CommandExecute.type, (evt) => {
     command.trigger(evt.properties.command)
@@ -680,12 +842,14 @@ function App() {
     route.navigate({
       type: "session",
       sessionID: evt.properties.sessionID,
+      source: "switch",
+      workspaceID: route.data.workspaceID,
     })
   })
 
   sdk.event.on(SessionApi.Event.Deleted.type, (evt) => {
     if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
-      route.navigate({ type: "home" })
+      route.navigate({ type: "home", workspaceID: route.data.workspaceID })
       toast.show({
         variant: "info",
         message: "The current session was deleted",
@@ -724,6 +888,20 @@ function App() {
     })
   })
 
+  const plugin = createMemo(() => {
+    if (!pluginsReady()) return
+    if (route.data.type !== "plugin") return
+    const render = routeView(route.data.id)
+    if (!render) {
+      return (
+        <box flexGrow={1} alignItems="center" justifyContent="center" padding={2}>
+          <text fg={theme.textMuted}>Plugin route {route.data.id} is unavailable.</text>
+        </box>
+      )
+    }
+    return render({ params: route.data.data })
+  })
+
   return (
     <box
       width={dimensions().width}
@@ -747,6 +925,8 @@ function App() {
           <Session />
         </Match>
       </Switch>
+      {plugin()}
+      <TuiPluginRuntime.Slot name="app" />
     </box>
   )
 }

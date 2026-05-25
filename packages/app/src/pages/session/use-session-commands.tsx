@@ -11,8 +11,10 @@ import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
+import { useProviders } from "@/hooks/use-providers"
 import { DialogSelectFile } from "@/components/dialog-select-file"
 import { DialogSelectModel } from "@/components/dialog-select-model"
+import { DialogSelectModelUnpaid } from "@/components/dialog-select-model-unpaid"
 import { DialogSelectMcp } from "@/components/dialog-select-mcp"
 import { DialogFork } from "@/components/dialog-fork"
 import { showToast } from "@slopcode-ai/ui/toast"
@@ -20,6 +22,8 @@ import { findLast } from "@slopcode-ai/util/array"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { UserMessage } from "@slopcode-ai/sdk/v2"
 import { canAddSelectionContext } from "@/pages/session/session-command-helpers"
+import { createMediaQuery } from "@solid-primitives/media"
+import { adjacentTab, visibleTabs } from "@/pages/session/helpers"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -42,6 +46,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const local = useLocal()
   const permission = usePermission()
   const prompt = usePrompt()
+  const providers = useProviders()
   const sdk = useSDK()
   const sync = useSync()
   const terminal = useTerminal()
@@ -54,6 +59,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const view = createMemo(() => layout.view(sessionKey))
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
 
+  const isDesktop = createMediaQuery("(min-width: 768px)")
+  const reviewTab = createMemo(() => isDesktop())
+  const contextOpen = createMemo(() => tabs().active() === "context" || tabs().all().includes("context"))
+  const openedTabs = createMemo(() =>
+    tabs()
+      .all()
+      .filter((t) => t !== "context" && t !== "review"),
+  )
   const idle = { type: "idle" as const }
   const status = createMemo(() => sync.data.session_status[params.id ?? ""] ?? idle)
   const messages = createMemo(() => (params.id ? (sync.data.message[params.id] ?? []) : []))
@@ -128,6 +141,32 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         tabs().close(active)
       },
     }),
+    fileCommand({
+      id: "tab.previous",
+      title: language.t("command.tab.previous"),
+      keybind: "mod+shift+[",
+      onSelect: () => {
+        const target = adjacentTab(
+          visibleTabs({ reviewTab: reviewTab(), contextOpen: contextOpen(), openedTabs: openedTabs() }),
+          tabs().active(),
+          -1,
+        )
+        if (target) tabs().open(target)
+      },
+    }),
+    fileCommand({
+      id: "tab.next",
+      title: language.t("command.tab.next"),
+      keybind: "mod+shift+]",
+      onSelect: () => {
+        const target = adjacentTab(
+          visibleTabs({ reviewTab: reviewTab(), contextOpen: contextOpen(), openedTabs: openedTabs() }),
+          tabs().active(),
+          1,
+        )
+        if (target) tabs().open(target)
+      },
+    }),
   ])
 
   const contextCommands = createMemo(() => [
@@ -179,7 +218,11 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       id: "fileTree.toggle",
       title: language.t("command.fileTree.toggle"),
       keybind: "mod+\\",
-      onSelect: () => layout.fileTree.toggle(),
+      onSelect: () => {
+        const next = !layout.fileTree.opened()
+        layout.fileTree.toggle()
+        if (next) view().sidePanel.expand()
+      },
     }),
     viewCommand({
       id: "input.focus",
@@ -225,7 +268,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       description: language.t("command.model.choose.description"),
       keybind: "mod+'",
       slash: "model",
-      onSelect: () => dialog.show(() => <DialogSelectModel />),
+      onSelect: () =>
+        dialog.show(() => (providers.paid().length > 0 ? <DialogSelectModel /> : <DialogSelectModelUnpaid />)),
     }),
     mcpCommand({
       id: "mcp.toggle",

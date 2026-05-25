@@ -13,6 +13,8 @@ import { useArgs } from "./args"
 import { useSDK } from "./sdk"
 import { RGBA } from "@opentui/core"
 import { Filesystem } from "@/util/filesystem"
+import { useTabState } from "./tab-state"
+import { useRoute } from "./route"
 
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
@@ -20,6 +22,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const sync = useSync()
     const sdk = useSDK()
     const toast = useToast()
+    const tabState = useTabState()
+    const route = useRoute()
+    const args = useArgs()
 
     function isModelValid(model: { providerID: string; modelID: string }) {
       const provider = sync.data.provider.find((x) => x.id === model.providerID)
@@ -37,11 +42,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const agent = iife(() => {
       const agents = createMemo(() => sync.data.agent.filter((x) => x.mode !== "subagent" && !x.hidden))
       const visibleAgents = createMemo(() => sync.data.agent.filter((x) => !x.hidden))
-      const [agentStore, setAgentStore] = createStore<{
-        current: string
-      }>({
-        current: agents()[0].name,
-      })
       const { theme } = useTheme()
       const colors = createMemo(() => [
         theme.secondary,
@@ -52,12 +52,18 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         theme.error,
         theme.info,
       ])
+      const currentName = createMemo(() => {
+        const current = tabState.selection().agent
+        if (current && agents().some((x) => x.name === current)) return current
+        if (args.agent && agents().some((x) => x.name === args.agent)) return args.agent
+        return agents()[0]?.name ?? ""
+      })
       return {
         list() {
           return agents()
         },
         current() {
-          return agents().find((x) => x.name === agentStore.current)!
+          return agents().find((x) => x.name === currentName()) ?? agents()[0]!
         },
         set(name: string) {
           if (!agents().some((x) => x.name === name))
@@ -66,26 +72,26 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               message: `Agent not found: ${name}`,
               duration: 3000,
             })
-          setAgentStore("current", name)
+          tabState.setAgent(tabState.currentID(), name)
         },
         move(direction: 1 | -1) {
           batch(() => {
-            let next = agents().findIndex((x) => x.name === agentStore.current) + direction
+            let next = agents().findIndex((x) => x.name === currentName()) + direction
             if (next < 0) next = agents().length - 1
             if (next >= agents().length) next = 0
             const value = agents()[next]
-            setAgentStore("current", value.name)
+            if (!value) return
+            tabState.setAgent(tabState.currentID(), value.name)
           })
         },
         color(name: string) {
           const index = visibleAgents().findIndex((x) => x.name === name)
           if (index === -1) return colors()[0]
-          const agent = visibleAgents()[index]
+          const value = visibleAgents()[index]
 
-          if (agent?.color) {
-            const color = agent.color
+          if (value?.color) {
+            const color = value.color
             if (color.startsWith("#")) return RGBA.fromHex(color)
-            // already validated by config, just satisfying TS here
             return theme[color as keyof typeof theme] as RGBA
           }
           return colors()[index % colors().length]
@@ -94,30 +100,11 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     })
 
     const model = iife(() => {
-      const [modelStore, setModelStore] = createStore<{
-        ready: boolean
-        model: Record<
-          string,
-          {
-            providerID: string
-            modelID: string
-          }
-        >
-        recent: {
-          providerID: string
-          modelID: string
-        }[]
-        favorite: {
-          providerID: string
-          modelID: string
-        }[]
-        variant: Record<string, string | undefined>
-      }>({
+      const [modelStore, setModelStore] = createStore({
         ready: false,
-        model: {},
-        recent: [],
-        favorite: [],
-        variant: {},
+        recent: [] as { providerID: string; modelID: string }[],
+        favorite: [] as { providerID: string; modelID: string }[],
+        variant: {} as Record<string, string | undefined>,
       })
 
       const filePath = path.join(Global.Path.state, "model.json")
@@ -138,8 +125,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         })
       }
 
-      Filesystem.readJson(filePath)
-        .then((x: any) => {
+      Filesystem.readJson<{
+        recent?: { providerID: string; modelID: string }[]
+        favorite?: { providerID: string; modelID: string }[]
+        variant?: Record<string, string | undefined>
+      }>(filePath)
+        .then((x) => {
           if (Array.isArray(x.recent)) setModelStore("recent", x.recent)
           if (Array.isArray(x.favorite)) setModelStore("favorite", x.favorite)
           if (typeof x.variant === "object" && x.variant !== null) setModelStore("variant", x.variant)
@@ -150,7 +141,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (state.pending) save()
         })
 
-      const args = useArgs()
       const fallbackModel = createMemo(() => {
         if (args.model) {
           const { providerID, modelID } = Provider.parseModel(args.model)
@@ -173,9 +163,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         }
 
         for (const item of modelStore.recent) {
-          if (isModelValid(item)) {
-            return item
-          }
+          if (isModelValid(item)) return item
         }
 
         const provider = sync.data.provider[0]
@@ -191,11 +179,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       })
 
       const currentModel = createMemo(() => {
-        const a = agent.current()
+        const current = agent.current()
+        const selection = tabState.selection()
         return (
           getFirstValidModel(
-            () => modelStore.model[a.name],
-            () => a.model,
+            () => selection.model[current.name],
+            () => current.model,
             fallbackModel,
           ) ?? undefined
         )
@@ -238,9 +227,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           let next = index + direction
           if (next < 0) next = recent.length - 1
           if (next >= recent.length) next = 0
-          const val = recent[next]
-          if (!val) return
-          setModelStore("model", agent.current().name, { ...val })
+          const value = recent[next]
+          if (!value) return
+          tabState.setModel(tabState.currentID(), agent.current().name, { ...value })
         },
         cycleFavorite(direction: 1 | -1) {
           const favorites = modelStore.favorite.filter((item) => isModelValid(item))
@@ -266,7 +255,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           }
           const next = favorites[index]
           if (!next) return
-          setModelStore("model", agent.current().name, { ...next })
+          tabState.setModel(tabState.currentID(), agent.current().name, { ...next })
           const uniq = uniqueBy([next, ...modelStore.recent], (x) => `${x.providerID}/${x.modelID}`)
           if (uniq.length > 10) uniq.pop()
           setModelStore(
@@ -285,7 +274,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               })
               return
             }
-            setModelStore("model", agent.current().name, model)
+            tabState.setModel(tabState.currentID(), agent.current().name, model)
             if (options?.recent) {
               const uniq = uniqueBy([model, ...modelStore.recent], (x) => `${x.providerID}/${x.modelID}`)
               if (uniq.length > 10) uniq.pop()
@@ -322,23 +311,30 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         },
         variant: {
           current() {
-            const m = currentModel()
-            if (!m) return undefined
-            const key = `${m.providerID}/${m.modelID}`
-            return modelStore.variant[key]
+            const current = currentModel()
+            if (!current) return undefined
+            const key = `${current.providerID}/${current.modelID}`
+            const selection = tabState.selection()
+            const value = selection.variant[key] ?? modelStore.variant[key]
+            return this.list().includes(value ?? "") ? value : undefined
+          },
+          selected() {
+            return this.current() ?? "default"
           },
           list() {
-            const m = currentModel()
-            if (!m) return []
-            const provider = sync.data.provider.find((x) => x.id === m.providerID)
-            const info = provider?.models[m.modelID]
+            const current = currentModel()
+            if (!current) return []
+            const provider = sync.data.provider.find((x) => x.id === current.providerID)
+            const info = provider?.models[current.modelID]
             if (!info?.variants) return []
             return Object.keys(info.variants)
           },
           set(value: string | undefined) {
-            const m = currentModel()
-            if (!m) return
-            const key = `${m.providerID}/${m.modelID}`
+            if (value && !this.list().includes(value)) return
+            const current = currentModel()
+            if (!current) return
+            const key = `${current.providerID}/${current.modelID}`
+            tabState.setVariant(tabState.currentID(), key, value)
             setModelStore("variant", key, value)
             save()
           },
@@ -369,38 +365,57 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       async toggle(name: string) {
         const status = sync.data.mcp[name]
         if (status?.status === "connected") {
-          // Disable: disconnect the MCP
           await sdk.client.mcp.disconnect({ name })
         } else {
-          // Enable/Retry: connect the MCP (handles disabled, failed, and other states)
           await sdk.client.mcp.connect({ name })
         }
       },
     }
 
-    // Automatically update model when agent changes
     createEffect(() => {
-      const value = agent.current()
-      if (value.model) {
-        if (isModelValid(value.model))
-          model.set({
-            providerID: value.model.providerID,
-            modelID: value.model.modelID,
-          })
-        else
-          toast.show({
-            variant: "warning",
-            message: `Agent ${value.name}'s configured model ${value.model.providerID}/${value.model.modelID} is not valid`,
-            duration: 3000,
-          })
+      const data = route.data
+      if (data.type !== "session") return
+      const messages = sync.data.message[data.sessionID] ?? []
+      const last = messages.findLast((x) => x.role === "user")
+      if (!last) return
+      const current = tabState.selection(data.sessionID)
+      if (current.agent || Object.keys(current.model).length > 0 || Object.keys(current.variant).length > 0) return
+      const primary = agent.list().some((x) => x.name === last.agent)
+      if (!primary) return
+      tabState.setAgent(data.sessionID, last.agent)
+      if (last.model) {
+        tabState.setModel(data.sessionID, last.agent, {
+          providerID: last.model.providerID,
+          modelID: last.model.modelID,
+        })
+      }
+      if (last.variant && last.model) {
+        tabState.setVariant(data.sessionID, `${last.model.providerID}/${last.model.modelID}`, last.variant)
       }
     })
 
-    const result = {
+    createEffect(() => {
+      const value = agent.current()
+      const selection = tabState.selection()
+      if (!value.model || selection.model[value.name]) return
+      if (isModelValid(value.model)) {
+        tabState.setModel(tabState.currentID(), value.name, {
+          providerID: value.model.providerID,
+          modelID: value.model.modelID,
+        })
+        return
+      }
+      toast.show({
+        variant: "warning",
+        message: `Agent ${value.name}'s configured model ${value.model.providerID}/${value.model.modelID} is not valid`,
+        duration: 3000,
+      })
+    })
+
+    return {
       model,
       agent,
       mcp,
     }
-    return result
   },
 })

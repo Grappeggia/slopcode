@@ -2,9 +2,10 @@ import fs from "fs/promises"
 import { xdgData, xdgCache, xdgConfig, xdgState } from "xdg-basedir"
 import path from "path"
 import os from "os"
+import { product } from "@slopcode-ai/util/product"
 import { Filesystem } from "../util/filesystem"
 
-const app = "slopcode"
+const app = product.id
 
 const data = path.join(xdgData!, app)
 const cache = path.join(xdgCache!, app)
@@ -23,6 +24,7 @@ export namespace Global {
     cache,
     config,
     state,
+    repos: path.join(data, "repos"),
   }
 }
 
@@ -32,6 +34,7 @@ await Promise.all([
   fs.mkdir(Global.Path.state, { recursive: true }),
   fs.mkdir(Global.Path.log, { recursive: true }),
   fs.mkdir(Global.Path.bin, { recursive: true }),
+  fs.mkdir(Global.Path.repos, { recursive: true }),
 ])
 
 const CACHE_VERSION = "21"

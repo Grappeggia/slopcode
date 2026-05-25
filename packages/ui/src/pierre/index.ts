@@ -96,6 +96,21 @@ const unsafeCSS = `
   box-shadow: inset 0 0 0 9999px var(--diffs-bg-selection);
 }
 
+[data-diff] [data-line][data-line-type='context'],
+[data-diff] [data-line][data-line-type='context-expanded'] {
+  opacity: 0.82;
+}
+
+[data-diff] [data-column-number][data-line-type='context'],
+[data-diff] [data-column-number][data-line-type='context-expanded'] {
+  color: color-mix(in lab, var(--diffs-fg-number) 82%, var(--diffs-bg));
+}
+
+[data-diff] [data-line][data-line-type='context'][data-selected-line],
+[data-diff] [data-line][data-line-type='context-expanded'][data-selected-line] {
+  opacity: 1;
+}
+
 [data-diff] [data-line][data-selected-line] {
   background-color: var(--diffs-bg-selection);
   box-shadow: inset 2px 0 0 var(--diffs-selection-border);
@@ -171,7 +186,7 @@ export function createDefaultOptions<T>(style: FileDiffOptions<T>["diffStyle"]) 
     disableBackground: false,
     expansionLineCount: 20,
     hunkSeparators: "line-info-basic",
-    lineDiffType: style === "split" ? "word-alt" : "none",
+    lineDiffType: style === "split" ? "word-alt" : "word",
     maxLineDiffLength: 1000,
     maxLineLengthForHighlighting: 1000,
     disableFileHeader: true,

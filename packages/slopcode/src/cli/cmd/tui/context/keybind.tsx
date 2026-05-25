@@ -2,6 +2,7 @@ import { createMemo } from "solid-js"
 import { Keybind } from "@/util/keybind"
 import { pipe, mapValues } from "remeda"
 import type { TuiConfig } from "@/config/tui"
+import { Config } from "@/config/config"
 import type { ParsedKey, Renderable } from "@opentui/core"
 import { createStore } from "solid-js/store"
 import { useKeyboard, useRenderer } from "@opentui/solid"
@@ -16,33 +17,41 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
     const config = useTuiConfig()
     const keybinds = createMemo<Record<string, Keybind.Info[]>>(() => {
       return pipe(
-        (config.keybinds ?? {}) as Record<string, string>,
+        Config.Keybinds.parse(config.keybinds ?? {}) as Record<string, string>,
         mapValues((value) => Keybind.parse(value)),
       )
     })
     const [store, setStore] = createStore({
       leader: false,
+      suspended: 0,
     })
     const renderer = useRenderer()
 
     let focus: Renderable | null
     let timeout: NodeJS.Timeout
+    let keep = false
+
+    function refresh() {
+      if (timeout) clearTimeout(timeout)
+      timeout = setTimeout(() => {
+        if (!store.leader) return
+        leader(false)
+      }, 2000)
+    }
+
     function leader(active: boolean) {
       if (active) {
         setStore("leader", true)
+        keep = false
         focus = renderer.currentFocusedRenderable
         focus?.blur()
-        if (timeout) clearTimeout(timeout)
-        timeout = setTimeout(() => {
-          if (!store.leader) return
-          leader(false)
-          if (!focus || focus.isDestroyed) return
-          focus.focus()
-        }, 2000)
+        refresh()
         return
       }
 
       if (!active) {
+        keep = false
+        if (timeout) clearTimeout(timeout)
         if (focus && !renderer.currentFocusedRenderable) {
           focus.focus()
         }
@@ -51,6 +60,7 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
     }
 
     useKeyboard(async (evt) => {
+      if (store.suspended > 0) return
       if (!store.leader && result.match("leader", evt)) {
         leader(true)
         return
@@ -58,8 +68,11 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
 
       if (store.leader && evt.name) {
         setImmediate(() => {
-          if (focus && renderer.currentFocusedRenderable === focus) {
-            focus.focus()
+          const next = Keybind.nextLeader({ active: store.leader, name: evt.name, keep })
+          keep = false
+          if (next) {
+            refresh()
+            return
           }
           leader(false)
         })
@@ -73,6 +86,15 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
       get leader() {
         return store.leader
       },
+      keep() {
+        if (!store.leader) return
+        keep = true
+      },
+      suspend() {
+        if (store.leader) leader(false)
+        setStore("suspended", (value) => value + 1)
+        return () => setStore("suspended", (value) => Math.max(0, value - 1))
+      },
       parse(evt: ParsedKey): Keybind.Info {
         // Handle special case for Ctrl+Underscore (represented as \x1F)
         if (evt.name === "\x1F") {
@@ -80,21 +102,22 @@ export const { use: useKeybind, provider: KeybindProvider } = createSimpleContex
         }
         return Keybind.fromParsedKey(evt, store.leader)
       },
-      match(key: KeybindKey, evt: ParsedKey) {
-        const keybind = keybinds()[key]
-        if (!keybind) return false
+      match(key: string, evt: ParsedKey) {
+        const list = keybinds()[key] ?? Keybind.parse(key)
+        if (!list.length) return false
         const parsed: Keybind.Info = result.parse(evt)
-        for (const key of keybind) {
-          if (Keybind.match(key, parsed)) {
-            return true
-          }
+        for (const item of list) {
+          if (Keybind.match(item, parsed)) return true
         }
+        return false
       },
-      print(key: KeybindKey) {
-        const first = keybinds()[key]?.at(0)
+      print(key: string) {
+        const first = keybinds()[key]?.at(0) ?? Keybind.parse(key).at(0)
         if (!first) return ""
-        const result = Keybind.toString(first)
-        return result.replace("<leader>", Keybind.toString(keybinds().leader![0]!))
+        const text = Keybind.toString(first)
+        const lead = keybinds().leader?.[0]
+        if (!lead) return text
+        return text.replace("<leader>", Keybind.toString(lead))
       },
     }
     return result

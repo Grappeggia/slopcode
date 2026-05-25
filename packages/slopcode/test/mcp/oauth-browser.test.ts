@@ -247,3 +247,11 @@ test("open() is called with the authorization URL", async () => {
     },
   })
 })
+
+test("cancelPending rejects callbacks registered by MCP name", async () => {
+  const pending = McpOAuthCallback.waitForCallback("oauth-state", "test-oauth-server-4")
+
+  McpOAuthCallback.cancelPending("test-oauth-server-4")
+
+  await expect(pending).rejects.toThrow("Authorization cancelled")
+})

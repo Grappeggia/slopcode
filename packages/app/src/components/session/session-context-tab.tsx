@@ -97,8 +97,10 @@ export function SessionContextTab() {
   const language = useLanguage()
 
   const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
+  const tabs = createMemo(() => layout.tabs(sessionKey))
   const view = createMemo(() => layout.view(sessionKey))
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
+  const active = createMemo(() => tabs().active() === "context")
 
   const messages = createMemo(
     () => {
@@ -176,8 +178,9 @@ export function SessionContextTab() {
 
   const breakdown = createMemo(
     on(
-      () => [ctx()?.message.id, ctx()?.input, messages().length, systemPrompt()],
+      () => [active(), ctx()?.message.id, ctx()?.input, messages().length, systemPrompt()],
       () => {
+        if (!active()) return []
         const c = ctx()
         if (!c?.input) return []
         return estimateSessionContextBreakdown({

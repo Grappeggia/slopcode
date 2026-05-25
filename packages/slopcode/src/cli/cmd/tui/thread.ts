@@ -1,49 +1,16 @@
 import { cmd } from "@/cli/cmd/cmd"
-import { tui } from "./app"
-import { Rpc } from "@/util/rpc"
-import { type rpc } from "./worker"
-import path from "path"
-import { fileURLToPath } from "url"
+import { resolveNetworkOptions, withNetworkOptions } from "@/cli/network"
 import { UI } from "@/cli/ui"
-import { iife } from "@/util/iife"
-import { Log } from "@/util/log"
-import { withNetworkOptions, resolveNetworkOptions } from "@/cli/network"
-import { Filesystem } from "@/util/filesystem"
-import type { Event } from "@slopcode-ai/sdk/v2"
-import type { EventSource } from "./context/sdk"
-import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
+import { upgrade } from "@/cli/upgrade"
+import { DaemonAuth } from "@/daemon/auth"
+import { DaemonLauncher } from "@/daemon/launcher"
 import { TuiConfig } from "@/config/tui"
 import { Instance } from "@/project/instance"
+import { randomUUID } from "crypto"
+import path from "path"
+import { spawnSync } from "child_process"
 
-declare global {
-  const SLOPCODE_WORKER_PATH: string
-}
-
-type RpcClient = ReturnType<typeof Rpc.client<typeof rpc>>
-
-function createWorkerFetch(client: RpcClient): typeof fetch {
-  const fn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const request = new Request(input, init)
-    const body = request.body ? await request.text() : undefined
-    const result = await client.call("fetch", {
-      url: request.url,
-      method: request.method,
-      headers: Object.fromEntries(request.headers.entries()),
-      body,
-    })
-    return new Response(result.body, {
-      status: result.status,
-      headers: result.headers,
-    })
-  }
-  return fn as typeof fetch
-}
-
-function createEventSource(client: RpcClient): EventSource {
-  return {
-    on: (handler) => client.on<Event>("event", handler),
-  }
-}
+import { android, client, guard } from "./platform"
 
 export const TuiThreadCommand = cmd({
   command: "$0 [project]",
@@ -82,13 +49,14 @@ export const TuiThreadCommand = cmd({
         describe: "agent to use",
       }),
   handler: async (args) => {
-    // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
-    // (Important when running under `bun run` wrappers on Windows.)
-    const unguard = win32InstallCtrlCGuard()
+    const termux = android()
+    const win32 = termux ? undefined : await import("./win32")
+    const unguard = win32?.win32InstallCtrlCGuard()
     try {
-      // Must be the very first thing — disables CTRL_C_EVENT before any Worker
-      // spawn or async work so the OS cannot kill the process group.
-      win32DisableProcessedInput()
+      win32?.win32DisableProcessedInput()
+      if (!termux && guard()) {
+        process.exit(1)
+      }
 
       if (args.fork && !args.continue && !args.session) {
         UI.error("--fork requires --continue or --session")
@@ -96,83 +64,119 @@ export const TuiThreadCommand = cmd({
         return
       }
 
-      // Resolve relative paths against PWD to preserve behavior when using --cwd flag
-      const baseCwd = process.env.PWD ?? process.cwd()
-      const cwd = args.project ? path.resolve(baseCwd, args.project) : process.cwd()
-      const localWorker = new URL("./worker.ts", import.meta.url)
-      const distWorker = new URL("./cli/cmd/tui/worker.js", import.meta.url)
-      const workerPath = await iife(async () => {
-        if (typeof SLOPCODE_WORKER_PATH !== "undefined") return SLOPCODE_WORKER_PATH
-        if (await Filesystem.exists(fileURLToPath(distWorker))) return distWorker
-        return localWorker
-      })
+      const base = process.env.PWD ?? process.cwd()
+      const cwd = args.project ? path.resolve(base, args.project) : process.cwd()
       try {
         process.chdir(cwd)
-      } catch (e) {
+      } catch {
         UI.error("Failed to change directory to " + cwd)
         return
       }
 
-      const worker = new Worker(workerPath, {
-        env: Object.fromEntries(
-          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-        ),
-      })
-      worker.onerror = (e) => {
-        Log.Default.error(e)
-      }
-      const client = Rpc.client<typeof rpc>(worker)
-      process.on("uncaughtException", (e) => {
-        Log.Default.error(e)
-      })
-      process.on("unhandledRejection", (e) => {
-        Log.Default.error(e)
-      })
-      process.on("SIGUSR2", async () => {
-        await client.call("reload", undefined)
-      })
-
-      const prompt = await iife(async () => {
+      const prompt = await (async () => {
         const piped = !process.stdin.isTTY ? await Bun.stdin.text() : undefined
         if (!args.prompt) return piped
         return piped ? piped + "\n" + args.prompt : args.prompt
-      })
+      })()
+
       const config = await Instance.provide({
         directory: cwd,
         fn: () => TuiConfig.get(),
       })
 
-      // Check if server should be started (port or hostname explicitly set in CLI or config)
-      const networkOpts = await resolveNetworkOptions(args)
-      const shouldStartServer =
+      const network = await resolveNetworkOptions(args)
+      const expose =
         process.argv.includes("--port") ||
         process.argv.includes("--hostname") ||
         process.argv.includes("--mdns") ||
-        networkOpts.mdns ||
-        networkOpts.port !== 0 ||
-        networkOpts.hostname !== "127.0.0.1"
+        network.mdns ||
+        network.port !== 0 ||
+        network.hostname !== "127.0.0.1"
+      const viewID = randomUUID()
 
-      let url: string
-      let customFetch: typeof fetch | undefined
-      let events: EventSource | undefined
+      const daemon = await DaemonLauncher.ensure({
+        directory: cwd,
+        viewID,
+        network: expose ? network : undefined,
+      })
 
-      if (shouldStartServer) {
-        // Start HTTP server for external access
-        const server = await client.call("server", networkOpts)
-        url = server.url
-      } else {
-        // Use direct RPC communication (no HTTP)
-        url = "http://slopcode.internal"
-        customFetch = createWorkerFetch(client)
-        events = createEventSource(client)
+      if (termux) {
+        const { androidHostTui } = await import("./android-host")
+        if (
+          await androidHostTui({
+            url: daemon.url,
+            config,
+            directory: cwd,
+            viewID,
+            headers: daemon.headers,
+            args: {
+              continue: args.continue,
+              sessionID: args.session,
+              agent: args.agent,
+              model: args.model,
+              prompt,
+              fork: args.fork,
+            },
+            onExit: async () => {},
+          })
+        ) {
+          return
+        }
+
+        if (process.env.SLOPCODE_TERMUX_LEGACY !== "1") {
+          const { portableTui } = await import("./portable")
+          await portableTui({
+            url: daemon.url,
+            headers: daemon.headers,
+            directory: cwd,
+            viewID,
+            args: {
+              continue: args.continue,
+              sessionID: args.session,
+              agent: args.agent,
+              model: args.model,
+              prompt,
+              fork: args.fork,
+            },
+          })
+          return
+        }
+
+        const bin = client()
+        if (!bin) {
+          UI.error("SlopCode Termux client is missing. Reinstall with: npm install -g slopcode@latest")
+          process.exit(1)
+        }
+        const result = spawnSync(
+          bin,
+          [
+            "--url",
+            daemon.url,
+            "--token",
+            daemon.headers[DaemonAuth.Header] ?? "",
+            ...(args.continue ? ["--continue"] : []),
+            ...(args.session ? ["--session", args.session] : []),
+            ...(args.model ? ["--model", args.model] : []),
+            ...(args.agent ? ["--agent", args.agent] : []),
+            ...(prompt ? ["--prompt", prompt] : []),
+          ],
+          { cwd, stdio: "inherit" },
+        )
+        if (result.error) {
+          UI.error(result.error.message)
+          process.exit(1)
+        }
+        process.exit(typeof result.status === "number" ? result.status : 1)
       }
 
+      const { tui } = await import("./app")
+
       const tuiPromise = tui({
-        url,
+        url: daemon.url,
         config,
         directory: cwd,
-        fetch: customFetch,
-        events,
+        viewID,
+        headers: daemon.headers,
         args: {
           continue: args.continue,
           sessionID: args.session,
@@ -181,13 +185,16 @@ export const TuiThreadCommand = cmd({
           prompt,
           fork: args.fork,
         },
-        onExit: async () => {
-          await client.call("shutdown", undefined)
-        },
+        onExit: async () => {},
       })
 
       setTimeout(() => {
-        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
+        Instance.provide({
+          directory: cwd,
+          fn: async () => {
+            await upgrade().catch(() => {})
+          },
+        }).catch(() => {})
       }, 1000)
 
       await tuiPromise

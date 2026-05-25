@@ -1,0 +1,43 @@
+{
+  "redirects": [
+    {
+      "source": "/docs/:path+/",
+      "destination": "/docs/:path+",
+      "permanent": false
+    },
+    {
+      "source": "/auth",
+      "destination": "https://opencode.ai/auth",
+      "permanent": false
+    },
+    {
+      "source": "/auth/:path*",
+      "destination": "https://opencode.ai/auth/:path*",
+      "permanent": false
+    },
+    {
+      "source": "/discord",
+      "destination": "https://discord.gg/slopcode",
+      "permanent": false
+    },
+    {
+      "source": "/discord/",
+      "destination": "https://discord.gg/slopcode",
+      "permanent": false
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/docs",
+      "destination": "/"
+    },
+    {
+      "source": "/docs/",
+      "destination": "/"
+    },
+    {
+      "source": "/docs/:path+",
+      "destination": "/:path*"
+    }
+  ]
+}

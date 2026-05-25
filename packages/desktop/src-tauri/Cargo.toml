@@ -1,7 +1,7 @@
 [package]
 name = "slopcode-desktop"
 version = "0.0.0"
-description = "The open source AI coding agent"
+description = "The open source AI slopcoding agent"
 authors = ["Anomaly Innovations"]
 edition = "2024"
 

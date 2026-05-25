@@ -1,5 +1,6 @@
 import { createMemo, createSignal, onMount, Show } from "solid-js"
 import { useSync } from "@tui/context/sync"
+import { useLocal } from "@tui/context/local"
 import { map, pipe, sortBy } from "remeda"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { useDialog } from "@tui/ui/dialog"
@@ -9,10 +10,12 @@ import { Link } from "../ui/link"
 import { useTheme } from "../context/theme"
 import { TextAttributes } from "@opentui/core"
 import type { ProviderAuthAuthorization } from "@slopcode-ai/sdk/v2"
-import { DialogModel } from "./dialog-model"
 import { useKeyboard } from "@opentui/solid"
 import { Clipboard } from "@tui/util/clipboard"
 import { useToast } from "../ui/toast"
+import { usePromptRef } from "../context/prompt"
+import { dismissPromptSlash } from "../util/prompt-slash"
+import { Provider } from "@/provider/provider"
 
 const PROVIDER_PRIORITY: Record<string, number> = {
   slopcode: 0,
@@ -27,6 +30,7 @@ export function createDialogProviderOptions() {
   const sync = useSync()
   const dialog = useDialog()
   const sdk = useSDK()
+  const promptRef = usePromptRef()
   const options = createMemo(() => {
     return pipe(
       sync.data.provider_next.all,
@@ -99,6 +103,45 @@ export function DialogProvider() {
   return <DialogSelect title="Connect a provider" options={options()} />
 }
 
+function DialogLoading(props: { message: string }) {
+  const { theme } = useTheme()
+  return (
+    <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
+      <box flexDirection="row" justifyContent="space-between">
+        <text attributes={TextAttributes.BOLD} fg={theme.text}>
+          {props.message}
+        </text>
+      </box>
+      <text fg={theme.textMuted}>Please wait...</text>
+    </box>
+  )
+}
+
+async function completeConnection(
+  sdk: ReturnType<typeof useSDK>,
+  dialog: ReturnType<typeof useDialog>,
+  sync: ReturnType<typeof useSync>,
+  local: ReturnType<typeof useLocal>,
+  toast: ReturnType<typeof useToast>,
+  prompt: ReturnType<typeof usePromptRef>,
+  providerID: string,
+  title: string,
+) {
+  dialog.replace(() => <DialogLoading message={`Connecting ${title}...`} />)
+  await sdk.client.instance.dispose()
+  await sync.bootstrap()
+  const provider = sync.data.provider.find((p) => p.id === providerID)
+  if (provider) {
+    const models = Provider.sort(Object.values(provider.models))
+    if (models[0]) {
+      local.model.set({ providerID, modelID: models[0].id }, { recent: true })
+    }
+  }
+  dismissPromptSlash(prompt.current)
+  dialog.clear()
+  toast.show({ message: `${title} connected`, variant: "success" })
+}
+
 interface AutoMethodProps {
   index: number
   providerID: string
@@ -111,6 +154,8 @@ function AutoMethod(props: AutoMethodProps) {
   const dialog = useDialog()
   const sync = useSync()
   const toast = useToast()
+  const local = useLocal()
+  const promptRef = usePromptRef()
 
   useKeyboard((evt) => {
     if (evt.name === "c" && !evt.ctrl && !evt.meta) {
@@ -130,9 +175,7 @@ function AutoMethod(props: AutoMethodProps) {
       dialog.clear()
       return
     }
-    await sdk.client.instance.dispose()
-    await sync.bootstrap()
-    dialog.replace(() => <DialogModel providerID={props.providerID} />)
+    await completeConnection(sdk, dialog, sync, local, toast, promptRef, props.providerID, props.title)
   })
 
   return (
@@ -168,6 +211,9 @@ function CodeMethod(props: CodeMethodProps) {
   const sdk = useSDK()
   const sync = useSync()
   const dialog = useDialog()
+  const toast = useToast()
+  const local = useLocal()
+  const promptRef = usePromptRef()
   const [error, setError] = createSignal(false)
 
   return (
@@ -181,9 +227,7 @@ function CodeMethod(props: CodeMethodProps) {
           code: value,
         })
         if (!error) {
-          await sdk.client.instance.dispose()
-          await sync.bootstrap()
-          dialog.replace(() => <DialogModel providerID={props.providerID} />)
+          await completeConnection(sdk, dialog, sync, local, toast, promptRef, props.providerID, props.title)
           return
         }
         setError(true)
@@ -209,6 +253,9 @@ function ApiMethod(props: ApiMethodProps) {
   const dialog = useDialog()
   const sdk = useSDK()
   const sync = useSync()
+  const toast = useToast()
+  const local = useLocal()
+  const promptRef = usePromptRef()
   const { theme } = useTheme()
 
   return (
@@ -250,9 +297,7 @@ function ApiMethod(props: ApiMethodProps) {
             key: value,
           },
         })
-        await sdk.client.instance.dispose()
-        await sync.bootstrap()
-        dialog.replace(() => <DialogModel providerID={props.providerID} />)
+        await completeConnection(sdk, dialog, sync, local, toast, promptRef, props.providerID, props.title)
       }}
     />
   )

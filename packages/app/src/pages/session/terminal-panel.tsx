@@ -83,7 +83,7 @@ export function TerminalPanel() {
     language.locale()
 
     setTerminalHandoff(
-      dir,
+      sessionKey(),
       terminal.all().map((pty) =>
         terminalTabLabel({
           title: pty.title,
@@ -95,9 +95,9 @@ export function TerminalPanel() {
   })
 
   const handoff = createMemo(() => {
-    const dir = params.dir
-    if (!dir) return []
-    return getTerminalHandoff(dir) ?? []
+    const key = sessionKey()
+    if (!key) return []
+    return getTerminalHandoff(key) ?? []
   })
 
   const all = createMemo(() => terminal.all())

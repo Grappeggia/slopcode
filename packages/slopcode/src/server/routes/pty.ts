@@ -3,6 +3,7 @@ import { describeRoute, validator, resolver } from "hono-openapi"
 import { upgradeWebSocket } from "hono/bun"
 import z from "zod"
 import { Pty } from "@/pty"
+import { Shell } from "@/shell/shell"
 import { NotFoundError } from "../../storage/db"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
@@ -26,8 +27,9 @@ export const PtyRoutes = lazy(() =>
           },
         },
       }),
+      validator("query", Pty.ScopedInput),
       async (c) => {
-        return c.json(Pty.list())
+        return c.json(Pty.list(c.req.valid("query")))
       },
     )
     .post(
@@ -55,6 +57,35 @@ export const PtyRoutes = lazy(() =>
       },
     )
     .get(
+      "/shells",
+      describeRoute({
+        summary: "List available shells",
+        description: "Get the shells that can be used for PTY sessions and shell mode.",
+        operationId: "pty.shells",
+        responses: {
+          200: {
+            description: "Available shells",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.array(
+                    z.object({
+                      path: z.string(),
+                      name: z.string(),
+                      acceptable: z.boolean(),
+                    }),
+                  ),
+                ),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        return c.json(await Shell.list())
+      },
+    )
+    .get(
       "/:ptyID",
       describeRoute({
         summary: "Get PTY session",
@@ -73,8 +104,9 @@ export const PtyRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ ptyID: z.string() })),
+      validator("query", Pty.ScopedInput),
       async (c) => {
-        const info = Pty.get(c.req.valid("param").ptyID)
+        const info = Pty.get(c.req.valid("param").ptyID, c.req.valid("query"))
         if (!info) {
           throw new NotFoundError({ message: "Session not found" })
         }
@@ -100,9 +132,13 @@ export const PtyRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ ptyID: z.string() })),
+      validator("query", Pty.ScopedInput),
       validator("json", Pty.UpdateInput),
       async (c) => {
-        const info = await Pty.update(c.req.valid("param").ptyID, c.req.valid("json"))
+        const info = await Pty.update(c.req.valid("param").ptyID, c.req.valid("json"), c.req.valid("query"))
+        if (!info) {
+          throw new NotFoundError({ message: "Session not found" })
+        }
         return c.json(info)
       },
     )
@@ -125,8 +161,13 @@ export const PtyRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ ptyID: z.string() })),
+      validator("query", Pty.ScopedInput),
       async (c) => {
-        await Pty.remove(c.req.valid("param").ptyID)
+        const info = Pty.get(c.req.valid("param").ptyID, c.req.valid("query"))
+        if (!info) {
+          throw new NotFoundError({ message: "Session not found" })
+        }
+        await Pty.remove(c.req.valid("param").ptyID, c.req.valid("query"))
         return c.json(true)
       },
     )
@@ -151,6 +192,7 @@ export const PtyRoutes = lazy(() =>
       validator("param", z.object({ ptyID: z.string() })),
       upgradeWebSocket((c) => {
         const id = c.req.param("ptyID")
+        const access = Pty.ScopedInput.parse({ sessionID: c.req.query("sessionID") })
         const cursor = (() => {
           const value = c.req.query("cursor")
           if (!value) return
@@ -159,7 +201,7 @@ export const PtyRoutes = lazy(() =>
           return parsed
         })()
         let handler: ReturnType<typeof Pty.connect>
-        if (!Pty.get(id)) throw new Error("Session not found")
+        if (!Pty.get(id, access)) throw new Error("Session not found")
 
         type Socket = {
           readyState: number
@@ -182,7 +224,7 @@ export const PtyRoutes = lazy(() =>
               ws.close()
               return
             }
-            handler = Pty.connect(id, socket, cursor)
+            handler = Pty.connect(id, socket, cursor, access)
           },
           onMessage(event) {
             if (typeof event.data !== "string") return

@@ -54,6 +54,17 @@ describe("Keybind.toString", () => {
     expect(Keybind.toString(info)).toBe("pgup")
   })
 
+  test("should abbreviate escape to esc", () => {
+    const info: Keybind.Info = {
+      ctrl: false,
+      meta: false,
+      shift: false,
+      leader: false,
+      name: "escape",
+    }
+    expect(Keybind.toString(info)).toBe("esc")
+  })
+
   test("should handle empty name", () => {
     const info: Keybind.Info = { ctrl: true, meta: false, shift: false, leader: false, name: "" }
     expect(Keybind.toString(info)).toBe("ctrl")
@@ -417,5 +428,32 @@ describe("Keybind.parse", () => {
         name: "z",
       },
     ])
+  })
+})
+
+describe("Keybind.nextLeader", () => {
+  test("keeps leader active for unnamed keys", () => {
+    expect(Keybind.nextLeader({ active: true })).toBe(true)
+  })
+
+  test("releases leader after a regular named key", () => {
+    expect(Keybind.nextLeader({ active: true, name: "a" })).toBe(false)
+  })
+
+  test("keeps leader active for repeatable tab keys", () => {
+    expect(Keybind.nextLeader({ active: true, name: "[", keep: true })).toBe(true)
+    expect(Keybind.nextLeader({ active: true, name: "]", keep: true })).toBe(true)
+  })
+
+  test("supports repeated tab cycling before exiting leader mode", () => {
+    let active = true
+    active = Keybind.nextLeader({ active, name: "]", keep: true })
+    expect(active).toBe(true)
+    active = Keybind.nextLeader({ active, name: "]", keep: true })
+    expect(active).toBe(true)
+    active = Keybind.nextLeader({ active, name: "[", keep: true })
+    expect(active).toBe(true)
+    active = Keybind.nextLeader({ active, name: "escape" })
+    expect(active).toBe(false)
   })
 })

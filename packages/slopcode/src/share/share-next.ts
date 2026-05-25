@@ -8,12 +8,13 @@ import { Database, eq } from "@/storage/db"
 import { SessionShareTable } from "./share.sql"
 import { Log } from "@/util/log"
 import type * as SDK from "@slopcode-ai/sdk/v2"
+import { product } from "@slopcode-ai/util/product"
 
 export namespace ShareNext {
   const log = Log.create({ service: "share-next" })
 
   export async function url() {
-    return Config.get().then((x) => x.enterprise?.url ?? "https://opncd.ai")
+    return Config.get().then((x) => x.enterprise?.url ?? product.share.default_url)
   }
 
   const disabled = process.env["SLOPCODE_DISABLE_SHARE"] === "true" || process.env["SLOPCODE_DISABLE_SHARE"] === "1"

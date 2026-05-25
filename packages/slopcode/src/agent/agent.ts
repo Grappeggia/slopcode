@@ -11,6 +11,7 @@ import { ProviderTransform } from "../provider/transform"
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
+import PROMPT_SCOUT from "./prompt/scout.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { PermissionNext } from "@/permission/next"
@@ -19,6 +20,7 @@ import { Global } from "@/global"
 import path from "path"
 import { Plugin } from "@/plugin"
 import { Skill } from "../skill"
+import { Flag } from "@/flag/flag"
 
 export namespace Agent {
   export const Info = z
@@ -63,6 +65,8 @@ export namespace Agent {
       question: "deny",
       plan_enter: "deny",
       plan_exit: "deny",
+      plan_permissions: "deny",
+      edit: "ask",
       // mirrors github.com/github/gitignore Node.gitignore pattern for .env files
       read: {
         "*": "allow",
@@ -97,6 +101,7 @@ export namespace Agent {
           defaults,
           PermissionNext.fromConfig({
             question: "allow",
+            plan_permissions: "allow",
             plan_exit: "allow",
             external_directory: {
               [path.join(Global.Path.data, "plans", "*")]: "allow",
@@ -154,6 +159,38 @@ export namespace Agent {
         mode: "subagent",
         native: true,
       },
+      ...(Flag.SLOPCODE_EXPERIMENTAL_SCOUT
+        ? {
+            scout: {
+              name: "scout",
+              permission: PermissionNext.merge(
+                defaults,
+                PermissionNext.fromConfig({
+                  "*": "deny",
+                  grep: "allow",
+                  glob: "allow",
+                  webfetch: "allow",
+                  websearch: "allow",
+                  read: "allow",
+                  repo_clone: "allow",
+                  repo_overview: "allow",
+                  external_directory: {
+                    "*": "ask",
+                    [path.join(Global.Path.repos, "*")]: "allow",
+                    ...Object.fromEntries(whitelistedDirs.map((dir) => [dir, "allow"])),
+                  },
+                }),
+                user,
+              ),
+              description:
+                "Docs and dependency-source specialist. Use this when you need to inspect external documentation, clone dependency repositories into the managed cache, and research library implementation details without modifying the user's workspace.",
+              prompt: PROMPT_SCOUT,
+              options: {},
+              mode: "subagent" as const,
+              native: true,
+            },
+          }
+        : {}),
       compaction: {
         name: "compaction",
         mode: "primary",

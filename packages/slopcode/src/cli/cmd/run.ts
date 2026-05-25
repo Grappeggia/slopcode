@@ -161,9 +161,10 @@ function codesearch(info: ToolProps<typeof CodeSearchTool>) {
 }
 
 function websearch(info: ToolProps<typeof WebSearchTool>) {
+  const provider = info.metadata.provider ?? "Web"
   inline({
     icon: "◈",
-    title: `Exa Web Search "${info.input.query}"`,
+    title: `${provider} Web Search "${info.input.query}"`,
   })
 }
 
@@ -297,6 +298,11 @@ export const RunCommand = cmd({
         describe: "show thinking blocks",
         default: false,
       })
+      .option("dangerously-skip-permissions", {
+        type: "boolean",
+        describe: "auto-approve permissions that are not explicitly denied (dangerous!)",
+        default: false,
+      })
   },
   handler: async (args) => {
     let message = [...args.message, ...(args["--"] || [])]
@@ -363,6 +369,11 @@ export const RunCommand = cmd({
       {
         permission: "plan_exit",
         action: "deny",
+        pattern: "*",
+      },
+      {
+        permission: "edit",
+        action: "allow",
         pattern: "*",
       },
     ]
@@ -497,7 +508,7 @@ export const RunCommand = cmd({
                 continue
               }
               UI.empty()
-              UI.println(text)
+              UI.println(await UI.markdown(text))
               UI.empty()
             }
 
@@ -539,6 +550,14 @@ export const RunCommand = cmd({
           if (event.type === "permission.asked") {
             const permission = event.properties
             if (permission.sessionID !== sessionID) continue
+            if (args["dangerously-skip-permissions"]) {
+              await sdk.permission.reply({
+                requestID: permission.id,
+                reply: "once",
+                sessionID: permission.sessionID,
+              })
+              continue
+            }
             UI.println(
               UI.Style.TEXT_WARNING_BOLD + "!",
               UI.Style.TEXT_NORMAL +
@@ -547,6 +566,7 @@ export const RunCommand = cmd({
             await sdk.permission.reply({
               requestID: permission.id,
               reply: "reject",
+              sessionID: permission.sessionID,
             })
           }
         }

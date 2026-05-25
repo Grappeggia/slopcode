@@ -10,6 +10,7 @@ import { useDialog, type DialogContext } from "@tui/ui/dialog"
 import { useKeybind } from "@tui/context/keybind"
 import { Keybind } from "@/util/keybind"
 import { Locale } from "@/util/locale"
+import { ShortcutHint } from "@tui/ui/shortcut-hint"
 
 export interface DialogSelectProps<T> {
   title: string
@@ -34,6 +35,7 @@ export interface DialogSelectOption<T = any> {
   title: string
   value: T
   description?: string
+  search?: string
   footer?: JSX.Element | string
   category?: string
   disabled?: boolean
@@ -85,8 +87,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     // users typically search by the item name, and not its category.
     const result = fuzzysort
       .go(needle, options, {
-        keys: ["title", "category"],
-        scoreFn: (r) => r[0].score * 2 + r[1].score,
+        keys: ["title", "category", "search"],
+        scoreFn: (r) => r[0].score * 2 + r[1].score + r[2].score,
       })
       .map((x) => x.obj)
 
@@ -340,12 +342,15 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         <box paddingRight={2} paddingLeft={4} flexDirection="row" gap={2} flexShrink={0} paddingTop={1}>
           <For each={keybinds()}>
             {(item) => (
-              <text>
-                <span style={{ fg: theme.text }}>
-                  <b>{item.title}</b>{" "}
-                </span>
-                <span style={{ fg: theme.textMuted }}>{Keybind.toString(item.keybind)}</span>
-              </text>
+              <ShortcutHint
+                shortcut={Keybind.toString(item.keybind)}
+                label={item.title}
+                onTrigger={() => {
+                  const s = selected()
+                  if (!s) return
+                  item.onTrigger(s)
+                }}
+              />
             )}
           </For>
         </box>

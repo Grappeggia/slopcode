@@ -8,7 +8,7 @@ import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { useSDK } from "@/context/sdk"
 import { useServer } from "@/context/server"
-import { monoFontFamily, useSettings } from "@/context/settings"
+import { terminalFontFamily, useSettings } from "@/context/settings"
 import type { LocalPTY } from "@/context/terminal"
 import { disposeIfDisposable, getHoveredLinkText, setOptionIfSupported } from "@/utils/runtime-adapters"
 import { terminalWriter } from "@/utils/terminal-writer"
@@ -188,9 +188,11 @@ export const Terminal = (props: TerminalProps) => {
   }
 
   const pushSize = (cols: number, rows: number) => {
+    if (!local.pty.sessionID) return Promise.resolve()
     return sdk.client.pty
       .update({
         ptyID: local.pty.id,
+        sessionID: local.pty.sessionID,
         size: { cols, rows },
       })
       .catch((err) => {
@@ -266,7 +268,7 @@ export const Terminal = (props: TerminalProps) => {
   })
 
   createEffect(() => {
-    const font = monoFontFamily(settings.appearance.font())
+    const font = terminalFontFamily(settings.appearance.terminalFont())
     if (!term) return
     setOptionIfSupported(term, "fontFamily", font)
     scheduleFit()
@@ -338,7 +340,7 @@ export const Terminal = (props: TerminalProps) => {
         cols: restoreSize?.cols,
         rows: restoreSize?.rows,
         fontSize: 14,
-        fontFamily: monoFontFamily(settings.appearance.font()),
+        fontFamily: terminalFontFamily(settings.appearance.terminalFont()),
         allowTransparency: false,
         convertEol: false,
         theme: terminalColors(),
@@ -449,6 +451,7 @@ export const Terminal = (props: TerminalProps) => {
 
       const url = new URL(sdk.url + `/pty/${local.pty.id}/connect`)
       url.searchParams.set("directory", sdk.directory)
+      if (local.pty.sessionID) url.searchParams.set("sessionID", local.pty.sessionID)
       url.searchParams.set("cursor", String(start !== undefined ? start : local.pty.buffer ? -1 : 0))
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
       url.username = server.current?.http.username ?? ""

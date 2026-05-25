@@ -10,7 +10,7 @@ import { Flag } from "../flag/flag"
 import { Identifier } from "../id/id"
 import { Installation } from "../installation"
 
-import { Database, NotFoundError, eq, and, or, gte, isNull, desc, like, inArray, lt } from "../storage/db"
+import { Database, NotFoundError, eq, and, or, gte, isNull, isNotNull, desc, like, inArray, lt } from "../storage/db"
 import type { SQL } from "../storage/db"
 import { SessionTable, MessageTable, PartTable } from "./session.sql"
 import { ProjectTable } from "../project/project.sql"
@@ -24,6 +24,7 @@ import { Command } from "../command"
 import { Snapshot } from "@/snapshot"
 
 import type { Provider } from "@/provider/provider"
+import { LlamaCppSessionCache } from "@/provider/llamacpp-cache"
 import { PermissionNext } from "@/permission/next"
 import { Global } from "@/global"
 import type { LanguageModelV2Usage } from "@ai-sdk/provider"
@@ -37,6 +38,13 @@ export namespace Session {
 
   function createDefaultTitle(isChild = false) {
     return (isChild ? childTitlePrefix : parentTitlePrefix) + new Date().toISOString()
+  }
+
+  function sessionPath(directory: string) {
+    const relative = path.relative(Instance.project.worktree, directory).replaceAll("\\", "/")
+    if (relative === ".") return ""
+    if (relative.startsWith("../") || relative === "..") return
+    return relative
   }
 
   export function isDefaultTitle(title: string) {
@@ -64,6 +72,7 @@ export namespace Session {
       slug: row.slug,
       projectID: row.project_id,
       directory: row.directory,
+      workspaceID: row.workspace_id ?? undefined,
       parentID: row.parent_id ?? undefined,
       title: row.title,
       version: row.version,
@@ -87,6 +96,7 @@ export namespace Session {
       parent_id: info.parentID,
       slug: info.slug,
       directory: info.directory,
+      workspace_id: info.workspaceID ?? null,
       title: info.title,
       version: info.version,
       share_url: info.share?.url,
@@ -119,6 +129,7 @@ export namespace Session {
       slug: z.string(),
       projectID: z.string(),
       directory: z.string(),
+      workspaceID: Identifier.schema("workspace").optional(),
       parentID: Identifier.schema("session").optional(),
       summary: z
         .object({
@@ -205,6 +216,7 @@ export namespace Session {
       z.object({
         sessionID: z.string().optional(),
         error: MessageV2.Assistant.shape.error,
+        viewID: z.string().optional(),
       }),
     ),
   }
@@ -212,17 +224,21 @@ export namespace Session {
   export const create = fn(
     z
       .object({
+        id: Identifier.schema("session").optional(),
         parentID: Identifier.schema("session").optional(),
         title: z.string().optional(),
         permission: Info.shape.permission,
+        workspaceID: Info.shape.workspaceID,
       })
       .optional(),
     async (input) => {
       return createNext({
+        id: input?.id,
         parentID: input?.parentID,
         directory: Instance.directory,
         title: input?.title,
         permission: input?.permission,
+        workspaceID: input?.workspaceID,
       })
     },
   )
@@ -237,8 +253,9 @@ export namespace Session {
       if (!original) throw new Error("session not found")
       const title = getForkedTitle(original.title)
       const session = await createNext({
-        directory: Instance.directory,
+        directory: original.directory,
         title,
+        workspaceID: original.workspaceID,
       })
       const msgs = await messages({ sessionID: input.sessionID })
       const idMap = new Map<string, string>()
@@ -290,6 +307,7 @@ export namespace Session {
     parentID?: string
     directory: string
     permission?: PermissionNext.Ruleset
+    workspaceID?: string
   }) {
     const result: Info = {
       id: Identifier.descending("session", input.id),
@@ -297,6 +315,7 @@ export namespace Session {
       version: Installation.VERSION,
       projectID: Instance.project.id,
       directory: input.directory,
+      workspaceID: input.workspaceID,
       parentID: input.parentID,
       title: input.title ?? createDefaultTitle(!!input.parentID),
       permission: input.permission,
@@ -306,8 +325,14 @@ export namespace Session {
       },
     }
     log.info("created", result)
+    const relative = sessionPath(result.directory)
     Database.use((db) => {
-      db.insert(SessionTable).values(toRow(result)).run()
+      db.insert(SessionTable)
+        .values({
+          ...toRow(result),
+          path: relative ?? null,
+        })
+        .run()
       Database.effect(() =>
         Bus.publish(Event.Created, {
           info: result,
@@ -375,7 +400,7 @@ export namespace Session {
       return Database.use((db) => {
         const row = db
           .update(SessionTable)
-          .set({ title: input.title })
+          .set({ title: input.title, time_updated: Date.now() })
           .where(eq(SessionTable.id, input.sessionID))
           .returning()
           .get()
@@ -396,7 +421,7 @@ export namespace Session {
       return Database.use((db) => {
         const row = db
           .update(SessionTable)
-          .set({ time_archived: input.time })
+          .set({ time_archived: input.time ?? null })
           .where(eq(SessionTable.id, input.sessionID))
           .returning()
           .get()
@@ -418,6 +443,30 @@ export namespace Session {
         const row = db
           .update(SessionTable)
           .set({ permission: input.permission, time_updated: Date.now() })
+          .where(eq(SessionTable.id, input.sessionID))
+          .returning()
+          .get()
+        if (!row) throw new NotFoundError({ message: `Session not found: ${input.sessionID}` })
+        const info = fromRow(row)
+        Database.effect(() => Bus.publish(Event.Updated, { info }))
+        return info
+      })
+    },
+  )
+
+  export const setWorkspace = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+      workspaceID: Info.shape.workspaceID,
+    }),
+    async (input) => {
+      return Database.use((db) => {
+        const row = db
+          .update(SessionTable)
+          .set({
+            workspace_id: input.workspaceID ?? null,
+            time_updated: Date.now(),
+          })
           .where(eq(SessionTable.id, input.sessionID))
           .returning()
           .get()
@@ -513,10 +562,12 @@ export namespace Session {
     z.object({
       sessionID: Identifier.schema("session"),
       limit: z.number().optional(),
+      cursor: z.number().optional(),
     }),
     async (input) => {
       const result = [] as MessageV2.WithParts[]
       for await (const msg of MessageV2.stream(input.sessionID)) {
+        if (input.cursor && msg.info.time.created >= input.cursor) continue
         if (input.limit && result.length >= input.limit) break
         result.push(msg)
       }
@@ -526,16 +577,34 @@ export namespace Session {
   )
 
   export function* list(input?: {
+    workspaceID?: string | null
     directory?: string
+    scope?: "project"
+    path?: string
     roots?: boolean
     start?: number
+    cursor?: number
     search?: string
     limit?: number
   }) {
     const project = Instance.project
     const conditions = [eq(SessionTable.project_id, project.id)]
 
-    if (input?.directory) {
+    if (input?.workspaceID !== undefined) {
+      conditions.push(
+        input.workspaceID ? eq(SessionTable.workspace_id, input.workspaceID) : isNull(SessionTable.workspace_id),
+      )
+    }
+    if (input?.path !== undefined) {
+      if (input.path) {
+        const match = [eq(SessionTable.path, input.path), like(SessionTable.path, `${input.path}/%`)]
+        conditions.push(
+          input.directory
+            ? or(...match, and(isNull(SessionTable.path), eq(SessionTable.directory, input.directory))!)!
+            : or(...match)!,
+        )
+      }
+    } else if (input?.scope !== "project" && input?.directory) {
       conditions.push(eq(SessionTable.directory, input.directory))
     }
     if (input?.roots) {
@@ -543,6 +612,9 @@ export namespace Session {
     }
     if (input?.start) {
       conditions.push(gte(SessionTable.time_updated, input.start))
+    }
+    if (input?.cursor) {
+      conditions.push(lt(SessionTable.time_updated, input.cursor))
     }
     if (input?.search) {
       conditions.push(like(SessionTable.title, `%${input.search}%`))
@@ -555,7 +627,7 @@ export namespace Session {
         .select()
         .from(SessionTable)
         .where(and(...conditions))
-        .orderBy(desc(SessionTable.time_updated))
+        .orderBy(desc(SessionTable.time_updated), desc(SessionTable.id))
         .limit(limit)
         .all(),
     )
@@ -589,6 +661,9 @@ export namespace Session {
     }
     if (input?.search) {
       conditions.push(like(SessionTable.title, `%${input.search}%`))
+    }
+    if (input?.archived) {
+      conditions.push(isNotNull(SessionTable.time_archived))
     }
     if (!input?.archived) {
       conditions.push(isNull(SessionTable.time_archived))
@@ -653,6 +728,7 @@ export namespace Session {
         await remove(child.id)
       }
       await unshare(sessionID).catch(() => {})
+      await LlamaCppSessionCache.removeSession(sessionID).catch(() => {})
       // CASCADE delete handles messages and parts automatically
       Database.use((db) => {
         db.delete(SessionTable).where(eq(SessionTable.id, sessionID)).run()
@@ -768,7 +844,45 @@ export namespace Session {
       delta: z.string(),
     }),
     async (input) => {
-      Bus.publish(MessageV2.Event.PartDelta, input)
+      Database.use((db) => {
+        const row = db
+          .select()
+          .from(PartTable)
+          .where(
+            and(
+              eq(PartTable.id, input.partID),
+              eq(PartTable.message_id, input.messageID),
+              eq(PartTable.session_id, input.sessionID),
+            ),
+          )
+          .get()
+
+        if (row) {
+          const data = row.data as Record<string, unknown>
+          const value = data[input.field]
+          const next = typeof value === "string" ? value + input.delta : value === undefined ? input.delta : undefined
+          if (next !== undefined) {
+            const nextData = {
+              ...row.data,
+              [input.field]: next,
+            } as typeof row.data
+            db.update(PartTable)
+              .set({
+                data: nextData,
+              })
+              .where(
+                and(
+                  eq(PartTable.id, input.partID),
+                  eq(PartTable.message_id, input.messageID),
+                  eq(PartTable.session_id, input.sessionID),
+                ),
+              )
+              .run()
+          }
+        }
+
+        Database.effect(() => Bus.publish(MessageV2.Event.PartDelta, input))
+      })
     },
   )
 

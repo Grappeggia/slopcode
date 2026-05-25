@@ -3,8 +3,9 @@ import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
 import { useParams } from "@solidjs/router"
 import { Tabs } from "@slopcode-ai/ui/tabs"
+import { Button } from "@slopcode-ai/ui/button"
 import { IconButton } from "@slopcode-ai/ui/icon-button"
-import { TooltipKeybind } from "@slopcode-ai/ui/tooltip"
+import { Tooltip, TooltipKeybind } from "@slopcode-ai/ui/tooltip"
 import { ResizeHandle } from "@slopcode-ai/ui/resize-handle"
 import { Mark } from "@slopcode-ai/ui/logo"
 import { DragDropProvider, DragDropSensors, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
@@ -19,7 +20,7 @@ import { SessionContextTab, SortableTab, FileVisual } from "@/components/session
 import { useCommand } from "@/context/command"
 import { useFile, type SelectedLineRange } from "@/context/file"
 import { useLanguage } from "@/context/language"
-import { useLayout } from "@/context/layout"
+import { SESSION_SIDE_PANEL_RAIL_WIDTH, useLayout } from "@/context/layout"
 import { useSync } from "@/context/sync"
 import { createFileTabListSync } from "@/pages/session/file-tab-scroll"
 import { FileTabContent } from "@/pages/session/file-tabs"
@@ -45,8 +46,9 @@ export function SessionSidePanel(props: {
   const tabs = createMemo(() => layout.tabs(sessionKey))
   const view = createMemo(() => layout.view(sessionKey))
 
-  const reviewOpen = createMemo(() => isDesktop() && view().reviewPanel.opened())
   const open = createMemo(() => isDesktop() && (view().reviewPanel.opened() || layout.fileTree.opened()))
+  const collapsed = createMemo(() => open() && view().sidePanel.collapsed())
+  const reviewOpen = createMemo(() => open() && !collapsed() && view().reviewPanel.opened())
   const reviewTab = createMemo(() => isDesktop())
 
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
@@ -143,6 +145,53 @@ export function SessionSidePanel(props: {
     layout.fileTree.setTab("all")
   }
 
+  const openExplorer = () => {
+    view().sidePanel.expand()
+    if (!layout.fileTree.opened()) layout.fileTree.open()
+    if (fileTreeTab() === "all") return
+    layout.fileTree.setTab("all")
+  }
+
+  const explorerActive = createMemo(() => layout.fileTree.opened() && fileTreeTab() === "all")
+  const explorerLabel = () => language.t("command.fileTree.openAll")
+  const ExplorerButton = (props: { action: string }) => (
+    <Tooltip value={explorerLabel()} class="flex items-center" placement="bottom">
+      <Button
+        size="small"
+        variant="ghost"
+        data-action={props.action}
+        data-active={explorerActive() ? "true" : undefined}
+        onClick={openExplorer}
+        aria-label={explorerLabel()}
+        class={`w-6 !px-0 !rounded-md text-base leading-none ${explorerActive() ? "text-text-strong" : "text-text-weak hover:text-text-base"}`}
+      >
+        <span
+          aria-hidden="true"
+          style={{ "font-family": '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif' }}
+        >
+          📂
+        </span>
+      </Button>
+    </Tooltip>
+  )
+
+  const SideButton = (props: { collapsed: boolean }) => (
+    <Tooltip value={language.t(props.collapsed ? "session.panel.expand" : "session.panel.collapse")} placement="left">
+      <Button
+        size="small"
+        variant="ghost"
+        data-action={props.collapsed ? "session-side-panel-expand" : "session-side-panel-collapse"}
+        onClick={() => (props.collapsed ? view().sidePanel.expand() : view().sidePanel.collapse())}
+        aria-label={language.t(props.collapsed ? "session.panel.expand" : "session.panel.collapse")}
+        aria-controls="review-panel"
+        aria-expanded={!props.collapsed}
+        class="h-7 w-7 !rounded-full !px-0 border border-border-weak-base bg-background-stronger text-text-weak shadow-sm hover:text-text-strong"
+      >
+        {props.collapsed ? "<" : ">"}
+      </Button>
+    </Tooltip>
+  )
+
   const [store, setStore] = createStore({
     activeDraggable: undefined as string | undefined,
     fileTreeScrolled: false,
@@ -211,10 +260,25 @@ export function SessionSidePanel(props: {
         classList={{
           "flex-1": reviewOpen(),
           "shrink-0": !reviewOpen(),
+          "bg-background-stronger": collapsed(),
         }}
-        style={{ width: reviewOpen() ? undefined : `${layout.fileTree.width()}px` }}
+        style={{
+          width: collapsed()
+            ? `${SESSION_SIDE_PANEL_RAIL_WIDTH}px`
+            : reviewOpen()
+              ? undefined
+              : `${layout.fileTree.width()}px`,
+        }}
       >
-        <Show when={reviewOpen()}>
+        <div class="absolute left-0 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2">
+          <SideButton collapsed={collapsed()} />
+        </div>
+
+        <Show when={collapsed()}>
+          <div class="h-full w-full bg-background-stronger" />
+        </Show>
+
+        <Show when={!collapsed() && reviewOpen()}>
           <div class="flex-1 min-w-0 h-full">
             <DragDropProvider
               onDragStart={handleDragStart}
@@ -225,12 +289,21 @@ export function SessionSidePanel(props: {
               <DragDropSensors />
               <ConstrainDragYAxis />
               <Tabs value={activeTab()} onChange={openTab}>
-                <div class="sticky top-0 shrink-0 flex">
+                <div class="sticky top-0 shrink-0 flex relative">
+                  <div
+                    data-slot="tabs-leading-fade"
+                    aria-hidden="true"
+                    class="pointer-events-none absolute inset-y-0 left-0 z-10"
+                  />
+                  <div data-slot="tabs-leading-divider" aria-hidden="true" data-hidden>
+                    |
+                  </div>
                   <Tabs.List
                     ref={(el: HTMLDivElement) => {
                       const stop = createFileTabListSync({ el, contextOpen })
                       onCleanup(stop)
                     }}
+                    style={{ width: "auto", flex: 1, "min-width": 0 }}
                   >
                     <Show when={reviewTab()}>
                       <Tabs.Trigger value="review">
@@ -273,7 +346,23 @@ export function SessionSidePanel(props: {
                     <SortableProvider ids={openedTabs()}>
                       <For each={openedTabs()}>{(tab) => <SortableTab tab={tab} onTabClose={tabs().close} />}</For>
                     </SortableProvider>
-                    <StickyAddButton>
+                  </Tabs.List>
+                  <StickyAddButton>
+                    <div class="flex items-center gap-1">
+                      <TooltipKeybind
+                        title={language.t("command.palette")}
+                        keybind={command.keybind("command.palette")}
+                        class="flex items-center"
+                      >
+                        <IconButton
+                          icon="magnifying-glass"
+                          variant="ghost"
+                          iconSize="small"
+                          class="!rounded-md"
+                          onClick={() => command.show()}
+                          aria-label={language.t("command.palette")}
+                        />
+                      </TooltipKeybind>
                       <TooltipKeybind
                         title={language.t("command.file.open")}
                         keybind={command.keybind("file.open")}
@@ -288,13 +377,14 @@ export function SessionSidePanel(props: {
                           aria-label={language.t("command.file.open")}
                         />
                       </TooltipKeybind>
-                    </StickyAddButton>
-                  </Tabs.List>
+                      <ExplorerButton action="session-tabs-open-all" />
+                    </div>
+                  </StickyAddButton>
                 </div>
 
                 <Show when={reviewTab()}>
                   <Tabs.Content value="review" class="flex flex-col h-full overflow-hidden contain-strict">
-                    <Show when={activeTab() === "review"}>{props.reviewPanel()}</Show>
+                    {props.reviewPanel()}
                   </Tabs.Content>
                 </Show>
 
@@ -313,17 +403,13 @@ export function SessionSidePanel(props: {
 
                 <Show when={contextOpen()}>
                   <Tabs.Content value="context" class="flex flex-col h-full overflow-hidden contain-strict">
-                    <Show when={activeTab() === "context"}>
-                      <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                        <SessionContextTab />
-                      </div>
-                    </Show>
+                    <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
+                      <SessionContextTab />
+                    </div>
                   </Tabs.Content>
                 </Show>
 
-                <Show when={activeFileTab()} keyed>
-                  {(tab) => <FileTabContent tab={tab} />}
-                </Show>
+                <For each={openedTabs()}>{(tab) => <FileTabContent tab={tab} />}</For>
               </Tabs>
               <DragOverlay>
                 <Show when={store.activeDraggable} keyed>
@@ -341,19 +427,13 @@ export function SessionSidePanel(props: {
           </div>
         </Show>
 
-        <Show when={layout.fileTree.opened()}>
+        <Show when={!collapsed() && layout.fileTree.opened()}>
           <div id="file-tree-panel" class="relative shrink-0 h-full" style={{ width: `${layout.fileTree.width()}px` }}>
             <div
               class="h-full flex flex-col overflow-hidden group/filetree"
               classList={{ "border-l border-border-weak-base": reviewOpen() }}
             >
-              <Tabs
-                variant="pill"
-                value={fileTreeTab()}
-                onChange={setFileTreeTabValue}
-                class="h-full"
-                data-scope="filetree"
-              >
+              <Tabs value={fileTreeTab()} onChange={setFileTreeTabValue} class="h-full" data-scope="filetree">
                 <Tabs.List data-scrolled={store.fileTreeScrolled ? "" : undefined}>
                   <Tabs.Trigger value="changes" class="flex-1" classes={{ button: "w-full" }}>
                     {reviewCount()}{" "}
@@ -362,6 +442,9 @@ export function SessionSidePanel(props: {
                   <Tabs.Trigger value="all" class="flex-1" classes={{ button: "w-full" }}>
                     {language.t("session.files.all")}
                   </Tabs.Trigger>
+                  <div class="ml-auto shrink-0 flex items-center">
+                    <ExplorerButton action="file-tree-header-open-all" />
+                  </div>
                 </Tabs.List>
                 <Tabs.Content
                   value="changes"

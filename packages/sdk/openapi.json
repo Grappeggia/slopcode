@@ -158,6 +158,126 @@
         ]
       }
     },
+    "/daemon/status": {
+      "get": {
+        "operationId": "daemon.status",
+        "summary": "Get daemon status",
+        "description": "Get local daemon status.",
+        "responses": {
+          "200": {
+            "description": "Daemon status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "protocol": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "directory": {
+                      "type": "string"
+                    },
+                    "view_id": {
+                      "type": "string"
+                    },
+                    "pid": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "started_at": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "idle_timeout_ms": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "clients": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "busy": {
+                      "type": "boolean"
+                    },
+                    "permissions": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "questions": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "pty": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "shutting_down": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "protocol",
+                    "version",
+                    "directory",
+                    "pid",
+                    "started_at",
+                    "idle_timeout_ms",
+                    "clients",
+                    "busy",
+                    "permissions",
+                    "questions",
+                    "pty",
+                    "shutting_down"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.daemon.status({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/daemon/shutdown": {
+      "post": {
+        "operationId": "daemon.shutdown",
+        "summary": "Shutdown daemon",
+        "description": "Shutdown the local daemon.",
+        "responses": {
+          "200": {
+            "description": "Daemon shutdown requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.daemon.shutdown({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/auth/{providerID}": {
       "put": {
         "operationId": "auth.set",
@@ -435,6 +555,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
+            },
+            "required": true
           }
         ],
         "summary": "List PTY sessions",
@@ -525,6 +654,60 @@
                     "additionalProperties": {
                       "type": "string"
                     }
+                  },
+                  "sessionID": {
+                    "type": "string",
+                    "pattern": "^ses.*"
+                  }
+                },
+                "required": ["sessionID"]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.pty.create({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/pty/shells": {
+      "get": {
+        "operationId": "pty.shells",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List available shells",
+        "description": "Get the shells that can be used for PTY sessions and shell mode.",
+        "responses": {
+          "200": {
+            "description": "Available shells",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "acceptable": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["path", "name", "acceptable"]
                   }
                 }
               }
@@ -534,7 +717,7 @@
         "x-codeSamples": [
           {
             "lang": "js",
-            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.pty.create({\n  ...\n})"
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.pty.shells({\n  ...\n})"
           }
         ]
       }
@@ -555,6 +738,15 @@
             "name": "ptyID",
             "schema": {
               "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
             },
             "required": true
           }
@@ -605,6 +797,15 @@
             "name": "ptyID",
             "schema": {
               "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
             },
             "required": true
           }
@@ -681,6 +882,15 @@
             "name": "ptyID",
             "schema": {
               "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
             },
             "required": true
           }
@@ -765,6 +975,519 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.pty.connect({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/editor": {
+      "post": {
+        "operationId": "editor.open",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Open embedded editor",
+        "description": "Start a built-in embedded editor session for a file.",
+        "responses": {
+          "200": {
+            "description": "Editor session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sessionID": {
+                    "type": "string",
+                    "pattern": "^ses.*"
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "object",
+                    "properties": {
+                      "rows": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "cols": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": ["rows", "cols"]
+                  }
+                },
+                "required": ["sessionID", "file", "size"]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.editor.open({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/editor/{editorID}": {
+      "get": {
+        "operationId": "editor.get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "editorID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Get embedded editor",
+        "description": "Get the current state of an embedded editor session.",
+        "responses": {
+          "200": {
+            "description": "Editor session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorSession"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.editor.get({\n  ...\n})"
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "editor.close",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "editorID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Close embedded editor",
+        "description": "Terminate an embedded editor session.",
+        "responses": {
+          "200": {
+            "description": "Closed editor session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.editor.close({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/editor/{editorID}/snapshot": {
+      "get": {
+        "operationId": "editor.snapshot",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "editorID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Get embedded editor snapshot",
+        "description": "Get the current rendered editor snapshot.",
+        "responses": {
+          "200": {
+            "description": "Editor snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "width": {
+                      "type": "number"
+                    },
+                    "height": {
+                      "type": "number"
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "fg": {
+                              "type": "string"
+                            },
+                            "bg": {
+                              "type": "string"
+                            },
+                            "bold": {
+                              "type": "boolean"
+                            },
+                            "italic": {
+                              "type": "boolean"
+                            },
+                            "underline": {
+                              "type": "boolean"
+                            },
+                            "strikethrough": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["text"]
+                        }
+                      }
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "dirty": {
+                      "type": "boolean"
+                    },
+                    "diff": {
+                      "type": "boolean"
+                    },
+                    "file": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "diagnostics": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "line": {
+                            "type": "number"
+                          },
+                          "column": {
+                            "type": "number"
+                          },
+                          "severity": {
+                            "type": "string",
+                            "enum": ["error", "warning"]
+                          },
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["line", "column", "severity", "message"]
+                      }
+                    }
+                  },
+                  "required": ["width", "height", "rows", "mode", "dirty", "diff", "file", "status", "diagnostics"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.editor.snapshot({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/editor/{editorID}/save": {
+      "post": {
+        "operationId": "editor.save",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "editorID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Save embedded editor",
+        "description": "Write the active editor buffer to disk.",
+        "responses": {
+          "200": {
+            "description": "Saved editor session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorSession"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.editor.save({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/editor/{editorID}/diff/dismiss": {
+      "post": {
+        "operationId": "editor.dismissDiff",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "editorID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Dismiss editor diff",
+        "description": "Collapse the editor back to a single editable buffer.",
+        "responses": {
+          "200": {
+            "description": "Updated editor session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorSession"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.editor.dismissDiff({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/editor/{editorID}/connect": {
+      "get": {
+        "operationId": "editor.connect",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "editorID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Connect embedded editor",
+        "description": "Open a WebSocket for live editor snapshots and input forwarding.",
+        "responses": {
+          "200": {
+            "description": "Connected editor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.editor.connect({\n  ...\n})"
           }
         ]
       }
@@ -1224,6 +1947,16 @@
                           }
                         },
                         "required": ["directory", "type"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["type"],
+                        "additionalProperties": {}
                       }
                     ]
                   }
@@ -1292,6 +2025,103 @@
         ]
       }
     },
+    "/experimental/workspace/status": {
+      "get": {
+        "operationId": "experimental.workspace.status",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List workspace statuses",
+        "description": "List connection statuses for all workspaces in the current project.",
+        "responses": {
+          "200": {
+            "description": "Workspace statuses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "workspaceID": {
+                        "type": "string",
+                        "pattern": "^wrk.*"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": ["connected", "connecting", "disconnected", "error"]
+                      }
+                    },
+                    "required": ["workspaceID", "status"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.status({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/workspace/adaptor": {
+      "get": {
+        "operationId": "experimental.workspace.adaptors",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List workspace adaptors",
+        "description": "List all workspace adaptors available for the current project.",
+        "responses": {
+          "200": {
+            "description": "Workspace adaptors",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "name", "description"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.adaptors({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/experimental/workspace": {
       "get": {
         "operationId": "experimental.workspace.list",
@@ -1325,6 +2155,77 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/experimental/workspace/warp": {
+      "post": {
+        "operationId": "experimental.workspace.warp",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Warp session to workspace",
+        "description": "Move a session between the local project and a workspace.",
+        "responses": {
+          "200": {
+            "description": "Updated session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^wrk.*"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "sessionID": {
+                    "type": "string",
+                    "pattern": "^ses.*"
+                  }
+                },
+                "required": ["id", "sessionID"]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.experimental.workspace.warp({\n  ...\n})"
           }
         ]
       }
@@ -1518,7 +2419,24 @@
             "schema": {
               "type": "string"
             },
-            "description": "Filter sessions by project directory"
+            "description": "Filter sessions by directory"
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "schema": {
+              "type": "string",
+              "enum": ["project"]
+            },
+            "description": "List sessions across the current project"
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter sessions by project-relative path"
           },
           {
             "in": "query",
@@ -1535,6 +2453,14 @@
               "type": "number"
             },
             "description": "Filter sessions updated on or after this timestamp (milliseconds since epoch)"
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "number"
+            },
+            "description": "Return sessions updated before this timestamp (milliseconds since epoch)"
           },
           {
             "in": "query",
@@ -1618,6 +2544,10 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^ses.*"
+                  },
                   "parentID": {
                     "type": "string",
                     "pattern": "^ses.*"
@@ -1627,6 +2557,10 @@
                   },
                   "permission": {
                     "$ref": "#/components/schemas/PermissionRuleset"
+                  },
+                  "workspaceID": {
+                    "type": "string",
+                    "pattern": "^wrk.*"
                   }
                 }
               }
@@ -1881,7 +2815,14 @@
                     "type": "object",
                     "properties": {
                       "archived": {
-                        "type": "number"
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     }
                   }
@@ -2236,6 +3177,130 @@
         ]
       }
     },
+    "/session/{sessionID}/pause": {
+      "post": {
+        "operationId": "session.pause",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Pause session",
+        "description": "Pause the active prompt while preserving the remaining serial queue.",
+        "responses": {
+          "200": {
+            "description": "Paused session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.pause({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/session/{sessionID}/resume": {
+      "post": {
+        "operationId": "session.resume",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Resume session",
+        "description": "Resume a previously paused prompt and continue the remaining serial queue.",
+        "responses": {
+          "200": {
+            "description": "Resumed session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.resume({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/session/{sessionID}/share": {
       "post": {
         "operationId": "session.share",
@@ -2413,6 +3478,138 @@
         ]
       }
     },
+    "/session/{sessionID}/diff/index": {
+      "get": {
+        "operationId": "session.diffIndex",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Get session diff index",
+        "description": "Get the file list and metadata for a session diff without loading full file contents.",
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved diff index",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionDiffEntry"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.diffIndex({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/session/{sessionID}/diff/chunk": {
+      "post": {
+        "operationId": "session.diffChunk",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
+            },
+            "required": true
+          }
+        ],
+        "summary": "Get session diff chunk",
+        "description": "Get full diff contents for a subset of files in a session diff.",
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved diff chunk",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionDiffEntry"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "files": {
+                    "minItems": 1,
+                    "maxItems": 128,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["files"]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.diffChunk({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/session/{sessionID}/summarize": {
       "post": {
         "operationId": "session.summarize",
@@ -2521,6 +3718,13 @@
           {
             "in": "query",
             "name": "limit",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
             "schema": {
               "type": "number"
             }
@@ -2676,6 +3880,9 @@
                   "noReply": {
                     "type": "boolean"
                   },
+                  "front": {
+                    "type": "boolean"
+                  },
                   "tools": {
                     "description": "@deprecated tools and permissions have been merged, you can set permissions on the session itself now",
                     "type": "object",
@@ -2724,6 +3931,186 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.prompt({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/session/{sessionID}/message/index": {
+      "get": {
+        "operationId": "session.messageIndex",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Session ID"
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "summary": "Get session message index",
+        "description": "Retrieve message metadata for a session without loading full message parts.",
+        "responses": {
+          "200": {
+            "description": "List of message metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Message"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.messageIndex({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/session/{sessionID}/message/chunk": {
+      "post": {
+        "operationId": "session.messageChunk",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Session ID"
+          }
+        ],
+        "summary": "Get session message chunk",
+        "description": "Retrieve message parts for a subset of messages in a session.",
+        "responses": {
+          "200": {
+            "description": "List of message parts grouped by message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "messageID": {
+                        "type": "string",
+                        "pattern": "^msg.*"
+                      },
+                      "parts": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/Part"
+                        }
+                      }
+                    },
+                    "required": ["messageID", "parts"]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messageIDs": {
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^msg.*"
+                    }
+                  }
+                },
+                "required": ["messageIDs"]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.messageChunk({\n  ...\n})"
           }
         ]
       }
@@ -2808,6 +4195,85 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.message({\n  ...\n})"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "message.update",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Session ID"
+          },
+          {
+            "in": "path",
+            "name": "messageID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Message ID"
+          }
+        ],
+        "summary": "Update message",
+        "description": "Create or update a message in a session.",
+        "responses": {
+          "200": {
+            "description": "Successfully updated message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Message"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.message.update({\n  ...\n})"
           }
         ]
       },
@@ -3049,6 +4515,118 @@
         ]
       }
     },
+    "/session/{sessionID}/autocomplete": {
+      "post": {
+        "operationId": "session.autocomplete",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "description": "Session ID"
+          }
+        ],
+        "summary": "Get prompt autocomplete",
+        "description": "Generate a low-latency model-powered completion for the current prompt input.",
+        "responses": {
+          "200": {
+            "description": "Autocomplete response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "completion": {
+                      "type": "string"
+                    },
+                    "model": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["completion", "model"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "object",
+                    "properties": {
+                      "providerID": {
+                        "type": "string"
+                      },
+                      "modelID": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["providerID", "modelID"]
+                  },
+                  "agent": {
+                    "type": "string"
+                  },
+                  "variant": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": ["normal", "shell"]
+                  },
+                  "prefix": {
+                    "type": "string"
+                  },
+                  "suffix": {
+                    "type": "string"
+                  }
+                },
+                "required": ["model", "prefix"]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.autocomplete({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/session/{sessionID}/prompt_async": {
       "post": {
         "operationId": "session.prompt_async",
@@ -3123,6 +4701,9 @@
                     "type": "string"
                   },
                   "noReply": {
+                    "type": "boolean"
+                  },
+                  "front": {
                     "type": "boolean"
                   },
                   "tools": {
@@ -3657,6 +5238,13 @@
               "type": "string"
             },
             "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "summary": "Respond to permission request",
@@ -3720,6 +5308,129 @@
         ]
       }
     },
+    "/permission/approved": {
+      "get": {
+        "operationId": "permission.approved.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "List approved permissions",
+        "description": "Get saved Always Allow permission rules for the current project.",
+        "responses": {
+          "200": {
+            "description": "Saved permission rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionRuleset"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.permission.approved.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/permission/approved/revoke": {
+      "post": {
+        "operationId": "permission.approved.revoke",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Revoke approved permission",
+        "description": "Remove a saved Always Allow permission rule for the current project.",
+        "responses": {
+          "200": {
+            "description": "Number of removed rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "permission": {
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  },
+                  "action": {
+                    "$ref": "#/components/schemas/PermissionAction"
+                  }
+                },
+                "required": ["permission", "pattern"]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.permission.approved.revoke({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/permission/approved/clear": {
+      "post": {
+        "operationId": "permission.approved.clear",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Clear approved permissions",
+        "description": "Remove all saved Always Allow permission rules for the current project.",
+        "responses": {
+          "200": {
+            "description": "Number of removed rules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.permission.approved.clear({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/permission": {
       "get": {
         "operationId": "permission.list",
@@ -3727,6 +5438,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
             "schema": {
               "type": "string"
             }
@@ -3764,6 +5482,13 @@
           {
             "in": "query",
             "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
             "schema": {
               "type": "string"
             }
@@ -3812,6 +5537,13 @@
               "type": "string"
             },
             "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "summary": "Reply to question request",
@@ -3893,6 +5625,13 @@
               "type": "string"
             },
             "required": true
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "summary": "Reject question request",
@@ -4380,6 +6119,152 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.provider.oauth.callback({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/model": {
+      "get": {
+        "operationId": "v2.model.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project directory for the request instance"
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Workspace ID for the request instance"
+          }
+        ],
+        "summary": "List v2 models",
+        "description": "Retrieve available v2 models ordered by release date.",
+        "responses": {
+          "200": {
+            "description": "List of models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Model"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.model.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/provider": {
+      "get": {
+        "operationId": "v2.provider.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project directory for the request instance"
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Workspace ID for the request instance"
+          }
+        ],
+        "summary": "List v2 providers",
+        "description": "Retrieve active v2 AI providers so clients can show provider availability and configuration.",
+        "responses": {
+          "200": {
+            "description": "List of providers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Provider"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.provider.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/provider/{providerID}": {
+      "get": {
+        "operationId": "v2.provider.get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Project directory for the request instance"
+          },
+          {
+            "in": "path",
+            "name": "providerID",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Workspace ID for the request instance"
+          }
+        ],
+        "summary": "Get v2 provider",
+        "description": "Retrieve a single v2 AI provider so clients can inspect availability and endpoint settings.",
+        "responses": {
+          "200": {
+            "description": "Provider",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Provider"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Provider not found"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.provider.get({\n  ...\n})"
           }
         ]
       }
@@ -5224,6 +7109,9 @@
                 "properties": {
                   "text": {
                     "type": "string"
+                  },
+                  "viewID": {
+                    "type": "string"
                   }
                 },
                 "required": ["text"]
@@ -5548,6 +7436,9 @@
                     "description": "Duration in milliseconds",
                     "default": 5000,
                     "type": "number"
+                  },
+                  "viewID": {
+                    "type": "string"
                   }
                 },
                 "required": ["message", "variant"]
@@ -5685,6 +7576,9 @@
                     "description": "Session ID to navigate to",
                     "type": "string",
                     "pattern": "^ses"
+                  },
+                  "viewID": {
+                    "type": "string"
                   }
                 },
                 "required": ["sessionID"]
@@ -6171,6 +8065,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses.*"
+            }
           }
         ],
         "summary": "Subscribe to events",
@@ -6635,6 +8537,28 @@
         },
         "required": ["name", "data"]
       },
+      "MessageTimeoutError": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "const": "MessageTimeoutError"
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "timeout": {
+                "type": "number"
+              }
+            },
+            "required": ["message", "timeout"]
+          }
+        },
+        "required": ["name", "data"]
+      },
       "StructuredOutputError": {
         "type": "object",
         "properties": {
@@ -6763,6 +8687,9 @@
               },
               {
                 "$ref": "#/components/schemas/MessageAbortedError"
+              },
+              {
+                "$ref": "#/components/schemas/MessageTimeoutError"
               },
               {
                 "$ref": "#/components/schemas/StructuredOutputError"
@@ -7471,6 +9398,13 @@
               }
             },
             "required": ["input", "output", "reasoning", "cache"]
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
           }
         },
         "required": ["id", "sessionID", "messageID", "type", "reason", "cost", "tokens"]
@@ -7618,6 +9552,9 @@
           },
           "auto": {
             "type": "boolean"
+          },
+          "overflow": {
+            "type": "boolean"
           }
         },
         "required": ["id", "sessionID", "messageID", "type", "auto"]
@@ -7737,53 +9674,9 @@
         },
         "required": ["type", "properties"]
       },
-      "PermissionRequest": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^per.*"
-          },
-          "sessionID": {
-            "type": "string",
-            "pattern": "^ses.*"
-          },
-          "permission": {
-            "type": "string"
-          },
-          "patterns": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "metadata": {
-            "type": "object",
-            "propertyNames": {
-              "type": "string"
-            },
-            "additionalProperties": {}
-          },
-          "always": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "tool": {
-            "type": "object",
-            "properties": {
-              "messageID": {
-                "type": "string"
-              },
-              "callID": {
-                "type": "string"
-              }
-            },
-            "required": ["messageID", "callID"]
-          }
-        },
-        "required": ["id", "sessionID", "permission", "patterns", "metadata", "always"]
+      "PermissionKind": {
+        "type": "string",
+        "enum": ["blocking", "forecast"]
       },
       "Event.permission.asked": {
         "type": "object",
@@ -7793,7 +9686,61 @@
             "const": "permission.asked"
           },
           "properties": {
-            "$ref": "#/components/schemas/PermissionRequest"
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^per.*"
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses.*"
+              },
+              "permission": {
+                "type": "string"
+              },
+              "patterns": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "always": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "$ref": "#/components/schemas/PermissionKind"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "tool": {
+                "type": "object",
+                "properties": {
+                  "messageID": {
+                    "type": "string"
+                  },
+                  "callID": {
+                    "type": "string"
+                  }
+                },
+                "required": ["messageID", "callID"]
+              },
+              "viewID": {
+                "type": "string"
+              }
+            },
+            "required": ["id", "sessionID", "permission", "patterns", "metadata", "always"]
           }
         },
         "required": ["type", "properties"]
@@ -7817,6 +9764,9 @@
               "reply": {
                 "type": "string",
                 "enum": ["once", "always", "reject"]
+              },
+              "viewID": {
+                "type": "string"
               }
             },
             "required": ["sessionID", "requestID", "reply"]
@@ -7851,9 +9801,15 @@
               },
               "next": {
                 "type": "number"
+              },
+              "since": {
+                "type": "number"
+              },
+              "updated": {
+                "type": "number"
               }
             },
-            "required": ["type", "attempt", "message", "next"]
+            "required": ["type", "attempt", "message", "next", "since", "updated"]
           },
           {
             "type": "object",
@@ -7861,9 +9817,19 @@
               "type": {
                 "type": "string",
                 "const": "busy"
+              },
+              "phase": {
+                "type": "string",
+                "enum": ["starting", "running", "compacting"]
+              },
+              "since": {
+                "type": "number"
+              },
+              "updated": {
+                "type": "number"
               }
             },
-            "required": ["type"]
+            "required": ["type", "phase", "since", "updated"]
           }
         ]
       },
@@ -7882,6 +9848,9 @@
               },
               "status": {
                 "$ref": "#/components/schemas/SessionStatus"
+              },
+              "viewID": {
+                "type": "string"
               }
             },
             "required": ["sessionID", "status"]
@@ -7900,6 +9869,9 @@
             "type": "object",
             "properties": {
               "sessionID": {
+                "type": "string"
+              },
+              "viewID": {
                 "type": "string"
               }
             },
@@ -7951,39 +9923,6 @@
         },
         "required": ["question", "header", "options"]
       },
-      "QuestionRequest": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^que.*"
-          },
-          "sessionID": {
-            "type": "string",
-            "pattern": "^ses.*"
-          },
-          "questions": {
-            "description": "Questions to ask",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/QuestionInfo"
-            }
-          },
-          "tool": {
-            "type": "object",
-            "properties": {
-              "messageID": {
-                "type": "string"
-              },
-              "callID": {
-                "type": "string"
-              }
-            },
-            "required": ["messageID", "callID"]
-          }
-        },
-        "required": ["id", "sessionID", "questions"]
-      },
       "Event.question.asked": {
         "type": "object",
         "properties": {
@@ -7992,7 +9931,40 @@
             "const": "question.asked"
           },
           "properties": {
-            "$ref": "#/components/schemas/QuestionRequest"
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^que.*"
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses.*"
+              },
+              "questions": {
+                "description": "Questions to ask",
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/QuestionInfo"
+                }
+              },
+              "tool": {
+                "type": "object",
+                "properties": {
+                  "messageID": {
+                    "type": "string"
+                  },
+                  "callID": {
+                    "type": "string"
+                  }
+                },
+                "required": ["messageID", "callID"]
+              },
+              "viewID": {
+                "type": "string"
+              }
+            },
+            "required": ["id", "sessionID", "questions"]
           }
         },
         "required": ["type", "properties"]
@@ -8024,6 +9996,9 @@
                 "items": {
                   "$ref": "#/components/schemas/QuestionAnswer"
                 }
+              },
+              "viewID": {
+                "type": "string"
               }
             },
             "required": ["sessionID", "requestID", "answers"]
@@ -8045,6 +10020,9 @@
                 "type": "string"
               },
               "requestID": {
+                "type": "string"
+              },
+              "viewID": {
                 "type": "string"
               }
             },
@@ -8162,6 +10140,9 @@
             "properties": {
               "text": {
                 "type": "string"
+              },
+              "viewID": {
+                "type": "string"
               }
             },
             "required": ["text"]
@@ -8206,6 +10187,9 @@
                     "type": "string"
                   }
                 ]
+              },
+              "viewID": {
+                "type": "string"
               }
             },
             "required": ["command"]
@@ -8237,6 +10221,9 @@
                 "description": "Duration in milliseconds",
                 "default": 5000,
                 "type": "number"
+              },
+              "viewID": {
+                "type": "string"
               }
             },
             "required": ["message", "variant"]
@@ -8258,6 +10245,9 @@
                 "description": "Session ID to navigate to",
                 "type": "string",
                 "pattern": "^ses"
+              },
+              "viewID": {
+                "type": "string"
               }
             },
             "required": ["sessionID"]
@@ -8376,6 +10366,10 @@
           },
           "directory": {
             "type": "string"
+          },
+          "workspaceID": {
+            "type": "string",
+            "pattern": "^wrk.*"
           },
           "parentID": {
             "type": "string",
@@ -8569,6 +10563,9 @@
                     "$ref": "#/components/schemas/MessageAbortedError"
                   },
                   {
+                    "$ref": "#/components/schemas/MessageTimeoutError"
+                  },
+                  {
                     "$ref": "#/components/schemas/StructuredOutputError"
                   },
                   {
@@ -8578,8 +10575,88 @@
                     "$ref": "#/components/schemas/APIError"
                   }
                 ]
+              },
+              "viewID": {
+                "type": "string"
               }
             }
+          }
+        },
+        "required": ["type", "properties"]
+      },
+      "EditorSession": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses.*"
+          },
+          "file": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["running", "exited"]
+          },
+          "dirty": {
+            "type": "boolean"
+          },
+          "diff": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "number"
+          }
+        },
+        "required": ["id", "sessionID", "file", "cwd", "status", "dirty", "diff", "mode", "pid"]
+      },
+      "Event.editor.updated": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "editor.updated"
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "info": {
+                "$ref": "#/components/schemas/EditorSession"
+              }
+            },
+            "required": ["info"]
+          }
+        },
+        "required": ["type", "properties"]
+      },
+      "Event.editor.exited": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "editor.exited"
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses.*"
+              }
+            },
+            "required": ["id", "sessionID"]
           }
         },
         "required": ["type", "properties"]
@@ -8709,6 +10786,10 @@
           },
           "pid": {
             "type": "number"
+          },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses.*"
           }
         },
         "required": ["id", "title", "command", "args", "cwd", "status", "pid"]
@@ -8767,9 +10848,13 @@
               },
               "exitCode": {
                 "type": "number"
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses.*"
               }
             },
-            "required": ["id", "exitCode"]
+            "required": ["id", "exitCode", "sessionID"]
           }
         },
         "required": ["type", "properties"]
@@ -8787,9 +10872,13 @@
               "id": {
                 "type": "string",
                 "pattern": "^pty.*"
+              },
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses.*"
               }
             },
-            "required": ["id"]
+            "required": ["id", "sessionID"]
           }
         },
         "required": ["type", "properties"]
@@ -8905,6 +10994,12 @@
             "$ref": "#/components/schemas/Event.session.error"
           },
           {
+            "$ref": "#/components/schemas/Event.editor.updated"
+          },
+          {
+            "$ref": "#/components/schemas/Event.editor.exited"
+          },
+          {
             "$ref": "#/components/schemas/Event.vcs.branch.updated"
           },
           {
@@ -8978,6 +11073,62 @@
             "items": {
               "type": "string"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "DaemonConfig": {
+        "description": "Shared local daemon configuration for TUI sessions",
+        "type": "object",
+        "properties": {
+          "idle_timeout_ms": {
+            "description": "Idle timeout in milliseconds before the shared local daemon exits (default: 1800000).",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "additionalProperties": false
+      },
+      "PtyConfig": {
+        "description": "Pseudo-terminal configuration for detached terminal sessions",
+        "type": "object",
+        "properties": {
+          "idle_timeout_ms": {
+            "description": "Idle timeout in milliseconds before an orphaned PTY is removed (default: 600000).",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "additionalProperties": false
+      },
+      "SessionConfig": {
+        "description": "Session runtime configuration for turn processing limits",
+        "type": "object",
+        "properties": {
+          "turn_timeout_ms": {
+            "description": "Timeout in milliseconds for a single session turn before it is aborted (default: 9000000).",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "additionalProperties": false
+      },
+      "ShellConfig": {
+        "description": "Shell command configuration for session-driven shell executions",
+        "type": "object",
+        "properties": {
+          "program": {
+            "description": "Shell program to use for shell mode, PTY sessions, and the bash tool.",
+            "type": "string"
+          },
+          "timeout_ms": {
+            "description": "Timeout in milliseconds for session shell commands before the process is terminated (default: 300000).",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "additionalProperties": false
@@ -9460,6 +11611,10 @@
           "scope": {
             "description": "OAuth scopes to request during authorization",
             "type": "string"
+          },
+          "redirectUri": {
+            "description": "Override the OAuth redirect URI used for browser callbacks",
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -9530,6 +11685,18 @@
           "server": {
             "$ref": "#/components/schemas/ServerConfig"
           },
+          "daemon": {
+            "$ref": "#/components/schemas/DaemonConfig"
+          },
+          "pty": {
+            "$ref": "#/components/schemas/PtyConfig"
+          },
+          "session": {
+            "$ref": "#/components/schemas/SessionConfig"
+          },
+          "shell": {
+            "$ref": "#/components/schemas/ShellConfig"
+          },
           "command": {
             "description": "Command configuration, see https://slopcode.dev/docs/commands",
             "type": "object",
@@ -9578,6 +11745,72 @@
               }
             }
           },
+          "reference": {
+            "description": "Reference repositories or local paths available to scout/reference tools",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["path"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "repository": {
+                      "type": "string"
+                    },
+                    "branch": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["repository"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "attachment": {
+            "description": "Attachment processing configuration, including image size limits and resizing behavior",
+            "type": "object",
+            "properties": {
+              "image": {
+                "type": "object",
+                "properties": {
+                  "auto_resize": {
+                    "type": "boolean"
+                  },
+                  "max_width": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "max_height": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "max_base64_bytes": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                }
+              }
+            }
+          },
           "watcher": {
             "type": "object",
             "properties": {
@@ -9592,7 +11825,26 @@
           "plugin": {
             "type": "array",
             "items": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    }
+                  ]
+                }
+              ]
             }
           },
           "snapshot": {
@@ -9874,6 +12126,11 @@
               }
             }
           },
+          "queue_mode": {
+            "description": "How follow-up prompts are handled while a session is already running (default: serial)",
+            "type": "string",
+            "enum": ["serial", "injection"]
+          },
           "compaction": {
             "type": "object",
             "properties": {
@@ -9893,6 +12150,77 @@
               }
             }
           },
+          "autocomplete": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "description": "Enable model-powered prompt autocomplete (default: true)",
+                "type": "boolean"
+              },
+              "debounce_ms": {
+                "description": "Debounce delay in milliseconds before requesting autocomplete (default: 180)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "min_prefix_chars": {
+                "description": "Minimum prefix characters required to request autocomplete (default: 12)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "timeout_ms": {
+                "description": "Timeout in milliseconds for autocomplete requests (default: 4000)",
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "max_output_tokens": {
+                "description": "Maximum output tokens for autocomplete generation (default: 48)",
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "max_completion_chars": {
+                "description": "Maximum completion characters returned to the client (default: 96)",
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "provider_model_overrides": {
+                "description": "Override autocomplete model per provider. Key is provider ID, value is model ID. Set null to use the selected model for that provider.",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "model_strategy": {
+                "description": "@deprecated Legacy autocomplete routing strategy. Ignored by runtime.",
+                "type": "string",
+                "enum": ["same_exact", "family_fast", "custom_map"]
+              },
+              "model_map": {
+                "description": "@deprecated Legacy autocomplete model map. Ignored by runtime.",
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "experimental": {
             "type": "object",
             "properties": {
@@ -9901,6 +12229,14 @@
               },
               "batch_tool": {
                 "description": "Enable the batch tool",
+                "type": "boolean"
+              },
+              "hashline_edit": {
+                "description": "Enable hashline-backed edit/read tool behavior (default true, set false to disable)",
+                "type": "boolean"
+              },
+              "hashline_autocorrect": {
+                "description": "Enable hashline autocorrect cleanup for copied prefixes and formatting artifacts (default true)",
                 "type": "boolean"
               },
               "openTelemetry": {
@@ -9971,6 +12307,15 @@
           },
           "enterpriseUrl": {
             "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "required": ["type", "refresh", "access", "expires"]
@@ -9984,6 +12329,15 @@
           },
           "key": {
             "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "required": ["type", "key"]
@@ -10384,6 +12738,16 @@
                   }
                 },
                 "required": ["directory", "type"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": ["type"],
+                "additionalProperties": {}
               }
             ]
           }
@@ -10438,6 +12802,10 @@
           },
           "directory": {
             "type": "string"
+          },
+          "workspaceID": {
+            "type": "string",
+            "pattern": "^wrk.*"
           },
           "parentID": {
             "type": "string",
@@ -10551,6 +12919,34 @@
           }
         },
         "required": ["name", "uri", "client"]
+      },
+      "SessionDiffEntry": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "additions": {
+            "type": "number"
+          },
+          "deletions": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["added", "deleted", "modified"]
+          },
+          "before": {
+            "type": "string"
+          },
+          "after": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "number"
+          }
+        },
+        "required": ["file", "additions", "deletions"]
       },
       "TextPartInput": {
         "type": "object",
@@ -10689,6 +13085,93 @@
           }
         },
         "required": ["type", "prompt", "description", "agent"]
+      },
+      "PermissionRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^per.*"
+          },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses.*"
+          },
+          "permission": {
+            "type": "string"
+          },
+          "patterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "always": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PermissionKind"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "object",
+            "properties": {
+              "messageID": {
+                "type": "string"
+              },
+              "callID": {
+                "type": "string"
+              }
+            },
+            "required": ["messageID", "callID"]
+          }
+        },
+        "required": ["id", "sessionID", "permission", "patterns", "metadata", "always"]
+      },
+      "QuestionRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^que.*"
+          },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses.*"
+          },
+          "questions": {
+            "description": "Questions to ask",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuestionInfo"
+            }
+          },
+          "tool": {
+            "type": "object",
+            "properties": {
+              "messageID": {
+                "type": "string"
+              },
+              "callID": {
+                "type": "string"
+              }
+            },
+            "required": ["messageID", "callID"]
+          }
+        },
+        "required": ["id", "sessionID", "questions"]
       },
       "ProviderAuthMethod": {
         "type": "object",

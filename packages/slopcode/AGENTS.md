@@ -1,5 +1,15 @@
 # slopcode database guide
 
+- Prioritize TUI behavior here before matching web UI changes when a request could land in both surfaces.
+
+## Release
+
+- The default release flow is `bun run release patch` from the repo root. Use `minor`, `major`, or an explicit version only when the user explicitly asks for a different bump.
+- Before running the release flow, rebase the release branch/worktree onto the latest remote base branch tip (`origin/dev` here, or `origin/main` in repos that use `main`) so npm publishes are cut from the current base.
+- That flow builds and uploads release assets locally, then dispatches `.github/workflows/publish.yml` for npm trusted publishing.
+- Do not use local `npm publish` as the normal release path; keep GitHub Actions publish-only.
+- When publishing a release, replace placeholder GitHub release notes with clear changelog bullets and keep them to at most 3 very short bullet points.
+
 ## Database
 
 - **Schema**: Drizzle schema lives in `src/**/*.sql.ts`.

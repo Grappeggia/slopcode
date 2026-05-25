@@ -7,7 +7,7 @@
     </picture>
   </a>
 </p>
-<p align="center">The open source AI coding agent.</p>
+<p align="center">The open source AI slopcoding agent.</p>
 <p align="center">
   <a href="https://slopcode.dev/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
   <a href="https://www.npmjs.com/package/slopcode"><img alt="npm" src="https://img.shields.io/npm/v/slopcode?style=flat-square" /></a>
@@ -49,18 +49,34 @@
 curl -fsSL https://slopcode.dev/install | bash
 
 # Package managers
-npm i -g slopcode@latest        # or: bun install -g / pnpm add -g / yarn global add
+npm i -g slopcode@latest        # or: bun install -g / pnpm add -g / yarn global add (Yarn Classic)
+yarn add -D slopcode             # Yarn Berry (project install)
 scoop install slopcode             # Windows
 choco install slopcode             # Windows
 brew install teamslop/slopcode/slopcode # macOS and Linux (recommended, always up to date)
 brew install slopcode              # macOS and Linux (official brew formula, updated less)
 curl -fsSL https://teamslop.github.io/apt-slopcode/install.sh | sudo bash # Debian/Ubuntu (apt repository)
+sudo zypper install slopcode       # openSUSE (RPM repository)
 sudo pacman -S slopcode            # Arch Linux (Stable)
 paru -S slopcode-bin               # Arch Linux (Latest from AUR)
+sudo port install slopcode         # macOS (MacPorts)
 mise use -g slopcode               # Any OS
 nix profile install github:teamslop/slopcode#slopcode # Any OS (persistent install)
 nix run github:teamslop/slopcode#slopcode             # One-off run
 ```
+
+#### Termux on Android
+
+SlopCode supports native Termux on Android arm64/x64 for CLI and server commands through the npm package. Install the Termux runtime dependencies first:
+
+```bash
+pkg update
+pkg install nodejs git ripgrep neovim
+npm install -g slopcode@latest --include=optional
+slopcode --help
+```
+
+The interactive TUI still requires a proot-distro Linux environment until Bun for Android enables the FFI support required by OpenTUI.
 
 > [!TIP]
 > Remove versions older than 0.1.x before installing.

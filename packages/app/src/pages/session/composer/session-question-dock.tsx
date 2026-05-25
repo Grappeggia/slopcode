@@ -118,7 +118,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     props.onSubmit()
     setStore("sending", true)
     try {
-      await sdk.client.question.reply({ requestID: props.request.id, answers })
+      await sdk.client.question.reply({ requestID: props.request.id, sessionID: props.request.sessionID, answers })
     } catch (err) {
       fail(err)
     } finally {
@@ -132,7 +132,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     props.onSubmit()
     setStore("sending", true)
     try {
-      await sdk.client.question.reject({ requestID: props.request.id })
+      await sdk.client.question.reject({ requestID: props.request.id, sessionID: props.request.sessionID })
     } catch (err) {
       fail(err)
     } finally {

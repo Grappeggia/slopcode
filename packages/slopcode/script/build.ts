@@ -4,7 +4,9 @@ import { $ } from "bun"
 import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
+import { gunzipSync } from "zlib"
 import solidPlugin from "../node_modules/@opentui/solid/scripts/solid-plugin"
+import { Archive } from "../src/util/archive"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -59,6 +61,490 @@ console.log(`Loaded ${migrations.length} migrations`)
 const singleFlag = process.argv.includes("--single")
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
+const targetFlag = process.argv.find((item) => item.startsWith("--target="))?.slice("--target=".length)
+const releaseFlag = Script.release
+
+const nvimVersion = "v0.12.1"
+const androidBunVersion = "1.3.14"
+const cliBinary = (os: string) => (os === "win32" ? "slopcode.exe" : "slopcode")
+const nvimBinary = (os: string) => (os === "win32" ? "nvim.exe" : "nvim")
+const alpineVersion = "3.22"
+const alpineRoot = `https://dl-cdn.alpinelinux.org/alpine/v${alpineVersion}`
+const alpineArch = (arch: "arm64" | "x64") => (arch === "arm64" ? "aarch64" : "x86_64")
+const nvimAssets = {
+  "linux-x64": {
+    name: "nvim-linux-x86_64.tar.gz",
+    url: `https://github.com/neovim/neovim/releases/download/${nvimVersion}/nvim-linux-x86_64.tar.gz`,
+    sha256: "ab757a1fd9ad307d53d2df4045698906a7ca3993d92260dd8fe49108712d57d0",
+    format: "tar",
+  },
+  "linux-arm64": {
+    name: "nvim-linux-arm64.tar.gz",
+    url: `https://github.com/neovim/neovim/releases/download/${nvimVersion}/nvim-linux-arm64.tar.gz`,
+    sha256: "a3f8aa5590fd2ac930bcc5c9070b9ac1ec33461d262b6428874c5fc640f3f13c",
+    format: "tar",
+  },
+  "darwin-x64": {
+    name: "nvim-macos-x86_64.tar.gz",
+    url: `https://github.com/neovim/neovim/releases/download/${nvimVersion}/nvim-macos-x86_64.tar.gz`,
+    sha256: "e59a5eafcdf824e2bf6a738e75f8f62ba4ff1b7f1c7daaec2d134aa46737907c",
+    format: "tar",
+  },
+  "darwin-arm64": {
+    name: "nvim-macos-arm64.tar.gz",
+    url: `https://github.com/neovim/neovim/releases/download/${nvimVersion}/nvim-macos-arm64.tar.gz`,
+    sha256: "b77e01c5421ac1bac593eed5c2ea1b950439306dd4c32371ac2473792da9a9d5",
+    format: "tar",
+  },
+  "win32-x64": {
+    name: "nvim-win64.zip",
+    url: `https://github.com/neovim/neovim/releases/download/${nvimVersion}/nvim-win64.zip`,
+    sha256: "75fedc530b3772ca9f177edc7db92560bb9d2d6700ac6d5b2c53eaf5a9317ae3",
+    format: "zip",
+  },
+} as const
+
+const nvimCache = path.join(dir, "dist", ".neovim-cache")
+const nvimDownloads = new Map<string, Promise<string>>()
+const alpineIndexes = new Map<
+  string,
+  Promise<{ packages: Map<string, AlpinePackage>; providers: Map<string, string> }>
+>()
+const alpineDownloads = new Map<string, Promise<string>>()
+const alpineRoots = new Map<string, Promise<string>>()
+
+type AlpinePackage = {
+  name: string
+  version: string
+  repo: string
+  deps: string[]
+  provides: string[]
+}
+
+const tarEntry = (data: Uint8Array, file: string) => {
+  let offset = 0
+  while (offset + 512 <= data.length) {
+    const header = Uint8Array.from(data.subarray(offset, offset + 512))
+    const name = Buffer.from(header.subarray(0, 100)).toString("utf8").replace(/\0.*$/, "")
+    if (!name) return
+    const raw = Buffer.from(header.subarray(124, 136)).toString("utf8").replace(/\0.*$/, "").trim()
+    const size = Number.parseInt(raw || "0", 8)
+    const start = offset + 512
+    const end = start + size
+    if (name === file) {
+      return Uint8Array.from(data.subarray(start, end))
+    }
+    offset = start + Math.ceil(size / 512) * 512
+  }
+}
+
+const alpineName = (value: string) => {
+  if (!value || value.startsWith("!")) return ""
+  return value.split(/[<>=~]/)[0] ?? ""
+}
+
+const alpineIndex = (arch: "aarch64" | "x86_64") => {
+  const hit = alpineIndexes.get(arch)
+  if (hit) return hit
+  const task = (async () => {
+    const items = await Promise.all(
+      ["main", "community"].map(async (repo) => {
+        const url = `${alpineRoot}/${repo}/${arch}/APKINDEX.tar.gz`
+        const res = await fetch(url)
+        if (!res.ok) {
+          throw new Error(`Failed to download ${url}: ${res.status} ${res.statusText}`)
+        }
+        const plain = tarEntry(gunzipSync(new Uint8Array(await res.arrayBuffer())), "APKINDEX")
+        if (!plain) {
+          throw new Error(`Missing APKINDEX entry in ${url}`)
+        }
+        return {
+          repo: `${alpineRoot}/${repo}`,
+          text: Buffer.from(plain).toString("utf8"),
+        }
+      }),
+    )
+    const packages = new Map<string, AlpinePackage>()
+    const providers = new Map<string, string>()
+    for (const item of items) {
+      for (const block of item.text.split("\n\n")) {
+        if (!block.trim()) continue
+        const map = new Map(
+          block
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => [line.slice(0, 2), line.slice(2)]),
+        )
+        const name = map.get("P:")
+        const version = map.get("V:")
+        if (!name || !version) continue
+        const info = {
+          name,
+          version,
+          repo: item.repo,
+          deps: (map.get("D:") ?? "").split(" ").map(alpineName).filter(Boolean),
+          provides: (map.get("p:") ?? "").split(" ").map(alpineName).filter(Boolean),
+        } satisfies AlpinePackage
+        packages.set(name, info)
+        providers.set(name, name)
+        info.provides.forEach((provide) => {
+          if (!providers.has(provide)) {
+            providers.set(provide, name)
+          }
+        })
+      }
+    }
+    return { packages, providers }
+  })()
+  alpineIndexes.set(arch, task)
+  return task
+}
+
+const alpineResolve = async (arch: "aarch64" | "x86_64") => {
+  const index = await alpineIndex(arch)
+  const seen = new Set<string>()
+  const queue = ["neovim"]
+  while (queue.length > 0) {
+    const name = queue.shift()
+    if (!name || seen.has(name) || name.startsWith("so:libc.musl-")) continue
+    const next = index.providers.get(name) ?? name
+    if (seen.has(next) || next.startsWith("so:libc.musl-")) continue
+    const info = index.packages.get(next)
+    if (!info) {
+      throw new Error(`Missing Alpine package for ${name} (${arch})`)
+    }
+    seen.add(next)
+    info.deps.forEach((dep) => {
+      if (!dep.startsWith("so:libc.musl-")) {
+        queue.push(dep)
+      }
+    })
+  }
+  return Array.from(seen)
+    .map((name) => index.packages.get(name))
+    .filter((item): item is AlpinePackage => !!item)
+}
+
+const alpineDownload = (arch: "aarch64" | "x86_64", item: AlpinePackage) => {
+  const key = `${arch}:${item.name}:${item.version}`
+  const hit = alpineDownloads.get(key)
+  if (hit) return hit
+  const task = (async () => {
+    const out = path.join(nvimCache, "alpine", alpineVersion, arch, `${item.name}-${item.version}.apk`)
+    await fs.promises.mkdir(path.dirname(out), { recursive: true })
+    if (!(await Bun.file(out).exists())) {
+      const url = `${item.repo}/${arch}/${item.name}-${item.version}.apk`
+      const res = await fetch(url)
+      if (!res.ok) {
+        throw new Error(`Failed to download ${url}: ${res.status} ${res.statusText}`)
+      }
+      await Bun.write(out, await res.arrayBuffer())
+    }
+    return out
+  })()
+  alpineDownloads.set(key, task)
+  return task
+}
+
+const alpineBundle = (arch: "aarch64" | "x86_64") => {
+  const hit = alpineRoots.get(arch)
+  if (hit) return hit
+  const task = (async () => {
+    const root = path.join(nvimCache, "alpine", alpineVersion, `${arch}-root`)
+    await fs.promises.rm(root, { recursive: true, force: true })
+    await fs.promises.mkdir(root, { recursive: true })
+    const items = await alpineResolve(arch)
+    for (const item of items) {
+      const file = await alpineDownload(arch, item)
+      await $`tar -xzf ${file} -C ${root} ${"--exclude=.PKGINFO"} ${"--exclude=.SIGN.*"}`
+    }
+    return root
+  })()
+  alpineRoots.set(arch, task)
+  return task
+}
+
+const nvimKey = (item: { os: string; arch: "arm64" | "x64"; abi?: "musl" }) => {
+  if (item.abi === "musl") return
+  const key = `${item.os}-${item.arch}` as keyof typeof nvimAssets
+  if (key in nvimAssets) return key
+}
+
+const nvimDownload = (key: keyof typeof nvimAssets) => {
+  const existing = nvimDownloads.get(key)
+  if (existing) return existing
+  const task = (async () => {
+    const asset = nvimAssets[key]
+    const out = path.join(nvimCache, asset.name)
+    await fs.promises.mkdir(nvimCache, { recursive: true })
+    if (!(await Bun.file(out).exists())) {
+      const res = await fetch(asset.url)
+      if (!res.ok) {
+        throw new Error(`Failed to download ${asset.url}: ${res.status} ${res.statusText}`)
+      }
+      await Bun.write(out, await res.arrayBuffer())
+    }
+    const digest = new Bun.CryptoHasher("sha256").update(await Bun.file(out).arrayBuffer()).digest("hex")
+    if (digest !== asset.sha256) {
+      throw new Error(`Neovim digest mismatch for ${asset.name}`)
+    }
+    return out
+  })()
+  nvimDownloads.set(key, task)
+  return task
+}
+
+const nvimBundle = async (item: { os: string; arch: "arm64" | "x64"; abi?: "musl" }, name: string) => {
+  const dest = path.join(dir, "dist", name, "bin", "neovim")
+  await fs.promises.rm(dest, { recursive: true, force: true })
+  await fs.promises.mkdir(dest, { recursive: true })
+  if (item.abi === "musl") {
+    const root = await alpineBundle(alpineArch(item.arch))
+    await $`cp -RL ${path.join(root, "usr", "bin")} ${path.join(dest, "bin")}`
+    await $`cp -RL ${path.join(root, "usr", "lib")} ${path.join(dest, "lib")}`
+    await $`cp -RL ${path.join(root, "usr", "share")} ${path.join(dest, "share")}`
+    await $`docker run --rm -v ${dest}:/work alpine:${alpineVersion} sh -lc ${"apk add --no-cache patchelf >/dev/null && patchelf --replace-needed /usr/lib/lua/5.1/lpeg.so lpeg.so /work/bin/nvim"}`
+    return
+  }
+  const key = nvimKey(item)
+  if (!key) return
+  const asset = nvimAssets[key]
+  const file = await nvimDownload(key)
+  if (asset.format === "tar") {
+    await $`tar -xzf ${file} -C ${dest} --strip-components=1`
+    return
+  }
+  const tmp = path.join(nvimCache, `${asset.name}.tmp`)
+  await fs.promises.rm(tmp, { recursive: true, force: true })
+  await fs.promises.mkdir(tmp, { recursive: true })
+  await Archive.extractZip(file, tmp)
+  const entries = await fs.promises.readdir(tmp, { withFileTypes: true })
+  const source = entries.length === 1 && entries[0]?.isDirectory() ? path.join(tmp, entries[0].name) : tmp
+  await fs.promises.cp(source, dest, { recursive: true, force: true })
+  await fs.promises.rm(tmp, { recursive: true, force: true })
+}
+
+const androidOpentui = async (name: string, arch: "arm64" | "x64") => {
+  const pkgname = `@opentui/core-android-${arch}`
+  const linux = `@opentui/core-linux-${arch}`
+  let source = path.join(dir, "node_modules", "@opentui", `core-linux-${arch}`, "libopentui.so")
+  if (!fs.existsSync(source)) {
+    const cache = path.join(dir, "dist", ".android-cache")
+    await fs.promises.mkdir(cache, { recursive: true })
+    const meta = await fetch(
+      `https://registry.npmjs.org/${encodeURIComponent(linux)}/${pkg.dependencies["@opentui/core"]}`,
+    ).then((res) => {
+      if (!res.ok) throw new Error(`Failed to resolve ${linux}: ${res.status} ${res.statusText}`)
+      return res.json() as Promise<{ dist: { tarball: string } }>
+    })
+    const archive = path.join(cache, `opentui-core-linux-${arch}-${pkg.dependencies["@opentui/core"]}.tgz`)
+    if (!(await Bun.file(archive).exists())) {
+      const res = await fetch(meta.dist.tarball)
+      if (!res.ok) throw new Error(`Failed to download ${meta.dist.tarball}: ${res.status} ${res.statusText}`)
+      await Bun.write(archive, await res.arrayBuffer())
+    }
+    const extract = path.join(cache, `opentui-core-linux-${arch}`)
+    await fs.promises.rm(extract, { recursive: true, force: true })
+    await fs.promises.mkdir(extract, { recursive: true })
+    await $`tar -xzf ${archive} -C ${extract}`
+    source = path.join(extract, "package", "libopentui.so")
+  }
+
+  const root = path.join(dir, "dist", name, "node_modules", "@opentui", `core-android-${arch}`)
+  await fs.promises.mkdir(root, { recursive: true })
+  await fs.promises.copyFile(source, path.join(root, "libopentui.so"))
+  await Bun.write(
+    path.join(root, "index.ts"),
+    'const module = await import("./libopentui.so", { with: { type: "file" } })\nconst path = module.default\nexport default path\n',
+  )
+  await Bun.write(
+    path.join(root, "package.json"),
+    JSON.stringify(
+      {
+        name: pkgname,
+        version: pkg.dependencies["@opentui/core"],
+        os: ["android"],
+        cpu: [arch],
+        type: "module",
+        main: "index.ts",
+        module: "index.ts",
+        files: ["index.ts", "libopentui.so"],
+      },
+      null,
+      2,
+    ),
+  )
+}
+
+const androidBunPackage = (arch: "arm64" | "x64") => `@oven/bun-linux-${arch === "arm64" ? "aarch64" : "x64"}-android`
+
+const androidBun = async (name: string, arch: "arm64" | "x64") => {
+  const pkgname = androidBunPackage(arch)
+  const cache = path.join(dir, "dist", ".android-cache")
+  await fs.promises.mkdir(cache, { recursive: true })
+  const meta = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pkgname)}/${androidBunVersion}`).then(
+    (res) => {
+      if (!res.ok) throw new Error(`Failed to resolve ${pkgname}: ${res.status} ${res.statusText}`)
+      return res.json() as Promise<{ dist: { tarball: string } }>
+    },
+  )
+  const archive = path.join(cache, `${pkgname.replace("@", "").replace("/", "-")}-${androidBunVersion}.tgz`)
+  if (!(await Bun.file(archive).exists())) {
+    const res = await fetch(meta.dist.tarball)
+    if (!res.ok) throw new Error(`Failed to download ${meta.dist.tarball}: ${res.status} ${res.statusText}`)
+    await Bun.write(archive, await res.arrayBuffer())
+  }
+  const root = path.join(dir, "dist", name, "node_modules", "@oven", path.basename(pkgname))
+  await fs.promises.rm(root, { recursive: true, force: true })
+  await fs.promises.mkdir(root, { recursive: true })
+  await $`tar -xzf ${archive} -C ${root} --strip-components=1`
+  await $`chmod 755 ${path.join(root, "bin", "bun")}`
+}
+
+const androidRust = (arch: "arm64" | "x64") =>
+  arch === "arm64"
+    ? {
+        target: "aarch64-linux-android",
+        linker: "aarch64-linux-android24-clang",
+      }
+    : {
+        target: "x86_64-linux-android",
+        linker: "x86_64-linux-android24-clang",
+      }
+
+const androidNdk = () => {
+  const roots = [
+    process.env.ANDROID_NDK_HOME,
+    process.env.NDK_HOME,
+    process.env.ANDROID_HOME && path.join(process.env.ANDROID_HOME, "ndk", "27.1.12297006"),
+    process.env.ANDROID_SDK_ROOT && path.join(process.env.ANDROID_SDK_ROOT, "ndk", "27.1.12297006"),
+    path.join(process.env.HOME ?? "", "android-sdk", "ndk", "27.1.12297006"),
+  ].filter((item): item is string => !!item)
+  const found = roots.find((item) => fs.existsSync(path.join(item, "toolchains", "llvm")))
+  if (!found) throw new Error("Android NDK not found; set ANDROID_NDK_HOME")
+  return found
+}
+
+const androidClient = async (name: string, arch: "arm64" | "x64") => {
+  const rust = androidRust(arch)
+  const bin = path.join(dir, "dist", name, "bin", "slopcode-termux")
+  const linker = path.join(androidNdk(), "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", rust.linker)
+  if (!fs.existsSync(linker)) throw new Error(`Missing Android linker at ${linker}`)
+  await $`rustup target add ${rust.target}`
+  await $`rustc --target ${rust.target} -C linker=${linker} -C opt-level=z -C strip=symbols native/android-client/main.rs -o ${bin}`
+  await $`chmod 755 ${bin}`
+}
+
+const androidHost = async (name: string, arch: "arm64" | "x64") => {
+  const rust = androidRust(arch)
+  const bin = path.join(dir, "dist", name, "bin", "slopcode-android-host")
+  const linker = path.join(androidNdk(), "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", rust.linker)
+  if (!fs.existsSync(linker)) throw new Error(`Missing Android linker at ${linker}`)
+  await $`rustup target add ${rust.target}`
+  await $`rustc --target ${rust.target} -C linker=${linker} -C opt-level=z -C strip=symbols native/android-host/main.rs -o ${bin}`
+  await $`chmod 755 ${bin}`
+}
+
+const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: string, workerPath: string) => {
+  await fs.promises.mkdir(path.join(dir, "dist", name, "bin"), { recursive: true })
+  await fs.promises.mkdir(path.join(dir, "dist", name, "bundle"), { recursive: true })
+  const result = await Bun.build({
+    conditions: ["browser"],
+    tsconfig: "./tsconfig.json",
+    plugins: [solidPlugin],
+    sourcemap: "none",
+    target: "bun",
+    outdir: `dist/${name}/bundle`,
+    entrypoints: ["./src/index.ts", parserWorker, workerPath],
+    naming: "[name].[ext]",
+    define: {
+      SLOPCODE_VERSION: `'${Script.version}'`,
+      SLOPCODE_NVIM_VERSION: `'${nvimVersion}'`,
+      SLOPCODE_MIGRATIONS: JSON.stringify(migrations),
+      OTUI_TREE_SITTER_WORKER_PATH: 'new URL("./parser.worker.js", import.meta.url).href',
+      SLOPCODE_WORKER_PATH: 'new URL("./worker.js", import.meta.url).href',
+      SLOPCODE_CHANNEL: `'${Script.channel}'`,
+      SLOPCODE_LIBC: "'bionic'",
+    },
+  })
+  if (!result.success) {
+    throw new Error(`Build failed for ${name}`)
+  }
+  if (!(await Bun.file(`dist/${name}/bundle/index.js`).exists())) {
+    throw new Error(`Missing Android bundle at dist/${name}/bundle/index.js`)
+  }
+  await androidOpentui(name, arch)
+  await androidBun(name, arch)
+  await androidClient(name, arch)
+  await androidHost(name, arch)
+  await Bun.write(
+    `dist/${name}/bin/slopcode`,
+    [
+      "#!/data/data/com.termux/files/usr/bin/env node",
+      'const childProcess = require("child_process")',
+      'const fs = require("fs")',
+      'const path = require("path")',
+      "const root = path.dirname(path.dirname(__filename))",
+      'const bundle = path.join(root, "bundle", "index.js")',
+      "const candidates = [",
+      "  process.env.SLOPCODE_BUN_PATH,",
+      `  path.join(root, "node_modules", "@oven", "${path.basename(androidBunPackage(arch))}", "bin", "bun"),`,
+      '  path.join(root, "node_modules", "bun", "bin", "bun.exe"),',
+      '  path.join(root, "node_modules", ".bin", process.platform === "win32" ? "bun.cmd" : "bun"),',
+      "].filter(Boolean)",
+      "const bun = candidates.find((item) => fs.existsSync(item))",
+      "if (!bun) {",
+      '  console.error("SlopCode native Termux support requires Bun. Reinstall with: npm install -g slopcode@latest --include=optional")',
+      "  process.exit(1)",
+      "}",
+      "const result = childProcess.spawnSync(bun, [bundle, ...process.argv.slice(2)], {",
+      '  stdio: "inherit",',
+      "  env: {",
+      "    ...process.env,",
+      '    SLOPCODE_BIONIC: "1",',
+      "    SLOPCODE_ENTRYPOINT: bundle,",
+      "    SLOPCODE_ANDROID_ROOT: root,",
+      '    SLOPCODE_ANDROID_HOST_PATH: path.join(root, "bin", "slopcode-android-host"),',
+      '    SLOPCODE_ANDROID_HOST: process.env.SLOPCODE_ANDROID_HOST ?? "sidecar",',
+      "  },",
+      "})",
+      "if (result.error) {",
+      "  console.error(result.error.message)",
+      "  process.exit(1)",
+      "}",
+      "if (result.signal) {",
+      "  const signals = { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 }",
+      "  process.exit(128 + (signals[result.signal] || 1))",
+      "}",
+      'process.exit(typeof result.status === "number" ? result.status : 1)',
+      "",
+    ].join("\n"),
+  )
+  await $`chmod 755 ${path.join(dir, "dist", name, "bin", "slopcode")}`
+  await Bun.write(
+    `dist/${name}/package.json`,
+    JSON.stringify(
+      {
+        name: `@slopcode-ai/slopcode-android-${arch}`,
+        version: Script.version,
+        repository: {
+          type: "git",
+          url: "https://github.com/teamslop/slopcode",
+        },
+        os: ["android"],
+        cpu: [arch],
+        dependencies: {
+          [androidBunPackage(arch)]: androidBunVersion,
+          [`@opentui/core-android-${arch}`]: pkg.dependencies["@opentui/core"],
+          ...(arch === "arm64" ? { "@parcel/watcher-android-arm64": pkg.dependencies["@parcel/watcher"] } : {}),
+        },
+        bundleDependencies: [androidBunPackage(arch), `@opentui/core-android-${arch}`],
+      },
+      null,
+      2,
+    ),
+  )
+}
 
 const allTargets: {
   os: string
@@ -66,6 +552,14 @@ const allTargets: {
   abi?: "musl"
   avx2?: false
 }[] = [
+  {
+    os: "android",
+    arch: "arm64",
+  },
+  {
+    os: "android",
+    arch: "x64",
+  },
   {
     os: "linux",
     arch: "arm64",
@@ -119,26 +613,41 @@ const allTargets: {
   },
 ]
 
-const targets = singleFlag
-  ? allTargets.filter((item) => {
-      if (item.os !== process.platform || item.arch !== process.arch) {
-        return false
-      }
+const targetKey = (item: (typeof allTargets)[number]) =>
+  [item.os === "win32" ? "windows" : item.os, item.arch, item.avx2 === false ? "baseline" : undefined, item.abi]
+    .filter(Boolean)
+    .join("-")
 
-      // When building for the current platform, prefer a single native binary by default.
-      // Baseline binaries require additional Bun artifacts and can be flaky to download.
-      if (item.avx2 === false) {
-        return baselineFlag
-      }
+const targetName = (item: (typeof allTargets)[number]) => `${pkg.name}-${targetKey(item)}`
 
-      // also skip abi-specific builds for the same reason
-      if (item.abi !== undefined) {
-        return false
-      }
+const targets = targetFlag
+  ? allTargets.filter((item) => targetKey(item) === targetFlag || targetName(item) === targetFlag)
+  : singleFlag
+    ? allTargets.filter((item) => {
+        if (item.os !== process.platform || item.arch !== process.arch) {
+          return false
+        }
 
-      return true
-    })
-  : allTargets
+        // When building for the current platform, prefer a single native binary by default.
+        // Baseline binaries require additional Bun artifacts and can be flaky to download.
+        if (item.avx2 === false) {
+          return baselineFlag
+        }
+
+        // also skip abi-specific builds for the same reason
+        if (item.abi !== undefined) {
+          return false
+        }
+
+        return true
+      })
+    : releaseFlag
+      ? allTargets
+      : allTargets.filter((item) => item.os !== "android")
+
+if (targetFlag && targets.length === 0) {
+  throw new Error(`Unknown build target: ${targetFlag}`)
+}
 
 await $`rm -rf dist`
 
@@ -148,27 +657,24 @@ if (!skipInstall) {
   await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
 }
 for (const item of targets) {
-  const name = [
-    pkg.name,
-    // changing to win32 flags npm for some reason
-    item.os === "win32" ? "windows" : item.os,
-    item.arch,
-    item.avx2 === false ? "baseline" : undefined,
-    item.abi === undefined ? undefined : item.abi,
-  ]
-    .filter(Boolean)
-    .join("-")
+  const name = targetName(item)
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
 
   const parserWorker = fs.realpathSync(path.resolve(dir, "./node_modules/@opentui/core/parser.worker.js"))
   const workerPath = "./src/cli/cmd/tui/worker.ts"
 
+  if (item.os === "android") {
+    await androidBundle(name, item.arch, parserWorker, workerPath)
+    binaries[name] = Script.version
+    continue
+  }
+
   // Use platform-specific bunfs root path based on target OS
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
 
-  await Bun.build({
+  const result = await Bun.build({
     conditions: ["browser"],
     tsconfig: "./tsconfig.json",
     plugins: [solidPlugin],
@@ -186,6 +692,7 @@ for (const item of targets) {
     entrypoints: ["./src/index.ts", parserWorker, workerPath],
     define: {
       SLOPCODE_VERSION: `'${Script.version}'`,
+      SLOPCODE_NVIM_VERSION: `'${nvimVersion}'`,
       SLOPCODE_MIGRATIONS: JSON.stringify(migrations),
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       SLOPCODE_WORKER_PATH: workerPath,
@@ -194,12 +701,29 @@ for (const item of targets) {
     },
   })
 
+  if (!result.success) {
+    throw new Error(`Build failed for ${name}`)
+  }
+  const binary = `dist/${name}/bin/${cliBinary(item.os)}`
+  if (!(await Bun.file(binary).exists())) {
+    throw new Error(`Missing built binary at ${binary}`)
+  }
+
   await $`rm -rf ./dist/${name}/bin/tui`
+  await nvimBundle(item, name)
+  const file = `dist/${name}/bin/neovim/bin/${nvimBinary(item.os)}`
+  if (!(await Bun.file(file).exists())) {
+    throw new Error(`Missing bundled Neovim at ${file}`)
+  }
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {
         name,
         version: Script.version,
+        repository: {
+          type: "git",
+          url: "https://github.com/teamslop/slopcode",
+        },
         os: [item.os],
         cpu: [item.arch],
       },
@@ -226,21 +750,27 @@ const debVersion = (() => {
 
 const debBuild = async (src: string, arch: "amd64" | "arm64") => {
   const binary = path.join(dir, "dist", src, "bin", "slopcode")
+  const nvim = path.join(dir, "dist", src, "bin", "neovim")
   if (!fs.existsSync(binary)) {
     throw new Error(`Missing Debian source binary at ${binary}`)
   }
 
   const root = path.join(dir, "dist", `deb-${arch}`)
   const binDir = path.join(root, "usr", "bin")
+  const libDir = path.join(root, "usr", "lib", "slopcode")
   const controlDir = path.join(root, "DEBIAN")
   const deb = path.join(dir, "dist", `slopcode-linux-${arch}.deb`)
 
   await fs.promises.rm(root, { recursive: true, force: true })
   await fs.promises.mkdir(binDir, { recursive: true })
+  await fs.promises.mkdir(libDir, { recursive: true })
   await fs.promises.mkdir(controlDir, { recursive: true })
 
   await $`cp ${binary} ${path.join(binDir, "slopcode")}`
   await $`chmod 755 ${path.join(binDir, "slopcode")}`
+  if (fs.existsSync(nvim)) {
+    await fs.promises.cp(nvim, path.join(libDir, "neovim"), { recursive: true, force: true })
+  }
 
   await Bun.write(
     path.join(controlDir, "control"),
@@ -252,8 +782,8 @@ const debBuild = async (src: string, arch: "amd64" | "arm64") => {
       `Architecture: ${arch}`,
       "Maintainer: SlopCode Team <support@slopcode.dev>",
       "Depends: libc6, libstdc++6",
-      "Description: The open source AI coding agent",
-      " SlopCode is an open source AI coding agent focused on terminal workflows.",
+      "Description: The open source AI slopcoding agent",
+      " SlopCode is an open source AI slopcoding agent focused on terminal workflows.",
       "",
     ].join("\n"),
   )
@@ -270,18 +800,19 @@ if (Script.release) {
   }
 
   for (const key of Object.keys(binaries)) {
+    if (key.includes("android")) {
+      await $`tar -czf ../${key}.tar.gz *`.cwd(`dist/${key}`)
+      continue
+    }
     if (key.includes("linux")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
       continue
     }
 
-    if (key === winget) {
-      await $`zip -r ../../${key}.zip slopcode.exe`.cwd(`dist/${key}/bin`)
-      continue
-    }
-
     await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
   }
+
+  await $`tar -czf slopcode-cli-dist.tar.gz ${Object.keys(binaries)}`.cwd("dist")
 
   if (process.platform === "linux") {
     const dpkgDeb = (await $`bash -lc "command -v dpkg-deb"`.quiet().nothrow().text()).trim()

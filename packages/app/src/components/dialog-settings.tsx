@@ -4,14 +4,26 @@ import { Tabs } from "@slopcode-ai/ui/tabs"
 import { Icon } from "@slopcode-ai/ui/icon"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
+import { useDialog } from "@slopcode-ai/ui/context/dialog"
 import { SettingsGeneral } from "./settings-general"
 import { SettingsKeybinds } from "./settings-keybinds"
 import { SettingsProviders } from "./settings-providers"
 import { SettingsModels } from "./settings-models"
+import { SettingsPermissions } from "./settings-permissions"
+import { SettingsAgents } from "./settings-agents"
+import { SettingsCommands } from "./settings-commands"
+import { SettingsMcp } from "./settings-mcp"
+import { SettingsArchive } from "./settings-archive"
+import { DialogChangelog } from "@/components/dialog-changelog"
 
 export const DialogSettings: Component = () => {
   const language = useLanguage()
   const platform = usePlatform()
+  const dialog = useDialog()
+
+  function handleShowChangelog() {
+    dialog.show(() => <DialogChangelog />)
+  }
 
   return (
     <Dialog size="x-large" transition>
@@ -45,6 +57,32 @@ export const DialogSettings: Component = () => {
                       <Icon name="models" />
                       {language.t("settings.models.title")}
                     </Tabs.Trigger>
+                    <Tabs.Trigger value="permissions">
+                      <Icon name="settings-gear" />
+                      {language.t("settings.permissions.title")}
+                    </Tabs.Trigger>
+                    <Tabs.Trigger value="agents">
+                      <Icon name="brain" />
+                      {language.t("settings.agents.title")}
+                    </Tabs.Trigger>
+                    <Tabs.Trigger value="commands">
+                      <Icon name="settings-gear" />
+                      {language.t("settings.commands.title")}
+                    </Tabs.Trigger>
+                    <Tabs.Trigger value="mcp">
+                      <Icon name="providers" />
+                      {language.t("settings.mcp.title")}
+                    </Tabs.Trigger>
+                  </div>
+                </div>
+
+                <div class="flex flex-col gap-1.5">
+                  <Tabs.SectionTitle>{language.t("settings.section.data")}</Tabs.SectionTitle>
+                  <div class="flex flex-col gap-1.5 w-full">
+                    <Tabs.Trigger value="archive">
+                      <Icon name="archive" />
+                      {language.t("settings.archive.title")}
+                    </Tabs.Trigger>
                   </div>
                 </div>
               </div>
@@ -52,6 +90,12 @@ export const DialogSettings: Component = () => {
             <div class="flex flex-col gap-1 pl-1 py-1 text-12-medium text-text-weak">
               <span>{language.t("app.name.desktop")}</span>
               <span class="text-11-regular">v{platform.version}</span>
+              <button
+                class="text-11-regular text-text-weak hover:text-text-base self-start"
+                onClick={handleShowChangelog}
+              >
+                Changelog
+              </button>
             </div>
           </div>
         </Tabs.List>
@@ -66,6 +110,21 @@ export const DialogSettings: Component = () => {
         </Tabs.Content>
         <Tabs.Content value="models" class="no-scrollbar">
           <SettingsModels />
+        </Tabs.Content>
+        <Tabs.Content value="permissions" class="no-scrollbar">
+          <SettingsPermissions />
+        </Tabs.Content>
+        <Tabs.Content value="agents" class="no-scrollbar">
+          <SettingsAgents />
+        </Tabs.Content>
+        <Tabs.Content value="commands" class="no-scrollbar">
+          <SettingsCommands />
+        </Tabs.Content>
+        <Tabs.Content value="mcp" class="no-scrollbar">
+          <SettingsMcp />
+        </Tabs.Content>
+        <Tabs.Content value="archive" class="no-scrollbar">
+          <SettingsArchive />
         </Tabs.Content>
       </Tabs>
     </Dialog>

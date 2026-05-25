@@ -18,6 +18,8 @@ export const SessionTable = sqliteTable(
     parent_id: text(),
     slug: text().notNull(),
     directory: text().notNull(),
+    path: text(),
+    workspace_id: text(),
     title: text().notNull(),
     version: text().notNull(),
     share_url: text(),
@@ -31,7 +33,12 @@ export const SessionTable = sqliteTable(
     time_compacting: integer(),
     time_archived: integer(),
   },
-  (table) => [index("session_project_idx").on(table.project_id), index("session_parent_idx").on(table.parent_id)],
+  (table) => [
+    index("session_project_idx").on(table.project_id),
+    index("session_parent_idx").on(table.parent_id),
+    index("session_path_idx").on(table.path),
+    index("session_workspace_idx").on(table.workspace_id),
+  ],
 )
 
 export const MessageTable = sqliteTable(

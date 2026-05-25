@@ -11,6 +11,7 @@ playground
 tmp
 dist
 ts-dist
+sdks/vscode/out
 .turbo
 **/.serena
 .serena/

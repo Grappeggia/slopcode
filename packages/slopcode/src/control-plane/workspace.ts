@@ -1,4 +1,5 @@
 import z from "zod"
+import { existsSync } from "fs"
 import { Identifier } from "@/id/id"
 import { fn } from "@/util/fn"
 import { Database, eq } from "@/storage/db"
@@ -8,7 +9,7 @@ import { GlobalBus } from "@/bus/global"
 import { Log } from "@/util/log"
 import { WorkspaceTable } from "./workspace.sql"
 import { Config } from "./config"
-import { getAdaptor } from "./adaptors"
+import { getAdaptor, listAdaptors } from "./adaptors"
 import { parseSSE } from "./sse"
 
 export namespace Workspace {
@@ -39,6 +40,23 @@ export namespace Workspace {
     })
   export type Info = z.infer<typeof Info>
 
+  export const ConnectionStatus = z.object({
+    workspaceID: Info.shape.id,
+    status: z.enum(["connected", "connecting", "disconnected", "error"]),
+  })
+  export type ConnectionStatus = z.infer<typeof ConnectionStatus>
+
+  export const WarpInput = z.object({
+    id: Info.shape.id.nullable(),
+    sessionID: Identifier.schema("session"),
+  })
+
+  export const AdaptorInfo = z.object({
+    type: z.string(),
+    name: z.string(),
+    description: z.string(),
+  })
+
   function fromRow(row: typeof WorkspaceTable.$inferSelect): Info {
     return {
       id: row.id,
@@ -58,7 +76,7 @@ export namespace Workspace {
     async (input) => {
       const id = Identifier.ascending("workspace", input.id)
 
-      const { config, init } = await getAdaptor(input.config).create(input.config, input.branch)
+      const { config, init } = await getAdaptor(input.projectID, input.config.type).create(input.config, input.branch)
 
       const info: Info = {
         id,
@@ -94,6 +112,10 @@ export namespace Workspace {
     },
   )
 
+  export function adaptors(project: Project.Info) {
+    return listAdaptors(project.id)
+  }
+
   export function list(project: Project.Info) {
     const rows = Database.use((db) =>
       db.select().from(WorkspaceTable).where(eq(WorkspaceTable.project_id, project.id)).all(),
@@ -107,11 +129,34 @@ export namespace Workspace {
     return fromRow(row)
   })
 
+  async function connection(space: Info): Promise<ConnectionStatus> {
+    if (space.config.type === "worktree" && typeof space.config.directory === "string") {
+      return {
+        workspaceID: space.id,
+        status: existsSync(space.config.directory) ? "connected" : "error",
+      }
+    }
+
+    const signal = AbortSignal.timeout(1500)
+    const response = await getAdaptor(space.projectID, space.config.type)
+      .request(space.config, "GET", "/global/health", undefined, signal)
+      .catch(() => undefined)
+
+    return {
+      workspaceID: space.id,
+      status: response?.ok ? "connected" : "error",
+    }
+  }
+
+  export async function status(project: Project.Info) {
+    return Promise.all(list(project).map(connection))
+  }
+
   export const remove = fn(Identifier.schema("workspace"), async (id) => {
     const row = Database.use((db) => db.select().from(WorkspaceTable).where(eq(WorkspaceTable.id, id)).get())
     if (row) {
       const info = fromRow(row)
-      await getAdaptor(info.config).remove(info.config)
+      await getAdaptor(info.projectID, info.config.type).remove(info.config)
       Database.use((db) => db.delete(WorkspaceTable).where(eq(WorkspaceTable.id, id)).run())
       return info
     }
@@ -120,7 +165,7 @@ export namespace Workspace {
 
   async function workspaceEventLoop(space: Info, stop: AbortSignal) {
     while (!stop.aborted) {
-      const res = await getAdaptor(space.config)
+      const res = await getAdaptor(space.projectID, space.config.type)
         .request(space.config, "GET", "/event", undefined, stop)
         .catch(() => undefined)
       if (!res || !res.ok || !res.body) {

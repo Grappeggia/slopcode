@@ -8,15 +8,15 @@ import { useLanguage } from "@/context/language"
 import { usePermission } from "@/context/permission"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
-import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
+import { sessionPermissionRequests, sessionQuestionRequest } from "./session-request-tree"
 
 export function createSessionComposerBlocked() {
   const params = useParams()
   const permission = usePermission()
   const sdk = useSDK()
   const sync = useSync()
-  const permissionRequest = createMemo(() =>
-    sessionPermissionRequest(sync.data.session, sync.data.permission, params.id, (item) => {
+  const permissionRequests = createMemo(() =>
+    sessionPermissionRequests(sync.data.session, sync.data.permission, params.id, (item) => {
       return !permission.autoResponds(item, sdk.directory)
     }),
   )
@@ -25,7 +25,7 @@ export function createSessionComposerBlocked() {
   return createMemo(() => {
     const id = params.id
     if (!id) return false
-    return !!permissionRequest() || !!questionRequest()
+    return permissionRequests().length > 0 || !!questionRequest()
   })
 }
 
@@ -41,8 +41,8 @@ export function createSessionComposerState() {
     return sessionQuestionRequest(sync.data.session, sync.data.question, params.id)
   })
 
-  const permissionRequest = createMemo((): PermissionRequest | undefined => {
-    return sessionPermissionRequest(sync.data.session, sync.data.permission, params.id, (item) => {
+  const permissionRequests = createMemo((): PermissionRequest[] => {
+    return sessionPermissionRequests(sync.data.session, sync.data.permission, params.id, (item) => {
       return !permission.autoResponds(item, sdk.directory)
     })
   })
@@ -50,7 +50,7 @@ export function createSessionComposerState() {
   const blocked = createMemo(() => {
     const id = params.id
     if (!id) return false
-    return !!permissionRequest() || !!questionRequest()
+    return permissionRequests().length > 0 || !!questionRequest()
   })
 
   const todos = createMemo((): Todo[] => {
@@ -67,25 +67,29 @@ export function createSessionComposerState() {
   })
 
   const permissionResponding = createMemo(() => {
-    const perm = permissionRequest()
-    if (!perm) return false
-    return store.responding === perm.id
+    return !!store.responding
   })
 
-  const decide = (response: "once" | "always" | "reject") => {
-    const perm = permissionRequest()
-    if (!perm) return
-    if (store.responding === perm.id) return
+  const decide = (response: "once" | "always" | "reject", permissionIDs: string[]) => {
+    const permissions = permissionRequests().filter((item) => permissionIDs.includes(item.id))
+    if (permissions.length === 0) return
+    const key = permissions.map((item) => item.id).join(":")
+    if (store.responding === key) return
 
-    setStore("responding", perm.id)
-    sdk.client.permission
-      .respond({ sessionID: perm.sessionID, permissionID: perm.id, response })
-      .catch((err: unknown) => {
-        const description = err instanceof Error ? err.message : String(err)
+    setStore("responding", key)
+    Promise.allSettled(
+      permissions.map((item) =>
+        sdk.client.permission.respond({ sessionID: item.sessionID, permissionID: item.id, response }),
+      ),
+    )
+      .then((result) => {
+        const error = result.find((item) => item.status === "rejected")
+        if (!error || error.status !== "rejected") return
+        const description = error.reason instanceof Error ? error.reason.message : String(error.reason)
         showToast({ title: language.t("common.requestFailed"), description })
       })
       .finally(() => {
-        setStore("responding", (id) => (id === perm.id ? undefined : id))
+        setStore("responding", (id) => (id === key ? undefined : id))
       })
   }
 
@@ -159,7 +163,7 @@ export function createSessionComposerState() {
   return {
     blocked,
     questionRequest,
-    permissionRequest,
+    permissionRequests,
     permissionResponding,
     decide,
     todos,

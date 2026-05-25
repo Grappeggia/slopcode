@@ -1,0 +1,72 @@
+import { d as createVNode, F as Fragment, _ as __astro_tag_component__ } from "./astro/server_CGASYgNY.mjs"
+
+const frontmatter = {
+  title: "Intro",
+  description: "Quick setup for your first SlopCode session.",
+}
+function getHeadings() {
+  return [
+    {
+      depth: 2,
+      slug: "install",
+      text: "Install",
+    },
+    {
+      depth: 2,
+      slug: "connect",
+      text: "Connect",
+    },
+    {
+      depth: 2,
+      slug: "start",
+      text: "Start",
+    },
+    {
+      depth: 2,
+      slug: "prompt",
+      text: "Prompt",
+    },
+    {
+      depth: 2,
+      slug: "explore",
+      text: "Explore",
+    },
+  ]
+}
+function _createMdxContent(props) {
+  const { Fragment } = props.components || {}
+  if (!Fragment) _missingMdxReference("Fragment")
+  return createVNode(Fragment, {
+    "set:html":
+      '<p><a href="/">SlopCode</a> is an open source coding agent focused on terminal workflows.\nThis page gets you from install to first prompt quickly.</p>\n<hr>\n<h2 id="install"><a href="#install">Install</a></h2>\n<p>Use the install script.</p>\n<div class="expressive-code"><link rel="stylesheet" href="/_astro/ec.4c0k7.css"><script type="module" src="/_astro/ec.0vx5m.js"></script><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="bash"><code><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">curl</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-fsSL</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">https://slopcode.dev/install</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#BF3441;--1:#F97583">|</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#6F42C1;--1:#B392F0">bash</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="curl -fsSL https://slopcode.dev/install | bash"><div></div></button></div></figure></div>\n<p>Prefer a package manager? Use one of these commands.</p>\n<div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="bash"><code><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">npm</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">install</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-g</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">slopcode</span></div></div><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">bun</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">install</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-g</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">slopcode</span></div></div><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">brew</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">install</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">slopcode</span></div></div><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">curl</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-fsSL</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">https://teamslop.github.io/apt-slopcode/install.sh</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#BF3441;--1:#F97583">|</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#6F42C1;--1:#B392F0">sudo</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">bash</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="npm install -g slopcodebun install -g slopcodebrew install slopcodecurl -fsSL https://teamslop.github.io/apt-slopcode/install.sh | sudo bash"><div></div></button></div></figure></div>\n<p>SlopCode also ships through <code dir="auto">winget</code>, <code dir="auto">snap</code>, <code dir="auto">nix profile</code>, RPM (<code dir="auto">zypper</code>/<code dir="auto">dnf</code>/<code dir="auto">yum</code>), <code dir="auto">apk</code>, <code dir="auto">pkg</code>, AUR/<code dir="auto">paru</code>, MacPorts, Docker, Zed, and release binaries.</p>\n<p>See <a href="/platforms">Platforms</a> when you want exact install commands.</p>\n<p>Android/Termux on arm64/x64 uses the native npm package for CLI and server commands with Termux runtime dependencies.</p>\n<div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="bash"><code><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">pkg</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">update</span></div></div><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">pkg</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">install</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">nodejs</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">git</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">ripgrep</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">neovim</span></div></div><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">npm</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">install</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-g</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">slopcode@latest</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">--include=optional</span></div></div><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">slopcode</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">--help</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="pkg updatepkg install nodejs git ripgrep neovimnpm install -g slopcode@latest --include=optionalslopcode --help"><div></div></button></div></figure></div>\n<p>The interactive TUI still requires proot-distro until Bun for Android enables the FFI support required by OpenTUI.</p>\n<p>SlopCode can still attach a portable Termux client, but the native TUI renderer stays disabled on Android for now.</p>\n<hr>\n<h2 id="connect"><a href="#connect">Connect</a></h2>\n<p>Run <code dir="auto">/connect</code> and choose the provider you already use.\nYou can switch providers later at any time.</p>\n<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="txt"><code><div class="ec-line"><div class="code"><span style="--0:#24292e;--1:#e1e4e8">/connect</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="/connect"><div></div></button></div></figure></div>\n<hr>\n<h2 id="start"><a href="#start">Start</a></h2>\n<p>Open a project and launch SlopCode.</p>\n<div class="expressive-code"><figure class="frame is-terminal not-content"><figcaption class="header"><span class="title"></span><span class="sr-only">Terminal window</span></figcaption><pre data-language="bash"><code><div class="ec-line"><div class="code"><span style="--0:#005CC5;--1:#79B8FF">cd</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">/path/to/project</span></div></div><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">slopcode</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="cd /path/to/projectslopcode"><div></div></button></div></figure></div>\n<p>Initialize project instructions once.</p>\n<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="txt"><code><div class="ec-line"><div class="code"><span style="--0:#24292e;--1:#e1e4e8">/init</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="/init"><div></div></button></div></figure></div>\n<p>Commit the generated <code dir="auto">AGENTS.md</code> file so future sessions keep the same context.</p>\n<hr>\n<h2 id="prompt"><a href="#prompt">Prompt</a></h2>\n<p>Ask for one concrete task and include file paths when useful.\nShort, specific prompts usually give better edits.</p>\n<div class="expressive-code"><figure class="frame not-content"><figcaption class="header"></figcaption><pre data-language="txt"><code><div class="ec-line"><div class="code"><span style="--0:#24292e;--1:#e1e4e8">Add request logging to </span><mark><span style="--0:#24292e;--1:#e1e4e8">@src/api.ts</span></mark><span style="--0:#24292e;--1:#e1e4e8"> and include a unit test</span></div></div></code></pre><div class="copy"><div aria-live="polite"></div><button title="Copy to clipboard" data-copied="Copied!" data-code="Add request logging to @src/api.ts and include a unit test"><div></div></button></div></figure></div>\n<hr>\n<h2 id="explore"><a href="#explore">Explore</a></h2>\n<p>Read these next pages when you need more control.</p>\n<ul>\n<li><a href="/cli">CLI</a></li>\n<li><a href="/platforms">Platforms</a></li>\n<li><a href="/workflows">Workflows</a></li>\n<li><a href="/tui">TUI</a></li>\n<li><a href="/providers">Providers</a></li>\n<li><a href="/config">Configuration</a></li>\n<li><a href="/permissions">Permissions</a></li>\n<li><a href="/tools">Tools</a></li>\n<li><a href="/troubleshooting">Troubleshooting</a></li>\n</ul>',
+  })
+}
+function MDXContent(props = {}) {
+  const { wrapper: MDXLayout } = props.components || {}
+  return MDXLayout
+    ? createVNode(MDXLayout, {
+        ...props,
+        children: createVNode(_createMdxContent, {
+          ...props,
+        }),
+      })
+    : _createMdxContent(props)
+}
+function _missingMdxReference(id, component) {
+  throw new Error(
+    "Expected " + "component" + " `" + id + "` to be defined: you likely forgot to import, pass, or provide it.",
+  )
+}
+const url = "src/content/docs/index.mdx"
+const file = "/home/marcos/Disk-Combined-5.5TB/Projects/Personal/slopcode/packages/web/src/content/docs/index.mdx"
+const Content = (props = {}) =>
+  MDXContent({
+    ...props,
+    components: { Fragment: Fragment, ...props.components },
+  })
+Content[Symbol.for("mdx-component")] = true
+Content[Symbol.for("astro.needsHeadRendering")] = !Boolean(frontmatter.layout)
+Content.moduleId = "/home/marcos/Disk-Combined-5.5TB/Projects/Personal/slopcode/packages/web/src/content/docs/index.mdx"
+__astro_tag_component__(Content, "astro:jsx")
+
+export { Content, Content as default, file, frontmatter, getHeadings, url }

@@ -43,6 +43,11 @@ export namespace PermissionNext {
   })
   export type Ruleset = z.infer<typeof Ruleset>
 
+  export const Kind = z.enum(["blocking", "forecast"]).meta({
+    ref: "PermissionKind",
+  })
+  export type Kind = z.infer<typeof Kind>
+
   export function fromConfig(permission: Config.Permission) {
     const ruleset: Ruleset = []
     for (const [key, value] of Object.entries(permission)) {
@@ -73,6 +78,8 @@ export namespace PermissionNext {
       patterns: z.string().array(),
       metadata: z.record(z.string(), z.any()),
       always: z.string().array(),
+      kind: Kind.optional(),
+      reason: z.string().optional(),
       tool: z
         .object({
           messageID: z.string(),
@@ -86,6 +93,15 @@ export namespace PermissionNext {
 
   export type Request = z.infer<typeof Request>
 
+  export const Candidate = z.object({
+    permission: z.string(),
+    patterns: z.string().array(),
+    always: z.string().array().optional(),
+    metadata: z.record(z.string(), z.any()).optional(),
+    reason: z.string().optional(),
+  })
+  export type Candidate = z.infer<typeof Candidate>
+
   export const Reply = z.enum(["once", "always", "reject"])
   export type Reply = z.infer<typeof Reply>
 
@@ -95,18 +111,19 @@ export namespace PermissionNext {
   })
 
   export const Event = {
-    Asked: BusEvent.define("permission.asked", Request),
+    Asked: BusEvent.define("permission.asked", Request.extend({ viewID: z.string().optional() })),
     Replied: BusEvent.define(
       "permission.replied",
       z.object({
         sessionID: z.string(),
         requestID: z.string(),
         reply: Reply,
+        viewID: z.string().optional(),
       }),
     ),
   }
 
-  const state = Instance.state(() => {
+  const state = Instance.sharedState(() => {
     const projectID = Instance.project.id
     const row = Database.use((db) =>
       db.select().from(PermissionTable).where(eq(PermissionTable.project_id, projectID)).get(),
@@ -121,12 +138,104 @@ export namespace PermissionNext {
         reject: (e: any) => void
       }
     > = {}
+    const forecast: Record<string, Request[]> = {}
+    const granted: Array<{
+      sessionID: string
+      permission: string
+      pattern: string
+    }> = []
 
     return {
       pending,
+      forecast,
+      granted,
       approved: stored,
     }
   })
+
+  function dedupe(ruleset: Ruleset): Ruleset {
+    const seen = new Set<string>()
+    return ruleset.filter((rule) => {
+      const key = JSON.stringify([rule.permission, rule.pattern, rule.action])
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }
+
+  function save(ruleset: Ruleset) {
+    const data = dedupe(ruleset)
+    const now = Date.now()
+    Database.use((db) =>
+      db
+        .insert(PermissionTable)
+        .values({ project_id: Instance.project.id, data, time_created: now, time_updated: now })
+        .onConflictDoUpdate({ target: PermissionTable.project_id, set: { data, time_updated: now } })
+        .run(),
+    )
+    return data
+  }
+
+  function resolve(permission: string, pattern: string, ruleset: Ruleset, approved: Ruleset) {
+    const rule = evaluate(permission, pattern, ruleset)
+    if (rule.action !== "ask") return rule
+    const stored = evaluate(permission, pattern, approved)
+    if (stored.action === "allow") return stored
+    return rule
+  }
+
+  export async function listApproved() {
+    return (await state()).approved
+  }
+
+  export async function removeApproved(input: { permission: string; pattern: string; action?: Action }) {
+    const s = await state()
+    const next = s.approved.filter(
+      (rule) =>
+        rule.permission !== input.permission ||
+        rule.pattern !== input.pattern ||
+        (input.action !== undefined && rule.action !== input.action),
+    )
+    const removed = s.approved.length - next.length
+    if (removed === 0) return 0
+    s.approved = save(next)
+    return removed
+  }
+
+  export async function clearApproved() {
+    const s = await state()
+    const removed = s.approved.length
+    if (removed === 0) return 0
+    s.approved = save([])
+    return removed
+  }
+
+  function consume(
+    granted: Array<{
+      sessionID: string
+      permission: string
+      pattern: string
+    }>,
+    sessionID: string,
+    permission: string,
+    patterns: string[],
+  ) {
+    const match = patterns.map((pattern) =>
+      granted.findIndex(
+        (item) =>
+          item.sessionID === sessionID &&
+          Wildcard.match(permission, item.permission) &&
+          Wildcard.match(pattern, item.pattern),
+      ),
+    )
+    if (match.some((item) => item === -1)) return false
+    Array.from(new Set(match))
+      .toSorted((a, b) => b - a)
+      .forEach((item) => {
+        granted.splice(item, 1)
+      })
+    return true
+  }
 
   export const ask = fn(
     Request.partial({ id: true }).extend({
@@ -135,28 +244,112 @@ export namespace PermissionNext {
     async (input) => {
       const s = await state()
       const { ruleset, ...request } = input
+      const patterns = [] as string[]
       for (const pattern of request.patterns ?? []) {
-        const rule = evaluate(request.permission, pattern, ruleset, s.approved)
+        const rule = resolve(request.permission, pattern, ruleset, s.approved)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny")
           throw new DeniedError(ruleset.filter((r) => Wildcard.match(request.permission, r.permission)))
-        if (rule.action === "ask") {
-          const id = input.id ?? Identifier.ascending("permission")
-          return new Promise<void>((resolve, reject) => {
-            const info: Request = {
-              id,
-              ...request,
-            }
-            s.pending[id] = {
-              info,
+        if (rule.action === "ask") patterns.push(pattern)
+      }
+      if (patterns.length === 0) return
+      if (consume(s.granted, request.sessionID, request.permission, patterns)) return
+      const id = input.id ?? Identifier.ascending("permission")
+      return new Promise<void>((resolve, reject) => {
+        const info: Request = {
+          id,
+          ...request,
+          patterns,
+          kind: request.kind ?? "blocking",
+        }
+        s.pending[id] = {
+          info,
+          resolve,
+          reject,
+        }
+        Bus.publish(Event.Asked, { ...info, viewID: Instance.viewID })
+      })
+    },
+  )
+
+  export const forecast = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+      ruleset: Ruleset,
+      requests: Candidate.array(),
+    }),
+    async (input) => {
+      const s = await state()
+      const list = s.forecast[input.sessionID] ?? []
+      const next = input.requests.flatMap((item) => {
+        const patterns = item.patterns.filter(
+          (pattern) => resolve(item.permission, pattern, input.ruleset, s.approved).action === "ask",
+        )
+        if (patterns.length === 0) return []
+        const always = (item.always ?? patterns).filter((pattern, index, array) => array.indexOf(pattern) === index)
+        return [
+          {
+            id: Identifier.ascending("permission"),
+            sessionID: input.sessionID,
+            permission: item.permission,
+            patterns,
+            always,
+            metadata: item.metadata ?? {},
+            kind: "forecast" as const,
+            reason: item.reason,
+          } as Request,
+        ]
+      })
+      for (const item of next) {
+        const key = JSON.stringify([item.permission, item.patterns, item.always, item.reason])
+        const index = list.findIndex(
+          (existing) =>
+            JSON.stringify([existing.permission, existing.patterns, existing.always, existing.reason]) === key,
+        )
+        if (index === -1) {
+          list.push(item)
+          continue
+        }
+        list[index] = {
+          ...item,
+          id: list[index].id,
+        }
+      }
+      if (list.length === 0) {
+        delete s.forecast[input.sessionID]
+        return [] as Request[]
+      }
+      s.forecast[input.sessionID] = list
+      return list
+    },
+  )
+
+  export const review = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+      tool: Request.shape.tool.optional(),
+    }),
+    async (input) => {
+      const s = await state()
+      const list = s.forecast[input.sessionID] ?? []
+      if (list.length === 0) return false
+      delete s.forecast[input.sessionID]
+      await Promise.all(
+        list.map((info) =>
+          new Promise<void>((resolve, reject) => {
+            s.pending[info.id] = {
+              info: {
+                ...info,
+                tool: input.tool,
+              },
               resolve,
               reject,
             }
-            Bus.publish(Event.Asked, info)
-          })
-        }
-        if (rule.action === "allow") continue
-      }
+            Bus.publish(Event.Asked, { ...info, tool: input.tool, viewID: Instance.viewID })
+          }).catch(() => undefined),
+        ),
+      )
+      return true
     },
   )
 
@@ -165,18 +358,25 @@ export namespace PermissionNext {
       requestID: Identifier.schema("permission"),
       reply: Reply,
       message: z.string().optional(),
+      sessionID: Identifier.schema("session").optional(),
     }),
     async (input) => {
       const s = await state()
       const existing = s.pending[input.requestID]
-      if (!existing) return
+      if (!existing) return false
+      if (input.sessionID && existing.info.sessionID !== input.sessionID) return false
       delete s.pending[input.requestID]
       Bus.publish(Event.Replied, {
         sessionID: existing.info.sessionID,
         requestID: existing.info.id,
         reply: input.reply,
+        viewID: Instance.viewID,
       })
       if (input.reply === "reject") {
+        if (existing.info.kind === "forecast") {
+          existing.reject(input.message ? new CorrectedError(input.message) : new RejectedError())
+          return true
+        }
         existing.reject(input.message ? new CorrectedError(input.message) : new RejectedError())
         // Reject all other pending permissions for this session
         const sessionID = existing.info.sessionID
@@ -187,18 +387,28 @@ export namespace PermissionNext {
               sessionID: pending.info.sessionID,
               requestID: pending.info.id,
               reply: "reject",
+              viewID: Instance.viewID,
             })
             pending.reject(new RejectedError())
           }
         }
-        return
+        return true
       }
       if (input.reply === "once") {
+        if (existing.info.kind === "forecast") {
+          existing.info.patterns.forEach((pattern) => {
+            s.granted.push({
+              sessionID: existing.info.sessionID,
+              permission: existing.info.permission,
+              pattern,
+            })
+          })
+        }
         existing.resolve()
-        return
+        return true
       }
       if (input.reply === "always") {
-        for (const pattern of existing.info.always) {
+        for (const pattern of existing.info.always.length > 0 ? existing.info.always : existing.info.patterns) {
           s.approved.push({
             permission: existing.info.permission,
             pattern,
@@ -206,6 +416,7 @@ export namespace PermissionNext {
           })
         }
 
+        s.approved = save(s.approved)
         existing.resolve()
 
         const sessionID = existing.info.sessionID
@@ -220,16 +431,14 @@ export namespace PermissionNext {
             sessionID: pending.info.sessionID,
             requestID: pending.info.id,
             reply: "always",
+            viewID: Instance.viewID,
           })
           pending.resolve()
         }
 
-        // TODO: we don't save the permission ruleset to disk yet until there's
-        // UI to manage it
-        // db().insert(PermissionTable).values({ projectID: Instance.project.id, data: s.approved })
-        //   .onConflictDoUpdate({ target: PermissionTable.projectID, set: { data: s.approved } }).run()
-        return
+        return true
       }
+      return true
     },
   )
 
@@ -279,8 +488,25 @@ export namespace PermissionNext {
     }
   }
 
-  export async function list() {
+  export async function cancel(sessionID: string, reason: unknown = new DOMException("Aborted", "AbortError")) {
     const s = await state()
-    return Object.values(s.pending).map((x) => x.info)
+    for (const [id, pending] of Object.entries(s.pending)) {
+      if (pending.info.sessionID !== sessionID) continue
+      delete s.pending[id]
+      Bus.publish(Event.Replied, {
+        sessionID: pending.info.sessionID,
+        requestID: pending.info.id,
+        reply: "reject",
+        viewID: Instance.viewID,
+      })
+      pending.reject(reason)
+    }
+  }
+
+  export async function list(input?: { sessionID?: string }) {
+    const s = await state()
+    const list = Object.values(s.pending).map((x) => x.info)
+    if (!input?.sessionID) return list
+    return list.filter((item) => item.sessionID === input.sessionID)
   }
 }

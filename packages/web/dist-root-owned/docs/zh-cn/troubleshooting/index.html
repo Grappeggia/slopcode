@@ -1,0 +1,1518 @@
+<!doctype html>
+<html lang="en" dir="ltr" data-theme="dark" data-has-toc data-has-sidebar class="astro-4jvd4zkm">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>故障排除 | SlopCode</title>
+    <link rel="canonical" href="https://dev.slopcode.ai/docs/zh-cn/troubleshooting/" />
+    <link rel="sitemap" href="/docs/sitemap-index.xml" />
+    <link rel="icon" href="/favicon-v3.ico" sizes="32x32" />
+    <link rel="icon" type="image/png" href="/favicon-96x96-v3.png" sizes="96x96" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon-v3.png" sizes="180x180" />
+    <link rel="shortcut icon" href="/docs/favicon-v3.svg" type="image/svg+xml" />
+    <meta name="generator" content="Astro v5.7.13" />
+    <meta name="generator" content="Starlight v0.34.3" />
+    <meta property="og:title" content="故障排除" />
+    <meta property="og:type" content="article" />
+    <meta property="og:url" content="https://dev.slopcode.ai/docs/zh-cn/troubleshooting/" />
+    <meta property="og:locale" content="en" />
+    <meta property="og:description" content="常见问题及其解决方法。" />
+    <meta property="og:site_name" content="SlopCode" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="description" content="常见问题及其解决方法。" />
+    <script>
+      window.StarlightThemeProvider = (() => {
+        const storedTheme = typeof localStorage !== "undefined" && localStorage.getItem("starlight-theme")
+        const theme = storedTheme || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+        document.documentElement.dataset.theme = theme === "light" ? "light" : "dark"
+        return {
+          updatePickers(theme = storedTheme || "auto") {
+            document.querySelectorAll("starlight-theme-select").forEach((picker) => {
+              const select = picker.querySelector("select")
+              if (select) select.value = theme
+              /** @type {HTMLTemplateElement | null} */
+              const tmpl = document.querySelector(`#theme-icons`)
+              const newIcon = tmpl && tmpl.content.querySelector("." + theme)
+              if (newIcon) {
+                const oldIcon = picker.querySelector("svg.label-icon")
+                if (oldIcon) {
+                  oldIcon.replaceChildren(...newIcon.cloneNode(true).childNodes)
+                }
+              }
+            })
+          },
+        }
+      })()
+    </script>
+    <template id="theme-icons"
+      ><svg
+        aria-hidden="true"
+        class="light astro-pgergp6q"
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        style="--sl-icon-size: 1em"
+      >
+        <path
+          d="M5 12a1 1 0 0 0-1-1H3a1 1 0 0 0 0 2h1a1 1 0 0 0 1-1Zm.64 5-.71.71a1 1 0 0 0 0 1.41 1 1 0 0 0 1.41 0l.71-.71A1 1 0 0 0 5.64 17ZM12 5a1 1 0 0 0 1-1V3a1 1 0 0 0-2 0v1a1 1 0 0 0 1 1Zm5.66 2.34a1 1 0 0 0 .7-.29l.71-.71a1 1 0 1 0-1.41-1.41l-.66.71a1 1 0 0 0 0 1.41 1 1 0 0 0 .66.29Zm-12-.29a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.71-.71a1.004 1.004 0 1 0-1.43 1.41l.73.71ZM21 11h-1a1 1 0 0 0 0 2h1a1 1 0 0 0 0-2Zm-2.64 6A1 1 0 0 0 17 18.36l.71.71a1 1 0 0 0 1.41 0 1 1 0 0 0 0-1.41l-.76-.66ZM12 6.5a5.5 5.5 0 1 0 5.5 5.5A5.51 5.51 0 0 0 12 6.5Zm0 9a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Zm0 3.5a1 1 0 0 0-1 1v1a1 1 0 0 0 2 0v-1a1 1 0 0 0-1-1Z"
+        /></svg
+      ><svg
+        aria-hidden="true"
+        class="dark astro-pgergp6q"
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        style="--sl-icon-size: 1em"
+      >
+        <path
+          d="M21.64 13a1 1 0 0 0-1.05-.14 8.049 8.049 0 0 1-3.37.73 8.15 8.15 0 0 1-8.14-8.1 8.59 8.59 0 0 1 .25-2A1 1 0 0 0 8 2.36a10.14 10.14 0 1 0 14 11.69 1 1 0 0 0-.36-1.05Zm-9.5 6.69A8.14 8.14 0 0 1 7.08 5.22v.27a10.15 10.15 0 0 0 10.14 10.14 9.784 9.784 0 0 0 2.1-.22 8.11 8.11 0 0 1-7.18 4.32v-.04Z"
+        /></svg
+      ><svg
+        aria-hidden="true"
+        class="auto astro-pgergp6q"
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        style="--sl-icon-size: 1em"
+      >
+        <path
+          d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"
+        /></svg
+    ></template>
+    <link rel="stylesheet" href="/docs/_astro/print.DNXP8c50.css" media="print" />
+    <link rel="stylesheet" href="/docs/_astro/_id_.DQYfqPeF.css" />
+    <style>
+      @layer starlight.components {
+        :root {
+          --sl-badge-default-border: var(--sl-color-accent);
+          --sl-badge-default-bg: var(--sl-color-accent-low);
+          --sl-badge-default-text: #fff;
+          --sl-badge-note-border: var(--sl-color-blue);
+          --sl-badge-note-bg: var(--sl-color-blue-low);
+          --sl-badge-note-text: #fff;
+          --sl-badge-danger-border: var(--sl-color-red);
+          --sl-badge-danger-bg: var(--sl-color-red-low);
+          --sl-badge-danger-text: #fff;
+          --sl-badge-success-border: var(--sl-color-green);
+          --sl-badge-success-bg: var(--sl-color-green-low);
+          --sl-badge-success-text: #fff;
+          --sl-badge-caution-border: var(--sl-color-orange);
+          --sl-badge-caution-bg: var(--sl-color-orange-low);
+          --sl-badge-caution-text: #fff;
+          --sl-badge-tip-border: var(--sl-color-purple);
+          --sl-badge-tip-bg: var(--sl-color-purple-low);
+          --sl-badge-tip-text: #fff;
+        }
+        [data-theme="light"]:root {
+          --sl-badge-default-bg: var(--sl-color-accent-high);
+          --sl-badge-note-bg: var(--sl-color-blue-high);
+          --sl-badge-danger-bg: var(--sl-color-red-high);
+          --sl-badge-success-bg: var(--sl-color-green-high);
+          --sl-badge-caution-bg: var(--sl-color-orange-high);
+          --sl-badge-tip-bg: var(--sl-color-purple-high);
+        }
+        .sl-badge:where(.astro-7chlrfwd) {
+          display: inline-block;
+          border: 1px solid var(--sl-color-border-badge);
+          border-radius: 0.25rem;
+          font-family: var(--sl-font-system-mono);
+          line-height: normal;
+          color: var(--sl-color-text-badge);
+          background-color: var(--sl-color-bg-badge);
+          overflow-wrap: anywhere;
+        }
+        .sidebar-content .sl-badge:where(.astro-7chlrfwd) {
+          line-height: 1;
+          font-size: var(--sl-text-xs);
+          padding: 0.125rem 0.375rem;
+        }
+        .sidebar-content a[aria-current="page"] > .sl-badge:where(.astro-7chlrfwd) {
+          --sl-color-bg-badge: transparent;
+          --sl-color-border-badge: currentColor;
+          color: inherit;
+        }
+        .default:where(.astro-7chlrfwd) {
+          --sl-color-bg-badge: var(--sl-badge-default-bg);
+          --sl-color-border-badge: var(--sl-badge-default-border);
+          --sl-color-text-badge: var(--sl-badge-default-text);
+        }
+        .note:where(.astro-7chlrfwd) {
+          --sl-color-bg-badge: var(--sl-badge-note-bg);
+          --sl-color-border-badge: var(--sl-badge-note-border);
+          --sl-color-text-badge: var(--sl-badge-note-text);
+        }
+        .danger:where(.astro-7chlrfwd) {
+          --sl-color-bg-badge: var(--sl-badge-danger-bg);
+          --sl-color-border-badge: var(--sl-badge-danger-border);
+          --sl-color-text-badge: var(--sl-badge-danger-text);
+        }
+        .success:where(.astro-7chlrfwd) {
+          --sl-color-bg-badge: var(--sl-badge-success-bg);
+          --sl-color-border-badge: var(--sl-badge-success-border);
+          --sl-color-text-badge: var(--sl-badge-success-text);
+        }
+        .tip:where(.astro-7chlrfwd) {
+          --sl-color-bg-badge: var(--sl-badge-tip-bg);
+          --sl-color-border-badge: var(--sl-badge-tip-border);
+          --sl-color-text-badge: var(--sl-badge-tip-text);
+        }
+        .caution:where(.astro-7chlrfwd) {
+          --sl-color-bg-badge: var(--sl-badge-caution-bg);
+          --sl-color-border-badge: var(--sl-badge-caution-border);
+          --sl-color-text-badge: var(--sl-badge-caution-text);
+        }
+        .small:where(.astro-7chlrfwd) {
+          font-size: var(--sl-text-xs);
+          padding: 0.125rem 0.25rem;
+        }
+        .medium:where(.astro-7chlrfwd) {
+          font-size: var(--sl-text-sm);
+          padding: 0.175rem 0.35rem;
+        }
+        .large:where(.astro-7chlrfwd) {
+          font-size: var(--sl-text-base);
+          padding: 0.225rem 0.45rem;
+        }
+        .sl-markdown-content :is(h1, h2, h3, h4, h5, h6) .sl-badge:where(.astro-7chlrfwd) {
+          vertical-align: middle;
+        }
+      }
+      @layer starlight.components {
+        svg:where(.astro-pgergp6q) {
+          color: var(--sl-icon-color);
+          font-size: var(--sl-icon-size, 1em);
+          width: 1em;
+          height: 1em;
+        }
+      }
+      @layer starlight.components {
+        starlight-tabs:where(.astro-5nhz6dz6) {
+          display: block;
+        }
+        .tablist-wrapper:where(.astro-5nhz6dz6) {
+          overflow-x: auto;
+        }
+        :where(.astro-5nhz6dz6)[role="tablist"] {
+          display: flex;
+          list-style: none;
+          border-bottom: 2px solid var(--sl-color-gray-5);
+          padding: 0;
+        }
+        .tab:where(.astro-5nhz6dz6) {
+          margin-bottom: -2px;
+        }
+        .tab:where(.astro-5nhz6dz6) > :where(.astro-5nhz6dz6)[role="tab"] {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0 1.25rem;
+          text-decoration: none;
+          border-bottom: 2px solid var(--sl-color-gray-5);
+          color: var(--sl-color-gray-3);
+          outline-offset: var(--sl-outline-offset-inside);
+          overflow-wrap: initial;
+        }
+        .tab:where(.astro-5nhz6dz6) :where(.astro-5nhz6dz6)[role="tab"][aria-selected="true"] {
+          color: var(--sl-color-white);
+          border-color: var(--sl-color-text-accent);
+          font-weight: 600;
+        }
+        .tablist-wrapper:where(.astro-5nhz6dz6) ~ [role="tabpanel"] {
+          margin-top: 1rem;
+        }
+      }
+      @layer starlight.components {
+        .sl-steps {
+          --bullet-size: calc(var(--sl-line-height) * 1rem);
+          --bullet-margin: 0.375rem;
+          list-style: none;
+          counter-reset: steps-counter var(--sl-steps-start, 0);
+          padding-inline-start: 0;
+        }
+        .sl-steps > li {
+          counter-increment: steps-counter;
+          position: relative;
+          padding-inline-start: calc(var(--bullet-size) + 1rem);
+          padding-bottom: 1px;
+          min-height: calc(var(--bullet-size) + var(--bullet-margin));
+        }
+        .sl-steps > li + li {
+          margin-top: 0;
+        }
+        .sl-steps > li:before {
+          content: counter(steps-counter);
+          position: absolute;
+          top: 0;
+          inset-inline-start: 0;
+          width: var(--bullet-size);
+          height: var(--bullet-size);
+          line-height: var(--bullet-size);
+          font-size: var(--sl-text-xs);
+          font-weight: 600;
+          text-align: center;
+          color: var(--sl-color-white);
+          background-color: var(--sl-color-gray-6);
+          border-radius: 99rem;
+          box-shadow: inset 0 0 0 1px var(--sl-color-gray-5);
+        }
+        .sl-steps > li:after {
+          --guide-width: 1px;
+          content: "";
+          position: absolute;
+          top: calc(var(--bullet-size) + var(--bullet-margin));
+          bottom: var(--bullet-margin);
+          inset-inline-start: calc((var(--bullet-size) - var(--guide-width)) / 2);
+          width: var(--guide-width);
+          background-color: var(--sl-color-hairline-light);
+        }
+      }
+      @layer starlight.content {
+        .sl-steps > li > :first-child {
+          --lh: calc(1em * var(--sl-line-height));
+          --shift-y: calc(0.5 * (var(--bullet-size) - var(--lh)));
+          transform: translateY(var(--shift-y));
+          margin-bottom: var(--shift-y);
+        }
+        .sl-steps > li > :first-child:where(h1, h2, h3, h4, h5, h6) {
+          --lh: calc(1em * var(--sl-line-height-headings));
+        }
+        @supports (--prop: 1lh) {
+          .sl-steps > li > :first-child {
+            --lh: 1lh;
+          }
+        }
+      }
+      @layer starlight.components {
+        .sl-link-button:where(.astro-am3vhdfa) {
+          align-items: center;
+          border: 1px solid transparent;
+          border-radius: 999rem;
+          display: inline-flex;
+          font-size: var(--sl-text-sm);
+          gap: 0.5em;
+          line-height: 1.1875;
+          outline-offset: 0.25rem;
+          padding: 0.4375rem 1.125rem;
+          text-decoration: none;
+        }
+        .sl-link-button:where(.astro-am3vhdfa).primary {
+          background: var(--sl-color-text-accent);
+          border-color: var(--sl-color-text-accent);
+          color: var(--sl-color-black);
+        }
+        .sl-link-button:where(.astro-am3vhdfa).primary:hover {
+          color: var(--sl-color-black);
+        }
+        .sl-link-button:where(.astro-am3vhdfa).secondary {
+          border-color: inherit;
+          color: var(--sl-color-white);
+        }
+        .sl-link-button:where(.astro-am3vhdfa).minimal {
+          color: var(--sl-color-white);
+          padding-inline: 0;
+        }
+        .sl-link-button:where(.astro-am3vhdfa) svg {
+          flex-shrink: 0;
+        }
+        @media (min-width: 50rem) {
+          .sl-link-button:where(.astro-am3vhdfa) {
+            font-size: var(--sl-text-base);
+            padding: 0.9375rem 1.25rem;
+          }
+        }
+        .sl-markdown-content .sl-link-button:where(.astro-am3vhdfa) {
+          margin-inline-end: 1rem;
+        }
+        .sl-markdown-content .sl-link-button:where(.astro-am3vhdfa):not(:where(p *)) {
+          margin-block: 1rem;
+        }
+      }
+    </style>
+    <script type="module" src="/docs/_astro/page.7qqag-5g.js"></script>
+  </head>
+  <body class="astro-4jvd4zkm">
+    <a href="#_top" class="astro-5v3azq4y">Skip to content</a>
+    <div class="page sl-flex astro-zd7qw23m">
+      <header class="header astro-zd7qw23m">
+        <div class="header astro-4x5qxlea">
+          <div class="title-wrapper sl-flex astro-4x5qxlea">
+            <a href="/docs/" class="site-title sl-flex astro-772bztwy">
+              <img
+                class="light:sl-hidden print:hidden astro-772bztwy"
+                alt
+                src="/docs/_astro/logo-dark.DKnNIUK_.svg"
+                width="234"
+                height="42"
+              />
+              <img
+                class="dark:sl-hidden print:block astro-772bztwy"
+                alt
+                src="/docs/_astro/logo-light.JW7yDsY9.svg"
+                width="234"
+                height="42"
+              />
+              <span class="sr-only astro-772bztwy" translate="no"> SlopCode </span>
+            </a>
+          </div>
+          <div class="sl-flex print:hidden astro-4x5qxlea">
+            <site-search
+              class="astro-4x5qxlea astro-jeiqmncs"
+              data-translations="{&#34;placeholder&#34;:&#34;Search&#34;}"
+            >
+              <button data-open-modal disabled aria-label="Search" aria-keyshortcuts="Control+K" class="astro-jeiqmncs">
+                <svg
+                  aria-hidden="true"
+                  class="astro-jeiqmncs astro-pgergp6q"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  style="--sl-icon-size: 1em"
+                >
+                  <path
+                    d="M21.71 20.29 18 16.61A9 9 0 1 0 16.61 18l3.68 3.68a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.39ZM11 18a7 7 0 1 1 0-14 7 7 0 0 1 0 14Z"
+                  />
+                </svg>
+                <span class="sl-hidden md:sl-block astro-jeiqmncs" aria-hidden="true">Search</span>
+                <kbd class="sl-hidden md:sl-flex astro-jeiqmncs" style="display: none">
+                  <kbd class="astro-jeiqmncs">Ctrl</kbd><kbd class="astro-jeiqmncs">K</kbd>
+                </kbd>
+              </button>
+              <dialog style="padding: 0" aria-label="Search" class="astro-jeiqmncs">
+                <div class="dialog-frame sl-flex astro-jeiqmncs">
+                  <button data-close-modal class="sl-flex md:sl-hidden astro-jeiqmncs">Cancel</button>
+                  <div class="search-container astro-jeiqmncs">
+                    <div id="starlight__search" class="astro-jeiqmncs"></div>
+                  </div>
+                </div>
+              </dialog>
+            </site-search>
+            <script>
+              ;(() => {
+                const openBtn = document.querySelector("button[data-open-modal]")
+                const shortcut = openBtn?.querySelector("kbd")
+                if (!openBtn || !(shortcut instanceof HTMLElement)) return
+                const platformKey = shortcut.querySelector("kbd")
+                if (platformKey && /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform)) {
+                  platformKey.textContent = "⌘"
+                  openBtn.setAttribute("aria-keyshortcuts", "Meta+K")
+                }
+                shortcut.style.display = ""
+              })()
+            </script>
+            <script type="module" src="/docs/_astro/Search.astro_astro_type_script_index_0_lang.Be8X6flO.js"></script>
+          </div>
+          <div class="sl-hidden md:sl-flex print:hidden right-group astro-4x5qxlea">
+            <div class="sl-flex social-icons astro-4x5qxlea">
+              <a href="http://github.com/teamslop/slopcode" rel="me" class="sl-flex astro-z256xgsb"
+                ><span class="sr-only astro-z256xgsb">GitHub</span
+                ><svg
+                  aria-hidden="true"
+                  class="astro-z256xgsb astro-pgergp6q"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  style="--sl-icon-size: 1em"
+                >
+                  <path
+                    d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"
+                  /></svg
+              ></a>
+            </div>
+            <starlight-theme-select>
+              <label style="--sl-select-width: 6.25em" class="astro-prbxhx7p">
+                <span class="sr-only astro-prbxhx7p">Select theme</span>
+                <svg
+                  aria-hidden="true"
+                  class="icon label-icon astro-prbxhx7p astro-pgergp6q"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  style="--sl-icon-size: 1em"
+                >
+                  <path
+                    d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"
+                  />
+                </svg>
+                <select value="auto" autocomplete="off" class="astro-prbxhx7p">
+                  <option value="dark" class="astro-prbxhx7p">Dark</option>
+                  <option value="light" class="astro-prbxhx7p">Light</option>
+                  <option value="auto" selected class="astro-prbxhx7p">Auto</option>
+                </select>
+                <svg
+                  aria-hidden="true"
+                  class="icon caret astro-prbxhx7p astro-pgergp6q"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  style="--sl-icon-size: 1em"
+                >
+                  <path
+                    d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"
+                  />
+                </svg>
+              </label>
+            </starlight-theme-select>
+            <script>
+              StarlightThemeProvider.updatePickers()
+            </script>
+            <script type="module">
+              const r = "starlight-theme",
+                o = (e) => (e === "auto" || e === "dark" || e === "light" ? e : "auto"),
+                c = () => o(typeof localStorage < "u" && localStorage.getItem(r))
+              function n(e) {
+                typeof localStorage < "u" && localStorage.setItem(r, e === "light" || e === "dark" ? e : "")
+              }
+              const l = () => (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+              function t(e) {
+                ;(StarlightThemeProvider.updatePickers(e),
+                  (document.documentElement.dataset.theme = e === "auto" ? l() : e),
+                  n(e))
+              }
+              matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+                c() === "auto" && t("auto")
+              })
+              class s extends HTMLElement {
+                constructor() {
+                  ;(super(),
+                    t(c()),
+                    this.querySelector("select")?.addEventListener("change", (a) => {
+                      a.currentTarget instanceof HTMLSelectElement && t(o(a.currentTarget.value))
+                    }))
+                }
+              }
+              customElements.define("starlight-theme-select", s)
+            </script>
+            <script type="module">
+              class s extends HTMLElement {
+                constructor() {
+                  super()
+                  const e = this.querySelector("select")
+                  e &&
+                    (e.addEventListener("change", (t) => {
+                      t.currentTarget instanceof HTMLSelectElement && (window.location.pathname = t.currentTarget.value)
+                    }),
+                    window.addEventListener("pageshow", (t) => {
+                      if (!t.persisted) return
+                      const n = e.querySelector("option[selected]")?.index
+                      n !== e.selectedIndex && (e.selectedIndex = n ?? 0)
+                    }))
+                }
+              }
+              customElements.define("starlight-lang-select", s)
+            </script>
+          </div>
+        </div>
+      </header>
+      <nav class="sidebar print:hidden astro-zd7qw23m" aria-label="Main">
+        <starlight-menu-button class="print:hidden astro-wdhmbx6u">
+          <button
+            aria-expanded="false"
+            aria-label="Menu"
+            aria-controls="starlight__sidebar"
+            class="sl-flex md:sl-hidden astro-wdhmbx6u"
+          >
+            <svg
+              aria-hidden="true"
+              class="open-menu astro-wdhmbx6u astro-pgergp6q"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              style="--sl-icon-size: 1em"
+            >
+              <path
+                d="M3 8h18a1 1 0 1 0 0-2H3a1 1 0 0 0 0 2Zm18 8H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Zm0-5H3a1 1 0 0 0 0 2h18a1 1 0 0 0 0-2Z"
+              />
+            </svg>
+            <svg
+              aria-hidden="true"
+              class="close-menu astro-wdhmbx6u astro-pgergp6q"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              style="--sl-icon-size: 1em"
+            >
+              <path
+                d="m13.41 12 6.3-6.29a1.004 1.004 0 1 0-1.42-1.42L12 10.59l-6.29-6.3a1.004 1.004 0 0 0-1.42 1.42l6.3 6.29-6.3 6.29a1 1 0 0 0 0 1.42.998.998 0 0 0 1.42 0l6.29-6.3 6.29 6.3a.999.999 0 0 0 1.42 0 1 1 0 0 0 0-1.42L13.41 12Z"
+              />
+            </svg>
+          </button>
+        </starlight-menu-button>
+        <script type="module">
+          class s extends HTMLElement {
+            constructor() {
+              ;(super(),
+                (this.btn = this.querySelector("button")),
+                this.btn.addEventListener("click", () => this.toggleExpanded()))
+              const t = this.closest("nav")
+              t && t.addEventListener("keyup", (e) => this.closeOnEscape(e))
+            }
+            setExpanded(t) {
+              ;(this.setAttribute("aria-expanded", String(t)),
+                document.body.toggleAttribute("data-mobile-menu-expanded", t))
+            }
+            toggleExpanded() {
+              this.setExpanded(this.getAttribute("aria-expanded") !== "true")
+            }
+            closeOnEscape(t) {
+              t.code === "Escape" && (this.setExpanded(!1), this.btn.focus())
+            }
+          }
+          customElements.define("starlight-menu-button", s)
+        </script>
+        <div id="starlight__sidebar" class="sidebar-pane astro-zd7qw23m">
+          <div class="sidebar-content sl-flex astro-zd7qw23m">
+            <sl-sidebar-state-persist data-hash="1xduv05" class="astro-fzjue7yd">
+              <script aria-hidden="true">
+                ;(() => {
+                  try {
+                    if (!matchMedia("(min-width: 50em)").matches) return
+                    /** @type {HTMLElement | null} */
+                    const target = document.querySelector("sl-sidebar-state-persist")
+                    const state = JSON.parse(sessionStorage.getItem("sl-sidebar-state") || "0")
+                    if (!target || !state || target.dataset.hash !== state.hash) return
+                    window._starlightScrollRestore = state.scroll
+                    customElements.define(
+                      "sl-sidebar-restore",
+                      class SidebarRestore extends HTMLElement {
+                        connectedCallback() {
+                          try {
+                            const idx = parseInt(this.dataset.index || "")
+                            const details = this.closest("details")
+                            if (details && typeof state.open[idx] === "boolean") details.open = state.open[idx]
+                          } catch {}
+                        }
+                      },
+                    )
+                  } catch {}
+                })()
+              </script>
+              <ul class="top-level astro-cawowe6z">
+                <li class="astro-cawowe6z">
+                  <a href="/docs/" aria-current="false" class="large astro-cawowe6z">
+                    <span class="astro-cawowe6z">Intro</span>
+                  </a>
+                </li>
+                <li class="astro-cawowe6z">
+                  <a href="/docs/cli/" aria-current="false" class="large astro-cawowe6z">
+                    <span class="astro-cawowe6z">CLI</span>
+                  </a>
+                </li>
+                <li class="astro-cawowe6z">
+                  <a href="/docs/config/" aria-current="false" class="large astro-cawowe6z">
+                    <span class="astro-cawowe6z">Config</span>
+                  </a>
+                </li>
+                <li class="astro-cawowe6z">
+                  <a href="/docs/providers/" aria-current="false" class="large astro-cawowe6z">
+                    <span class="astro-cawowe6z">Providers</span>
+                  </a>
+                </li>
+                <li class="astro-cawowe6z">
+                  <a href="/docs/tools/" aria-current="false" class="large astro-cawowe6z">
+                    <span class="astro-cawowe6z">Tools</span>
+                  </a>
+                </li>
+                <li class="astro-cawowe6z">
+                  <a href="/docs/commands/" aria-current="false" class="large astro-cawowe6z">
+                    <span class="astro-cawowe6z">Commands</span>
+                  </a>
+                </li>
+                <li class="astro-cawowe6z">
+                  <a href="/docs/agents/" aria-current="false" class="large astro-cawowe6z">
+                    <span class="astro-cawowe6z">Agents</span>
+                  </a>
+                </li>
+                <li class="astro-cawowe6z">
+                  <a href="/docs/themes/" aria-current="false" class="large astro-cawowe6z">
+                    <span class="astro-cawowe6z">Themes</span>
+                  </a>
+                </li>
+                <li class="astro-cawowe6z">
+                  <a href="/docs/troubleshooting/" aria-current="false" class="large astro-cawowe6z">
+                    <span class="astro-cawowe6z">Troubleshooting</span>
+                  </a>
+                </li>
+              </ul>
+              <script aria-hidden="true">
+                ;(() => {
+                  const scroller = document.getElementById("starlight__sidebar")
+                  if (!window._starlightScrollRestore || !scroller) return
+                  scroller.scrollTop = window._starlightScrollRestore
+                  delete window._starlightScrollRestore
+                })()
+              </script>
+            </sl-sidebar-state-persist>
+            <div class="md:sl-hidden">
+              <div class="mobile-preferences sl-flex astro-jwtgnnti">
+                <div class="social-icons astro-jwtgnnti">
+                  <a href="http://github.com/teamslop/slopcode" rel="me" class="sl-flex astro-z256xgsb"
+                    ><span class="sr-only astro-z256xgsb">GitHub</span
+                    ><svg
+                      aria-hidden="true"
+                      class="astro-z256xgsb astro-pgergp6q"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      style="--sl-icon-size: 1em"
+                    >
+                      <path
+                        d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 21.07c-3.34.72-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.09-.73.09-.73 1.2.09 1.83 1.24 1.83 1.24 1.08 1.83 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.14-.3-.54-1.52.1-3.18 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.64 1.66.24 2.88.12 3.18a4.65 4.65 0 0 1 1.23 3.22c0 4.61-2.8 5.63-5.48 5.92.42.36.81 1.1.81 2.22l-.01 3.29c0 .31.2.69.82.57A12 12 0 0 0 12 .3Z"
+                      /></svg
+                  ></a>
+                </div>
+                <starlight-theme-select>
+                  <label style="--sl-select-width: 6.25em" class="astro-prbxhx7p">
+                    <span class="sr-only astro-prbxhx7p">Select theme</span>
+                    <svg
+                      aria-hidden="true"
+                      class="icon label-icon astro-prbxhx7p astro-pgergp6q"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      style="--sl-icon-size: 1em"
+                    >
+                      <path
+                        d="M21 14h-1V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v7H3a1 1 0 0 0-1 1v2a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-2a1 1 0 0 0-1-1ZM6 7a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7H6V7Zm14 10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-1h16v1Z"
+                      />
+                    </svg>
+                    <select value="auto" autocomplete="off" class="astro-prbxhx7p">
+                      <option value="dark" class="astro-prbxhx7p">Dark</option>
+                      <option value="light" class="astro-prbxhx7p">Light</option>
+                      <option value="auto" selected class="astro-prbxhx7p">Auto</option>
+                    </select>
+                    <svg
+                      aria-hidden="true"
+                      class="icon caret astro-prbxhx7p astro-pgergp6q"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="currentColor"
+                      style="--sl-icon-size: 1em"
+                    >
+                      <path
+                        d="M17 9.17a1 1 0 0 0-1.41 0L12 12.71 8.46 9.17a1 1 0 1 0-1.41 1.42l4.24 4.24a1.002 1.002 0 0 0 1.42 0L17 10.59a1.002 1.002 0 0 0 0-1.42Z"
+                      />
+                    </svg>
+                  </label>
+                </starlight-theme-select>
+                <script>
+                  StarlightThemeProvider.updatePickers()
+                </script>
+              </div>
+            </div>
+          </div>
+        </div>
+      </nav>
+      <div class="main-frame astro-zd7qw23m">
+        <script type="module">
+          const a = document.getElementById("starlight__sidebar"),
+            n = a?.querySelector("sl-sidebar-state-persist"),
+            o = "sl-sidebar-state",
+            i = () => {
+              let t = []
+              const e = n?.dataset.hash || ""
+              try {
+                const s = sessionStorage.getItem(o),
+                  r = JSON.parse(s || "{}")
+                Array.isArray(r.open) && r.hash === e && (t = r.open)
+              } catch {}
+              return { hash: e, open: t, scroll: a?.scrollTop || 0 }
+            },
+            c = (t) => {
+              try {
+                sessionStorage.setItem(o, JSON.stringify(t))
+              } catch {}
+            },
+            d = () => c(i()),
+            l = (t, e) => {
+              const s = i()
+              ;((s.open[e] = t), c(s))
+            }
+          n?.addEventListener("click", (t) => {
+            if (!(t.target instanceof Element)) return
+            const e = t.target.closest("summary")?.closest("details")
+            if (!e) return
+            const s = e.querySelector("sl-sidebar-restore"),
+              r = parseInt(s?.dataset.index || "")
+            isNaN(r) || l(!e.open, r)
+          })
+          addEventListener("visibilitychange", () => {
+            document.visibilityState === "hidden" && d()
+          })
+          addEventListener("pageHide", d)
+        </script>
+        <div class="lg:sl-flex astro-74vqitmv">
+          <aside class="right-sidebar-container print:hidden astro-74vqitmv">
+            <div class="right-sidebar astro-74vqitmv">
+              <div class="lg:sl-hidden astro-hqup5nbm">
+                <mobile-starlight-toc data-min-h="2" data-max-h="3" class="astro-5726abyz"
+                  ><nav aria-labelledby="starlight__on-this-page--mobile" class="astro-5726abyz">
+                    <details id="starlight__mobile-toc" class="astro-5726abyz">
+                      <summary id="starlight__on-this-page--mobile" class="sl-flex astro-5726abyz">
+                        <div class="toggle sl-flex astro-5726abyz">
+                          On this page<svg
+                            aria-hidden="true"
+                            class="caret astro-5726abyz astro-pgergp6q"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                            style="--sl-icon-size: 1rem"
+                          >
+                            <path
+                              d="m14.83 11.29-4.24-4.24a1 1 0 1 0-1.42 1.41L12.71 12l-3.54 3.54a1 1 0 0 0 0 1.41 1 1 0 0 0 .71.29 1 1 0 0 0 .71-.29l4.24-4.24a1.002 1.002 0 0 0 0-1.42Z"
+                            />
+                          </svg>
+                        </div>
+                        <span class="display-current astro-5726abyz"></span>
+                      </summary>
+                      <div class="dropdown astro-5726abyz">
+                        <ul class="isMobile astro-mj6l7yai" style="--depth: 0">
+                          <li class="astro-mj6l7yai" style="--depth: 0">
+                            <a href="#_top" class="astro-mj6l7yai" style="--depth: 0">
+                              <span class="astro-mj6l7yai" style="--depth: 0">Overview</span>
+                            </a>
+                          </li>
+                          <li class="astro-mj6l7yai" style="--depth: 0">
+                            <a href="#日志" class="astro-mj6l7yai" style="--depth: 0">
+                              <span class="astro-mj6l7yai" style="--depth: 0">日志</span>
+                            </a>
+                          </li>
+                          <li class="astro-mj6l7yai" style="--depth: 0">
+                            <a href="#存储" class="astro-mj6l7yai" style="--depth: 0">
+                              <span class="astro-mj6l7yai" style="--depth: 0">存储</span>
+                            </a>
+                          </li>
+                          <li class="astro-mj6l7yai" style="--depth: 0">
+                            <a href="#桌面应用" class="astro-mj6l7yai" style="--depth: 0">
+                              <span class="astro-mj6l7yai" style="--depth: 0">桌面应用</span>
+                            </a>
+                            <ul class="isMobile astro-mj6l7yai" style="--depth: 1">
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#快速检查" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">快速检查</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#禁用插件" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">禁用插件</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#清除缓存" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">清除缓存</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#修复服务器连接问题" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">修复服务器连接问题</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#linux-wayland--x11-问题" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">Linux: Wayland / X11 问题</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#windows-webview2-运行时" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">Windows: WebView2 运行时</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#windows-常见性能问题" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">Windows: 常见性能问题</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#通知不显示" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">通知不显示</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#重置桌面应用存储最后手段" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">重置桌面应用存储（最后手段）</span>
+                                </a>
+                              </li>
+                            </ul>
+                          </li>
+                          <li class="astro-mj6l7yai" style="--depth: 0">
+                            <a href="#获取帮助" class="astro-mj6l7yai" style="--depth: 0">
+                              <span class="astro-mj6l7yai" style="--depth: 0">获取帮助</span>
+                            </a>
+                          </li>
+                          <li class="astro-mj6l7yai" style="--depth: 0">
+                            <a href="#常见问题" class="astro-mj6l7yai" style="--depth: 0">
+                              <span class="astro-mj6l7yai" style="--depth: 0">常见问题</span>
+                            </a>
+                            <ul class="isMobile astro-mj6l7yai" style="--depth: 1">
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#slopcode-无法启动" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">SlopCode 无法启动</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#身份验证问题" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">身份验证问题</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#模型不可用" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">模型不可用</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#provideriniterror" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">ProviderInitError</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#ai_apicallerror-和提供商包问题" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">AI_APICallError 和提供商包问题</span>
+                                </a>
+                              </li>
+                              <li class="astro-mj6l7yai" style="--depth: 1">
+                                <a href="#在-linux-上复制粘贴不可用" class="astro-mj6l7yai" style="--depth: 1">
+                                  <span class="astro-mj6l7yai" style="--depth: 1">在 Linux 上复制/粘贴不可用</span>
+                                </a>
+                              </li>
+                            </ul>
+                          </li>
+                        </ul>
+                      </div>
+                    </details>
+                  </nav></mobile-starlight-toc
+                >
+                <script
+                  type="module"
+                  src="/docs/_astro/MobileTableOfContents.astro_astro_type_script_index_0_lang.C181hMzK.js"
+                ></script>
+              </div>
+              <div class="right-sidebar-panel sl-hidden lg:sl-block astro-hqup5nbm">
+                <div class="sl-container astro-hqup5nbm">
+                  <starlight-toc data-min-h="2" data-max-h="3"
+                    ><nav aria-labelledby="starlight__on-this-page">
+                      <h2 id="starlight__on-this-page">On this page</h2>
+                      <ul class="astro-mj6l7yai" style="--depth: 0">
+                        <li class="astro-mj6l7yai" style="--depth: 0">
+                          <a href="#_top" class="astro-mj6l7yai" style="--depth: 0">
+                            <span class="astro-mj6l7yai" style="--depth: 0">Overview</span>
+                          </a>
+                        </li>
+                        <li class="astro-mj6l7yai" style="--depth: 0">
+                          <a href="#日志" class="astro-mj6l7yai" style="--depth: 0">
+                            <span class="astro-mj6l7yai" style="--depth: 0">日志</span>
+                          </a>
+                        </li>
+                        <li class="astro-mj6l7yai" style="--depth: 0">
+                          <a href="#存储" class="astro-mj6l7yai" style="--depth: 0">
+                            <span class="astro-mj6l7yai" style="--depth: 0">存储</span>
+                          </a>
+                        </li>
+                        <li class="astro-mj6l7yai" style="--depth: 0">
+                          <a href="#桌面应用" class="astro-mj6l7yai" style="--depth: 0">
+                            <span class="astro-mj6l7yai" style="--depth: 0">桌面应用</span>
+                          </a>
+                          <ul class="astro-mj6l7yai" style="--depth: 1">
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#快速检查" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">快速检查</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#禁用插件" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">禁用插件</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#清除缓存" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">清除缓存</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#修复服务器连接问题" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">修复服务器连接问题</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#linux-wayland--x11-问题" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">Linux: Wayland / X11 问题</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#windows-webview2-运行时" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">Windows: WebView2 运行时</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#windows-常见性能问题" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">Windows: 常见性能问题</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#通知不显示" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">通知不显示</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#重置桌面应用存储最后手段" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">重置桌面应用存储（最后手段）</span>
+                              </a>
+                            </li>
+                          </ul>
+                        </li>
+                        <li class="astro-mj6l7yai" style="--depth: 0">
+                          <a href="#获取帮助" class="astro-mj6l7yai" style="--depth: 0">
+                            <span class="astro-mj6l7yai" style="--depth: 0">获取帮助</span>
+                          </a>
+                        </li>
+                        <li class="astro-mj6l7yai" style="--depth: 0">
+                          <a href="#常见问题" class="astro-mj6l7yai" style="--depth: 0">
+                            <span class="astro-mj6l7yai" style="--depth: 0">常见问题</span>
+                          </a>
+                          <ul class="astro-mj6l7yai" style="--depth: 1">
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#slopcode-无法启动" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">SlopCode 无法启动</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#身份验证问题" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">身份验证问题</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#模型不可用" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">模型不可用</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#provideriniterror" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">ProviderInitError</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#ai_apicallerror-和提供商包问题" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">AI_APICallError 和提供商包问题</span>
+                              </a>
+                            </li>
+                            <li class="astro-mj6l7yai" style="--depth: 1">
+                              <a href="#在-linux-上复制粘贴不可用" class="astro-mj6l7yai" style="--depth: 1">
+                                <span class="astro-mj6l7yai" style="--depth: 1">在 Linux 上复制/粘贴不可用</span>
+                              </a>
+                            </li>
+                          </ul>
+                        </li>
+                      </ul>
+                    </nav></starlight-toc
+                  >
+                  <script
+                    type="module"
+                    src="/docs/_astro/TableOfContents.astro_astro_type_script_index_0_lang.CKWWgpjV.js"
+                  ></script>
+                </div>
+              </div>
+            </div>
+          </aside>
+          <div class="main-pane astro-74vqitmv">
+            <main data-pagefind-body class="astro-4jvd4zkm" lang="en" dir="ltr">
+              <div class="content-panel astro-etdt5uyz">
+                <div class="sl-container astro-etdt5uyz"><h1 id="_top" class="astro-rfjjleg5">故障排除</h1></div>
+              </div>
+              <div class="content-panel astro-etdt5uyz">
+                <div class="sl-container astro-etdt5uyz">
+                  <div class="sl-markdown-content">
+                    <p>要调试 SlopCode 的问题，请先检查其存储在磁盘上的日志和本地数据。</p>
+                    <hr />
+                    <h2 id="日志"><a href="#日志">日志</a></h2>
+                    <p>日志文件写入位置：</p>
+                    <ul>
+                      <li><strong>macOS/Linux</strong>: <code dir="auto">~/.local/share/slopcode/log/</code></li>
+                      <li>
+                        <strong>Windows</strong>: 按 <code dir="auto">WIN+R</code> 并粘贴
+                        <code dir="auto">%USERPROFILE%\.local\share\slopcode\log</code>
+                      </li>
+                    </ul>
+                    <p>
+                      日志文件以时间戳命名（例如 <code dir="auto">2025-01-09T123456.log</code>），并保留最近的 10
+                      个日志文件。
+                    </p>
+                    <p>
+                      你可以通过
+                      <code dir="auto">--log-level</code> 命令行选项设置日志级别以获取更详细的调试信息。例如：<code
+                        dir="auto"
+                        >slopcode --log-level DEBUG</code
+                      >。
+                    </p>
+                    <hr />
+                    <h2 id="存储"><a href="#存储">存储</a></h2>
+                    <p>SlopCode 将会话数据和其他应用数据存储在磁盘上：</p>
+                    <ul>
+                      <li><strong>macOS/Linux</strong>: <code dir="auto">~/.local/share/slopcode/</code></li>
+                      <li>
+                        <strong>Windows</strong>: 按 <code dir="auto">WIN+R</code> 并粘贴
+                        <code dir="auto">%USERPROFILE%\.local\share\slopcode</code>
+                      </li>
+                    </ul>
+                    <p>该目录包含：</p>
+                    <ul>
+                      <li><code dir="auto">auth.json</code> - 身份验证数据，如 API 密钥、OAuth Token</li>
+                      <li><code dir="auto">log/</code> - 应用日志</li>
+                      <li>
+                        <code dir="auto">project/</code> - 项目特定数据，如会话和消息数据
+                        <ul>
+                          <li>
+                            如果项目位于 Git 仓库中，则存储在 <code dir="auto">./&#x3C;project-slug>/storage/</code>
+                          </li>
+                          <li>如果不是 Git 仓库，则存储在 <code dir="auto">./global/storage/</code></li>
+                        </ul>
+                      </li>
+                    </ul>
+                    <hr />
+                    <h2 id="桌面应用"><a href="#桌面应用">桌面应用</a></h2>
+                    <p>
+                      SlopCode Desktop 会在后台运行一个本地 SlopCode 服务器（即
+                      <code dir="auto">slopcode-cli</code>
+                      附属进程）。大多数问题是由插件异常、缓存损坏或错误的服务器设置引起的。
+                    </p>
+                    <h3 id="快速检查"><a href="#快速检查">快速检查</a></h3>
+                    <ul>
+                      <li>完全退出并重新启动应用。</li>
+                      <li>如果应用显示错误页面，请点击<strong>重新启动</strong>并复制错误详情。</li>
+                      <li>
+                        仅限 macOS：<code dir="auto">SlopCode</code> 菜单 -> <strong>Reload Webview</strong>（当 UI
+                        空白或冻结时有效）。
+                      </li>
+                    </ul>
+                    <hr />
+                    <h3 id="禁用插件"><a href="#禁用插件">禁用插件</a></h3>
+                    <p>如果桌面应用在启动时崩溃、卡住或行为异常，请先禁用插件。</p>
+                    <h4 id="检查全局配置"><a href="#检查全局配置">检查全局配置</a></h4>
+                    <p>打开你的全局配置文件，查找 <code dir="auto">plugin</code> 键。</p>
+                    <ul>
+                      <li>
+                        <strong>macOS/Linux</strong>: <code dir="auto">~/.config/slopcode/slopcode.jsonc</code>（或
+                        <code dir="auto">~/.config/slopcode/slopcode.json</code>）
+                      </li>
+                      <li>
+                        <strong>macOS/Linux</strong>（旧版安装）:
+                        <code dir="auto">~/.local/share/slopcode/slopcode.jsonc</code>
+                      </li>
+                      <li>
+                        <strong>Windows</strong>: 按 <code dir="auto">WIN+R</code> 并粘贴
+                        <code dir="auto">%USERPROFILE%\.config\slopcode\slopcode.jsonc</code>
+                      </li>
+                    </ul>
+                    <p>如果你配置了插件，请通过移除该键或将其设置为空数组来临时禁用它们：</p>
+                    <div class="expressive-code">
+                      <link rel="stylesheet" href="/docs/_astro/ec.4c0k7.css" />
+                      <script type="module" src="/docs/_astro/ec.0vx5m.js"></script>
+                      <figure class="frame not-content">
+                        <figcaption class="header"></figcaption>
+                        <pre
+                          data-language="jsonc"
+                        ><code><div class="ec-line"><div class="code"><span style="--0:#24292E;--1:#E1E4E8">{</span></div></div><div class="ec-line"><div class="code"><span class="indent">  </span><span style="--0:#005CC5;--1:#79B8FF">"$schema"</span><span style="--0:#24292E;--1:#E1E4E8">: </span><span style="--0:#032F62;--1:#9ECBFF">"https://slopcode.dev/config.json"</span><span style="--0:#24292E;--1:#E1E4E8">,</span></div></div><div class="ec-line"><div class="code"><span class="indent">  </span><span style="--0:#005CC5;--1:#79B8FF">"plugin"</span><span style="--0:#24292E;--1:#E1E4E8">: [],</span></div></div><div class="ec-line"><div class="code"><span style="--0:#24292E;--1:#E1E4E8">}</span></div></div></code></pre>
+                        <div class="copy">
+                          <div aria-live="polite"></div>
+                          <button
+                            title="Copy to clipboard"
+                            data-copied="Copied!"
+                            data-code="{  &#x22;$schema&#x22;: &#x22;https://slopcode.dev/config.json&#x22;,  &#x22;plugin&#x22;: [],}"
+                          >
+                            <div></div>
+                          </button>
+                        </div>
+                      </figure>
+                    </div>
+                    <h4 id="检查插件目录"><a href="#检查插件目录">检查插件目录</a></h4>
+                    <p>
+                      SlopCode 还可以从磁盘加载本地插件。临时将这些插件移走（或重命名文件夹），然后重新启动桌面应用：
+                    </p>
+                    <ul>
+                      <li>
+                        <strong>全局插件</strong>
+                        <ul>
+                          <li><strong>macOS/Linux</strong>: <code dir="auto">~/.config/slopcode/plugins/</code></li>
+                          <li>
+                            <strong>Windows</strong>: 按 <code dir="auto">WIN+R</code> 并粘贴
+                            <code dir="auto">%USERPROFILE%\.config\slopcode\plugins</code>
+                          </li>
+                        </ul>
+                      </li>
+                      <li>
+                        <strong>项目插件</strong>（仅当你使用了项目级配置时）
+                        <ul>
+                          <li><code dir="auto">&#x3C;your-project>/.slopcode/plugins/</code></li>
+                        </ul>
+                      </li>
+                    </ul>
+                    <p>如果应用恢复正常，请逐个重新启用插件，找出导致问题的那个。</p>
+                    <hr />
+                    <h3 id="清除缓存"><a href="#清除缓存">清除缓存</a></h3>
+                    <p>如果禁用插件没有帮助（或插件安装卡住了），请清除缓存以便 SlopCode 重新构建。</p>
+                    <ol>
+                      <li>完全退出 SlopCode Desktop。</li>
+                      <li>删除缓存目录：</li>
+                    </ol>
+                    <ul>
+                      <li>
+                        <strong>macOS</strong>: Finder -> <code dir="auto">Cmd+Shift+G</code> -> 粘贴
+                        <code dir="auto">~/.cache/slopcode</code>
+                      </li>
+                      <li>
+                        <strong>Linux</strong>: 删除 <code dir="auto">~/.cache/slopcode</code>（或运行
+                        <code dir="auto">rm -rf ~/.cache/slopcode</code>）
+                      </li>
+                      <li>
+                        <strong>Windows</strong>: 按 <code dir="auto">WIN+R</code> 并粘贴
+                        <code dir="auto">%USERPROFILE%\.cache\slopcode</code>
+                      </li>
+                    </ul>
+                    <ol start="3">
+                      <li>重新启动 SlopCode Desktop。</li>
+                    </ol>
+                    <hr />
+                    <h3 id="修复服务器连接问题"><a href="#修复服务器连接问题">修复服务器连接问题</a></h3>
+                    <p>SlopCode Desktop 可以启动自己的本地服务器（默认行为），也可以连接到你配置的服务器 URL。</p>
+                    <p>如果你看到**“Connection Failed”**对话框（或应用始终停留在启动画面），请检查自定义服务器 URL。</p>
+                    <h4 id="清除桌面默认服务器-url"><a href="#清除桌面默认服务器-url">清除桌面默认服务器 URL</a></h4>
+                    <p>
+                      在主页面上，点击服务器名称（带有状态指示点）以打开服务器选择器。在<strong>默认服务器</strong>部分，点击<strong>清除</strong>。
+                    </p>
+                    <h4 id="从配置中移除-serverport--serverhostname">
+                      <a href="#从配置中移除-serverport--serverhostname"
+                        >从配置中移除 <code dir="auto">server.port</code> / <code dir="auto">server.hostname</code></a
+                      >
+                    </h4>
+                    <p>
+                      如果你的 <code dir="auto">slopcode.json(c)</code> 包含
+                      <code dir="auto">server</code> 部分，请临时移除该部分并重新启动桌面应用。
+                    </p>
+                    <h4 id="检查环境变量"><a href="#检查环境变量">检查环境变量</a></h4>
+                    <p>
+                      如果你在环境中设置了
+                      <code dir="auto">SLOPCODE_PORT</code>，桌面应用将尝试使用该端口作为本地服务器端口。
+                    </p>
+                    <ul>
+                      <li>取消设置 <code dir="auto">SLOPCODE_PORT</code>（或选择一个空闲端口）并重新启动。</li>
+                    </ul>
+                    <hr />
+                    <h3 id="linux-wayland--x11-问题">
+                      <a href="#linux-wayland--x11-问题">Linux: Wayland / X11 问题</a>
+                    </h3>
+                    <p>在 Linux 上，某些 Wayland 设置可能会导致窗口空白或合成器错误。</p>
+                    <ul>
+                      <li>
+                        如果你使用 Wayland 且应用出现空白或崩溃，请尝试使用
+                        <code dir="auto">OC_ALLOW_WAYLAND=1</code> 启动。
+                      </li>
+                      <li>如果情况变得更糟，请移除该设置并尝试在 X11 会话下启动。</li>
+                    </ul>
+                    <hr />
+                    <h3 id="windows-webview2-运行时">
+                      <a href="#windows-webview2-运行时">Windows: WebView2 运行时</a>
+                    </h3>
+                    <p>
+                      在 Windows 上，SlopCode Desktop 需要 Microsoft Edge
+                      <strong>WebView2 Runtime</strong>。如果应用打开后是空白窗口或无法启动，请安装或更新 WebView2
+                      后重试。
+                    </p>
+                    <hr />
+                    <h3 id="windows-常见性能问题"><a href="#windows-常见性能问题">Windows: 常见性能问题</a></h3>
+                    <p>
+                      如果你在 Windows 上遇到性能缓慢、文件访问问题或终端问题，请尝试使用
+                      <a href="/docs/windows-wsl">WSL (Windows Subsystem for Linux)</a>。WSL 提供了一个 Linux
+                      环境，能更好地与 SlopCode 的功能兼容。
+                    </p>
+                    <hr />
+                    <h3 id="通知不显示"><a href="#通知不显示">通知不显示</a></h3>
+                    <p>SlopCode Desktop 仅在以下情况下显示系统通知：</p>
+                    <ul>
+                      <li>在操作系统设置中已为 SlopCode 启用通知，且</li>
+                      <li>应用窗口未处于焦点状态。</li>
+                    </ul>
+                    <hr />
+                    <h3 id="重置桌面应用存储最后手段">
+                      <a href="#重置桌面应用存储最后手段">重置桌面应用存储（最后手段）</a>
+                    </h3>
+                    <p>如果应用无法启动且你无法从 UI 内部清除设置，请重置桌面应用的保存状态。</p>
+                    <ol>
+                      <li>退出 SlopCode Desktop。</li>
+                      <li>找到并删除以下文件（它们位于 SlopCode Desktop 应用数据目录中）：</li>
+                    </ol>
+                    <ul>
+                      <li><code dir="auto">slopcode.settings.dat</code>（桌面默认服务器 URL）</li>
+                      <li>
+                        <code dir="auto">slopcode.global.dat</code> 和
+                        <code dir="auto">slopcode.workspace.*.dat</code>（UI 状态，如最近的服务器/项目）
+                      </li>
+                    </ul>
+                    <p>快速找到该目录：</p>
+                    <ul>
+                      <li>
+                        <strong>macOS</strong>: Finder -> <code dir="auto">Cmd+Shift+G</code> ->
+                        <code dir="auto">~/Library/Application Support</code>（然后搜索上述文件名）
+                      </li>
+                      <li><strong>Linux</strong>: 在 <code dir="auto">~/.local/share</code> 下搜索上述文件名</li>
+                      <li>
+                        <strong>Windows</strong>: 按 <code dir="auto">WIN+R</code> ->
+                        <code dir="auto">%APPDATA%</code>（然后搜索上述文件名）
+                      </li>
+                    </ul>
+                    <hr />
+                    <h2 id="获取帮助"><a href="#获取帮助">获取帮助</a></h2>
+                    <p>如果你遇到 SlopCode 的问题：</p>
+                    <ol>
+                      <li>
+                        <p><strong>在 GitHub 上报告问题</strong></p>
+                        <p>报告 Bug 或请求功能的最佳方式是通过我们的 GitHub 仓库：</p>
+                        <p>
+                          <a href="http://github.com/teamslop/slopcode/issues"
+                            ><strong>github.com/teamslop/slopcode/issues</strong></a
+                          >
+                        </p>
+                        <p>在创建新 Issue 之前，请先搜索已有的 Issue，看看你的问题是否已被报告。</p>
+                      </li>
+                      <li>
+                        <p><strong>加入我们的 Discord</strong></p>
+                        <p>如需实时帮助和社区讨论，请加入我们的 Discord 服务器：</p>
+                        <p>
+                          <a href="https://slopcode.dev/discord"><strong>slopcode.dev/discord</strong></a>
+                        </p>
+                      </li>
+                    </ol>
+                    <hr />
+                    <h2 id="常见问题"><a href="#常见问题">常见问题</a></h2>
+                    <p>以下是一些常见问题及其解决方法。</p>
+                    <hr />
+                    <h3 id="slopcode-无法启动"><a href="#slopcode-无法启动">SlopCode 无法启动</a></h3>
+                    <ol>
+                      <li>检查日志中的错误消息</li>
+                      <li>尝试使用 <code dir="auto">--print-logs</code> 运行以在终端中查看输出</li>
+                      <li>使用 <code dir="auto">slopcode upgrade</code> 确保你使用的是最新版本</li>
+                    </ol>
+                    <hr />
+                    <h3 id="身份验证问题"><a href="#身份验证问题">身份验证问题</a></h3>
+                    <ol>
+                      <li>尝试在 TUI 中使用 <code dir="auto">/connect</code> 命令重新进行身份验证</li>
+                      <li>检查你的 API 密钥是否有效</li>
+                      <li>确保你的网络允许连接到提供商的 API</li>
+                    </ol>
+                    <hr />
+                    <h3 id="模型不可用"><a href="#模型不可用">模型不可用</a></h3>
+                    <ol>
+                      <li>检查你是否已通过提供商的身份验证</li>
+                      <li>验证配置中的模型名称是否正确</li>
+                      <li>某些模型可能需要特定的访问权限或订阅</li>
+                    </ol>
+                    <p>
+                      如果你遇到 <code dir="auto">ProviderModelNotFoundError</code>，很可能是在某处错误地引用了模型。
+                      模型应按如下方式引用：<code dir="auto">&#x3C;providerId>/&#x3C;modelId></code>
+                    </p>
+                    <p>示例：</p>
+                    <ul>
+                      <li><code dir="auto">openai/gpt-4.1</code></li>
+                      <li><code dir="auto">openrouter/google/gemini-2.5-flash</code></li>
+                      <li><code dir="auto">slopcode/kimi-k2</code></li>
+                    </ul>
+                    <p>要查看你有权访问哪些模型，请运行 <code dir="auto">slopcode models</code></p>
+                    <hr />
+                    <h3 id="provideriniterror"><a href="#provideriniterror">ProviderInitError</a></h3>
+                    <p>如果你遇到 ProviderInitError，很可能是配置无效或已损坏。</p>
+                    <p>要解决此问题：</p>
+                    <ol>
+                      <li>
+                        <p>首先，按照<a href="/docs/providers">提供商指南</a>验证你的提供商是否已正确设置</p>
+                      </li>
+                      <li>
+                        <p>如果问题仍然存在，请尝试清除已存储的配置：</p>
+                        <div class="expressive-code">
+                          <figure class="frame is-terminal not-content">
+                            <figcaption class="header">
+                              <span class="title"></span><span class="sr-only">Terminal window</span>
+                            </figcaption>
+                            <pre
+                              data-language="bash"
+                            ><code><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">rm</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-rf</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">~/.local/share/slopcode</span></div></div></code></pre>
+                            <div class="copy">
+                              <div aria-live="polite"></div>
+                              <button
+                                title="Copy to clipboard"
+                                data-copied="Copied!"
+                                data-code="rm -rf ~/.local/share/slopcode"
+                              >
+                                <div></div>
+                              </button>
+                            </div>
+                          </figure>
+                        </div>
+                        <p>
+                          在 Windows 上，按 <code dir="auto">WIN+R</code> 并删除：<code dir="auto"
+                            >%USERPROFILE%\.local\share\slopcode</code
+                          >
+                        </p>
+                      </li>
+                      <li>
+                        <p>在 TUI 中使用 <code dir="auto">/connect</code> 命令重新与提供商进行身份验证。</p>
+                      </li>
+                    </ol>
+                    <hr />
+                    <h3 id="ai_apicallerror-和提供商包问题">
+                      <a href="#ai_apicallerror-和提供商包问题">AI_APICallError 和提供商包问题</a>
+                    </h3>
+                    <p>
+                      如果你遇到 API 调用错误，可能是由于提供商包过期导致的。SlopCode
+                      会根据需要动态安装提供商包（OpenAI、Anthropic、Google 等）并将它们缓存到本地。
+                    </p>
+                    <p>要解决提供商包问题：</p>
+                    <ol>
+                      <li>
+                        <p>清除提供商包缓存：</p>
+                        <div class="expressive-code">
+                          <figure class="frame is-terminal not-content">
+                            <figcaption class="header">
+                              <span class="title"></span><span class="sr-only">Terminal window</span>
+                            </figcaption>
+                            <pre
+                              data-language="bash"
+                            ><code><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">rm</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-rf</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">~/.cache/slopcode</span></div></div></code></pre>
+                            <div class="copy">
+                              <div aria-live="polite"></div>
+                              <button
+                                title="Copy to clipboard"
+                                data-copied="Copied!"
+                                data-code="rm -rf ~/.cache/slopcode"
+                              >
+                                <div></div>
+                              </button>
+                            </div>
+                          </figure>
+                        </div>
+                        <p>
+                          在 Windows 上，按 <code dir="auto">WIN+R</code> 并删除：<code dir="auto"
+                            >%USERPROFILE%\.cache\slopcode</code
+                          >
+                        </p>
+                      </li>
+                      <li>
+                        <p>重新启动 SlopCode 以重新安装最新的提供商包</p>
+                      </li>
+                    </ol>
+                    <p>这将强制 SlopCode 下载最新版本的提供商包，通常可以解决模型参数和 API 变更带来的兼容性问题。</p>
+                    <hr />
+                    <h3 id="在-linux-上复制粘贴不可用">
+                      <a href="#在-linux-上复制粘贴不可用">在 Linux 上复制/粘贴不可用</a>
+                    </h3>
+                    <p>Linux 用户需要安装以下剪贴板工具之一，复制/粘贴功能才能正常工作：</p>
+                    <p><strong>对于 X11 系统：</strong></p>
+                    <div class="expressive-code">
+                      <figure class="frame is-terminal not-content">
+                        <figcaption class="header">
+                          <span class="title"></span><span class="sr-only">Terminal window</span>
+                        </figcaption>
+                        <pre
+                          data-language="bash"
+                        ><code><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">apt</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">install</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-y</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">xclip</span></div></div><div class="ec-line"><div class="code"><span style="--0:#616972;--1:#99A0A6"># or</span></div></div><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">apt</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">install</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-y</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">xsel</span></div></div></code></pre>
+                        <div class="copy">
+                          <div aria-live="polite"></div>
+                          <button
+                            title="Copy to clipboard"
+                            data-copied="Copied!"
+                            data-code="apt install -y xclipapt install -y xsel"
+                          >
+                            <div></div>
+                          </button>
+                        </div>
+                      </figure>
+                    </div>
+                    <p><strong>对于 Wayland 系统：</strong></p>
+                    <div class="expressive-code">
+                      <figure class="frame is-terminal not-content">
+                        <figcaption class="header">
+                          <span class="title"></span><span class="sr-only">Terminal window</span>
+                        </figcaption>
+                        <pre
+                          data-language="bash"
+                        ><code><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">apt</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">install</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-y</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">wl-clipboard</span></div></div></code></pre>
+                        <div class="copy">
+                          <div aria-live="polite"></div>
+                          <button
+                            title="Copy to clipboard"
+                            data-copied="Copied!"
+                            data-code="apt install -y wl-clipboard"
+                          >
+                            <div></div>
+                          </button>
+                        </div>
+                      </figure>
+                    </div>
+                    <p><strong>对于无头环境：</strong></p>
+                    <div class="expressive-code">
+                      <figure class="frame is-terminal not-content">
+                        <figcaption class="header">
+                          <span class="title"></span><span class="sr-only">Terminal window</span>
+                        </figcaption>
+                        <pre
+                          data-language="bash"
+                        ><code><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">apt</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">install</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-y</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">xvfb</span></div></div><div class="ec-line"><div class="code"><span style="--0:#616972;--1:#99A0A6"># and run:</span></div></div><div class="ec-line"><div class="code"><span style="--0:#6F42C1;--1:#B392F0">Xvfb</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">:99</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">-screen</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#005CC5;--1:#79B8FF">0</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">1024x768x24</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#BF3441;--1:#F97583">></span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#032F62;--1:#9ECBFF">/dev/null</span><span style="--0:#24292E;--1:#E1E4E8"> </span><span style="--0:#BF3441;--1:#F97583">2>&#x26;1</span><span style="--0:#24292E;--1:#E1E4E8"> &#x26;</span></div></div><div class="ec-line"><div class="code"><span style="--0:#BF3441;--1:#F97583">export</span><span style="--0:#24292E;--1:#E1E4E8"> DISPLAY</span><span style="--0:#BF3441;--1:#F97583">=</span><span style="--0:#24292E;--1:#E1E4E8">:99.0</span></div></div></code></pre>
+                        <div class="copy">
+                          <div aria-live="polite"></div>
+                          <button
+                            title="Copy to clipboard"
+                            data-copied="Copied!"
+                            data-code="apt install -y xvfbXvfb :99 -screen 0 1024x768x24 > /dev/null 2>&#x26;1 &#x26;export DISPLAY=:99.0"
+                          >
+                            <div></div>
+                          </button>
+                        </div>
+                      </figure>
+                    </div>
+                    <p>
+                      SlopCode 会检测你是否正在使用 Wayland 并优先使用
+                      <code dir="auto">wl-clipboard</code>，否则将按以下顺序尝试查找剪贴板工具：<code dir="auto"
+                        >xclip</code
+                      >
+                      和 <code dir="auto">xsel</code>。
+                    </p>
+                  </div>
+                  <footer class="sl-flex astro-xfcqalbw">
+                    <div class="meta sl-flex astro-xfcqalbw">
+                      <a
+                        href="http://github.com/teamslop/slopcode/edit/dev/packages/web/src/content/docs/zh-cn/troubleshooting.mdx"
+                        class="sl-flex print:hidden astro-vyxowwsa"
+                        ><svg
+                          aria-hidden="true"
+                          class="astro-vyxowwsa astro-pgergp6q"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                          style="--sl-icon-size: 1.2em"
+                        >
+                          <path
+                            d="M22 7.24a1 1 0 0 0-.29-.71l-4.24-4.24a1 1 0 0 0-1.1-.22 1 1 0 0 0-.32.22l-2.83 2.83L2.29 16.05a1 1 0 0 0-.29.71V21a1 1 0 0 0 1 1h4.24a1 1 0 0 0 .76-.29l10.87-10.93L21.71 8c.1-.1.17-.2.22-.33a1 1 0 0 0 0-.24v-.14l.07-.05ZM6.83 20H4v-2.83l9.93-9.93 2.83 2.83L6.83 20ZM18.17 8.66l-2.83-2.83 1.42-1.41 2.82 2.82-1.41 1.42Z"
+                          /></svg
+                        >Edit page</a
+                      >
+                    </div>
+                    <div class="pagination-links print:hidden astro-httbbuy6" dir="ltr"></div>
+                  </footer>
+                </div>
+              </div>
+            </main>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

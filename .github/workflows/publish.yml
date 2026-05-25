@@ -1,14 +1,8 @@
 name: publish
-run-name: "${{ format('release {0}', inputs.bump) }}"
+run-name: "${{ format('release {0}', inputs.version || inputs.bump || 'manual') }}"
 
 on:
-  push:
-    branches:
-      - ci
-      - dev
-      - beta
-      - snapshot-*
-  workflow_dispatch:
+  workflow_dispatch: # Default release path; `bun run release` prepares assets locally and dispatches this workflow
     inputs:
       bump:
         description: "Bump major, minor, or patch"
@@ -26,7 +20,7 @@ on:
 concurrency: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.version || inputs.bump }}
 
 permissions:
-  id-token: write
+  id-token: write # npm trusted publishing
   contents: write
   packages: write
 
@@ -35,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.repository == 'teamslop/slopcode'
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -66,46 +60,9 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       repo: ${{ steps.version.outputs.repo }}
 
-  build-cli:
-    needs: version
-    runs-on: ubuntu-latest
-    if: github.repository == 'teamslop/slopcode' && needs.version.outputs.version != ''
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          fetch-tags: true
-
-      - uses: ./.github/actions/setup-bun
-
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
-        with:
-          slopcode-app-id: ${{ vars.SLOPCODE_APP_ID }}
-          slopcode-app-secret: ${{ secrets.SLOPCODE_APP_SECRET }}
-
-      - name: Build
-        id: build
-        run: |
-          ./packages/slopcode/script/build.ts
-        env:
-          SLOPCODE_VERSION: ${{ needs.version.outputs.version }}
-          SLOPCODE_RELEASE: ${{ needs.version.outputs.release }}
-          GH_REPO: ${{ needs.version.outputs.repo }}
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: slopcode-cli
-          path: packages/slopcode/dist
-
-    outputs:
-      version: ${{ needs.version.outputs.version }}
-
   build-tauri:
     if: false # Non-npm publishing channel disabled
     needs:
-      - build-cli
       - version
     continue-on-error: false
     strategy:
@@ -124,7 +81,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.settings.host }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
         with:
           fetch-tags: true
 
@@ -152,7 +109,7 @@ jobs:
 
       - name: Cache apt packages
         if: contains(matrix.settings.host, 'ubuntu')
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/apt-cache
           key: ${{ runner.os }}-${{ matrix.settings.target }}-apt-${{ hashFiles('.github/workflows/publish.yml') }}
@@ -243,11 +200,10 @@ jobs:
   publish:
     needs:
       - version
-      - build-cli
     runs-on: ubuntu-latest
     if: needs.version.outputs.version != ''
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v5
 
       - uses: ./.github/actions/setup-bun
 
@@ -272,55 +228,57 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Check required credentials
-        id: guard
-        env:
-          HAVE_NPM_TOKEN: ${{ secrets.NPM_TOKEN != '' && 'true' || 'false' }}
-        run: |
-          if [ "$HAVE_NPM_TOKEN" != "true" ]; then
-            echo "Skipping publish: missing NPM_TOKEN"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-
       - name: Setup git committer
         id: committer
-        if: steps.guard.outputs.ready == 'true'
         uses: ./.github/actions/setup-git-committer
         with:
           slopcode-app-id: ${{ vars.SLOPCODE_APP_ID }}
           slopcode-app-secret: ${{ secrets.SLOPCODE_APP_SECRET }}
 
-      - uses: actions/download-artifact@v4
-        if: steps.guard.outputs.ready == 'true'
-        with:
-          name: slopcode-cli
-          path: packages/slopcode/dist
+      - name: Download CLI dist bundle
+        run: |
+          rm -rf packages/slopcode/dist
+          mkdir -p packages/slopcode/dist
+          for attempt in $(seq 1 30); do
+            if gh release download ${{ needs.version.outputs.tag }} --pattern "slopcode-cli-dist.tar.gz" --dir packages/slopcode/dist --repo ${{ needs.version.outputs.repo }}; then
+              tar -xzf packages/slopcode/dist/slopcode-cli-dist.tar.gz -C packages/slopcode/dist
+              rm packages/slopcode/dist/slopcode-cli-dist.tar.gz
+              exit 0
+            fi
+            rm -f packages/slopcode/dist/slopcode-cli-dist.tar.gz
+            if [ "$attempt" -eq 30 ]; then
+              echo "Timed out waiting for slopcode-cli-dist.tar.gz on release ${{ needs.version.outputs.tag }}" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
 
-      - name: Install apt repository tooling
-        if: steps.guard.outputs.ready == 'true'
+      - name: Install package repository tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends dpkg-dev gnupg
+          sudo apt-get install -y --no-install-recommends dpkg-dev gnupg rpm createrepo-c
 
-      - name: Install snapcraft tooling
-        if: steps.guard.outputs.ready == 'true'
-        run: |
-          sudo snap install snapcraft --classic
-          echo "/snap/bin" >> "$GITHUB_PATH"
-          /snap/bin/snapcraft --version
-
-      - run: ./script/publish.ts
-        if: steps.guard.outputs.ready == 'true'
+      - name: Publish release
+        run: ./script/publish.ts
         env:
-          # npm release destination
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          SLOPCODE_PUBLISH_ONLY: true
+          # npm trusted publishing uses GitHub Actions OIDC; prebuilt release assets are downloaded above.
           # Homebrew tap sync
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN || steps.committer.outputs.token }}
           HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO || 'teamslop/homebrew-slopcode' }}
           HOMEBREW_TAP_BRANCH: ${{ vars.HOMEBREW_TAP_BRANCH || 'main' }}
           HOMEBREW_TAP_PATH: ${{ vars.HOMEBREW_TAP_PATH || 'Formula/slopcode.rb' }}
+          SLOPCODE_DISABLE_HOMEBREW: ${{ vars.SLOPCODE_DISABLE_HOMEBREW || 'true' }}
+          SLOPCODE_ENFORCE_APT: ${{ vars.SLOPCODE_ENFORCE_APT || 'false' }}
+          SLOPCODE_ENFORCE_RPM: ${{ vars.SLOPCODE_ENFORCE_RPM || 'false' }}
+          SLOPCODE_ENFORCE_APK: ${{ vars.SLOPCODE_ENFORCE_APK || 'false' }}
+          SLOPCODE_ENFORCE_MACPORTS: ${{ vars.SLOPCODE_ENFORCE_MACPORTS || 'false' }}
+          SLOPCODE_DISABLE_APT: ${{ vars.SLOPCODE_DISABLE_APT || 'true' }}
+          SLOPCODE_DISABLE_RPM: ${{ vars.SLOPCODE_DISABLE_RPM || 'true' }}
+          SLOPCODE_DISABLE_APK: ${{ vars.SLOPCODE_DISABLE_APK || 'true' }}
+          SLOPCODE_DISABLE_MACPORTS: ${{ vars.SLOPCODE_DISABLE_MACPORTS || 'true' }}
           # Homebrew core PR sync (non-blocking)
           HOMEBREW_CORE_TOKEN: ${{ secrets.HOMEBREW_CORE_TOKEN || steps.committer.outputs.token }}
           HOMEBREW_CORE_FORK_REPO: ${{ vars.HOMEBREW_CORE_FORK_REPO || '' }}
@@ -333,10 +291,6 @@ jobs:
           AUR_REPO: ${{ vars.AUR_REPO || 'slopcode-bin' }}
           AUR_BRANCH: ${{ vars.AUR_BRANCH || 'master' }}
           AUR_PACKAGE: ${{ vars.AUR_PACKAGE || 'slopcode-bin' }}
-          # Snap store sync
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
-          SNAPCRAFT_CHANNEL: ${{ vars.SNAPCRAFT_CHANNEL || 'latest/stable' }}
-          SNAPCRAFT_SNAP_NAME: ${{ vars.SNAPCRAFT_SNAP_NAME || 'slopcode' }}
           # apt repository sync
           APT_REPO_TOKEN: ${{ secrets.APT_REPO_TOKEN || steps.committer.outputs.token }}
           APT_REPO_REPO: ${{ vars.APT_REPO_REPO || 'teamslop/apt-slopcode' }}
@@ -350,8 +304,26 @@ jobs:
           APT_REPO_GPG_PRIVATE_KEY: ${{ secrets.APT_REPO_GPG_PRIVATE_KEY }}
           APT_REPO_GPG_PASSPHRASE: ${{ secrets.APT_REPO_GPG_PASSPHRASE }}
           APT_REPO_GPG_KEY_ID: ${{ secrets.APT_REPO_GPG_KEY_ID }}
+          # rpm repository sync
+          RPM_REPO_TOKEN: ${{ secrets.RPM_REPO_TOKEN || steps.committer.outputs.token }}
+          RPM_REPO_REPO: ${{ vars.RPM_REPO_REPO || 'teamslop/rpm-slopcode' }}
+          RPM_REPO_BRANCH: ${{ vars.RPM_REPO_BRANCH || 'main' }}
+          RPM_REPO_BASE_URL: ${{ vars.RPM_REPO_BASE_URL || 'https://teamslop.github.io/rpm-slopcode' }}
+          # apk repository sync
+          APK_REPO_TOKEN: ${{ secrets.APK_REPO_TOKEN || steps.committer.outputs.token }}
+          APK_REPO_REPO: ${{ vars.APK_REPO_REPO || 'teamslop/apk-slopcode' }}
+          APK_REPO_BRANCH: ${{ vars.APK_REPO_BRANCH || 'main' }}
+          APK_REPO_BASE_URL: ${{ vars.APK_REPO_BASE_URL || 'https://teamslop.github.io/apk-slopcode' }}
+          APK_REPO_IMAGE: ${{ vars.APK_REPO_IMAGE || 'alpine:3.20' }}
+          # MacPorts sync
+          MACPORTS_TOKEN: ${{ secrets.MACPORTS_TOKEN || steps.committer.outputs.token }}
+          MACPORTS_FORK_REPO: ${{ vars.MACPORTS_FORK_REPO || '' }}
+          MACPORTS_UPSTREAM_REPO: ${{ vars.MACPORTS_UPSTREAM_REPO || 'macports/macports-ports' }}
+          MACPORTS_BASE_BRANCH: ${{ vars.MACPORTS_BASE_BRANCH || '' }}
+          MACPORTS_PORT_PATH: ${{ vars.MACPORTS_PORT_PATH || 'devel/slopcode/Portfile' }}
+          MACPORTS_BRANCH_PREFIX: ${{ vars.MACPORTS_BRANCH_PREFIX || 'slopcode-bump-' }}
           SLOPCODE_VERSION: ${{ needs.version.outputs.version }}
           SLOPCODE_RELEASE: ${{ needs.version.outputs.release }}
           GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
           GH_REPO: ${{ needs.version.outputs.repo }}
-          NPM_CONFIG_PROVENANCE: false
+          NPM_CONFIG_PROVENANCE: true

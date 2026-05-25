@@ -366,3 +366,22 @@ export function createColors(options: KnightRiderOptions = {}): ColorGenerator {
 
   return createKnightRiderTrail(trailOptions)
 }
+
+export function createBlockSpinner(input: { color: ColorInput; width?: number }) {
+  return {
+    frames: createFrames({
+      color: input.color,
+      width: input.width,
+      style: "blocks",
+      inactiveFactor: 0.6,
+      minAlpha: 0.3,
+    }),
+    color: createColors({
+      color: input.color,
+      width: input.width,
+      style: "blocks",
+      inactiveFactor: 0.6,
+      minAlpha: 0.3,
+    }),
+  }
+}

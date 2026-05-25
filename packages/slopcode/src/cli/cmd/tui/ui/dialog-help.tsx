@@ -3,11 +3,14 @@ import { useTheme } from "@tui/context/theme"
 import { useDialog } from "./dialog"
 import { useKeyboard } from "@opentui/solid"
 import { useKeybind } from "@tui/context/keybind"
+import { useCommandDialog } from "@tui/component/dialog-command"
+import { ShortcutHint } from "./shortcut-hint"
 
 export function DialogHelp() {
   const dialog = useDialog()
   const { theme } = useTheme()
   const keybind = useKeybind()
+  const command = useCommandDialog()
 
   useKeyboard((evt) => {
     if (evt.name === "return" || evt.name === "escape") {
@@ -26,9 +29,14 @@ export function DialogHelp() {
         </text>
       </box>
       <box paddingBottom={1}>
-        <text fg={theme.textMuted}>
-          Press {keybind.print("command_list")} to see all available actions and commands in any context.
-        </text>
+        <ShortcutHint
+          shortcut={keybind.print("command_list")}
+          label="show commands"
+          onTrigger={() => {
+            dialog.clear()
+            command.show()
+          }}
+        />
       </box>
       <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
         <box paddingLeft={3} paddingRight={3} backgroundColor={theme.primary} onMouseUp={() => dialog.clear()}>

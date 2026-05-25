@@ -229,23 +229,28 @@ export function FileTabContent(props: { tab: string }) {
     },
   })
 
-  createEffect(() => {
-    if (typeof window === "undefined") return
+  createEffect(
+    on(
+      () => tabs().active() === props.tab,
+      (active) => {
+        if (!active) return
+        if (typeof window === "undefined") return
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return
-      if (tabs().active() !== props.tab) return
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
-      if (event.key.toLowerCase() !== "f") return
+        const onKeyDown = (event: KeyboardEvent) => {
+          if (event.defaultPrevented) return
+          if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+          if (event.key.toLowerCase() !== "f") return
 
-      event.preventDefault()
-      event.stopPropagation()
-      find?.focus()
-    }
+          event.preventDefault()
+          event.stopPropagation()
+          find?.focus()
+        }
 
-    window.addEventListener("keydown", onKeyDown, { capture: true })
-    onCleanup(() => window.removeEventListener("keydown", onKeyDown, { capture: true }))
-  })
+        window.addEventListener("keydown", onKeyDown, { capture: true })
+        onCleanup(() => window.removeEventListener("keydown", onKeyDown, { capture: true }))
+      },
+    ),
+  )
 
   createEffect(
     on(

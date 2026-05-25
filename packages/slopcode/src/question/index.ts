@@ -61,13 +61,14 @@ export namespace Question {
   export type Reply = z.infer<typeof Reply>
 
   export const Event = {
-    Asked: BusEvent.define("question.asked", Request),
+    Asked: BusEvent.define("question.asked", Request.extend({ viewID: z.string().optional() })),
     Replied: BusEvent.define(
       "question.replied",
       z.object({
         sessionID: z.string(),
         requestID: z.string(),
         answers: z.array(Answer),
+        viewID: z.string().optional(),
       }),
     ),
     Rejected: BusEvent.define(
@@ -75,11 +76,12 @@ export namespace Question {
       z.object({
         sessionID: z.string(),
         requestID: z.string(),
+        viewID: z.string().optional(),
       }),
     ),
   }
 
-  const state = Instance.state(async () => {
+  const state = Instance.sharedState(async () => {
     const pending: Record<
       string,
       {
@@ -116,17 +118,18 @@ export namespace Question {
         resolve,
         reject,
       }
-      Bus.publish(Event.Asked, info)
+      Bus.publish(Event.Asked, { ...info, viewID: Instance.viewID })
     })
   }
 
-  export async function reply(input: { requestID: string; answers: Answer[] }): Promise<void> {
+  export async function reply(input: { requestID: string; answers: Answer[]; sessionID?: string }): Promise<boolean> {
     const s = await state()
     const existing = s.pending[input.requestID]
     if (!existing) {
       log.warn("reply for unknown request", { requestID: input.requestID })
-      return
+      return false
     }
+    if (input.sessionID && existing.info.sessionID !== input.sessionID) return false
     delete s.pending[input.requestID]
 
     log.info("replied", { requestID: input.requestID, answers: input.answers })
@@ -135,18 +138,21 @@ export namespace Question {
       sessionID: existing.info.sessionID,
       requestID: existing.info.id,
       answers: input.answers,
+      viewID: Instance.viewID,
     })
 
     existing.resolve(input.answers)
+    return true
   }
 
-  export async function reject(requestID: string): Promise<void> {
+  export async function reject(requestID: string, sessionID?: string): Promise<boolean> {
     const s = await state()
     const existing = s.pending[requestID]
     if (!existing) {
       log.warn("reject for unknown request", { requestID })
-      return
+      return false
     }
+    if (sessionID && existing.info.sessionID !== sessionID) return false
     delete s.pending[requestID]
 
     log.info("rejected", { requestID })
@@ -154,9 +160,11 @@ export namespace Question {
     Bus.publish(Event.Rejected, {
       sessionID: existing.info.sessionID,
       requestID: existing.info.id,
+      viewID: Instance.viewID,
     })
 
     existing.reject(new RejectedError())
+    return true
   }
 
   export class RejectedError extends Error {
@@ -165,7 +173,23 @@ export namespace Question {
     }
   }
 
-  export async function list() {
-    return state().then((x) => Object.values(x.pending).map((x) => x.info))
+  export async function cancel(sessionID: string, reason: unknown = new DOMException("Aborted", "AbortError")) {
+    const s = await state()
+    for (const [id, pending] of Object.entries(s.pending)) {
+      if (pending.info.sessionID !== sessionID) continue
+      delete s.pending[id]
+      Bus.publish(Event.Rejected, {
+        sessionID: pending.info.sessionID,
+        requestID: pending.info.id,
+        viewID: Instance.viewID,
+      })
+      pending.reject(reason)
+    }
+  }
+
+  export async function list(input?: { sessionID?: string }) {
+    const list = await state().then((x) => Object.values(x.pending).map((x) => x.info))
+    if (!input?.sessionID) return list
+    return list.filter((item) => item.sessionID === input.sessionID)
   }
 }

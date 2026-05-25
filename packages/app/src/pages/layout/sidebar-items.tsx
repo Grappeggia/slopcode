@@ -18,7 +18,7 @@ import { type Message, type Session, type TextPart, type UserMessage } from "@sl
 import { For, Match, Show, Switch, createMemo, onCleanup, type Accessor, type JSX } from "solid-js"
 import { agentColor } from "@/utils/agent"
 import { hasProjectPermissions } from "./helpers"
-import { sessionPermissionRequest } from "../session/composer/session-request-tree"
+import { sessionPermissionRequest, sessionWaiting } from "../session/composer/session-request-tree"
 
 const SLOPCODE_PROJECT_ID = "4b0ea68d7af9a6031a7ffda7ad66e0cb83315750"
 
@@ -90,6 +90,7 @@ const SessionRow = (props: {
   dense?: boolean
   tint: Accessor<string | undefined>
   isWorking: Accessor<boolean>
+  isWaiting: Accessor<boolean>
   hasPermissions: Accessor<boolean>
   hasError: Accessor<boolean>
   unseenCount: Accessor<number>
@@ -122,6 +123,9 @@ const SessionRow = (props: {
         <Switch fallback={<Icon name="dash" size="small" class="text-icon-weak" />}>
           <Match when={props.isWorking()}>
             <Spinner class="size-[15px]" />
+          </Match>
+          <Match when={props.isWaiting()}>
+            <div class="size-1.5 rounded-[2px] bg-background-stronger" />
           </Match>
           <Match when={props.hasPermissions()}>
             <div class="size-1.5 rounded-full bg-surface-warning-strong" />
@@ -204,13 +208,24 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
   const unseenCount = createMemo(() => notification.session.unseenCount(props.session.id))
   const hasError = createMemo(() => notification.session.unseenHasError(props.session.id))
   const [sessionStore] = globalSync.child(props.session.directory)
+  const isWaiting = createMemo(() =>
+    sessionWaiting({
+      session: sessionStore.session,
+      permission: sessionStore.permission,
+      question: sessionStore.question,
+      sessionID: props.session.id,
+      includePermission(item) {
+        return !permission.autoResponds(item, props.session.directory)
+      },
+    }),
+  )
   const hasPermissions = createMemo(() => {
     return !!sessionPermissionRequest(sessionStore.session, sessionStore.permission, props.session.id, (item) => {
       return !permission.autoResponds(item, props.session.directory)
     })
   })
   const isWorking = createMemo(() => {
-    if (hasPermissions()) return false
+    if (isWaiting()) return false
     const status = sessionStore.session_status[props.session.id]
     return status?.type === "busy" || status?.type === "retry"
   })
@@ -268,6 +283,7 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
       dense={props.dense}
       tint={tint}
       isWorking={isWorking}
+      isWaiting={isWaiting}
       hasPermissions={hasPermissions}
       hasError={hasError}
       unseenCount={unseenCount}

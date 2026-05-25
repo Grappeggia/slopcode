@@ -18,6 +18,9 @@ export type Platform = {
   /** App version */
   version?: string
 
+  /** Stable ID for the current browser tab or desktop window */
+  viewID?: Accessor<string>
+
   /** Open a URL in the default browser */
   openLink(url: string): void
 

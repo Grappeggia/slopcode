@@ -1,8 +1,8 @@
 import { Platform, usePlatform } from "@/context/platform"
 import { makePersisted, type AsyncStorage, type SyncStorage } from "@solid-primitives/storage"
 import { checksum } from "@slopcode-ai/util/encode"
-import { createResource, type Accessor } from "solid-js"
-import type { SetStoreFunction, Store } from "solid-js/store"
+import { createResource, onCleanup, type Accessor } from "solid-js"
+import { reconcile, type SetStoreFunction, type Store } from "solid-js/store"
 
 type InitType = Promise<string> | string | null
 type PersistedWithReady<T> = [Store<T>, SetStoreFunction<T>, InitType, Accessor<boolean>]
@@ -12,6 +12,8 @@ type PersistTarget = {
   key: string
   legacy?: string[]
   migrate?: (value: unknown) => unknown
+  scope?: string
+  sync?: boolean
 }
 
 const LEGACY_STORAGE = "default.dat"
@@ -209,6 +211,41 @@ function workspaceStorage(dir: string) {
   return `slopcode.workspace.${head}.${sum}.dat`
 }
 
+function token(scope?: string) {
+  if (!scope) return
+  return checksum(scope) ?? "0"
+}
+
+function scopedStorage(config: { storage?: string; scope?: string }) {
+  if (!config.storage) return
+  const sum = token(config.scope)
+  if (!sum) return config.storage
+  if (config.storage.endsWith(".dat")) {
+    return `${config.storage.slice(0, -4)}.${sum}.dat`
+  }
+  return `${config.storage}.${sum}`
+}
+
+function scopedKey(config: { key: string; scope?: string }) {
+  const sum = token(config.scope)
+  if (!sum) return config.key
+  return `scope:${sum}:${config.key}`
+}
+
+function localStorageKey(config: PersistTarget) {
+  const storage = scopedStorage(config)
+  const key = scopedKey(config)
+  if (!storage) return key
+  return `${storage}:${key}`
+}
+
+function syncValue<T>(defaults: T, newValue: string | null, migrate?: (value: unknown) => unknown) {
+  if (newValue === null) return snapshot(defaults)
+  const next = normalize(defaults, newValue, migrate)
+  if (next === undefined) return
+  return JSON.parse(next) as T
+}
+
 function localStorageWithPrefix(prefix: string): SyncStorage {
   const base = `${prefix}:`
   const scope = `prefix:${prefix}`
@@ -298,8 +335,12 @@ function localStorageDirect(): SyncStorage {
 
 export const PersistTesting = {
   localStorageDirect,
+  localStorageKey,
   localStorageWithPrefix,
   normalize,
+  scopedKey,
+  scopedStorage,
+  syncValue,
 }
 
 export const Persist = {
@@ -319,18 +360,20 @@ export const Persist = {
 }
 
 export function removePersisted(target: { storage?: string; key: string }, platform?: Platform) {
+  const storage = scopedStorage(target)
+  const key = scopedKey(target)
   const isDesktop = platform?.platform === "desktop" && !!platform.storage
 
   if (isDesktop) {
-    return platform.storage?.(target.storage)?.removeItem(target.key)
+    return platform.storage?.(storage)?.removeItem(key)
   }
 
-  if (!target.storage) {
-    localStorageDirect().removeItem(target.key)
+  if (!storage) {
+    localStorageDirect().removeItem(key)
     return
   }
 
-  localStorageWithPrefix(target.storage).removeItem(target.key)
+  localStorageWithPrefix(storage).removeItem(key)
 }
 
 export function persisted<T>(
@@ -342,10 +385,19 @@ export function persisted<T>(
 
   const defaults = snapshot(store[0])
   const legacy = config.legacy ?? []
+  const storageName = scopedStorage(config)
+  const storageKey = scopedKey(config)
 
   const isDesktop = platform.platform === "desktop" && !!platform.storage
 
   const currentStorage = (() => {
+    if (isDesktop) return platform.storage?.(storageName)
+    if (!storageName) return localStorageDirect()
+    return localStorageWithPrefix(storageName)
+  })()
+
+  const previousStorage = (() => {
+    if (!config.scope) return
     if (isDesktop) return platform.storage?.(config.storage)
     if (!config.storage) return localStorageDirect()
     return localStorageWithPrefix(config.storage)
@@ -373,6 +425,21 @@ export function persisted<T>(
             }
             if (raw !== next) current.setItem(key, next)
             return next
+          }
+
+          if (previousStorage) {
+            const previous = previousStorage as SyncStorage
+            const previousRaw = previous.getItem(config.key)
+            if (previousRaw !== null) {
+              const next = normalize(defaults, previousRaw, config.migrate)
+              if (next === undefined) {
+                previous.removeItem(config.key)
+              } else {
+                current.setItem(key, next)
+                previous.removeItem(config.key)
+                return next
+              }
+            }
           }
 
           for (const legacyKey of legacy) {
@@ -418,6 +485,21 @@ export function persisted<T>(
           return next
         }
 
+        if (previousStorage) {
+          const previous = previousStorage as AsyncStorage
+          const previousRaw = await previous.getItem(config.key)
+          if (previousRaw !== null) {
+            const next = normalize(defaults, previousRaw, config.migrate)
+            if (next === undefined) {
+              await previous.removeItem(config.key).catch(() => undefined)
+            } else {
+              await current.setItem(key, next)
+              await previous.removeItem(config.key).catch(() => undefined)
+              return next
+            }
+          }
+        }
+
         if (!legacyStore) return null
 
         for (const legacyKey of legacy) {
@@ -447,7 +529,7 @@ export function persisted<T>(
     return api
   })()
 
-  const [state, setState, init] = makePersisted(store, { name: config.key, storage })
+  const [state, setState, init] = makePersisted(store, { name: storageKey, storage })
 
   const isAsync = init instanceof Promise
   const [ready] = createResource(
@@ -458,6 +540,19 @@ export function persisted<T>(
     },
     { initialValue: !isAsync },
   )
+
+  if (!isDesktop && config.sync !== false && typeof window !== "undefined") {
+    const key = localStorageKey(config)
+    const sync = (event: StorageEvent) => {
+      if (event.storageArea !== localStorage) return
+      if (event.key !== key) return
+      const next = syncValue(defaults, event.newValue, config.migrate)
+      if (next === undefined) return
+      setState(next as T)
+    }
+    window.addEventListener("storage", sync)
+    onCleanup(() => window.removeEventListener("storage", sync))
+  }
 
   return [state, setState, init, () => ready() === true]
 }

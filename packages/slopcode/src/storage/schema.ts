@@ -1,3 +1,4 @@
+export { AccountTable, AccountStateTable } from "../account/account.sql"
 export { ControlAccountTable } from "../control/control.sql"
 export { SessionTable, MessageTable, PartTable, TodoTable, PermissionTable } from "../session/session.sql"
 export { SessionShareTable } from "../share/share.sql"

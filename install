@@ -99,6 +99,35 @@ else
       fi
     fi
 
+    is_termux=false
+    if [[ -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == *"/com.termux/"* ]]; then
+      if ! getconf GNU_LIBC_VERSION 2>/dev/null | grep -qi glibc; then
+        is_termux=true
+      fi
+    fi
+
+    if [ "$is_termux" = "true" ]; then
+      echo -e "${BLUE}Installing SlopCode for native Termux (Android/bionic)...${NC}"
+      if [ "$arch" != "arm64" ] && [ "$arch" != "x64" ]; then
+        echo -e "${RED}Native Termux install currently supports Android arm64/x64 only (detected $arch).${NC}"
+        exit 1
+      fi
+      if ! command -v pkg >/dev/null 2>&1; then
+        echo -e "${RED}Termux pkg is required for native Android install.${NC}"
+        exit 1
+      fi
+      pkg update -y
+      pkg install -y nodejs git ripgrep neovim
+      if ! command -v npm >/dev/null 2>&1; then
+        echo -e "${RED}npm was not found after installing nodejs.${NC}"
+        exit 1
+      fi
+      npm install -g slopcode@latest --include=optional
+      echo -e "${GREEN}SlopCode installed for native Termux.${NC}"
+      echo -e "${ORANGE}Native Termux supports CLI/server commands. Use proot-distro for the interactive TUI until Bun Android enables FFI.${NC}"
+      exit 0
+    fi
+
     combo="$os-$arch"
     case "$combo" in
       linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64)

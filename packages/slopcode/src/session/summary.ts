@@ -1,15 +1,16 @@
 import { fn } from "@/util/fn"
 import z from "zod"
 import { Session } from "."
-
 import { MessageV2 } from "./message-v2"
 import { Identifier } from "@/id/id"
 import { Snapshot } from "@/snapshot"
-
 import { Storage } from "@/storage/storage"
 import { Bus } from "@/bus"
 
 export namespace SessionSummary {
+  const ttl = 60_000
+  const cache = new Map<string, { at: number; diffs: Snapshot.FileDiff[] }>()
+
   function unquoteGitPath(input: string) {
     if (!input.startsWith('"')) return input
     if (!input.endsWith('"')) return input
@@ -66,6 +67,53 @@ export namespace SessionSummary {
     return Buffer.from(bytes).toString()
   }
 
+  function size(input: Snapshot.FileDiff) {
+    return Buffer.byteLength(input.before) + Buffer.byteLength(input.after)
+  }
+
+  function entry(input: Snapshot.FileDiff, full = false): Snapshot.FileDiffEntry {
+    return {
+      file: input.file,
+      additions: input.additions,
+      deletions: input.deletions,
+      status: input.status,
+      bytes: size(input),
+      ...(full ? { before: input.before, after: input.after } : {}),
+    }
+  }
+
+  function normalize(input: Snapshot.FileDiff[]) {
+    const next = input.map((item) => {
+      const file = unquoteGitPath(item.file)
+      if (file === item.file) return item
+      return {
+        ...item,
+        file,
+      }
+    })
+    return {
+      next,
+      changed: next.some((item, i) => item.file !== input[i]?.file),
+    }
+  }
+
+  function remember(sessionID: string, diffs: Snapshot.FileDiff[]) {
+    cache.set(sessionID, {
+      at: Date.now(),
+      diffs,
+    })
+    return diffs
+  }
+
+  async function stored(sessionID: string) {
+    const hit = cache.get(sessionID)
+    if (hit && Date.now() - hit.at < ttl) return hit.diffs
+    const diffs = await Storage.read<Snapshot.FileDiff[]>(["session_diff", sessionID]).catch(() => [])
+    const data = normalize(diffs)
+    if (data.changed) Storage.write(["session_diff", sessionID], data.next).catch(() => {})
+    return remember(sessionID, data.next)
+  }
+
   export const summarize = fn(
     z.object({
       sessionID: z.string(),
@@ -91,6 +139,7 @@ export namespace SessionSummary {
       },
     })
     await Storage.write(["session_diff", input.sessionID], diffs)
+    remember(input.sessionID, diffs)
     Bus.publish(Session.Event.Diff, {
       sessionID: input.sessionID,
       diff: diffs,
@@ -117,18 +166,24 @@ export namespace SessionSummary {
       messageID: Identifier.schema("message").optional(),
     }),
     async (input) => {
-      const diffs = await Storage.read<Snapshot.FileDiff[]>(["session_diff", input.sessionID]).catch(() => [])
-      const next = diffs.map((item) => {
-        const file = unquoteGitPath(item.file)
-        if (file === item.file) return item
-        return {
-          ...item,
-          file,
-        }
-      })
-      const changed = next.some((item, i) => item.file !== diffs[i]?.file)
-      if (changed) Storage.write(["session_diff", input.sessionID], next).catch(() => {})
-      return next
+      return stored(input.sessionID)
+    },
+  )
+
+  export const diffIndex = fn(Identifier.schema("session"), async (sessionID) => {
+    return stored(sessionID).then((diffs) => diffs.map((item) => entry(item)))
+  })
+
+  export const diffChunk = fn(
+    z.object({
+      sessionID: Identifier.schema("session"),
+      files: z.array(z.string()).min(1).max(128),
+    }),
+    async (input) => {
+      const files = new Set(input.files)
+      return stored(input.sessionID).then((diffs) =>
+        diffs.filter((item) => files.has(item.file)).map((item) => entry(item, true)),
+      )
     },
   )
 
@@ -136,8 +191,6 @@ export namespace SessionSummary {
     let from: string | undefined
     let to: string | undefined
 
-    // scan assistant messages to find earliest from and latest to
-    // snapshot
     for (const item of input.messages) {
       if (!from) {
         for (const part of item.parts) {

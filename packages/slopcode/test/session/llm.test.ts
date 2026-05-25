@@ -323,6 +323,232 @@ describe("session.llm.stream", () => {
     })
   })
 
+  test("injects llama.cpp slot caching requests for compatible providers", async () => {
+    const server = state.server
+    if (!server) {
+      throw new Error("Server not initialized")
+    }
+
+    const providerID = "alibaba"
+    const modelID = "qwen-plus"
+    const fixture = await loadFixture(providerID, modelID)
+    const model = fixture.model
+
+    const slotRequest = waitRequest(
+      "/slots/0",
+      new Response(JSON.stringify({ id_slot: 0, success: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    const chatRequest = waitRequest(
+      "/chat/completions",
+      new Response(createChatStream("Hello"), {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    )
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "slopcode.json"),
+          JSON.stringify({
+            $schema: "https://slopcode.dev/config.json",
+            enabled_providers: [providerID],
+            provider: {
+              [providerID]: {
+                options: {
+                  apiKey: "test-key",
+                  baseURL: `${server.url.origin}/v1`,
+                  llamaCppSessionCache: {
+                    enabled: true,
+                    fixedSlot: 0,
+                    persistent: false,
+                    cacheReuse: 128,
+                  },
+                },
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const resolved = await Provider.getModel(providerID, model.id)
+        const sessionID = "session-test-llamacpp"
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+
+        const user = {
+          id: "user-llamacpp",
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID, modelID: resolved.id },
+        } satisfies MessageV2.User
+
+        const stream = await LLM.stream({
+          user,
+          sessionID,
+          model: resolved,
+          agent,
+          system: ["You are a helpful assistant."],
+          abort: new AbortController().signal,
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {},
+        })
+
+        for await (const _ of stream.fullStream) {
+        }
+
+        const slotCapture = await slotRequest
+        const chatCapture = await chatRequest
+
+        expect(slotCapture.url.pathname).toBe("/slots/0")
+        expect(slotCapture.url.searchParams.get("action")).toBe("erase")
+
+        expect(chatCapture.url.pathname.endsWith("/chat/completions")).toBe(true)
+        expect(chatCapture.headers.get("x-slopcode-session")).toBe(sessionID)
+        expect(chatCapture.body.id_slot).toBe(0)
+        expect(chatCapture.body.cache_prompt).toBe(true)
+        expect(chatCapture.body.n_cache_reuse).toBe(128)
+      },
+    })
+  })
+
+  test("captures token limit metadata from successful responses", async () => {
+    const server = state.server
+    if (!server) {
+      throw new Error("Server not initialized")
+    }
+
+    const providerID = "alibaba"
+    const modelID = "qwen-plus"
+    const fixture = await loadFixture(providerID, modelID)
+    const model = fixture.model
+
+    const request = waitRequest(
+      "/chat/completions",
+      new Response(
+        createEventStream(
+          [
+            {
+              id: "chatcmpl-limit",
+              object: "chat.completion.chunk",
+              choices: [{ delta: { role: "assistant" } }],
+            },
+            {
+              id: "chatcmpl-limit",
+              object: "chat.completion.chunk",
+              choices: [{ delta: { content: "Hello" } }],
+            },
+            {
+              id: "chatcmpl-limit",
+              object: "chat.completion.chunk",
+              choices: [{ delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+                prompt_tokens_details: { cached_tokens: 0 },
+                completion_tokens_details: { reasoning_tokens: 0 },
+              },
+            },
+          ],
+          true,
+        ),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "text/event-stream",
+            "x-ratelimit-limit-tokens": "1000",
+            "x-ratelimit-remaining-tokens": "370",
+          },
+        },
+      ),
+    )
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "slopcode.json"),
+          JSON.stringify({
+            $schema: "https://slopcode.dev/config.json",
+            enabled_providers: [providerID],
+            provider: {
+              [providerID]: {
+                options: {
+                  apiKey: "test-key",
+                  baseURL: `${server.url.origin}/v1`,
+                },
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const resolved = await Provider.getModel(providerID, model.id)
+        const sessionID = "session-test-limit"
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          temperature: 0.4,
+          topP: 0.8,
+        } satisfies Agent.Info
+
+        const user = {
+          id: "user-limit",
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID, modelID: resolved.id },
+          variant: "high",
+        } satisfies MessageV2.User
+
+        const stream = await LLM.stream({
+          user,
+          sessionID,
+          model: resolved,
+          agent,
+          system: ["You are a helpful assistant."],
+          abort: new AbortController().signal,
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {},
+        })
+
+        for await (const _ of stream.fullStream) {
+        }
+
+        expect(stream.limit()).toEqual({
+          consumedPct: 63,
+          consumed: 630,
+          limit: 1000,
+          remaining: 370,
+          kind: "tokens",
+        })
+
+        const capture = await request
+        expect(capture.url.pathname.endsWith("/chat/completions")).toBe(true)
+      },
+    })
+  })
+
   test("sends responses API payload for OpenAI models", async () => {
     const server = state.server
     if (!server) {

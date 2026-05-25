@@ -2,8 +2,12 @@ import { BusEvent } from "@/bus/bus-event"
 import { Bus } from "@/bus"
 import z from "zod"
 
+const scoped = {
+  viewID: z.string().optional(),
+}
+
 export const TuiEvent = {
-  PromptAppend: BusEvent.define("tui.prompt.append", z.object({ text: z.string() })),
+  PromptAppend: BusEvent.define("tui.prompt.append", z.object({ text: z.string(), ...scoped })),
   CommandExecute: BusEvent.define(
     "tui.command.execute",
     z.object({
@@ -28,6 +32,7 @@ export const TuiEvent = {
         ]),
         z.string(),
       ]),
+      ...scoped,
     }),
   ),
   ToastShow: BusEvent.define(
@@ -37,12 +42,14 @@ export const TuiEvent = {
       message: z.string(),
       variant: z.enum(["info", "success", "warning", "error"]),
       duration: z.number().default(5000).optional().describe("Duration in milliseconds"),
+      ...scoped,
     }),
   ),
   SessionSelect: BusEvent.define(
     "tui.session.select",
     z.object({
       sessionID: z.string().regex(/^ses/).describe("Session ID to navigate to"),
+      ...scoped,
     }),
   ),
 }

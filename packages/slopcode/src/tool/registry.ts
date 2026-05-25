@@ -1,4 +1,4 @@
-import { PlanExitTool } from "./plan"
+import { PlanExitTool, PlanPermissionsTool } from "./plan"
 import { QuestionTool } from "./question"
 import { BashTool } from "./bash"
 import { EditTool } from "./edit"
@@ -7,6 +7,7 @@ import { GrepTool } from "./grep"
 import { BatchTool } from "./batch"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
+import { TaskStatusTool } from "./task_status"
 import { TodoWriteTool, TodoReadTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
@@ -20,12 +21,15 @@ import path from "path"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@slopcode-ai/plugin"
 import z from "zod"
 import { Plugin } from "../plugin"
-import { WebSearchTool } from "./websearch"
+import { WebSearchTool, hasBraveSearchCredential } from "./websearch"
 import { CodeSearchTool } from "./codesearch"
+import { RepoCloneTool } from "./repo_clone"
+import { RepoOverviewTool } from "./repo_overview"
 import { Flag } from "@/flag/flag"
 import { Log } from "@/util/log"
 import { LspTool } from "./lsp"
 import { Truncate } from "./truncation"
+import { FollowupRecommendationsTool } from "./recommendation"
 
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "../util/glob"
@@ -110,16 +114,21 @@ export namespace ToolRegistry {
       EditTool,
       WriteTool,
       TaskTool,
+      ...(Flag.SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS ? [TaskStatusTool] : []),
       WebFetchTool,
       TodoWriteTool,
       // TodoReadTool,
       WebSearchTool,
       CodeSearchTool,
+      ...(Flag.SLOPCODE_EXPERIMENTAL_SCOUT ? [RepoCloneTool, RepoOverviewTool] : []),
+      FollowupRecommendationsTool,
       SkillTool,
       ApplyPatchTool,
       ...(Flag.SLOPCODE_EXPERIMENTAL_LSP_TOOL ? [LspTool] : []),
       ...(config.experimental?.batch_tool === true ? [BatchTool] : []),
-      ...(Flag.SLOPCODE_EXPERIMENTAL_PLAN_MODE && Flag.SLOPCODE_CLIENT === "cli" ? [PlanExitTool] : []),
+      ...(Flag.SLOPCODE_EXPERIMENTAL_PLAN_MODE && Flag.SLOPCODE_CLIENT === "cli"
+        ? [PlanPermissionsTool, PlanExitTool]
+        : []),
       ...custom,
     ]
   }
@@ -135,18 +144,29 @@ export namespace ToolRegistry {
     },
     agent?: Agent.Info,
   ) {
+    const config = await Config.get()
     const tools = await all()
+    const hashline = config.experimental?.hashline_edit !== false
+    const brave = await hasBraveSearchCredential()
+    const usePatch =
+      model.modelID.includes("gpt-") && !model.modelID.includes("oss") && !model.modelID.includes("gpt-4")
     const result = await Promise.all(
       tools
         .filter((t) => {
-          // Enable websearch/codesearch for zen users OR via enable flag
-          if (t.id === "codesearch" || t.id === "websearch") {
+          if (t.id === "websearch") {
+            return brave || model.providerID === "slopcode" || Flag.SLOPCODE_ENABLE_EXA
+          }
+
+          if (t.id === "codesearch") {
             return model.providerID === "slopcode" || Flag.SLOPCODE_ENABLE_EXA
           }
 
+          if (hashline) {
+            if (t.id === "apply_patch") return usePatch
+            return true
+          }
+
           // use apply tool in same format as codex
-          const usePatch =
-            model.modelID.includes("gpt-") && !model.modelID.includes("oss") && !model.modelID.includes("gpt-4")
           if (t.id === "apply_patch") return usePatch
           if (t.id === "edit" || t.id === "write") return !usePatch
 

@@ -199,6 +199,18 @@ export namespace Snapshot {
       ref: "FileDiff",
     })
   export type FileDiff = z.infer<typeof FileDiff>
+
+  export const FileDiffEntry = FileDiff.omit({ before: true, after: true })
+    .extend({
+      before: z.string().optional(),
+      after: z.string().optional(),
+      bytes: z.number().optional(),
+    })
+    .meta({
+      ref: "SessionDiffEntry",
+    })
+  export type FileDiffEntry = z.infer<typeof FileDiffEntry>
+
   export async function diffFull(from: string, to: string): Promise<FileDiff[]> {
     const git = gitdir()
     const result: FileDiff[] = []

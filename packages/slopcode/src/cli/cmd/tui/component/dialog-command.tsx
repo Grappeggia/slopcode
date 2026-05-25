@@ -1,16 +1,18 @@
-import { useDialog } from "@tui/ui/dialog"
+import { useDialog, type DialogContext } from "@tui/ui/dialog"
 import { DialogSelect, type DialogSelectOption, type DialogSelectRef } from "@tui/ui/dialog-select"
 import {
   createContext,
   createMemo,
   createSignal,
+  getOwner,
   onCleanup,
+  runWithOwner,
   useContext,
   type Accessor,
   type ParentProps,
 } from "solid-js"
 import { useKeyboard } from "@opentui/solid"
-import { type KeybindKey, useKeybind } from "@tui/context/keybind"
+import { useKeybind } from "@tui/context/keybind"
 
 type Context = ReturnType<typeof init>
 const ctx = createContext<Context>()
@@ -21,7 +23,7 @@ export type Slash = {
 }
 
 export type CommandOption = DialogSelectOption<string> & {
-  keybind?: KeybindKey
+  keybind?: string
   suggested?: boolean
   slash?: Slash
   hidden?: boolean
@@ -29,9 +31,10 @@ export type CommandOption = DialogSelectOption<string> & {
 }
 
 function init() {
+  const root = getOwner()
   const [registrations, setRegistrations] = createSignal<Accessor<CommandOption[]>[]>([])
   const [suspendCount, setSuspendCount] = createSignal(0)
-  const dialog = useDialog()
+  const [dialog, setDialog] = createSignal<DialogContext | undefined>()
   const keybind = useKeybind()
 
   const entries = createMemo(() => {
@@ -56,26 +59,39 @@ function init() {
       })),
   )
   const suspended = () => suspendCount() > 0
+  const current = () => dialog()
 
   useKeyboard((evt) => {
+    const open = current()
+    if (!open) return
     if (suspended()) return
-    if (dialog.stack.length > 0) return
+    if (open.stack.length > 0) return
+    if (evt.defaultPrevented) return
     for (const option of entries()) {
       if (!isEnabled(option)) continue
       if (option.keybind && keybind.match(option.keybind, evt)) {
         evt.preventDefault()
-        option.onSelect?.(dialog)
+        option.onSelect?.(open)
         return
       }
     }
   })
 
   const result = {
+    bindDialog(input: DialogContext) {
+      setDialog(() => input)
+      return () => {
+        if (dialog() === input) setDialog(undefined)
+      }
+    },
+    dialog: current,
     trigger(name: string) {
+      const open = current()
+      if (!open) return
       for (const option of entries()) {
         if (option.value === name) {
           if (!isEnabled(option)) return
-          option.onSelect?.(dialog)
+          option.onSelect?.(open)
           return
         }
       }
@@ -93,18 +109,38 @@ function init() {
       })
     },
     keybinds(enabled: boolean) {
-      setSuspendCount((count) => count + (enabled ? -1 : 1))
+      setSuspendCount((count) => Math.max(0, count + (enabled ? -1 : 1)))
     },
     suspended,
     show() {
-      dialog.replace(() => <DialogCommand options={visibleOptions()} suggestedOptions={suggestedOptions()} />)
+      const open = current()
+      if (!open) return
+      open.replace(() => <DialogCommand options={visibleOptions()} suggestedOptions={suggestedOptions()} />)
     },
     register(cb: () => CommandOption[]) {
-      const results = createMemo(cb)
-      setRegistrations((arr) => [results, ...arr])
-      onCleanup(() => {
-        setRegistrations((arr) => arr.filter((x) => x !== results))
+      const owner = getOwner() ?? root
+      if (!owner) return () => {}
+
+      let list: Accessor<CommandOption[]> | undefined
+      runWithOwner(owner, () => {
+        list = createMemo(cb)
+        const ref = list
+        if (!ref) return
+        setRegistrations((arr) => [ref, ...arr])
+        onCleanup(() => {
+          setRegistrations((arr) => arr.filter((x) => x !== ref))
+        })
       })
+
+      if (!list) return () => {}
+      let done = false
+      return () => {
+        if (done) return
+        done = true
+        const ref = list
+        if (!ref) return
+        setRegistrations((arr) => arr.filter((x) => x !== ref))
+      }
     },
   }
   return result
@@ -120,10 +156,11 @@ export function useCommandDialog() {
 
 export function CommandProvider(props: ParentProps) {
   const value = init()
-  const dialog = useDialog()
   const keybind = useKeybind()
 
   useKeyboard((evt) => {
+    const dialog = value.dialog()
+    if (!dialog) return
     if (value.suspended()) return
     if (dialog.stack.length > 0) return
     if (evt.defaultPrevented) return
@@ -135,6 +172,13 @@ export function CommandProvider(props: ParentProps) {
   })
 
   return <ctx.Provider value={value}>{props.children}</ctx.Provider>
+}
+
+export function CommandDialogBridge() {
+  const command = useCommandDialog()
+  const dialog = useDialog()
+  onCleanup(command.bindDialog(dialog))
+  return null
 }
 
 function DialogCommand(props: { options: CommandOption[]; suggestedOptions: CommandOption[] }) {

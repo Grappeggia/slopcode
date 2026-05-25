@@ -57,7 +57,7 @@ const run = async () => {
     `pkgname=${pkg}`,
     `pkgver=${version}`,
     "pkgrel=1",
-    'pkgdesc="The open source AI coding agent focused on terminal workflows."',
+    'pkgdesc="The open source AI slopcoding agent focused on terminal workflows."',
     "arch=('x86_64' 'aarch64')",
     'url="https://slopcode.dev"',
     "license=('MIT')",
@@ -71,13 +71,21 @@ const run = async () => {
     "",
     "package() {",
     '  install -Dm755 "$srcdir/slopcode" "$pkgdir/usr/bin/slopcode"',
+    '  if [[ -d "$srcdir/neovim" ]]; then',
+    '    install -dm755 "$pkgdir/usr/lib/slopcode"',
+    '    cp -a "$srcdir/neovim" "$pkgdir/usr/lib/slopcode/neovim"',
+    "  fi",
     "}",
     "",
   ].join("\n")
 
+  if (!pkgbuild.includes("/usr/lib/slopcode/neovim")) {
+    throw new Error("aur: missing neovim sidecar install step")
+  }
+
   const src = [
     `pkgbase = ${pkg}`,
-    "\tpkgdesc = The open source AI coding agent focused on terminal workflows.",
+    "\tpkgdesc = The open source AI slopcoding agent focused on terminal workflows.",
     `\tpkgver = ${version}`,
     "\tpkgrel = 1",
     "\turl = https://slopcode.dev",

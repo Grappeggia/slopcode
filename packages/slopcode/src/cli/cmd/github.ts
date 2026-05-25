@@ -28,6 +28,8 @@ import { Bus } from "../../bus"
 import { MessageV2 } from "../../session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
 import { $ } from "bun"
+import { setTimeout as sleep } from "node:timers/promises"
+import { product } from "@slopcode-ai/util/product"
 
 type GitHubAuthor = {
   login: string
@@ -132,9 +134,9 @@ type IssueQueryResponse = {
   }
 }
 
-const AGENT_USERNAME = "slopcode-agent[bot]"
+const AGENT_USERNAME = product.github.app_user
 const AGENT_REACTION = "eyes"
-const WORKFLOW_FILE = ".github/workflows/slopcode.yml"
+const WORKFLOW_FILE = product.github.workflow_file
 
 // Event categories for routing
 // USER_EVENTS: triggered by user actions, have actor/issueId, support reactions/comments
@@ -241,7 +243,7 @@ export const GithubInstallCommand = cmd({
                 "",
                 "    3. Go to a GitHub issue and comment `/sc summarize` to see the agent in action",
                 "",
-                "   Learn more about the GitHub agent - https://slopcode.dev/docs/github/#usage-examples",
+                `   Learn more about the GitHub agent - ${product.urls.docs}/github/#usage-examples`,
               ].join("\n"),
             )
           }
@@ -323,7 +325,7 @@ export const GithubInstallCommand = cmd({
             if (installation) return s.stop("GitHub app already installed")
 
             // Open browser
-            const url = "https://github.com/apps/slopcode-agent"
+            const url = product.urls.github_app
             const command =
               process.platform === "darwin"
                 ? `open "${url}"`
@@ -353,15 +355,13 @@ export const GithubInstallCommand = cmd({
               }
 
               retries++
-              await Bun.sleep(1000)
+              await sleep(1000)
             } while (true)
 
             s.stop("Installed GitHub app")
 
             async function getInstallation() {
-              return await fetch(
-                `https://api.slopcode.ai/get_github_app_installation?owner=${app.owner}&repo=${app.repo}`,
-              )
+              return await fetch(`${product.urls.api}/get_github_app_installation?owner=${app.owner}&repo=${app.repo}`)
                 .then((res) => res.json())
                 .then((data) => data.installation)
             }
@@ -403,7 +403,7 @@ jobs:
           persist-credentials: false
 
       - name: Run slopcode
-        uses: teamslop/slopcode/github@latest${envStr}
+        uses: ${product.github.full_repo}/github@latest${envStr}
         with:
           model: ${provider}/${model}`,
             )
@@ -473,7 +473,7 @@ export const GithubRunCommand = cmd({
           ? (payload as IssueCommentEvent | IssuesEvent).issue.number
           : (payload as PullRequestEvent | PullRequestReviewCommentEvent).pull_request.number
       const runUrl = `/${owner}/${repo}/actions/runs/${runId}`
-      const shareBaseUrl = isMock ? "https://dev.slopcode.ai" : "https://slopcode.dev"
+      const shareBaseUrl = isMock ? product.share.dev_url : product.urls.site
 
       let appToken: string
       let octoRest: Octokit
@@ -712,7 +712,7 @@ export const GithubRunCommand = cmd({
 
       function normalizeOidcBaseUrl(): string {
         const value = process.env["OIDC_BASE_URL"]
-        if (!value) return "https://api.slopcode.ai"
+        if (!value) return product.urls.api
         return value.replace(/\/+$/, "")
       }
 
@@ -887,7 +887,7 @@ export const GithubRunCommand = cmd({
 
             if (part.time?.end) {
               UI.empty()
-              UI.println(UI.markdown(text))
+              UI.println(await UI.markdown(text))
               UI.empty()
               text = ""
               return
@@ -1372,7 +1372,7 @@ Co-authored-by: ${actor} <${actor}@users.noreply.github.com>"`
         } catch (e) {
           if (retries > 0) {
             console.log(`Retrying after ${delayMs}ms...`)
-            await Bun.sleep(delayMs)
+            await sleep(delayMs)
             return withRetry(fn, retries - 1, delayMs)
           }
           throw e

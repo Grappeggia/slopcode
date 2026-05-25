@@ -148,7 +148,7 @@ describe("transcript", () => {
       expect(result).toStartWith("**Tool: bash**\n")
       // Input and output should each be in their own code blocks
       expect(result).toContain("**Input:**\n```json")
-      expect(result).toContain("**Output:**\n```\n```hello```\n```")
+      expect(result).toContain("**Output:**\n```hello```")
     })
 
     test("formats tool part without details when disabled", () => {
@@ -192,6 +192,29 @@ describe("transcript", () => {
       const result = formatPart(part, options)
       expect(result).toContain("**Error:**")
       expect(result).toContain("Command failed")
+    })
+
+    test("labels transcript output with embedded heredoc languages", () => {
+      const part: Part = {
+        id: "part_1",
+        sessionID: "ses_123",
+        messageID: "msg_123",
+        type: "tool",
+        callID: "call_1",
+        tool: "bash",
+        state: {
+          status: "completed",
+          input: { command: "python3 - <<'PY'" },
+          output: `$ python3 - <<'PY'\nprint(\"hi\")\nPY\nTraceback (most recent call last):`,
+          title: "Run heredoc",
+          metadata: {},
+          time: { start: 1000, end: 1100 },
+        },
+      }
+      const result = formatPart(part, options)
+      expect(result).toContain("```bash")
+      expect(result).toContain("```python")
+      expect(result).toContain("```text")
     })
   })
 

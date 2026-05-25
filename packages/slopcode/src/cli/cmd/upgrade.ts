@@ -16,7 +16,27 @@ export const UpgradeCommand = {
         alias: "m",
         describe: "installation method to use",
         type: "string",
-        choices: ["curl", "npm", "pnpm", "bun", "nix", "brew", "apt", "snap", "choco", "scoop"],
+        choices: [
+          "curl",
+          "npm",
+          "pnpm",
+          "yarn",
+          "bun",
+          "nix",
+          "brew",
+          "macports",
+          "apt",
+          "zypper",
+          "dnf",
+          "yum",
+          "apk",
+          "pkg",
+          "pacman",
+          "paru",
+          "snap",
+          "choco",
+          "scoop",
+        ],
       })
   },
   handler: async (args: { target?: string; method?: string }) => {
@@ -61,7 +81,15 @@ export const UpgradeCommand = {
         if (method === "choco" && err.data.stderr.includes("not running from an elevated command shell")) {
           prompts.log.error("Please run the terminal as Administrator and try again")
         } else if (
-          (method === "apt" || method === "snap") &&
+          (method === "apt" ||
+            method === "zypper" ||
+            method === "dnf" ||
+            method === "yum" ||
+            method === "apk" ||
+            method === "pkg" ||
+            method === "macports" ||
+            method === "pacman" ||
+            method === "snap") &&
           err.data.stderr.includes("not running from a privileged shell")
         ) {
           prompts.log.error("Please rerun with sudo privileges and try again")

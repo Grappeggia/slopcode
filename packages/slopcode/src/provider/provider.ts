@@ -44,6 +44,8 @@ import { fromNodeProviderChain } from "@aws-sdk/credential-providers"
 import { GoogleAuth } from "google-auth-library"
 import { ProviderTransform } from "./transform"
 import { Installation } from "../installation"
+import { ProviderLimit } from "./limit"
+import { LlamaCppSessionCache } from "./llamacpp-cache"
 
 export namespace Provider {
   const log = Log.create({ service: "provider" })
@@ -225,23 +227,11 @@ export namespace Provider {
       const profile = configProfile ?? envProfile
 
       const awsAccessKeyId = Env.get("AWS_ACCESS_KEY_ID")
-
-      // TODO: Using process.env directly because Env.set only updates a process.env shallow copy,
-      // until the scope of the Env API is clarified (test only or runtime?)
-      const awsBearerToken = iife(() => {
-        const envToken = process.env.AWS_BEARER_TOKEN_BEDROCK
-        if (envToken) return envToken
-        if (auth?.type === "api") {
-          process.env.AWS_BEARER_TOKEN_BEDROCK = auth.key
-          return auth.key
-        }
-        return undefined
-      })
-
+      const awsBearerToken = Env.get("AWS_BEARER_TOKEN_BEDROCK") ?? (auth?.type === "api" ? auth.key : undefined)
       const awsWebIdentityTokenFile = Env.get("AWS_WEB_IDENTITY_TOKEN_FILE")
 
       const containerCreds = Boolean(
-        process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI || process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI,
+        Env.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") || Env.get("AWS_CONTAINER_CREDENTIALS_FULL_URI"),
       )
 
       if (!profile && !awsAccessKeyId && !awsBearerToken && !awsWebIdentityTokenFile && !containerCreds)
@@ -356,6 +346,18 @@ export namespace Provider {
         },
       }
     },
+    llmgateway: async () => {
+      return {
+        autoload: false,
+        options: {
+          headers: {
+            "HTTP-Referer": "https://slopcode.dev/",
+            "X-Title": "slopcode",
+            "X-Source": "slopcode",
+          },
+        },
+      }
+    },
     openrouter: async () => {
       return {
         autoload: false,
@@ -363,6 +365,18 @@ export namespace Provider {
           headers: {
             "HTTP-Referer": "https://slopcode.dev/",
             "X-Title": "slopcode",
+          },
+        },
+      }
+    },
+    nvidia: async (provider) => {
+      return {
+        autoload: provider.source === "config",
+        options: {
+          headers: {
+            "HTTP-Referer": "https://slopcode.dev/",
+            "X-Title": "slopcode",
+            "X-BILLING-INVOKE-ORIGIN": "SlopCode",
           },
         },
       }
@@ -431,19 +445,9 @@ export namespace Provider {
     },
     "sap-ai-core": async () => {
       const auth = await Auth.get("sap-ai-core")
-      // TODO: Using process.env directly because Env.set only updates a shallow copy (not process.env),
-      // until the scope of the Env API is clarified (test only or runtime?)
-      const envServiceKey = iife(() => {
-        const envAICoreServiceKey = process.env.AICORE_SERVICE_KEY
-        if (envAICoreServiceKey) return envAICoreServiceKey
-        if (auth?.type === "api") {
-          process.env.AICORE_SERVICE_KEY = auth.key
-          return auth.key
-        }
-        return undefined
-      })
-      const deploymentId = process.env.AICORE_DEPLOYMENT_ID
-      const resourceGroup = process.env.AICORE_RESOURCE_GROUP
+      const envServiceKey = Env.get("AICORE_SERVICE_KEY") ?? (auth?.type === "api" ? auth.key : undefined)
+      const deploymentId = Env.get("AICORE_DEPLOYMENT_ID")
+      const resourceGroup = Env.get("AICORE_RESOURCE_GROUP")
 
       return {
         autoload: !!envServiceKey,
@@ -964,7 +968,7 @@ export namespace Provider {
       if (disabled.has(providerID)) continue
       const data = database[providerID]
       if (!data) {
-        log.error("Provider does not exist in model list " + providerID)
+        log.debug("skipping custom loader for missing provider", { providerID })
         continue
       }
       const result = await fn(data)
@@ -983,6 +987,17 @@ export namespace Provider {
       if (provider.name) partial.name = provider.name
       if (provider.options) partial.options = provider.options
       mergeProvider(providerID, partial)
+    }
+
+    for (const plugin of await Plugin.list()) {
+      if (!plugin.provider?.models) continue
+      const providerID = plugin.provider.id
+      const provider = providers[providerID]
+      if (!provider || !isProviderAllowed(providerID)) continue
+      const models = await plugin.provider.models(provider, { auth: await Auth.get(providerID) })
+      if (models) {
+        provider.models = mergeDeep(provider.models, models as Record<string, Model>) as Record<string, Model>
+      }
     }
 
     for (const [providerID, provider] of Object.entries(providers)) {
@@ -1071,7 +1086,6 @@ export namespace Provider {
       const customFetch = options["fetch"]
 
       options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
-        // Preserve custom fetch if it exists, wrap it with timeout logic
         const fetchFn = customFetch ?? fetch
         const opts = init ?? {}
 
@@ -1085,29 +1099,55 @@ export namespace Provider {
           opts.signal = combined
         }
 
-        // Strip openai itemId metadata following what codex does
-        // Codex uses #[serde(skip_serializing)] on id fields for all item types:
-        // Message, Reasoning, FunctionCall, LocalShellCall, CustomToolCall, WebSearchCall
-        // IDs are only re-attached for Azure with store=true
-        if (model.api.npm === "@ai-sdk/openai" && opts.body && opts.method === "POST") {
-          const body = JSON.parse(opts.body as string)
-          const isAzure = model.providerID.includes("azure")
-          const keepIds = isAzure && body.store === true
-          if (!keepIds && Array.isArray(body.input)) {
-            for (const item of body.input) {
-              if ("id" in item) {
-                delete item.id
+        if (opts.method === "POST" && typeof opts.body === "string") {
+          const url = new URL(input instanceof Request ? input.url : input.toString())
+
+          if (model.api.npm === "@ai-sdk/openai") {
+            const body = JSON.parse(opts.body)
+            const isAzure = model.providerID.includes("azure")
+            const keepIds = isAzure && body.store === true
+            if (!keepIds && Array.isArray(body.input)) {
+              for (const item of body.input) {
+                if ("id" in item) {
+                  delete item.id
+                }
+              }
+              opts.body = JSON.stringify(body)
+            }
+          }
+
+          if (
+            LlamaCppSessionCache.isEnabled(provider.options) &&
+            (url.pathname.endsWith("/chat/completions") || url.pathname.endsWith("/completions"))
+          ) {
+            const sessionID = new Headers(opts.headers).get("x-slopcode-session")
+            if (sessionID) {
+              const body = JSON.parse(opts.body)
+              const injected = await LlamaCppSessionCache.prepareRequest({
+                sessionID,
+                providerID: model.providerID,
+                modelID: model.id,
+                providerOptions: provider.options,
+                baseURL: String(baseURL ?? model.api.url),
+                fetch: fetchFn,
+                signal: opts.signal ?? undefined,
+              })
+              if (injected) {
+                opts.body = JSON.stringify({ ...body, ...injected })
               }
             }
-            opts.body = JSON.stringify(body)
           }
         }
 
-        return fetchFn(input, {
+        const response = await fetchFn(input, {
           ...opts,
           // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
           timeout: false,
         })
+        if (response.ok) {
+          ProviderLimit.capture(response.headers)
+        }
+        return response
       }
 
       const bundledFn = BUNDLED_PROVIDERS[model.api.npm]

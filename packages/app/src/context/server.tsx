@@ -16,9 +16,13 @@ export function normalizeServerUrl(input: string) {
   return withProtocol.replace(/\/+$/, "")
 }
 
+function brand(value: string) {
+  return value.replace(/\bopencode\b/gi, "SlopCode")
+}
+
 export function serverName(conn?: ServerConnection.Any, ignoreDisplayName = false) {
   if (!conn) return ""
-  if (conn.displayName && !ignoreDisplayName) return conn.displayName
+  if (conn.displayName && !ignoreDisplayName) return brand(conn.displayName)
   return conn.http.url.replace(/^https?:\/\//, "").replace(/\/+$/, "")
 }
 
@@ -99,7 +103,11 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     const platform = usePlatform()
 
     const [store, setStore, _, ready] = persisted(
-      Persist.global("server", ["server.v3"]),
+      {
+        ...Persist.global("server", ["server.v3"]),
+        scope: platform.viewID?.(),
+        sync: false,
+      },
       createStore({
         list: [] as StoredServer[],
         projects: {} as Record<string, StoredProject[]>,

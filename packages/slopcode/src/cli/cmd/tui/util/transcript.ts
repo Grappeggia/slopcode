@@ -1,4 +1,5 @@
 import type { AssistantMessage, Part, UserMessage } from "@slopcode-ai/sdk/v2"
+import { segmentRichText, segmentsToMarkdown } from "@/cli/render/segment"
 import { Locale } from "@/util/locale"
 
 export type TranscriptOptions = {
@@ -69,7 +70,7 @@ export function formatAssistantHeader(msg: AssistantMessage, includeMetadata: bo
 
 export function formatPart(part: Part, options: TranscriptOptions): string {
   if (part.type === "text" && !part.synthetic) {
-    return `${part.text}\n\n`
+    return `${segmentsToMarkdown(segmentRichText(part.text))}\n\n`
   }
 
   if (part.type === "reasoning") {
@@ -85,10 +86,10 @@ export function formatPart(part: Part, options: TranscriptOptions): string {
       result += `\n**Input:**\n\`\`\`json\n${JSON.stringify(part.state.input, null, 2)}\n\`\`\`\n`
     }
     if (options.toolDetails && part.state.status === "completed" && part.state.output) {
-      result += `\n**Output:**\n\`\`\`\n${part.state.output}\n\`\`\`\n`
+      result += `\n**Output:**\n${segmentsToMarkdown(segmentRichText(part.state.output))}\n`
     }
     if (options.toolDetails && part.state.status === "error" && part.state.error) {
-      result += `\n**Error:**\n\`\`\`\n${part.state.error}\n\`\`\`\n`
+      result += `\n**Error:**\n${segmentsToMarkdown(segmentRichText(part.state.error))}\n`
     }
     result += `\n`
     return result
