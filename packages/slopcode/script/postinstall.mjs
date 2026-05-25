@@ -179,7 +179,8 @@ async function installAndroid(arch) {
     const archive = await androidAsset(arch, tmp)
     const extract = path.join(tmp, "package")
     await fs.promises.mkdir(extract, { recursive: true })
-    const result = require("child_process").spawnSync("tar", ["-xzf", archive, "-C", extract], {
+    const result = require("child_process").spawnSync("tar", ["-xzf", path.basename(archive), "-C", extract], {
+      cwd: path.dirname(archive),
       encoding: "utf8",
       timeout: 120000,
     })

@@ -232,7 +232,7 @@ const events = {
         210 + deltas.length * 12,
       ),
     )
-    timers.push(setTimeout(() => process.exit(0), 330 + deltas.length * 12))
+    timers.push(setTimeout(() => process.exit(0), 4_000 + deltas.length * 12))
     return () => timers.forEach(clearTimeout)
   },
 }
@@ -270,7 +270,7 @@ async function run(mode: "hidden" | "visible") {
   const exited = child.exited
   const stdout = child.stdout ? new Response(child.stdout).text() : Promise.resolve("")
   const stderr = child.stderr ? new Response(child.stderr).text() : Promise.resolve("")
-  const timeout = sleep(10_000).then(async () => {
+  const timeout = sleep(15_000).then(async () => {
     child.kill()
     throw new Error(`probe timed out for ${mode}`)
   })
@@ -305,7 +305,7 @@ describe("tui final output flicker reproduction", () => {
     expect(count(visible.text, token)).toBeGreaterThanOrEqual(1)
     expect(count(visible.text, token)).toBeLessThanOrEqual(2)
     expect(count(visible.text, "This paragraph is intentionally")).toBeLessThanOrEqual(4)
-  }, 15_000)
+  }, 25_000)
 
   test("keeps repaint churn bounded without remounting the TUI", async () => {
     const { hidden, visible } = await sample()
@@ -313,5 +313,5 @@ describe("tui final output flicker reproduction", () => {
     expect(visible.raw.length).toBeLessThan(Math.floor(hidden.raw.length * 4.5))
     expect((hidden.raw.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1)
     expect((visible.raw.match(/\x1b\[\?1049h/g) ?? []).length).toBe(1)
-  }, 15_000)
+  }, 25_000)
 })

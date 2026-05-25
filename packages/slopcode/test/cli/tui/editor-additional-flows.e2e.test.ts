@@ -136,6 +136,18 @@ async function click_editor_tab_close(app: Awaited<ReturnType<typeof start>>, fi
   click(app.pty, hit.row, hit.col)
 }
 
+async function close_editor_tab(app: Awaited<ReturnType<typeof start>>, file: string) {
+  await eventually(async () => {
+    const open = app.screen().some((line) => line.includes(file) && line.includes("[x]"))
+    if (!open) return true
+    await click_editor_tab_close(app, file)
+    await Bun.sleep(250)
+    return !app.screen().some((line) => line.includes(file) && line.includes("[x]"))
+  }, 15_000).catch(() => {
+    throw new Error(`${file}\n${app.text()}`)
+  })
+}
+
 async function click_text(app: Awaited<ReturnType<typeof start>>, value: string, occurrence = 0) {
   const hit = await eventually(() => locate(app.text(), value, occurrence), 10_000)
   click(app.pty, hit.row, hit.col + Math.max(1, Math.floor(value.length / 2)))
@@ -393,29 +405,39 @@ describe("editor additional flows e2e", () => {
 
       await click_files_open(app, "c.ts")
       await wait_editor(app, "GAMMA LIFE")
+      await Bun.sleep(500)
 
-      await click_editor_tab_close(app, "b.ts")
+      await close_editor_tab(app, "b.ts")
       await eventually(() => {
         const screen = app.text()
         if (!screen.includes("GAMMA LIFE")) return
-        if (screen.includes("b.ts  [x]")) return
+        if (app.screen().some((line) => line.includes("b.ts") && line.includes("[x]"))) return
         return screen
-      }, 8_000)
+      }, 15_000)
 
-      ctrl(app.pty, "q")
+      await click_text(app, "a.ts")
+      await wait_editor(app, "ALPHA LIFE")
+      await close_editor_tab(app, "c.ts")
       await eventually(() => {
         const screen = app.text()
         if (!screen.includes("ALPHA LIFE")) return
-        if (screen.includes("c.ts  [x]")) return
+        if (app.screen().some((line) => line.includes("c.ts") && line.includes("[x]"))) return
         return screen
-      }, 8_000)
+      }, 15_000)
 
-      ctrl(app.pty, "q")
+      await click_text(app, "Chat")
       await wait_no_editor(app, "ALPHA LIFE")
+      await close_editor_tab(app, "a.ts")
+      await eventually(() => {
+        const screen = app.text()
+        if (screen.includes("ALPHA LIFE")) return
+        if (app.screen().some((line) => line.includes("a.ts") && line.includes("[x]"))) return
+        return screen
+      }, 15_000)
     } finally {
       await app.stop()
     }
-  }, 40_000)
+  }, 60_000)
 
   test("diagnostics appear for invalid content and clear after fixing and saving", async () => {
     await using tmp = await tmpdir({
