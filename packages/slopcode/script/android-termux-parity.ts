@@ -54,7 +54,8 @@ export const parity = [
     area: "sidebar",
     mode: "parity",
     active: false,
-    missing: "summary/files sidebar, file explorer rows, modified files, and open files sections need the shared UI renderer",
+    missing:
+      "summary/files sidebar, file explorer rows, modified files, and open files sections need the shared UI renderer",
     expect: ["summary/files modes", "file attach", "open action", "docked and overlay layouts"],
   },
   {
@@ -63,7 +64,8 @@ export const parity = [
     area: "editor",
     mode: "parity",
     active: false,
-    missing: "embedded Neovim snapshots, mouse/input forwarding, save, close guard, diagnostics, and diff dismiss are not in the sidecar",
+    missing:
+      "embedded Neovim snapshots, mouse/input forwarding, save, close guard, diagnostics, and diff dismiss are not in the sidecar",
     expect: ["open real file", "edit/save", "dirty guard", "diagnostics", "diff open/dismiss"],
   },
 ] as const

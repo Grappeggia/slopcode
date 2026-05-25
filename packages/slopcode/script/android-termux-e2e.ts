@@ -54,7 +54,8 @@ async function androidSerial() {
   serial ??= await adbSerial()
   return serial
 }
-const adbRun = async (args: string[], options?: ExecOptions) => exec(["adb", "-s", await androidSerial(), ...args], options)
+const adbRun = async (args: string[], options?: ExecOptions) =>
+  exec(["adb", "-s", await androidSerial(), ...args], options)
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 const adb = (...args: string[]) => adbRun(args)
 const termux = (command: string, options?: ExecOptions) =>

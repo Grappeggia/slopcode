@@ -133,9 +133,11 @@ async function installTools(dir: string) {
   await Bun.write(driver, code)
 
   const sh = (name: string) =>
-    ["#!/bin/sh", `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(driver)} ${JSON.stringify(name)} "$@"`, ""].join(
-      "\n",
-    )
+    [
+      "#!/bin/sh",
+      `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(driver)} ${JSON.stringify(name)} "$@"`,
+      "",
+    ].join("\n")
   const cmd = (name: string) =>
     ["@echo off", `"${process.execPath}" "${driver}" ${name} %*`, "exit /b %ERRORLEVEL%", ""].join("\r\n")
 
@@ -147,9 +149,7 @@ async function installTools(dir: string) {
           await Bun.write(file, sh(name))
           await fs.chmod(file, 0o755)
         },
-        ...(process.platform === "win32"
-          ? [async () => Bun.write(path.join(dir, `${name}.cmd`), cmd(name))]
-          : []),
+        ...(process.platform === "win32" ? [async () => Bun.write(path.join(dir, `${name}.cmd`), cmd(name))] : []),
       ])
       .map((write) => write()),
   )
