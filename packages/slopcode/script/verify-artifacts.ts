@@ -220,7 +220,7 @@ const androidSmoke = async () => {
   }
   const work = path.join(tmp, "install-android")
   await fs.mkdir(work, { recursive: true })
-  await $`npm install --no-package-lock --ignore-scripts=false --include=optional --os=android --cpu=arm64 ${android.tgz} ${root.tgz}`.cwd(
+  await $`npm install --force --no-package-lock --ignore-scripts=false --include=optional --os=android --cpu=arm64 ${android.tgz} ${root.tgz}`.cwd(
     work,
   )
   const bin = path.join(work, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode")
