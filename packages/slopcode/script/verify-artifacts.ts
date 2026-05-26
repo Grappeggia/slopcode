@@ -227,7 +227,9 @@ const androidSmoke = async () => {
     SLOPCODE_TEST_ARCH: "arm64",
     SLOPCODE_ANDROID_ASSET_PATH: android,
   }
-  await $`npm install --force --no-package-lock --ignore-scripts=true --os=android --cpu=arm64 ${root.tgz}`.env(env).cwd(work)
+  await $`npm install --force --no-package-lock --ignore-scripts=true --os=android --cpu=arm64 ${root.tgz}`
+    .env(env)
+    .cwd(work)
   await $`node ./node_modules/${pkg.name}/postinstall.mjs`.env(env).cwd(work)
   const bin = path.join(
     work,
