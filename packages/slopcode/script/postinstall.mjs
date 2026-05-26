@@ -327,7 +327,7 @@ async function main() {
 }
 
 try {
-  main()
+  await main()
 } catch (error) {
   clearCache()
   console.error("Postinstall script error:", error.message)

@@ -71,7 +71,8 @@ if (binaries.length === 0) {
   throw new Error("verify: missing binary packages in ./dist")
 }
 
-const deps = Object.fromEntries(binaries.map((item) => [item.name, item.version]))
+const publishable = binaries.filter((item) => !item.name.includes("-android-"))
+const deps = Object.fromEntries(publishable.map((item) => [item.name, item.version]))
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-verify-"))
 const stage = path.join(tmp, "stage")
 await fs.mkdir(stage, { recursive: true })
@@ -214,16 +215,30 @@ const alpineSmoke = async () => {
 }
 
 const androidSmoke = async () => {
-  const android = packed.find((item) => item.name === "slopcode-bin-android-arm64")
-  if (!android) {
-    throw new Error("verify: missing Android arm64 runtime package")
+  const android = path.join(dir, "dist", "slopcode-android-arm64.tar.gz")
+  if (!(await exists(android))) {
+    throw new Error("verify: missing Android arm64 release asset")
   }
   const work = path.join(tmp, "install-android")
   await fs.mkdir(work, { recursive: true })
-  await $`npm install --force --no-package-lock --ignore-scripts=false --include=optional --os=android --cpu=arm64 ${android.tgz} ${root.tgz}`.cwd(
+  const env = {
+    ...process.env,
+    SLOPCODE_TEST_PLATFORM: "android",
+    SLOPCODE_TEST_ARCH: "arm64",
+    SLOPCODE_ANDROID_ASSET_PATH: android,
+  }
+  await $`npm install --force --no-package-lock --ignore-scripts=true --os=android --cpu=arm64 ${root.tgz}`.env(env).cwd(work)
+  await $`node ./node_modules/${pkg.name}/postinstall.mjs`.env(env).cwd(work)
+  const bin = path.join(
     work,
+    "node_modules",
+    pkg.name,
+    "node_modules",
+    "@slopcode-ai",
+    "slopcode-android-arm64",
+    "bin",
+    "slopcode",
   )
-  const bin = path.join(work, "node_modules", "slopcode-bin-android-arm64", "bin", "slopcode")
   if (!(await exists(bin))) {
     throw new Error("verify: packed Android install did not install the Android runtime")
   }
