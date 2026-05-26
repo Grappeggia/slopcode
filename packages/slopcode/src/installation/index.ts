@@ -526,7 +526,11 @@ export namespace Installation {
   }
 
   function android() {
-    return process.platform === "android" || process.env.TERMUX_VERSION !== undefined || process.env.SLOPCODE_TEST_PLATFORM === "android"
+    return (
+      process.platform === "android" ||
+      process.env.TERMUX_VERSION !== undefined ||
+      process.env.SLOPCODE_TEST_PLATFORM === "android"
+    )
   }
 
   export async function upgrade(method: Method, target: string) {
