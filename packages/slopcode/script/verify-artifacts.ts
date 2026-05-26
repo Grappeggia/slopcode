@@ -214,35 +214,43 @@ const alpineSmoke = async () => {
   await $`docker run --rm --platform linux/amd64 -v ${work}:/work node:20-alpine sh -lc ${sh}`
 }
 
+const androidTargets = [
+  { arch: "arm64", asset: "slopcode-android-arm64.tar.gz", pkg: "slopcode-android-arm64" },
+  { arch: "x64", asset: "slopcode-android-x64.tar.gz", pkg: "slopcode-android-x64" },
+] as const
+
 const androidSmoke = async () => {
-  const android = path.join(dir, "dist", "slopcode-android-arm64.tar.gz")
-  if (!(await exists(android))) {
-    throw new Error("verify: missing Android arm64 release asset")
-  }
-  const work = path.join(tmp, "install-android")
-  await fs.mkdir(work, { recursive: true })
-  const env = {
-    ...process.env,
-    SLOPCODE_TEST_PLATFORM: "android",
-    SLOPCODE_TEST_ARCH: "arm64",
-    SLOPCODE_ANDROID_ASSET_PATH: android,
-  }
-  await $`npm install --force --no-package-lock --ignore-scripts=true --os=android --cpu=arm64 ${root.tgz}`
-    .env(env)
-    .cwd(work)
-  await $`node ./node_modules/${pkg.name}/postinstall.mjs`.env(env).cwd(work)
-  const bin = path.join(
-    work,
-    "node_modules",
-    pkg.name,
-    "node_modules",
-    "@slopcode-ai",
-    "slopcode-android-arm64",
-    "bin",
-    "slopcode",
-  )
-  if (!(await exists(bin))) {
-    throw new Error("verify: packed Android install did not install the Android runtime")
+  for (const target of androidTargets) {
+    const android = path.join(dir, "dist", target.asset)
+    if (!(await exists(android))) {
+      throw new Error(`verify: missing Android ${target.arch} release asset`)
+    }
+    const work = path.join(tmp, `install-android-${target.arch}`)
+    await fs.mkdir(work, { recursive: true })
+    const env = {
+      ...process.env,
+      SLOPCODE_TEST_PLATFORM: "android",
+      SLOPCODE_TEST_ARCH: target.arch,
+      SLOPCODE_ANDROID_ASSET_PATH: android,
+    }
+    await $`npm install --force --no-package-lock --ignore-scripts=true --os=android --cpu=${target.arch} ${root.tgz}`
+      .env(env)
+      .cwd(work)
+    await $`node ./node_modules/${pkg.name}/postinstall.mjs`.env(env).cwd(work)
+    const bin = path.join(work, "node_modules", pkg.name, "node_modules", "@slopcode-ai", target.pkg, "bin", "slopcode")
+    const sidecar = path.join(
+      work,
+      "node_modules",
+      pkg.name,
+      "node_modules",
+      "@slopcode-ai",
+      target.pkg,
+      "bin",
+      "slopcode-android-host",
+    )
+    if (!(await exists(bin)) || !(await exists(sidecar))) {
+      throw new Error(`verify: packed Android ${target.arch} install did not install the Android runtime and sidecar`)
+    }
   }
 }
 

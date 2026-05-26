@@ -49,6 +49,22 @@ type Chunk = {
   parts: Part[]
 }
 
+type FileInfo = {
+  path?: string
+  file?: string
+  status?: string
+  type?: string
+  additions?: number
+  deletions?: number
+}
+
+type FileNode = {
+  path: string
+  name?: string
+  type: "file" | "directory"
+  ignored?: boolean
+}
+
 type PermissionRequest = {
   id: string
   sessionID: string
@@ -56,6 +72,7 @@ type PermissionRequest = {
   patterns: Array<string | { pattern?: string }>
   reason?: string
   metadata?: Record<string, unknown>
+  source?: string
 }
 
 type QuestionInfo = {
@@ -100,7 +117,14 @@ export type PortableState = {
   historyIndex?: number
   historyDraft?: string
   mode: "prompt" | "permission" | "question"
+  shell: boolean
+  queued: number
+  stash: string[]
   permission?: PermissionRequest
+  permissions: PermissionRequest[]
+  permissionIndex: number
+  rejectInput?: string
+  toolExpanded: Set<string>
   question?: {
     request: QuestionRequest
     index: number
@@ -111,6 +135,16 @@ export type PortableState = {
   messages: Map<string, MessageRecord>
   order: string[]
   notices: Notice[]
+  sidebar: {
+    visible: boolean
+    mode: "summary" | "files"
+    modified: FileInfo[]
+    open: string[]
+    files: FileNode[]
+    dir: string
+    attached: string[]
+    active?: string
+  }
   connected: boolean
 }
 
@@ -124,10 +158,25 @@ export function createPortableState(args: PortableArgs = {}): PortableState {
     cursor: 0,
     history: [],
     mode: "prompt",
+    shell: false,
+    queued: 0,
+    stash: [],
+    permissions: [],
+    permissionIndex: 0,
+    toolExpanded: new Set(),
     sessions: new Map(),
     messages: new Map(),
     order: [],
     notices: [],
+    sidebar: {
+      visible: false,
+      mode: "summary",
+      modified: [],
+      open: [],
+      files: [],
+      dir: "",
+      attached: [],
+    },
     connected: false,
   }
 }
@@ -192,11 +241,26 @@ function notice(state: PortableState, text: string, kind: Notice["kind"] = "info
 const commands = [
   "/new",
   "/sessions",
+  "/children",
+  "/messages",
+  "/history",
+  "/timeline",
   "/session",
   "/continue",
   "/model",
   "/agent",
+  "/queue",
+  "/summary",
+  "/sidebar",
+  "/stash",
+  "/list",
+  "/pop",
+  "/shell",
+  "/revert",
+  "/unrevert",
   "/interrupt",
+  "/attach",
+  "/open",
   "/help",
   "/exit",
   "/quit",
@@ -285,6 +349,7 @@ export function parseQuestionAnswer(input: string, info: QuestionInfo) {
     const index = Number(token)
     const option = Number.isInteger(index) ? info.options[index - 1] : undefined
     if (option) return [option.label]
+
     const found = info.options.find((item) => item.label.toLowerCase() === token.toLowerCase())
     if (found) return [found.label]
     return info.custom === false ? [] : [token]
@@ -302,6 +367,7 @@ export function applyPortableEvent(state: PortableState, event: PortableEvent) {
     if (props.sessionID !== state.sessionID) return
     const status = object(props.status) && string(props.status.type) ? props.status.type : "idle"
     state.status = status === "busy" && object(props.status) && string(props.status.phase) ? props.status.phase : status
+    if (state.status === "idle") state.queued = 0
     return
   }
   if (event.type === "session.created" || event.type === "session.updated") {
@@ -361,16 +427,30 @@ export function applyPortableEvent(state: PortableState, event: PortableEvent) {
   if (event.type === "permission.asked") {
     const request = permission(props)
     if (!request || request.sessionID !== state.sessionID) return
-    state.permission = request
+    const source = string(props.source)
+      ? props.source
+      : object(request.metadata) && string(request.metadata.source)
+        ? request.metadata.source
+        : object(request.metadata) && string(request.metadata.childSessionID)
+          ? `child ${request.metadata.childSessionID}`
+          : undefined
+    const next = source ? { ...request, source } : request
+    state.permissions = [...state.permissions.filter((item) => item.id !== next.id), next]
+    state.permissionIndex = clamp(state.permissionIndex, 0, Math.max(0, state.permissions.length - 1))
+    state.permission = state.permissions[state.permissionIndex]
     state.mode = "permission"
+    state.rejectInput = undefined
     notice(state, `permission requested: ${request.permission}`, "warning")
     return
   }
   if (event.type === "permission.replied") {
     if (props.sessionID !== state.sessionID) return
-    if (state.permission?.id === props.requestID) {
-      state.permission = undefined
+    state.permissions = state.permissions.filter((item) => item.id !== props.requestID)
+    state.permissionIndex = clamp(state.permissionIndex, 0, Math.max(0, state.permissions.length - 1))
+    state.permission = state.permissions[state.permissionIndex]
+    if (!state.permission) {
       state.mode = "prompt"
+      state.rejectInput = undefined
     }
     return
   }
@@ -429,51 +509,171 @@ function partText(record: MessageRecord) {
     .trim()
 }
 
-function toolLines(record: MessageRecord) {
-  return parts(record, "tool").map((item) => {
+function value(input: unknown) {
+  if (input === undefined) return
+  if (typeof input === "string") return input
+  return JSON.stringify(input, null, 2)
+}
+
+function clip(input: string, width: number, max = 8) {
+  const all = input.split("\n")
+  const lines = all
+    .slice(0, max)
+    .flatMap((line) =>
+      wrap(clean(line).length > width ? `${clean(line).slice(0, Math.max(1, width - 4))} ...` : line, width),
+    )
+  return all.length > max ? [...lines, `... ${all.length - max} more line(s)`] : lines
+}
+
+function diff(input: string, width: number) {
+  const lines = input
+    .split("\n")
+    .filter((line) => /^(diff --git|--- |\+\+\+|@@|\+[^+]|-[^-])/.test(line))
+    .slice(0, 14)
+  return lines.length === 0 ? [] : ["  diff preview", ...lines.flatMap((line) => wrap(`    ${line}`, width))]
+}
+
+function markdown(input: string, width: number) {
+  const lines: string[] = []
+  let code = false
+  let seen = 0
+  for (const raw of input.split("\n")) {
+    if (raw.trim().startsWith("```")) {
+      if (code && seen > 12) lines.push(`... ${seen - 12} more code line(s)`)
+      code = !code
+      seen = 0
+      lines.push(raw)
+      continue
+    }
+    if (code) {
+      seen++
+      if (seen <= 12) lines.push(clean(raw).length > width ? `${clean(raw).slice(0, Math.max(1, width - 4))} ...` : raw)
+      continue
+    }
+    lines.push(...wrap(raw, width))
+  }
+  if (code && seen > 12) lines.push(`... ${seen - 12} more code line(s)`)
+  return lines
+}
+
+function toolLines(state: PortableState, record: MessageRecord, width: number) {
+  return parts(record, "tool").flatMap((item) => {
     const status = item.state?.status ?? "pending"
-    const suffix = status === "error" && item.state?.error ? `: ${item.state.error}` : ""
-    return `tool ${item.tool ?? "unknown"} ${status}${suffix}`
+    const name = item.tool ?? "unknown"
+    const expanded = state.toolExpanded.has(item.id) || status === "completed" || status === "error"
+    const lines = [`  tool ${name} ${status} ${expanded ? "[expanded]" : "[collapsed]"}`]
+    if (!expanded) return lines
+    const input = value(item.state?.input)
+    const output = value((item.state as { output?: unknown } | undefined)?.output)
+    const patch = value(item.metadata?.diff ?? (object(item.state?.input) ? item.state.input.diff : undefined))
+    if (input) lines.push("  input", ...clip(input, Math.max(16, width - 6), 6).map((line) => `    ${line}`))
+    if (output) lines.push("  output", ...clip(output, Math.max(16, width - 6), 8).map((line) => `    ${line}`))
+    if (patch) lines.push(...diff(patch, width))
+    if (status === "error" && item.state?.error)
+      lines.push("  error", ...clip(item.state.error, Math.max(16, width - 6), 6).map((line) => `    ${line}`))
+    return lines
   })
+}
+
+function fileName(item: FileInfo) {
+  return item.path ?? item.file ?? "unknown"
+}
+
+function fileStatus(item: FileInfo) {
+  return item.status ?? item.type ?? "changed"
+}
+
+function sidebarLines(state: PortableState, width: number) {
+  if (!state.sidebar.visible) return []
+  const layout = width >= 96 ? "docked" : "overlay"
+  const lines = [`Sidebar ${layout} | Summary | Files | mode ${state.sidebar.mode}`]
+  if (state.sidebar.open.length > 0) {
+    lines.push("Open Files")
+    lines.push(
+      ...state.sidebar.open.map((item) => `${state.sidebar.active === item ? ">" : "-"} ${item} [open] [close]`),
+    )
+  }
+  if (state.sidebar.mode === "files") {
+    lines.push(`Files ${state.sidebar.dir || "."}`)
+    if (state.sidebar.files.length === 0) lines.push("No files found in this workspace.")
+    lines.push(
+      ...state.sidebar.files.map(
+        (item) =>
+          `${item.type === "directory" ? "dir " : "file"} ${item.path}${item.type === "file" ? " [attach] [open]" : ""}`,
+      ),
+    )
+    return lines.flatMap((item) => wrap(item, width))
+  }
+  lines.push("Modified Files")
+  if (state.sidebar.modified.length === 0) lines.push("No changed files")
+  lines.push(
+    ...state.sidebar.modified.map((item) => {
+      const additions = item.additions ? ` +${item.additions}` : ""
+      const deletions = item.deletions ? ` -${item.deletions}` : ""
+      return `${fileStatus(item)} ${fileName(item)} [open]${additions}${deletions}`
+    }),
+  )
+  return lines.flatMap((item) => wrap(item, width))
 }
 
 export function renderPortableLines(state: PortableState, width = 80, height = 24) {
   const session = state.sessionID ? state.sessions.get(state.sessionID) : undefined
   const model = state.model ? ` model ${state.model}` : ""
   const agent = state.agent ? ` agent ${state.agent}` : ""
-  const header = `SlopCode Android fallback | ${state.status}${model}${agent}`
+  const shell = state.shell ? " shell" : ""
+  const header = `SlopCode Android fallback | ${state.status}${model}${agent}${shell}`
   const title = session?.title ?? state.sessionID ?? "new session"
   const body: string[] = []
   body.push(`session ${title}`)
+  body.push(...sidebarLines(state, width))
   body.push("")
   for (const id of state.order) {
     const record = state.messages.get(id)
     if (!record) continue
     const label = record.info.role === "user" ? "You" : "Assistant"
     const text = partText(record)
-    if (text) body.push(...wrap(`${label}: ${text}`, width))
-    for (const line of toolLines(record)) body.push(...wrap(`  ${line}`, width))
+    const tools = toolLines(state, record, width)
+    if (text) body.push(...markdown(`${label}: ${text}`, width))
+    for (const line of tools) body.push(...wrap(line, width))
     if (record.info.role === "assistant" && record.info.error?.name) body.push(`  error ${record.info.error.name}`)
-    if (text || toolLines(record).length > 0) body.push("")
+    if (text || tools.length > 0) body.push("")
   }
   for (const item of state.notices) body.push(...wrap(`${item.kind}: ${item.text}`, width))
   if (state.mode === "permission" && state.permission) {
-    body.push(...wrap(`permission requested: ${state.permission.permission}`, width))
+    const total = state.permissions.length
+    const source = state.permission.source ? ` source ${state.permission.source}` : ""
+    const forecast = object(state.permission.metadata) && state.permission.metadata.forecast ? " forecast" : ""
+    body.push(
+      ...wrap(
+        `permission ${state.permissionIndex + 1}/${Math.max(1, total)}: ${state.permission.permission}${source}${forecast}`,
+        width,
+      ),
+    )
+    if (state.permission.reason) body.push(...wrap(`reason: ${state.permission.reason}`, width))
+    const grouped = new Map<string, number>()
+    for (const item of state.permissions) grouped.set(item.permission, (grouped.get(item.permission) ?? 0) + 1)
+    if (grouped.size > 1 || total > 1)
+      body.push(...wrap(`grouped: ${[...grouped].map((item) => `${item[0]} x${item[1]}`).join(", ")}`, width))
     body.push(
       ...state.permission.patterns.flatMap((item) =>
         wrap(`  ${typeof item === "string" ? item : (item.pattern ?? "*")}`, width),
       ),
     )
+    if (state.rejectInput !== undefined)
+      body.push(...wrap(`reject reason: ${state.rejectInput || "(optional)"}`, width))
   }
   const footer = (() => {
-    if (state.mode === "permission" && state.permission) return "permission | o once, a always, r reject"
+    if (state.mode === "permission" && state.permission)
+      return state.rejectInput === undefined
+        ? "permission | o once, a always, r reject, n/p request"
+        : `reject | enter send, esc cancel > ${state.rejectInput}`
     if (state.mode === "question" && state.question) {
       const item = state.question.request.questions[state.question.index]
       if (!item) return "question | enter answer"
       const options = item.options.map((option, index) => `${index + 1}) ${option.label}`).join("  ")
       return `${item.header}: ${item.question} ${options} > ${state.question.input}`
     }
-    return `> ${shown(state.input, clamp(state.cursor, 0, state.input.length))}`
+    return `${state.shell ? "shell " : ""}> ${shown(state.input, clamp(state.cursor, 0, state.input.length))}`
   })()
   const footerLines = wrap(footer, width)
   const maxBody = Math.max(1, height - 1 - footerLines.length)
@@ -582,7 +782,33 @@ export async function portableTui(input: {
         for (const item of chunk.parts) record.parts.set(item.id, item)
       }
     }
+    state.sidebar.modified = await request<FileInfo[]>("GET", "/file/status").catch(() => [])
     schedule()
+  }
+
+  const listFiles = async (dir = state.sidebar.dir) => {
+    state.sidebar.files = await request<FileNode[]>("GET", `/file?path=${encodeURIComponent(dir)}`).catch(() => [])
+    state.sidebar.dir = dir
+  }
+
+  const openFile = async (file: string) => {
+    if (!file) {
+      notice(state, "usage: /open <file>", "warning")
+      return
+    }
+    await request("GET", `/file/content?path=${encodeURIComponent(file)}`)
+    state.sidebar.active = file
+    state.sidebar.open = [...state.sidebar.open.filter((item) => item !== file), file]
+    notice(state, `opened ${file}`)
+  }
+
+  const attachFile = (file: string) => {
+    if (!file) {
+      notice(state, "usage: /attach <file>", "warning")
+      return
+    }
+    if (!state.sidebar.attached.includes(file)) state.sidebar.attached.push(file)
+    notice(state, `attached ${file}`)
   }
 
   const activate = async (sessionID: string) => {
@@ -609,13 +835,32 @@ export async function portableTui(input: {
     if (trimmed.startsWith("/")) return command(trimmed)
     const sessionID = state.sessionID ?? (await create())
     const model = parseModel(state.model)
+    if (state.shell) {
+      await request("POST", `/session/${sessionID}/shell`, {
+        command: trimmed,
+        ...(state.agent ? { agent: state.agent } : {}),
+        ...(model ? { model } : {}),
+      })
+      state.shell = false
+      if (state.history.at(-1) !== trimmed) state.history.push(trimmed)
+      state.historyIndex = undefined
+      state.historyDraft = undefined
+      saveHistory()
+      state.status = "sent"
+      return true
+    }
+    if (state.status !== "idle") state.queued++
     await request<void>("POST", `/session/${sessionID}/prompt_async`, {
       messageID: Identifier.ascending("message"),
       ...(state.agent ? { agent: state.agent } : {}),
       ...(model ? { model } : {}),
       ...(state.variant ? { variant: state.variant } : {}),
-      parts: [{ id: Identifier.ascending("part"), type: "text", text: trimmed }],
+      parts: [
+        ...state.sidebar.attached.map((file) => ({ id: Identifier.ascending("part"), type: "file", path: file })),
+        { id: Identifier.ascending("part"), type: "text", text: trimmed },
+      ],
     })
+    state.sidebar.attached = []
     if (state.history.at(-1) !== trimmed) state.history.push(trimmed)
     if (state.history.length > 50) state.history = state.history.slice(-50)
     state.historyIndex = undefined
@@ -630,7 +875,10 @@ export async function portableTui(input: {
     const value = rest.join(" ").trim()
     if (["exit", "quit", "q"].includes(name)) return false
     if (name === "help") {
-      notice(state, "/new /sessions /session <id> /continue /model <provider/model> /agent <name> /interrupt /exit")
+      notice(
+        state,
+        "/new /sessions /children /messages /session <id> /continue /model <provider/model> /agent <name> /summary /files [dir] /attach <file> /open <file> /queue /stash /list /pop /shell /interrupt /exit",
+      )
       return true
     }
     if (name === "new") {
@@ -649,6 +897,18 @@ export async function portableTui(input: {
       for (const item of list) notice(state, `${item.id} ${item.title ?? "untitled"}`)
       return true
     }
+    if (["children", "messages", "history", "timeline"].includes(name)) {
+      if (!state.sessionID) return true
+      const path =
+        name === "children"
+          ? `/session/${state.sessionID}/children`
+          : `/session/${state.sessionID}/message/index?limit=20`
+      const list = await request<Array<SessionInfo | MessageInfo>>("GET", path)
+      for (const item of list)
+        notice(state, `${item.id} ${"sessionID" in item ? item.role : (item.title ?? "untitled")}`)
+      return true
+    }
+
     if (name === "session") {
       if (!value) notice(state, "usage: /session <id>", "warning")
       else await activate(value)
@@ -664,6 +924,66 @@ export async function portableTui(input: {
       notice(state, state.agent ? `agent ${state.agent}` : "agent cleared")
       return true
     }
+    if (name === "queue") {
+      notice(state, `status ${state.status}; queued ${state.queued}; mode ${state.shell ? "shell" : "normal"}`)
+      return true
+    }
+    if (name === "sidebar" || name === "summary") {
+      state.sidebar.visible = true
+      state.sidebar.mode = "summary"
+      state.sidebar.modified = await request<FileInfo[]>("GET", "/file/status").catch(() => [])
+      return true
+    }
+    if (name === "files" || name === "explorer") {
+      state.sidebar.visible = true
+      state.sidebar.mode = "files"
+      await listFiles(value)
+      return true
+    }
+    if (name === "open") {
+      await openFile(value)
+      return true
+    }
+    if (name === "attach") {
+      attachFile(value)
+      return true
+    }
+    if (name === "stash") {
+      if (!state.input.trim()) notice(state, "nothing to stash", "warning")
+      else {
+        state.stash.push(state.input)
+        state.input = ""
+        state.cursor = 0
+        notice(state, "stashed prompt")
+      }
+      return true
+    }
+    if (name === "list" || name === "stashes") {
+      if (state.stash.length === 0) notice(state, "no stashed prompts")
+      else state.stash.forEach((item, index) => notice(state, `${index + 1} ${item.replace(/\s+/g, " ")}`))
+      return true
+    }
+    if (name === "pop") {
+      const text = state.stash.pop()
+      if (text) {
+        state.input = text
+        state.cursor = text.length
+        notice(state, "restored stashed prompt")
+      } else notice(state, "no stashed prompts", "warning")
+      return true
+    }
+    if (name === "shell") {
+      state.shell = !state.shell
+      notice(state, state.shell ? "shell mode enabled; next prompt runs as a shell command" : "shell mode disabled")
+      return true
+    }
+    if (name === "revert" || name === "unrevert") {
+      if (!state.sessionID) return true
+      if (name === "revert" && !value) notice(state, "usage: /revert <message-id>", "warning")
+      else await request("POST", `/session/${state.sessionID}/${name}`, name === "revert" ? { messageID: value } : {})
+      return true
+    }
+
     if (name === "interrupt") {
       if (state.sessionID) await request<boolean>("POST", `/session/${state.sessionID}/abort`, {})
       return true
@@ -672,14 +992,19 @@ export async function portableTui(input: {
     return true
   }
 
-  const replyPermission = async (reply: "once" | "always" | "reject") => {
-    if (!state.permission) return
-    await request<boolean>("POST", `/permission/${state.permission.id}/reply?sessionID=${state.permission.sessionID}`, {
+  const replyPermission = async (reply: "once" | "always" | "reject", reason?: string) => {
+    const active = state.permission
+    if (!active) return
+    await request<boolean>("POST", `/permission/${active.id}/reply?sessionID=${active.sessionID}`, {
       reply,
+      ...(reason ? { reason } : {}),
     })
-    state.permission = undefined
-    state.mode = "prompt"
-    notice(state, `permission ${reply}`)
+    state.permissions = state.permissions.filter((item) => item.id !== active.id)
+    state.permissionIndex = clamp(state.permissionIndex, 0, Math.max(0, state.permissions.length - 1))
+    state.permission = state.permissions[state.permissionIndex]
+    state.rejectInput = undefined
+    if (!state.permission) state.mode = "prompt"
+    notice(state, `permission ${reply}${reason ? `: ${reason}` : ""}`)
   }
 
   const replyQuestion = async () => {
@@ -827,6 +1152,26 @@ export async function portableTui(input: {
         i += rest.startsWith("\x1b[1~") ? 4 : 3
         continue
       }
+      if (rest.startsWith("\x1b[24~") || rest.startsWith("[24~")) {
+        if (state.input.trim()) {
+          state.stash.push(state.input)
+          state.input = ""
+          state.cursor = 0
+          notice(state, "stashed prompt")
+        }
+        i += rest.startsWith("\x1b") ? 5 : 4
+        continue
+      }
+      if (rest.startsWith("\x1b[25~") || rest.startsWith("[25~")) {
+        const text = state.stash.pop()
+        if (text) {
+          state.input = text
+          state.cursor = text.length
+          notice(state, "restored stashed prompt")
+        }
+        i += rest.startsWith("\x1b") ? 5 : 4
+        continue
+      }
       if (rest.startsWith("\x1b[F") || rest.startsWith("\x1b[4~")) {
         state.cursor = state.input.length
         i += rest.startsWith("\x1b[4~") ? 4 : 3
@@ -865,7 +1210,21 @@ export async function portableTui(input: {
         state.cursor = 0
       } else if (ch === "\x0b") state.input = state.input.slice(0, state.cursor)
       else if (ch === "\x17") deleteWordBefore(state)
-      else if (ch === "\u007f" || ch === "\b") backspace(state)
+      else if (ch === "\x18") {
+        if (state.input.trim()) {
+          state.stash.push(state.input)
+          state.input = ""
+          state.cursor = 0
+          notice(state, "stashed prompt")
+        }
+      } else if (ch === "\x19") {
+        const text = state.stash.pop()
+        if (text) {
+          state.input = text
+          state.cursor = text.length
+          notice(state, "restored stashed prompt")
+        }
+      } else if (ch === "\u007f" || ch === "\b") backspace(state)
       else if (ch === "\f") draw()
       else if (ch >= " " && ch !== "\u007f") insert(state, ch)
     }
@@ -874,12 +1233,44 @@ export async function portableTui(input: {
   const onData = (data: Buffer) => {
     const text = data.toString("utf8")
     if (state.mode === "permission") {
-      if (text === "\x03" || text === "\x04") stop()
-      else if (text === "o") void replyPermission("once").then(schedule)
-      else if (text === "a") void replyPermission("always").then(schedule)
-      else if (text === "r" || text === "\x1b") void replyPermission("reject").then(schedule)
+      if (state.rejectInput !== undefined) {
+        for (const ch of text) {
+          const reason: string = state.rejectInput ?? ""
+          if (ch === "\x03" || ch === "\x04") stop()
+          else if (ch === "\x1b") state.rejectInput = undefined
+          else if (ch === "\r" || ch === "\n") void replyPermission("reject", reason.trim()).then(schedule)
+          else if (ch === "\u007f" || ch === "\b") state.rejectInput = reason.slice(0, -1)
+          else if (ch >= " " && ch !== "\u007f") state.rejectInput = reason + ch
+        }
+      } else {
+        for (const ch of text) {
+          if (state.rejectInput !== undefined) {
+            const reason: string = state.rejectInput
+            if (ch === "\x03" || ch === "\x04") stop()
+            else if (ch === "\x1b") state.rejectInput = undefined
+            else if (ch === "\r" || ch === "\n") void replyPermission("reject", reason.trim()).then(schedule)
+            else if (ch === "\u007f" || ch === "\b") state.rejectInput = reason.slice(0, -1)
+            else if (ch >= " " && ch !== "\u007f") state.rejectInput = reason + ch
+            continue
+          }
+          if (ch === "\x03" || ch === "\x04") stop()
+          else if (ch === "o") void replyPermission("once").then(schedule)
+          else if (ch === "a") void replyPermission("always").then(schedule)
+          else if (ch === "r") state.rejectInput = ""
+          else if (ch === "\x1b") void replyPermission("reject").then(schedule)
+          else if (ch === "n" && state.permissions.length > 1) {
+            state.permissionIndex = (state.permissionIndex + 1) % state.permissions.length
+            state.permission = state.permissions[state.permissionIndex]
+          } else if (ch === "p" && state.permissions.length > 1) {
+            state.permissionIndex = (state.permissionIndex + state.permissions.length - 1) % state.permissions.length
+            state.permission = state.permissions[state.permissionIndex]
+          }
+        }
+      }
+      schedule()
       return
     }
+
     if (state.mode === "question") {
       for (const ch of text) {
         if (ch === "\x03" || ch === "\x04") stop()

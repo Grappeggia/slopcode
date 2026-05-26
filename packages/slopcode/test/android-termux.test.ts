@@ -4,8 +4,8 @@ import fs from "fs"
 import os from "os"
 import { DaemonLauncher } from "@/daemon/launcher"
 import { android, client, native } from "@/cli/cmd/tui/platform"
-import { active, parity } from "../script/android-termux-parity"
-import { e2eSource } from "../script/android-termux-e2e"
+import { active, parity, phases, report } from "../script/android-termux-parity"
+import { androidTargets, e2eSource } from "../script/android-termux-e2e"
 
 const entry = process.env.SLOPCODE_ENTRYPOINT
 
@@ -66,27 +66,63 @@ describe("Android Termux runtime", () => {
     expect(thread).toContain('await import("./android-host")')
   })
 
-  test("Android E2E declares parity coverage and phase 3 gaps", () => {
-    const ids = parity.map((item) => item.id)
+  test("Android release and E2E targets cover arm64 and x64", async () => {
+    const build = await Bun.file(path.join(import.meta.dir, "..", "script", "build.ts")).text()
+    const verify = await Bun.file(path.join(import.meta.dir, "..", "script", "verify-artifacts.ts")).text()
 
+    expect(androidTargets.map((item) => item.arch)).toEqual(["arm64", "x64"])
+    expect(build).toContain('os: "android"')
+    expect(build).toContain('arch: "arm64"')
+    expect(build).toContain('arch: "x64"')
+    expect(verify).toContain('asset: "slopcode-android-arm64.tar.gz"')
+    expect(verify).toContain('asset: "slopcode-android-x64.tar.gz"')
+  })
+
+  test("Android E2E declares normalized parity coverage and blockers", async () => {
+    const ids = parity.map((item) => item.id)
+    const snapshot = await Bun.file(
+      path.join(import.meta.dir, "..", "script", "android-termux-parity.snapshot.json"),
+    ).json()
+
+    expect(phases.map((item) => item.phase)).toEqual([0, 1, 2, 3, 4, 5])
     expect(active("smoke").map((item) => item.id)).toEqual(["smoke.install"])
     expect(active("parity").map((item) => item.id)).toEqual([
       "smoke.install",
       "composer.submit",
       "composer.editing",
+      "composer.advanced",
       "dialogs.question",
       "layout.capture",
       "commands.palette",
       "sessions.tabs",
+      "sessions.routes",
       "models.panel",
       "files.panel",
       "render.tools",
       "permissions.preview",
+      "sidebar.files",
+      "editor.diff",
+      "terminal.polish",
+      "render.parity-gates",
+      "permissions.parity-gates",
     ])
-    expect(ids).toContain("tabs.rich")
-    expect(ids).toContain("sidebar.files")
-    expect(ids).toContain("editor.diff")
-    expect(parity.filter((item) => !item.active).every((item) => item.phase === 3 && !!item.missing)).toBe(true)
+    expect(report()).toEqual(snapshot)
+    expect(parity.filter((item) => item.active).every((item) => item.android.length > 0)).toBe(true)
+    expect(parity.filter((item) => item.status === "blocked").every((item) => !item.active && !!item.missing)).toBe(
+      true,
+    )
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        "tabs.rich",
+        "sidebar.files",
+        "editor.diff",
+        "terminal.polish",
+        "native.opentui",
+        "release.sidecar-smoke",
+        "render.parity-gates",
+        "permissions.parity-gates",
+      ]),
+    )
   })
 
   test("Android E2E generated Termux runner is valid JavaScript", async () => {

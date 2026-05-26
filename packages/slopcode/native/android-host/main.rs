@@ -37,6 +37,9 @@ struct Permission {
     patterns: Vec<String>,
     file: Option<String>,
     diff: Option<String>,
+    source: Option<String>,
+    reason: Option<String>,
+    reject: Option<String>,
 }
 
 #[derive(Clone)]
@@ -48,6 +51,15 @@ struct Tab {
 struct Panel {
     title: String,
     rows: Vec<String>,
+}
+
+#[derive(Clone)]
+struct Editor {
+    id: String,
+    file: String,
+    dirty: bool,
+    diff: bool,
+    diagnostics: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -230,6 +242,9 @@ struct State {
     paste: Option<String>,
     model: Option<String>,
     agent: Option<String>,
+    shell: bool,
+    queue: usize,
+    stash: Vec<String>,
     messages: Vec<Message>,
     notices: Vec<String>,
     permission: Option<Permission>,
@@ -237,6 +252,13 @@ struct State {
     tabs: Vec<Tab>,
     panel: Option<Panel>,
     sidebar: Vec<String>,
+    sidebar_visible: bool,
+    sidebar_mode: String,
+    sidebar_files: Vec<String>,
+    open_files: Vec<String>,
+    attached_files: Vec<String>,
+    active_file: Option<String>,
+    editor: Option<Editor>,
 }
 
 impl State {
@@ -252,6 +274,9 @@ impl State {
             paste: None,
             model: args.model.clone(),
             agent: args.agent.clone(),
+            shell: false,
+            queue: 0,
+            stash: Vec::new(),
             messages: Vec::new(),
             notices: Vec::new(),
             permission: None,
@@ -259,6 +284,13 @@ impl State {
             tabs: Vec::new(),
             panel: None,
             sidebar: Vec::new(),
+            sidebar_visible: false,
+            sidebar_mode: String::from("summary"),
+            sidebar_files: Vec::new(),
+            open_files: Vec::new(),
+            attached_files: Vec::new(),
+            active_file: None,
+            editor: None,
         }
     }
 
@@ -643,7 +675,7 @@ fn command_rows() -> Vec<String> {
     [
         (
             "Session",
-            "/sessions /new /session <id> /tabs /tab <n> /next /prev /close /fork /rename <title>",
+            "/sessions /children /messages /timeline /new /session <id> /tabs /tab <n> /next /prev /close /fork /rename <title>",
         ),
         (
             "Agent",
@@ -651,9 +683,9 @@ fn command_rows() -> Vec<String> {
         ),
         (
             "Workspace",
-            "/files [query] /diff /status /share /unshare /compact /pause /resume /interrupt",
+            "/summary /files [dir] /attach <file> /open <file> /save /diagnostics /close-editor[!] /diff [dismiss] /status /queue /stash /list /pop /share /unshare /compact /pause /resume /interrupt",
         ),
-        ("System", "/themes /shells /orgs /clear /help /exit"),
+        ("System", "/shell /autocomplete /themes /keybinds /clipboard /title <title> /suspend /plugins /shells /orgs /clear /help /exit"),
     ]
     .iter()
     .map(|(section, text)| format!("{section}: {text}"))
@@ -743,10 +775,21 @@ fn file_rows(body: &str) -> Vec<String> {
     }
 }
 
-fn string_rows(body: &str) -> Vec<String> {
-    let rows = strings(body).into_iter().take(50).collect::<Vec<_>>();
+fn explorer_rows(body: &str) -> Vec<String> {
+    let rows = objects(body)
+        .into_iter()
+        .filter_map(|item| {
+            let file = string(&item, "path")?;
+            let kind = string(&item, "type").unwrap_or_else(|| String::from("file"));
+            if kind == "directory" {
+                Some(format!("dir  {file}/"))
+            } else {
+                Some(format!("file {file} [attach] [open]"))
+            }
+        })
+        .collect::<Vec<_>>();
     if rows.is_empty() {
-        vec![String::from("No results")]
+        vec![String::from("No files found in this workspace.")]
     } else {
         rows
     }
@@ -784,6 +827,217 @@ fn diff_rows(body: &str) -> Vec<String> {
     }
 }
 
+fn editor_rows(editor: &Editor) -> Vec<String> {
+    let mut rows = vec![
+        format!("file {}", editor.file),
+        format!("dirty {}", if editor.dirty { "yes" } else { "no" }),
+        format!("diff {}", if editor.diff { "open" } else { "dismissed" }),
+    ];
+    if editor.diagnostics.is_empty() {
+        rows.push(String::from("diagnostics clean"));
+    } else {
+        rows.push(String::from("diagnostics"));
+        rows.extend(editor.diagnostics.iter().take(8).cloned());
+    }
+    rows
+}
+
+fn diagnostic_rows(body: &str) -> Vec<String> {
+    let rows = array_value(body, "diagnostics")
+        .map(|items| {
+            objects(&items)
+                .into_iter()
+                .filter_map(|item| {
+                    let severity =
+                        string(&item, "severity").unwrap_or_else(|| String::from("warning"));
+                    let message = string(&item, "message")?;
+                    Some(format!("{severity}: {message}"))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if rows.is_empty() {
+        vec![String::from("diagnostics clean")]
+    } else {
+        rows
+    }
+}
+
+fn editor_from(body: &str, fallback: &str) -> Option<Editor> {
+    Some(Editor {
+        id: string(body, "id")?,
+        file: string(body, "file").unwrap_or_else(|| fallback.to_string()),
+        dirty: boolean(body, "dirty").unwrap_or(false),
+        diff: boolean(body, "diff").unwrap_or(false),
+        diagnostics: Vec::new(),
+    })
+}
+
+fn editor_snapshot(client: &Client, session: &str, editor: &Editor) -> Result<Editor, String> {
+    let body = client.request(
+        "GET",
+        &format!(
+            "/editor/{}/snapshot?sessionID={}",
+            editor.id,
+            encode_query(session)
+        ),
+        None,
+    )?;
+    Ok(Editor {
+        id: editor.id.clone(),
+        file: string(&body, "file").unwrap_or_else(|| editor.file.clone()),
+        dirty: boolean(&body, "dirty").unwrap_or(editor.dirty),
+        diff: boolean(&body, "diff").unwrap_or(editor.diff),
+        diagnostics: diagnostic_rows(&body),
+    })
+}
+
+fn message_rows(body: &str) -> Vec<String> {
+    let rows = objects(body)
+        .into_iter()
+        .filter_map(|item| {
+            let id = string(&item, "id")?;
+            let role = string(&item, "role").unwrap_or_else(|| String::from("message"));
+            Some(format!("{}  {}", short(&id), role))
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        vec![String::from("No messages found")]
+    } else {
+        rows
+    }
+}
+
+fn child_rows(body: &str) -> Vec<String> {
+    let rows = objects(body)
+        .into_iter()
+        .filter_map(|item| {
+            let id = string(&item, "id")?;
+            let title = string(&item, "title").unwrap_or_else(|| String::from("untitled"));
+            Some(format!("{}  {}", short(&id), title))
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        vec![String::from("No child sessions")]
+    } else {
+        rows
+    }
+}
+
+fn queue_rows(state: &State) -> Vec<String> {
+    vec![
+        format!("status {}", state.status),
+        format!("queued {}", state.queue),
+        format!("mode {}", if state.shell { "shell" } else { "normal" }),
+    ]
+}
+
+fn stash_rows(state: &State) -> Vec<String> {
+    if state.stash.is_empty() {
+        return vec![String::from("No stashed prompts")];
+    }
+    state
+        .stash
+        .iter()
+        .enumerate()
+        .map(|(index, item)| format!("{}  {}", index + 1, item.replace('\n', " ")))
+        .collect()
+}
+
+fn submit_prompt(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    dirty: &Arc<AtomicBool>,
+    text: &str,
+) -> Result<bool, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(true);
+    }
+    if trimmed.starts_with('/') {
+        return command(client, state, dirty, trimmed);
+    }
+    let (session, model, agent, shell, attached) = {
+        let locked = state.lock().map_err(|_| "state lock failed")?;
+        (
+            locked.session.clone().ok_or("missing session")?,
+            locked.model.clone(),
+            locked.agent.clone(),
+            locked.shell,
+            locked.attached_files.clone(),
+        )
+    };
+    if shell {
+        let mut body = format!("{{\"command\":{}", json(trimmed));
+        if let Some(agent) = agent {
+            body.push_str(&format!(",\"agent\":{}", json(&agent)));
+        }
+        if let Some(model) = model.and_then(|item| parse_model(&item)) {
+            body.push_str(&format!(
+                ",\"model\":{{\"providerID\":{},\"modelID\":{}}}",
+                json(&model.0),
+                json(&model.1)
+            ));
+        }
+        body.push('}');
+        client.request("POST", &format!("/session/{session}/shell"), Some(&body))?;
+        let mut locked = state.lock().map_err(|_| "state lock failed")?;
+        locked.history_push(trimmed);
+        locked.shell = false;
+        locked.status = String::from("sent");
+        dirty.store(true, Ordering::SeqCst);
+        return Ok(true);
+    }
+    let msg = id("message");
+    let part = id("part");
+    let mut payload = attached
+        .iter()
+        .map(|file| {
+            format!(
+                "{{\"id\":{},\"type\":\"file\",\"path\":{}}}",
+                json(&id("part")),
+                json(file)
+            )
+        })
+        .collect::<Vec<_>>();
+    payload.push(format!(
+        "{{\"id\":{},\"type\":\"text\",\"text\":{}}}",
+        json(&part),
+        json(trimmed)
+    ));
+    let mut body = format!(
+        "{{\"messageID\":{},\"parts\":[{}]",
+        json(&msg),
+        payload.join(",")
+    );
+    if let Some(agent) = agent {
+        body.push_str(&format!(",\"agent\":{}", json(&agent)));
+    }
+    if let Some(model) = model.and_then(|item| parse_model(&item)) {
+        body.push_str(&format!(
+            ",\"model\":{{\"providerID\":{},\"modelID\":{}}}",
+            json(&model.0),
+            json(&model.1)
+        ));
+    }
+    body.push('}');
+    client.request(
+        "POST",
+        &format!("/session/{session}/prompt_async"),
+        Some(&body),
+    )?;
+    {
+        let mut locked = state.lock().map_err(|_| "state lock failed")?;
+        locked.history_push(trimmed);
+        if locked.status != "idle" {
+            locked.queue += 1;
+        }
+        locked.status = String::from("sent");
+        locked.attached_files.clear();
+    }
+    dirty.store(true, Ordering::SeqCst);
+    Ok(true)
+}
 fn short(id: &str) -> String {
     if id.len() <= 12 {
         id.to_string()
@@ -809,60 +1063,6 @@ fn encode_query(input: &str) -> String {
 fn create_session(client: &Client) -> Result<String, String> {
     let body = client.request("POST", "/session", Some("{}"))?;
     string(&body, "id").ok_or_else(|| format!("failed to create session: {body}"))
-}
-
-fn submit_prompt(
-    client: &Client,
-    state: &Arc<Mutex<State>>,
-    dirty: &Arc<AtomicBool>,
-    text: &str,
-) -> Result<bool, String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Ok(true);
-    }
-    if trimmed.starts_with('/') {
-        return command(client, state, dirty, trimmed);
-    }
-    let (session, model, agent) = {
-        let locked = state.lock().map_err(|_| "state lock failed")?;
-        (
-            locked.session.clone().ok_or("missing session")?,
-            locked.model.clone(),
-            locked.agent.clone(),
-        )
-    };
-    let msg = id("message");
-    let part = id("part");
-    let mut body = format!(
-        "{{\"messageID\":{},\"parts\":[{{\"id\":{},\"type\":\"text\",\"text\":{}}}]",
-        json(&msg),
-        json(&part),
-        json(trimmed)
-    );
-    if let Some(agent) = agent {
-        body.push_str(&format!(",\"agent\":{}", json(&agent)));
-    }
-    if let Some(model) = model.and_then(|item| parse_model(&item)) {
-        body.push_str(&format!(
-            ",\"model\":{{\"providerID\":{},\"modelID\":{}}}",
-            json(&model.0),
-            json(&model.1)
-        ));
-    }
-    body.push('}');
-    client.request(
-        "POST",
-        &format!("/session/{session}/prompt_async"),
-        Some(&body),
-    )?;
-    {
-        let mut locked = state.lock().map_err(|_| "state lock failed")?;
-        locked.history_push(trimmed);
-        locked.status = String::from("sent");
-    }
-    dirty.store(true, Ordering::SeqCst);
-    Ok(true)
 }
 
 fn command(
@@ -1030,19 +1230,147 @@ fn command(
             Ok(true)
         }
         "files" => {
-            let rows = if value.is_empty() {
-                file_rows(&client.request("GET", "/file/status", None)?)
+            let rows = if value.is_empty() || value == "." {
+                explorer_rows(&client.request("GET", "/file?path=", None)?)
             } else {
-                string_rows(&client.request(
+                explorer_rows(&client.request(
                     "GET",
-                    &format!("/file/find/file?query={}&limit=20", encode_query(value)),
+                    &format!("/file?path={}", encode_query(value)),
                     None,
                 )?)
             };
-            state
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            locked.sidebar_visible = true;
+            locked.sidebar_mode = String::from("files");
+            locked.sidebar_files = rows.clone();
+            locked.panel("Files", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "summary" | "sidebar" => {
+            let rows = file_rows(&client.request("GET", "/file/status", None)?);
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            locked.sidebar_visible = true;
+            locked.sidebar_mode = String::from("summary");
+            locked.sidebar = rows;
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "open" => {
+            if value.is_empty() {
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .notice("usage: /open <file>");
+            } else {
+                let session = current_session(state)?;
+                let body = client.request(
+                    "POST",
+                    "/editor",
+                    Some(&format!(
+                        "{{\"sessionID\":{},\"file\":{},\"size\":{{\"rows\":24,\"cols\":80}}}}",
+                        json(&session),
+                        json(value)
+                    )),
+                )?;
+                let editor = editor_from(&body, value)
+                    .ok_or_else(|| format!("invalid editor response: {body}"))?;
+                let mut locked = state.lock().map_err(|_| "state lock failed")?;
+                locked.active_file = Some(value.to_string());
+                locked.open_files.retain(|item| item != value);
+                locked.open_files.push(value.to_string());
+                locked.editor = Some(editor.clone());
+                locked.panel("Editor", editor_rows(&editor));
+                locked.notice(format!("opened editor {value}"));
+            }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "save" => {
+            let session = current_session(state)?;
+            let editor = state
                 .lock()
                 .map_err(|_| "state lock failed")?
-                .panel("Files", rows);
+                .editor
+                .clone()
+                .ok_or("no active editor")?;
+            let body = client.request(
+                "POST",
+                &format!(
+                    "/editor/{}/save?sessionID={}",
+                    editor.id,
+                    encode_query(&session)
+                ),
+                None,
+            )?;
+            let saved = editor_from(&body, &editor.file).unwrap_or(Editor {
+                dirty: false,
+                ..editor
+            });
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            locked.editor = Some(saved.clone());
+            locked.panel("Editor", editor_rows(&saved));
+            locked.notice(format!("saved {}", saved.file));
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "diagnostics" => {
+            let session = current_session(state)?;
+            let editor = state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .editor
+                .clone()
+                .ok_or("no active editor")?;
+            let snapshot = editor_snapshot(client, &session, &editor)?;
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            locked.editor = Some(snapshot.clone());
+            locked.panel("Diagnostics", snapshot.diagnostics.clone());
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "close-editor" | "close-editor!" => {
+            let session = current_session(state)?;
+            let editor = state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .editor
+                .clone()
+                .ok_or("no active editor")?;
+            let latest = editor_snapshot(client, &session, &editor).unwrap_or(editor);
+            if latest.dirty && name != "close-editor!" {
+                let mut locked = state.lock().map_err(|_| "state lock failed")?;
+                locked.editor = Some(latest);
+                locked.notice("editor has unsaved changes; use /save or /close-editor!");
+                dirty.store(true, Ordering::SeqCst);
+                return Ok(true);
+            }
+            client.request(
+                "DELETE",
+                &format!("/editor/{}?sessionID={}", latest.id, encode_query(&session)),
+                None,
+            )?;
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            locked.open_files.retain(|item| item != &latest.file);
+            locked.active_file = None;
+            locked.editor = None;
+            locked.notice("closed editor");
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "attach" => {
+            if value.is_empty() {
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .notice("usage: /attach <file>");
+            } else {
+                let mut locked = state.lock().map_err(|_| "state lock failed")?;
+                if !locked.attached_files.iter().any(|item| item == value) {
+                    locked.attached_files.push(value.to_string());
+                }
+                locked.notice(format!("attached {value}"));
+            }
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
@@ -1052,6 +1380,34 @@ fn command(
                 .lock()
                 .map_err(|_| "state lock failed")?
                 .panel("Status", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "children" => {
+            let session = current_session(state)?;
+            let body = client.request("GET", &format!("/session/{session}/children"), None)?;
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .panel("Child Sessions", child_rows(&body));
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "messages" | "history" | "timeline" => {
+            let session = current_session(state)?;
+            let body = client.request(
+                "GET",
+                &format!("/session/{session}/message/index?limit=20"),
+                None,
+            )?;
+            state.lock().map_err(|_| "state lock failed")?.panel(
+                if name == "timeline" {
+                    "Timeline"
+                } else {
+                    "Messages"
+                },
+                message_rows(&body),
+            );
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
@@ -1066,12 +1422,16 @@ fn command(
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
-        "rename" => {
+        "rename" | "title" => {
             if value.is_empty() {
                 state
                     .lock()
                     .map_err(|_| "state lock failed")?
-                    .notice("usage: /rename <title>");
+                    .notice(if name == "title" {
+                        "usage: /title <title>"
+                    } else {
+                        "usage: /rename <title>"
+                    });
             } else {
                 let session = current_session(state)?;
                 let body = client.request(
@@ -1083,13 +1443,100 @@ fn command(
                 let mut locked = state.lock().map_err(|_| "state lock failed")?;
                 locked.title = title.clone();
                 locked.sync_tab(&session, &title);
-                locked.notice("renamed session");
+                locked.notice(if name == "title" {
+                    "updated terminal title"
+                } else {
+                    "renamed session"
+                });
             }
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
         "pause" => session_post(client, state, dirty, "pause", Some("paused session")),
         "resume" => session_post(client, state, dirty, "resume", Some("resumed session")),
+        "queue" => {
+            let locked = state.lock().map_err(|_| "state lock failed")?;
+            let rows = queue_rows(&locked);
+            drop(locked);
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .panel("Prompt Queue", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "stash" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            if locked.input.text.trim().is_empty() {
+                locked.notice("nothing to stash");
+            } else {
+                let text = locked.input.clear();
+                locked.stash.push(text);
+                locked.notice("stashed prompt");
+            }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "list" | "stashes" => {
+            let locked = state.lock().map_err(|_| "state lock failed")?;
+            let rows = stash_rows(&locked);
+            drop(locked);
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .panel("Prompt Stash", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "pop" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            if let Some(text) = locked.stash.pop() {
+                locked.input.set(text);
+                locked.notice("restored stashed prompt");
+            } else {
+                locked.notice("no stashed prompts");
+            }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "autocomplete" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            complete_command(&mut locked.input);
+            locked.notice("autocomplete applied");
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "revert" => {
+            if value.is_empty() {
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .notice("usage: /revert <message-id>");
+            } else {
+                let session = current_session(state)?;
+                client.request(
+                    "POST",
+                    &format!("/session/{session}/revert"),
+                    Some(&format!("{{\"messageID\":{}}}", json(value))),
+                )?;
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .notice("reverted message");
+            }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "unrevert" => {
+            let session = current_session(state)?;
+            client.request("POST", &format!("/session/{session}/unrevert"), Some("{}"))?;
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .notice("restored reverted messages");
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
         "compact" | "summarize" => {
             let session = current_session(state)?;
             let model = state
@@ -1123,6 +1570,33 @@ fn command(
         }
         "diff" => {
             let session = current_session(state)?;
+            if value == "dismiss" {
+                let editor = state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .editor
+                    .clone()
+                    .ok_or("no active editor")?;
+                let body = client.request(
+                    "POST",
+                    &format!(
+                        "/editor/{}/diff/dismiss?sessionID={}",
+                        editor.id,
+                        encode_query(&session)
+                    ),
+                    None,
+                )?;
+                let updated = editor_from(&body, &editor.file).unwrap_or(Editor {
+                    diff: false,
+                    ..editor
+                });
+                let mut locked = state.lock().map_err(|_| "state lock failed")?;
+                locked.editor = Some(updated.clone());
+                locked.panel("Editor", editor_rows(&updated));
+                locked.notice("dismissed editor diff");
+                dirty.store(true, Ordering::SeqCst);
+                return Ok(true);
+            }
             let rows = diff_rows(&client.request(
                 "GET",
                 &format!("/session/{session}/diff/index"),
@@ -1148,14 +1622,77 @@ fn command(
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
-        "shell" | "shells" => {
+        "keybind" | "keybinds" | "keys" => {
+            state.lock().map_err(|_| "state lock failed")?.panel(
+                "Keybinds",
+                vec![
+                    String::from("Enter submits, Ctrl-D exits, Esc closes panels."),
+                    String::from("Arrows move cursor/history; Alt-B/Alt-F move by word."),
+                    String::from(
+                        "F12 stashes and F13 restores the prompt where terminals support them.",
+                    ),
+                ],
+            );
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "clipboard" | "copy" | "paste" => {
+            state.lock().map_err(|_| "state lock failed")?.panel(
+                "Clipboard",
+                vec![
+                    String::from("Bracketed paste is supported in the Android sidecar."),
+                    String::from("System clipboard access needs Termux:API or OpenTUI FFI and is not called from the sidecar."),
+                    String::from("Use termux-clipboard-get or termux-clipboard-set outside SlopCode for OS clipboard sync."),
+                ],
+            );
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "suspend" => {
+            state.lock().map_err(|_| "state lock failed")?.panel(
+                "Suspend",
+                vec![
+                    String::from("Terminal job control handles Ctrl-Z in Termux."),
+                    String::from("The Android sidecar keeps suspend discoverable without invoking native OpenTUI hooks."),
+                ],
+            );
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "plugins" | "plugin" => {
+            state.lock().map_err(|_| "state lock failed")?.panel(
+                "Plugins",
+                vec![
+                    String::from("Plugin and MCP commands stay discoverable on Android."),
+                    String::from(
+                        "Install and configure plugins with the same project config used by Linux.",
+                    ),
+                    String::from(
+                        "Native plugin UI mounting remains blocked by OpenTUI FFI on Termux.",
+                    ),
+                ],
+            );
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "shell" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            locked.shell = !locked.shell;
+            let text = if locked.shell {
+                "shell mode enabled; next prompt runs as a shell command"
+            } else {
+                "shell mode disabled"
+            };
+            locked.notice(text);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "shells" => {
             state.lock().map_err(|_| "state lock failed")?.panel(
                 "Shell",
                 vec![
-                    String::from(
-                        "Shell mode runs through normal prompt submission on Android sidecar.",
-                    ),
-                    String::from("Use !command or bash tool requests for terminal work."),
+                    String::from("Use /shell to toggle shell mode for the next prompt."),
+                    String::from("Shell mode sends the prompt to the session shell route."),
                 ],
             );
             dirty.store(true, Ordering::SeqCst);
@@ -1216,15 +1753,78 @@ fn input(
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
         if locked.permission.is_some() {
-            let reply = match text.as_str() {
-                "o" => Some("once"),
-                "a" => Some("always"),
-                "r" | "\x1b" => Some("reject"),
-                _ => None,
-            };
-            if let Some(reply) = reply {
-                let perm = locked.permission.take().unwrap();
-                permission = Some((perm.id, perm.session, reply.to_string()));
+            for ch in text.chars() {
+                let mut clear = false;
+                if let Some(active) = locked.permission.as_mut() {
+                    if active.reject.is_some() {
+                        let current = active.reject.clone().unwrap_or_default();
+                        match ch {
+                            '\u{3}' | '\u{4}' => exit = true,
+                            '\u{1b}' => active.reject = None,
+                            '\r' | '\n' => {
+                                let perm = locked.permission.take().unwrap();
+                                permission = Some((
+                                    perm.id,
+                                    perm.session,
+                                    String::from("reject"),
+                                    current.trim().to_string(),
+                                ));
+                                clear = true;
+                            }
+                            '\u{7f}' | '\u{8}' => {
+                                active.reject = Some(
+                                    current
+                                        .chars()
+                                        .take(current.chars().count().saturating_sub(1))
+                                        .collect(),
+                                )
+                            }
+                            ch if !ch.is_control() => {
+                                active.reject = Some(format!("{current}{ch}"))
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        match ch {
+                            'o' => {
+                                let perm = locked.permission.take().unwrap();
+                                permission = Some((
+                                    perm.id,
+                                    perm.session,
+                                    String::from("once"),
+                                    String::new(),
+                                ));
+                                clear = true;
+                            }
+                            'a' => {
+                                let perm = locked.permission.take().unwrap();
+                                permission = Some((
+                                    perm.id,
+                                    perm.session,
+                                    String::from("always"),
+                                    String::new(),
+                                ));
+                                clear = true;
+                            }
+                            'r' => active.reject = Some(String::new()),
+                            '\u{1b}' => {
+                                let perm = locked.permission.take().unwrap();
+                                permission = Some((
+                                    perm.id,
+                                    perm.session,
+                                    String::from("reject"),
+                                    String::new(),
+                                ));
+                                clear = true;
+                            }
+                            '\u{3}' | '\u{4}' => exit = true,
+                            _ => {}
+                        }
+                    }
+                }
+                if clear {
+                    break;
+                }
             }
         } else if locked.question.is_some() {
             question_input(&mut locked, &text, &mut question, &mut exit);
@@ -1232,11 +1832,20 @@ fn input(
             prompt_input(&mut locked, &text, &mut submit, &mut exit);
         }
     }
-    if let Some((id, session, reply)) = permission {
+    if let Some((id, session, reply, reason)) = permission {
+        let body = if reason.is_empty() {
+            format!("{{\"reply\":{}}}", json(&reply))
+        } else {
+            format!(
+                "{{\"reply\":{},\"reason\":{}}}",
+                json(&reply),
+                json(&reason)
+            )
+        };
         client.request(
             "POST",
             &format!("/permission/{id}/reply?sessionID={session}"),
-            Some(&format!("{{\"reply\":{}}}", json(&reply))),
+            Some(&body),
         )?;
     }
     if let Some((id, session, body)) = question {
@@ -1259,9 +1868,13 @@ fn input(
     Ok(false)
 }
 
-const COMMANDS: [&str; 37] = [
+const COMMANDS: &[&str] = &[
     "/new",
     "/sessions",
+    "/children",
+    "/messages",
+    "/history",
+    "/timeline",
     "/session",
     "/tabs",
     "/tab",
@@ -1275,11 +1888,25 @@ const COMMANDS: [&str; 37] = [
     "/agents",
     "/agent",
     "/files",
+    "/summary",
+    "/sidebar",
+    "/attach",
+    "/open",
+    "/save",
+    "/diagnostics",
+    "/close-editor",
     "/status",
+    "/queue",
+    "/stash",
+    "/list",
+    "/pop",
     "/share",
     "/unshare",
     "/fork",
     "/rename",
+    "/title",
+    "/revert",
+    "/unrevert",
     "/pause",
     "/resume",
     "/compact",
@@ -1287,8 +1914,13 @@ const COMMANDS: [&str; 37] = [
     "/diff",
     "/themes",
     "/theme",
+    "/keybinds",
+    "/clipboard",
+    "/suspend",
+    "/plugins",
     "/shells",
     "/shell",
+    "/autocomplete",
     "/mcps",
     "/orgs",
     "/commands",
@@ -1344,6 +1976,23 @@ fn prompt_input(state: &mut State, text: &str, submit: &mut Option<String>, exit
             index += if rest.starts_with("\x1b[1~") { 4 } else { 3 };
             continue;
         }
+        if rest.starts_with("\x1b[24~") || rest.starts_with("[24~") {
+            if !state.input.text.trim().is_empty() {
+                let text = state.input.clear();
+                state.stash.push(text);
+                state.notice("stashed prompt");
+            }
+            index += if rest.starts_with("\x1b") { 5 } else { 4 };
+            continue;
+        }
+        if rest.starts_with("\x1b[25~") || rest.starts_with("[25~") {
+            if let Some(text) = state.stash.pop() {
+                state.input.set(text);
+                state.notice("restored stashed prompt");
+            }
+            index += if rest.starts_with("\x1b") { 5 } else { 4 };
+            continue;
+        }
         if rest.starts_with("\x1b[F") || rest.starts_with("\x1b[4~") {
             state.input.end();
             index += if rest.starts_with("\x1b[4~") { 4 } else { 3 };
@@ -1386,6 +2035,19 @@ fn prompt_input(state: &mut State, text: &str, submit: &mut Option<String>, exit
             '\u{5}' => state.input.end(),
             '\u{15}' => state.input.kill_before(),
             '\u{b}' => state.input.kill_after(),
+            '\u{18}' => {
+                if !state.input.text.trim().is_empty() {
+                    let text = state.input.clear();
+                    state.stash.push(text);
+                    state.notice("stashed prompt");
+                }
+            }
+            '\u{19}' => {
+                if let Some(text) = state.stash.pop() {
+                    state.input.set(text);
+                    state.notice("restored stashed prompt");
+                }
+            }
             '\u{17}' => state.input.delete_word_before(),
             '\u{7f}' | '\u{8}' => state.input.backspace(),
             ch if ch >= ' ' => state.input.insert(&ch.to_string()),
@@ -1614,6 +2276,7 @@ fn events_once(
 
 fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
     let kind = string(event, "type").unwrap_or_default();
+
     let props = object_value(event, "properties").unwrap_or_else(|| event.to_string());
     if let Ok(mut locked) = state.lock() {
         match kind.as_str() {
@@ -1624,6 +2287,9 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
                     locked.status = string(&status, "phase")
                         .or_else(|| string(&status, "type"))
                         .unwrap_or_else(|| String::from("idle"));
+                    if locked.status == "idle" {
+                        locked.queue = 0;
+                    }
                 }
             }
             "session.created" | "session.updated" => {
@@ -1684,6 +2350,14 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
                         patterns,
                         file: string(&metadata, "filepath").or_else(|| string(&metadata, "file")),
                         diff: string(&metadata, "diff"),
+                        source: string(&props, "source")
+                            .or_else(|| string(&metadata, "source"))
+                            .or_else(|| {
+                                string(&metadata, "childSessionID")
+                                    .map(|item| format!("child {item}"))
+                            }),
+                        reason: string(&props, "reason"),
+                        reject: None,
                     });
                     locked.notice("permission requested");
                 }
@@ -1762,25 +2436,48 @@ fn apply_part(state: &mut State, message: &str, part: &str) {
         let suffix = string(&state_json, "error")
             .map(|item| format!(": {item}"))
             .unwrap_or_default();
-        let line = format!("tool {tool} {status}{suffix}");
+        let line = format!("tool {tool} {status} [expanded]{suffix}");
         if !msg.tools.iter().any(|item| item == &line) {
             msg.tools.push(line);
         }
         if let Some(output) = string(&state_json, "output") {
-            for line in output.lines().take(4) {
+            let rows: Vec<&str> = output.lines().collect();
+            for line in rows.iter().take(8) {
                 let preview = format!("output {line}");
                 if !msg.tools.iter().any(|item| item == &preview) {
                     msg.tools.push(preview);
                 }
             }
+            if rows.len() > 8 {
+                let preview = format!("... {} more line(s)", rows.len() - 8);
+                if !msg.tools.iter().any(|item| item == &preview) {
+                    msg.tools.push(preview);
+                }
+            }
         }
-        if let Some(metadata) = object_value(part, "metadata") {
-            if let Some(diff) = string(&metadata, "diff") {
-                for line in diff.lines().take(8) {
-                    let preview = format!("diff {line}");
-                    if !msg.tools.iter().any(|item| item == &preview) {
-                        msg.tools.push(preview);
-                    }
+        let input = object_value(&state_json, "input");
+        let input_diff = input.as_ref().and_then(|item| string(item, "diff"));
+        let metadata_diff = object_value(part, "metadata").and_then(|item| string(&item, "diff"));
+        if let Some(diff) = metadata_diff.or(input_diff) {
+            let heading = String::from("diff preview");
+            if !msg.tools.iter().any(|item| item == &heading) {
+                msg.tools.push(heading);
+            }
+            for line in diff
+                .lines()
+                .filter(|line| {
+                    line.starts_with("diff --git")
+                        || line.starts_with("--- ")
+                        || line.starts_with("+++ ")
+                        || line.starts_with("@@")
+                        || (line.starts_with('+') && !line.starts_with("+++"))
+                        || (line.starts_with('-') && !line.starts_with("---"))
+                })
+                .take(14)
+            {
+                let preview = format!("diff {line}");
+                if !msg.tools.iter().any(|item| item == &preview) {
+                    msg.tools.push(preview);
                 }
             }
         }
@@ -1999,20 +2696,56 @@ fn draw(state: &State, size: (usize, usize)) {
             .join("  ");
         lines.push(crop(&format!("tabs {tabs}"), width));
     }
-    if width >= 96 && !state.sidebar.is_empty() {
+    if state.sidebar_visible {
         lines.push(crop(
             &format!(
-                "files {}",
-                state
-                    .sidebar
-                    .iter()
-                    .take(3)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" | ")
+                "Sidebar {} | Summary | Files | mode {}",
+                if width >= 96 { "docked" } else { "overlay" },
+                state.sidebar_mode
             ),
             width,
         ));
+        if !state.open_files.is_empty() {
+            lines.push(crop("Open Files", width));
+            for file in state.open_files.iter().take(4) {
+                lines.push(crop(
+                    &format!(
+                        "{} {file} [open] [close]",
+                        if state.active_file.as_deref() == Some(file.as_str()) {
+                            ">"
+                        } else {
+                            "-"
+                        }
+                    ),
+                    width,
+                ));
+            }
+        }
+        if state.sidebar_mode == "files" {
+            lines.push(crop("Files .", width));
+            for row in state.sidebar_files.iter().take(6) {
+                lines.extend(wrap(row, width));
+            }
+        } else {
+            lines.push(crop("Modified Files", width));
+            for row in state.sidebar.iter().take(6) {
+                lines.extend(wrap(&format!("{row} [open]"), width));
+            }
+        }
+    }
+    if let Some(editor) = &state.editor {
+        lines.push(crop(
+            &format!(
+                "Editor {}{}{}",
+                editor.file,
+                if editor.dirty { " *" } else { "" },
+                if editor.diff { " diff" } else { "" }
+            ),
+            width,
+        ));
+        for row in editor.diagnostics.iter().take(3) {
+            lines.extend(wrap(&format!("  {row}"), width));
+        }
     }
     lines.push(String::new());
     if let Some(panel) = &state.panel {
@@ -2029,7 +2762,7 @@ fn draw(state: &State, size: (usize, usize)) {
             "Assistant"
         };
         if !msg.text.trim().is_empty() {
-            lines.extend(wrap(&format!("{label}: {}", msg.text.trim()), width));
+            lines.extend(markdown(&format!("{label}: {}", msg.text.trim()), width));
         }
         for tool in &msg.tools {
             lines.extend(wrap(&format!("  {tool}"), width));
@@ -2039,10 +2772,18 @@ fn draw(state: &State, size: (usize, usize)) {
         }
     }
     if let Some(permission) = &state.permission {
+        let source = permission
+            .source
+            .as_ref()
+            .map(|item| format!(" source {item}"))
+            .unwrap_or_default();
         lines.push(crop(
-            &format!("permission {}", permission.permission),
+            &format!("permission {}{source}", permission.permission),
             width,
         ));
+        if let Some(reason) = &permission.reason {
+            lines.extend(wrap(&format!("reason: {reason}"), width));
+        }
         for pattern in &permission.patterns {
             lines.extend(wrap(&format!("  {pattern}"), width));
         }
@@ -2050,9 +2791,23 @@ fn draw(state: &State, size: (usize, usize)) {
             lines.extend(wrap(&format!("  file {file}"), width));
         }
         if let Some(diff) = &permission.diff {
+            lines.push(String::from("  diff preview"));
             for line in diff.lines().take(6) {
                 lines.extend(wrap(&format!("  {line}"), width));
             }
+        }
+        if let Some(reject) = &permission.reject {
+            lines.extend(wrap(
+                &format!(
+                    "reject reason: {}",
+                    if reject.is_empty() {
+                        "(optional)"
+                    } else {
+                        reject
+                    }
+                ),
+                width,
+            ));
         }
     }
     for notice in &state.notices {
@@ -2079,6 +2834,12 @@ fn draw(state: &State, size: (usize, usize)) {
 
 fn footer_lines(state: &State, width: usize) -> Vec<String> {
     if let Some(permission) = &state.permission {
+        if let Some(reject) = &permission.reject {
+            return wrap(
+                &format!("reject | enter send, esc cancel > {reject}"),
+                width,
+            );
+        }
         return wrap(
             &format!(
                 "permission {} {} | o once, a always, r reject",
@@ -2116,7 +2877,12 @@ fn footer_lines(state: &State, width: usize) -> Vec<String> {
         " | /commands"
     };
     wrap(
-        &format!("> {}{hint}", state.input.rendered()).replace('\n', "\n  "),
+        &format!(
+            "{}> {}{hint}",
+            if state.shell { "shell " } else { "" },
+            state.input.rendered()
+        )
+        .replace('\n', "\n  "),
         width,
     )
 }
@@ -2131,6 +2897,35 @@ fn wrap(input: &str, width: usize) -> Vec<String> {
             line = line.chars().skip(width).collect();
         }
         out.push(line);
+    }
+    out
+}
+
+fn markdown(input: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut code = false;
+    let mut seen = 0usize;
+    for raw in input.split('\n') {
+        if raw.trim_start().starts_with("```") {
+            if code && seen > 12 {
+                out.push(format!("... {} more code line(s)", seen - 12));
+            }
+            code = !code;
+            seen = 0;
+            out.push(raw.to_string());
+            continue;
+        }
+        if code {
+            seen += 1;
+            if seen <= 12 {
+                out.push(crop(raw, width));
+            }
+            continue;
+        }
+        out.extend(wrap(raw, width));
+    }
+    if code && seen > 12 {
+        out.push(format!("... {} more code line(s)", seen - 12));
     }
     out
 }

@@ -1,0 +1,86 @@
+{
+  "phases": [
+    {
+      "phase": 0,
+      "label": "bootstrap",
+      "status": "active",
+      "active": [
+        "smoke.install"
+      ],
+      "inactive": [],
+      "blocked": []
+    },
+    {
+      "phase": 1,
+      "label": "composer",
+      "status": "active",
+      "active": [
+        "composer.submit",
+        "composer.editing",
+        "composer.advanced",
+        "dialogs.question",
+        "layout.capture"
+      ],
+      "inactive": [],
+      "blocked": []
+    },
+    {
+      "phase": 2,
+      "label": "workspace",
+      "status": "active",
+      "active": [
+        "commands.palette",
+        "sessions.tabs",
+        "sessions.routes",
+        "models.panel",
+        "files.panel",
+        "render.tools",
+        "permissions.preview"
+      ],
+      "inactive": [],
+      "blocked": []
+    },
+    {
+      "phase": 3,
+      "label": "rich-ui",
+      "status": "blocked",
+      "active": [
+        "sidebar.files"
+      ],
+      "inactive": [],
+      "blocked": [
+        "tabs.rich"
+      ]
+    },
+    {
+      "phase": 4,
+      "label": "native-convergence",
+      "status": "blocked",
+      "active": [
+        "render.parity-gates",
+        "permissions.parity-gates"
+      ],
+      "inactive": [],
+      "blocked": [
+        "native.opentui",
+        "release.sidecar-smoke"
+      ]
+    },
+    {
+      "phase": 5,
+      "label": "editor-terminal-polish",
+      "status": "active",
+      "active": [
+        "editor.diff",
+        "terminal.polish"
+      ],
+      "inactive": [],
+      "blocked": []
+    }
+  ],
+  "totals": {
+    "active": 18,
+    "inactive": 0,
+    "blocked": 3
+  }
+}

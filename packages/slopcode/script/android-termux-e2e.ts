@@ -6,7 +6,7 @@ import path from "path"
 import { fileURLToPath } from "url"
 
 import pkg from "../package.json"
-import { parity } from "./android-termux-parity"
+import { parity, report } from "./android-termux-parity"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 const root = path.resolve(dir, "../..")
@@ -14,6 +14,11 @@ const sh = "/data/data/com.termux/files/usr/bin/sh"
 const home = "/data/data/com.termux/files/home"
 const tmp = "/data/local/tmp"
 const mode = process.env.SLOPCODE_ANDROID_E2E_MODE ?? "smoke"
+
+export const androidTargets = [
+  { arch: "arm64", name: "slopcode-android-arm64", flag: "android-arm64" },
+  { arch: "x64", name: "slopcode-android-x64", flag: "android-x64" },
+] as const
 
 process.chdir(dir)
 
@@ -74,6 +79,24 @@ async function exists(target: string) {
   )
 }
 
+function target() {
+  const value = process.env.SLOPCODE_ANDROID_TARGET
+  if (value) {
+    const found = androidTargets.find((item) => item.name === value || item.flag === value || item.arch === value)
+    if (found) return found
+    throw new Error(
+      `android e2e: unsupported SLOPCODE_ANDROID_TARGET=${value}; expected ${androidTargets.map((item) => item.name).join(" or ")}`,
+    )
+  }
+  const arch = process.env.SLOPCODE_ANDROID_ARCH
+  if (arch) {
+    const found = androidTargets.find((item) => item.arch === arch)
+    if (found) return found
+    throw new Error(`android e2e: unsupported SLOPCODE_ANDROID_ARCH=${arch}; expected arm64 or x64`)
+  }
+  return androidTargets.find((item) => item.arch === (process.arch === "arm64" ? "arm64" : "x64")) ?? androidTargets[1]
+}
+
 async function pack(cwd: string, name: string) {
   const file = path.join(cwd, name)
   await fs.rm(file, { force: true })
@@ -90,15 +113,15 @@ async function pack(cwd: string, name: string) {
 async function stage() {
   const version = (await import("@slopcode-ai/script")).Script.version
   const work = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-android-termux-e2e-"))
-  const androidName = process.env.SLOPCODE_ANDROID_TARGET ?? "slopcode-android-x64"
-  const androidFrom = path.join(dir, "dist", androidName)
+  const selected = target()
+  const androidFrom = path.join(dir, "dist", selected.name)
   if (!(await exists(path.join(androidFrom, "package.json")))) {
     throw new Error(
-      `android e2e: missing ${androidFrom}; run bun --cwd packages/slopcode run script/build.ts --target=android-x64`,
+      `android e2e: missing ${androidFrom}; run bun --cwd packages/slopcode run script/build.ts --target=${selected.flag}`,
     )
   }
 
-  const androidTo = path.join(work, androidName)
+  const androidTo = path.join(work, selected.name)
   await fs.cp(androidFrom, androidTo, { recursive: true, force: true })
   const androidJson = (await Bun.file(path.join(androidTo, "package.json")).json()) as { name: string; version: string }
   const android = await pack(androidTo, "slopcode-android-runtime.tgz")
@@ -157,6 +180,7 @@ import path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 
 const matrix = ${JSON.stringify(parity, null, 2)}
+const phaseReport = ${JSON.stringify(report(), null, 2)}
 const mode = process.env.SLOPCODE_ANDROID_E2E_MODE || "smoke"
 const root = spawnSync("npm", ["root", "-g"], { encoding: "utf8" }).stdout.trim()
 const host = path.join(root, ${JSON.stringify(androidPackage)}, "bin", "slopcode-android-host")
@@ -313,9 +337,10 @@ function read(req) {
 }
 
 async function runHost(input) {
-  const state = { bodies: [], replies: [], permissions: [] }
+  const state = { bodies: [], replies: [], permissions: [], shells: [], seen: [] }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1")
+    state.seen.push(req.method + " " + url.pathname)
     if (url.pathname === "/session" && req.method === "POST") return json(res, { id: "ses_termux", title: input.title })
     if (url.pathname === "/session" && req.method === "GET") return json(res, input.sessions || [{ id: "ses_termux", title: input.title }])
     if (url.pathname === "/session/ses_termux" && req.method === "GET") return json(res, { id: "ses_termux", title: input.title })
@@ -332,7 +357,13 @@ async function runHost(input) {
     if (url.pathname === "/session/ses_termux/pause" && req.method === "POST") return json(res, true)
     if (url.pathname === "/session/ses_termux/resume" && req.method === "POST") return json(res, true)
     if (url.pathname === "/session/ses_termux/summarize" && req.method === "POST") return json(res, true)
+    if (url.pathname === "/session/ses_termux/children") return json(res, [{ id: "ses_child", title: "Child Session" }])
     if (url.pathname === "/session/ses_termux/diff/index") return json(res, [{ file: "src/app.ts", added: 2, removed: 1 }])
+    if (url.pathname === "/editor" && req.method === "POST") return json(res, { id: "edt_termux", sessionID: "ses_termux", file: "src/app.ts", dirty: true, diff: true })
+    if (url.pathname === "/editor/edt_termux/snapshot") return json(res, { file: "src/app.ts", dirty: true, diff: true, diagnostics: [{ line: 1, column: 1, severity: "error", message: "expected semicolon" }] })
+    if (url.pathname === "/editor/edt_termux/save" && req.method === "POST") return json(res, { id: "edt_termux", sessionID: "ses_termux", file: "src/app.ts", dirty: false, diff: true })
+    if (url.pathname === "/editor/edt_termux/diff/dismiss" && req.method === "POST") return json(res, { id: "edt_termux", sessionID: "ses_termux", file: "src/app.ts", dirty: false, diff: false })
+    if (url.pathname === "/editor/edt_termux" && req.method === "DELETE") return json(res, true)
     if (url.pathname === "/session/ses_termux/message/index") return json(res, input.messages || [])
     if (url.pathname === "/session/ses_termux/message/chunk") return json(res, input.chunks || [])
     if (url.pathname === "/session/ses_termux/prompt_async" && req.method === "POST") {
@@ -341,6 +372,12 @@ async function runHost(input) {
       res.end()
       return
     }
+    if (url.pathname === "/session/ses_termux/shell" && req.method === "POST") {
+      state.shells.push(await read(req))
+      return json(res, { id: "msg_shell", sessionID: "ses_termux", role: "assistant" })
+    }
+    if (url.pathname === "/session/ses_termux/revert" && req.method === "POST") return json(res, { id: "ses_termux", title: input.title })
+    if (url.pathname === "/session/ses_termux/unrevert" && req.method === "POST") return json(res, { id: "ses_termux", title: input.title })
     if (url.pathname === "/question/que_termux/reply" && req.method === "POST") {
       state.replies.push(await read(req))
       return json(res, {})
@@ -361,6 +398,11 @@ async function runHost(input) {
       { path: "src/app.ts", status: "modified" },
       { path: "README.md", status: "added" },
     ])
+    if (url.pathname === "/file") return json(res, [
+      { path: "src/app.ts", name: "app.ts", type: "file" },
+      { path: "src/cli", name: "cli", type: "directory" },
+    ])
+    if (url.pathname === "/file/content") return json(res, { content: "console.log('ok')" })
     if (url.pathname === "/file/find/file") return json(res, ["src/app.ts", "src/cli/index.ts"])
     if (url.pathname === "/session/status") return json(res, { ses_termux: { type: "idle", phase: "idle" } })
     if (url.pathname === "/event") {
@@ -444,6 +486,23 @@ const actions = {
     })
     assert(JSON.stringify(run.bodies.map((item) => item.parts?.[0]?.text)) === JSON.stringify(["hello\\nworld", "first", "first again"]), "unexpected editing bodies " + JSON.stringify(run.bodies))
   },
+  "composer.advanced": async () => {
+    const run = await runHost({
+      title: "Advanced Composer",
+      steps: [
+        { delay: 100, text: "draft\\x1b[24~" },
+        { delay: 100, text: "/list\\r" },
+        { delay: 100, text: "\\x1b[25~\\t\\r" },
+        { delay: 100, text: "/shell\\r" },
+        { delay: 100, text: "ls\\r" },
+        { delay: 100, text: "/queue\\r" },
+        { delay: 100, text: "\\x04" },
+      ],
+    })
+    assert(run.bodies[0]?.parts?.[0]?.text === "draft", "stash/pop/autocomplete did not submit draft " + JSON.stringify(run.bodies))
+    assert(run.shells[0]?.command === "ls", "shell mode did not hit shell route " + JSON.stringify(run.shells))
+    assert(run.screen.includes("Prompt Queue") || run.stdout.includes("Prompt Queue"), "missing queue panel\\n" + run.screen)
+  },
   "dialogs.question": async () => {
     const run = await runHost({ title: "Question Session", question: true, steps: [{ delay: 200, text: "1\\r" }, { delay: 100, text: "\\x04" }] })
     assert(JSON.stringify(run.replies) === JSON.stringify([{ answers: [["Yes"]] }]), "unexpected replies " + JSON.stringify(run.replies))
@@ -469,6 +528,24 @@ const actions = {
     })
     assert(run.screen.includes("Sessions") || run.stdout.includes("Sessions"), "missing sessions panel\\n" + run.screen)
     assert(run.screen.includes("tabs") || run.stdout.includes("tabs"), "missing tab strip\\n" + run.screen)
+  },
+  "sessions.routes": async () => {
+    const run = await runHost({
+      title: "Route Session",
+      messages: [{ id: "msg_route", sessionID: "ses_termux", role: "user", time: { created: 1 } }],
+      steps: [
+        { delay: 100, text: "/children\\r" },
+        { delay: 100, text: "/messages\\r" },
+        { delay: 100, text: "/timeline\\r" },
+        { delay: 100, text: "/revert msg_route\\r" },
+        { delay: 100, text: "/unrevert\\r" },
+        { delay: 100, text: "\\x04" },
+      ],
+    })
+    assert(run.seen.includes("GET /session/ses_termux/children"), "missing children route " + JSON.stringify(run.seen))
+    assert(run.seen.filter((item) => item === "GET /session/ses_termux/message/index").length >= 3, "missing timeline/history routes " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /session/ses_termux/revert"), "missing revert route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /session/ses_termux/unrevert"), "missing unrevert route " + JSON.stringify(run.seen))
   },
   "models.panel": async () => {
     const run = await runHost({
@@ -498,6 +575,104 @@ const actions = {
     assert(JSON.stringify(run.permissions) === JSON.stringify([{ reply: "always" }]), "unexpected permission replies " + JSON.stringify(run.permissions))
     assert(run.screen.includes("permission") || run.stdout.includes("permission"), "missing permission panel\\n" + run.screen)
   },
+  "editor.diff": async () => {
+    const run = await runHost({
+      title: "Editor Session",
+      steps: [
+        { delay: 150, text: "/open src/app.ts\\r" },
+        { delay: 150, text: "/diagnostics\\r" },
+        { delay: 150, text: "/close-editor\\r" },
+        { delay: 150, text: "/save\\r" },
+        { delay: 150, text: "/diff dismiss\\r" },
+        { delay: 150, text: "/close-editor!\\r" },
+        { delay: 150, text: "\\x04" },
+      ],
+    })
+    assert(run.stdout.includes("Editor"), "missing editor panel\\\\n" + run.stdout)
+    assert(run.stdout.includes("expected semicolon"), "missing diagnostics\\\\n" + run.stdout)
+    assert(run.stdout.includes("unsaved changes") || run.stdout.includes("saved src/app.ts"), "missing dirty guard/save\\\\n" + run.stdout)
+    assert(run.seen.includes("POST /editor"), "missing editor open " + JSON.stringify(run.seen))
+    assert(run.seen.includes("GET /editor/edt_termux/snapshot"), "missing editor snapshot " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /editor/edt_termux/save"), "missing editor save " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /editor/edt_termux/diff/dismiss"), "missing diff dismiss " + JSON.stringify(run.seen))
+    assert(run.seen.includes("DELETE /editor/edt_termux"), "missing editor close " + JSON.stringify(run.seen))
+  },
+  "terminal.polish": async () => {
+    const run = await runHost({
+      title: "Polish Session",
+      steps: [
+        { delay: 150, text: "/themes\\r" },
+        { delay: 150, text: "/keybinds\\r" },
+        { delay: 150, text: "/clipboard\\r" },
+        { delay: 150, text: "/title Android Title\\r" },
+        { delay: 150, text: "/suspend\\r" },
+        { delay: 150, text: "/plugins\\r" },
+        { delay: 150, text: "\\x04" },
+      ],
+    })
+    assert(run.stdout.includes("Themes"), "missing themes\\\\n" + run.stdout)
+    assert(run.stdout.includes("Keybinds"), "missing keybinds\\\\n" + run.stdout)
+    assert(run.stdout.includes("Clipboard"), "missing clipboard\\\\n" + run.stdout)
+    assert(run.stdout.includes("Plugins"), "missing plugins\\\\n" + run.stdout)
+    assert(run.seen.includes("PATCH /session/ses_termux"), "missing title route " + JSON.stringify(run.seen))
+  },
+  "render.parity-gates": async () => {
+    const run = await runHost({
+      title: "Render Gate",
+      width: 100,
+      height: 32,
+      messages: [{ id: "msg_gate", role: "assistant" }],
+      chunks: [
+        {
+          messageID: "msg_gate",
+          parts: [
+            { type: "text", text: "\`\`\`ts\\n" + Array.from({ length: 20 }, (_, index) => "const item" + index + " = true").join("\\n") + "\\n\`\`\`" },
+            {
+              type: "tool",
+              tool: "edit",
+              state: {
+                status: "completed",
+                output: Array.from({ length: 20 }, (_, index) => "line " + index).join("\\n"),
+                input: { diff: "--- a/src/app.ts\\n+++ b/src/app.ts\\n@@ -1 +1 @@\\n-old\\n+new" },
+              },
+            },
+          ],
+        },
+      ],
+      steps: [{ delay: 150, text: "\\x04" }],
+    })
+    assert(run.stdout.includes("tool edit completed [expanded]"), "missing expanded tool gate\\n" + run.stdout)
+    assert(run.stdout.includes("diff preview") && run.stdout.includes("+new"), "missing diff gate\\n" + run.stdout)
+    assert(run.stdout.includes("more line(s)") || run.stdout.includes("more code line(s)"), "missing clipping gate\\n" + run.stdout)
+  },
+  "permissions.parity-gates": async () => {
+    const run = await runHost({ title: "Permission Gate", permission: true, steps: [{ delay: 200, text: "rneeds context\\r" }, { delay: 100, text: "\\x04" }] })
+    assert(JSON.stringify(run.permissions) === JSON.stringify([{ reply: "reject", reason: "needs context" }]), "unexpected permission gate replies " + JSON.stringify(run.permissions))
+    assert(run.stdout.includes("permission"), "missing permission gate panel\\n" + run.stdout)
+  },
+  "sidebar.files": async () => {
+    const narrow = await runHost({
+      title: "Sidebar Session",
+      width: 80,
+      height: 24,
+      steps: [
+        { delay: 150, text: "/summary\\r" },
+        { delay: 150, text: "/files\\r" },
+        { delay: 150, text: "/open src/app.ts\\r" },
+        { delay: 150, text: "/attach src/app.ts\\r" },
+        { delay: 150, text: "use it\\r" },
+        { delay: 150, text: "\\x04" },
+      ],
+    })
+    assert(narrow.stdout.includes("Sidebar overlay"), "missing overlay sidebar\\n" + narrow.stdout)
+    assert(narrow.stdout.includes("Open Files"), "missing open files\\n" + narrow.stdout)
+    assert(narrow.stdout.includes("[attach]") && narrow.stdout.includes("[open]"), "missing file actions\\n" + narrow.stdout)
+    assert(narrow.seen.includes("GET /file/status") && narrow.seen.includes("GET /file") && narrow.seen.includes("POST /editor"), "missing file/editor routes " + JSON.stringify(narrow.seen))
+    assert(JSON.stringify(narrow.bodies[0]?.parts?.map((item) => item.type)) === JSON.stringify(["file", "text"]), "missing attached file part " + JSON.stringify(narrow.bodies))
+    const wide = await runHost({ title: "Sidebar Wide", width: 120, height: 24, steps: [{ delay: 150, text: "/summary\\r" }, { delay: 150, text: "\\x04" }] })
+    assert(wide.stdout.includes("Sidebar"), "missing sidebar frame\\n" + wide.stdout)
+    assert(wide.stdout.includes("Modified Files"), "missing modified files\\n" + wide.stdout)
+  },
 }
 
 for (const item of selected()) {
@@ -508,13 +683,13 @@ for (const item of selected()) {
     console.log("android termux e2e ok", item.id)
   } catch (error) {
     results.push({ id: item.id, ok: false, ms: Date.now() - started, error: error instanceof Error ? error.message : String(error) })
-    fs.writeFileSync(resultPath, JSON.stringify({ mode, matrix, results }, null, 2))
+    fs.writeFileSync(resultPath, JSON.stringify({ mode, phaseReport, matrix, results }, null, 2))
     throw error
   }
 }
 
-fs.writeFileSync(resultPath, JSON.stringify({ mode, matrix, results }, null, 2))
-console.log("android termux e2e matrix", JSON.stringify({ mode, active: selected().map((item) => item.id), pending: matrix.filter((item) => !item.active).map((item) => item.id), results }))
+fs.writeFileSync(resultPath, JSON.stringify({ mode, phaseReport, matrix, results }, null, 2))
+console.log("android termux e2e matrix", JSON.stringify({ mode, phases: phaseReport.phases, totals: phaseReport.totals, results }))
 `
 }
 
