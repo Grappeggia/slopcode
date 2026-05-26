@@ -3,6 +3,18 @@ const endpoint = "https://api.github.com/repos/teamslop/slopcode/releases?per_pa
 const releaseUrl = "https://github.com/teamslop/slopcode/releases"
 const fallback: Release[] = [
   {
+    tag_name: "v0.2.126",
+    html_url: `${releaseUrl}/tag/v0.2.126`,
+    published_at: "2026-05-26T04:50:44Z",
+    body: [
+      "- Improved Android/Termux sidecar TUI parity.",
+      "- Added Android release assets with install fallback.",
+      "- Hardened artifact verification and release publishing.",
+    ].join("\n"),
+    draft: false,
+    prerelease: false,
+  },
+  {
     tag_name: "v0.2.125",
     html_url: `${releaseUrl}/tag/v0.2.125`,
     published_at: "2026-05-25T02:25:42Z",
