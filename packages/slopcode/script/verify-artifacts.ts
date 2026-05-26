@@ -213,6 +213,22 @@ const alpineSmoke = async () => {
   await $`docker run --rm --platform linux/amd64 -v ${work}:/work node:20-alpine sh -lc ${sh}`
 }
 
+const androidSmoke = async () => {
+  const android = packed.find((item) => item.name === "@slopcode-ai/slopcode-android-arm64")
+  if (!android) {
+    throw new Error("verify: missing Android arm64 runtime package")
+  }
+  const work = path.join(tmp, "install-android")
+  await fs.mkdir(work, { recursive: true })
+  await $`npm install --no-package-lock --ignore-scripts=false --include=optional --os=android --cpu=arm64 ${android.tgz} ${root.tgz}`.cwd(
+    work,
+  )
+  const bin = path.join(work, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode")
+  if (!(await exists(bin))) {
+    throw new Error("verify: packed Android install did not install the scoped runtime")
+  }
+}
+
 const listTar = async (file: string) => (await $`tar -tf ${file}`.text()).split("\n").filter(Boolean)
 const listDeb = async (file: string) => (await $`dpkg-deb -c ${file}`.text()).split("\n").filter(Boolean)
 const listZip = async (file: string) =>
@@ -281,6 +297,7 @@ const verifyAlias = async () => {
 
 await verifyArchives()
 await installSmoke()
+await androidSmoke()
 await verifyAlias()
 await alpineSmoke()
 

@@ -34,8 +34,10 @@ jobs:
       - name: Install Android NDK
         run: sdkmanager "ndk;27.1.12297006"
 
-      - name: Build Android x64 package
-        run: bun --cwd packages/slopcode run script/build.ts --target=android-x64
+      - name: Build Android packages
+        run: |
+          bun --cwd packages/slopcode run script/build.ts --target=android-arm64
+          bun --cwd packages/slopcode run script/build.ts --target=android-x64
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
 

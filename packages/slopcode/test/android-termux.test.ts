@@ -66,7 +66,7 @@ describe("Android Termux runtime", () => {
     expect(thread).toContain('await import("./android-host")')
   })
 
-  test("Android E2E declares phase 0/1 parity coverage and phase 3 gaps", () => {
+  test("Android E2E declares parity coverage and phase 3 gaps", () => {
     const ids = parity.map((item) => item.id)
 
     expect(active("smoke").map((item) => item.id)).toEqual(["smoke.install"])
@@ -76,6 +76,12 @@ describe("Android Termux runtime", () => {
       "composer.editing",
       "dialogs.question",
       "layout.capture",
+      "commands.palette",
+      "sessions.tabs",
+      "models.panel",
+      "files.panel",
+      "render.tools",
+      "permissions.preview",
     ])
     expect(ids).toContain("tabs.rich")
     expect(ids).toContain("sidebar.files")

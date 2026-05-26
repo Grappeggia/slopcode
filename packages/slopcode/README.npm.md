@@ -11,6 +11,16 @@ SlopCode is the open source AI slopcoding agent focused on terminal workflows.
 npm i -g slopcode@latest
 ```
 
+### Termux on Android
+
+```bash
+pkg update
+pkg install nodejs git ripgrep neovim tar
+npm i -g slopcode@latest --include=optional
+```
+
+The Android package includes the native sidecar TUI runtime for Termux arm64/x64.
+
 ## Quickstart
 
 ```bash

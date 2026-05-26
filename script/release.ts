@@ -99,12 +99,13 @@ if (behind > 0) {
   throw new Error(`Branch is behind origin/${ref}. Rebase or fast-forward before releasing.`)
 }
 
-const sha = (await $`git rev-parse HEAD`.text()).trim()
-
 await $`bun ./script/publish.ts`.env({
   ...env,
   SLOPCODE_PREPARE_ONLY: "true",
 })
+
+const sha = (await $`git rev-parse HEAD`.text()).trim()
+
 await $`gh workflow run publish.yml --ref ${ref} -f version=${version}`
 
 const waitForRun = async (left: number): Promise<{ databaseId: number; url?: string }> => {

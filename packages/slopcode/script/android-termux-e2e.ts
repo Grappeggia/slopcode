@@ -313,12 +313,28 @@ function read(req) {
 }
 
 async function runHost(input) {
-  const state = { bodies: [], replies: [] }
+  const state = { bodies: [], replies: [], permissions: [] }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1")
-    if (url.pathname === "/session" && req.method === "POST") return json(res, { id: "ses_termux" })
-    if (url.pathname === "/session/ses_termux") return json(res, { id: "ses_termux", title: input.title })
+    if (url.pathname === "/session" && req.method === "POST") return json(res, { id: "ses_termux", title: input.title })
+    if (url.pathname === "/session" && req.method === "GET") return json(res, input.sessions || [{ id: "ses_termux", title: input.title }])
+    if (url.pathname === "/session/ses_termux" && req.method === "GET") return json(res, { id: "ses_termux", title: input.title })
+    if (url.pathname === "/session/ses_termux" && req.method === "PATCH") {
+      const body = await read(req)
+      return json(res, { id: "ses_termux", title: body.title || input.title })
+    }
+    if (url.pathname === "/session/ses_termux/fork" && req.method === "POST") return json(res, { id: "ses_fork", title: "Forked Session" })
+    if (url.pathname === "/session/ses_fork" && req.method === "GET") return json(res, { id: "ses_fork", title: "Forked Session" })
+    if (url.pathname === "/session/ses_fork/message/index") return json(res, [])
+    if (url.pathname === "/session/ses_termux/share" && req.method === "POST") return json(res, { id: "ses_termux", title: input.title, share: { url: "https://share.example/ses_termux" } })
+    if (url.pathname === "/session/ses_termux/share" && req.method === "DELETE") return json(res, { id: "ses_termux", title: input.title })
+    if (url.pathname === "/session/ses_termux/abort" && req.method === "POST") return json(res, true)
+    if (url.pathname === "/session/ses_termux/pause" && req.method === "POST") return json(res, true)
+    if (url.pathname === "/session/ses_termux/resume" && req.method === "POST") return json(res, true)
+    if (url.pathname === "/session/ses_termux/summarize" && req.method === "POST") return json(res, true)
+    if (url.pathname === "/session/ses_termux/diff/index") return json(res, [{ file: "src/app.ts", added: 2, removed: 1 }])
     if (url.pathname === "/session/ses_termux/message/index") return json(res, input.messages || [])
+    if (url.pathname === "/session/ses_termux/message/chunk") return json(res, input.chunks || [])
     if (url.pathname === "/session/ses_termux/prompt_async" && req.method === "POST") {
       state.bodies.push(await read(req))
       res.writeHead(204)
@@ -329,17 +345,39 @@ async function runHost(input) {
       state.replies.push(await read(req))
       return json(res, {})
     }
+    if (url.pathname === "/permission/perm_termux/reply" && req.method === "POST") {
+      state.permissions.push(await read(req))
+      return json(res, {})
+    }
+    if (url.pathname === "/v2/model") return json(res, [
+      { providerID: "openai", id: "gpt-5", name: "GPT 5", release_date: "2026-01-01" },
+      { providerID: "anthropic", id: "claude-sonnet", name: "Claude Sonnet", release_date: "2025-12-01" },
+    ])
+    if (url.pathname === "/v2/provider") return json(res, [
+      { id: "openai", name: "OpenAI", models: {} },
+      { id: "anthropic", name: "Anthropic", models: {} },
+    ])
+    if (url.pathname === "/file/status") return json(res, [
+      { path: "src/app.ts", status: "modified" },
+      { path: "README.md", status: "added" },
+    ])
+    if (url.pathname === "/file/find/file") return json(res, ["src/app.ts", "src/cli/index.ts"])
+    if (url.pathname === "/session/status") return json(res, { ses_termux: { type: "idle", phase: "idle" } })
     if (url.pathname === "/event") {
       res.writeHead(200, { "content-type": "text/event-stream" })
       res.write('data: {"type":"server.connected"}\\n\\n')
       if (input.question) {
         res.write('data: {"type":"question.asked","properties":{"id":"que_termux","sessionID":"ses_termux","questions":[{"header":"Mode","question":"Pick one","options":[{"label":"Yes","description":"ok"}]}]}}\\n\\n')
       }
+      if (input.permission) {
+        res.write('data: {"type":"permission.asked","properties":{"id":"perm_termux","sessionID":"ses_termux","permission":"edit","patterns":["src/app.ts"],"metadata":{"filepath":"src/app.ts","diff":"+hello\\n-world"}}}\\n\\n')
+      }
       setTimeout(() => res.end(), 1000)
       return
     }
     return json(res, {})
   })
+
 
   try {
     await new Promise((resolve, reject) => server.listen(0, "127.0.0.1", (error) => (error ? reject(error) : resolve())))
@@ -414,6 +452,51 @@ const actions = {
     const run = await runHost({ title: "Layout Session", width: 80, height: 24, steps: [{ delay: 1500, text: "/exit\\r" }] })
     assert(run.screen.includes("Layout Session") || run.stdout.includes("Layout Session"), "screen missing title\\n" + run.screen + "\\nraw:\\n" + run.stdout)
     assert(run.screen.includes("SlopCode") || run.stdout.includes("SlopCode"), "screen missing chrome\\n" + run.screen + "\\nraw:\\n" + run.stdout)
+  },
+  "commands.palette": async () => {
+    const run = await runHost({ title: "Command Session", steps: [{ delay: 150, text: "/commands\\r" }, { delay: 150, text: "\\x04" }] })
+    assert(run.screen.includes("Command Palette") || run.stdout.includes("Command Palette"), "missing command palette\\n" + run.screen)
+    assert(run.screen.includes("/models") || run.stdout.includes("/models"), "missing model command\\n" + run.screen)
+  },
+  "sessions.tabs": async () => {
+    const run = await runHost({
+      title: "Tab Session",
+      sessions: [
+        { id: "ses_termux", title: "Tab Session" },
+        { id: "ses_other", title: "Other Session" },
+      ],
+      steps: [{ delay: 150, text: "/sessions\\r" }, { delay: 150, text: "/tabs\\r" }, { delay: 150, text: "\\x04" }],
+    })
+    assert(run.screen.includes("Sessions") || run.stdout.includes("Sessions"), "missing sessions panel\\n" + run.screen)
+    assert(run.screen.includes("tabs") || run.stdout.includes("tabs"), "missing tab strip\\n" + run.screen)
+  },
+  "models.panel": async () => {
+    const run = await runHost({
+      title: "Model Session",
+      steps: [{ delay: 150, text: "/models\\r" }, { delay: 150, text: "/model openai/gpt-5\\r" }, { delay: 150, text: "hello\\r" }, { delay: 150, text: "\\x04" }],
+    })
+    assert(run.screen.includes("Models") || run.stdout.includes("Models"), "missing models panel\\n" + run.screen)
+    assert(run.bodies[0]?.model?.providerID === "openai" && run.bodies[0]?.model?.modelID === "gpt-5", "missing selected model " + JSON.stringify(run.bodies))
+  },
+  "files.panel": async () => {
+    const run = await runHost({ title: "Files Session", steps: [{ delay: 150, text: "/files\\r" }, { delay: 150, text: "/files app\\r" }, { delay: 150, text: "\\x04" }] })
+    assert(run.screen.includes("Files") || run.stdout.includes("Files"), "missing files panel\\n" + run.screen)
+    assert(run.screen.includes("src/app.ts") || run.stdout.includes("src/app.ts"), "missing file row\\n" + run.screen)
+  },
+  "render.tools": async () => {
+    const run = await runHost({
+      title: "Render Session",
+      messages: [{ id: "msg_tool", role: "assistant" }],
+      chunks: [{ messageID: "msg_tool", parts: [{ type: "text", text: "Done" }, { type: "tool", tool: "edit", state: { status: "completed", output: "patched" }, metadata: { diff: "+next\\n-prev" } }] }],
+      steps: [{ delay: 150, text: "\\x04" }],
+    })
+    assert(run.screen.includes("tool edit completed") || run.stdout.includes("tool edit completed"), "missing tool card\\n" + run.screen)
+    assert(run.screen.includes("+next") || run.stdout.includes("+next"), "missing diff preview\\n" + run.screen)
+  },
+  "permissions.preview": async () => {
+    const run = await runHost({ title: "Permission Session", permission: true, steps: [{ delay: 200, text: "a" }, { delay: 100, text: "\\x04" }] })
+    assert(JSON.stringify(run.permissions) === JSON.stringify([{ reply: "always" }]), "unexpected permission replies " + JSON.stringify(run.permissions))
+    assert(run.screen.includes("permission") || run.stdout.includes("permission"), "missing permission panel\\n" + run.screen)
   },
 }
 

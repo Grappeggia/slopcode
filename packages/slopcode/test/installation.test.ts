@@ -390,6 +390,17 @@ describe("installation package manager behaviors", () => {
     expect(run.logs.some((item) => item.endsWith("|global add slopcode@0.9.0"))).toBe(true)
   })
 
+  test("runs npm Android upgrade with optional runtime deps", async () => {
+    const run = await runCase("upgrade", {
+      METHOD: "npm",
+      TARGET: "0.9.0",
+      SLOPCODE_TEST_PLATFORM: "android",
+      TERMUX_VERSION: "1",
+    })
+    expect(run.exitCode).toBe(0)
+    expect(run.logs.some((item) => item.endsWith("|install -g slopcode@0.9.0 --include=optional"))).toBe(true)
+  })
+
   test("runs yarn berry upgrade in project root", async () => {
     const project = path.join(root, ".slopcode-test-berry")
     const run = await runCase("upgrade", {

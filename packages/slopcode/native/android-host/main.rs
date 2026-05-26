@@ -35,6 +35,19 @@ struct Permission {
     session: String,
     permission: String,
     patterns: Vec<String>,
+    file: Option<String>,
+    diff: Option<String>,
+}
+
+#[derive(Clone)]
+struct Tab {
+    id: String,
+    title: String,
+}
+
+struct Panel {
+    title: String,
+    rows: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -52,7 +65,11 @@ impl Buffer {
         if index == 0 {
             return 0;
         }
-        self.text.char_indices().nth(index).map(|item| item.0).unwrap_or(self.text.len())
+        self.text
+            .char_indices()
+            .nth(index)
+            .map(|item| item.0)
+            .unwrap_or(self.text.len())
     }
 
     fn set(&mut self, text: String) {
@@ -117,28 +134,64 @@ impl Buffer {
     }
 
     fn delete_word_before(&mut self) {
-        while self.cursor > 0 && self.text.chars().nth(self.cursor - 1).is_some_and(char::is_whitespace) {
+        while self.cursor > 0
+            && self
+                .text
+                .chars()
+                .nth(self.cursor - 1)
+                .is_some_and(char::is_whitespace)
+        {
             self.backspace();
         }
-        while self.cursor > 0 && self.text.chars().nth(self.cursor - 1).is_some_and(|ch| !ch.is_whitespace()) {
+        while self.cursor > 0
+            && self
+                .text
+                .chars()
+                .nth(self.cursor - 1)
+                .is_some_and(|ch| !ch.is_whitespace())
+        {
             self.backspace();
         }
     }
 
     fn word_left(&mut self) {
-        while self.cursor > 0 && self.text.chars().nth(self.cursor - 1).is_some_and(char::is_whitespace) {
+        while self.cursor > 0
+            && self
+                .text
+                .chars()
+                .nth(self.cursor - 1)
+                .is_some_and(char::is_whitespace)
+        {
             self.left();
         }
-        while self.cursor > 0 && self.text.chars().nth(self.cursor - 1).is_some_and(|ch| !ch.is_whitespace()) {
+        while self.cursor > 0
+            && self
+                .text
+                .chars()
+                .nth(self.cursor - 1)
+                .is_some_and(|ch| !ch.is_whitespace())
+        {
             self.left();
         }
     }
 
     fn word_right(&mut self) {
-        while self.cursor < self.len() && self.text.chars().nth(self.cursor).is_some_and(|ch| !ch.is_whitespace()) {
+        while self.cursor < self.len()
+            && self
+                .text
+                .chars()
+                .nth(self.cursor)
+                .is_some_and(|ch| !ch.is_whitespace())
+        {
             self.right();
         }
-        while self.cursor < self.len() && self.text.chars().nth(self.cursor).is_some_and(char::is_whitespace) {
+        while self.cursor < self.len()
+            && self
+                .text
+                .chars()
+                .nth(self.cursor)
+                .is_some_and(char::is_whitespace)
+        {
             self.right();
         }
     }
@@ -181,6 +234,9 @@ struct State {
     notices: Vec<String>,
     permission: Option<Permission>,
     question: Option<Question>,
+    tabs: Vec<Tab>,
+    panel: Option<Panel>,
+    sidebar: Vec<String>,
 }
 
 impl State {
@@ -200,6 +256,9 @@ impl State {
             notices: Vec::new(),
             permission: None,
             question: None,
+            tabs: Vec::new(),
+            panel: None,
+            sidebar: Vec::new(),
         }
     }
 
@@ -207,6 +266,31 @@ impl State {
         self.notices.push(text.into());
         if self.notices.len() > 8 {
             self.notices.remove(0);
+        }
+    }
+
+    fn panel(&mut self, title: impl Into<String>, rows: Vec<String>) {
+        self.panel = Some(Panel {
+            title: title.into(),
+            rows,
+        });
+    }
+
+    fn close_panel(&mut self) {
+        self.panel = None;
+    }
+
+    fn sync_tab(&mut self, id: &str, title: &str) {
+        if let Some(tab) = self.tabs.iter_mut().find(|item| item.id == id) {
+            tab.title = title.to_string();
+            return;
+        }
+        self.tabs.push(Tab {
+            id: id.to_string(),
+            title: title.to_string(),
+        });
+        if self.tabs.len() > 8 {
+            self.tabs.remove(0);
         }
     }
 
@@ -372,21 +456,35 @@ fn parse() -> Result<Args, String> {
     Ok(args)
 }
 
-fn initialize(client: &Client, args: &Args, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>) -> Result<(), String> {
+fn initialize(
+    client: &Client,
+    args: &Args,
+    state: &Arc<Mutex<State>>,
+    dirty: &Arc<AtomicBool>,
+) -> Result<(), String> {
     let mut session = args.session.clone();
     if session.is_none() && args.cont {
         session = last_session(client).ok();
     }
     if let Some(id) = session.clone() {
         if args.fork {
-            session = Some(string(&client.request("POST", &format!("/session/{id}/fork"), Some("{}"))?, "id").ok_or("failed to fork session")?);
+            session = Some(
+                string(
+                    &client.request("POST", &format!("/session/{id}/fork"), Some("{}"))?,
+                    "id",
+                )
+                .ok_or("failed to fork session")?,
+            );
         }
     }
     if session.is_none() {
         session = Some(create_session(client)?);
     }
     activate(client, state, session.unwrap())?;
-    state.lock().map_err(|_| "state lock failed")?.notice("native Android sidecar active; type /help for commands");
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .notice("native Android sidecar active; type /help for commands");
     dirty.store(true, Ordering::SeqCst);
     Ok(())
 }
@@ -394,7 +492,11 @@ fn initialize(client: &Client, args: &Args, state: &Arc<Mutex<State>>, dirty: &A
 fn activate(client: &Client, state: &Arc<Mutex<State>>, session: String) -> Result<(), String> {
     let info = client.request("GET", &format!("/session/{session}"), None)?;
     let title = string(&info, "title").unwrap_or_else(|| session.clone());
-    let index = client.request("GET", &format!("/session/{session}/message/index?limit=40"), None)?;
+    let index = client.request(
+        "GET",
+        &format!("/session/{session}/message/index?limit=40"),
+        None,
+    )?;
     let ids = objects(&index)
         .iter()
         .filter_map(|item| string(item, "id"))
@@ -402,14 +504,31 @@ fn activate(client: &Client, state: &Arc<Mutex<State>>, session: String) -> Resu
     let chunks = if ids.is_empty() {
         String::new()
     } else {
-        client.request("POST", &format!("/session/{session}/message/chunk"), Some(&format!("{{\"messageIDs\":[{}]}}", ids.iter().map(|item| json(item)).collect::<Vec<_>>().join(","))))?
+        client.request(
+            "POST",
+            &format!("/session/{session}/message/chunk"),
+            Some(&format!(
+                "{{\"messageIDs\":[{}]}}",
+                ids.iter()
+                    .map(|item| json(item))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )),
+        )?
     };
+    let sidebar = client
+        .request("GET", "/file/status", None)
+        .map(|body| file_rows(&body))
+        .unwrap_or_default();
 
     let mut locked = state.lock().map_err(|_| "state lock failed")?;
     locked.session = Some(session.clone());
-    locked.title = title;
+    locked.title = title.clone();
     locked.status = String::from("idle");
     locked.messages.clear();
+    locked.close_panel();
+    locked.sidebar = sidebar;
+    locked.sync_tab(&session, &title);
     for item in objects(&index) {
         if let (Some(id), Some(role)) = (string(&item, "id"), string(&item, "role")) {
             locked.message(&id, &session, &role);
@@ -429,8 +548,262 @@ fn activate(client: &Client, state: &Arc<Mutex<State>>, session: String) -> Resu
 
 fn last_session(client: &Client) -> Result<String, String> {
     let body = client.request("GET", "/session?roots=true&limit=1", None)?;
-    let first = objects(&body).into_iter().next().ok_or("no previous session found")?;
+    let first = objects(&body)
+        .into_iter()
+        .next()
+        .ok_or("no previous session found")?;
     string(&first, "id").ok_or_else(|| String::from("no previous session found"))
+}
+
+fn current_session(state: &Arc<Mutex<State>>) -> Result<String, String> {
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .session
+        .clone()
+        .ok_or_else(|| String::from("missing session"))
+}
+
+fn session_post(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    dirty: &Arc<AtomicBool>,
+    action: &str,
+    notice: Option<&str>,
+) -> Result<bool, String> {
+    let session = current_session(state)?;
+    client.request("POST", &format!("/session/{session}/{action}"), Some("{}"))?;
+    if let Some(text) = notice {
+        state.lock().map_err(|_| "state lock failed")?.notice(text);
+    }
+    dirty.store(true, Ordering::SeqCst);
+    Ok(true)
+}
+
+fn session_delete(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    dirty: &Arc<AtomicBool>,
+    action: &str,
+    notice: &str,
+) -> Result<bool, String> {
+    let session = current_session(state)?;
+    client.request("DELETE", &format!("/session/{session}/{action}"), None)?;
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .notice(notice);
+    dirty.store(true, Ordering::SeqCst);
+    Ok(true)
+}
+
+fn marker(active: bool) -> &'static str {
+    if active {
+        "*"
+    } else {
+        " "
+    }
+}
+
+fn tab_target(state: &Arc<Mutex<State>>, value: &str) -> Result<String, String> {
+    let locked = state.lock().map_err(|_| "state lock failed")?;
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    if let Ok(index) = value.parse::<usize>() {
+        return Ok(locked
+            .tabs
+            .get(index.saturating_sub(1))
+            .map(|item| item.id.clone())
+            .unwrap_or_default());
+    }
+    Ok(value.to_string())
+}
+
+fn next_tab(state: &Arc<Mutex<State>>, forward: bool) -> Result<Option<String>, String> {
+    let locked = state.lock().map_err(|_| "state lock failed")?;
+    if locked.tabs.is_empty() {
+        return Ok(None);
+    }
+    let current = locked.session.as_deref();
+    let index = locked
+        .tabs
+        .iter()
+        .position(|item| Some(item.id.as_str()) == current)
+        .unwrap_or(0);
+    let next = if forward {
+        (index + 1) % locked.tabs.len()
+    } else {
+        (index + locked.tabs.len() - 1) % locked.tabs.len()
+    };
+    Ok(locked.tabs.get(next).map(|item| item.id.clone()))
+}
+
+fn command_rows() -> Vec<String> {
+    [
+        (
+            "Session",
+            "/sessions /new /session <id> /tabs /tab <n> /next /prev /close /fork /rename <title>",
+        ),
+        (
+            "Agent",
+            "/models [query] /model provider/model /providers /agents /agent <name> /mcps",
+        ),
+        (
+            "Workspace",
+            "/files [query] /diff /status /share /unshare /compact /pause /resume /interrupt",
+        ),
+        ("System", "/themes /shells /orgs /clear /help /exit"),
+    ]
+    .iter()
+    .map(|(section, text)| format!("{section}: {text}"))
+    .collect()
+}
+
+fn session_rows(body: &str) -> Vec<String> {
+    let rows = objects(body)
+        .into_iter()
+        .filter_map(|item| {
+            let id = string(&item, "id")?;
+            let title = string(&item, "title").unwrap_or_else(|| String::from("untitled"));
+            Some(format!("{}  {}", short(&id), title))
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        vec![String::from("No sessions found")]
+    } else {
+        rows
+    }
+}
+
+fn model_rows(body: &str, query: &str) -> Vec<String> {
+    let needle = query.to_lowercase();
+    let rows = objects(body)
+        .into_iter()
+        .filter_map(|item| {
+            let provider = string(&item, "providerID")?;
+            let id = string(&item, "id")?;
+            let name = string(&item, "name").unwrap_or_else(|| id.clone());
+            let row = format!("{provider}/{id}  {name}");
+            if needle.is_empty() || row.to_lowercase().contains(&needle) {
+                Some(row)
+            } else {
+                None
+            }
+        })
+        .take(20)
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        vec![String::from(
+            "No models found. Use /model provider/model to set one.",
+        )]
+    } else {
+        rows
+    }
+}
+
+fn provider_rows(body: &str) -> Vec<String> {
+    let rows = objects(body)
+        .into_iter()
+        .filter_map(|item| {
+            let id = string(&item, "id")?;
+            let name = string(&item, "name").unwrap_or_else(|| id.clone());
+            Some(format!("{id}  {name}"))
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        vec![String::from("No providers configured")]
+    } else {
+        rows
+    }
+}
+
+fn agent_rows(current: Option<&str>) -> Vec<String> {
+    ["build", "plan", "general", "explore", "docs", "translator"]
+        .iter()
+        .map(|name| format!("{} {name}", marker(current == Some(*name))))
+        .collect()
+}
+
+fn file_rows(body: &str) -> Vec<String> {
+    let rows = objects(body)
+        .into_iter()
+        .filter_map(|item| {
+            let file = string(&item, "path").or_else(|| string(&item, "file"))?;
+            let status = string(&item, "status")
+                .or_else(|| string(&item, "type"))
+                .unwrap_or_else(|| String::from("changed"));
+            Some(format!("{status:>10}  {file}"))
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        vec![String::from("No changed files")]
+    } else {
+        rows
+    }
+}
+
+fn string_rows(body: &str) -> Vec<String> {
+    let rows = strings(body).into_iter().take(50).collect::<Vec<_>>();
+    if rows.is_empty() {
+        vec![String::from("No results")]
+    } else {
+        rows
+    }
+}
+
+fn status_rows(body: &str) -> Vec<String> {
+    let rows = objects(body)
+        .into_iter()
+        .filter_map(|item| {
+            let status = string(&item, "phase")
+                .or_else(|| string(&item, "type"))
+                .unwrap_or_else(|| String::from("idle"));
+            Some(format!("session status {status}"))
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        vec![body.to_string()]
+    } else {
+        rows
+    }
+}
+
+fn diff_rows(body: &str) -> Vec<String> {
+    let rows = objects(body)
+        .into_iter()
+        .filter_map(|item| {
+            let file = string(&item, "file").or_else(|| string(&item, "path"))?;
+            Some(format!("diff {file}"))
+        })
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        vec![String::from("No diff entries")]
+    } else {
+        rows
+    }
+}
+
+fn short(id: &str) -> String {
+    if id.len() <= 12 {
+        id.to_string()
+    } else {
+        id[..12].to_string()
+    }
+}
+
+fn encode_query(input: &str) -> String {
+    input
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            b' ' => String::from("+"),
+            _ => format!("%{byte:02X}"),
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn create_session(client: &Client) -> Result<String, String> {
@@ -438,7 +811,12 @@ fn create_session(client: &Client) -> Result<String, String> {
     string(&body, "id").ok_or_else(|| format!("failed to create session: {body}"))
 }
 
-fn submit_prompt(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, text: &str) -> Result<bool, String> {
+fn submit_prompt(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    dirty: &Arc<AtomicBool>,
+    text: &str,
+) -> Result<bool, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Ok(true);
@@ -448,19 +826,36 @@ fn submit_prompt(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicB
     }
     let (session, model, agent) = {
         let locked = state.lock().map_err(|_| "state lock failed")?;
-        (locked.session.clone().ok_or("missing session")?, locked.model.clone(), locked.agent.clone())
+        (
+            locked.session.clone().ok_or("missing session")?,
+            locked.model.clone(),
+            locked.agent.clone(),
+        )
     };
     let msg = id("message");
     let part = id("part");
-    let mut body = format!("{{\"messageID\":{},\"parts\":[{{\"id\":{},\"type\":\"text\",\"text\":{}}}]", json(&msg), json(&part), json(trimmed));
+    let mut body = format!(
+        "{{\"messageID\":{},\"parts\":[{{\"id\":{},\"type\":\"text\",\"text\":{}}}]",
+        json(&msg),
+        json(&part),
+        json(trimmed)
+    );
     if let Some(agent) = agent {
         body.push_str(&format!(",\"agent\":{}", json(&agent)));
     }
     if let Some(model) = model.and_then(|item| parse_model(&item)) {
-        body.push_str(&format!(",\"model\":{{\"providerID\":{},\"modelID\":{}}}", json(&model.0), json(&model.1)));
+        body.push_str(&format!(
+            ",\"model\":{{\"providerID\":{},\"modelID\":{}}}",
+            json(&model.0),
+            json(&model.1)
+        ));
     }
     body.push('}');
-    client.request("POST", &format!("/session/{session}/prompt_async"), Some(&body))?;
+    client.request(
+        "POST",
+        &format!("/session/{session}/prompt_async"),
+        Some(&body),
+    )?;
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
         locked.history_push(trimmed);
@@ -470,14 +865,22 @@ fn submit_prompt(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicB
     Ok(true)
 }
 
-fn command(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, line: &str) -> Result<bool, String> {
+fn command(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    dirty: &Arc<AtomicBool>,
+    line: &str,
+) -> Result<bool, String> {
     let mut parts = line[1..].splitn(2, ' ');
     let name = parts.next().unwrap_or("");
     let value = parts.next().unwrap_or("").trim();
     match name {
         "exit" | "quit" | "q" => Ok(false),
-        "help" => {
-            state.lock().map_err(|_| "state lock failed")?.notice("/new /sessions /session <id> /continue /model <provider/model> /agent <name> /interrupt /exit");
+        "help" | "commands" | "command" => {
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .panel("Command Palette", command_rows());
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
@@ -494,58 +897,317 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, 
             Ok(true)
         }
         "sessions" => {
-            let body = client.request("GET", "/session?roots=true&limit=10", None)?;
+            let body = client.request("GET", "/session?roots=true&limit=20", None)?;
+            let rows = session_rows(&body);
             let mut locked = state.lock().map_err(|_| "state lock failed")?;
             for item in objects(&body) {
-                if let Some(id) = string(&item, "id") {
-                    locked.notice(format!("{} {}", id, string(&item, "title").unwrap_or_else(|| String::from("untitled"))));
+                if let (Some(id), Some(title)) = (string(&item, "id"), string(&item, "title")) {
+                    locked.sync_tab(&id, &title);
                 }
+            }
+            locked.panel("Sessions", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "session" | "tab" => {
+            let target = if name == "tab" {
+                tab_target(state, value)?
+            } else {
+                value.to_string()
+            };
+            if target.is_empty() {
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .notice(if name == "tab" {
+                        "usage: /tab <number|id>"
+                    } else {
+                        "usage: /session <id>"
+                    });
+            } else {
+                activate(client, state, target)?;
             }
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
-        "session" => {
-            if value.is_empty() {
-                state.lock().map_err(|_| "state lock failed")?.notice("usage: /session <id>");
+        "tabs" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            let current = locked.session.clone();
+            let rows = if locked.tabs.is_empty() {
+                vec![String::from("No open tabs")]
             } else {
-                activate(client, state, value.to_string())?;
+                locked
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, tab)| {
+                        format!(
+                            "{} {} {}",
+                            index + 1,
+                            marker(current.as_deref() == Some(tab.id.as_str())),
+                            tab.title
+                        )
+                    })
+                    .collect()
+            };
+            locked.panel("Tabs", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "next" | "prev" => {
+            if let Some(session) = next_tab(state, name == "next")? {
+                activate(client, state, session)?;
+            }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "close" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            if let Some(current) = locked.session.clone() {
+                locked.tabs.retain(|item| item.id != current);
+                locked.notice("closed current tab");
             }
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
         "model" => {
-            let mut locked = state.lock().map_err(|_| "state lock failed")?;
-            if parse_model(value).is_some() {
+            if value.is_empty() {
+                let rows = model_rows(&client.request("GET", "/v2/model", None)?, "");
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .panel("Models", rows);
+            } else if parse_model(value).is_some() {
+                let mut locked = state.lock().map_err(|_| "state lock failed")?;
                 locked.model = Some(value.to_string());
                 locked.notice(format!("model {value}"));
             } else {
-                locked.notice("usage: /model provider/model");
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .notice("usage: /model provider/model");
             }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "models" => {
+            let rows = model_rows(&client.request("GET", "/v2/model", None)?, value);
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .panel("Models", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "providers" | "connect" => {
+            let rows = provider_rows(&client.request("GET", "/v2/provider", None)?);
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .panel("Providers", rows);
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
         "agent" => {
             let mut locked = state.lock().map_err(|_| "state lock failed")?;
-            locked.agent = if value.is_empty() { None } else { Some(value.to_string()) };
-            locked.notice(if value.is_empty() { String::from("agent cleared") } else { format!("agent {value}") });
+            if value.is_empty() {
+                let current = locked.agent.clone();
+                let rows = agent_rows(current.as_deref());
+                locked.panel("Agents", rows);
+            } else {
+                locked.agent = Some(value.to_string());
+                locked.notice(format!("agent {value}"));
+            }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "agents" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            let current = locked.agent.clone();
+            let rows = agent_rows(current.as_deref());
+            locked.panel("Agents", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "files" => {
+            let rows = if value.is_empty() {
+                file_rows(&client.request("GET", "/file/status", None)?)
+            } else {
+                string_rows(&client.request(
+                    "GET",
+                    &format!("/file/find/file?query={}&limit=20", encode_query(value)),
+                    None,
+                )?)
+            };
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .panel("Files", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "status" => {
+            let rows = status_rows(&client.request("GET", "/session/status", None)?);
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .panel("Status", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "share" => session_post(client, state, dirty, "share", Some("shared session")),
+        "unshare" => session_delete(client, state, dirty, "share", "unshared session"),
+        "fork" => {
+            let session = current_session(state)?;
+            let body = client.request("POST", &format!("/session/{session}/fork"), Some("{}"))?;
+            if let Some(id) = string(&body, "id") {
+                activate(client, state, id)?;
+            }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "rename" => {
+            if value.is_empty() {
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .notice("usage: /rename <title>");
+            } else {
+                let session = current_session(state)?;
+                let body = client.request(
+                    "PATCH",
+                    &format!("/session/{session}"),
+                    Some(&format!("{{\"title\":{}}}", json(value))),
+                )?;
+                let title = string(&body, "title").unwrap_or_else(|| value.to_string());
+                let mut locked = state.lock().map_err(|_| "state lock failed")?;
+                locked.title = title.clone();
+                locked.sync_tab(&session, &title);
+                locked.notice("renamed session");
+            }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "pause" => session_post(client, state, dirty, "pause", Some("paused session")),
+        "resume" => session_post(client, state, dirty, "resume", Some("resumed session")),
+        "compact" | "summarize" => {
+            let session = current_session(state)?;
+            let model = state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .model
+                .clone()
+                .and_then(|item| parse_model(&item));
+            if let Some((provider, model)) = model {
+                client.request(
+                    "POST",
+                    &format!("/session/{session}/summarize"),
+                    Some(&format!(
+                        "{{\"providerID\":{},\"modelID\":{}}}",
+                        json(&provider),
+                        json(&model)
+                    )),
+                )?;
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .notice("compaction queued");
+            } else {
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .notice("select a model before /compact");
+            }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "diff" => {
+            let session = current_session(state)?;
+            let rows = diff_rows(&client.request(
+                "GET",
+                &format!("/session/{session}/diff/index"),
+                None,
+            )?);
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .panel("Diff", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "theme" | "themes" => {
+            state.lock().map_err(|_| "state lock failed")?.panel(
+                "Themes",
+                vec![
+                    String::from("Android sidecar follows the Termux terminal theme."),
+                    String::from(
+                        "Use Linux/OpenTUI for full theme switching until FFI support lands.",
+                    ),
+                ],
+            );
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "shell" | "shells" => {
+            state.lock().map_err(|_| "state lock failed")?.panel(
+                "Shell",
+                vec![
+                    String::from(
+                        "Shell mode runs through normal prompt submission on Android sidecar.",
+                    ),
+                    String::from("Use !command or bash tool requests for terminal work."),
+                ],
+            );
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "mcps" | "orgs" => {
+            state.lock().map_err(|_| "state lock failed")?.panel(
+                "Integrations",
+                vec![
+                    String::from("Manage MCPs, providers, and orgs in config or Linux TUI."),
+                    String::from("Android sidecar keeps these commands discoverable for parity."),
+                ],
+            );
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+        "clear" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            locked.close_panel();
+            locked.notices.clear();
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
         "interrupt" => {
-            if let Some(session) = state.lock().map_err(|_| "state lock failed")?.session.clone() {
+            if let Some(session) = state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .session
+                .clone()
+            {
                 client.request("POST", &format!("/session/{session}/abort"), Some("{}"))?;
             }
             Ok(true)
         }
         _ => {
-            state.lock().map_err(|_| "state lock failed")?.notice(format!("unknown command: /{name}"));
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .notice(format!("unknown command: /{name}"));
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
     }
 }
 
-fn input(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, done: &Arc<AtomicBool>, data: &[u8]) -> Result<bool, String> {
+fn input(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    dirty: &Arc<AtomicBool>,
+    done: &Arc<AtomicBool>,
+    data: &[u8],
+) -> Result<bool, String> {
     let text = String::from_utf8_lossy(data).to_string();
     let mut submit = None;
     let mut exit = false;
@@ -571,10 +1233,18 @@ fn input(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, do
         }
     }
     if let Some((id, session, reply)) = permission {
-        client.request("POST", &format!("/permission/{id}/reply?sessionID={session}"), Some(&format!("{{\"reply\":{}}}", json(&reply))))?;
+        client.request(
+            "POST",
+            &format!("/permission/{id}/reply?sessionID={session}"),
+            Some(&format!("{{\"reply\":{}}}", json(&reply))),
+        )?;
     }
     if let Some((id, session, body)) = question {
-        client.request("POST", &format!("/question/{id}/reply?sessionID={session}"), Some(&body))?;
+        client.request(
+            "POST",
+            &format!("/question/{id}/reply?sessionID={session}"),
+            Some(&body),
+        )?;
     }
     if exit {
         done.store(true, Ordering::SeqCst);
@@ -589,7 +1259,45 @@ fn input(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, do
     Ok(false)
 }
 
-const COMMANDS: [&str; 10] = ["/new", "/sessions", "/session", "/continue", "/model", "/agent", "/interrupt", "/help", "/exit", "/quit"];
+const COMMANDS: [&str; 37] = [
+    "/new",
+    "/sessions",
+    "/session",
+    "/tabs",
+    "/tab",
+    "/next",
+    "/prev",
+    "/close",
+    "/models",
+    "/model",
+    "/providers",
+    "/connect",
+    "/agents",
+    "/agent",
+    "/files",
+    "/status",
+    "/share",
+    "/unshare",
+    "/fork",
+    "/rename",
+    "/pause",
+    "/resume",
+    "/compact",
+    "/summarize",
+    "/diff",
+    "/themes",
+    "/theme",
+    "/shells",
+    "/shell",
+    "/mcps",
+    "/orgs",
+    "/commands",
+    "/help",
+    "/clear",
+    "/interrupt",
+    "/exit",
+    "/quit",
+];
 
 fn prompt_input(state: &mut State, text: &str, submit: &mut Option<String>, exit: &mut bool) {
     let mut index = 0;
@@ -672,6 +1380,7 @@ fn prompt_input(state: &mut State, text: &str, submit: &mut Option<String>, exit
                 state.history_index = None;
                 state.history_draft.clear();
             }
+            '\u{1b}' => state.close_panel(),
             '\t' => complete_command(&mut state.input),
             '\u{1}' => state.input.home(),
             '\u{5}' => state.input.end(),
@@ -685,7 +1394,12 @@ fn prompt_input(state: &mut State, text: &str, submit: &mut Option<String>, exit
     }
 }
 
-fn question_input(state: &mut State, text: &str, reply: &mut Option<(String, String, String)>, exit: &mut bool) {
+fn question_input(
+    state: &mut State,
+    text: &str,
+    reply: &mut Option<(String, String, String)>,
+    exit: &mut bool,
+) {
     let mut index = 0;
     while index < text.len() {
         let rest = &text[index..];
@@ -753,7 +1467,22 @@ fn question_submit(state: &mut State) -> Option<String> {
         question.index += 1;
         return None;
     }
-    Some(format!("{{\"answers\":[{}]}}", question.answers.iter().map(|items| format!("[{}]", items.iter().map(|item| json(item)).collect::<Vec<_>>().join(","))).collect::<Vec<_>>().join(",")))
+    Some(format!(
+        "{{\"answers\":[{}]}}",
+        question
+            .answers
+            .iter()
+            .map(|items| format!(
+                "[{}]",
+                items
+                    .iter()
+                    .map(|item| json(item))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ))
+            .collect::<Vec<_>>()
+            .join(",")
+    ))
 }
 
 fn parse_answer(input: &str, question: &QuestionItem) -> Vec<String> {
@@ -761,15 +1490,29 @@ fn parse_answer(input: &str, question: &QuestionItem) -> Vec<String> {
     if text.is_empty() {
         return Vec::new();
     }
-    let tokens = if question.multiple { text.split(',').map(str::trim).filter(|item| !item.is_empty()).collect::<Vec<_>>() } else { vec![text] };
+    let tokens = if question.multiple {
+        text.split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>()
+    } else {
+        vec![text]
+    };
     let result = tokens
         .iter()
         .flat_map(|token| {
-            let index = token.parse::<usize>().ok().and_then(|item| question.options.get(item.saturating_sub(1)));
+            let index = token
+                .parse::<usize>()
+                .ok()
+                .and_then(|item| question.options.get(item.saturating_sub(1)));
             if let Some(label) = index {
                 return vec![label.clone()];
             }
-            if let Some(label) = question.options.iter().find(|item| item.eq_ignore_ascii_case(token)) {
+            if let Some(label) = question
+                .options
+                .iter()
+                .find(|item| item.eq_ignore_ascii_case(token))
+            {
                 return vec![label.clone()];
             }
             if question.custom {
@@ -778,7 +1521,11 @@ fn parse_answer(input: &str, question: &QuestionItem) -> Vec<String> {
             Vec::new()
         })
         .collect::<Vec<_>>();
-    if question.multiple { result } else { result.into_iter().take(1).collect() }
+    if question.multiple {
+        result
+    } else {
+        result.into_iter().take(1).collect()
+    }
 }
 
 fn normalize_paste(input: &str) -> String {
@@ -789,13 +1536,21 @@ fn complete_command(input: &mut Buffer) {
     if input.cursor != input.len() || !input.text.starts_with('/') || input.text.contains(' ') {
         return;
     }
-    let matches = COMMANDS.iter().filter(|item| item.starts_with(&input.text)).collect::<Vec<_>>();
+    let matches = COMMANDS
+        .iter()
+        .filter(|item| item.starts_with(&input.text))
+        .collect::<Vec<_>>();
     if matches.len() == 1 {
         input.set(format!("{} ", matches[0]));
     }
 }
 
-fn spawn_events(client: Client, state: Arc<Mutex<State>>, dirty: Arc<AtomicBool>, done: Arc<AtomicBool>) {
+fn spawn_events(
+    client: Client,
+    state: Arc<Mutex<State>>,
+    dirty: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+) {
     thread::spawn(move || {
         while !done.load(Ordering::SeqCst) {
             if let Err(err) = events_once(&client, &state, &dirty, &done) {
@@ -809,7 +1564,12 @@ fn spawn_events(client: Client, state: Arc<Mutex<State>>, dirty: Arc<AtomicBool>
     });
 }
 
-fn events_once(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBool>, done: &Arc<AtomicBool>) -> Result<(), String> {
+fn events_once(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    dirty: &Arc<AtomicBool>,
+    done: &Arc<AtomicBool>,
+) -> Result<(), String> {
     let url = parse_url(&client.url)?;
     let mut stream = connect(&url.host, url.port)?;
     stream.write_all(format!("GET {}{} HTTP/1.1\r\nHost: {}:{}\r\nAccept: text/event-stream\r\nx-slopcode-daemon-token: {}\r\nConnection: close\r\n\r\n", url.base, "/event", url.host, url.port, client.token).as_bytes()).map_err(|err| err.to_string())?;
@@ -836,7 +1596,13 @@ fn events_once(client: &Client, state: &Arc<Mutex<State>>, dirty: &Arc<AtomicBoo
         }
         while let Some(pos) = body.find("\n\n").or_else(|| body.find("\r\n\r\n")) {
             let block = body[..pos].to_string();
-            body = body[pos + if body.as_bytes().get(pos) == Some(&b'\r') { 4 } else { 2 }..].to_string();
+            body = body[pos
+                + if body.as_bytes().get(pos) == Some(&b'\r') {
+                    4
+                } else {
+                    2
+                }..]
+                .to_string();
             if let Some(event) = parse_sse(&block) {
                 apply_event(state, &event);
                 dirty.store(true, Ordering::SeqCst);
@@ -855,13 +1621,17 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
             "session.status" => {
                 if same_session(&locked, &props) {
                     let status = object_value(&props, "status").unwrap_or_default();
-                    locked.status = string(&status, "phase").or_else(|| string(&status, "type")).unwrap_or_else(|| String::from("idle"));
+                    locked.status = string(&status, "phase")
+                        .or_else(|| string(&status, "type"))
+                        .unwrap_or_else(|| String::from("idle"));
                 }
             }
             "session.created" | "session.updated" => {
                 if let Some(info) = object_value(&props, "info") {
-                    if Some(locked.session.as_deref().unwrap_or("")) == string(&info, "id").as_deref() {
-                        if let Some(title) = string(&info, "title") {
+                    if let Some(id) = string(&info, "id") {
+                        let title = string(&info, "title").unwrap_or_else(|| id.clone());
+                        locked.sync_tab(&id, &title);
+                        if Some(id.as_str()) == locked.session.as_deref() {
                             locked.title = title;
                         }
                     }
@@ -869,7 +1639,11 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
             }
             "message.updated" => {
                 if let Some(info) = object_value(&props, "info") {
-                    if let (Some(id), Some(session), Some(role)) = (string(&info, "id"), string(&info, "sessionID"), string(&info, "role")) {
+                    if let (Some(id), Some(session), Some(role)) = (
+                        string(&info, "id"),
+                        string(&info, "sessionID"),
+                        string(&info, "role"),
+                    ) {
                         if Some(session.as_str()) == locked.session.as_deref() {
                             locked.message(&id, &session, &role);
                         }
@@ -884,8 +1658,11 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
             }
             "message.part.delta" => {
                 if string(&props, "field").as_deref() == Some("text") {
-                    if let (Some(message), Some(delta)) = (string(&props, "messageID"), string(&props, "delta")) {
-                        let session = string(&props, "sessionID").unwrap_or_else(|| locked.session.clone().unwrap_or_default());
+                    if let (Some(message), Some(delta)) =
+                        (string(&props, "messageID"), string(&props, "delta"))
+                    {
+                        let session = string(&props, "sessionID")
+                            .unwrap_or_else(|| locked.session.clone().unwrap_or_default());
                         if Some(session.as_str()) == locked.session.as_deref() {
                             let msg = locked.message(&message, &session, "assistant");
                             msg.text.push_str(&delta);
@@ -895,12 +1672,18 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
             }
             "permission.asked" => {
                 if same_session(&locked, &props) {
-                    let patterns = array_value(&props, "patterns").map(|arr| strings(&arr)).unwrap_or_default();
+                    let patterns = array_value(&props, "patterns")
+                        .map(|arr| strings(&arr))
+                        .unwrap_or_default();
+                    let metadata = object_value(&props, "metadata").unwrap_or_default();
                     locked.permission = Some(Permission {
                         id: string(&props, "id").unwrap_or_default(),
                         session: string(&props, "sessionID").unwrap_or_default(),
-                        permission: string(&props, "permission").unwrap_or_else(|| String::from("tool")),
+                        permission: string(&props, "permission")
+                            .unwrap_or_else(|| String::from("tool")),
                         patterns,
+                        file: string(&metadata, "filepath").or_else(|| string(&metadata, "file")),
+                        diff: string(&metadata, "diff"),
                     });
                     locked.notice("permission requested");
                 }
@@ -919,7 +1702,8 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
                     locked.question = None;
                 }
             }
-            "session.error" => locked.notice(string(&props, "name").unwrap_or_else(|| String::from("session error"))),
+            "session.error" => locked
+                .notice(string(&props, "name").unwrap_or_else(|| String::from("session error"))),
             _ => {}
         }
     }
@@ -932,7 +1716,12 @@ fn question_from_props(props: &str) -> Option<Question> {
         .into_iter()
         .map(|item| {
             let options = array_value(&item, "options")
-                .map(|value| objects(&value).into_iter().filter_map(|option| string(&option, "label")).collect::<Vec<_>>())
+                .map(|value| {
+                    objects(&value)
+                        .into_iter()
+                        .filter_map(|option| string(&option, "label"))
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
             QuestionItem {
                 header: string(&item, "header").unwrap_or_else(|| String::from("Question")),
@@ -957,7 +1746,8 @@ fn question_from_props(props: &str) -> Option<Question> {
 }
 
 fn apply_part(state: &mut State, message: &str, part: &str) {
-    let session = string(part, "sessionID").unwrap_or_else(|| state.session.clone().unwrap_or_default());
+    let session =
+        string(part, "sessionID").unwrap_or_else(|| state.session.clone().unwrap_or_default());
     if Some(session.as_str()) != state.session.as_deref() {
         return;
     }
@@ -967,10 +1757,32 @@ fn apply_part(state: &mut State, message: &str, part: &str) {
     }
     if string(part, "type").as_deref() == Some("tool") {
         let tool = string(part, "tool").unwrap_or_else(|| String::from("tool"));
-        let status = object_value(part, "state").and_then(|item| string(&item, "status")).unwrap_or_else(|| String::from("pending"));
-        let line = format!("tool {tool} {status}");
+        let state_json = object_value(part, "state").unwrap_or_default();
+        let status = string(&state_json, "status").unwrap_or_else(|| String::from("pending"));
+        let suffix = string(&state_json, "error")
+            .map(|item| format!(": {item}"))
+            .unwrap_or_default();
+        let line = format!("tool {tool} {status}{suffix}");
         if !msg.tools.iter().any(|item| item == &line) {
             msg.tools.push(line);
+        }
+        if let Some(output) = string(&state_json, "output") {
+            for line in output.lines().take(4) {
+                let preview = format!("output {line}");
+                if !msg.tools.iter().any(|item| item == &preview) {
+                    msg.tools.push(preview);
+                }
+            }
+        }
+        if let Some(metadata) = object_value(part, "metadata") {
+            if let Some(diff) = string(&metadata, "diff") {
+                for line in diff.lines().take(8) {
+                    let preview = format!("diff {line}");
+                    if !msg.tools.iter().any(|item| item == &preview) {
+                        msg.tools.push(preview);
+                    }
+                }
+            }
         }
     }
 }
@@ -983,13 +1795,17 @@ impl Client {
         stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
         let request = format!("{method} {}{} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\nContent-Type: application/json\r\nx-slopcode-daemon-token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", url.base, path, url.host, url.port, self.token, body.len(), body);
-        stream.write_all(request.as_bytes()).map_err(|err| err.to_string())?;
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|err| err.to_string())?;
         response(&read_response(&mut stream)?)
     }
 }
 
 fn connect(host: &str, port: u16) -> Result<TcpStream, String> {
-    let addrs = (host, port).to_socket_addrs().map_err(|err| format!("resolve {host}:{port}: {err}"))?;
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .map_err(|err| format!("resolve {host}:{port}: {err}"))?;
     let mut last = None;
     for addr in addrs {
         match TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
@@ -997,7 +1813,11 @@ fn connect(host: &str, port: u16) -> Result<TcpStream, String> {
             Err(err) => last = Some(err),
         }
     }
-    Err(format!("connect {host}:{port}: {}", last.map(|err| err.to_string()).unwrap_or_else(|| String::from("no address"))))
+    Err(format!(
+        "connect {host}:{port}: {}",
+        last.map(|err| err.to_string())
+            .unwrap_or_else(|| String::from("no address"))
+    ))
 }
 
 fn read_response(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
@@ -1006,7 +1826,11 @@ fn read_response(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
     let split = loop {
         let count = stream.read(&mut buf).map_err(|err| err.to_string())?;
         if count == 0 {
-            return if raw.is_empty() { Err(String::from("empty http response")) } else { Ok(raw) };
+            return if raw.is_empty() {
+                Err(String::from("empty http response"))
+            } else {
+                Ok(raw)
+            };
         }
         raw.extend_from_slice(&buf[..count]);
         if let Some(pos) = find(&raw, b"\r\n\r\n") {
@@ -1045,9 +1869,16 @@ fn content_length(head: &str) -> Option<usize> {
 fn response(raw: &[u8]) -> Result<String, String> {
     let split = find(raw, b"\r\n\r\n").ok_or("invalid http response")?;
     let head = String::from_utf8_lossy(&raw[..split]);
-    let status = head.split_whitespace().nth(1).and_then(|item| item.parse::<u16>().ok()).ok_or("invalid http status")?;
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .and_then(|item| item.parse::<u16>().ok())
+        .ok_or("invalid http status")?;
     let mut bytes = raw[split + 4..].to_vec();
-    if head.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+    if head
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
         bytes = chunks(&bytes)?;
     }
     let text = String::from_utf8_lossy(&bytes).to_string();
@@ -1058,13 +1889,22 @@ fn response(raw: &[u8]) -> Result<String, String> {
 }
 
 fn parse_url(input: &str) -> Result<Url, String> {
-    let rest = input.strip_prefix("http://").ok_or("only http URLs are supported")?;
+    let rest = input
+        .strip_prefix("http://")
+        .ok_or("only http URLs are supported")?;
     let (hostport, path) = rest.split_once('/').unwrap_or((rest, ""));
     let (host, port) = match hostport.rsplit_once(':') {
-        Some((host, port)) => (host.to_string(), port.parse::<u16>().map_err(|_| "invalid port")?),
+        Some((host, port)) => (
+            host.to_string(),
+            port.parse::<u16>().map_err(|_| "invalid port")?,
+        ),
         None => (hostport.to_string(), 80),
     };
-    let base = if path.is_empty() { String::new() } else { format!("/{path}") };
+    let base = if path.is_empty() {
+        String::new()
+    } else {
+        format!("/{path}")
+    };
     Ok(Url { host, port, base })
 }
 
@@ -1075,17 +1915,31 @@ struct Terminal {
 
 impl Terminal {
     fn start() -> Result<Self, String> {
-        let saved = Command::new("stty").arg("-g").output().map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string()).unwrap_or_default();
-        Command::new("stty").args(["raw", "-echo", "min", "0", "time", "1"]).status().ok();
+        let saved = Command::new("stty")
+            .arg("-g")
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .unwrap_or_default();
+        Command::new("stty")
+            .args(["raw", "-echo", "min", "0", "time", "1"])
+            .status()
+            .ok();
         print!("\x1b[?1049h\x1b[?25l\x1b[2J");
         io::stdout().flush().ok();
-        Ok(Self { saved, active: true })
+        Ok(Self {
+            saved,
+            active: true,
+        })
     }
 
     fn size(&self) -> (usize, usize) {
         let out = Command::new("stty").arg("size").output().ok();
-        let text = out.map(|item| String::from_utf8_lossy(&item.stdout).to_string()).unwrap_or_default();
-        let mut parts = text.split_whitespace().filter_map(|item| item.parse::<usize>().ok());
+        let text = out
+            .map(|item| String::from_utf8_lossy(&item.stdout).to_string())
+            .unwrap_or_default();
+        let mut parts = text
+            .split_whitespace()
+            .filter_map(|item| item.parse::<usize>().ok());
         let rows = parts.next().unwrap_or(24).max(10);
         let cols = parts.next().unwrap_or(80).max(40);
         (cols, rows)
@@ -1113,13 +1967,67 @@ impl Drop for Terminal {
 fn draw(state: &State, size: (usize, usize)) {
     let (width, height) = size;
     let mut lines = Vec::new();
-    let model = state.model.as_ref().map(|item| format!(" model {item}")).unwrap_or_default();
-    let agent = state.agent.as_ref().map(|item| format!(" agent {item}")).unwrap_or_default();
-    lines.push(crop(&format!("SlopCode Android | {}{}{}", state.status, model, agent), width));
+    let model = state
+        .model
+        .as_ref()
+        .map(|item| format!(" model {item}"))
+        .unwrap_or_default();
+    let agent = state
+        .agent
+        .as_ref()
+        .map(|item| format!(" agent {item}"))
+        .unwrap_or_default();
+    lines.push(crop(
+        &format!("SlopCode Android | {}{}{}", state.status, model, agent),
+        width,
+    ));
     lines.push(crop(&format!("session {}", state.title), width));
+    if !state.tabs.is_empty() {
+        let tabs = state
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| {
+                format!(
+                    "{}{}:{}",
+                    marker(state.session.as_deref() == Some(tab.id.as_str())),
+                    index + 1,
+                    tab.title
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("  ");
+        lines.push(crop(&format!("tabs {tabs}"), width));
+    }
+    if width >= 96 && !state.sidebar.is_empty() {
+        lines.push(crop(
+            &format!(
+                "files {}",
+                state
+                    .sidebar
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
+            width,
+        ));
+    }
     lines.push(String::new());
+    if let Some(panel) = &state.panel {
+        lines.push(crop(&format!("== {} ==", panel.title), width));
+        for row in panel.rows.iter().take(12) {
+            lines.extend(wrap(row, width));
+        }
+        lines.push(String::new());
+    }
     for msg in &state.messages {
-        let label = if msg.role == "user" { "You" } else { "Assistant" };
+        let label = if msg.role == "user" {
+            "You"
+        } else {
+            "Assistant"
+        };
         if !msg.text.trim().is_empty() {
             lines.extend(wrap(&format!("{label}: {}", msg.text.trim()), width));
         }
@@ -1130,33 +2038,87 @@ fn draw(state: &State, size: (usize, usize)) {
             lines.push(String::new());
         }
     }
+    if let Some(permission) = &state.permission {
+        lines.push(crop(
+            &format!("permission {}", permission.permission),
+            width,
+        ));
+        for pattern in &permission.patterns {
+            lines.extend(wrap(&format!("  {pattern}"), width));
+        }
+        if let Some(file) = &permission.file {
+            lines.extend(wrap(&format!("  file {file}"), width));
+        }
+        if let Some(diff) = &permission.diff {
+            for line in diff.lines().take(6) {
+                lines.extend(wrap(&format!("  {line}"), width));
+            }
+        }
+    }
     for notice in &state.notices {
         lines.extend(wrap(&format!("info: {notice}"), width));
     }
     let footer = footer_lines(state, width);
     let body_height = height.saturating_sub(footer.len());
     let start = lines.len().saturating_sub(body_height);
-    let mut rows = lines[start..].iter().map(|item| pad(item, width)).collect::<Vec<_>>();
+    let mut rows = lines[start..]
+        .iter()
+        .map(|item| pad(item, width))
+        .collect::<Vec<_>>();
     while rows.len() < body_height {
         rows.push(" ".repeat(width));
     }
-    rows.extend(footer.into_iter().map(|item| pad(&crop(&item, width), width)));
+    rows.extend(
+        footer
+            .into_iter()
+            .map(|item| pad(&crop(&item, width), width)),
+    );
     print!("\x1b[H{}", rows.join("\n"));
     io::stdout().flush().ok();
 }
 
 fn footer_lines(state: &State, width: usize) -> Vec<String> {
     if let Some(permission) = &state.permission {
-        return wrap(&format!("permission {} {} | o once, a always, r reject", permission.permission, permission.patterns.join(", ")), width);
+        return wrap(
+            &format!(
+                "permission {} {} | o once, a always, r reject",
+                permission.permission,
+                permission.patterns.join(", ")
+            ),
+            width,
+        );
     }
     if let Some(question) = &state.question {
         if let Some(item) = question.items.get(question.index) {
-            let options = item.options.iter().enumerate().map(|(index, option)| format!("{}) {}", index + 1, option)).collect::<Vec<_>>().join("  ");
-            return wrap(&format!("{}: {} {} > {}", item.header, item.question, options, question.input.rendered()), width);
+            let options = item
+                .options
+                .iter()
+                .enumerate()
+                .map(|(index, option)| format!("{}) {}", index + 1, option))
+                .collect::<Vec<_>>()
+                .join("  ");
+            return wrap(
+                &format!(
+                    "{}: {} {} > {}",
+                    item.header,
+                    item.question,
+                    options,
+                    question.input.rendered()
+                ),
+                width,
+            );
         }
         return vec![String::from("question | enter answer")];
     }
-    wrap(&format!("> {}", state.input.rendered()).replace('\n', "\n  "), width)
+    let hint = if state.panel.is_some() {
+        " | esc close panel"
+    } else {
+        " | /commands"
+    };
+    wrap(
+        &format!("> {}{hint}", state.input.rendered()).replace('\n', "\n  "),
+        width,
+    )
 }
 
 fn wrap(input: &str, width: usize) -> Vec<String> {
@@ -1183,8 +2145,16 @@ fn pad(input: &str, width: usize) -> String {
 }
 
 fn parse_sse(block: &str) -> Option<String> {
-    let data = block.lines().filter_map(|line| line.strip_prefix("data:").map(str::trim_start)).collect::<Vec<_>>().join("\n");
-    if data.is_empty() { None } else { Some(data) }
+    let data = block
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if data.is_empty() {
+        None
+    } else {
+        Some(data)
+    }
 }
 
 fn same_session(state: &State, props: &str) -> bool {
@@ -1205,20 +2175,32 @@ fn id(prefix: &str) -> String {
         "part" => "prt",
         _ => prefix,
     };
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
     let count = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{head}_{now:013}{count:04}")
 }
 
 fn json(input: &str) -> String {
-    let escaped = input.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+    let escaped = input
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
     format!("\"{escaped}\"")
 }
 
 fn string(input: &str, key: &str) -> Option<String> {
     let needle = format!("\"{}\":", key);
     let mut start = input.find(&needle)? + needle.len();
-    while input.as_bytes().get(start).is_some_and(|b| b.is_ascii_whitespace()) {
+    while input
+        .as_bytes()
+        .get(start)
+        .is_some_and(|b| b.is_ascii_whitespace())
+    {
         start += 1;
     }
     if input.as_bytes().get(start) != Some(&b'\"') {
@@ -1296,7 +2278,11 @@ fn array_value(input: &str, key: &str) -> Option<String> {
 fn boolean(input: &str, key: &str) -> Option<bool> {
     let needle = format!("\"{}\":", key);
     let mut index = input.find(&needle)? + needle.len();
-    while input.as_bytes().get(index).is_some_and(|b| b.is_ascii_whitespace()) {
+    while input
+        .as_bytes()
+        .get(index)
+        .is_some_and(|b| b.is_ascii_whitespace())
+    {
         index += 1;
     }
     if input[index..].starts_with("true") {
@@ -1311,14 +2297,24 @@ fn boolean(input: &str, key: &str) -> Option<bool> {
 fn value(input: &str, key: &str) -> Option<String> {
     let needle = format!("\"{}\":", key);
     let mut index = input.find(&needle)? + needle.len();
-    while input.as_bytes().get(index).is_some_and(|b| b.is_ascii_whitespace()) {
+    while input
+        .as_bytes()
+        .get(index)
+        .is_some_and(|b| b.is_ascii_whitespace())
+    {
         index += 1;
     }
     let first = *input.as_bytes().get(index)? as char;
     if first == '"' {
         return string(input, key).map(|item| json(&item));
     }
-    let (open, close) = if first == '{' { ('{', '}') } else if first == '[' { ('[', ']') } else { return None };
+    let (open, close) = if first == '{' {
+        ('{', '}')
+    } else if first == '[' {
+        ('[', ']')
+    } else {
+        return None;
+    };
     let mut depth = 0i32;
     let mut inside = false;
     let mut escaped = false;
@@ -1397,8 +2393,16 @@ fn chunks(input: &[u8]) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let mut pos = 0;
     loop {
-        let end = input[pos..].windows(2).position(|item| item == b"\r\n").ok_or("invalid chunk header")? + pos;
-        let size = std::str::from_utf8(&input[pos..end]).map_err(|err| err.to_string())?.split(';').next().unwrap_or("0");
+        let end = input[pos..]
+            .windows(2)
+            .position(|item| item == b"\r\n")
+            .ok_or("invalid chunk header")?
+            + pos;
+        let size = std::str::from_utf8(&input[pos..end])
+            .map_err(|err| err.to_string())?
+            .split(';')
+            .next()
+            .unwrap_or("0");
         let len = usize::from_str_radix(size.trim(), 16).map_err(|err| err.to_string())?;
         pos = end + 2;
         if len == 0 {

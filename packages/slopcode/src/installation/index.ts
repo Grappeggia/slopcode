@@ -525,6 +525,10 @@ export namespace Installation {
     return pkg
   }
 
+  function android() {
+    return process.platform === "android" || process.env.TERMUX_VERSION !== undefined || process.env.SLOPCODE_TEST_PLATFORM === "android"
+  }
+
   export async function upgrade(method: Method, target: string) {
     let cmd
     switch (method) {
@@ -535,7 +539,7 @@ export namespace Installation {
         })
         break
       case "npm":
-        cmd = $`npm install -g ${pkg}@${target}`
+        cmd = android() ? $`npm install -g ${pkg}@${target} --include=optional` : $`npm install -g ${pkg}@${target}`
         break
       case "pnpm":
         cmd = $`pnpm install -g ${pkg}@${target}`
