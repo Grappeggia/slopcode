@@ -214,7 +214,7 @@ const alpineSmoke = async () => {
 }
 
 const androidSmoke = async () => {
-  const android = packed.find((item) => item.name === "@slopcode-ai/slopcode-android-arm64")
+  const android = packed.find((item) => item.name === "slopcode-bin-android-arm64")
   if (!android) {
     throw new Error("verify: missing Android arm64 runtime package")
   }
@@ -223,9 +223,9 @@ const androidSmoke = async () => {
   await $`npm install --force --no-package-lock --ignore-scripts=false --include=optional --os=android --cpu=arm64 ${android.tgz} ${root.tgz}`.cwd(
     work,
   )
-  const bin = path.join(work, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode")
+  const bin = path.join(work, "node_modules", "slopcode-bin-android-arm64", "bin", "slopcode")
   if (!(await exists(bin))) {
-    throw new Error("verify: packed Android install did not install the scoped runtime")
+    throw new Error("verify: packed Android install did not install the Android runtime")
   }
 }
 

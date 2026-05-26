@@ -525,7 +525,7 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
     `dist/${name}/package.json`,
     JSON.stringify(
       {
-        name: `@slopcode-ai/slopcode-android-${arch}`,
+        name: `slopcode-bin-android-${arch}`,
         version: Script.version,
         repository: {
           type: "git",

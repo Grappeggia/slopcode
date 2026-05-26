@@ -47,7 +47,7 @@ describe("Android Termux runtime", () => {
     const thread = await Bun.file(path.join(import.meta.dir, "..", "src", "cli", "cmd", "tui", "thread.ts")).text()
 
     expect(build).toContain("SLOPCODE_ENTRYPOINT: bundle")
-    expect(build).toContain("@slopcode-ai/slopcode-android-${arch}")
+    expect(build).toContain("slopcode-bin-android-${arch}")
     expect(build).toContain('@oven/bun-linux-${arch === "arm64" ? "aarch64" : "x64"}-android')
     expect(build).toContain("candidates.find((item) => fs.existsSync(item))")
     expect(build).not.toContain('item === "bun"')
@@ -94,7 +94,7 @@ describe("Android Termux runtime", () => {
     if ((await check.exited) !== 0) return
 
     const file = path.join(os.tmpdir(), `slopcode-android-termux-runner-${process.pid}.mjs`)
-    await Bun.write(file, e2eSource("@slopcode-ai/slopcode-android-x64"))
+    await Bun.write(file, e2eSource("slopcode-bin-android-x64"))
     try {
       const proc = Bun.spawn(["node", "--check", file], { stdout: "pipe", stderr: "pipe" })
       const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()])
