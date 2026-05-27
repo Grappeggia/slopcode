@@ -108,6 +108,11 @@ describe("Android Termux runtime", () => {
     ])
     expect(report()).toEqual(snapshot)
     expect(parity.filter((item) => item.active).every((item) => item.android.length > 0)).toBe(true)
+    expect(active("release").map((item) => item.id)).toEqual(["release.sidecar-smoke"])
+    expect(report().overclaims.map((item) => item.id)).toEqual(
+      expect.arrayContaining(["commands.palette", "editor.diff", "terminal.polish"]),
+    )
+    expect(parity.find((item) => item.id === "native.opentui")?.level).toBe("blocked")
     expect(parity.filter((item) => item.status === "blocked").every((item) => !item.active && !!item.missing)).toBe(
       true,
     )

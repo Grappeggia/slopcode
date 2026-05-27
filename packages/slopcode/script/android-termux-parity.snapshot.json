@@ -4,17 +4,40 @@
       "phase": 0,
       "label": "bootstrap",
       "status": "active",
-      "active": ["smoke.install"],
+      "active": [
+        "smoke.install"
+      ],
       "inactive": [],
-      "blocked": []
+      "blocked": [],
+      "trueParity": [
+        "smoke.install"
+      ],
+      "workflowParity": [],
+      "surfaceOnly": []
     },
     {
       "phase": 1,
       "label": "composer",
       "status": "active",
-      "active": ["composer.submit", "composer.editing", "composer.advanced", "dialogs.question", "layout.capture"],
+      "active": [
+        "composer.submit",
+        "composer.editing",
+        "composer.advanced",
+        "dialogs.question",
+        "layout.capture"
+      ],
       "inactive": [],
-      "blocked": []
+      "blocked": [],
+      "trueParity": [
+        "composer.submit",
+        "layout.capture"
+      ],
+      "workflowParity": [
+        "composer.editing",
+        "composer.advanced",
+        "dialogs.question"
+      ],
+      "surfaceOnly": []
     },
     {
       "phase": 2,
@@ -30,36 +53,317 @@
         "permissions.preview"
       ],
       "inactive": [],
-      "blocked": []
+      "blocked": [],
+      "trueParity": [],
+      "workflowParity": [
+        "sessions.tabs",
+        "sessions.routes",
+        "models.panel",
+        "files.panel",
+        "render.tools",
+        "permissions.preview"
+      ],
+      "surfaceOnly": [
+        "commands.palette"
+      ]
     },
     {
       "phase": 3,
       "label": "rich-ui",
       "status": "blocked",
-      "active": ["sidebar.files"],
+      "active": [
+        "sidebar.files"
+      ],
       "inactive": [],
-      "blocked": ["tabs.rich"]
+      "blocked": [
+        "tabs.rich"
+      ],
+      "trueParity": [],
+      "workflowParity": [
+        "sidebar.files"
+      ],
+      "surfaceOnly": []
     },
     {
       "phase": 4,
       "label": "native-convergence",
       "status": "blocked",
-      "active": ["render.parity-gates", "permissions.parity-gates"],
+      "active": [
+        "render.parity-gates",
+        "permissions.parity-gates",
+        "release.sidecar-smoke"
+      ],
       "inactive": [],
-      "blocked": ["native.opentui", "release.sidecar-smoke"]
+      "blocked": [
+        "native.opentui"
+      ],
+      "trueParity": [
+        "release.sidecar-smoke"
+      ],
+      "workflowParity": [
+        "render.parity-gates",
+        "permissions.parity-gates"
+      ],
+      "surfaceOnly": []
     },
     {
       "phase": 5,
       "label": "editor-terminal-polish",
       "status": "active",
-      "active": ["editor.diff", "terminal.polish"],
+      "active": [
+        "editor.diff",
+        "terminal.polish"
+      ],
       "inactive": [],
-      "blocked": []
+      "blocked": [],
+      "trueParity": [],
+      "workflowParity": [],
+      "surfaceOnly": [
+        "editor.diff",
+        "terminal.polish"
+      ]
     }
   ],
   "totals": {
-    "active": 18,
+    "active": 19,
     "inactive": 0,
-    "blocked": 3
-  }
+    "blocked": 2,
+    "trueParity": 4,
+    "workflowParity": 12,
+    "surfaceOnly": 3
+  },
+  "overclaims": [
+    {
+      "id": "composer.editing",
+      "level": "workflow-parity",
+      "android": [
+        "bracketed multiline paste",
+        "prompt history recall",
+        "cursor append after recall",
+        "core prompt keymap"
+      ],
+      "linux": [
+        "bracketed multiline paste",
+        "prompt history recall",
+        "cursor append after recall",
+        "full prompt keymap"
+      ]
+    },
+    {
+      "id": "composer.advanced",
+      "level": "workflow-parity",
+      "android": [
+        "command autocomplete panel",
+        "shell mode",
+        "prompt queue status",
+        "stash list and pop",
+        "bracketed paste replay"
+      ],
+      "linux": [
+        "autocomplete menu",
+        "shell mode",
+        "prompt queue status",
+        "stash list and pop",
+        "rich paste replay"
+      ]
+    },
+    {
+      "id": "dialogs.question",
+      "level": "workflow-parity",
+      "android": [
+        "question panel renders",
+        "numeric selection replies through daemon API"
+      ],
+      "linux": [
+        "question dialog renders",
+        "numeric selection replies through daemon API"
+      ]
+    },
+    {
+      "id": "commands.palette",
+      "level": "surface-only",
+      "android": [
+        "command palette panel",
+        "searchable command names",
+        "slash-command selection"
+      ],
+      "linux": [
+        "interactive command palette",
+        "searchable aliases",
+        "keybound selection"
+      ]
+    },
+    {
+      "id": "sessions.tabs",
+      "level": "workflow-parity",
+      "android": [
+        "session list panel",
+        "tab strip",
+        "tab switching commands"
+      ],
+      "linux": [
+        "session list panel",
+        "tab strip",
+        "tab switching commands",
+        "rich close affordances"
+      ]
+    },
+    {
+      "id": "sessions.routes",
+      "level": "workflow-parity",
+      "android": [
+        "children route",
+        "message history",
+        "timeline panel",
+        "revert and unrevert commands"
+      ],
+      "linux": [
+        "children route",
+        "message history",
+        "timeline panel",
+        "revert and unrevert commands"
+      ]
+    },
+    {
+      "id": "models.panel",
+      "level": "workflow-parity",
+      "android": [
+        "model list panel",
+        "provider/model selection",
+        "prompt_async sends selected model"
+      ],
+      "linux": [
+        "model list panel",
+        "provider/model selection",
+        "prompt_async sends selected model"
+      ]
+    },
+    {
+      "id": "files.panel",
+      "level": "workflow-parity",
+      "android": [
+        "modified file panel",
+        "file search command",
+        "workspace file rows"
+      ],
+      "linux": [
+        "modified file panel",
+        "file search command",
+        "workspace file rows"
+      ]
+    },
+    {
+      "id": "render.tools",
+      "level": "workflow-parity",
+      "android": [
+        "tool status rows",
+        "tool output preview",
+        "diff preview lines"
+      ],
+      "linux": [
+        "tool status cards",
+        "tool output preview",
+        "diff preview lines"
+      ]
+    },
+    {
+      "id": "permissions.preview",
+      "level": "workflow-parity",
+      "android": [
+        "permission request panel",
+        "pattern preview",
+        "once/always/reject replies"
+      ],
+      "linux": [
+        "permission request panel",
+        "pattern preview",
+        "once/always/reject replies"
+      ]
+    },
+    {
+      "id": "sidebar.files",
+      "level": "workflow-parity",
+      "android": [
+        "summary/files modes",
+        "file attach",
+        "open action",
+        "docked and overlay layouts"
+      ],
+      "linux": [
+        "summary/files modes",
+        "file attach",
+        "open action",
+        "docked and overlay layouts"
+      ]
+    },
+    {
+      "id": "editor.diff",
+      "level": "surface-only",
+      "android": [
+        "open real file",
+        "save",
+        "dirty guard",
+        "diagnostics",
+        "diff open/dismiss",
+        "snapshot preview"
+      ],
+      "linux": [
+        "open real file",
+        "edit/save",
+        "dirty guard",
+        "diagnostics",
+        "diff open/dismiss"
+      ]
+    },
+    {
+      "id": "terminal.polish",
+      "level": "surface-only",
+      "android": [
+        "Termux theme guidance",
+        "keybind help",
+        "clipboard guidance",
+        "title updates",
+        "suspend guidance",
+        "plugin discovery"
+      ],
+      "linux": [
+        "theme switcher",
+        "keybind help",
+        "system clipboard",
+        "title updates",
+        "suspend hooks",
+        "plugin UI"
+      ]
+    },
+    {
+      "id": "render.parity-gates",
+      "level": "workflow-parity",
+      "android": [
+        "tool rows",
+        "markdown/code clipping",
+        "diff previews"
+      ],
+      "linux": [
+        "tool cards",
+        "markdown/code clipping",
+        "rich diff previews"
+      ]
+    },
+    {
+      "id": "permissions.parity-gates",
+      "level": "workflow-parity",
+      "android": [
+        "grouped request summary",
+        "source labels",
+        "custom rejection",
+        "multi-request navigation"
+      ],
+      "linux": [
+        "grouped forecast requests",
+        "source labels",
+        "custom rejection",
+        "multi-request navigation"
+      ]
+    }
+  ]
 }

@@ -1,5 +1,14 @@
 type Status = "active" | "inactive" | "blocked"
+type Level = "true-parity" | "workflow-parity" | "surface-only" | "blocked"
+type Mode = "smoke" | "parity" | "release"
 type Phase = 0 | 1 | 2 | 3 | 4 | 5
+
+export const levels = {
+  true: "Linux and Android exercise the same observable behavior",
+  workflow: "Android completes the workflow through sidecar-specific UI",
+  surface: "Android exposes a discoverable surface but not full Linux UX",
+  blocked: "Android cannot match Linux until shared native support lands",
+} as const
 
 export const phases = [
   { phase: 0, label: "bootstrap", status: "active" },
@@ -16,17 +25,19 @@ export const parity = [
     phase: 0,
     area: "baseline",
     mode: "smoke",
+    level: "true-parity",
     active: true,
     status: "active",
     linux: ["global launcher resolves", "native runtime self-test passes"],
-    android: ["global launcher resolves", "native sidecar self-test passes"],
-    expect: ["global launcher resolves", "native sidecar self-test passes"],
+    android: ["global launcher resolves", "native sidecar self-test passes", "runtime mode is reported"],
+    expect: ["global launcher resolves", "native runtime self-test passes", "runtime mode is reported"],
   },
   {
     id: "composer.submit",
     phase: 1,
     area: "composer",
     mode: "parity",
+    level: "true-parity",
     active: true,
     status: "active",
     linux: ["prompt_async body uses server-compatible ids", "submitted text is preserved"],
@@ -38,39 +49,43 @@ export const parity = [
     phase: 1,
     area: "composer",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
-    linux: ["bracketed multiline paste", "prompt history recall", "cursor append after recall"],
-    android: ["bracketed multiline paste", "prompt history recall", "cursor append after recall"],
-    expect: ["bracketed multiline paste", "prompt history recall", "cursor append after recall"],
+    linux: ["bracketed multiline paste", "prompt history recall", "cursor append after recall", "full prompt keymap"],
+    android: ["bracketed multiline paste", "prompt history recall", "cursor append after recall", "core prompt keymap"],
+    expect: ["bracketed multiline paste", "prompt history recall", "cursor append after recall", "core prompt keymap"],
   },
   {
     id: "composer.advanced",
     phase: 1,
     area: "composer",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
-    linux: ["autocomplete", "shell mode", "prompt queue status", "stash list and pop", "rich paste replay"],
-    android: ["autocomplete", "shell mode", "prompt queue status", "stash list and pop", "rich paste replay"],
-    expect: ["autocomplete", "shell mode", "prompt queue status", "stash list and pop", "rich paste replay"],
+    linux: ["autocomplete menu", "shell mode", "prompt queue status", "stash list and pop", "rich paste replay"],
+    android: ["command autocomplete panel", "shell mode", "prompt queue status", "stash list and pop", "bracketed paste replay"],
+    expect: ["command autocomplete panel", "shell mode", "prompt queue status", "stash list and pop", "bracketed paste replay"],
   },
   {
     id: "dialogs.question",
     phase: 1,
     area: "dialogs",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
-    linux: ["question event renders", "numeric selection replies through daemon API"],
-    android: ["question event renders", "numeric selection replies through daemon API"],
-    expect: ["question event renders", "numeric selection replies through daemon API"],
+    linux: ["question dialog renders", "numeric selection replies through daemon API"],
+    android: ["question panel renders", "numeric selection replies through daemon API"],
+    expect: ["question panel renders", "numeric selection replies through daemon API"],
   },
   {
     id: "layout.capture",
     phase: 1,
     area: "layout",
     mode: "parity",
+    level: "true-parity",
     active: true,
     status: "active",
     linux: ["ANSI output is captured", "normalized frame contains session chrome"],
@@ -82,20 +97,22 @@ export const parity = [
     phase: 2,
     area: "commands",
     mode: "parity",
+    level: "surface-only",
     active: true,
     status: "active",
-    linux: ["command palette panel", "Linux command aliases documented", "help is searchable"],
-    android: ["command palette panel", "Linux command aliases documented", "help is searchable from Android sidecar"],
-    expect: ["command palette panel", "Linux command aliases documented", "help is searchable from Android sidecar"],
+    linux: ["interactive command palette", "searchable aliases", "keybound selection"],
+    android: ["command palette panel", "searchable command names", "slash-command selection"],
+    expect: ["command palette panel", "searchable command names", "slash-command selection"],
   },
   {
     id: "sessions.tabs",
     phase: 2,
     area: "sessions",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
-    linux: ["session list panel", "tab strip", "tab switching commands"],
+    linux: ["session list panel", "tab strip", "tab switching commands", "rich close affordances"],
     android: ["session list panel", "tab strip", "tab switching commands"],
     expect: ["session list panel", "tab strip", "tab switching commands"],
   },
@@ -104,6 +121,7 @@ export const parity = [
     phase: 2,
     area: "sessions",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
     linux: ["children route", "message history", "timeline panel", "revert and unrevert commands"],
@@ -115,6 +133,7 @@ export const parity = [
     phase: 2,
     area: "models",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
     linux: ["model list panel", "provider/model selection", "prompt_async sends selected model"],
@@ -126,6 +145,7 @@ export const parity = [
     phase: 2,
     area: "files",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
     linux: ["modified file panel", "file search command", "workspace file rows"],
@@ -137,17 +157,19 @@ export const parity = [
     phase: 2,
     area: "rendering",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
     linux: ["tool status cards", "tool output preview", "diff preview lines"],
-    android: ["tool status cards", "tool output preview", "diff preview lines"],
-    expect: ["tool status cards", "tool output preview", "diff preview lines"],
+    android: ["tool status rows", "tool output preview", "diff preview lines"],
+    expect: ["tool status rows", "tool output preview", "diff preview lines"],
   },
   {
     id: "permissions.preview",
     phase: 2,
     area: "permissions",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
     linux: ["permission request panel", "pattern preview", "once/always/reject replies"],
@@ -159,6 +181,7 @@ export const parity = [
     phase: 3,
     area: "tabs",
     mode: "parity",
+    level: "blocked",
     active: false,
     status: "blocked",
     missing: "chat/editor tab strip, dirty markers, close buttons, and persistence need the shared UI renderer",
@@ -171,6 +194,7 @@ export const parity = [
     phase: 3,
     area: "sidebar",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
     linux: ["summary/files modes", "file attach", "open action", "docked and overlay layouts"],
@@ -182,28 +206,31 @@ export const parity = [
     phase: 5,
     area: "editor",
     mode: "parity",
+    level: "surface-only",
     active: true,
     status: "active",
     linux: ["open real file", "edit/save", "dirty guard", "diagnostics", "diff open/dismiss"],
-    android: ["open real file", "save", "dirty guard", "diagnostics", "diff open/dismiss"],
-    expect: ["open real file", "edit/save", "dirty guard", "diagnostics", "diff open/dismiss"],
+    android: ["open real file", "save", "dirty guard", "diagnostics", "diff open/dismiss", "snapshot preview"],
+    expect: ["open real file", "save", "dirty guard", "diagnostics", "diff open/dismiss", "snapshot preview"],
   },
   {
     id: "terminal.polish",
     phase: 5,
     area: "terminal",
     mode: "parity",
+    level: "surface-only",
     active: true,
     status: "active",
-    linux: ["theme panel", "keybind help", "clipboard guidance", "title updates", "suspend help", "plugin discovery"],
-    android: ["theme panel", "keybind help", "clipboard blocker", "title updates", "suspend help", "plugin discovery"],
-    expect: ["theme/keybind/clipboard/title/suspend/plugin-adjacent behavior"],
+    linux: ["theme switcher", "keybind help", "system clipboard", "title updates", "suspend hooks", "plugin UI"],
+    android: ["Termux theme guidance", "keybind help", "clipboard guidance", "title updates", "suspend guidance", "plugin discovery"],
+    expect: ["Termux theme guidance", "keybind help", "clipboard guidance", "title updates", "suspend guidance", "plugin discovery"],
   },
   {
     id: "native.opentui",
     phase: 4,
     area: "native",
     mode: "parity",
+    level: "blocked",
     active: false,
     status: "blocked",
     missing: "Bun FFI and OpenTUI native bindings are not reliable on Termux yet",
@@ -216,40 +243,43 @@ export const parity = [
     phase: 4,
     area: "rendering",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
     linux: ["tool cards", "markdown/code clipping", "rich diff previews"],
-    android: ["tool cards", "markdown/code clipping", "rich diff previews"],
-    expect: ["tool cards", "markdown/code clipping", "rich diff previews"],
+    android: ["tool rows", "markdown/code clipping", "diff previews"],
+    expect: ["tool rows", "markdown/code clipping", "diff previews"],
   },
   {
     id: "permissions.parity-gates",
     phase: 4,
     area: "permissions",
     mode: "parity",
+    level: "workflow-parity",
     active: true,
     status: "active",
     linux: ["grouped forecast requests", "source labels", "custom rejection", "multi-request navigation"],
-    android: ["grouped forecast requests", "source labels", "custom rejection", "multi-request navigation"],
-    expect: ["grouped forecast requests", "source labels", "custom rejection", "multi-request navigation"],
+    android: ["grouped request summary", "source labels", "custom rejection", "multi-request navigation"],
+    expect: ["grouped request summary", "source labels", "custom rejection", "multi-request navigation"],
   },
   {
     id: "release.sidecar-smoke",
     phase: 4,
     area: "release",
-    mode: "smoke",
-    active: false,
-    status: "blocked",
-    missing: "release verification must keep both Android runtime archives and the Termux sidecar smoke path explicit",
+    mode: "release",
+    level: "true-parity",
+    active: true,
+    status: "active",
     linux: ["release artifact smoke runs during verification"],
-    android: [],
-    expect: ["release artifact smoke runs during verification"],
+    android: ["release Android archives include runtime and sidecar", "postinstall fallback installs the runtime"],
+    expect: ["release Android archives include runtime and sidecar", "postinstall fallback installs the runtime"],
   },
 ] as const satisfies readonly {
   id: string
   phase: Phase
   area: string
-  mode: "smoke" | "parity"
+  mode: Mode
+  level: Level
   active: boolean
   status: Status
   missing?: string
@@ -258,15 +288,17 @@ export const parity = [
   expect: readonly string[]
 }[]
 
-export function active(mode = "smoke") {
+export function active(mode: Mode | "all" = "smoke") {
   return parity.filter((item) => {
     if (!item.active) return false
+    if (mode === "all") return true
     if (mode === "parity") return item.mode === "smoke" || item.mode === "parity"
-    return item.mode === "smoke"
+    return item.mode === mode
   })
 }
 
 const state = (item: { status: Status }) => item.status
+const level = (item: { level: Level }) => item.level
 
 export function report() {
   const rows = phases.map((phase) => {
@@ -278,6 +310,9 @@ export function report() {
       active: items.filter((item) => state(item) === "active").map((item) => item.id),
       inactive: items.filter((item) => state(item) === "inactive").map((item) => item.id),
       blocked: items.filter((item) => state(item) === "blocked").map((item) => item.id),
+      trueParity: items.filter((item) => level(item) === "true-parity").map((item) => item.id),
+      workflowParity: items.filter((item) => level(item) === "workflow-parity").map((item) => item.id),
+      surfaceOnly: items.filter((item) => level(item) === "surface-only").map((item) => item.id),
     }
   })
   return {
@@ -286,6 +321,12 @@ export function report() {
       active: rows.reduce((sum, item) => sum + item.active.length, 0),
       inactive: rows.reduce((sum, item) => sum + item.inactive.length, 0),
       blocked: rows.reduce((sum, item) => sum + item.blocked.length, 0),
+      trueParity: rows.reduce((sum, item) => sum + item.trueParity.length, 0),
+      workflowParity: rows.reduce((sum, item) => sum + item.workflowParity.length, 0),
+      surfaceOnly: rows.reduce((sum, item) => sum + item.surfaceOnly.length, 0),
     },
+    overclaims: parity
+      .filter((item) => item.active && item.level !== "true-parity")
+      .map((item) => ({ id: item.id, level: item.level, android: item.android, linux: item.linux })),
   }
 }

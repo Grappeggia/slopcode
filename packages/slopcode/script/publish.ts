@@ -50,7 +50,7 @@ const binaries = await Array.fromAsync(new Bun.Glob("*/package.json").scan({ cwd
     }),
   ).then((arr) => arr.flatMap((item) => (item ? [item] : []))),
 )
-const publishable = binaries.filter((item) => !item.name.includes("-android-"))
+const publishable = binaries
 const deps = Object.fromEntries(publishable.map((item) => [item.name, item.version]))
 console.log("binaries", deps)
 const version = Script.version

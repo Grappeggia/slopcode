@@ -71,7 +71,7 @@ if (binaries.length === 0) {
   throw new Error("verify: missing binary packages in ./dist")
 }
 
-const publishable = binaries.filter((item) => !item.name.includes("-android-"))
+const publishable = binaries
 const deps = Object.fromEntries(publishable.map((item) => [item.name, item.version]))
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-verify-"))
 const stage = path.join(tmp, "stage")

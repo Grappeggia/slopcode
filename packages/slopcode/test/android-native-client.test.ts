@@ -340,6 +340,70 @@ describe("Android native client", () => {
     }
   })
 
+  test("handles sidecar permission prompts", async () => {
+    if (process.platform === "win32") return
+    const check = Bun.spawn(["rustc", "--version"], { stdout: "pipe", stderr: "pipe" })
+    if ((await check.exited) !== 0) return
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-native-host-permission-"))
+    try {
+      const bin = path.join(dir, "slopcode-android-host")
+      const build = Bun.spawn(["rustc", "native/android-host/main.rs", "-O", "-o", bin], {
+        cwd: path.join(import.meta.dir, ".."),
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      expect(await build.exited).toBe(0)
+
+      const replies: Array<{ id: string; body: { reply?: string } }> = []
+      const json = (value: unknown) =>
+        new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } })
+      const server = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          const url = new URL(req.url)
+          if (url.pathname === "/session" && req.method === "POST") return json({ id: "ses_sidecar" })
+          if (url.pathname === "/session/ses_sidecar") return json({ id: "ses_sidecar", title: "Permission Session" })
+          if (url.pathname === "/session/ses_sidecar/message/index") return json([])
+          if (url.pathname.startsWith("/permission/") && url.pathname.endsWith("/reply")) {
+            replies.push({ id: url.pathname.split("/")[2] ?? "", body: (await req.json()) as { reply?: string } })
+            return json({})
+          }
+          if (url.pathname === "/event") {
+            return new Response(
+              [
+                'data: {"type":"permission.asked","properties":{"id":"perm_one","sessionID":"ses_sidecar","permission":"edit","patterns":["src/a.ts"],"metadata":{"filepath":"src/a.ts"}}}',
+                'data: {"type":"permission.asked","properties":{"id":"perm_two","sessionID":"ses_sidecar","permission":"bash","patterns":["npm test"],"metadata":{"source":"terminal"}}}',
+                "",
+              ].join("\n\n"),
+            )
+          }
+          return json({})
+        },
+      })
+      try {
+        const proc = Bun.spawn([bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test"], {
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        await Bun.sleep(100)
+        proc.stdin.write("o")
+        await Bun.sleep(50)
+        proc.stdin.write("\x04")
+        proc.stdin.end()
+        const [code, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()])
+        expect(code).toBe(0)
+        expect(stdout).toContain("permission")
+        expect(replies).toEqual([{ id: "perm_two", body: { reply: "once" } }])
+      } finally {
+        server.stop(true)
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
   test("routes sidecar navigation, queue, stash, shell, and autocomplete commands", async () => {
     if (process.platform === "win32") return
     const check = Bun.spawn(["rustc", "--version"], { stdout: "pipe", stderr: "pipe" })
@@ -389,6 +453,8 @@ describe("Android native client", () => {
         })
         for (const input of [
           "/children\r",
+          "/doctor\r",
+          "/cl\t\u0015",
           "/messages\r",
           "/timeline\r",
           "/queue\r",
@@ -406,6 +472,8 @@ describe("Android native client", () => {
         const [code, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()])
         expect(code).toBe(0)
         expect(stdout).toContain("Phase 2")
+        expect(stdout).toContain("Android Runtime")
+        expect(stdout).toContain("Command Matches")
         expect(seen).toContain("GET /session/ses_sidecar/children")
         expect(seen.filter((item) => item === "GET /session/ses_sidecar/message/index").length).toBeGreaterThanOrEqual(
           3,
@@ -474,6 +542,7 @@ describe("Android native client", () => {
         proc.stdin.write("\x04")
         proc.stdin.end()
         const [code, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()])
+        expect(stdout).toContain("hello")
         expect(code).toBe(0)
         expect(stdout).toContain("Sidebar overlay")
         expect(stdout).toContain("Open Files")

@@ -38,6 +38,7 @@ import { JsonMigration } from "./storage/json-migration"
 import { Database } from "./storage/db"
 import { ConsoleCommand } from "./cli/cmd/console"
 import { DaemonCommand } from "./cli/cmd/daemon"
+import { DoctorCommand } from "./cli/cmd/doctor"
 import { Telemetry } from "./util/telemetry"
 
 process.on("unhandledRejection", (e) => {
@@ -212,6 +213,7 @@ let cli = yargs(hideBin(process.argv))
   .command(PluginCommand)
   .command(DbCommand)
   .command(PermissionCommand)
+  .command(DoctorCommand)
 
 if (Installation.isLocal()) {
   cli = cli.command(WorkspaceServeCommand)

@@ -30,6 +30,7 @@ struct Message {
     tools: Vec<String>,
 }
 
+#[derive(Clone)]
 struct Permission {
     id: String,
     session: String,
@@ -60,6 +61,7 @@ struct Editor {
     dirty: bool,
     diff: bool,
     diagnostics: Vec<String>,
+    preview: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -259,6 +261,11 @@ struct State {
     attached_files: Vec<String>,
     active_file: Option<String>,
     editor: Option<Editor>,
+    runtime: String,
+    runtime_path: String,
+    version: String,
+    permissions: Vec<Permission>,
+    permission_index: usize,
 }
 
 impl State {
@@ -291,6 +298,14 @@ impl State {
             attached_files: Vec::new(),
             active_file: None,
             editor: None,
+            runtime: String::from("sidecar"),
+            runtime_path: env::current_exe()
+                .ok()
+                .map(|item| item.display().to_string())
+                .unwrap_or_else(|| String::from("unknown")),
+            version: env::var("SLOPCODE_VERSION").unwrap_or_else(|_| String::from("dev")),
+            permissions: Vec::new(),
+            permission_index: 0,
         }
     }
 
@@ -422,7 +437,7 @@ fn run() -> Result<(), String> {
     let mut term = Terminal::start()?;
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
-        locked.notice("starting native Android sidecar");
+        locked.notice("starting native Android sidecar; type /doctor for runtime details");
         draw(&locked, term.size());
     }
     initialize(&client, &args, &state, &dirty)?;
@@ -516,7 +531,7 @@ fn initialize(
     state
         .lock()
         .map_err(|_| "state lock failed")?
-        .notice("native Android sidecar active; type /help for commands");
+        .notice("native Android sidecar active; type /doctor for runtime details or /help for commands");
     dirty.store(true, Ordering::SeqCst);
     Ok(())
 }
@@ -685,11 +700,32 @@ fn command_rows() -> Vec<String> {
             "Workspace",
             "/summary /files [dir] /attach <file> /open <file> /save /diagnostics /close-editor[!] /diff [dismiss] /status /queue /stash /list /pop /share /unshare /compact /pause /resume /interrupt",
         ),
-        ("System", "/shell /autocomplete /themes /keybinds /clipboard /title <title> /suspend /plugins /shells /orgs /clear /help /exit"),
+        ("System", "/doctor /runtime /shell /autocomplete /themes /keybinds /clipboard /title <title> /suspend /plugins /shells /orgs /clear /help /exit"),
     ]
     .iter()
     .map(|(section, text)| format!("{section}: {text}"))
     .collect()
+}
+
+fn runtime_rows(state: &State) -> Vec<String> {
+    vec![
+        format!("mode: {}", state.runtime),
+        format!("version: {}", state.version),
+        format!("sidecar: {}", state.runtime_path),
+        String::from("native OpenTUI: blocked on Android until Bun exposes bun:ffi"),
+        String::from("install check: slopcode doctor android --json"),
+    ]
+}
+
+fn complete_rows(input: &Buffer) -> Vec<String> {
+    if input.cursor != input.len() || !input.text.starts_with('/') || input.text.contains(' ') {
+        return Vec::new();
+    }
+    COMMANDS
+        .iter()
+        .filter(|item| item.starts_with(&input.text))
+        .map(|item| item.to_string())
+        .collect()
 }
 
 fn session_rows(body: &str) -> Vec<String> {
@@ -839,6 +875,10 @@ fn editor_rows(editor: &Editor) -> Vec<String> {
         rows.push(String::from("diagnostics"));
         rows.extend(editor.diagnostics.iter().take(8).cloned());
     }
+    if !editor.preview.is_empty() {
+        rows.push(String::from("snapshot preview"));
+        rows.extend(editor.preview.iter().take(8).map(|line| format!("  {line}")));
+    }
     rows
 }
 
@@ -870,6 +910,7 @@ fn editor_from(body: &str, fallback: &str) -> Option<Editor> {
         dirty: boolean(body, "dirty").unwrap_or(false),
         diff: boolean(body, "diff").unwrap_or(false),
         diagnostics: Vec::new(),
+        preview: Vec::new(),
     })
 }
 
@@ -889,6 +930,9 @@ fn editor_snapshot(client: &Client, session: &str, editor: &Editor) -> Result<Ed
         dirty: boolean(&body, "dirty").unwrap_or(editor.dirty),
         diff: boolean(&body, "diff").unwrap_or(editor.diff),
         diagnostics: diagnostic_rows(&body),
+        preview: string(&body, "content")
+            .map(|item| item.lines().take(8).map(|line| line.to_string()).collect())
+            .unwrap_or_else(|| editor.preview.clone()),
     })
 }
 
@@ -1084,6 +1128,13 @@ fn command(
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
+        "doctor" | "runtime" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            let rows = runtime_rows(&locked);
+            locked.panel("Android Runtime", rows);
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
         "new" => {
             let session = create_session(client)?;
             activate(client, state, session)?;
@@ -1273,8 +1324,17 @@ fn command(
                         json(value)
                     )),
                 )?;
-                let editor = editor_from(&body, value)
+                let mut editor = editor_from(&body, value)
                     .ok_or_else(|| format!("invalid editor response: {body}"))?;
+                if let Ok(content) = client.request(
+                    "GET",
+                    &format!("/file/content?path={}", encode_query(value)),
+                    None,
+                ) {
+                    if let Some(text) = string(&content, "content") {
+                        editor.preview = text.lines().take(8).map(|line| line.to_string()).collect();
+                    }
+                }
                 let mut locked = state.lock().map_err(|_| "state lock failed")?;
                 locked.active_file = Some(value.to_string());
                 locked.open_files.retain(|item| item != value);
@@ -1501,8 +1561,14 @@ fn command(
         }
         "autocomplete" => {
             let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            let rows = complete_rows(&locked.input);
             complete_command(&mut locked.input);
-            locked.notice("autocomplete applied");
+            if rows.len() > 1 {
+                locked.panel("Command Matches", rows);
+                locked.notice("autocomplete has multiple matches");
+            } else {
+                locked.notice("autocomplete applied");
+            }
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
@@ -1755,14 +1821,21 @@ fn input(
         if locked.permission.is_some() {
             for ch in text.chars() {
                 let mut clear = false;
-                if let Some(active) = locked.permission.as_mut() {
+                if let Some(active) = locked.permission.clone() {
                     if active.reject.is_some() {
                         let current = active.reject.clone().unwrap_or_default();
                         match ch {
                             '\u{3}' | '\u{4}' => exit = true,
-                            '\u{1b}' => active.reject = None,
+                            '\u{1b}' => {
+                                if let Some(item) = locked.permission.as_mut() {
+                                    item.reject = None;
+                                }
+                            }
                             '\r' | '\n' => {
                                 let perm = locked.permission.take().unwrap();
+                                locked.permissions.retain(|item| item.id != perm.id);
+                                locked.permission_index = locked.permission_index.min(locked.permissions.len().saturating_sub(1));
+                                locked.permission = locked.permissions.get(locked.permission_index).cloned();
                                 permission = Some((
                                     perm.id,
                                     perm.session,
@@ -1772,22 +1845,34 @@ fn input(
                                 clear = true;
                             }
                             '\u{7f}' | '\u{8}' => {
-                                active.reject = Some(
-                                    current
-                                        .chars()
-                                        .take(current.chars().count().saturating_sub(1))
-                                        .collect(),
-                                )
+                                if let Some(item) = locked.permission.as_mut() {
+                                    item.reject = Some(
+                                        current
+                                            .chars()
+                                            .take(current.chars().count().saturating_sub(1))
+                                            .collect(),
+                                    );
+                                }
                             }
                             ch if !ch.is_control() => {
-                                active.reject = Some(format!("{current}{ch}"))
+                                if let Some(item) = locked.permission.as_mut() {
+                                    item.reject = Some(format!("{current}{ch}"));
+                                }
                             }
                             _ => {}
+                        }
+                        if let Some(item) = locked.permission.clone() {
+                            if let Some(saved) = locked.permissions.iter_mut().find(|perm| perm.id == item.id) {
+                                saved.reject = item.reject;
+                            }
                         }
                     } else {
                         match ch {
                             'o' => {
                                 let perm = locked.permission.take().unwrap();
+                                locked.permissions.retain(|item| item.id != perm.id);
+                                locked.permission_index = locked.permission_index.min(locked.permissions.len().saturating_sub(1));
+                                locked.permission = locked.permissions.get(locked.permission_index).cloned();
                                 permission = Some((
                                     perm.id,
                                     perm.session,
@@ -1798,6 +1883,9 @@ fn input(
                             }
                             'a' => {
                                 let perm = locked.permission.take().unwrap();
+                                locked.permissions.retain(|item| item.id != perm.id);
+                                locked.permission_index = locked.permission_index.min(locked.permissions.len().saturating_sub(1));
+                                locked.permission = locked.permissions.get(locked.permission_index).cloned();
                                 permission = Some((
                                     perm.id,
                                     perm.session,
@@ -1806,9 +1894,30 @@ fn input(
                                 ));
                                 clear = true;
                             }
-                            'r' => active.reject = Some(String::new()),
+                            'r' => {
+                                if let Some(item) = locked.permission.as_mut() {
+                                    item.reject = Some(String::new());
+                                }
+                            }
+                            'n' => {
+                                if !locked.permissions.is_empty() {
+                                    locked.permission_index = (locked.permission_index + 1) % locked.permissions.len();
+                                    locked.permission = locked.permissions.get(locked.permission_index).cloned();
+                                    locked.notice("next permission");
+                                }
+                            }
+                            'p' => {
+                                if !locked.permissions.is_empty() {
+                                    locked.permission_index = (locked.permission_index + locked.permissions.len() - 1) % locked.permissions.len();
+                                    locked.permission = locked.permissions.get(locked.permission_index).cloned();
+                                    locked.notice("previous permission");
+                                }
+                            }
                             '\u{1b}' => {
                                 let perm = locked.permission.take().unwrap();
+                                locked.permissions.retain(|item| item.id != perm.id);
+                                locked.permission_index = locked.permission_index.min(locked.permissions.len().saturating_sub(1));
+                                locked.permission = locked.permissions.get(locked.permission_index).cloned();
                                 permission = Some((
                                     perm.id,
                                     perm.session,
@@ -1869,6 +1978,8 @@ fn input(
 }
 
 const COMMANDS: &[&str] = &[
+    "/doctor",
+    "/runtime",
     "/new",
     "/sessions",
     "/children",
@@ -2030,7 +2141,14 @@ fn prompt_input(state: &mut State, text: &str, submit: &mut Option<String>, exit
                 state.history_draft.clear();
             }
             '\u{1b}' => state.close_panel(),
-            '\t' => complete_command(&mut state.input),
+            '\t' => {
+                let rows = complete_rows(&state.input);
+                complete_command(&mut state.input);
+                if rows.len() > 1 {
+                    state.panel("Command Matches", rows);
+                    state.notice("autocomplete has multiple matches");
+                }
+            }
             '\u{1}' => state.input.home(),
             '\u{5}' => state.input.end(),
             '\u{15}' => state.input.kill_before(),
@@ -2342,7 +2460,7 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
                         .map(|arr| strings(&arr))
                         .unwrap_or_default();
                     let metadata = object_value(&props, "metadata").unwrap_or_default();
-                    locked.permission = Some(Permission {
+                    let next = Permission {
                         id: string(&props, "id").unwrap_or_default(),
                         session: string(&props, "sessionID").unwrap_or_default(),
                         permission: string(&props, "permission")
@@ -2358,11 +2476,20 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
                             }),
                         reason: string(&props, "reason"),
                         reject: None,
-                    });
+                    };
+                    locked.permissions.retain(|item| item.id != next.id);
+                    locked.permissions.push(next.clone());
+                    locked.permission_index = locked.permissions.len().saturating_sub(1);
+                    locked.permission = Some(next);
                     locked.notice("permission requested");
                 }
             }
-            "permission.replied" => locked.permission = None,
+            "permission.replied" => {
+                let id = string(&props, "id").unwrap_or_default();
+                locked.permissions.retain(|item| item.id != id);
+                locked.permission_index = locked.permission_index.min(locked.permissions.len().saturating_sub(1));
+                locked.permission = locked.permissions.get(locked.permission_index).cloned();
+            }
             "question.asked" => {
                 if same_session(&locked, &props) {
                     if let Some(next) = question_from_props(&props) {
@@ -2679,6 +2806,10 @@ fn draw(state: &State, size: (usize, usize)) {
         width,
     ));
     lines.push(crop(&format!("session {}", state.title), width));
+    lines.push(crop(
+        &format!("runtime {} {} | {}", state.runtime, state.version, state.runtime_path),
+        width,
+    ));
     if !state.tabs.is_empty() {
         let tabs = state
             .tabs
@@ -2746,6 +2877,9 @@ fn draw(state: &State, size: (usize, usize)) {
         for row in editor.diagnostics.iter().take(3) {
             lines.extend(wrap(&format!("  {row}"), width));
         }
+        for row in editor.preview.iter().take(3) {
+            lines.extend(wrap(&format!("  {row}"), width));
+        }
     }
     lines.push(String::new());
     if let Some(panel) = &state.panel {
@@ -2778,7 +2912,12 @@ fn draw(state: &State, size: (usize, usize)) {
             .map(|item| format!(" source {item}"))
             .unwrap_or_default();
         lines.push(crop(
-            &format!("permission {}{source}", permission.permission),
+            &format!(
+                "permission {}/{} {}{source}",
+                state.permission_index + 1,
+                state.permissions.len().max(1),
+                permission.permission
+            ),
             width,
         ));
         if let Some(reason) = &permission.reason {
@@ -2842,7 +2981,9 @@ fn footer_lines(state: &State, width: usize) -> Vec<String> {
         }
         return wrap(
             &format!(
-                "permission {} {} | o once, a always, r reject",
+                "permission {}/{} {} {} | o once, a always, r reject, n/p switch",
+                state.permission_index + 1,
+                state.permissions.len().max(1),
                 permission.permission,
                 permission.patterns.join(", ")
             ),

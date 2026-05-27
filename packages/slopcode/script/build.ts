@@ -502,6 +502,7 @@ const androidBundle = async (name: string, arch: "arm64" | "x64", parserWorker: 
       "  env: {",
       "    ...process.env,",
       '    SLOPCODE_BIONIC: "1",',
+      `    SLOPCODE_VERSION: "${Script.version}",`,
       "    SLOPCODE_ENTRYPOINT: bundle,",
       "    SLOPCODE_ANDROID_ROOT: root,",
       '    SLOPCODE_ANDROID_HOST_PATH: path.join(root, "bin", "slopcode-android-host"),',

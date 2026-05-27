@@ -325,7 +325,12 @@ function json(res, value, status = 200) {
 }
 
 function selected() {
-  return matrix.filter((item) => item.active && (mode === "parity" ? item.mode === "smoke" || item.mode === "parity" : item.mode === "smoke"))
+  return matrix.filter((item) => {
+    if (!item.active) return false
+    if (mode === "parity") return item.mode === "smoke" || item.mode === "parity"
+    if (mode === "release") return item.mode === "release"
+    return item.mode === "smoke"
+  })
 }
 
 function read(req) {
@@ -460,13 +465,25 @@ function assert(value, message) {
   if (!value) throw new Error(message)
 }
 
+function semantic(run, tokens) {
+  const value = run.screen + "\\n" + run.stdout
+  for (const token of tokens) assert(value.includes(token), "missing semantic token " + token + "\\n" + value)
+  return tokens
+}
+
+
 const actions = {
   "smoke.install": async () => {
     const cli = spawnSync(cliPath, ["--version"], { encoding: "utf8" })
     assert(cli.status === 0, cli.error?.message || cli.stderr || cli.stdout || "slopcode --version failed")
     const self = spawnSync(host, ["--self-test"], { encoding: "utf8" })
     assert(self.status === 0 && self.stdout.includes("slopcode-android-host ok"), self.stderr || self.stdout || "sidecar self-test failed")
+    const doctor = spawnSync(cliPath, ["doctor", "android", "--json"], { encoding: "utf8", env: { ...process.env, SLOPCODE_ANDROID_HOST_PATH: host } })
+    assert(doctor.status === 0, doctor.stderr || doctor.stdout || "slopcode doctor android failed")
+    const info = JSON.parse(doctor.stdout)
+    assert(info.sidecar === host && info.sidecarExists === true, "doctor did not report sidecar " + doctor.stdout)
   },
+  "release.sidecar-smoke": async () => actions["smoke.install"](),
   "composer.submit": async () => {
     const run = await runHost({ title: "Submit Session", args: ["--prompt", "hello"], steps: [{ delay: 150, text: "/exit\\r" }] })
     const body = run.bodies[0]
@@ -513,9 +530,8 @@ const actions = {
     assert(run.screen.includes("SlopCode") || run.stdout.includes("SlopCode"), "screen missing chrome\\n" + run.screen + "\\nraw:\\n" + run.stdout)
   },
   "commands.palette": async () => {
-    const run = await runHost({ title: "Command Session", steps: [{ delay: 150, text: "/commands\\r" }, { delay: 150, text: "\\x04" }] })
-    assert(run.screen.includes("Command Palette") || run.stdout.includes("Command Palette"), "missing command palette\\n" + run.screen)
-    assert(run.screen.includes("/models") || run.stdout.includes("/models"), "missing model command\\n" + run.screen)
+    const run = await runHost({ title: "Command Session", steps: [{ delay: 150, text: "/commands\\r" }, { delay: 150, text: "/cl\\t\\u0015" }, { delay: 150, text: "\\x04" }] })
+    semantic(run, ["Command Palette", "/models", "Command Matches"])
   },
   "sessions.tabs": async () => {
     const run = await runHost({
@@ -590,6 +606,7 @@ const actions = {
     })
     assert(run.stdout.includes("Editor"), "missing editor panel\\\\n" + run.stdout)
     assert(run.stdout.includes("expected semicolon"), "missing diagnostics\\\\n" + run.stdout)
+    assert(run.stdout.includes("console.log('ok')"), "missing editor preview\\n" + run.stdout)
     assert(run.stdout.includes("unsaved changes") || run.stdout.includes("saved src/app.ts"), "missing dirty guard/save\\\\n" + run.stdout)
     assert(run.seen.includes("POST /editor"), "missing editor open " + JSON.stringify(run.seen))
     assert(run.seen.includes("GET /editor/edt_termux/snapshot"), "missing editor snapshot " + JSON.stringify(run.seen))

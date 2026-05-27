@@ -18,11 +18,11 @@ This page tracks notable SlopCode releases and updates directly from GitHub.
 
 ## Version highlights
 
-### Android parity train
+### Android Termux sidecar
 
-- Embedded editor workflows now cover open, diagnostics, dirty close guards, save, and diff dismiss in the Termux sidecar.
-- Android terminal polish adds theme, keybind, clipboard, title, suspend, and plugin-adjacent parity surfaces.
-- Remaining Android non-parity is limited to explicit Termux OpenTUI/Bun FFI blockers.
+- Android now reports runtime mode, sidecar path, version, and install health through `slopcode doctor android`.
+- Termux gates now classify true parity, workflow parity, surface-only support, and blocked OpenTUI work separately.
+- Core sidecar workflows continue to improve, while rich OpenTUI/editor/plugin/theme parity remains blocked or surface-only until shared native support lands.
 
 <GitHubReleases />
 
