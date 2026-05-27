@@ -12,8 +12,8 @@ export function android(input = { platform: process.platform, override: process.
 }
 
 export function client(root = process.env.SLOPCODE_ANDROID_ROOT) {
-  const file = root && path.join(root, "bin", "slopcode-termux")
-  if (file && fs.existsSync(file)) return file
+  const host = root && path.join(root, "bin", "slopcode-android-host")
+  if (host && fs.existsSync(host)) return host
 }
 
 export function guard() {

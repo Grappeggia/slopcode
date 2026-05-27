@@ -185,6 +185,7 @@ const mode = process.env.SLOPCODE_ANDROID_E2E_MODE || "smoke"
 const root = spawnSync("npm", ["root", "-g"], { encoding: "utf8" }).stdout.trim()
 const host = path.join(root, ${JSON.stringify(androidPackage)}, "bin", "slopcode-android-host")
 const cliPath = path.join(root, "slopcode", "bin", "slopcode")
+const androidRoot = path.join(root, ${JSON.stringify(androidPackage)})
 const resultPath = path.join(process.env.HOME || ".", "android-termux-e2e-result.json")
 const results = []
 
@@ -482,6 +483,9 @@ const actions = {
     assert(doctor.status === 0, doctor.stderr || doctor.stdout || "slopcode doctor android failed")
     const info = JSON.parse(doctor.stdout)
     assert(info.sidecar === host && info.sidecarExists === true, "doctor did not report sidecar " + doctor.stdout)
+    assert(info.strategy === "rust" && info.bun === null, "doctor did not report Rust runtime " + doctor.stdout)
+    assert(!fs.existsSync(path.join(androidRoot, "bundle", "index.js")), "Android package includes JS bundle")
+    assert(!fs.existsSync(path.join(androidRoot, "node_modules", "@oven")), "Android package includes Bun runtime")
   },
   "release.sidecar-smoke": async () => actions["smoke.install"](),
   "home.landing": async () => {

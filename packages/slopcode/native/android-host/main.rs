@@ -313,7 +313,7 @@ impl State {
                 .ok()
                 .map(|item| item.display().to_string())
                 .unwrap_or_else(|| String::from("unknown")),
-            version: env::var("SLOPCODE_VERSION").unwrap_or_else(|_| String::from("dev")),
+            version: version(),
             permissions: Vec::new(),
             permission_index: 0,
         }
@@ -420,6 +420,61 @@ struct Url {
     base: String,
 }
 
+fn version() -> String {
+    env::var("SLOPCODE_VERSION")
+        .ok()
+        .or_else(|| option_env!("SLOPCODE_BUILD_VERSION").map(|item| item.to_string()))
+        .unwrap_or_else(|| String::from("dev"))
+}
+
+fn sidecar_path() -> String {
+    if let Ok(path) = env::var("SLOPCODE_ANDROID_HOST_PATH") {
+        return path;
+    }
+    if let Ok(exe) = env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            return dir.join("slopcode-android-host").display().to_string();
+        }
+        return exe.display().to_string();
+    }
+    String::from("unknown")
+}
+
+fn doctor(raw: &[String]) -> Result<(), String> {
+    if raw.first().map(|item| item.as_str()) != Some("android") {
+        return Err(String::from("usage: slopcode doctor android [--json]"));
+    }
+    let sidecar = sidecar_path();
+    let root = env::var("SLOPCODE_ANDROID_ROOT")
+        .ok()
+        .or_else(|| {
+            env::current_exe()
+                .ok()
+                .and_then(|item| item.parent()?.parent().map(|dir| dir.display().to_string()))
+        })
+        .unwrap_or_else(|| String::from("unknown"));
+    let exists = std::path::Path::new(&sidecar).exists();
+    if raw.iter().any(|item| item == "--json") {
+        println!(
+            "{{\"version\":{},\"platform\":{},\"arch\":{},\"termux\":{},\"mode\":\"rust\",\"strategy\":\"rust\",\"available\":true,\"reason\":\"rust Android runtime\",\"root\":{},\"sidecar\":{},\"sidecarExists\":{},\"bun\":null,\"ffiBlocked\":true}}",
+            json(&version()),
+            json(env::consts::OS),
+            json(env::consts::ARCH),
+            env::var("TERMUX_VERSION").is_ok() || env::var("PREFIX").map(|item| item.contains("/com.termux/")).unwrap_or(false),
+            json(&root),
+            json(&sidecar),
+            exists,
+        );
+        return Ok(());
+    }
+    println!("Android runtime: rust");
+    println!("version: {}", version());
+    println!("sidecar: {sidecar}");
+    println!("sidecar exists: {exists}");
+    println!("bun: not bundled");
+    Ok(())
+}
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("{err}");
@@ -506,8 +561,26 @@ fn parse() -> Result<Args, String> {
                 println!("slopcode-android-host ok");
                 std::process::exit(0);
             }
+            "--version" | "-V" => {
+                println!("{}", version());
+                std::process::exit(0);
+            }
+            "doctor" => {
+                doctor(&iter.collect::<Vec<_>>())?;
+                std::process::exit(0);
+            }
             _ => return Err(format!("unknown argument: {arg}")),
         }
+    }
+    if args.url.is_empty() {
+        args.url = env::var("SLOPCODE_DAEMON_URL")
+            .or_else(|_| env::var("SLOPCODE_SERVER_URL"))
+            .unwrap_or_default();
+    }
+    if args.token.is_empty() {
+        args.token = env::var("SLOPCODE_DAEMON_TOKEN")
+            .or_else(|_| env::var("SLOPCODE_TOKEN"))
+            .unwrap_or_default();
     }
     Ok(args)
 }

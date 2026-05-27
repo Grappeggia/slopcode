@@ -271,17 +271,17 @@ const verifyArchives = async () => {
       if (!list.some((item) => item.endsWith("bin/slopcode"))) {
         throw new Error(`verify: missing Android launcher in ${file}`)
       }
-      if (!list.some((item) => item.endsWith("bundle/index.js"))) {
-        throw new Error(`verify: missing Android bundle in ${file}`)
+      if (list.some((item) => item.endsWith("bundle/index.js"))) {
+        throw new Error(`verify: Android archive must not include Bun bundle in ${file}`)
       }
-      if (!list.some((item) => item.includes("node_modules/@opentui/core-android-"))) {
-        throw new Error(`verify: missing Android OpenTUI runtime in ${file}`)
+      if (list.some((item) => item.includes("node_modules/@opentui/core-android-"))) {
+        throw new Error(`verify: Android archive must not include OpenTUI JS runtime in ${file}`)
       }
-      if (!list.some((item) => item.includes("node_modules/@oven/bun-linux-") && item.endsWith("/bin/bun"))) {
-        throw new Error(`verify: missing Android Bun runtime in ${file}`)
+      if (list.some((item) => item.includes("node_modules/@oven/bun-linux-"))) {
+        throw new Error(`verify: Android archive must not include Bun runtime in ${file}`)
       }
-      if (!list.some((item) => item.endsWith("bin/slopcode-termux"))) {
-        throw new Error(`verify: missing Android Termux client in ${file}`)
+      if (list.some((item) => item.endsWith("bin/slopcode-termux"))) {
+        throw new Error(`verify: Android archive must not include legacy Termux client in ${file}`)
       }
       if (!list.some((item) => item.endsWith("bin/slopcode-android-host"))) {
         throw new Error(`verify: missing Android host sidecar in ${file}`)

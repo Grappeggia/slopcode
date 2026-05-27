@@ -90,6 +90,28 @@ describe("Android native client", () => {
       expect(stderr).toBe("")
       expect(code).toBe(0)
       expect(stdout).toContain("slopcode-android-host ok")
+      const version = Bun.spawn([bin, "--version"], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, SLOPCODE_VERSION: "1.2.3" },
+      })
+      expect(await version.exited).toBe(0)
+      expect(await new Response(version.stdout).text()).toContain("1.2.3")
+
+      const doctor = Bun.spawn([bin, "doctor", "android", "--json"], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, SLOPCODE_ANDROID_HOST_PATH: bin, SLOPCODE_VERSION: "1.2.3" },
+      })
+      const [doctorCode, doctorOut] = await Promise.all([doctor.exited, new Response(doctor.stdout).text()])
+      expect(doctorCode).toBe(0)
+      expect(JSON.parse(doctorOut)).toMatchObject({
+        version: "1.2.3",
+        strategy: "rust",
+        sidecar: bin,
+        sidecarExists: true,
+        bun: null,
+      })
     } finally {
       await fs.rm(dir, { recursive: true, force: true })
     }

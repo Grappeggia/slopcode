@@ -23,13 +23,13 @@ describe("Android Termux runtime", () => {
     expect(android({ platform: "android", override: "1" })).toBe(false)
   })
 
-  test("resolves bundled Termux client only when present", async () => {
+  test("resolves bundled Rust host only when present", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "slopcode-android-"))
     const bin = path.join(root, "bin")
     await fs.promises.mkdir(bin)
     expect(client(root)).toBeUndefined()
-    await Bun.write(path.join(bin, "slopcode-termux"), "")
-    expect(client(root)).toBe(path.join(bin, "slopcode-termux"))
+    await Bun.write(path.join(bin, "slopcode-android-host"), "")
+    expect(client(root)).toBe(path.join(bin, "slopcode-android-host"))
     await fs.promises.rm(root, { recursive: true, force: true })
   })
 
@@ -42,27 +42,24 @@ describe("Android Termux runtime", () => {
     })
   })
 
-  test("Android wrapper preserves entrypoint and sidecar host mode", async () => {
+  test("Android runtime package is Rust-only", async () => {
     const build = await Bun.file(path.join(import.meta.dir, "..", "script", "build.ts")).text()
+    const verify = await Bun.file(path.join(import.meta.dir, "..", "script", "verify-artifacts.ts")).text()
     const thread = await Bun.file(path.join(import.meta.dir, "..", "src", "cli", "cmd", "tui", "thread.ts")).text()
 
-    expect(build).toContain("SLOPCODE_ENTRYPOINT: bundle")
-    expect(build).toContain("slopcode-bin-android-${arch}")
-    expect(build).toContain('@oven/bun-linux-${arch === "arm64" ? "aarch64" : "x64"}-android')
-    expect(build).toContain("candidates.find((item) => fs.existsSync(item))")
-    expect(build).not.toContain('item === "bun"')
-    expect(build).toContain("native/android-client/main.rs")
-    expect(build).toContain("SLOPCODE_ANDROID_ROOT")
-    expect(build).toContain('"slopcode-termux"')
+    expect(build).toContain("androidRuntime")
     expect(build).toContain("native/android-host/main.rs")
-    expect(build).toContain("SLOPCODE_ANDROID_HOST_PATH")
-    expect(build).toContain('SLOPCODE_ANDROID_HOST: process.env.SLOPCODE_ANDROID_HOST ?? "sidecar"')
     expect(build).toContain('"slopcode-android-host"')
-    expect(build).toContain("process.exit(typeof result.status ===")
-    expect(build).toContain("cwd(`dist/${key}`)")
-    expect(build).toContain("cwd(`dist/${key}/bin`)")
-    expect(thread).toContain('await import("./portable")')
-    expect(thread).toContain("SLOPCODE_TERMUX_LEGACY")
+    expect(build).toContain('"./bin/slopcode"')
+    expect(build).toContain("SLOPCODE_BUILD_VERSION")
+    expect(build).not.toContain("@oven/bun-linux")
+    expect(build).not.toContain("androidBun")
+    expect(build).not.toContain("bundle/index.js")
+    expect(build).not.toContain("core-android")
+    expect(build).not.toContain("native/android-client/main.rs")
+    expect(build).not.toContain('"slopcode-termux"')
+    expect(verify).toContain("must not include Bun runtime")
+    expect(verify).toContain("must not include legacy Termux client")
     expect(thread).toContain('await import("./android-host")')
   })
 
