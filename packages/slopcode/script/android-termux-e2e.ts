@@ -484,6 +484,17 @@ const actions = {
     assert(info.sidecar === host && info.sidecarExists === true, "doctor did not report sidecar " + doctor.stdout)
   },
   "release.sidecar-smoke": async () => actions["smoke.install"](),
+  "home.landing": async () => {
+    const run = await runHost({
+      title: "Home Landing",
+      steps: [
+        { delay: 150, text: "hello from home\\r" },
+        { delay: 150, text: "\\x04" },
+      ],
+    })
+    semantic(run, ["SlopCode", "Fix a TODO in the codebase"])
+    assert(run.bodies[0]?.parts?.[0]?.text === "hello from home", "home prompt did not submit " + JSON.stringify(run.bodies))
+  },
   "composer.submit": async () => {
     const run = await runHost({ title: "Submit Session", args: ["--prompt", "hello"], steps: [{ delay: 150, text: "/exit\\r" }] })
     const body = run.bodies[0]

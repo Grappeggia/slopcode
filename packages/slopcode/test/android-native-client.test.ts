@@ -95,12 +95,12 @@ describe("Android native client", () => {
     }
   })
 
-  test("renders sidecar status before daemon sync completes", async () => {
+  test("renders sidecar home and creates sessions lazily", async () => {
     if (process.platform === "win32") return
     const check = Bun.spawn(["rustc", "--version"], { stdout: "pipe", stderr: "pipe" })
     if ((await check.exited) !== 0) return
 
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-native-host-render-"))
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-native-host-home-"))
     try {
       const bin = path.join(dir, "slopcode-android-host")
       const build = Bun.spawn(["rustc", "native/android-host/main.rs", "-O", "-o", bin], {
@@ -110,17 +110,26 @@ describe("Android native client", () => {
       })
       expect(await build.exited).toBe(0)
 
+      let created = 0
+      const bodies: Array<{ parts?: Array<{ text?: string }> }> = []
       const json = (value: unknown) =>
         new Response(JSON.stringify(value, null, 2), { headers: { "content-type": "application/json" } })
       const server = Bun.serve({
         port: 0,
         fetch: async (req: Request) => {
           const url = new URL(req.url)
-          if (url.pathname === "/session" && req.method === "POST") return json({ id: "ses_sidecar" })
-          if (url.pathname === "/session/ses_sidecar") return json({ id: "ses_sidecar", title: "Pretty JSON Session" })
+          if (url.pathname === "/session" && req.method === "POST") {
+            created++
+            return json({ id: "ses_sidecar" })
+          }
+          if (url.pathname === "/session/ses_sidecar") return json({ id: "ses_sidecar", title: "Home Prompt Session" })
           if (url.pathname === "/session/ses_sidecar/message/index") return json([])
+          if (url.pathname === "/session/ses_sidecar/prompt_async" && req.method === "POST") {
+            bodies.push((await req.json()) as { parts?: Array<{ text?: string }> })
+            return new Response(null, { status: 204 })
+          }
           if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\n\n')
-          return json({})
+          return json([])
         },
       })
       try {
@@ -129,12 +138,18 @@ describe("Android native client", () => {
           stdout: "pipe",
           stderr: "pipe",
         })
-        proc.stdin.write("/exit\n")
+        await Bun.sleep(100)
+        expect(created).toBe(0)
+        proc.stdin.write("hello from home\r")
+        await Bun.sleep(100)
+        proc.stdin.write("\x04")
         proc.stdin.end()
         const [code, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()])
         expect(code).toBe(0)
-        expect(stdout).toContain("starting native Android sidecar")
-        expect(stdout).toContain("Pretty JSON Session")
+        expect(stdout).toContain("SlopCode")
+        expect(stdout).toContain("Fix a TODO in the codebase")
+        expect(created).toBe(1)
+        expect(bodies[0]?.parts?.[0]?.text).toBe("hello from home")
       } finally {
         server.stop(true)
       }

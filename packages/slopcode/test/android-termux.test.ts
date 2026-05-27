@@ -88,6 +88,7 @@ describe("Android Termux runtime", () => {
     expect(active("smoke").map((item) => item.id)).toEqual(["smoke.install"])
     expect(active("parity").map((item) => item.id)).toEqual([
       "smoke.install",
+      "home.landing",
       "composer.submit",
       "composer.editing",
       "composer.advanced",
@@ -110,7 +111,7 @@ describe("Android Termux runtime", () => {
     expect(parity.filter((item) => item.active).every((item) => item.android.length > 0)).toBe(true)
     expect(active("release").map((item) => item.id)).toEqual(["release.sidecar-smoke"])
     expect(report().overclaims.map((item) => item.id)).toEqual(
-      expect.arrayContaining(["commands.palette", "editor.diff", "terminal.polish"]),
+      expect.arrayContaining(["home.landing", "commands.palette", "editor.diff", "terminal.polish"]),
     )
     expect(parity.find((item) => item.id === "native.opentui")?.level).toBe("blocked")
     expect(parity.filter((item) => item.status === "blocked").every((item) => !item.active && !!item.missing)).toBe(

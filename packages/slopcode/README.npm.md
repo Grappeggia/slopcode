@@ -19,7 +19,7 @@ pkg install nodejs git ripgrep neovim tar
 npm i -g slopcode@latest --include=optional
 ```
 
-The Android package includes the native sidecar TUI runtime for Termux arm64/x64. Run `slopcode doctor android` to verify whether the sidecar, portable fallback, or shared OpenTUI path is active.
+The Android package includes the native sidecar TUI runtime for Termux arm64/x64. It opens on the SlopCode home prompt and creates the first session lazily; run `slopcode doctor android` to verify whether the sidecar, portable fallback, or shared OpenTUI path is active.
 
 ## Quickstart
 

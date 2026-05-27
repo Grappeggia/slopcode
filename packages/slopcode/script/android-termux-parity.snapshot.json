@@ -15,11 +15,18 @@
       "phase": 1,
       "label": "composer",
       "status": "active",
-      "active": ["composer.submit", "composer.editing", "composer.advanced", "dialogs.question", "layout.capture"],
+      "active": [
+        "home.landing",
+        "composer.submit",
+        "composer.editing",
+        "composer.advanced",
+        "dialogs.question",
+        "layout.capture"
+      ],
       "inactive": [],
       "blocked": [],
       "trueParity": ["composer.submit", "layout.capture"],
-      "workflowParity": ["composer.editing", "composer.advanced", "dialogs.question"],
+      "workflowParity": ["home.landing", "composer.editing", "composer.advanced", "dialogs.question"],
       "surfaceOnly": []
     },
     {
@@ -83,14 +90,20 @@
     }
   ],
   "totals": {
-    "active": 19,
+    "active": 20,
     "inactive": 0,
     "blocked": 2,
     "trueParity": 4,
-    "workflowParity": 12,
+    "workflowParity": 13,
     "surfaceOnly": 3
   },
   "overclaims": [
+    {
+      "id": "home.landing",
+      "level": "workflow-parity",
+      "android": ["home logo", "prompt placeholder", "lazy session creation", "typed prompt submits"],
+      "linux": ["home logo", "prompt placeholder", "lazy session creation", "typed prompt submits"]
+    },
     {
       "id": "composer.editing",
       "level": "workflow-parity",

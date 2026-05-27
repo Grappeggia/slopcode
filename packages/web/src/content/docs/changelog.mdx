@@ -18,6 +18,11 @@ This page tracks notable SlopCode releases and updates directly from GitHub.
 
 ## Version highlights
 
+### Android home prompt
+
+- Termux sidecar now opens on a SlopCode home prompt instead of eagerly creating a session.
+- Typing the first prompt creates the session lazily and submits through the same daemon prompt route.
+
 ### Android Termux sidecar
 
 - Android now reports runtime mode, sidecar path, version, and install health through `slopcode doctor android`.

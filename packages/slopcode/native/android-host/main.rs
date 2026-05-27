@@ -237,6 +237,7 @@ struct State {
     session: Option<String>,
     title: String,
     status: String,
+    cwd: String,
     input: Buffer,
     history: Vec<String>,
     history_index: Option<usize>,
@@ -270,10 +271,19 @@ struct State {
 
 impl State {
     fn new(args: &Args) -> Self {
+        let home = args.session.is_none() && !args.cont && args.prompt.is_none();
         Self {
             session: args.session.clone(),
             title: String::from("new session"),
-            status: String::from("starting"),
+            status: if home {
+                String::from("home")
+            } else {
+                String::from("starting")
+            },
+            cwd: env::current_dir()
+                .ok()
+                .map(|item| item.display().to_string())
+                .unwrap_or_else(|| String::from("unknown")),
             input: Buffer::default(),
             history: Vec::new(),
             history_index: None,
@@ -436,8 +446,7 @@ fn run() -> Result<(), String> {
 
     let mut term = Terminal::start()?;
     {
-        let mut locked = state.lock().map_err(|_| "state lock failed")?;
-        locked.notice("starting native Android sidecar; type /doctor for runtime details");
+        let locked = state.lock().map_err(|_| "state lock failed")?;
         draw(&locked, term.size());
     }
     initialize(&client, &args, &state, &dirty)?;
@@ -524,14 +533,20 @@ fn initialize(
             );
         }
     }
-    if session.is_none() {
-        session = Some(create_session(client)?);
+    if let Some(session) = session {
+        activate(client, state, session)?;
+        state.lock().map_err(|_| "state lock failed")?.notice(
+            "native Android sidecar active; type /doctor for runtime details or /help for commands",
+        );
+        dirty.store(true, Ordering::SeqCst);
+        return Ok(());
     }
-    activate(client, state, session.unwrap())?;
-    state
-        .lock()
-        .map_err(|_| "state lock failed")?
-        .notice("native Android sidecar active; type /doctor for runtime details or /help for commands");
+    {
+        let mut locked = state.lock().map_err(|_| "state lock failed")?;
+        locked.status = String::from("home");
+        locked.title = String::from("new session");
+        locked.close_panel();
+    }
     dirty.store(true, Ordering::SeqCst);
     Ok(())
 }
@@ -609,6 +624,20 @@ fn current_session(state: &Arc<Mutex<State>>) -> Result<String, String> {
         .session
         .clone()
         .ok_or_else(|| String::from("missing session"))
+}
+
+fn ensure_session(client: &Client, state: &Arc<Mutex<State>>) -> Result<String, String> {
+    if let Some(session) = state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .session
+        .clone()
+    {
+        return Ok(session);
+    }
+    let session = create_session(client)?;
+    activate(client, state, session.clone())?;
+    Ok(session)
 }
 
 fn session_post(
@@ -877,7 +906,13 @@ fn editor_rows(editor: &Editor) -> Vec<String> {
     }
     if !editor.preview.is_empty() {
         rows.push(String::from("snapshot preview"));
-        rows.extend(editor.preview.iter().take(8).map(|line| format!("  {line}")));
+        rows.extend(
+            editor
+                .preview
+                .iter()
+                .take(8)
+                .map(|line| format!("  {line}")),
+        );
     }
     rows
 }
@@ -1001,10 +1036,10 @@ fn submit_prompt(
     if trimmed.starts_with('/') {
         return command(client, state, dirty, trimmed);
     }
-    let (session, model, agent, shell, attached) = {
+    let session = ensure_session(client, state)?;
+    let (model, agent, shell, attached) = {
         let locked = state.lock().map_err(|_| "state lock failed")?;
         (
-            locked.session.clone().ok_or("missing session")?,
             locked.model.clone(),
             locked.agent.clone(),
             locked.shell,
@@ -1109,6 +1144,36 @@ fn create_session(client: &Client) -> Result<String, String> {
     string(&body, "id").ok_or_else(|| format!("failed to create session: {body}"))
 }
 
+fn session_required(name: &str) -> bool {
+    matches!(
+        name,
+        "summary"
+            | "sidebar"
+            | "files"
+            | "open"
+            | "save"
+            | "diagnostics"
+            | "close-editor"
+            | "close-editor!"
+            | "children"
+            | "messages"
+            | "history"
+            | "timeline"
+            | "share"
+            | "unshare"
+            | "fork"
+            | "rename"
+            | "title"
+            | "pause"
+            | "resume"
+            | "revert"
+            | "unrevert"
+            | "compact"
+            | "summarize"
+            | "diff"
+    )
+}
+
 fn command(
     client: &Client,
     state: &Arc<Mutex<State>>,
@@ -1118,6 +1183,9 @@ fn command(
     let mut parts = line[1..].splitn(2, ' ');
     let name = parts.next().unwrap_or("");
     let value = parts.next().unwrap_or("").trim();
+    if session_required(name) {
+        ensure_session(client, state)?;
+    }
     match name {
         "exit" | "quit" | "q" => Ok(false),
         "help" | "commands" | "command" => {
@@ -1332,7 +1400,8 @@ fn command(
                     None,
                 ) {
                     if let Some(text) = string(&content, "content") {
-                        editor.preview = text.lines().take(8).map(|line| line.to_string()).collect();
+                        editor.preview =
+                            text.lines().take(8).map(|line| line.to_string()).collect();
                     }
                 }
                 let mut locked = state.lock().map_err(|_| "state lock failed")?;
@@ -1834,8 +1903,11 @@ fn input(
                             '\r' | '\n' => {
                                 let perm = locked.permission.take().unwrap();
                                 locked.permissions.retain(|item| item.id != perm.id);
-                                locked.permission_index = locked.permission_index.min(locked.permissions.len().saturating_sub(1));
-                                locked.permission = locked.permissions.get(locked.permission_index).cloned();
+                                locked.permission_index = locked
+                                    .permission_index
+                                    .min(locked.permissions.len().saturating_sub(1));
+                                locked.permission =
+                                    locked.permissions.get(locked.permission_index).cloned();
                                 permission = Some((
                                     perm.id,
                                     perm.session,
@@ -1862,7 +1934,11 @@ fn input(
                             _ => {}
                         }
                         if let Some(item) = locked.permission.clone() {
-                            if let Some(saved) = locked.permissions.iter_mut().find(|perm| perm.id == item.id) {
+                            if let Some(saved) = locked
+                                .permissions
+                                .iter_mut()
+                                .find(|perm| perm.id == item.id)
+                            {
                                 saved.reject = item.reject;
                             }
                         }
@@ -1871,8 +1947,11 @@ fn input(
                             'o' => {
                                 let perm = locked.permission.take().unwrap();
                                 locked.permissions.retain(|item| item.id != perm.id);
-                                locked.permission_index = locked.permission_index.min(locked.permissions.len().saturating_sub(1));
-                                locked.permission = locked.permissions.get(locked.permission_index).cloned();
+                                locked.permission_index = locked
+                                    .permission_index
+                                    .min(locked.permissions.len().saturating_sub(1));
+                                locked.permission =
+                                    locked.permissions.get(locked.permission_index).cloned();
                                 permission = Some((
                                     perm.id,
                                     perm.session,
@@ -1884,8 +1963,11 @@ fn input(
                             'a' => {
                                 let perm = locked.permission.take().unwrap();
                                 locked.permissions.retain(|item| item.id != perm.id);
-                                locked.permission_index = locked.permission_index.min(locked.permissions.len().saturating_sub(1));
-                                locked.permission = locked.permissions.get(locked.permission_index).cloned();
+                                locked.permission_index = locked
+                                    .permission_index
+                                    .min(locked.permissions.len().saturating_sub(1));
+                                locked.permission =
+                                    locked.permissions.get(locked.permission_index).cloned();
                                 permission = Some((
                                     perm.id,
                                     perm.session,
@@ -1901,23 +1983,31 @@ fn input(
                             }
                             'n' => {
                                 if !locked.permissions.is_empty() {
-                                    locked.permission_index = (locked.permission_index + 1) % locked.permissions.len();
-                                    locked.permission = locked.permissions.get(locked.permission_index).cloned();
+                                    locked.permission_index =
+                                        (locked.permission_index + 1) % locked.permissions.len();
+                                    locked.permission =
+                                        locked.permissions.get(locked.permission_index).cloned();
                                     locked.notice("next permission");
                                 }
                             }
                             'p' => {
                                 if !locked.permissions.is_empty() {
-                                    locked.permission_index = (locked.permission_index + locked.permissions.len() - 1) % locked.permissions.len();
-                                    locked.permission = locked.permissions.get(locked.permission_index).cloned();
+                                    locked.permission_index =
+                                        (locked.permission_index + locked.permissions.len() - 1)
+                                            % locked.permissions.len();
+                                    locked.permission =
+                                        locked.permissions.get(locked.permission_index).cloned();
                                     locked.notice("previous permission");
                                 }
                             }
                             '\u{1b}' => {
                                 let perm = locked.permission.take().unwrap();
                                 locked.permissions.retain(|item| item.id != perm.id);
-                                locked.permission_index = locked.permission_index.min(locked.permissions.len().saturating_sub(1));
-                                locked.permission = locked.permissions.get(locked.permission_index).cloned();
+                                locked.permission_index = locked
+                                    .permission_index
+                                    .min(locked.permissions.len().saturating_sub(1));
+                                locked.permission =
+                                    locked.permissions.get(locked.permission_index).cloned();
                                 permission = Some((
                                     perm.id,
                                     perm.session,
@@ -2487,7 +2577,9 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
             "permission.replied" => {
                 let id = string(&props, "id").unwrap_or_default();
                 locked.permissions.retain(|item| item.id != id);
-                locked.permission_index = locked.permission_index.min(locked.permissions.len().saturating_sub(1));
+                locked.permission_index = locked
+                    .permission_index
+                    .min(locked.permissions.len().saturating_sub(1));
                 locked.permission = locked.permissions.get(locked.permission_index).cloned();
             }
             "question.asked" => {
@@ -2788,8 +2880,101 @@ impl Drop for Terminal {
     }
 }
 
+fn center(input: &str, width: usize) -> String {
+    let text = crop(input, width);
+    let len = text.chars().count();
+    format!("{}{}", " ".repeat(width.saturating_sub(len) / 2), text)
+}
+
+fn box_line(input: &str, inner: usize, width: usize) -> String {
+    let text = crop(input, inner);
+    center(
+        &format!(
+            "| {}{} |",
+            text,
+            " ".repeat(inner.saturating_sub(text.chars().count()))
+        ),
+        width,
+    )
+}
+
+fn draw_home(state: &State, size: (usize, usize)) {
+    let (width, height) = size;
+    let box_width = width.min(75).max(20);
+    let inner = box_width.saturating_sub(4);
+    let prompt = if state.input.text.is_empty() {
+        String::from("> Fix a TODO in the codebase")
+    } else {
+        format!("> {}", state.input.rendered()).replace('\n', "\n  ")
+    };
+    let mut lines = vec![
+        center("SlopCode", width),
+        center("terminal AI coding agent", width),
+        String::new(),
+        center(
+            &format!("+{}+", "-".repeat(box_width.saturating_sub(2))),
+            width,
+        ),
+    ];
+    for row in wrap(&prompt, inner) {
+        lines.push(box_line(&row, inner, width));
+    }
+    if !state.attached_files.is_empty() {
+        lines.push(box_line(
+            &format!("files: {}", state.attached_files.join(", ")),
+            inner,
+            width,
+        ));
+    }
+    lines.push(box_line("Enter send | /commands | /doctor", inner, width));
+    lines.push(center(
+        &format!("+{}+", "-".repeat(box_width.saturating_sub(2))),
+        width,
+    ));
+    if let Some(panel) = &state.panel {
+        lines.push(String::new());
+        lines.push(center(&format!("== {} ==", panel.title), width));
+        for row in panel.rows.iter().take(10) {
+            lines.extend(wrap(row, width));
+        }
+    }
+    for notice in &state.notices {
+        lines.extend(wrap(&format!("info: {notice}"), width));
+    }
+    let footer = vec![crop(
+        &format!("{} | {} | /help", state.cwd, state.version),
+        width,
+    )];
+    let body_height = height.saturating_sub(footer.len());
+    let top = body_height.saturating_sub(lines.len()) / 2;
+    let mut rows = Vec::new();
+    for _ in 0..top {
+        rows.push(" ".repeat(width));
+    }
+    rows.extend(
+        lines
+            .into_iter()
+            .take(body_height.saturating_sub(top))
+            .map(|item| pad(&item, width)),
+    );
+    while rows.len() < body_height {
+        rows.push(" ".repeat(width));
+    }
+    rows.extend(footer.into_iter().map(|item| pad(&item, width)));
+    print!("\x1b[H{}", rows.join("\n"));
+    io::stdout().flush().ok();
+}
+
 fn draw(state: &State, size: (usize, usize)) {
     let (width, height) = size;
+    if state.session.is_none()
+        && state.messages.is_empty()
+        && state.permission.is_none()
+        && state.question.is_none()
+    {
+        draw_home(state, size);
+        return;
+    }
     let mut lines = Vec::new();
     let model = state
         .model
@@ -2807,7 +2992,10 @@ fn draw(state: &State, size: (usize, usize)) {
     ));
     lines.push(crop(&format!("session {}", state.title), width));
     lines.push(crop(
-        &format!("runtime {} {} | {}", state.runtime, state.version, state.runtime_path),
+        &format!(
+            "runtime {} {} | {}",
+            state.runtime, state.version, state.runtime_path
+        ),
         width,
     ));
     if !state.tabs.is_empty() {
@@ -3094,7 +3282,11 @@ fn parse_sse(block: &str) -> Option<String> {
 }
 
 fn same_session(state: &State, props: &str) -> bool {
-    string(props, "sessionID").as_deref() == state.session.as_deref()
+    state
+        .session
+        .as_ref()
+        .map(|session| string(props, "sessionID").as_deref() == Some(session.as_str()))
+        .unwrap_or(true)
 }
 
 fn parse_model(input: &str) -> Option<(String, String)> {

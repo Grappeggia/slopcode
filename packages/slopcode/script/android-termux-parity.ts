@@ -33,6 +33,18 @@ export const parity = [
     expect: ["global launcher resolves", "native runtime self-test passes", "runtime mode is reported"],
   },
   {
+    id: "home.landing",
+    phase: 1,
+    area: "home",
+    mode: "parity",
+    level: "workflow-parity",
+    active: true,
+    status: "active",
+    linux: ["home logo", "prompt placeholder", "lazy session creation", "typed prompt submits"],
+    android: ["home logo", "prompt placeholder", "lazy session creation", "typed prompt submits"],
+    expect: ["home logo", "prompt placeholder", "lazy session creation", "typed prompt submits"],
+  },
+  {
     id: "composer.submit",
     phase: 1,
     area: "composer",
