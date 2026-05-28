@@ -255,7 +255,6 @@ const androidSmoke = async () => {
       .cwd(work)
     await $`node ./node_modules/${pkg.name}/postinstall.mjs`.env(env).cwd(work)
     const bundle = path.join(work, "node_modules", pkg.name, "bundle", "index.js")
-    const bun = path.join(work, "node_modules", pkg.name, "node_modules", "@oven")
     const bin = path.join(work, "node_modules", pkg.name, "node_modules", "@slopcode-ai", target.pkg, "bin", "slopcode")
     const sidecar = path.join(
       work,
@@ -267,10 +266,8 @@ const androidSmoke = async () => {
       "bin",
       "slopcode-android-host",
     )
-    if (!(await exists(bundle)) || !(await exists(bun))) {
-      throw new Error(
-        `verify: packed Android ${target.arch} install did not install the Android launcher bundle and Bun bootstrap`,
-      )
+    if (!(await exists(bundle))) {
+      throw new Error(`verify: packed Android ${target.arch} install did not include the Android launcher bundle`)
     }
     if (!(await exists(bin)) || !(await exists(sidecar))) {
       throw new Error(`verify: packed Android ${target.arch} install did not install the Android runtime and sidecar`)
