@@ -354,10 +354,12 @@ const androidHost = async (name: string, arch: "arm64" | "x64") => {
   const linker = path.join(androidNdk(), "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", rust.linker)
   if (!fs.existsSync(linker)) throw new Error(`Missing Android linker at ${linker}`)
   await $`rustup target add ${rust.target}`
-  await $`rustc --target ${rust.target} -C linker=${linker} -C opt-level=z -C strip=symbols native/android-host/main.rs -o ${bin}`.env({
-    ...process.env,
-    SLOPCODE_BUILD_VERSION: Script.version,
-  })
+  await $`rustc --target ${rust.target} -C linker=${linker} -C opt-level=z -C strip=symbols native/android-host/main.rs -o ${bin}`.env(
+    {
+      ...process.env,
+      SLOPCODE_BUILD_VERSION: Script.version,
+    },
+  )
   await $`chmod 755 ${bin}`
   await fs.promises.copyFile(bin, cli)
   await $`chmod 755 ${cli}`

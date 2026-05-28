@@ -309,8 +309,16 @@ export const parity = [
     active: true,
     status: "active",
     linux: ["release artifact smoke runs during verification"],
-    android: ["release Android archives include Rust runtime and sidecar", "postinstall fallback installs the Rust runtime", "Android archives omit Bun"],
-    expect: ["release Android archives include Rust runtime and sidecar", "postinstall fallback installs the Rust runtime", "Android archives omit Bun"],
+    android: [
+      "release Android archives include Rust runtime and sidecar",
+      "postinstall fallback installs the Rust runtime",
+      "Android archives omit Bun",
+    ],
+    expect: [
+      "release Android archives include Rust runtime and sidecar",
+      "postinstall fallback installs the Rust runtime",
+      "Android archives omit Bun",
+    ],
   },
 ] as const satisfies readonly {
   id: string
