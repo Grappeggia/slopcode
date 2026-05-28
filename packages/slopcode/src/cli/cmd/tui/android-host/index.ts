@@ -27,17 +27,6 @@ export async function androidHostTui(input: {
     UI.println(UI.Style.TEXT_WARNING_BOLD + "Android host unavailable: " + UI.Style.TEXT_NORMAL + status.reason)
     return false
   }
-  if (status.strategy === "opentui") {
-    return import("../app")
-      .then((app) => app.tui(input))
-      .then(
-        () => true,
-        (error) => {
-          UI.println(UI.Style.TEXT_WARNING_BOLD + "Android shared TUI failed: " + UI.Style.TEXT_NORMAL + text(error))
-          return false
-        },
-      )
-  }
   if (status.strategy === "sidecar" && status.sidecar) {
     return run({
       path: status.sidecar,

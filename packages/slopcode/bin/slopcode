@@ -7,9 +7,10 @@ const path = require("path")
 const os = require("os")
 const pkg = require("../package.json")
 
-function run(target) {
-  const result = childProcess.spawnSync(target, process.argv.slice(2), {
+function run(target, options = {}) {
+  const result = childProcess.spawnSync(target, options.args || process.argv.slice(2), {
     stdio: "inherit",
+    env: options.env ? { ...process.env, ...options.env } : process.env,
   })
   if (result.error) {
     console.error(result.error.message)
@@ -26,9 +27,11 @@ if (envPath) {
 
 const scriptPath = fs.realpathSync(__filename)
 const scriptDir = path.dirname(scriptPath)
+const rootDir = path.dirname(scriptDir)
 const cached = path.join(scriptDir, ".slopcode")
 const meta = path.join(scriptDir, ".slopcode.json")
 const sidecar = path.join(scriptDir, "neovim")
+const androidBundle = path.join(rootDir, "bundle", "index.js")
 const platformMap = {
   darwin: "darwin",
   linux: "linux",
@@ -215,6 +218,23 @@ function termuxMessage() {
   ].join("\n")
 }
 
+function androidDoctor(args) {
+  return args[0] === "doctor" && args[1] === "android"
+}
+
+function androidInteractive(args) {
+  return !androidDoctor(args) && !args.includes("--self-test")
+}
+
+function androidBun(arch) {
+  const name = arch === "arm64" ? "bun-linux-aarch64-android" : "bun-linux-x64-android"
+  return [
+    process.env.SLOPCODE_BUN_PATH,
+    path.join(rootDir, "node_modules", "@oven", name, "bin", "bun"),
+    path.join(rootDir, "node_modules", ".bin", process.platform === "win32" ? "bun.cmd" : "bun"),
+  ].find((item) => item && fs.existsSync(item))
+}
+
 const useCache = libc() !== "bionic"
 
 const packageNames = names("slopcode-bin")
@@ -273,6 +293,32 @@ if (!resolved) {
       " package",
   )
   process.exit(1)
+}
+
+const args = process.argv.slice(2)
+if (platform === "android" && androidInteractive(args)) {
+  const bun = androidBun(arch)
+  if (bun && fs.existsSync(androidBundle)) {
+    const runtimeRoot = path.dirname(path.dirname(resolved.path))
+    run(bun, {
+      args: [androidBundle, ...args],
+      env: {
+        SLOPCODE_BIONIC: "1",
+        SLOPCODE_VERSION: pkg.version,
+        SLOPCODE_ENTRYPOINT: androidBundle,
+        SLOPCODE_ANDROID_ROOT: runtimeRoot,
+        SLOPCODE_ANDROID_HOST_PATH: path.join(runtimeRoot, "bin", "slopcode-android-host"),
+        SLOPCODE_ANDROID_HOST: process.env.SLOPCODE_ANDROID_HOST || "sidecar",
+        NODE_PATH: [path.join(rootDir, "android-modules"), process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
+      },
+    })
+  }
+  if (fs.existsSync(androidBundle) && !bun) {
+    console.error(
+      "SlopCode Android CLI bootstrap is missing. Reinstall from Termux with: npm install -g slopcode@latest --include=optional",
+    )
+    process.exit(1)
+  }
 }
 
 run(resolved.path)

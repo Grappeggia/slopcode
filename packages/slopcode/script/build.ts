@@ -365,6 +365,87 @@ const androidHost = async (name: string, arch: "arm64" | "x64") => {
   await $`chmod 755 ${cli}`
 }
 
+const androidBundle = async (parserWorker: string, workerPath: string) => {
+  await fs.promises.rm(path.join(dir, "dist", "android-bundle"), { recursive: true, force: true })
+  await fs.promises.mkdir(path.join(dir, "dist", "android-bundle"), { recursive: true })
+  const result = await Bun.build({
+    conditions: ["browser"],
+    tsconfig: "./tsconfig.json",
+    plugins: [solidPlugin],
+    sourcemap: "none",
+    target: "bun",
+    outdir: "dist/android-bundle",
+    entrypoints: ["./src/index.ts", parserWorker, workerPath],
+    naming: "[name].[ext]",
+    define: {
+      SLOPCODE_VERSION: `'${Script.version}'`,
+      SLOPCODE_NVIM_VERSION: `'${nvimVersion}'`,
+      SLOPCODE_MIGRATIONS: JSON.stringify(migrations),
+      OTUI_TREE_SITTER_WORKER_PATH: 'new URL("./parser.worker.js", import.meta.url).href',
+      SLOPCODE_WORKER_PATH: 'new URL("./worker.js", import.meta.url).href',
+      SLOPCODE_CHANNEL: `'${Script.channel}'`,
+      SLOPCODE_LIBC: "'bionic'",
+    },
+  })
+  if (!result.success) {
+    throw new Error("Build failed for Android bundle")
+  }
+  if (!(await Bun.file("dist/android-bundle/index.js").exists())) {
+    throw new Error("Missing Android bundle at dist/android-bundle/index.js")
+  }
+}
+
+const androidOpentui = async (arch: "arm64" | "x64") => {
+  const linux = `@opentui/core-linux-${arch}`
+  let source = path.join(dir, "node_modules", "@opentui", `core-linux-${arch}`, "libopentui.so")
+  if (!fs.existsSync(source)) {
+    const cache = path.join(dir, "dist", ".android-cache")
+    await fs.promises.mkdir(cache, { recursive: true })
+    const meta = await fetch(
+      `https://registry.npmjs.org/${encodeURIComponent(linux)}/${pkg.dependencies["@opentui/core"]}`,
+    ).then((res) => {
+      if (!res.ok) throw new Error(`Failed to resolve ${linux}: ${res.status} ${res.statusText}`)
+      return res.json() as Promise<{ dist: { tarball: string } }>
+    })
+    const archive = path.join(cache, `opentui-core-linux-${arch}-${pkg.dependencies["@opentui/core"]}.tgz`)
+    if (!(await Bun.file(archive).exists())) {
+      const res = await fetch(meta.dist.tarball)
+      if (!res.ok) throw new Error(`Failed to download ${meta.dist.tarball}: ${res.status} ${res.statusText}`)
+      await Bun.write(archive, await res.arrayBuffer())
+    }
+    const extract = path.join(cache, `opentui-core-linux-${arch}`)
+    await fs.promises.rm(extract, { recursive: true, force: true })
+    await fs.promises.mkdir(extract, { recursive: true })
+    await $`tar -xzf ${archive} -C ${extract}`
+    source = path.join(extract, "package", "libopentui.so")
+  }
+
+  const root = path.join(dir, "dist", "android-modules", "@opentui", `core-android-${arch}`)
+  await fs.promises.mkdir(root, { recursive: true })
+  await fs.promises.copyFile(source, path.join(root, "libopentui.so"))
+  await Bun.write(path.join(root, "index.ts"), 'export default new URL("./libopentui.so", import.meta.url).pathname\n')
+  await Bun.write(
+    path.join(root, "package.json"),
+    JSON.stringify(
+      {
+        name: `@opentui/core-android-${arch}`,
+        type: "module",
+        main: "index.ts",
+        module: "index.ts",
+        files: ["index.ts", "libopentui.so", "package.json"],
+      },
+      null,
+      2,
+    ),
+  )
+}
+
+const androidModules = async () => {
+  const root = path.join(dir, "dist", "android-modules")
+  await fs.promises.rm(root, { recursive: true, force: true })
+  await Promise.all((["arm64", "x64"] as const).map(androidOpentui))
+}
+
 const androidRuntime = async (name: string, arch: "arm64" | "x64") => {
   await fs.promises.mkdir(path.join(dir, "dist", name, "bin"), { recursive: true })
   await androidHost(name, arch)
@@ -497,10 +578,17 @@ if (targetFlag && targets.length === 0) {
 await $`rm -rf dist`
 
 const binaries: Record<string, string> = {}
-const needsOpenTui = targets.some((item) => item.os !== "android")
+const needsOpenTui = targets.length > 0
 if (!skipInstall && needsOpenTui) {
   await $`bun install --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
   await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
+}
+const parserWorker = fs.realpathSync(path.resolve(dir, "./node_modules/@opentui/core/parser.worker.js"))
+const workerPath = "./src/cli/cmd/tui/worker.ts"
+const needsAndroidBundle = targets.some((item) => item.os === "android")
+if (needsAndroidBundle) {
+  await androidBundle(parserWorker, workerPath)
+  await androidModules()
 }
 for (const item of targets) {
   const name = targetName(item)
@@ -512,9 +600,6 @@ for (const item of targets) {
     binaries[name] = Script.version
     continue
   }
-
-  const parserWorker = fs.realpathSync(path.resolve(dir, "./node_modules/@opentui/core/parser.worker.js"))
-  const workerPath = "./src/cli/cmd/tui/worker.ts"
 
   // Use platform-specific bunfs root path based on target OS
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"

@@ -268,6 +268,71 @@ describe("bin launcher", () => {
     expect(out.stdout.trim()).toBe("scoped")
   })
 
+  test("routes Android interactive launch through the bundled bootstrap", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
+    const bun = path.join(staged.root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin")
+    const bundle = path.join(staged.root, "bundle")
+    await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
+    await fs.mkdir(bun, { recursive: true })
+    await fs.mkdir(bundle, { recursive: true })
+    await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
+    await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
+    await Bun.write(
+      path.join(bundle, "index.js"),
+      'console.log(JSON.stringify({ args: process.argv.slice(2), entry: process.env.SLOPCODE_ENTRYPOINT, host: process.env.SLOPCODE_ANDROID_HOST_PATH, root: process.env.SLOPCODE_ANDROID_ROOT }))\n',
+    )
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        TERMUX_VERSION: "1",
+      },
+      ["--print-logs"],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(JSON.parse(out.stdout)).toEqual({
+      args: ["--print-logs"],
+      entry: path.join(bundle, "index.js"),
+      host: path.join(scoped, "bin", "slopcode-android-host"),
+      root: scoped,
+    })
+  })
+
+  test("keeps Android doctor routed to the Rust runtime", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
+    const bun = path.join(staged.root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin")
+    const bundle = path.join(staged.root, "bundle")
+    await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
+    await fs.mkdir(bun, { recursive: true })
+    await fs.mkdir(bundle, { recursive: true })
+    await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\nprintf 'runtime %s %s %s\\n' \"$1\" \"$2\" \"$3\"\n")
+    await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
+    await Bun.write(path.join(bundle, "index.js"), 'console.log("bundle")\n')
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        TERMUX_VERSION: "1",
+      },
+      ["doctor", "android", "--json"],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(out.stdout.trim()).toBe("runtime doctor android --json")
+  })
+
   test("prints native Termux instructions when Android package is missing", async () => {
     if (process.platform === "win32") return
     const staged = await stageLauncher()

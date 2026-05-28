@@ -2,13 +2,11 @@ import { cmd } from "@/cli/cmd/cmd"
 import { resolveNetworkOptions, withNetworkOptions } from "@/cli/network"
 import { UI } from "@/cli/ui"
 import { upgrade } from "@/cli/upgrade"
-import { DaemonAuth } from "@/daemon/auth"
 import { DaemonLauncher } from "@/daemon/launcher"
 import { TuiConfig } from "@/config/tui"
 import { Instance } from "@/project/instance"
 import { randomUUID } from "crypto"
 import path from "path"
-import { spawnSync } from "child_process"
 
 import { android, client, guard } from "./platform"
 
@@ -123,50 +121,14 @@ export const TuiThreadCommand = cmd({
           return
         }
 
-        if (process.env.SLOPCODE_TERMUX_LEGACY !== "1") {
-          const { portableTui } = await import("./portable")
-          await portableTui({
-            url: daemon.url,
-            headers: daemon.headers,
-            directory: cwd,
-            viewID,
-            args: {
-              continue: args.continue,
-              sessionID: args.session,
-              agent: args.agent,
-              model: args.model,
-              prompt,
-              fork: args.fork,
-            },
-          })
-          return
-        }
-
-        const bin = client()
-        if (!bin) {
-          UI.error("SlopCode Termux client is missing. Reinstall with: npm install -g slopcode@latest")
+        if (!client()) {
+          UI.error("SlopCode Android runtime is missing. Reinstall with: npm install -g slopcode@latest --include=optional")
           process.exit(1)
         }
-        const result = spawnSync(
-          bin,
-          [
-            "--url",
-            daemon.url,
-            "--token",
-            daemon.headers[DaemonAuth.Header] ?? "",
-            ...(args.continue ? ["--continue"] : []),
-            ...(args.session ? ["--session", args.session] : []),
-            ...(args.model ? ["--model", args.model] : []),
-            ...(args.agent ? ["--agent", args.agent] : []),
-            ...(prompt ? ["--prompt", prompt] : []),
-          ],
-          { cwd, stdio: "inherit" },
+        UI.error(
+          "SlopCode Android now runs only through the bundled Rust runtime. Remove old Android TUI overrides and try again.",
         )
-        if (result.error) {
-          UI.error(result.error.message)
-          process.exit(1)
-        }
-        process.exit(typeof result.status === "number" ? result.status : 1)
+        process.exit(1)
       }
 
       const { tui } = await import("./app")

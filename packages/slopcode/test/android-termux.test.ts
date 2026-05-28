@@ -15,12 +15,12 @@ afterEach(() => {
 })
 
 describe("Android Termux runtime", () => {
-  test("marks native Android TUI unavailable unless explicitly overridden", () => {
+  test("keeps Android on the Rust runtime path", () => {
     expect(native({ platform: "linux", override: undefined })).toBe(true)
     expect(native({ platform: "android", override: undefined })).toBe(false)
-    expect(native({ platform: "android", override: "1" })).toBe(true)
+    expect(native({ platform: "android", override: "1" })).toBe(false)
     expect(android({ platform: "android", override: undefined })).toBe(true)
-    expect(android({ platform: "android", override: "1" })).toBe(false)
+    expect(android({ platform: "android", override: "1" })).toBe(true)
   })
 
   test("resolves bundled Rust host only when present", async () => {
@@ -42,25 +42,31 @@ describe("Android Termux runtime", () => {
     })
   })
 
-  test("Android runtime package is Rust-only", async () => {
+  test("Android runtime stays Rust-only while root package ships the bootstrap bundle", async () => {
     const build = await Bun.file(path.join(import.meta.dir, "..", "script", "build.ts")).text()
+    const publish = await Bun.file(path.join(import.meta.dir, "..", "script", "publish.ts")).text()
     const verify = await Bun.file(path.join(import.meta.dir, "..", "script", "verify-artifacts.ts")).text()
+    const e2e = await Bun.file(path.join(import.meta.dir, "..", "script", "android-termux-e2e.ts")).text()
     const thread = await Bun.file(path.join(import.meta.dir, "..", "src", "cli", "cmd", "tui", "thread.ts")).text()
 
     expect(build).toContain("androidRuntime")
+    expect(build).toContain("androidBundle")
     expect(build).toContain("native/android-host/main.rs")
     expect(build).toContain('"slopcode-android-host"')
     expect(build).toContain('"./bin/slopcode"')
+    expect(build).toContain("dist/android-bundle/index.js")
+    expect(build).toContain("const androidModules = async")
     expect(build).toContain("SLOPCODE_BUILD_VERSION")
-    expect(build).not.toContain("@oven/bun-linux")
-    expect(build).not.toContain("androidBun")
-    expect(build).not.toContain("bundle/index.js")
-    expect(build).not.toContain("core-android")
     expect(build).not.toContain("native/android-client/main.rs")
     expect(build).not.toContain('"slopcode-termux"')
+    expect(publish).toContain('"@oven/bun-linux-x64-android": "1.3.14"')
+    expect(verify).toContain('"@oven/bun-linux-x64-android": "1.3.14"')
+    expect(e2e).toContain('"@oven/bun-linux-x64-android": "1.3.14"')
     expect(verify).toContain("must not include Bun runtime")
     expect(verify).toContain("must not include legacy Termux client")
     expect(thread).toContain('await import("./android-host")')
+    expect(thread).not.toContain('await import("./portable")')
+    expect(thread).not.toContain("SLOPCODE_TERMUX_LEGACY")
   })
 
   test("Android release and E2E targets cover arm64 and x64", async () => {

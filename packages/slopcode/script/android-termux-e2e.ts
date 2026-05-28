@@ -126,9 +126,20 @@ async function stage() {
   const androidJson = (await Bun.file(path.join(androidTo, "package.json")).json()) as { name: string; version: string }
   const android = await pack(androidTo, "slopcode-android-runtime.tgz")
 
+  const bundle = path.join(dir, "dist", "android-bundle")
+  const modules = path.join(dir, "dist", "android-modules")
+  if (!(await exists(path.join(bundle, "index.js")))) {
+    throw new Error("android e2e: missing dist/android-bundle; run bun --cwd packages/slopcode run script/build.ts --target=android-x64")
+  }
+  if (!(await exists(path.join(modules, "@opentui", "core-android-arm64", "index.ts")))) {
+    throw new Error("android e2e: missing dist/android-modules; rebuild the Android bundle")
+  }
+
   const app = path.join(work, pkg.name)
   await fs.mkdir(app, { recursive: true })
   await fs.cp(path.join(dir, "bin"), path.join(app, "bin"), { recursive: true, force: true })
+  await fs.cp(bundle, path.join(app, "bundle"), { recursive: true, force: true })
+  await fs.cp(modules, path.join(app, "android-modules"), { recursive: true, force: true })
   await fs.copyFile(path.join(dir, "script", "postinstall.mjs"), path.join(app, "postinstall.mjs"))
   await fs.copyFile(path.join(root, "LICENSE"), path.join(app, "LICENSE"))
   await Bun.write(path.join(app, "README.md"), `${(await Bun.file(path.join(dir, "README.npm.md")).text()).trim()}\n`)
@@ -145,9 +156,13 @@ async function stage() {
         bugs: { url: "https://github.com/teamslop/slopcode/issues" },
         funding: { url: "https://github.com/sponsors/teamslop" },
         bin: { [pkg.name]: `./bin/${pkg.name}` },
-        files: ["bin", "postinstall.mjs", "README.md", "LICENSE"],
+        files: ["bin", "bundle", "android-modules", "postinstall.mjs", "README.md", "LICENSE"],
         scripts: { postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs" },
-        optionalDependencies: { [androidJson.name]: androidJson.version },
+        optionalDependencies: {
+          [androidJson.name]: androidJson.version,
+          "@oven/bun-linux-aarch64-android": "1.3.14",
+          "@oven/bun-linux-x64-android": "1.3.14",
+        },
       },
       null,
       2,
@@ -484,8 +499,17 @@ const actions = {
     const info = JSON.parse(doctor.stdout)
     assert(info.sidecar === host && info.sidecarExists === true, "doctor did not report sidecar " + doctor.stdout)
     assert(info.strategy === "rust" && info.bun === null, "doctor did not report Rust runtime " + doctor.stdout)
+    assert(fs.existsSync(path.join(root, "slopcode", "bundle", "index.js")), "root package missing Android bundle")
+    assert(fs.existsSync(path.join(root, "slopcode", "node_modules", "@oven")), "root package missing Android Bun bootstrap")
     assert(!fs.existsSync(path.join(androidRoot, "bundle", "index.js")), "Android package includes JS bundle")
     assert(!fs.existsSync(path.join(androidRoot, "node_modules", "@oven")), "Android package includes Bun runtime")
+    const boot = spawnSync("sh", ["-lc", "timeout 5 " + cliPath + " --print-logs || true"], {
+      encoding: "utf8",
+      env: { ...process.env, COLUMNS: "100", LINES: "30", TERM: "xterm-256color" },
+    })
+    const bootText = (boot.stdout || "") + (boot.stderr || "")
+    assert(!bootText.includes("missing --url"), "plain slopcode still requires daemon args\\n" + bootText)
+    assert(bootText.includes("SlopCode"), "plain slopcode did not render home\\n" + bootText)
   },
   "release.sidecar-smoke": async () => actions["smoke.install"](),
   "home.landing": async () => {
@@ -541,9 +565,11 @@ const actions = {
   },
   "layout.capture": async () => {
     const run = await runHost({ title: "Layout Session", width: 80, height: 24, steps: [{ delay: 1500, text: "/exit\\r" }] })
-    assert(run.screen.includes("Layout Session") || run.stdout.includes("Layout Session"), "screen missing title\\n" + run.screen + "\\nraw:\\n" + run.stdout)
-    assert(run.screen.includes("SlopCode") || run.stdout.includes("SlopCode"), "screen missing chrome\\n" + run.screen + "\\nraw:\\n" + run.stdout)
+    const text = run.screen + "\\n" + run.stdout
+    assert(text.includes("Layout Session") || text.includes("Fix a TODO in the codebase"), "screen missing expected content\\n" + run.screen + "\\nraw:\\n" + run.stdout)
+    assert(text.includes("SlopCode"), "screen missing chrome\\n" + run.screen + "\\nraw:\\n" + run.stdout)
   },
+
   "commands.palette": async () => {
     const run = await runHost({ title: "Command Session", steps: [{ delay: 150, text: "/commands\\r" }, { delay: 150, text: "/cl\\t\\u0015" }, { delay: 150, text: "\\x04" }] })
     semantic(run, ["Command Palette", "/models", "Command Matches"])
@@ -735,7 +761,7 @@ export async function main() {
     await Bun.write(script, e2eSource(staged.androidPackage))
     await adb("push", script, `${tmp}/slopcode-android-termux-e2e.mjs`)
     await termux(
-      `export SLOPCODE_ANDROID_E2E_MODE=${quote(mode)}; npm install -g --include=optional --ignore-scripts=false ${tmp}/slopcode-android-runtime.tgz ${tmp}/slopcode-root.tgz && node ${tmp}/slopcode-android-termux-e2e.mjs`,
+      `export SLOPCODE_ANDROID_E2E_MODE=${quote(mode)}; export SLOPCODE_ANDROID_ASSET_PATH=${tmp}/slopcode-android-runtime.tgz; npm install -g --include=optional --ignore-scripts=false ${tmp}/slopcode-root.tgz && node ${tmp}/slopcode-android-termux-e2e.mjs`,
     )
     console.log(`android e2e: ok (${mode})`)
   } finally {

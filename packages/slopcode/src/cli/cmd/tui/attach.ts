@@ -2,7 +2,7 @@ import { cmd } from "../cmd"
 import { UI } from "@/cli/ui"
 import { tui } from "./app"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
-import { guard } from "./platform"
+import { android, client, guard } from "./platform"
 import { TuiConfig } from "@/config/tui"
 import { Instance } from "@/project/instance"
 import { randomUUID } from "crypto"
@@ -45,7 +45,7 @@ export const AttachCommand = cmd({
     const unguard = win32InstallCtrlCGuard()
     try {
       win32DisableProcessedInput()
-      if (guard()) {
+      if (!android() && guard()) {
         process.exit(1)
       }
 
@@ -76,6 +76,33 @@ export const AttachCommand = cmd({
         fn: () => TuiConfig.get(),
       })
       const viewID = randomUUID()
+      if (android()) {
+        const { androidHostTui } = await import("./android-host")
+        if (
+          await androidHostTui({
+            url: args.url,
+            config,
+            args: {
+              continue: args.continue,
+              sessionID: args.session,
+              fork: args.fork,
+            },
+            directory,
+            viewID,
+            headers,
+          })
+        ) {
+          return
+        }
+        if (!client()) {
+          UI.error("SlopCode Android runtime is missing. Reinstall with: npm install -g slopcode@latest --include=optional")
+          process.exit(1)
+        }
+        UI.error(
+          "SlopCode Android now runs only through the bundled Rust runtime. Remove old Android TUI overrides and try again.",
+        )
+        process.exit(1)
+      }
       await tui({
         url: args.url,
         config,

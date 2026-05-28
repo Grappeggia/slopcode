@@ -51,7 +51,14 @@ const binaries = await Array.fromAsync(new Bun.Glob("*/package.json").scan({ cwd
   ).then((arr) => arr.flatMap((item) => (item ? [item] : []))),
 )
 const publishable = binaries.filter((item) => !item.name.includes("-android-"))
-const deps = Object.fromEntries(publishable.map((item) => [item.name, item.version]))
+const androidBootstrapDeps = {
+  "@oven/bun-linux-aarch64-android": "1.3.14",
+  "@oven/bun-linux-x64-android": "1.3.14",
+}
+const deps = {
+  ...Object.fromEntries(publishable.map((item) => [item.name, item.version])),
+  ...androidBootstrapDeps,
+}
 console.log("binaries", deps)
 const version = Script.version
 if (binaries.length === 0) {
@@ -281,9 +288,19 @@ const aliases = [
 ] as const
 
 const stage = async (input: { name: string; bin: string; description: string }) => {
+  const bundle = "./dist/android-bundle"
+  const modules = "./dist/android-modules"
+  if (!(await Bun.file(`${bundle}/index.js`).exists())) {
+    throw new Error("Missing Android bundle at ./dist/android-bundle/index.js")
+  }
+  if (!(await Bun.file(`${modules}/@opentui/core-android-arm64/index.ts`).exists())) {
+    throw new Error("Missing Android bootstrap modules at ./dist/android-modules")
+  }
   await $`rm -rf ./dist/${input.name}`
   await $`mkdir -p ./dist/${input.name}`
   await $`cp -r ./bin ./dist/${input.name}/bin`
+  await $`cp -r ${bundle} ./dist/${input.name}/bundle`
+  await $`cp -r ${modules} ./dist/${input.name}/android-modules`
   await $`cp ./script/postinstall.mjs ./dist/${input.name}/postinstall.mjs`
   await Bun.file(`./dist/${input.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
   await Bun.file(`./dist/${input.name}/README.md`).write(readme + "\n")
@@ -300,7 +317,7 @@ const stage = async (input: { name: string; bin: string; description: string }) 
         bin: {
           [input.bin]: `./bin/${pkg.name}`,
         },
-        files: ["bin", "postinstall.mjs", "README.md", "LICENSE"],
+        files: ["bin", "bundle", "android-modules", "postinstall.mjs", "README.md", "LICENSE"],
         scripts: {
           postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs",
         },

@@ -72,7 +72,14 @@ if (binaries.length === 0) {
 }
 
 const publishable = binaries.filter((item) => !item.name.includes("-android-"))
-const deps = Object.fromEntries(publishable.map((item) => [item.name, item.version]))
+const androidBootstrapDeps = {
+  "@oven/bun-linux-aarch64-android": "1.3.14",
+  "@oven/bun-linux-x64-android": "1.3.14",
+}
+const deps = {
+  ...Object.fromEntries(publishable.map((item) => [item.name, item.version])),
+  ...androidBootstrapDeps,
+}
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-verify-"))
 const stage = path.join(tmp, "stage")
 await fs.mkdir(stage, { recursive: true })
@@ -122,10 +129,20 @@ const stageBinary = async (item: { dir: string; name: string; version: string })
 }
 
 const stageRoot = async (input: { name: string; bin: string; description: string }) => {
+  const bundle = path.join(dir, "dist", "android-bundle")
+  const modules = path.join(dir, "dist", "android-modules")
+  if (!(await exists(path.join(bundle, "index.js")))) {
+    throw new Error("verify: missing Android bundle at ./dist/android-bundle/index.js")
+  }
+  if (!(await exists(path.join(modules, "@opentui", "core-android-arm64", "index.ts")))) {
+    throw new Error("verify: missing Android bootstrap modules at ./dist/android-modules")
+  }
   const to = path.join(stage, input.name)
   await rm(to)
   await fs.mkdir(to, { recursive: true })
   await fs.cp(path.join(dir, "bin"), path.join(to, "bin"), { recursive: true, force: true })
+  await fs.cp(bundle, path.join(to, "bundle"), { recursive: true, force: true })
+  await fs.cp(modules, path.join(to, "android-modules"), { recursive: true, force: true })
   await fs.copyFile(path.join(dir, "script", "postinstall.mjs"), path.join(to, "postinstall.mjs"))
   await Bun.write(path.join(to, "README.md"), `${readme}\n`)
   await fs.copyFile(path.join(dir, "..", "..", "LICENSE"), path.join(to, "LICENSE"))
@@ -143,7 +160,7 @@ const stageRoot = async (input: { name: string; bin: string; description: string
         bin: {
           [input.bin]: `./bin/${pkg.name}`,
         },
-        files: ["bin", "postinstall.mjs", "README.md", "LICENSE"],
+        files: ["bin", "bundle", "android-modules", "postinstall.mjs", "README.md", "LICENSE"],
         scripts: {
           postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs",
         },
@@ -237,6 +254,8 @@ const androidSmoke = async () => {
       .env(env)
       .cwd(work)
     await $`node ./node_modules/${pkg.name}/postinstall.mjs`.env(env).cwd(work)
+    const bundle = path.join(work, "node_modules", pkg.name, "bundle", "index.js")
+    const bun = path.join(work, "node_modules", pkg.name, "node_modules", "@oven")
     const bin = path.join(work, "node_modules", pkg.name, "node_modules", "@slopcode-ai", target.pkg, "bin", "slopcode")
     const sidecar = path.join(
       work,
@@ -248,6 +267,9 @@ const androidSmoke = async () => {
       "bin",
       "slopcode-android-host",
     )
+    if (!(await exists(bundle)) || !(await exists(bun))) {
+      throw new Error(`verify: packed Android ${target.arch} install did not install the Android launcher bundle and Bun bootstrap`)
+    }
     if (!(await exists(bin)) || !(await exists(sidecar))) {
       throw new Error(`verify: packed Android ${target.arch} install did not install the Android runtime and sidecar`)
     }

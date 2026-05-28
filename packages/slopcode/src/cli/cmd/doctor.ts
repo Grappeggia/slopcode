@@ -68,7 +68,7 @@ const AndroidCommand = cmd({
       platform: String(process.platform),
       arch: os.arch(),
       termux: termux(),
-      mode: wanted(process.env.SLOPCODE_ANDROID_HOST) ?? "portable",
+      mode: wanted(process.env.SLOPCODE_ANDROID_HOST) ? "sidecar" : "disabled",
       strategy: status.strategy,
       available: status.available,
       reason: status.reason,
@@ -76,7 +76,7 @@ const AndroidCommand = cmd({
       sidecar: bin,
       sidecarExists: exists(bin),
       bun: process.execPath,
-      ffiBlocked: String(process.platform) === "android" && process.env.SLOPCODE_ANDROID_TUI !== "1",
+      ffiBlocked: String(process.platform) === "android",
     }
     if (args.json) {
       console.log(JSON.stringify(info, null, 2))
@@ -90,7 +90,7 @@ const AndroidCommand = cmd({
     console.log(`root ${info.root ?? "missing"}`)
     console.log(`sidecar ${info.sidecar ?? "missing"}`)
     console.log(`sidecar file ${info.sidecarExists ? "ok" : "missing"}`)
-    if (info.ffiBlocked) console.log("shared OpenTUI is blocked on Android until Bun FFI is available")
+    if (info.ffiBlocked) console.log("shared OpenTUI is disabled on Android; the bundled Rust runtime is the only supported TUI")
     if (!info.available) process.exitCode = 1
   },
 })

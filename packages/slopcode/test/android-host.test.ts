@@ -18,17 +18,17 @@ describe("Android host", () => {
     expect(wanted("portable")).toBeUndefined()
     expect(wanted("sidecar")).toBe("sidecar")
     expect(wanted("1")).toBe("sidecar")
-    expect(wanted("opentui")).toBe("opentui")
+    expect(wanted("opentui")).toBe("sidecar")
     expect(sidecar({ root: "/tmp/slopcode" })).toBe(path.join("/tmp/slopcode", "bin", "slopcode-android-host"))
   })
 
-  test("probes OpenTUI and sidecar availability", async () => {
+  test("probes Rust sidecar availability", async () => {
     const fs = {
       existsSync: (file: Parameters<typeof import("fs").existsSync>[0]) =>
         String(file).endsWith("slopcode-android-host"),
     }
 
-    expect(await probe({ platform: "linux", host: "1", importer: async () => ({}) })).toMatchObject({
+    expect(await probe({ platform: "linux", host: "1" })).toMatchObject({
       enabled: false,
       strategy: "fallback",
       reason: "not-android",
@@ -38,25 +38,17 @@ describe("Android host", () => {
       strategy: "fallback",
       reason: "android-host-disabled",
     })
-    expect(await probe({ platform: "android", host: "opentui", importer: async () => ({}) })).toMatchObject({
+    expect(await probe({ platform: "android", host: "opentui", root: "/tmp/slopcode", fs })).toMatchObject({
       enabled: true,
       available: true,
-      strategy: "opentui",
-      reason: "opentui-ready",
+      strategy: "sidecar",
+      reason: "android-rust-only",
     })
-    expect(
-      await probe({
-        platform: "android",
-        host: "opentui",
-        importer: async () => {
-          throw new Error("bun:ffi unavailable")
-        },
-      }),
-    ).toMatchObject({
+    expect(await probe({ platform: "android", tui: "1" })).toMatchObject({
       enabled: true,
       available: false,
       strategy: "fallback",
-      reason: "bun:ffi unavailable",
+      reason: "android-rust-only-sidecar-missing",
     })
     expect(await probe({ platform: "android", host: "sidecar", root: "/tmp/slopcode", fs })).toMatchObject({
       enabled: true,
