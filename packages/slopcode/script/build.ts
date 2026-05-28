@@ -743,7 +743,10 @@ if (Script.release) {
     await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
   }
 
-  await $`tar -czf slopcode-cli-dist.tar.gz ${Object.keys(binaries)}`.cwd("dist")
+  const dist = Object.keys(binaries)
+  if (fs.existsSync(path.join(dir, "dist", "android-bundle"))) dist.push("android-bundle")
+  if (fs.existsSync(path.join(dir, "dist", "android-modules"))) dist.push("android-modules")
+  await $`tar -czf slopcode-cli-dist.tar.gz ${dist}`.cwd("dist")
 
   if (process.platform === "linux") {
     const dpkgDeb = (await $`bash -lc "command -v dpkg-deb"`.quiet().nothrow().text()).trim()
