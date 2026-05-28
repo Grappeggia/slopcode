@@ -95,7 +95,9 @@ export const AttachCommand = cmd({
           return
         }
         if (!client()) {
-          UI.error("SlopCode Android runtime is missing. Reinstall with: npm install -g slopcode@latest --include=optional")
+          UI.error(
+            "SlopCode Android runtime is missing. Reinstall with: npm install -g slopcode@latest --include=optional",
+          )
           process.exit(1)
         }
         UI.error(

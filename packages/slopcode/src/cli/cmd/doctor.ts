@@ -90,7 +90,8 @@ const AndroidCommand = cmd({
     console.log(`root ${info.root ?? "missing"}`)
     console.log(`sidecar ${info.sidecar ?? "missing"}`)
     console.log(`sidecar file ${info.sidecarExists ? "ok" : "missing"}`)
-    if (info.ffiBlocked) console.log("shared OpenTUI is disabled on Android; the bundled Rust runtime is the only supported TUI")
+    if (info.ffiBlocked)
+      console.log("shared OpenTUI is disabled on Android; the bundled Rust runtime is the only supported TUI")
     if (!info.available) process.exitCode = 1
   },
 })

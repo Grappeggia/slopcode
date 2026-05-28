@@ -268,7 +268,9 @@ const androidSmoke = async () => {
       "slopcode-android-host",
     )
     if (!(await exists(bundle)) || !(await exists(bun))) {
-      throw new Error(`verify: packed Android ${target.arch} install did not install the Android launcher bundle and Bun bootstrap`)
+      throw new Error(
+        `verify: packed Android ${target.arch} install did not install the Android launcher bundle and Bun bootstrap`,
+      )
     }
     if (!(await exists(bin)) || !(await exists(sidecar))) {
       throw new Error(`verify: packed Android ${target.arch} install did not install the Android runtime and sidecar`)

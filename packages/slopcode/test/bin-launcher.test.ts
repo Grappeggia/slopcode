@@ -283,7 +283,7 @@ describe("bin launcher", () => {
     await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
     await Bun.write(
       path.join(bundle, "index.js"),
-      'console.log(JSON.stringify({ args: process.argv.slice(2), entry: process.env.SLOPCODE_ENTRYPOINT, host: process.env.SLOPCODE_ANDROID_HOST_PATH, root: process.env.SLOPCODE_ANDROID_ROOT }))\n',
+      "console.log(JSON.stringify({ args: process.argv.slice(2), entry: process.env.SLOPCODE_ENTRYPOINT, host: process.env.SLOPCODE_ANDROID_HOST_PATH, root: process.env.SLOPCODE_ANDROID_ROOT }))\n",
     )
 
     const out = await run(
@@ -315,7 +315,7 @@ describe("bin launcher", () => {
     await fs.mkdir(bun, { recursive: true })
     await fs.mkdir(bundle, { recursive: true })
     await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
-    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\nprintf 'runtime %s %s %s\\n' \"$1\" \"$2\" \"$3\"\n")
+    await script(path.join(scoped, "bin", "slopcode"), '#!/bin/sh\nprintf \'runtime %s %s %s\\n\' "$1" "$2" "$3"\n')
     await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
     await Bun.write(path.join(bundle, "index.js"), 'console.log("bundle")\n')
 

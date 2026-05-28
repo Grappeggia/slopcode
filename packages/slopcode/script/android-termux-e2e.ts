@@ -129,7 +129,9 @@ async function stage() {
   const bundle = path.join(dir, "dist", "android-bundle")
   const modules = path.join(dir, "dist", "android-modules")
   if (!(await exists(path.join(bundle, "index.js")))) {
-    throw new Error("android e2e: missing dist/android-bundle; run bun --cwd packages/slopcode run script/build.ts --target=android-x64")
+    throw new Error(
+      "android e2e: missing dist/android-bundle; run bun --cwd packages/slopcode run script/build.ts --target=android-x64",
+    )
   }
   if (!(await exists(path.join(modules, "@opentui", "core-android-arm64", "index.ts")))) {
     throw new Error("android e2e: missing dist/android-modules; rebuild the Android bundle")
