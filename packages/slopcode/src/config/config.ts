@@ -63,6 +63,55 @@ export namespace Config {
 
   const managedDir = managedConfigDir()
 
+  function sameOrContains(parent: string, child: string) {
+    const base = path.resolve(parent)
+    const target = path.resolve(child)
+    return Filesystem.contains(base, target)
+  }
+
+  async function realpathOrResolved(item: string) {
+    return fs.realpath(item).catch(() => path.resolve(item))
+  }
+
+  async function sameOrContainsReal(parent: string, child: string) {
+    const [base, target] = await Promise.all([realpathOrResolved(parent), realpathOrResolved(child)])
+    return Filesystem.contains(base, target)
+  }
+
+  function legacyGlobalConfigDir() {
+    return path.join(path.dirname(Global.Path.config), product.legacy_id)
+  }
+
+  export function trustedDirectory(dir: string) {
+    const trusted = [
+      Global.Path.config,
+      legacyGlobalConfigDir(),
+      managedDir,
+      ...product.config.dirs.map((item) => path.join(Global.Path.home, item)),
+      ...(Flag.SLOPCODE_CONFIG_DIR ? [Flag.SLOPCODE_CONFIG_DIR] : []),
+    ]
+    return trusted.some((item) => sameOrContains(item, dir))
+  }
+
+  function trustedSource(source: string) {
+    if (!source) return false
+    if (/^[a-z]+:\/\//i.test(source) && !source.startsWith("file://")) return false
+    const file = source.startsWith("file://") ? fileURLToPath(source) : source
+    if (Flag.SLOPCODE_CONFIG && path.resolve(file) === path.resolve(Flag.SLOPCODE_CONFIG)) return true
+    return trustedDirectory(path.dirname(file))
+  }
+
+  async function allowFileReference(source: string, configDir: string, target: string) {
+    if (trustedSource(source)) return true
+
+    const allowedRoots = [configDir, Instance.directory]
+    if (Instance.worktree !== "/") allowedRoots.push(Instance.worktree)
+    for (const root of allowedRoots) {
+      if (await sameOrContainsReal(root, target)) return true
+    }
+    return false
+  }
+
   function scope(source: string): ConfigPlugin.Scope {
     if (!source) return "local"
     if (/^[a-z]+:\/\//i.test(source) && !source.startsWith("file://")) return "global"
@@ -217,6 +266,7 @@ export namespace Config {
 
       deps.push(
         iife(async () => {
+          if (!trustedDirectory(dir)) return
           const shouldInstall = await needsInstall(dir)
           if (shouldInstall) await installDependencies(dir)
         }),
@@ -1504,10 +1554,11 @@ export namespace Config {
     const original = text
     const source = "path" in options ? options.path : options.source
     const isFile = "path" in options
-    const data = await ConfigPaths.parseText(
-      text,
-      "path" in options ? options.path : { source: options.source, dir: options.dir },
-    )
+    const sourceInput = "path" in options ? options.path : { source: options.source, dir: options.dir }
+    const configDir = "path" in options ? path.dirname(options.path) : options.dir
+    const data = await ConfigPaths.parseText(text, sourceInput, {
+      allowFileReference: ({ path: target }) => allowFileReference(source, configDir, target),
+    })
 
     const normalized = (() => {
       if (!data || typeof data !== "object" || Array.isArray(data)) return data

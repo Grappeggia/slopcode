@@ -81,6 +81,18 @@ export namespace ConfigPaths {
   }
 
   type ParseSource = string | { source: string; dir: string }
+  type ParseOptions =
+    | "error"
+    | "empty"
+    | {
+        missing?: "error" | "empty"
+        allowFileReference?: (input: {
+          path: string
+          source: string
+          configDir: string
+          token: string
+        }) => boolean | string | Promise<boolean | string>
+      }
 
   function source(input: ParseSource) {
     return typeof input === "string" ? input : input.source
@@ -90,8 +102,22 @@ export namespace ConfigPaths {
     return typeof input === "string" ? path.dirname(input) : input.dir
   }
 
+  function parseOptions(options: ParseOptions | undefined) {
+    if (!options || typeof options === "string") {
+      return {
+        missing: options ?? "error",
+        allowFileReference: undefined,
+      }
+    }
+    return {
+      missing: options.missing ?? "error",
+      allowFileReference: options.allowFileReference,
+    }
+  }
+
   /** Apply {env:VAR} and {file:path} substitutions to config text. */
-  async function substitute(text: string, input: ParseSource, missing: "error" | "empty" = "error") {
+  async function substitute(text: string, input: ParseSource, options?: ParseOptions) {
+    const { missing, allowFileReference } = parseOptions(options)
     text = text.replace(/\{env:([^}]+)\}/g, (_, varName) => {
       return process.env[varName] || ""
     })
@@ -123,6 +149,16 @@ export namespace ConfigPaths {
       }
 
       const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(configDir, filePath)
+      const allowed = await allowFileReference?.({ path: resolvedPath, source: configSource, configDir, token })
+      if (typeof allowed === "string") {
+        throw new InvalidError({ path: configSource, message: allowed })
+      }
+      if (allowed === false) {
+        throw new InvalidError({
+          path: configSource,
+          message: `bad file reference: "${token}" ${resolvedPath} is outside allowed config roots`,
+        })
+      }
       const fileContent = (
         await Filesystem.readText(resolvedPath).catch((error: NodeJS.ErrnoException) => {
           if (missing === "empty") return ""
@@ -150,9 +186,9 @@ export namespace ConfigPaths {
   }
 
   /** Substitute and parse JSONC text, throwing JsonError on syntax errors. */
-  export async function parseText(text: string, input: ParseSource, missing: "error" | "empty" = "error") {
+  export async function parseText(text: string, input: ParseSource, options?: ParseOptions) {
     const configSource = source(input)
-    text = await substitute(text, input, missing)
+    text = await substitute(text, input, options)
 
     const errors: JsoncParseError[] = []
     const data = parseJsonc(text, errors, { allowTrailingComma: true })

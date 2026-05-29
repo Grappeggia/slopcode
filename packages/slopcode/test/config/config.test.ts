@@ -491,6 +491,65 @@ test("handles file inclusion with replacement tokens", async () => {
   })
 })
 
+test("rejects project config file inclusion outside the project", async () => {
+  let outside = ""
+  await using tmp = await tmpdir<string>({
+    init: async (dir) => {
+      outside = path.join(path.dirname(dir), "outside-secret.txt")
+      await Filesystem.write(outside, "secret")
+      await writeConfig(dir, {
+        $schema: "https://slopcode.dev/config.json",
+        username: `{file:${outside}}`,
+      })
+      return outside
+    },
+    dispose: async (_dir) => {
+      await fs.rm(outside, { force: true }).catch(() => {})
+      return outside
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await expect(Config.get()).rejects.toMatchObject({
+        name: "ConfigInvalidError",
+        data: { message: expect.stringContaining("outside allowed config roots") },
+      })
+    },
+  })
+})
+
+test("rejects project config file inclusion through an in-project symlink", async () => {
+  let outside = ""
+  await using tmp = await tmpdir<string>({
+    init: async (dir) => {
+      outside = path.join(path.dirname(dir), "outside-symlink-secret.txt")
+      await Filesystem.write(outside, "secret")
+      await fs.symlink(outside, path.join(dir, "linked-secret.txt"))
+      await writeConfig(dir, {
+        $schema: "https://slopcode.dev/config.json",
+        username: "{file:linked-secret.txt}",
+      })
+      return outside
+    },
+    dispose: async (_dir) => {
+      await fs.rm(outside, { force: true }).catch(() => {})
+      return outside
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await expect(Config.get()).rejects.toMatchObject({
+        name: "ConfigInvalidError",
+        data: { message: expect.stringContaining("outside allowed config roots") },
+      })
+    },
+  })
+})
+
 test("validates config schema and throws on invalid fields", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -924,6 +983,33 @@ test("installs dependencies in writable SLOPCODE_CONFIG_DIR", async () => {
     if (prev === undefined) delete process.env.SLOPCODE_CONFIG_DIR
     else process.env.SLOPCODE_CONFIG_DIR = prev
   }
+})
+
+test("does not install dependencies in project config directories", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const configDir = path.join(dir, ".slopcode")
+      await fs.mkdir(configDir, { recursive: true })
+      await writeConfig(configDir, {
+        $schema: "https://slopcode.dev/config.json",
+        username: "project-config",
+      })
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      await Config.get()
+      await Config.waitForDependencies()
+    },
+  })
+
+  const configDir = path.join(tmp.path, ".slopcode")
+  expect(await Filesystem.exists(path.join(configDir, "package.json"))).toBe(false)
+  expect(await Filesystem.exists(path.join(configDir, ".gitignore"))).toBe(false)
+  expect(await Filesystem.exists(path.join(configDir, "node_modules"))).toBe(false)
+  expect(await Filesystem.exists(path.join(configDir, "bun.lock"))).toBe(false)
 })
 
 test("resolves scoped npm plugins in config", async () => {
