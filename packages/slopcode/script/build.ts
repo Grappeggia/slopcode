@@ -370,9 +370,11 @@ const androidLinker = (ndk: string, linker: string) => {
 
 const commandExists = (command: string) => {
   const extensions = process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""]
-  return (process.env.PATH ?? "").split(path.delimiter).some((dir) =>
-    extensions.some((extension) => fs.existsSync(path.join(dir, `${command}${extension.toLowerCase()}`))),
-  )
+  return (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .some((dir) =>
+      extensions.some((extension) => fs.existsSync(path.join(dir, `${command}${extension.toLowerCase()}`))),
+    )
 }
 
 const androidHost = async (name: string, arch: "arm64" | "x64") => {
