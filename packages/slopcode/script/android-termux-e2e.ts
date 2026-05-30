@@ -359,8 +359,37 @@ function read(req) {
   })
 }
 
+function websocketMessages(buffer) {
+  const out = []
+  for (let index = 0; index + 2 <= buffer.length; ) {
+    const masked = (buffer[index + 1] & 0x80) !== 0
+    let length = buffer[index + 1] & 0x7f
+    index += 2
+    if (length === 126) {
+      length = buffer.readUInt16BE(index)
+      index += 2
+    } else if (length === 127) {
+      length = Number(buffer.readBigUInt64BE(index))
+      index += 8
+    }
+    const mask = masked ? buffer.subarray(index, index + 4) : undefined
+    if (masked) index += 4
+    const payload = buffer.subarray(index, index + length)
+    index += length
+    if (mask) {
+      const decoded = Buffer.alloc(payload.length)
+      for (let i = 0; i < payload.length; i++) decoded[i] = payload[i] ^ mask[i % 4]
+      out.push(decoded.toString("utf8"))
+    } else {
+      out.push(payload.toString("utf8"))
+    }
+  }
+  return out
+}
+
 async function runHost(input) {
-  const state = { bodies: [], replies: [], permissions: [], shells: [], seen: [] }
+  const state = { bodies: [], replies: [], permissions: [], shells: [], summaries: [], editorInputs: [], seen: [] }
+  const editorState = { dirty: true, diff: true, content: "console.log('ok')" }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1")
     state.seen.push(req.method + " " + url.pathname)
@@ -379,13 +408,22 @@ async function runHost(input) {
     if (url.pathname === "/session/ses_termux/abort" && req.method === "POST") return json(res, true)
     if (url.pathname === "/session/ses_termux/pause" && req.method === "POST") return json(res, true)
     if (url.pathname === "/session/ses_termux/resume" && req.method === "POST") return json(res, true)
-    if (url.pathname === "/session/ses_termux/summarize" && req.method === "POST") return json(res, true)
+    if (url.pathname === "/session/ses_termux/summarize" && req.method === "POST") {
+      state.summaries.push(await read(req))
+      return json(res, true)
+    }
     if (url.pathname === "/session/ses_termux/children") return json(res, [{ id: "ses_child", title: "Child Session" }])
     if (url.pathname === "/session/ses_termux/diff/index") return json(res, [{ file: "src/app.ts", added: 2, removed: 1 }])
     if (url.pathname === "/editor" && req.method === "POST") return json(res, { id: "edt_termux", sessionID: "ses_termux", file: "src/app.ts", dirty: true, diff: true })
-    if (url.pathname === "/editor/edt_termux/snapshot") return json(res, { file: "src/app.ts", dirty: true, diff: true, diagnostics: [{ line: 1, column: 1, severity: "error", message: "expected semicolon" }] })
-    if (url.pathname === "/editor/edt_termux/save" && req.method === "POST") return json(res, { id: "edt_termux", sessionID: "ses_termux", file: "src/app.ts", dirty: false, diff: true })
-    if (url.pathname === "/editor/edt_termux/diff/dismiss" && req.method === "POST") return json(res, { id: "edt_termux", sessionID: "ses_termux", file: "src/app.ts", dirty: false, diff: false })
+    if (url.pathname === "/editor/edt_termux/snapshot") return json(res, { file: "src/app.ts", dirty: editorState.dirty, diff: editorState.diff, content: editorState.content, diagnostics: [{ line: 1, column: 1, severity: "error", message: "expected semicolon" }] })
+    if (url.pathname === "/editor/edt_termux/save" && req.method === "POST") {
+      editorState.dirty = false
+      return json(res, { id: "edt_termux", sessionID: "ses_termux", file: "src/app.ts", dirty: false, diff: editorState.diff })
+    }
+    if (url.pathname === "/editor/edt_termux/diff/dismiss" && req.method === "POST") {
+      editorState.diff = false
+      return json(res, { id: "edt_termux", sessionID: "ses_termux", file: "src/app.ts", dirty: editorState.dirty, diff: false })
+    }
     if (url.pathname === "/editor/edt_termux" && req.method === "DELETE") return json(res, true)
     if (url.pathname === "/session/ses_termux/message/index") return json(res, input.messages || [])
     if (url.pathname === "/session/ses_termux/message/chunk") return json(res, input.chunks || [])
@@ -441,6 +479,29 @@ async function runHost(input) {
       return
     }
     return json(res, {})
+  })
+  server.on("upgrade", (req, socket) => {
+    const url = new URL(req.url || "/", "http://127.0.0.1")
+    state.seen.push("GET " + url.pathname)
+    if (url.pathname !== "/editor/edt_termux/connect") {
+      socket.destroy()
+      return
+    }
+    socket.write("HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\n")
+    socket.on("data", (chunk) => {
+      for (const message of websocketMessages(chunk)) {
+        const parsed = JSON.parse(message)
+        state.editorInputs.push(parsed)
+        if (parsed.type === "paste") {
+          editorState.content += parsed.text || ""
+          editorState.dirty = true
+        }
+        if (parsed.type === "input" && parsed.keys && !parsed.keys.startsWith("<")) {
+          editorState.content += parsed.keys
+          editorState.dirty = true
+        }
+      }
+    })
   })
 
 
@@ -513,7 +574,7 @@ const actions = {
     assert(!bootText.includes("missing --url"), "plain slopcode still requires daemon args\\n" + bootText)
     assert(bootText.includes("SlopCode"), "plain slopcode did not render home\\n" + bootText)
   },
-  "release.sidecar-smoke": async () => actions["smoke.install"](),
+  "release.rust-tui-smoke": async () => actions["smoke.install"](),
   "home.landing": async () => {
     const run = await runHost({
       title: "Home Landing",
@@ -566,14 +627,28 @@ const actions = {
     assert(JSON.stringify(run.replies) === JSON.stringify([{ answers: [["Yes"]] }]), "unexpected replies " + JSON.stringify(run.replies))
   },
   "layout.capture": async () => {
-    const run = await runHost({ title: "Layout Session", width: 80, height: 24, steps: [{ delay: 1500, text: "/exit\\r" }] })
+    const run = await runHost({
+      title: "Layout Session",
+      width: 80,
+      height: 24,
+      args: ["--prompt", "layout probe"],
+      steps: [{ delay: 300, text: "/exit\\r" }],
+    })
     const text = run.screen + "\\n" + run.stdout
     assert(text.includes("Layout Session") || text.includes("Fix a TODO in the codebase"), "screen missing expected content\\n" + run.screen + "\\nraw:\\n" + run.stdout)
     assert(text.includes("SlopCode"), "screen missing chrome\\n" + run.screen + "\\nraw:\\n" + run.stdout)
   },
 
   "commands.palette": async () => {
-    const run = await runHost({ title: "Command Session", steps: [{ delay: 150, text: "/commands\\r" }, { delay: 150, text: "/cl\\t\\u0015" }, { delay: 150, text: "\\x04" }] })
+    const run = await runHost({
+      title: "Command Session",
+      steps: [
+        { delay: 150, text: "/commands\\r" },
+        { delay: 150, text: "/commands model\\r" },
+        { delay: 150, text: "/cl\\t\\u0015" },
+        { delay: 150, text: "\\x04" },
+      ],
+    })
     semantic(run, ["Command Palette", "/models", "Command Matches"])
   },
   "sessions.tabs": async () => {
@@ -586,7 +661,25 @@ const actions = {
       steps: [{ delay: 150, text: "/sessions\\r" }, { delay: 150, text: "/tabs\\r" }, { delay: 150, text: "\\x04" }],
     })
     assert(run.screen.includes("Sessions") || run.stdout.includes("Sessions"), "missing sessions panel\\n" + run.screen)
-    assert(run.screen.includes("tabs") || run.stdout.includes("tabs"), "missing tab strip\\n" + run.screen)
+    const rendered = run.screen + "\\n" + run.stdout
+    assert(rendered.toLowerCase().includes("tabs"), "missing tab strip\\n" + run.screen)
+    assert(rendered.includes("[close"), "missing close affordance\\n" + rendered)
+  },
+  "tabs.rich": async () => {
+    const run = await runHost({
+      title: "Rich Tabs",
+      steps: [
+        { delay: 150, text: "/open src/app.ts\\r" },
+        { delay: 150, text: "/tabs\\r" },
+        { delay: 150, text: "/close\\r" },
+        { delay: 150, text: "\\x04" },
+      ],
+    })
+    const rendered = run.screen + "\\n" + run.stdout
+    assert(rendered.includes("[close"), "missing tab close affordance\\n" + rendered)
+    assert(rendered.includes("*"), "missing dirty tab marker\\n" + rendered)
+    assert(rendered.includes("closed last tab"), "missing last tab close\\n" + rendered)
+    assert(run.seen.includes("POST /editor"), "missing editor tab setup " + JSON.stringify(run.seen))
   },
   "sessions.routes": async () => {
     const run = await runHost({
@@ -606,6 +699,37 @@ const actions = {
     assert(run.seen.includes("POST /session/ses_termux/revert"), "missing revert route " + JSON.stringify(run.seen))
     assert(run.seen.includes("POST /session/ses_termux/unrevert"), "missing unrevert route " + JSON.stringify(run.seen))
   },
+  "sessions.controls": async () => {
+    const run = await runHost({
+      title: "Control Session",
+      steps: [
+        { delay: 100, text: "/status\\r" },
+        { delay: 100, text: "/share\\r" },
+        { delay: 100, text: "/unshare\\r" },
+        { delay: 100, text: "/pause\\r" },
+        { delay: 100, text: "/resume\\r" },
+        { delay: 100, text: "/model openai/gpt-5\\r" },
+        { delay: 100, text: "/compact\\r" },
+        { delay: 100, text: "/interrupt\\r" },
+        { delay: 100, text: "/fork\\r" },
+        { delay: 100, text: "\\x04" },
+      ],
+    })
+    assert(run.seen.includes("GET /session/status"), "missing status route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /session/ses_termux/share"), "missing share route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("DELETE /session/ses_termux/share"), "missing unshare route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /session/ses_termux/pause"), "missing pause route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /session/ses_termux/resume"), "missing resume route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /session/ses_termux/summarize"), "missing compact route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /session/ses_termux/abort"), "missing interrupt route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /session/ses_termux/fork"), "missing fork route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("GET /session/ses_fork"), "missing fork activation " + JSON.stringify(run.seen))
+    assert(
+      run.summaries[0]?.providerID === "openai" && run.summaries[0]?.modelID === "gpt-5",
+      "compact did not send selected model " + JSON.stringify(run.summaries),
+    )
+    assert(run.screen.includes("Status") || run.stdout.includes("Status"), "missing status panel\\n" + run.screen)
+  },
   "models.panel": async () => {
     const run = await runHost({
       title: "Model Session",
@@ -622,9 +746,10 @@ const actions = {
   "render.tools": async () => {
     const run = await runHost({
       title: "Render Session",
+      args: ["--prompt", "render probe"],
       messages: [{ id: "msg_tool", role: "assistant" }],
       chunks: [{ messageID: "msg_tool", parts: [{ type: "text", text: "Done" }, { type: "tool", tool: "edit", state: { status: "completed", output: "patched" }, metadata: { diff: "+next\\n-prev" } }] }],
-      steps: [{ delay: 150, text: "\\x04" }],
+      steps: [{ delay: 300, text: "\\x04" }],
     })
     assert(run.screen.includes("tool edit completed") || run.stdout.includes("tool edit completed"), "missing tool card\\n" + run.screen)
     assert(run.screen.includes("+next") || run.stdout.includes("+next"), "missing diff preview\\n" + run.screen)
@@ -640,22 +765,23 @@ const actions = {
       steps: [
         { delay: 150, text: "/open src/app.ts\\r" },
         { delay: 150, text: "/diagnostics\\r" },
+        { delay: 150, text: "/edit\\r" },
+        { delay: 150, text: "x\\u0013\\u0004\\u0011" },
         { delay: 150, text: "/close-editor\\r" },
-        { delay: 150, text: "/save\\r" },
-        { delay: 150, text: "/diff dismiss\\r" },
-        { delay: 150, text: "/close-editor!\\r" },
         { delay: 150, text: "\\x04" },
       ],
     })
     assert(run.stdout.includes("Editor"), "missing editor panel\\\\n" + run.stdout)
     assert(run.stdout.includes("expected semicolon"), "missing diagnostics\\\\n" + run.stdout)
     assert(run.stdout.includes("console.log('ok')"), "missing editor preview\\n" + run.stdout)
-    assert(run.stdout.includes("unsaved changes") || run.stdout.includes("saved src/app.ts"), "missing dirty guard/save\\\\n" + run.stdout)
+    assert(run.stdout.includes("input focus") || run.stdout.includes("saved src/app.ts"), "missing editor input/save\\\\n" + run.stdout)
     assert(run.seen.includes("POST /editor"), "missing editor open " + JSON.stringify(run.seen))
+    assert(run.seen.includes("GET /editor/edt_termux/connect"), "missing editor input websocket " + JSON.stringify(run.seen))
     assert(run.seen.includes("GET /editor/edt_termux/snapshot"), "missing editor snapshot " + JSON.stringify(run.seen))
     assert(run.seen.includes("POST /editor/edt_termux/save"), "missing editor save " + JSON.stringify(run.seen))
     assert(run.seen.includes("POST /editor/edt_termux/diff/dismiss"), "missing diff dismiss " + JSON.stringify(run.seen))
     assert(run.seen.includes("DELETE /editor/edt_termux"), "missing editor close " + JSON.stringify(run.seen))
+    assert(run.editorInputs.some((item) => item.type === "input" && item.keys === "x"), "missing editor key input " + JSON.stringify(run.editorInputs))
   },
   "terminal.polish": async () => {
     const run = await runHost({
@@ -681,6 +807,7 @@ const actions = {
       title: "Render Gate",
       width: 100,
       height: 32,
+      args: ["--prompt", "render gate"],
       messages: [{ id: "msg_gate", role: "assistant" }],
       chunks: [
         {
@@ -699,7 +826,7 @@ const actions = {
           ],
         },
       ],
-      steps: [{ delay: 150, text: "\\x04" }],
+      steps: [{ delay: 300, text: "\\x04" }],
     })
     assert(run.stdout.includes("tool edit completed [expanded]"), "missing expanded tool gate\\n" + run.stdout)
     assert(run.stdout.includes("diff preview") && run.stdout.includes("+new"), "missing diff gate\\n" + run.stdout)
@@ -763,7 +890,7 @@ export async function main() {
     await Bun.write(script, e2eSource(staged.androidPackage))
     await adb("push", script, `${tmp}/slopcode-android-termux-e2e.mjs`)
     await termux(
-      `export SLOPCODE_ANDROID_E2E_MODE=${quote(mode)}; export SLOPCODE_ANDROID_ASSET_PATH=${tmp}/slopcode-android-runtime.tgz; npm install -g --include=optional --ignore-scripts=false ${tmp}/slopcode-root.tgz && node ${tmp}/slopcode-android-termux-e2e.mjs`,
+      `export SLOPCODE_ANDROID_E2E_MODE=${quote(mode)}; export SLOPCODE_ANDROID_ASSET_PATH=${tmp}/slopcode-android-runtime.tgz; npm install -g --force --include=optional --ignore-scripts=false ${tmp}/slopcode-root.tgz && node ${tmp}/slopcode-android-termux-e2e.mjs`,
     )
     console.log(`android e2e: ok (${mode})`)
   } finally {

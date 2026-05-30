@@ -28,7 +28,7 @@ export function client(root = process.env.SLOPCODE_ANDROID_ROOT) {
 export function guard() {
   if (native()) return false
   UI.error(
-    "Shared OpenTUI is disabled on Android. SlopCode uses the bundled Rust runtime instead; reinstall with npm install -g slopcode@latest --include=optional if the Android runtime is missing.",
+    "Shared OpenTUI is disabled on Android. SlopCode uses the bundled Rust runtime instead; reinstall with npm install -g slopcode@latest --include=optional if this message persists.",
   )
   return true
 }

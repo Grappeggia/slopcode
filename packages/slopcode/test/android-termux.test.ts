@@ -48,15 +48,23 @@ describe("Android Termux runtime", () => {
     const verify = await Bun.file(path.join(import.meta.dir, "..", "script", "verify-artifacts.ts")).text()
     const e2e = await Bun.file(path.join(import.meta.dir, "..", "script", "android-termux-e2e.ts")).text()
     const thread = await Bun.file(path.join(import.meta.dir, "..", "src", "cli", "cmd", "tui", "thread.ts")).text()
+    const manifest = await Bun.file(path.join(import.meta.dir, "..", "native", "android-tui", "Cargo.toml")).text()
+    const entry = await Bun.file(path.join(import.meta.dir, "..", "native", "android-tui", "src", "main.rs")).text()
 
     expect(build).toContain("androidRuntime")
     expect(build).toContain("androidBundle")
-    expect(build).toContain("native/android-host/main.rs")
+    expect(build).toContain("native/android-tui/Cargo.toml")
+    expect(build).toContain("cargo build")
+    expect(build).toContain("slopcode-android-tui")
     expect(build).toContain('"slopcode-android-host"')
     expect(build).toContain('"./bin/slopcode"')
     expect(build).toContain("dist/android-bundle/index.js")
     expect(build).toContain("const androidModules = async")
     expect(build).toContain("SLOPCODE_BUILD_VERSION")
+    expect(manifest).toContain("ratatui")
+    expect(manifest).toContain("crossterm")
+    expect(entry).toContain('include!("../../android-host/main.rs")')
+    expect(build).not.toContain("@oven/bun-linux")
     expect(build).not.toContain("native/android-client/main.rs")
     expect(build).not.toContain('"slopcode-termux"')
     expect(publish).toContain('"@oven/bun-linux-x64-android": "1.3.14"')
@@ -100,10 +108,12 @@ describe("Android Termux runtime", () => {
       "commands.palette",
       "sessions.tabs",
       "sessions.routes",
+      "sessions.controls",
       "models.panel",
       "files.panel",
       "render.tools",
       "permissions.preview",
+      "tabs.rich",
       "sidebar.files",
       "editor.diff",
       "terminal.polish",
@@ -112,22 +122,24 @@ describe("Android Termux runtime", () => {
     ])
     expect(report()).toEqual(snapshot)
     expect(parity.filter((item) => item.active).every((item) => item.android.length > 0)).toBe(true)
-    expect(active("release").map((item) => item.id)).toEqual(["release.sidecar-smoke"])
+    expect(active("release").map((item) => item.id)).toEqual(["release.rust-tui-smoke"])
     expect(report().overclaims.map((item) => item.id)).toEqual(
       expect.arrayContaining(["home.landing", "commands.palette", "editor.diff", "terminal.polish"]),
     )
     expect(parity.find((item) => item.id === "native.opentui")?.level).toBe("blocked")
+    expect(parity.find((item) => item.id === "tabs.rich")?.level).toBe("workflow-parity")
     expect(parity.filter((item) => item.status === "blocked").every((item) => !item.active && !!item.missing)).toBe(
       true,
     )
     expect(ids).toEqual(
       expect.arrayContaining([
+        "sessions.controls",
         "tabs.rich",
         "sidebar.files",
         "editor.diff",
         "terminal.polish",
         "native.opentui",
-        "release.sidecar-smoke",
+        "release.rust-tui-smoke",
         "render.parity-gates",
         "permissions.parity-gates",
       ]),

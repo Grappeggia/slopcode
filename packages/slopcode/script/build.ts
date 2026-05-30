@@ -327,10 +327,12 @@ const androidRust = (arch: "arm64" | "x64") =>
   arch === "arm64"
     ? {
         target: "aarch64-linux-android",
+        env: "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER",
         linker: "aarch64-linux-android24-clang",
       }
     : {
         target: "x86_64-linux-android",
+        env: "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER",
         linker: "x86_64-linux-android24-clang",
       }
 
@@ -340,6 +342,8 @@ const androidNdk = () => {
     process.env.NDK_HOME,
     process.env.ANDROID_HOME && path.join(process.env.ANDROID_HOME, "ndk", "27.1.12297006"),
     process.env.ANDROID_SDK_ROOT && path.join(process.env.ANDROID_SDK_ROOT, "ndk", "27.1.12297006"),
+    path.join(process.env.HOME ?? "", "Library", "Android", "sdk", "ndk", "27.1.12297006"),
+    path.join(process.env.HOME ?? "", ".android-sdk-macosx", "ndk", "27.1.12297006"),
     path.join(process.env.HOME ?? "", "android-sdk", "ndk", "27.1.12297006"),
   ].filter((item): item is string => !!item)
   const found = roots.find((item) => fs.existsSync(path.join(item, "toolchains", "llvm")))
@@ -347,18 +351,44 @@ const androidNdk = () => {
   return found
 }
 
+const androidLinker = (ndk: string, linker: string) => {
+  const prebuilt = path.join(ndk, "toolchains", "llvm", "prebuilt")
+  const executable = process.platform === "win32" ? `${linker}.cmd` : linker
+  const preferred =
+    process.platform === "darwin"
+      ? ["darwin-arm64", "darwin-x86_64"]
+      : process.platform === "win32"
+        ? ["windows-x86_64"]
+        : ["linux-x86_64"]
+  const dirs = fs.existsSync(prebuilt) ? fs.readdirSync(prebuilt) : []
+  for (const host of [...preferred, ...dirs]) {
+    const candidate = path.join(prebuilt, host, "bin", executable)
+    if (fs.existsSync(candidate)) return candidate
+  }
+  throw new Error(`Missing Android linker ${linker} under ${prebuilt}`)
+}
+
+const commandExists = (command: string) => {
+  const extensions = process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""]
+  return (process.env.PATH ?? "").split(path.delimiter).some((dir) =>
+    extensions.some((extension) => fs.existsSync(path.join(dir, `${command}${extension.toLowerCase()}`))),
+  )
+}
+
 const androidHost = async (name: string, arch: "arm64" | "x64") => {
   const rust = androidRust(arch)
   const bin = path.join(dir, "dist", name, "bin", "slopcode-android-host")
   const cli = path.join(dir, "dist", name, "bin", "slopcode")
-  const linker = path.join(androidNdk(), "toolchains", "llvm", "prebuilt", "linux-x86_64", "bin", rust.linker)
-  if (!fs.existsSync(linker)) throw new Error(`Missing Android linker at ${linker}`)
-  await $`rustup target add ${rust.target}`
-  await $`rustc --target ${rust.target} -C linker=${linker} -C opt-level=z -C strip=symbols native/android-host/main.rs -o ${bin}`.env(
-    {
-      ...process.env,
-      SLOPCODE_BUILD_VERSION: Script.version,
-    },
+  const linker = androidLinker(androidNdk(), rust.linker)
+  if (commandExists("rustup")) await $`rustup target add ${rust.target}`
+  await $`cargo build --manifest-path native/android-tui/Cargo.toml --release --target ${rust.target}`.env({
+    ...process.env,
+    [rust.env]: linker,
+    SLOPCODE_BUILD_VERSION: Script.version,
+  })
+  await fs.promises.copyFile(
+    path.join(dir, "native", "android-tui", "target", rust.target, "release", "slopcode-android-tui"),
+    bin,
   )
   await $`chmod 755 ${bin}`
   await fs.promises.copyFile(bin, cli)

@@ -63,6 +63,7 @@ const AndroidCommand = cmd({
       tui: process.env.SLOPCODE_ANDROID_TUI,
       sidecar: process.env.SLOPCODE_ANDROID_HOST_PATH,
     })
+    const legacyOpenTuiRequested = status.reason.startsWith("android-rust-only")
     const info = {
       version: Installation.VERSION,
       platform: String(process.platform),
@@ -70,13 +71,15 @@ const AndroidCommand = cmd({
       termux: termux(),
       mode: wanted(process.env.SLOPCODE_ANDROID_HOST) ? "sidecar" : "disabled",
       strategy: status.strategy,
+      renderer: status.strategy === "sidecar" ? "rust-native" : "portable",
+      targetRenderer: status.strategy === "sidecar" ? "ratatui/crossterm" : undefined,
       available: status.available,
       reason: status.reason,
       root,
       sidecar: bin,
       sidecarExists: exists(bin),
       bun: process.execPath,
-      ffiBlocked: String(process.platform) === "android",
+      ffiBlocked: String(process.platform) === "android" && legacyOpenTuiRequested && !status.available,
     }
     if (args.json) {
       console.log(JSON.stringify(info, null, 2))
@@ -86,12 +89,13 @@ const AndroidCommand = cmd({
     console.log(`platform ${info.platform}/${info.arch}${info.termux ? " termux" : ""}`)
     console.log(`android mode ${info.mode}`)
     console.log(`strategy ${info.strategy} ${info.available ? "available" : "unavailable"}`)
+    console.log(`renderer ${info.renderer}`)
+    if (info.targetRenderer) console.log(`target renderer ${info.targetRenderer}`)
     console.log(`reason ${info.reason}`)
     console.log(`root ${info.root ?? "missing"}`)
     console.log(`sidecar ${info.sidecar ?? "missing"}`)
     console.log(`sidecar file ${info.sidecarExists ? "ok" : "missing"}`)
-    if (info.ffiBlocked)
-      console.log("shared OpenTUI is disabled on Android; the bundled Rust runtime is the only supported TUI")
+    if (info.ffiBlocked) console.log("OpenTUI mode is unavailable on Android; use the bundled Rust TUI")
     if (!info.available) process.exitCode = 1
   },
 })

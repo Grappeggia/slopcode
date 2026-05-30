@@ -108,9 +108,12 @@ describe("Android native client", () => {
       expect(JSON.parse(doctorOut)).toMatchObject({
         version: "1.2.3",
         strategy: "rust",
+        renderer: "rust-native",
+        targetRenderer: "ratatui/crossterm",
         sidecar: bin,
         sidecarExists: true,
         bun: null,
+        ffiBlocked: false,
       })
     } finally {
       await fs.rm(dir, { recursive: true, force: true })
@@ -160,14 +163,18 @@ describe("Android native client", () => {
           stdout: "pipe",
           stderr: "pipe",
         })
-        await Bun.sleep(100)
+        await Bun.sleep(250)
         expect(created).toBe(0)
         proc.stdin.write("hello from home\r")
         await Bun.sleep(100)
         proc.stdin.write("\x04")
         proc.stdin.end()
-        const [code, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()])
-        expect(code).toBe(0)
+        const [code, stdout, stderr] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ])
+        if (code !== 0) throw new Error(stderr || stdout)
         expect(stdout).toContain("SlopCode")
         expect(stdout).toContain("Fix a TODO in the codebase")
         expect(created).toBe(1)
@@ -289,13 +296,13 @@ describe("Android native client", () => {
           stdout: "pipe",
           stderr: "pipe",
         })
-        await Bun.sleep(50)
+        await Bun.sleep(150)
         proc.stdin.write("\x1b[200~hello\nworld\x1b[201~\r")
-        await Bun.sleep(50)
+        await Bun.sleep(150)
         proc.stdin.write("first\r")
-        await Bun.sleep(50)
+        await Bun.sleep(150)
         proc.stdin.write("\x1b[A again\r")
-        await Bun.sleep(50)
+        await Bun.sleep(150)
         proc.stdin.write("\x04")
         proc.stdin.end()
         const [code, stdout] = await Promise.all([
@@ -357,7 +364,7 @@ describe("Android native client", () => {
           stdout: "pipe",
           stderr: "pipe",
         })
-        await Bun.sleep(100)
+        await Bun.sleep(250)
         proc.stdin.write("1\r")
         await Bun.sleep(100)
         proc.stdin.write("\x04")
@@ -424,7 +431,7 @@ describe("Android native client", () => {
           stdout: "pipe",
           stderr: "pipe",
         })
-        await Bun.sleep(100)
+        await Bun.sleep(250)
         proc.stdin.write("o")
         await Bun.sleep(50)
         proc.stdin.write("\x04")
@@ -457,7 +464,8 @@ describe("Android native client", () => {
       expect(await build.exited).toBe(0)
 
       const seen: string[] = []
-      const shells: Array<{ command?: string }> = []
+      const shells: Array<{ command?: string; model?: { providerID?: string; modelID?: string } }> = []
+      const summaries: Array<{ providerID?: string; modelID?: string }> = []
       const json = (value: unknown) =>
         new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } })
       const server = Bun.serve({
@@ -473,8 +481,23 @@ describe("Android native client", () => {
           if (url.pathname === "/session/ses_sidecar/message/index")
             return json([{ id: "msg_route", sessionID: "ses_sidecar", role: "user", time: { created: 1 } }])
           if (url.pathname === "/session/ses_sidecar/message/chunk") return json([])
+          if (url.pathname === "/session/ses_sidecar/share" && req.method === "POST")
+            return json({ id: "ses_sidecar", title: "Phase 2", share: { url: "https://share.example/ses_sidecar" } })
+          if (url.pathname === "/session/ses_sidecar/share" && req.method === "DELETE")
+            return json({ id: "ses_sidecar", title: "Phase 2" })
+          if (url.pathname === "/session/ses_sidecar/pause" && req.method === "POST") return json(true)
+          if (url.pathname === "/session/ses_sidecar/resume" && req.method === "POST") return json(true)
+          if (url.pathname === "/session/ses_sidecar/abort" && req.method === "POST") return json(true)
+          if (url.pathname === "/session/ses_sidecar/summarize" && req.method === "POST") {
+            summaries.push((await req.json()) as { providerID?: string; modelID?: string })
+            return json(true)
+          }
+          if (url.pathname === "/session/ses_sidecar/fork" && req.method === "POST")
+            return json({ id: "ses_fork", title: "Forked Session" })
+          if (url.pathname === "/session/ses_fork") return json({ id: "ses_fork", title: "Forked Session" })
+          if (url.pathname === "/session/ses_fork/message/index") return json([])
           if (url.pathname === "/session/ses_sidecar/shell" && req.method === "POST") {
-            shells.push((await req.json()) as { command?: string })
+            shells.push((await req.json()) as { command?: string; model?: { providerID?: string; modelID?: string } })
             return json({ id: "msg_shell", sessionID: "ses_sidecar", role: "assistant" })
           }
           if (url.pathname === "/session/status") return json({ ses_sidecar: { type: "idle" } })
@@ -494,12 +517,21 @@ describe("Android native client", () => {
           "/cl\t\u0015",
           "/messages\r",
           "/timeline\r",
+          "/status\r",
+          "/share\r",
+          "/unshare\r",
+          "/pause\r",
+          "/resume\r",
+          "/model openai/gpt-5\r",
+          "/compact\r",
+          "/interrupt\r",
           "/queue\r",
           "draft prompt\x1b[24~",
           "/list\r",
           "\x1b[25~\t\r",
           "/shell\r",
           "ls -la\r",
+          "/fork\r",
         ]) {
           proc.stdin.write(input)
           await Bun.sleep(50)
@@ -515,8 +547,18 @@ describe("Android native client", () => {
         expect(seen.filter((item) => item === "GET /session/ses_sidecar/message/index").length).toBeGreaterThanOrEqual(
           3,
         )
+        expect(seen).toContain("GET /session/status")
+        expect(seen).toContain("POST /session/ses_sidecar/share")
+        expect(seen).toContain("DELETE /session/ses_sidecar/share")
+        expect(seen).toContain("POST /session/ses_sidecar/pause")
+        expect(seen).toContain("POST /session/ses_sidecar/resume")
+        expect(seen).toContain("POST /session/ses_sidecar/summarize")
+        expect(seen).toContain("POST /session/ses_sidecar/abort")
+        expect(seen).toContain("POST /session/ses_sidecar/fork")
+        expect(seen).toContain("GET /session/ses_fork")
+        expect(summaries).toEqual([{ providerID: "openai", modelID: "gpt-5" }])
 
-        expect(shells).toEqual([{ command: "ls -la" }])
+        expect(shells).toEqual([{ command: "ls -la", model: { providerID: "openai", modelID: "gpt-5" } }])
       } finally {
         server.stop(true)
       }
@@ -614,10 +656,12 @@ describe("Android native client", () => {
       expect(await build.exited).toBe(0)
 
       const seen: string[] = []
+      const editorState = { dirty: true, diff: true, content: "console.log('ok')" }
       const json = (value: unknown) =>
         new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } })
+      const port = 38000 + Math.floor(Math.random() * 10000)
       const server = Bun.serve({
-        port: 0,
+        port,
         async fetch(req) {
           const url = new URL(req.url)
           seen.push(`${req.method} ${url.pathname}`)
@@ -630,14 +674,19 @@ describe("Android native client", () => {
           if (url.pathname === "/editor/edt_sidecar/snapshot")
             return json({
               file: "src/app.ts",
-              dirty: true,
-              diff: true,
+              dirty: editorState.dirty,
+              diff: editorState.diff,
+              content: editorState.content,
               diagnostics: [{ line: 1, column: 1, severity: "error", message: "expected semicolon" }],
             })
-          if (url.pathname === "/editor/edt_sidecar/save" && req.method === "POST")
+          if (url.pathname === "/editor/edt_sidecar/save" && req.method === "POST") {
+            editorState.dirty = false
             return json({ id: "edt_sidecar", sessionID: "ses_sidecar", file: "src/app.ts", dirty: false, diff: true })
-          if (url.pathname === "/editor/edt_sidecar/diff/dismiss" && req.method === "POST")
+          }
+          if (url.pathname === "/editor/edt_sidecar/diff/dismiss" && req.method === "POST") {
+            editorState.diff = false
             return json({ id: "edt_sidecar", sessionID: "ses_sidecar", file: "src/app.ts", dirty: false, diff: false })
+          }
           if (url.pathname === "/editor/edt_sidecar" && req.method === "DELETE") return json(true)
           if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\n\n')
           return json({})

@@ -270,7 +270,9 @@ const androidSmoke = async () => {
       throw new Error(`verify: packed Android ${target.arch} install did not include the Android launcher bundle`)
     }
     if (!(await exists(bin)) || !(await exists(sidecar))) {
-      throw new Error(`verify: packed Android ${target.arch} install did not install the Android runtime and sidecar`)
+      throw new Error(
+        `verify: packed Android ${target.arch} install did not install the Rust TUI runtime and compatibility host alias`,
+      )
     }
   }
 }
@@ -305,7 +307,7 @@ const verifyArchives = async () => {
         throw new Error(`verify: Android archive must not include legacy Termux client in ${file}`)
       }
       if (!list.some((item) => item.endsWith("bin/slopcode-android-host"))) {
-        throw new Error(`verify: missing Android host sidecar in ${file}`)
+        throw new Error(`verify: missing Android compatibility host alias in ${file}`)
       }
       continue
     }

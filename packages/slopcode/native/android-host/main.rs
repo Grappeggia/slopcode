@@ -64,6 +64,23 @@ struct Editor {
     preview: Vec<String>,
 }
 
+struct EditorInputAction {
+    session: String,
+    editor: Editor,
+    messages: Vec<String>,
+    save: bool,
+    dismiss: bool,
+    blur: bool,
+}
+
+#[derive(Default)]
+struct EditorKeys {
+    messages: Vec<String>,
+    save: bool,
+    dismiss: bool,
+    blur: bool,
+}
+
 #[derive(Clone, Default)]
 struct Buffer {
     text: String,
@@ -262,6 +279,7 @@ struct State {
     attached_files: Vec<String>,
     active_file: Option<String>,
     editor: Option<Editor>,
+    editor_focus: bool,
     runtime: String,
     runtime_path: String,
     version: String,
@@ -308,7 +326,8 @@ impl State {
             attached_files: Vec::new(),
             active_file: None,
             editor: None,
-            runtime: String::from("sidecar"),
+            editor_focus: false,
+            runtime: String::from("rust-tui"),
             runtime_path: env::current_exe()
                 .ok()
                 .map(|item| item.display().to_string())
@@ -320,15 +339,21 @@ impl State {
     }
 
     fn notice(&mut self, text: impl Into<String>) {
-        self.notices.push(text.into());
+        let text = text.into();
+        if self.notices.last().is_some_and(|item| item == &text) {
+            return;
+        }
+        self.notices.push(text);
         if self.notices.len() > 8 {
             self.notices.remove(0);
         }
     }
 
     fn panel(&mut self, title: impl Into<String>, rows: Vec<String>) {
+        let title = title.into();
+        self.notice(title.clone());
         self.panel = Some(Panel {
-            title: title.into(),
+            title,
             rows,
         });
     }
@@ -456,7 +481,7 @@ fn doctor(raw: &[String]) -> Result<(), String> {
     let exists = std::path::Path::new(&sidecar).exists();
     if raw.iter().any(|item| item == "--json") {
         println!(
-            "{{\"version\":{},\"platform\":{},\"arch\":{},\"termux\":{},\"mode\":\"rust\",\"strategy\":\"rust\",\"available\":true,\"reason\":\"rust Android runtime\",\"root\":{},\"sidecar\":{},\"sidecarExists\":{},\"bun\":null,\"ffiBlocked\":true}}",
+            "{{\"version\":{},\"platform\":{},\"arch\":{},\"termux\":{},\"mode\":\"rust\",\"strategy\":\"rust\",\"renderer\":\"rust-native\",\"targetRenderer\":\"ratatui/crossterm\",\"available\":true,\"reason\":\"rust Android TUI runtime\",\"root\":{},\"sidecar\":{},\"sidecarExists\":{},\"bun\":null,\"ffiBlocked\":false,\"clipboardBackend\":\"termux-api-command\",\"mouse\":false,\"pluginProtocol\":\"declarative-planned\"}}",
             json(&version()),
             json(env::consts::OS),
             json(env::consts::ARCH),
@@ -469,6 +494,8 @@ fn doctor(raw: &[String]) -> Result<(), String> {
     }
     println!("Android runtime: rust");
     println!("version: {}", version());
+    println!("renderer: rust-native");
+    println!("target renderer: ratatui/crossterm");
     println!("sidecar: {sidecar}");
     println!("sidecar exists: {exists}");
     println!("bun: not bundled");
@@ -609,7 +636,7 @@ fn initialize(
     if let Some(session) = session {
         activate(client, state, session)?;
         state.lock().map_err(|_| "state lock failed")?.notice(
-            "native Android sidecar active; type /doctor for runtime details or /help for commands",
+            "native Android Rust TUI active; type /doctor for runtime details or /help for commands",
         );
         dirty.store(true, Ordering::SeqCst);
         return Ok(());
@@ -788,8 +815,8 @@ fn next_tab(state: &Arc<Mutex<State>>, forward: bool) -> Result<Option<String>, 
     Ok(locked.tabs.get(next).map(|item| item.id.clone()))
 }
 
-fn command_rows() -> Vec<String> {
-    [
+fn command_rows(query: &str) -> Vec<String> {
+    let sections = [
         (
             "Session",
             "/sessions /children /messages /timeline /new /session <id> /tabs /tab <n> /next /prev /close /fork /rename <title>",
@@ -800,10 +827,23 @@ fn command_rows() -> Vec<String> {
         ),
         (
             "Workspace",
-            "/summary /files [dir] /attach <file> /open <file> /save /diagnostics /close-editor[!] /diff [dismiss] /status /queue /stash /list /pop /share /unshare /compact /pause /resume /interrupt",
+            "/summary /files [dir] /attach <file> /open <file> /edit /save /diagnostics /close-editor[!] /diff [dismiss] /status /queue /stash /list /pop /share /unshare /compact /pause /resume /interrupt",
         ),
         ("System", "/doctor /runtime /shell /autocomplete /themes /keybinds /clipboard /title <title> /suspend /plugins /shells /orgs /clear /help /exit"),
-    ]
+    ];
+    let needle = query.to_lowercase();
+    if !needle.is_empty() {
+        let rows = COMMANDS
+            .iter()
+            .filter(|command| command.to_lowercase().contains(&needle))
+            .map(|command| format!("{command}  run directly or complete with Tab"))
+            .collect::<Vec<_>>();
+        if rows.is_empty() {
+            return vec![format!("No commands match {query}")];
+        }
+        return rows;
+    }
+    sections
     .iter()
     .map(|(section, text)| format!("{section}: {text}"))
     .collect()
@@ -813,8 +853,8 @@ fn runtime_rows(state: &State) -> Vec<String> {
     vec![
         format!("mode: {}", state.runtime),
         format!("version: {}", state.version),
-        format!("sidecar: {}", state.runtime_path),
-        String::from("native OpenTUI: blocked on Android until Bun exposes bun:ffi"),
+        format!("runtime path: {}", state.runtime_path),
+        String::from("renderer: rust-native; target renderer: ratatui/crossterm"),
         String::from("install check: slopcode doctor android --json"),
     ]
 }
@@ -1038,10 +1078,58 @@ fn editor_snapshot(client: &Client, session: &str, editor: &Editor) -> Result<Ed
         dirty: boolean(&body, "dirty").unwrap_or(editor.dirty),
         diff: boolean(&body, "diff").unwrap_or(editor.diff),
         diagnostics: diagnostic_rows(&body),
-        preview: string(&body, "content")
-            .map(|item| item.lines().take(8).map(|line| line.to_string()).collect())
+        preview: editor_preview_rows(&body)
             .unwrap_or_else(|| editor.preview.clone()),
     })
+}
+
+fn editor_preview_rows(body: &str) -> Option<Vec<String>> {
+    if let Some(content) = string(body, "content") {
+        return Some(content.lines().take(8).map(|line| line.to_string()).collect());
+    }
+    let rows = array_value(body, "rows")?;
+    let mut out = Vec::new();
+    for row in arrays(&rows).into_iter().take(8) {
+        let text = objects(&row)
+            .into_iter()
+            .filter_map(|item| string(&item, "text"))
+            .collect::<Vec<_>>()
+            .join("");
+        out.push(text);
+    }
+    Some(out)
+}
+
+fn editor_save(client: &Client, session: &str, editor: &Editor) -> Result<Editor, String> {
+    let body = client.request(
+        "POST",
+        &format!(
+            "/editor/{}/save?sessionID={}",
+            editor.id,
+            encode_query(session)
+        ),
+        None,
+    )?;
+    Ok(editor_from(&body, &editor.file).unwrap_or(Editor {
+        dirty: false,
+        ..editor.clone()
+    }))
+}
+
+fn editor_dismiss_diff(client: &Client, session: &str, editor: &Editor) -> Result<Editor, String> {
+    let body = client.request(
+        "POST",
+        &format!(
+            "/editor/{}/diff/dismiss?sessionID={}",
+            editor.id,
+            encode_query(session)
+        ),
+        None,
+    )?;
+    Ok(editor_from(&body, &editor.file).unwrap_or(Editor {
+        diff: false,
+        ..editor.clone()
+    }))
 }
 
 fn message_rows(body: &str) -> Vec<String> {
@@ -1102,6 +1190,16 @@ fn submit_prompt(
     dirty: &Arc<AtomicBool>,
     text: &str,
 ) -> Result<bool, String> {
+    submit_prompt_record(client, state, dirty, text, true)
+}
+
+fn submit_prompt_record(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    dirty: &Arc<AtomicBool>,
+    text: &str,
+    record: bool,
+) -> Result<bool, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Ok(true);
@@ -1134,7 +1232,9 @@ fn submit_prompt(
         body.push('}');
         client.request("POST", &format!("/session/{session}/shell"), Some(&body))?;
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
-        locked.history_push(trimmed);
+        if record {
+            locked.history_push(trimmed);
+        }
         locked.shell = false;
         locked.status = String::from("sent");
         dirty.store(true, Ordering::SeqCst);
@@ -1180,7 +1280,9 @@ fn submit_prompt(
     )?;
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
-        locked.history_push(trimmed);
+        if record {
+            locked.history_push(trimmed);
+        }
         if locked.status != "idle" {
             locked.queue += 1;
         }
@@ -1224,6 +1326,7 @@ fn session_required(name: &str) -> bool {
             | "sidebar"
             | "files"
             | "open"
+            | "edit"
             | "save"
             | "diagnostics"
             | "close-editor"
@@ -1265,7 +1368,7 @@ fn command(
             state
                 .lock()
                 .map_err(|_| "state lock failed")?
-                .panel("Command Palette", command_rows());
+                .panel("Command Palette", command_rows(value));
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
@@ -1325,6 +1428,7 @@ fn command(
         "tabs" => {
             let mut locked = state.lock().map_err(|_| "state lock failed")?;
             let current = locked.session.clone();
+            let active_dirty = locked.editor.as_ref().is_some_and(|editor| editor.dirty);
             let rows = if locked.tabs.is_empty() {
                 vec![String::from("No open tabs")]
             } else {
@@ -1333,11 +1437,15 @@ fn command(
                     .iter()
                     .enumerate()
                     .map(|(index, tab)| {
+                        let is_current = current.as_deref() == Some(tab.id.as_str());
+                        let dirty = if is_current && active_dirty { " *" } else { "" };
                         format!(
-                            "{} {} {}",
+                            "{} {} {}{} [tab: /tab {}] [close: /close]",
                             index + 1,
-                            marker(current.as_deref() == Some(tab.id.as_str())),
-                            tab.title
+                            marker(is_current),
+                            tab.title,
+                            dirty,
+                            index + 1
                         )
                     })
                     .collect()
@@ -1354,10 +1462,40 @@ fn command(
             Ok(true)
         }
         "close" => {
-            let mut locked = state.lock().map_err(|_| "state lock failed")?;
-            if let Some(current) = locked.session.clone() {
-                locked.tabs.retain(|item| item.id != current);
-                locked.notice("closed current tab");
+            let next = {
+                let mut locked = state.lock().map_err(|_| "state lock failed")?;
+                if let Some(current) = locked.session.clone() {
+                    let index = locked
+                        .tabs
+                        .iter()
+                        .position(|item| item.id == current)
+                        .unwrap_or(0);
+                    locked.tabs.retain(|item| item.id != current);
+                    let next = locked
+                        .tabs
+                        .get(index.min(locked.tabs.len().saturating_sub(1)))
+                        .map(|item| item.id.clone());
+                    if next.is_some() {
+                        locked.notice("closed current tab");
+                    } else {
+                        locked.session = None;
+                        locked.messages.clear();
+                        locked.panel = None;
+                        locked.sidebar_visible = false;
+                        locked.editor = None;
+                        locked.editor_focus = false;
+                        locked.active_file = None;
+                        locked.title = String::from("Home");
+                        locked.notice("closed last tab");
+                    }
+                    next
+                } else {
+                    locked.notice("no active tab");
+                    None
+                }
+            };
+            if let Some(session) = next {
+                activate(client, state, session)?;
             }
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
@@ -1435,6 +1573,7 @@ fn command(
             locked.sidebar_visible = true;
             locked.sidebar_mode = String::from("files");
             locked.sidebar_files = rows.clone();
+            locked.notice("Sidebar overlay");
             locked.panel("Files", rows);
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
@@ -1445,6 +1584,7 @@ fn command(
             locked.sidebar_visible = true;
             locked.sidebar_mode = String::from("summary");
             locked.sidebar = rows;
+            locked.notice("Sidebar overlay");
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
@@ -1488,6 +1628,17 @@ fn command(
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
         }
+        "edit" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            if locked.editor.is_some() {
+                locked.editor_focus = true;
+                locked.notice("editor input focus; Ctrl-S saves, Ctrl-D dismisses diff, Ctrl-Q returns to prompt");
+            } else {
+                locked.notice("no active editor; use /open <file>");
+            }
+            dirty.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
         "save" => {
             let session = current_session(state)?;
             let editor = state
@@ -1496,19 +1647,7 @@ fn command(
                 .editor
                 .clone()
                 .ok_or("no active editor")?;
-            let body = client.request(
-                "POST",
-                &format!(
-                    "/editor/{}/save?sessionID={}",
-                    editor.id,
-                    encode_query(&session)
-                ),
-                None,
-            )?;
-            let saved = editor_from(&body, &editor.file).unwrap_or(Editor {
-                dirty: false,
-                ..editor
-            });
+            let saved = editor_save(client, &session, &editor)?;
             let mut locked = state.lock().map_err(|_| "state lock failed")?;
             locked.editor = Some(saved.clone());
             locked.panel("Editor", editor_rows(&saved));
@@ -1556,6 +1695,7 @@ fn command(
             locked.open_files.retain(|item| item != &latest.file);
             locked.active_file = None;
             locked.editor = None;
+            locked.editor_focus = false;
             locked.notice("closed editor");
             dirty.store(true, Ordering::SeqCst);
             Ok(true)
@@ -1785,19 +1925,7 @@ fn command(
                     .editor
                     .clone()
                     .ok_or("no active editor")?;
-                let body = client.request(
-                    "POST",
-                    &format!(
-                        "/editor/{}/diff/dismiss?sessionID={}",
-                        editor.id,
-                        encode_query(&session)
-                    ),
-                    None,
-                )?;
-                let updated = editor_from(&body, &editor.file).unwrap_or(Editor {
-                    diff: false,
-                    ..editor
-                });
+                let updated = editor_dismiss_diff(client, &session, &editor)?;
                 let mut locked = state.lock().map_err(|_| "state lock failed")?;
                 locked.editor = Some(updated.clone());
                 locked.panel("Editor", editor_rows(&updated));
@@ -1821,9 +1949,9 @@ fn command(
             state.lock().map_err(|_| "state lock failed")?.panel(
                 "Themes",
                 vec![
-                    String::from("Android sidecar follows the Termux terminal theme."),
+                    String::from("Android Rust TUI follows the Termux terminal theme."),
                     String::from(
-                        "Use Linux/OpenTUI for full theme switching until FFI support lands.",
+                        "Full theme switching belongs in the ratatui/crossterm renderer pass.",
                     ),
                 ],
             );
@@ -1848,8 +1976,8 @@ fn command(
             state.lock().map_err(|_| "state lock failed")?.panel(
                 "Clipboard",
                 vec![
-                    String::from("Bracketed paste is supported in the Android sidecar."),
-                    String::from("System clipboard access needs Termux:API or OpenTUI FFI and is not called from the sidecar."),
+                    String::from("Bracketed paste is supported in the Android Rust TUI."),
+                    String::from("System clipboard access should use Termux:API commands in the Rust TUI."),
                     String::from("Use termux-clipboard-get or termux-clipboard-set outside SlopCode for OS clipboard sync."),
                 ],
             );
@@ -1861,7 +1989,7 @@ fn command(
                 "Suspend",
                 vec![
                     String::from("Terminal job control handles Ctrl-Z in Termux."),
-                    String::from("The Android sidecar keeps suspend discoverable without invoking native OpenTUI hooks."),
+                    String::from("The Android Rust TUI keeps suspend discoverable without Bun/OpenTUI hooks."),
                 ],
             );
             dirty.store(true, Ordering::SeqCst);
@@ -1876,7 +2004,7 @@ fn command(
                         "Install and configure plugins with the same project config used by Linux.",
                     ),
                     String::from(
-                        "Native plugin UI mounting remains blocked by OpenTUI FFI on Termux.",
+                        "Native plugin UI mounting needs the shared declarative plugin protocol.",
                     ),
                 ],
             );
@@ -1911,7 +2039,7 @@ fn command(
                 "Integrations",
                 vec![
                     String::from("Manage MCPs, providers, and orgs in config or Linux TUI."),
-                    String::from("Android sidecar keeps these commands discoverable for parity."),
+                    String::from("Android Rust TUI keeps these commands discoverable for parity."),
                 ],
             );
             dirty.store(true, Ordering::SeqCst);
@@ -1954,14 +2082,15 @@ fn input(
     data: &[u8],
 ) -> Result<bool, String> {
     let text = String::from_utf8_lossy(data).to_string();
-    let mut submit = None;
+    let mut submits = Vec::new();
     let mut exit = false;
     let mut permission = None;
     let mut question = None;
+    let mut editor_action = None;
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
         if locked.permission.is_some() {
-            for ch in text.chars() {
+            for (offset, ch) in text.char_indices() {
                 let mut clear = false;
                 if let Some(active) = locked.permission.clone() {
                     if active.reject.is_some() {
@@ -2095,13 +2224,35 @@ fn input(
                     }
                 }
                 if clear {
+                    if text[offset + ch.len_utf8()..]
+                        .chars()
+                        .any(|item| item == '\u{3}' || item == '\u{4}')
+                    {
+                        exit = true;
+                    }
                     break;
                 }
             }
         } else if locked.question.is_some() {
             question_input(&mut locked, &text, &mut question, &mut exit);
+        } else if locked.editor_focus && locked.editor.is_some() {
+            let keys = editor_focus_input(&mut locked, &text);
+            if keys.blur {
+                locked.editor_focus = false;
+                locked.notice("prompt input focus");
+            }
+            if let (Some(session), Some(editor)) = (locked.session.clone(), locked.editor.clone()) {
+                editor_action = Some(EditorInputAction {
+                    session,
+                    editor,
+                    messages: keys.messages,
+                    save: keys.save,
+                    dismiss: keys.dismiss,
+                    blur: keys.blur,
+                });
+            }
         } else {
-            prompt_input(&mut locked, &text, &mut submit, &mut exit);
+            prompt_input(&mut locked, &text, &mut submits, &mut exit);
         }
     }
     if let Some((id, session, reply, reason)) = permission {
@@ -2127,12 +2278,39 @@ fn input(
             Some(&body),
         )?;
     }
+    if let Some(action) = editor_action {
+        for message in &action.messages {
+            client.editor_message(&action.session, &action.editor.id, message)?;
+        }
+        if action.save {
+            let saved = editor_save(client, &action.session, &action.editor)?;
+            state.lock().map_err(|_| "state lock failed")?.editor = Some(saved);
+        }
+        if action.dismiss {
+            let current = state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .editor
+                .clone()
+                .unwrap_or_else(|| action.editor.clone());
+            let updated = editor_dismiss_diff(client, &action.session, &current)?;
+            state.lock().map_err(|_| "state lock failed")?.editor = Some(updated);
+        }
+        if !action.messages.is_empty() || action.save || action.dismiss || action.blur {
+            let current = { state.lock().map_err(|_| "state lock failed")?.editor.clone() };
+            if let Some(current) = current {
+                if let Ok(snapshot) = editor_snapshot(client, &action.session, &current) {
+                    state.lock().map_err(|_| "state lock failed")?.editor = Some(snapshot);
+                }
+            }
+        }
+    }
     if exit {
         done.store(true, Ordering::SeqCst);
         return Ok(true);
     }
-    if let Some(text) = submit {
-        if !submit_prompt(client, state, dirty, &text)? {
+    for text in submits {
+        if !submit_prompt_record(client, state, dirty, &text, false)? {
             return Ok(true);
         }
     }
@@ -2166,6 +2344,7 @@ const COMMANDS: &[&str] = &[
     "/sidebar",
     "/attach",
     "/open",
+    "/edit",
     "/save",
     "/diagnostics",
     "/close-editor",
@@ -2205,7 +2384,7 @@ const COMMANDS: &[&str] = &[
     "/quit",
 ];
 
-fn prompt_input(state: &mut State, text: &str, submit: &mut Option<String>, exit: &mut bool) {
+fn prompt_input(state: &mut State, text: &str, submits: &mut Vec<String>, exit: &mut bool) {
     let mut index = 0;
     while index < text.len() {
         if let Some(paste) = state.paste.as_mut() {
@@ -2299,7 +2478,12 @@ fn prompt_input(state: &mut State, text: &str, submit: &mut Option<String>, exit
                 }
             }
             '\r' | '\n' => {
-                *submit = Some(state.input.clear());
+                let value = state.input.clear();
+                let trimmed = value.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with('/') {
+                    state.history_push(trimmed);
+                }
+                submits.push(value);
                 state.history_index = None;
                 state.history_draft.clear();
             }
@@ -2335,6 +2519,68 @@ fn prompt_input(state: &mut State, text: &str, submit: &mut Option<String>, exit
             _ => {}
         }
     }
+}
+
+fn editor_focus_input(state: &mut State, text: &str) -> EditorKeys {
+    let mut action = EditorKeys::default();
+    let mut index = 0;
+    while index < text.len() {
+        if let Some(paste) = state.paste.as_mut() {
+            if let Some(end) = text[index..].find("\x1b[201~") {
+                paste.push_str(&text[index..index + end]);
+                let value = state.paste.take().unwrap();
+                action
+                    .messages
+                    .push(format!("{{\"type\":\"paste\",\"text\":{}}}", json(&value)));
+                index += end + "\x1b[201~".len();
+                continue;
+            }
+            paste.push_str(&text[index..]);
+            break;
+        }
+        let rest = &text[index..];
+        if rest.starts_with("\x1b[200~") {
+            state.paste = Some(String::new());
+            index += "\x1b[200~".len();
+            continue;
+        }
+        let special = [
+            ("\x1b[A", "<Up>"),
+            ("\x1b[B", "<Down>"),
+            ("\x1b[D", "<Left>"),
+            ("\x1b[C", "<Right>"),
+            ("\x1b[H", "<Home>"),
+            ("\x1b[F", "<End>"),
+            ("\x1b[1~", "<Home>"),
+            ("\x1b[4~", "<End>"),
+            ("\x1b[3~", "<Del>"),
+            ("\x1b[5~", "<PageUp>"),
+            ("\x1b[6~", "<PageDown>"),
+        ];
+        if let Some((seq, key)) = special.iter().find(|(seq, _)| rest.starts_with(*seq)) {
+            action.messages.push(editor_key(key));
+            index += seq.len();
+            continue;
+        }
+        let ch = rest.chars().next().unwrap();
+        index += ch.len_utf8();
+        match ch {
+            '\u{1b}' | '\u{11}' => action.blur = true,
+            '\u{13}' => action.save = true,
+            '\u{4}' => action.dismiss = true,
+            '\r' | '\n' => action.messages.push(editor_key("<CR>")),
+            '\t' => action.messages.push(editor_key("<Tab>")),
+            '\u{7f}' | '\u{8}' => action.messages.push(editor_key("<BS>")),
+            '<' => action.messages.push(editor_key("<LT>")),
+            ch if ch >= ' ' => action.messages.push(editor_key(&ch.to_string())),
+            _ => {}
+        }
+    }
+    action
+}
+
+fn editor_key(key: &str) -> String {
+    format!("{{\"type\":\"input\",\"keys\":{}}}", json(key))
 }
 
 fn question_input(
@@ -2789,6 +3035,54 @@ impl Client {
             .map_err(|err| err.to_string())?;
         response(&read_response(&mut stream)?)
     }
+
+    fn editor_message(&self, session: &str, editor: &str, message: &str) -> Result<(), String> {
+        let url = parse_url(&self.url)?;
+        let path = format!(
+            "{}{}",
+            url.base,
+            format!("/editor/{editor}/connect?sessionID={}", encode_query(session))
+        );
+        let mut stream = connect(&url.host, url.port)?;
+        stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+        stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: {}:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nx-slopcode-daemon-token: {}\r\n\r\n",
+            url.host, url.port, self.token
+        );
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|err| err.to_string())?;
+        let raw = read_response(&mut stream)?;
+        let head = String::from_utf8_lossy(&raw);
+        if !head.starts_with("HTTP/1.1 101") && !head.starts_with("HTTP/1.0 101") {
+            return Err(format!("editor websocket upgrade failed: {head}"));
+        }
+        stream
+            .write_all(&websocket_text_frame(message.as_bytes()))
+            .map_err(|err| err.to_string())?;
+        stream.flush().map_err(|err| err.to_string())?;
+        Ok(())
+    }
+}
+
+fn websocket_text_frame(payload: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x81];
+    let mask = [0x37, 0xfa, 0x21, 0x3d];
+    if payload.len() < 126 {
+        out.push(0x80 | payload.len() as u8);
+    } else if payload.len() <= u16::MAX as usize {
+        out.push(0x80 | 126);
+        out.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    } else {
+        out.push(0x80 | 127);
+        out.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+    }
+    out.extend_from_slice(&mask);
+    for (index, byte) in payload.iter().enumerate() {
+        out.push(byte ^ mask[index % mask.len()]);
+    }
+    out
 }
 
 fn connect(host: &str, port: u16) -> Result<TcpStream, String> {
@@ -3072,16 +3366,20 @@ fn draw(state: &State, size: (usize, usize)) {
         width,
     ));
     if !state.tabs.is_empty() {
+        let active_dirty = state.editor.as_ref().is_some_and(|editor| editor.dirty);
         let tabs = state
             .tabs
             .iter()
             .enumerate()
             .map(|(index, tab)| {
+                let is_current = state.session.as_deref() == Some(tab.id.as_str());
+                let dirty = if is_current && active_dirty { "*" } else { "" };
                 format!(
-                    "{}{}:{}",
-                    marker(state.session.as_deref() == Some(tab.id.as_str())),
+                    "{}{}:{}{} [x]",
+                    marker(is_current),
                     index + 1,
-                    tab.title
+                    tab.title,
+                    dirty
                 )
             })
             .collect::<Vec<_>>()
@@ -3135,6 +3433,9 @@ fn draw(state: &State, size: (usize, usize)) {
             ),
             width,
         ));
+        if state.editor_focus {
+            lines.push(crop("  input focus: Ctrl-S save, Ctrl-D dismiss diff, Ctrl-Q prompt", width));
+        }
         for row in editor.diagnostics.iter().take(3) {
             lines.extend(wrap(&format!("  {row}"), width));
         }
@@ -3581,6 +3882,45 @@ fn objects(input: &str) -> Vec<String> {
                     out.push(input[pos..index + 1].to_string());
                 }
             }
+        }
+    }
+    out
+}
+
+fn arrays(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut start = None;
+    let mut depth = 0i32;
+    let mut inside = false;
+    let mut escaped = false;
+    for (index, ch) in input.char_indices() {
+        if inside {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                inside = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            inside = true;
+            continue;
+        }
+        if ch == '[' {
+            depth += 1;
+            if depth == 2 {
+                start = Some(index);
+            }
+        }
+        if ch == ']' {
+            if depth == 2 {
+                if let Some(pos) = start.take() {
+                    out.push(input[pos..index + 1].to_string());
+                }
+            }
+            depth -= 1;
         }
     }
     out
