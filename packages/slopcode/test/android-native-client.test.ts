@@ -177,6 +177,8 @@ describe("Android native client", () => {
         if (code !== 0) throw new Error(stderr || stdout)
         expect(stdout).toContain("SlopCode")
         expect(stdout).toContain("Fix a TODO in the codebase")
+        expect(stdout).not.toContain("info: connected")
+        expect(stdout).not.toContain("SlopCode Android |")
         expect(created).toBe(1)
         expect(bodies[0]?.parts?.[0]?.text).toBe("hello from home")
       } finally {

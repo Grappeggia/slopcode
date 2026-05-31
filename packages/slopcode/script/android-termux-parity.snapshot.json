@@ -104,8 +104,8 @@
     {
       "id": "home.landing",
       "level": "workflow-parity",
-      "android": ["home logo", "prompt placeholder", "lazy session creation", "typed prompt submits"],
-      "linux": ["home logo", "prompt placeholder", "lazy session creation", "typed prompt submits"]
+      "android": ["home logo", "prompt placeholder", "compact footer chrome", "lazy session creation", "typed prompt submits"],
+      "linux": ["home logo", "prompt placeholder", "compact footer chrome", "lazy session creation", "typed prompt submits"]
     },
     {
       "id": "composer.editing",
@@ -219,6 +219,7 @@
       "id": "terminal.polish",
       "level": "surface-only",
       "android": [
+        "Linux-like chrome",
         "Termux theme guidance",
         "keybind help",
         "clipboard guidance",

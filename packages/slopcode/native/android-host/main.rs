@@ -283,6 +283,7 @@ struct State {
     runtime: String,
     runtime_path: String,
     version: String,
+    connected: bool,
     permissions: Vec<Permission>,
     permission_index: usize,
 }
@@ -333,6 +334,7 @@ impl State {
                 .map(|item| item.display().to_string())
                 .unwrap_or_else(|| String::from("unknown")),
             version: version(),
+            connected: false,
             permissions: Vec::new(),
             permission_index: 0,
         }
@@ -635,9 +637,6 @@ fn initialize(
     }
     if let Some(session) = session {
         activate(client, state, session)?;
-        state.lock().map_err(|_| "state lock failed")?.notice(
-            "native Android Rust TUI active; type /doctor for runtime details or /help for commands",
-        );
         dirty.store(true, Ordering::SeqCst);
         return Ok(());
     }
@@ -2807,7 +2806,7 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &str) {
     let props = object_value(event, "properties").unwrap_or_else(|| event.to_string());
     if let Ok(mut locked) = state.lock() {
         match kind.as_str() {
-            "server.connected" => locked.notice("connected"),
+            "server.connected" => locked.connected = true,
             "session.status" => {
                 if same_session(&locked, &props) {
                     let status = object_value(&props, "status").unwrap_or_default();
@@ -3265,6 +3264,33 @@ fn box_line(input: &str, inner: usize, width: usize) -> String {
     )
 }
 
+fn status_items(state: &State) -> Vec<String> {
+    let mut items = vec![state.cwd.clone()];
+    items.push(if state.connected {
+        String::from("connected")
+    } else {
+        String::from("connecting")
+    });
+    if state.sidebar_visible {
+        items.push(format!("sidebar {}", state.sidebar_mode));
+    }
+    if state.editor.is_some() {
+        items.push(String::from("editor"));
+    }
+    if let Some(model) = &state.model {
+        items.push(model.clone());
+    }
+    if let Some(agent) = &state.agent {
+        items.push(format!("agent {agent}"));
+    }
+    items.push(state.version.clone());
+    items
+}
+
+fn status_footer(state: &State, width: usize) -> String {
+    crop(&status_items(state).join(" | "), width)
+}
+
 fn draw_home(state: &State, size: (usize, usize)) {
     let (width, height) = size;
     let box_width = width.min(75).max(20);
@@ -3293,7 +3319,7 @@ fn draw_home(state: &State, size: (usize, usize)) {
             width,
         ));
     }
-    lines.push(box_line("Enter send | /commands | /doctor", inner, width));
+    lines.push(box_line("Enter send | /commands | /status", inner, width));
     lines.push(center(
         &format!("+{}+", "-".repeat(box_width.saturating_sub(2))),
         width,
@@ -3308,10 +3334,7 @@ fn draw_home(state: &State, size: (usize, usize)) {
     for notice in &state.notices {
         lines.extend(wrap(&format!("info: {notice}"), width));
     }
-    let footer = vec![crop(
-        &format!("{} | {} | /help", state.cwd, state.version),
-        width,
-    )];
+    let footer = vec![status_footer(state, width)];
     let body_height = height.saturating_sub(footer.len());
     let top = body_height.saturating_sub(lines.len()) / 2;
     let mut rows = Vec::new();
@@ -3343,28 +3366,18 @@ fn draw(state: &State, size: (usize, usize)) {
         return;
     }
     let mut lines = Vec::new();
-    let model = state
-        .model
-        .as_ref()
-        .map(|item| format!(" model {item}"))
-        .unwrap_or_default();
-    let agent = state
-        .agent
-        .as_ref()
-        .map(|item| format!(" agent {item}"))
-        .unwrap_or_default();
-    lines.push(crop(
-        &format!("SlopCode Android | {}{}{}", state.status, model, agent),
-        width,
-    ));
-    lines.push(crop(&format!("session {}", state.title), width));
-    lines.push(crop(
-        &format!(
-            "runtime {} {} | {}",
-            state.runtime, state.version, state.runtime_path
-        ),
-        width,
-    ));
+    lines.push(crop(&format!("# {}", state.title), width));
+    let mut context = vec![state.status.clone()];
+    if let Some(model) = state.model.as_ref() {
+        context.push(format!("model {model}"));
+    }
+    if let Some(agent) = state.agent.as_ref() {
+        context.push(format!("agent {agent}"));
+    }
+    if state.shell {
+        context.push(String::from("shell"));
+    }
+    lines.push(crop(&context.join(" | "), width));
     if !state.tabs.is_empty() {
         let active_dirty = state.editor.as_ref().is_some_and(|editor| editor.dirty);
         let tabs = state
@@ -3579,7 +3592,8 @@ fn footer_lines(state: &State, width: usize) -> Vec<String> {
     } else {
         " | /commands"
     };
-    wrap(
+    let mut lines = vec![status_footer(state, width)];
+    lines.extend(wrap(
         &format!(
             "{}> {}{hint}",
             if state.shell { "shell " } else { "" },
@@ -3587,7 +3601,8 @@ fn footer_lines(state: &State, width: usize) -> Vec<String> {
         )
         .replace('\n', "\n  "),
         width,
-    )
+    ));
+    lines
 }
 
 fn wrap(input: &str, width: usize) -> Vec<String> {

@@ -584,6 +584,8 @@ const actions = {
       ],
     })
     semantic(run, ["SlopCode", "Fix a TODO in the codebase"])
+    assert(!run.stdout.includes("info: connected"), "home should use compact connected status, not a notice\\n" + run.stdout)
+    assert(!run.stdout.includes("SlopCode Android |"), "home should not expose Android runtime chrome\\n" + run.stdout)
     assert(run.bodies[0]?.parts?.[0]?.text === "hello from home", "home prompt did not submit " + JSON.stringify(run.bodies))
   },
   "composer.submit": async () => {
@@ -637,6 +639,7 @@ const actions = {
     const text = run.screen + "\\n" + run.stdout
     assert(text.includes("Layout Session") || text.includes("Fix a TODO in the codebase"), "screen missing expected content\\n" + run.screen + "\\nraw:\\n" + run.stdout)
     assert(text.includes("SlopCode"), "screen missing chrome\\n" + run.screen + "\\nraw:\\n" + run.stdout)
+    assert(!text.includes("SlopCode Android |"), "screen should use neutral Linux-like chrome\\n" + run.screen + "\\nraw:\\n" + run.stdout)
   },
 
   "commands.palette": async () => {

@@ -40,9 +40,9 @@ export const parity = [
     level: "workflow-parity",
     active: true,
     status: "active",
-    linux: ["home logo", "prompt placeholder", "lazy session creation", "typed prompt submits"],
-    android: ["home logo", "prompt placeholder", "lazy session creation", "typed prompt submits"],
-    expect: ["home logo", "prompt placeholder", "lazy session creation", "typed prompt submits"],
+    linux: ["home logo", "prompt placeholder", "compact footer chrome", "lazy session creation", "typed prompt submits"],
+    android: ["home logo", "prompt placeholder", "compact footer chrome", "lazy session creation", "typed prompt submits"],
+    expect: ["home logo", "prompt placeholder", "compact footer chrome", "lazy session creation", "typed prompt submits"],
   },
   {
     id: "composer.submit",
@@ -274,6 +274,7 @@ export const parity = [
     status: "active",
     linux: ["theme switcher", "keybind help", "system clipboard", "title updates", "suspend hooks", "plugin UI"],
     android: [
+      "Linux-like chrome",
       "Termux theme guidance",
       "keybind help",
       "clipboard guidance",
@@ -282,6 +283,7 @@ export const parity = [
       "plugin discovery",
     ],
     expect: [
+      "Linux-like chrome",
       "Termux theme guidance",
       "keybind help",
       "clipboard guidance",
