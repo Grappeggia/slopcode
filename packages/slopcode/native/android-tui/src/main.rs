@@ -14,7 +14,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
@@ -455,10 +455,11 @@ struct State {
     question: Option<Question>,
     manifest: SurfaceManifest,
     surface_frame: Option<Vec<String>>,
+    surface_hydrated: bool,
 }
 
 impl State {
-    fn new(args: Args) -> Self {
+    fn new(args: Args, width: u16, height: u16) -> Self {
         let cwd = args
             .cwd
             .clone()
@@ -491,7 +492,7 @@ impl State {
             sidebar_mode: SidebarMode::Summary,
             sidebar_rows: Vec::new(),
             tabs: Vec::new(),
-            footer_directory: cwd,
+            footer_directory: cwd.clone(),
             footer_workspace: None,
             footer_lsp: 0,
             footer_mcp: 0,
@@ -505,7 +506,8 @@ impl State {
             permission_index: 0,
             question: None,
             manifest: fallback_manifest(),
-            surface_frame: None,
+            surface_frame: Some(initial_surface_frame(width, height, &cwd)),
+            surface_hydrated: false,
             args,
         }
     }
@@ -1204,12 +1206,12 @@ fn apply_surface_frame(state: &Arc<Mutex<State>>, body: &Value) -> Result<(), St
     locked.title = string(body, "title").unwrap_or_else(|| locked.title.clone());
     locked.status = string(body, "status").unwrap_or_else(|| locked.status.clone());
     locked.surface_frame = Some(lines);
+    locked.surface_hydrated = true;
     Ok(())
 }
 
 fn apply_surface_snapshot(state: &Arc<Mutex<State>>, body: &Value) -> Result<(), String> {
     let mut locked = state.lock().map_err(|_| "state lock failed")?;
-    locked.surface_frame = None;
     if let Some(id) = string(body, "sessionID") {
         locked.session = Some(id);
     }
@@ -1317,12 +1319,12 @@ fn run() -> Result<(), String> {
         url: args.url.clone(),
         token: args.token.clone(),
     };
-    let state = Arc::new(Mutex::new(State::new(args.clone())));
+    let (width, height) = initial_terminal_size();
+    let state = Arc::new(Mutex::new(State::new(args.clone(), width, height)));
     let dirty = Arc::new(AtomicBool::new(true));
     let done = Arc::new(AtomicBool::new(false));
 
     spawn_events(client.clone(), state.clone(), dirty.clone(), done.clone());
-    let (width, height) = initial_terminal_size();
     spawn_startup(
         client.clone(),
         state.clone(),
@@ -1613,7 +1615,7 @@ fn terminal_loop(
                 startup_log(
                     startup,
                     "first_frame",
-                    json!({ "hydrated": locked.surface_frame.is_some() }),
+                    json!({ "hydrated": locked.surface_hydrated }),
                 );
                 first_draw = false;
             }
@@ -3271,7 +3273,19 @@ fn events_once(
                     let block = pending[..pos].to_string();
                     pending = pending[pos + 2..].to_string();
                     if let Some(event) = parse_sse(&block) {
+                        let kind = event
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
                         apply_event(state, &event);
+                        if kind != "server.connected" {
+                            let session =
+                                state.lock().ok().and_then(|locked| locked.session.clone());
+                            let (width, height) = initial_terminal_size();
+                            hydrate_surface_frame(client, state, session.as_deref(), width, height)
+                                .ok();
+                        }
                         dirty.store(true, Ordering::SeqCst);
                     }
                 }
@@ -3312,6 +3326,7 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &Value) {
     };
     if kind != "server.connected" {
         locked.surface_frame = None;
+        locked.surface_hydrated = false;
     }
     match kind {
         "server.connected" => {
@@ -3684,6 +3699,63 @@ fn initial_terminal_size() -> (u16, u16) {
         .unwrap_or_else(|| (env_u16("COLUMNS", 80), env_u16("LINES", 24)))
 }
 
+fn fit_line(text: &str, width: u16) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        if out.chars().count() >= width as usize {
+            break;
+        }
+        out.push(ch);
+    }
+    while out.chars().count() < width as usize {
+        out.push(' ');
+    }
+    out
+}
+
+fn center_line(text: &str, width: u16) -> String {
+    let len = text.chars().count() as u16;
+    let left = width.saturating_sub(len) / 2;
+    fit_line(&format!("{}{}", " ".repeat(left as usize), text), width)
+}
+
+fn initial_surface_frame(width: u16, height: u16, directory: &str) -> Vec<String> {
+    let width = width.clamp(20, 240);
+    let height = height.clamp(8, 100);
+    let mut lines = vec![" ".repeat(width as usize); height as usize];
+    let logo = [
+        "                                  ",
+        "█▀▀ █   █▀█ █▀█  █▀▀ █▀█ █▀▄ █▀▀",
+        "▀▀█ █   █ █ █▀▀  █   █ █ █ █ █▀▀",
+        "▀▀▀ ▀▀▀ ▀▀▀ ▀    ▀▀▀ ▀▀▀ ▀▀  ▀▀▀",
+    ];
+    let logo_start = ((height.saturating_sub(8)) / 2).max(1) as usize;
+    for (index, line) in logo.iter().enumerate() {
+        let row = logo_start + index;
+        if row >= lines.len() {
+            break;
+        }
+        lines[row] = center_line(line, width);
+    }
+    let prompt_width = width.min(75);
+    let prompt_left = width.saturating_sub(prompt_width) / 2;
+    let prompt_y = (logo_start + logo.len() + 2).min(lines.len().saturating_sub(2));
+    let prompt = fit_line("> ", prompt_width);
+    lines[prompt_y] = fit_line(
+        &format!("{}{}", " ".repeat(prompt_left as usize), prompt),
+        width,
+    );
+    let footer = [directory, version().as_str(), "/help"]
+        .into_iter()
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if let Some(last) = lines.last_mut() {
+        *last = fit_line(&footer, width);
+    }
+    lines
+}
+
 fn connect(host: &str, port: u16) -> Result<TcpStream, String> {
     let addrs = (host, port)
         .to_socket_addrs()
@@ -3851,36 +3923,19 @@ fn render_surface_frame(frame: &mut Frame<'_>, area: Rect, lines: &[String]) {
 }
 
 fn render_home(frame: &mut Frame<'_>, area: Rect, state: &State) {
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(4),
-            Constraint::Min(8),
-            Constraint::Length(4),
-        ])
-        .split(area);
-    let header = Paragraph::new(Text::from(vec![
-        Line::from(Span::styled(
-            "SlopCode",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("Rust-native Termux TUI"),
-    ]))
-    .block(Block::default().borders(Borders::ALL).title("Home"))
-    .alignment(Alignment::Center);
-    frame.render_widget(header, layout[0]);
-    let examples = List::new(vec![
-        ListItem::new("Fix a TODO in the codebase"),
-        ListItem::new("Explain the current directory"),
-        ListItem::new("Run tests and summarize failures"),
-        ListItem::new("/status"),
-        ListItem::new("/help"),
-    ])
-    .block(Block::default().borders(Borders::ALL).title("Start"));
-    frame.render_widget(examples, layout[1]);
-    render_prompt(frame, layout[2], state);
+    let lines = initial_surface_frame(area.width, area.height, &state.footer_directory);
+    render_surface_frame(frame, area, &lines);
+    if !state.input.text.is_empty() || state.shell || !state.attached.is_empty() {
+        let height = area.height.min(4);
+        let prompt_area = Rect {
+            x: area.x,
+            y: area.y + area.height.saturating_sub(height),
+            width: area.width,
+            height,
+        };
+        frame.render_widget(Clear, prompt_area);
+        render_prompt(frame, prompt_area, state);
+    }
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, state: &State) {

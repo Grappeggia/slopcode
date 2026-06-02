@@ -157,4 +157,38 @@ describe("shared TUI surface", () => {
     expect(frame.lines.join("\n")).toContain("modified src/app.ts")
     expect(frame.lines.at(-1)).toContain("/data/data/com.termux/files/home")
   })
+
+  test("renders the no-session home as Linux-like chrome for Android", () => {
+    const frame = createSurfaceFrame({
+      width: 90,
+      height: 20,
+      snapshot: {
+        version: 2,
+        title: "SlopCode",
+        status: "idle",
+        header: { title: "SlopCode" },
+        footer: {
+          directory: "/data/data/com.termux/files/home",
+          version: "9.9.9",
+          lsp: 0,
+          mcp: 0,
+          mcpFailed: false,
+          permissions: 0,
+        },
+        tabs: [],
+        transcript: [],
+        sidebar: { mode: "summary", rows: [] },
+      },
+    })
+
+    const text = frame.lines.join("\n")
+    expect(frame.lines).toHaveLength(20)
+    expect(frame.lines.every((line) => line.length > 0 && line.length <= 90)).toBe(true)
+    expect(text).toContain("█▀▀ █   █▀█ █▀█")
+    expect(text).toContain("> ")
+    expect(frame.lines.at(-1)).toContain("/data/data/com.termux/files/home | 9.9.9 | /help")
+    expect(text).not.toContain("Rust-native Termux TUI")
+    expect(text).not.toContain("Fix a TODO in the codebase")
+    expect(text).not.toContain("SlopCode | SlopCode | idle")
+  })
 })

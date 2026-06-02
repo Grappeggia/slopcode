@@ -33,6 +33,34 @@ describe("Android host", () => {
       strategy: "fallback",
       reason: "not-android",
     })
+    expect(
+      await probe({
+        platform: "linux",
+        host: "sidecar",
+        root: "/tmp/slopcode",
+        env: { SLOPCODE_BIONIC: "1" },
+        fs,
+      }),
+    ).toMatchObject({
+      enabled: true,
+      available: true,
+      strategy: "sidecar",
+      reason: "sidecar-ready",
+    })
+    expect(
+      await probe({
+        platform: "linux",
+        host: "sidecar",
+        root: "/tmp/slopcode",
+        env: { TERMUX_VERSION: "0.119.0" },
+        fs,
+      }),
+    ).toMatchObject({
+      enabled: true,
+      available: true,
+      strategy: "sidecar",
+      reason: "sidecar-ready",
+    })
     expect(await probe({ platform: "android", host: "0" })).toMatchObject({
       enabled: false,
       strategy: "fallback",

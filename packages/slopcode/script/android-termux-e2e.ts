@@ -482,11 +482,12 @@ function toolDiff(part) {
 }
 
 function surfaceSnapshot(input, sessionID) {
-  const activeID = sessionID || "ses_termux"
+  const home = input.noSession && !sessionID
+  const activeID = home ? undefined : sessionID || "ses_termux"
   const title = activeID === "ses_fork" ? "Forked Session" : input.title
   const sessions = input.sessions || [{ id: "ses_termux", title: input.title }]
   const chunks = new Map((input.chunks || []).map((item) => [item.messageID, item.parts || []]))
-  const transcript = (input.messages || []).map((message) => {
+  const transcript = (home ? [] : input.messages || []).map((message) => {
     const parts = chunks.get(message.id) || []
     return {
       id: message.id,
@@ -522,7 +523,7 @@ function surfaceSnapshot(input, sessionID) {
       mcpFailed: false,
       permissions: input.permission ? 1 : 0,
     },
-    tabs: sessions.slice(0, 8).map((item) => ({
+    tabs: home ? [] : sessions.slice(0, 8).map((item) => ({
       id: item.id,
       title: item.title || item.id,
       active: item.id === activeID,
@@ -562,6 +563,36 @@ function surfaceFrame(input, sessionID, width = 80, height = 24) {
   const snapshot = surfaceSnapshot(input, sessionID)
   width = Math.max(20, Math.min(240, Number(width) || 80))
   height = Math.max(8, Math.min(100, Number(height) || 24))
+  if (!snapshot.sessionID && snapshot.transcript.length === 0) {
+    const lines = Array.from({ length: height }, () => " ".repeat(width))
+    const logo = [
+      "                                  ",
+      "█▀▀ █   █▀█ █▀█  █▀▀ █▀█ █▀▄ █▀▀",
+      "▀▀█ █   █ █ █▀▀  █   █ █ █ █ █▀▀",
+      "▀▀▀ ▀▀▀ ▀▀▀ ▀    ▀▀▀ ▀▀▀ ▀▀  ▀▀▀",
+    ]
+    const logoStart = Math.max(1, Math.floor((height - 8) / 2))
+    for (let index = 0; index < logo.length && logoStart + index < height; index++) {
+      const left = Math.max(0, Math.floor((width - logo[index].length) / 2))
+      lines[logoStart + index] = fitLine(" ".repeat(left) + logo[index], width)
+    }
+    const promptWidth = Math.min(75, width)
+    const promptLeft = Math.max(0, Math.floor((width - promptWidth) / 2))
+    const promptY = Math.min(height - 2, logoStart + logo.length + 2)
+    lines[promptY] = fitLine(" ".repeat(promptLeft) + fitLine("> ", promptWidth), width)
+    lines[height - 1] = fitLine([snapshot.footer.directory, "local", "/help"].filter(Boolean).join(" | "), width)
+    return {
+      version: 2,
+      renderer: "shared/terminal-frame",
+      width,
+      height,
+      sessionID: snapshot.sessionID,
+      title: snapshot.title,
+      status: snapshot.status,
+      lines,
+      rows: lines.map((line, y) => ({ y, spans: [{ x: 0, text: line }] })),
+    }
+  }
   const transcript = []
   for (const message of snapshot.transcript) {
     const label = message.role === "user" ? "You" : "Assistant"
@@ -905,14 +936,17 @@ const actions = {
   "home.landing": async () => {
     const run = await runHost({
       title: "Home Landing",
+      noSession: true,
       steps: [
         { delay: 150, text: "hello from home\\r" },
         { delay: 150, text: "\\x04" },
       ],
     })
-    semantic(run, ["SlopCode", "Home Landing", "ses_termux"])
+    semantic(run, ["SlopCode", "█▀▀ █   █▀█ █▀█", "/help"])
     assert(!run.stdout.includes("info: connected"), "home should use compact connected status, not a notice\\n" + run.stdout)
     assert(!run.stdout.includes("SlopCode Android |"), "home should not expose Android runtime chrome\\n" + run.stdout)
+    assert(!run.stdout.includes("Rust-native Termux TUI"), "home should not expose Android-only landing copy\\n" + run.stdout)
+    assert(run.seen.includes("POST /session"), "home prompt did not lazily create a session " + JSON.stringify(run.seen))
     assert(run.bodies[0]?.parts?.[0]?.text === "hello from home", "home prompt did not submit " + JSON.stringify(run.bodies))
   },
   "composer.submit": async () => {
@@ -967,9 +1001,10 @@ const actions = {
       steps: [{ delay: 300, text: "/exit\\r" }],
     })
     const text = run.screen + "\\n" + run.stdout
-    assert(text.includes("Layout Session") || text.includes("Fix a TODO in the codebase"), "screen missing expected content\\n" + run.screen + "\\nraw:\\n" + run.stdout)
+    assert(text.includes("Layout Session") || text.includes("█▀▀ █   █▀█ █▀█"), "screen missing expected content\\n" + run.screen + "\\nraw:\\n" + run.stdout)
     assert(text.includes("SlopCode"), "screen missing chrome\\n" + run.screen + "\\nraw:\\n" + run.stdout)
     assert(!text.includes("SlopCode Android |"), "screen should use neutral Linux-like chrome\\n" + run.screen + "\\nraw:\\n" + run.stdout)
+    assert(!text.includes("Fix a TODO in the codebase"), "screen should not fall back to the old Android home\\n" + run.screen + "\\nraw:\\n" + run.stdout)
   },
 
   "commands.palette": async () => {

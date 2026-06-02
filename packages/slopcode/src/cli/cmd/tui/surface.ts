@@ -113,6 +113,7 @@ export const TuiSurfaceSnapshot = z.object({
   }),
   footer: z.object({
     directory: z.string(),
+    version: z.string().optional(),
     workspaceID: z.string().optional(),
     lsp: z.number(),
     mcp: z.number(),
@@ -189,6 +190,12 @@ export type TuiSurfaceFrame = z.infer<typeof TuiSurfaceFrame>
 type ManifestInput = {
   keybinds?: Record<string, string | undefined>
   android?: boolean
+}
+
+function runtimeVersion() {
+  const globalVersion = (globalThis as { SLOPCODE_VERSION?: unknown }).SLOPCODE_VERSION
+  if (typeof globalVersion === "string") return globalVersion
+  return process.env.SLOPCODE_VERSION ?? "local"
 }
 
 const command = (input: TuiSurfaceCommand): TuiSurfaceCommand => input
@@ -606,6 +613,7 @@ export function createSurfaceSnapshot(input: {
     },
     footer: {
       directory: input.directory,
+      version: runtimeVersion(),
       workspaceID: input.session?.workspaceID,
       lsp: input.lsp?.length ?? 0,
       mcp: mcp.filter((item) => item.status === "connected").length,
@@ -681,6 +689,19 @@ function fit(text: string, width: number) {
   return out + " ".repeat(Math.max(0, width - size))
 }
 
+function fitRaw(text: string, width: number) {
+  if (width <= 0) return ""
+  let out = ""
+  let size = 0
+  for (const char of text) {
+    const next = cellWidth(char)
+    if (size + next > width) break
+    out += char
+    size += next
+  }
+  return out + " ".repeat(Math.max(0, width - size))
+}
+
 function wrap(text: string, width: number) {
   if (width <= 0) return [""]
   const words = text.split(/\s+/).filter(Boolean)
@@ -721,6 +742,18 @@ function clampDimension(value: number, fallback: number, min: number, max: numbe
   return Math.max(min, Math.min(max, Math.floor(value)))
 }
 
+const logoLines = [
+  "                                  ",
+  "█▀▀ █   █▀█ █▀█  █▀▀ █▀█ █▀▄ █▀▀",
+  "▀▀█ █   █ █ █▀▀  █   █ █ █ █ █▀▀",
+  "▀▀▀ ▀▀▀ ▀▀▀ ▀    ▀▀▀ ▀▀▀ ▀▀  ▀▀▀",
+]
+
+function center(text: string, width: number) {
+  const left = Math.max(0, Math.floor((width - visibleWidth(text)) / 2))
+  return fitRaw(`${" ".repeat(left)}${text}`, width)
+}
+
 function tabLine(snapshot: TuiSurfaceSnapshot) {
   const tabs = snapshot.tabs.length
     ? snapshot.tabs.map((item) => `${item.active ? "[*]" : "[ ]"} ${item.title} ${item.status}`).join("  ")
@@ -755,6 +788,31 @@ function sidebarLines(snapshot: TuiSurfaceSnapshot, width: number) {
   return [title, ...rows.flatMap((row) => wrap(row, width))]
 }
 
+function homeLines(snapshot: TuiSurfaceSnapshot, width: number, height: number) {
+  const lines = Array.from({ length: height }, () => " ".repeat(width))
+  const logoStart = Math.max(1, Math.floor((height - 8) / 2))
+  for (const [index, line] of logoLines.entries()) {
+    if (logoStart + index >= height) break
+    lines[logoStart + index] = center(line, width)
+  }
+  const prompt = "> "
+  const promptWidth = Math.min(75, width)
+  const promptLeft = Math.max(0, Math.floor((width - promptWidth) / 2))
+  const promptY = Math.min(height - 2, logoStart + logoLines.length + 2)
+  lines[promptY] = fitRaw(`${" ".repeat(promptLeft)}${fitRaw(prompt, promptWidth)}`, width)
+  const footer = [
+    snapshot.footer.directory,
+    snapshot.footer.workspaceID ? `workspace ${snapshot.footer.workspaceID}` : undefined,
+    snapshot.footer.mcp > 0 || snapshot.footer.mcpFailed ? `${snapshot.footer.mcp} MCP${snapshot.footer.mcpFailed ? "!" : ""}` : undefined,
+    snapshot.footer.version ?? runtimeVersion(),
+    "/help",
+  ]
+    .filter(Boolean)
+    .join(" | ")
+  lines[height - 1] = fitRaw(footer, width)
+  return lines
+}
+
 export function createSurfaceFrame(input: {
   snapshot: TuiSurfaceSnapshot
   width: number
@@ -763,13 +821,32 @@ export function createSurfaceFrame(input: {
   const width = clampDimension(input.width, 80, 20, 240)
   const height = clampDimension(input.height, 24, 8, 100)
   const snapshot = input.snapshot
+  if (!snapshot.sessionID && snapshot.transcript.length === 0) {
+    const lines = homeLines(snapshot, width, height)
+    return {
+      version: TUI_SURFACE_VERSION,
+      renderer: "shared/terminal-frame",
+      width,
+      height,
+      sessionID: snapshot.sessionID,
+      title: snapshot.title,
+      status: snapshot.status,
+      lines,
+      rows: lines.map((line, y) => ({
+        y,
+        spans: [{ x: 0, text: line }],
+      })),
+    }
+  }
   const header = `SlopCode | ${snapshot.header.title} | ${snapshot.status}`
   const footer = [
     snapshot.footer.directory,
+    snapshot.footer.version ?? runtimeVersion(),
     snapshot.footer.workspaceID ? `workspace ${snapshot.footer.workspaceID}` : undefined,
     `lsp ${snapshot.footer.lsp}`,
     `mcp ${snapshot.footer.mcp}${snapshot.footer.mcpFailed ? "!" : ""}`,
     snapshot.footer.permissions ? `perm ${snapshot.footer.permissions}` : undefined,
+    "/help",
   ]
     .filter(Boolean)
     .join(" | ")

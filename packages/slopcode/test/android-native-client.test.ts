@@ -208,6 +208,7 @@ describe("Android native TUI", () => {
         env: { ...process.env, COLUMNS: "100", LINES: "30" },
       })
       await eventually(() => seen.includes("GET /tui/frame"))
+      await Bun.sleep(300)
       proc.stdin.write("\x04")
       proc.stdin.end()
       const [code, stdout, stderr] = await Promise.all([
@@ -396,8 +397,16 @@ describe("Android native TUI", () => {
       await Bun.sleep(75)
       proc.stdin.write("\x04")
       proc.stdin.end()
-      const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()])
+      const [code, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ])
       expect(code).toBe(0)
+      expect(stdout).toContain("█▀▀")
+      expect(stdout).toContain("/help")
+      expect(stdout).not.toContain("Rust-native Termux TUI")
+      expect(stdout).not.toContain("Fix a TODO in the codebase")
       const events = stderr
         .split("\n")
         .filter(Boolean)

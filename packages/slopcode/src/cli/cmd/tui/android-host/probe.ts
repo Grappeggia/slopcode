@@ -15,6 +15,7 @@ type Input = {
   host?: string
   tui?: string
   sidecar?: string
+  env?: Record<string, string | undefined>
   fs?: Pick<typeof fs, "existsSync">
 }
 
@@ -29,14 +30,19 @@ export function wanted(value = process.env.SLOPCODE_ANDROID_HOST) {
   return "sidecar"
 }
 
+function bionic(env: Record<string, string | undefined>) {
+  return env.SLOPCODE_BIONIC === "1" || env.TERMUX_VERSION !== undefined || env.PREFIX?.includes("/com.termux/")
+}
+
 export async function probe(input: Input = {}): Promise<HostProbe> {
   const platform = input.platform ?? process.platform
+  const env = input.env ?? process.env
   const bin = sidecar({
-    root: input.root ?? process.env.SLOPCODE_ANDROID_ROOT,
-    sidecar: input.sidecar ?? process.env.SLOPCODE_ANDROID_HOST_PATH,
+    root: input.root ?? env.SLOPCODE_ANDROID_ROOT,
+    sidecar: input.sidecar ?? env.SLOPCODE_ANDROID_HOST_PATH,
   })
   const exists = input.fs ?? fs
-  if (platform !== "android") {
+  if (platform !== "android" && !bionic(env)) {
     return { enabled: false, available: false, strategy: "fallback", reason: "not-android", sidecar: bin }
   }
 
