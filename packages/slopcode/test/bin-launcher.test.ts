@@ -473,7 +473,7 @@ describe("bin launcher", () => {
     const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
     await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
     await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
-    await script(path.join(scoped, "bin", "slopcode"), '#!/bin/sh\nprintf \'runtime %s\\n\' "$1"\n')
+    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\nprintf 'runtime %s\\n' \"$1\"\n")
 
     const out = await run(
       {
