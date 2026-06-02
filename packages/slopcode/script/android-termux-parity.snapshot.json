@@ -4,14 +4,10 @@
       "phase": 0,
       "label": "bootstrap",
       "status": "active",
-      "active": [
-        "smoke.install"
-      ],
+      "active": ["smoke.install"],
       "inactive": [],
       "blocked": [],
-      "trueParity": [
-        "smoke.install"
-      ],
+      "trueParity": ["smoke.install"],
       "workflowParity": [],
       "surfaceOnly": []
     },
@@ -29,16 +25,8 @@
       ],
       "inactive": [],
       "blocked": [],
-      "trueParity": [
-        "composer.submit",
-        "layout.capture"
-      ],
-      "workflowParity": [
-        "home.landing",
-        "composer.editing",
-        "composer.advanced",
-        "dialogs.question"
-      ],
+      "trueParity": ["composer.submit", "layout.capture"],
+      "workflowParity": ["home.landing", "composer.editing", "composer.advanced", "dialogs.question"],
       "surfaceOnly": []
     },
     {
@@ -74,56 +62,33 @@
       "phase": 3,
       "label": "rich-ui",
       "status": "active",
-      "active": [
-        "tabs.rich",
-        "sidebar.files"
-      ],
+      "active": ["tabs.rich", "sidebar.files"],
       "inactive": [],
       "blocked": [],
       "trueParity": [],
-      "workflowParity": [
-        "tabs.rich",
-        "sidebar.files"
-      ],
+      "workflowParity": ["tabs.rich", "sidebar.files"],
       "surfaceOnly": []
     },
     {
       "phase": 4,
       "label": "rust-native-renderer",
       "status": "active",
-      "active": [
-        "native.rust-tui",
-        "render.parity-gates",
-        "permissions.parity-gates",
-        "release.rust-tui-smoke"
-      ],
+      "active": ["native.rust-tui", "render.parity-gates", "permissions.parity-gates", "release.rust-tui-smoke"],
       "inactive": [],
       "blocked": [],
-      "trueParity": [
-        "release.rust-tui-smoke"
-      ],
-      "workflowParity": [
-        "native.rust-tui",
-        "render.parity-gates",
-        "permissions.parity-gates"
-      ],
+      "trueParity": ["release.rust-tui-smoke"],
+      "workflowParity": ["native.rust-tui", "render.parity-gates", "permissions.parity-gates"],
       "surfaceOnly": []
     },
     {
       "phase": 5,
       "label": "editor-terminal-polish",
       "status": "active",
-      "active": [
-        "editor.diff",
-        "terminal.polish"
-      ],
+      "active": ["editor.diff", "terminal.polish"],
       "inactive": [],
       "blocked": [],
       "trueParity": [],
-      "workflowParity": [
-        "editor.diff",
-        "terminal.polish"
-      ],
+      "workflowParity": ["editor.diff", "terminal.polish"],
       "surfaceOnly": []
     }
   ],
@@ -180,178 +145,73 @@
         "stash list and pop",
         "bracketed paste replay"
       ],
-      "linux": [
-        "autocomplete menu",
-        "shell mode",
-        "prompt queue status",
-        "stash list and pop",
-        "rich paste replay"
-      ]
+      "linux": ["autocomplete menu", "shell mode", "prompt queue status", "stash list and pop", "rich paste replay"]
     },
     {
       "id": "dialogs.question",
       "level": "workflow-parity",
-      "android": [
-        "question panel renders",
-        "numeric selection replies through daemon API"
-      ],
-      "linux": [
-        "question dialog renders",
-        "numeric selection replies through daemon API"
-      ]
+      "android": ["question panel renders", "numeric selection replies through daemon API"],
+      "linux": ["question dialog renders", "numeric selection replies through daemon API"]
     },
     {
       "id": "commands.palette",
       "level": "workflow-parity",
-      "android": [
-        "command palette panel",
-        "searchable command names",
-        "slash-command completion"
-      ],
-      "linux": [
-        "interactive command palette",
-        "searchable aliases",
-        "keybound selection"
-      ]
+      "android": ["command palette panel", "searchable command names", "slash-command completion"],
+      "linux": ["interactive command palette", "searchable aliases", "keybound selection"]
     },
     {
       "id": "sessions.tabs",
       "level": "workflow-parity",
-      "android": [
-        "session list panel",
-        "tab strip",
-        "tab switching commands",
-        "text close affordances"
-      ],
-      "linux": [
-        "session list panel",
-        "tab strip",
-        "tab switching commands",
-        "rich close affordances"
-      ]
+      "android": ["session list panel", "tab strip", "tab switching commands", "text close affordances"],
+      "linux": ["session list panel", "tab strip", "tab switching commands", "rich close affordances"]
     },
     {
       "id": "sessions.routes",
       "level": "workflow-parity",
-      "android": [
-        "children route",
-        "message history",
-        "timeline panel",
-        "revert and unrevert commands"
-      ],
-      "linux": [
-        "children route",
-        "message history",
-        "timeline panel",
-        "revert and unrevert commands"
-      ]
+      "android": ["children route", "message history", "timeline panel", "revert and unrevert commands"],
+      "linux": ["children route", "message history", "timeline panel", "revert and unrevert commands"]
     },
     {
       "id": "sessions.controls",
       "level": "workflow-parity",
-      "android": [
-        "status panel",
-        "share and unshare",
-        "pause and resume",
-        "compact",
-        "interrupt",
-        "fork session"
-      ],
-      "linux": [
-        "status panel",
-        "share and unshare",
-        "pause and resume",
-        "compact",
-        "interrupt",
-        "fork session"
-      ]
+      "android": ["status panel", "share and unshare", "pause and resume", "compact", "interrupt", "fork session"],
+      "linux": ["status panel", "share and unshare", "pause and resume", "compact", "interrupt", "fork session"]
     },
     {
       "id": "models.panel",
       "level": "workflow-parity",
-      "android": [
-        "model list panel",
-        "provider/model selection",
-        "prompt_async sends selected model"
-      ],
-      "linux": [
-        "model list panel",
-        "provider/model selection",
-        "prompt_async sends selected model"
-      ]
+      "android": ["model list panel", "provider/model selection", "prompt_async sends selected model"],
+      "linux": ["model list panel", "provider/model selection", "prompt_async sends selected model"]
     },
     {
       "id": "files.panel",
       "level": "workflow-parity",
-      "android": [
-        "modified file panel",
-        "file search command",
-        "workspace file rows"
-      ],
-      "linux": [
-        "modified file panel",
-        "file search command",
-        "workspace file rows"
-      ]
+      "android": ["modified file panel", "file search command", "workspace file rows"],
+      "linux": ["modified file panel", "file search command", "workspace file rows"]
     },
     {
       "id": "render.tools",
       "level": "workflow-parity",
-      "android": [
-        "tool status rows",
-        "tool output preview",
-        "diff preview lines"
-      ],
-      "linux": [
-        "tool status cards",
-        "tool output preview",
-        "diff preview lines"
-      ]
+      "android": ["tool status rows", "tool output preview", "diff preview lines"],
+      "linux": ["tool status cards", "tool output preview", "diff preview lines"]
     },
     {
       "id": "permissions.preview",
       "level": "workflow-parity",
-      "android": [
-        "permission request panel",
-        "pattern preview",
-        "once/always/reject replies"
-      ],
-      "linux": [
-        "permission request panel",
-        "pattern preview",
-        "once/always/reject replies"
-      ]
+      "android": ["permission request panel", "pattern preview", "once/always/reject replies"],
+      "linux": ["permission request panel", "pattern preview", "once/always/reject replies"]
     },
     {
       "id": "tabs.rich",
       "level": "workflow-parity",
-      "android": [
-        "chat tab",
-        "active tab marker",
-        "dirty marker",
-        "last tab close"
-      ],
-      "linux": [
-        "chat tab",
-        "multiple editor tabs",
-        "inactive/active/last tab close"
-      ]
+      "android": ["chat tab", "active tab marker", "dirty marker", "last tab close"],
+      "linux": ["chat tab", "multiple editor tabs", "inactive/active/last tab close"]
     },
     {
       "id": "sidebar.files",
       "level": "workflow-parity",
-      "android": [
-        "summary/files modes",
-        "file attach",
-        "open action",
-        "docked and overlay layouts"
-      ],
-      "linux": [
-        "summary/files modes",
-        "file attach",
-        "open action",
-        "docked and overlay layouts"
-      ]
+      "android": ["summary/files modes", "file attach", "open action", "docked and overlay layouts"],
+      "linux": ["summary/files modes", "file attach", "open action", "docked and overlay layouts"]
     },
     {
       "id": "editor.diff",
@@ -365,13 +225,7 @@
         "diff open/dismiss",
         "snapshot preview"
       ],
-      "linux": [
-        "open real file",
-        "edit/save",
-        "dirty guard",
-        "diagnostics",
-        "diff open/dismiss"
-      ]
+      "linux": ["open real file", "edit/save", "dirty guard", "diagnostics", "diff open/dismiss"]
     },
     {
       "id": "terminal.polish",
@@ -385,14 +239,7 @@
         "suspend guidance",
         "plugin discovery"
       ],
-      "linux": [
-        "theme switcher",
-        "keybind help",
-        "system clipboard",
-        "title updates",
-        "suspend hooks",
-        "plugin UI"
-      ]
+      "linux": ["theme switcher", "keybind help", "system clipboard", "title updates", "suspend hooks", "plugin UI"]
     },
     {
       "id": "native.rust-tui",
@@ -402,39 +249,19 @@
         "keyboard and paste events are handled in Rust",
         "doctor reports the Rust TUI core"
       ],
-      "linux": [
-        "desktop TUI remains the desktop renderer"
-      ]
+      "linux": ["desktop TUI remains the desktop renderer"]
     },
     {
       "id": "render.parity-gates",
       "level": "workflow-parity",
-      "android": [
-        "tool rows",
-        "markdown/code clipping",
-        "diff previews"
-      ],
-      "linux": [
-        "tool cards",
-        "markdown/code clipping",
-        "rich diff previews"
-      ]
+      "android": ["tool rows", "markdown/code clipping", "diff previews"],
+      "linux": ["tool cards", "markdown/code clipping", "rich diff previews"]
     },
     {
       "id": "permissions.parity-gates",
       "level": "workflow-parity",
-      "android": [
-        "grouped request summary",
-        "source labels",
-        "custom rejection",
-        "multi-request navigation"
-      ],
-      "linux": [
-        "grouped forecast requests",
-        "source labels",
-        "custom rejection",
-        "multi-request navigation"
-      ]
+      "android": ["grouped request summary", "source labels", "custom rejection", "multi-request navigation"],
+      "linux": ["grouped forecast requests", "source labels", "custom rejection", "multi-request navigation"]
     }
   ]
 }

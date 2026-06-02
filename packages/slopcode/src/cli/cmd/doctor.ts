@@ -83,7 +83,8 @@ const AndroidCommand = cmd({
       bun: process.execPath,
       ffiBlocked: String(process.platform) === "android" && legacyOpenTuiRequested && !status.available,
       termuxApi: {
-        clipboard: exists(path.join(process.env.PREFIX ?? "", "bin", "termux-clipboard-get")) &&
+        clipboard:
+          exists(path.join(process.env.PREFIX ?? "", "bin", "termux-clipboard-get")) &&
           exists(path.join(process.env.PREFIX ?? "", "bin", "termux-clipboard-set")),
         open: exists(path.join(process.env.PREFIX ?? "", "bin", "termux-open")),
       },
