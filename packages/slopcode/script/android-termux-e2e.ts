@@ -1011,6 +1011,7 @@ const actions = {
     const run = await runHost({
       title: "Command Session",
       steps: [
+        { delay: 150, text: "/se\\r" },
         { delay: 150, text: "/commands\\r" },
         { delay: 150, text: "/commands model\\r" },
         { delay: 150, text: "/cl\\t\\u0015" },
@@ -1019,6 +1020,7 @@ const actions = {
     })
     semantic(run, ["Command Palette", "/models"])
     const rendered = run.screen + "\\n" + run.stdout
+    assert(rendered.includes("Command Matches") && rendered.includes("/session") && rendered.includes("/se"), "partial slash submit did not keep command matches open\\n" + rendered)
     assert(
       rendered.includes("Command Matches") || (rendered.includes("/close-editor") && rendered.includes("/clipboard")),
       "missing command autocomplete panel\\n" + rendered,

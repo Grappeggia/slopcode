@@ -142,6 +142,8 @@ describe("Android Termux runtime", () => {
     expect(entry).toContain('"/session/{session}/command"')
     expect(entry).toContain("submit_prompt_command")
     expect(entry).toContain("apply_linux_command_parity")
+    expect(entry).toContain("cmd.starts_with(&prefix)")
+    expect(entry).toContain("locked.input.set(input.to_string())")
     expect(entry).toContain('&["rename", "title"]')
     expect(entry).toContain('&["undo", "revert"]')
     expect(entry).toContain('&["redo", "unrevert"]')
@@ -206,6 +208,8 @@ describe("Android Termux runtime", () => {
     for (const item of parity.filter((item) => item.active)) {
       expect(e2e).toContain(`${JSON.stringify(item.id)}: async`)
     }
+    expect(e2e).toContain("/se")
+    expect(e2e).toContain("partial slash submit did not keep command matches open")
     expect(ids).toEqual(
       expect.arrayContaining([
         "sessions.controls",

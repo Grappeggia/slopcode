@@ -2108,10 +2108,20 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
             .find(name);
     }
     let Some(command) = resolved else {
-        state
-            .lock()
-            .map_err(|_| "state lock failed")?
-            .notice(format!("unknown command /{name}"));
+        let mut locked = state.lock().map_err(|_| "state lock failed")?;
+        let prefix = format!("/{name}");
+        let matches = locked
+            .manifest
+            .command_names()
+            .into_iter()
+            .filter(|cmd| cmd.starts_with(&prefix))
+            .collect::<Vec<_>>();
+        if !matches.is_empty() {
+            locked.input.set(input.to_string());
+            locked.panel("Command Matches", matches);
+            return Ok(());
+        }
+        locked.notice(format!("unknown command /{name}"));
         return Ok(());
     };
     if command.source == CommandSource::Prompt {
