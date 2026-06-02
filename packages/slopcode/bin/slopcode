@@ -334,7 +334,7 @@ if (libc() === "bionic" && androidInteractive(args)) {
   }
   if (!bun) {
     console.error(
-      "SlopCode Android CLI bootstrap is missing. Reinstall from Termux with: npm install -g slopcode@latest --include=optional",
+      "SlopCode Android CLI bootstrap is missing. Run npm rebuild slopcode or reinstall from Termux with: npm install -g slopcode@latest --include=optional",
     )
     process.exit(1)
   }

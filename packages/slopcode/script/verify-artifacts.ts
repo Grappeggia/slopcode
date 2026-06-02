@@ -279,12 +279,14 @@ const androidSmoke = async () => {
         `verify: packed Android ${target.arch} install did not install the Rust TUI runtime and compatibility host alias`,
       )
     }
+    const localBun = path.join(work, "node_modules", pkg.name, "node_modules", "@oven", target.bun, "bin", "bun")
     const hoistedBun = path.join(work, "node_modules", "@oven", target.bun, "bin", "bun")
-    if (!(await exists(hoistedBun))) {
+    const bun = (await exists(localBun)) ? localBun : (await exists(hoistedBun)) ? hoistedBun : undefined
+    if (!bun) {
       throw new Error(`verify: packed Android ${target.arch} install did not include the Bun bootstrap dependency`)
     }
-    await Bun.write(hoistedBun, `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await fs.chmod(hoistedBun, 0o755)
+    await Bun.write(bun, `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
+    await fs.chmod(bun, 0o755)
     await Bun.write(
       bundle,
       "console.log(JSON.stringify({ entry: process.env.SLOPCODE_ENTRYPOINT, host: process.env.SLOPCODE_ANDROID_HOST_PATH, root: process.env.SLOPCODE_ANDROID_ROOT, nodePath: process.env.NODE_PATH }))\n",

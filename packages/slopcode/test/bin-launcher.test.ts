@@ -87,6 +87,23 @@ async function androidAsset() {
   return archive
 }
 
+async function androidBunAsset(name = "bun-linux-aarch64-android") {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-android-bun-asset-"))
+  clean.push(dir)
+  const root = path.join(dir, "package")
+  await fs.mkdir(path.join(root, "bin"), { recursive: true })
+  await Bun.write(path.join(root, "package.json"), JSON.stringify({ name: `@oven/${name}` }))
+  await script(path.join(root, "bin", "bun"), "#!/bin/sh\necho bun\n")
+  const archive = path.join(dir, `${name}.tgz`)
+  const proc = Bun.spawn(["tar", "-czf", path.basename(archive), "package"], {
+    stdout: "pipe",
+    stderr: "pipe",
+    cwd: dir,
+  })
+  expect(await proc.exited).toBe(0)
+  return archive
+}
+
 async function stageLauncher() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-staged-launcher-"))
   clean.push(dir)
@@ -570,12 +587,16 @@ describe("postinstall", () => {
       SLOPCODE_TEST_PLATFORM: "android",
       SLOPCODE_TEST_ARCH: "arm64",
       TERMUX_VERSION: "1",
+      SLOPCODE_ANDROID_BUN_ASSET_PATH: await androidBunAsset(),
     })
 
     expect(out.code).toBe(0)
     expect(out.stdout).toContain("runtime package detected")
     expect(await Bun.file(path.join(root, "bin", ".slopcode")).exists()).toBe(false)
     expect(await Bun.file(path.join(root, "bin", ".slopcode.json")).exists()).toBe(false)
+    expect(
+      await Bun.file(path.join(root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin", "bun")).exists(),
+    ).toBe(true)
   })
 
   test("installs Android runtime from release asset fallback", async () => {
@@ -586,14 +607,40 @@ describe("postinstall", () => {
       SLOPCODE_TEST_ARCH: "arm64",
       TERMUX_VERSION: "1",
       SLOPCODE_ANDROID_ASSET_PATH: await androidAsset(),
+      SLOPCODE_ANDROID_BUN_ASSET_PATH: await androidBunAsset(),
     })
 
     expect(out.code).toBe(0)
-    expect(out.stdout).toContain("runtime installed")
+    expect(out.stdout).toContain("runtime and bootstrap installed")
     expect(
       await Bun.file(
         path.join(root, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode"),
       ).exists(),
+    ).toBe(true)
+    expect(
+      await Bun.file(path.join(root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin", "bun")).exists(),
+    ).toBe(true)
+  })
+
+  test("installs x64 Android Bun bootstrap fallback", async () => {
+    const file = await stagePostinstall()
+    const root = path.dirname(file)
+    const pkg = path.join(root, "node_modules", "@slopcode-ai", "slopcode-android-x64")
+    await fs.mkdir(path.join(pkg, "bin"), { recursive: true })
+    await Bun.write(path.join(pkg, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-x64" }))
+    await script(path.join(pkg, "bin", "slopcode"), "#!/bin/sh\necho android\n")
+
+    const out = await runPostinstall(file, {
+      SLOPCODE_TEST_PLATFORM: "android",
+      SLOPCODE_TEST_ARCH: "x64",
+      TERMUX_VERSION: "1",
+      SLOPCODE_ANDROID_BUN_ASSET_PATH: await androidBunAsset("bun-linux-x64-android"),
+    })
+
+    expect(out.code).toBe(0)
+    expect(out.stdout).toContain("runtime package detected")
+    expect(
+      await Bun.file(path.join(root, "node_modules", "@oven", "bun-linux-x64-android", "bin", "bun")).exists(),
     ).toBe(true)
   })
 
@@ -605,14 +652,18 @@ describe("postinstall", () => {
       SLOPCODE_TEST_ARCH: "arm64",
       TERMUX_VERSION: "1",
       SLOPCODE_ANDROID_ASSET_PATH: await androidAsset(),
+      SLOPCODE_ANDROID_BUN_ASSET_PATH: await androidBunAsset(),
     })
 
     expect(out.code).toBe(0)
-    expect(out.stdout).toContain("runtime installed")
+    expect(out.stdout).toContain("runtime and bootstrap installed")
     expect(
       await Bun.file(
         path.join(root, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode"),
       ).exists(),
+    ).toBe(true)
+    expect(
+      await Bun.file(path.join(root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin", "bun")).exists(),
     ).toBe(true)
   })
 })

@@ -142,7 +142,7 @@ function supportedMessage() {
 
 function termuxMessage() {
   return [
-    "SlopCode native Termux support could not install the Android runtime.",
+    "SlopCode native Termux support could not install the Android runtime/bootstrap.",
     "Install from Termux with:",
     "  pkg update",
     "  pkg install nodejs git ripgrep neovim tar",
@@ -161,6 +161,21 @@ function androidTarget(arch) {
 
 function androidUrl(arch) {
   return `https://github.com/teamslop/slopcode/releases/download/v${pkg.version}/slopcode-android-${arch}.tar.gz`
+}
+
+const androidBunVersion = "1.3.14"
+
+function androidBunPackage(arch) {
+  return arch === "arm64" ? "bun-linux-aarch64-android" : "bun-linux-x64-android"
+}
+
+function androidBunTarget(arch) {
+  return path.join(__dirname, "node_modules", "@oven", androidBunPackage(arch))
+}
+
+function androidBunUrl(arch) {
+  const name = androidBunPackage(arch)
+  return `https://registry.npmjs.org/@oven/${name}/-/${name}-${androidBunVersion}.tgz`
 }
 
 async function androidAsset(arch, tmp) {
@@ -201,6 +216,51 @@ async function installAndroid(arch) {
       arch,
       libc: "bionic",
     }
+  } finally {
+    await fs.promises.rm(tmp, { recursive: true, force: true })
+  }
+}
+
+async function androidBunAsset(arch, tmp) {
+  if (process.env.SLOPCODE_ANDROID_BUN_ASSET_PATH) return process.env.SLOPCODE_ANDROID_BUN_ASSET_PATH
+  const out = path.join(tmp, `${androidBunPackage(arch)}.tgz`)
+  const res = await fetch(process.env.SLOPCODE_ANDROID_BUN_ASSET_URL || androidBunUrl(arch))
+  if (!res.ok) throw new Error(`Failed to download Android Bun bootstrap: ${res.status} ${res.statusText}`)
+  await fs.promises.writeFile(out, Buffer.from(await res.arrayBuffer()))
+  return out
+}
+
+async function installAndroidBun(arch) {
+  const target = androidBunTarget(arch)
+  const existing = path.join(target, "bin", "bun")
+  if (fs.existsSync(existing)) {
+    fs.chmodSync(existing, 0o755)
+    return "detected"
+  }
+
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "slopcode-android-bun-"))
+  try {
+    const archive = await androidBunAsset(arch, tmp)
+    const extract = path.join(tmp, "extract")
+    await fs.promises.mkdir(extract, { recursive: true })
+    const result = require("child_process").spawnSync("tar", ["-xzf", path.basename(archive), "-C", extract], {
+      cwd: path.dirname(archive),
+      encoding: "utf8",
+      timeout: 120000,
+    })
+    if (result.status !== 0) {
+      throw new Error((result.stderr || result.stdout || "tar failed").trim())
+    }
+    const source = fs.existsSync(path.join(extract, "package", "bin", "bun"))
+      ? path.join(extract, "package")
+      : extract
+    const binary = path.join(source, "bin", "bun")
+    if (!fs.existsSync(binary)) throw new Error("Downloaded Android Bun bootstrap is missing bin/bun")
+    await fs.promises.rm(target, { recursive: true, force: true })
+    await fs.promises.mkdir(path.dirname(target), { recursive: true })
+    await fs.promises.rename(source, target)
+    fs.chmodSync(path.join(target, "bin", "bun"), 0o755)
+    return "installed"
   } finally {
     await fs.promises.rm(tmp, { recursive: true, force: true })
   }
@@ -289,7 +349,8 @@ async function main() {
       if (detectLibc(platform, arch) === "bionic") {
         try {
           await installAndroid(arch)
-          console.log("Android/Termux runtime installed from GitHub release asset")
+          await installAndroidBun(arch)
+          console.log("Android/Termux runtime and bootstrap installed from release assets")
         } catch (error) {
           console.log(termuxMessage())
           console.error(error.message)
@@ -302,7 +363,13 @@ async function main() {
 
     if (found.libc === "bionic") {
       clearCache()
-      console.log("Android/Termux runtime package detected; runtime resolver will launch it")
+      try {
+        await installAndroidBun(arch)
+        console.log("Android/Termux runtime package detected; runtime resolver will launch it")
+      } catch (error) {
+        console.log(termuxMessage())
+        console.error(error.message)
+      }
       return
     }
     clearCache()
