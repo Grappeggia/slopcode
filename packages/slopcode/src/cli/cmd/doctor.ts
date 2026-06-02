@@ -71,15 +71,22 @@ const AndroidCommand = cmd({
       termux: termux(),
       mode: wanted(process.env.SLOPCODE_ANDROID_HOST) ? "sidecar" : "disabled",
       strategy: status.strategy,
-      renderer: status.strategy === "sidecar" ? "rust-native" : "portable",
+      renderer: status.strategy === "sidecar" ? "ratatui/crossterm" : "portable",
       targetRenderer: status.strategy === "sidecar" ? "ratatui/crossterm" : undefined,
+      tuiCoreVersion: status.strategy === "sidecar" ? "rust-ratatui-1" : undefined,
       available: status.available,
       reason: status.reason,
       root,
       sidecar: bin,
       sidecarExists: exists(bin),
+      legacyFallbackAvailable: exists(bin),
       bun: process.execPath,
       ffiBlocked: String(process.platform) === "android" && legacyOpenTuiRequested && !status.available,
+      termuxApi: {
+        clipboard: exists(path.join(process.env.PREFIX ?? "", "bin", "termux-clipboard-get")) &&
+          exists(path.join(process.env.PREFIX ?? "", "bin", "termux-clipboard-set")),
+        open: exists(path.join(process.env.PREFIX ?? "", "bin", "termux-open")),
+      },
     }
     if (args.json) {
       console.log(JSON.stringify(info, null, 2))
@@ -90,6 +97,7 @@ const AndroidCommand = cmd({
     console.log(`android mode ${info.mode}`)
     console.log(`strategy ${info.strategy} ${info.available ? "available" : "unavailable"}`)
     console.log(`renderer ${info.renderer}`)
+    if (info.tuiCoreVersion) console.log(`tui core ${info.tuiCoreVersion}`)
     if (info.targetRenderer) console.log(`target renderer ${info.targetRenderer}`)
     console.log(`reason ${info.reason}`)
     console.log(`root ${info.root ?? "missing"}`)

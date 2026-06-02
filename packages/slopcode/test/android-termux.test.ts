@@ -63,7 +63,10 @@ describe("Android Termux runtime", () => {
     expect(build).toContain("SLOPCODE_BUILD_VERSION")
     expect(manifest).toContain("ratatui")
     expect(manifest).toContain("crossterm")
-    expect(entry).toContain('include!("../../android-host/main.rs")')
+    expect(entry).toContain("ratatui")
+    expect(entry).toContain("crossterm")
+    expect(entry).toContain("TUI_CORE_VERSION")
+    expect(entry).not.toContain('include!("../../android-host/main.rs")')
     expect(build).not.toContain("@oven/bun-linux")
     expect(build).not.toContain("native/android-client/main.rs")
     expect(build).not.toContain('"slopcode-termux"')
@@ -117,6 +120,7 @@ describe("Android Termux runtime", () => {
       "sidebar.files",
       "editor.diff",
       "terminal.polish",
+      "native.rust-tui",
       "render.parity-gates",
       "permissions.parity-gates",
     ])
@@ -126,11 +130,9 @@ describe("Android Termux runtime", () => {
     expect(report().overclaims.map((item) => item.id)).toEqual(
       expect.arrayContaining(["home.landing", "commands.palette", "editor.diff", "terminal.polish"]),
     )
-    expect(parity.find((item) => item.id === "native.opentui")?.level).toBe("blocked")
+    expect(parity.find((item) => item.id === "native.rust-tui")?.level).toBe("workflow-parity")
     expect(parity.find((item) => item.id === "tabs.rich")?.level).toBe("workflow-parity")
-    expect(parity.filter((item) => item.status === "blocked").every((item) => !item.active && !!item.missing)).toBe(
-      true,
-    )
+    expect(report().totals.blocked).toBe(0)
     expect(ids).toEqual(
       expect.arrayContaining([
         "sessions.controls",
@@ -138,7 +140,7 @@ describe("Android Termux runtime", () => {
         "sidebar.files",
         "editor.diff",
         "terminal.polish",
-        "native.opentui",
+        "native.rust-tui",
         "release.rust-tui-smoke",
         "render.parity-gates",
         "permissions.parity-gates",

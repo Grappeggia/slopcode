@@ -13,6 +13,15 @@ import z from "zod"
 export namespace DaemonLauncher {
   type Status = z.output<typeof DaemonRuntime.Status>
 
+  function android() {
+    return (
+      process.platform === "android" ||
+      process.env.SLOPCODE_BIONIC === "1" ||
+      process.env.TERMUX_VERSION !== undefined ||
+      process.env.PREFIX?.includes("/com.termux/")
+    )
+  }
+
   function headers(token: string) {
     return {
       [DaemonAuth.Header]: token,
@@ -196,7 +205,7 @@ export namespace DaemonLauncher {
       idle_timeout_ms: next.idle_timeout_ms,
       network: input.network,
     })
-    const started = await wait(directory, input.viewID)
+    const started = await wait(directory, input.viewID, android() ? 45_000 : 10_000)
     return {
       url: started.info.url,
       headers: headers(started.info.token),

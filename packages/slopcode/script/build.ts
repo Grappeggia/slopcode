@@ -382,8 +382,12 @@ const androidHost = async (name: string, arch: "arm64" | "x64") => {
   const bin = path.join(dir, "dist", name, "bin", "slopcode-android-host")
   const cli = path.join(dir, "dist", name, "bin", "slopcode")
   const linker = androidLinker(androidNdk(), rust.linker)
-  if (commandExists("rustup")) await $`rustup target add ${rust.target}`
-  await $`cargo build --manifest-path native/android-tui/Cargo.toml --release --target ${rust.target}`.env({
+  const rustup = commandExists("rustup")
+  if (rustup) await $`rustup target add ${rust.target}`
+  const build = rustup
+    ? $`rustup run stable cargo build --manifest-path native/android-tui/Cargo.toml --release --target ${rust.target}`
+    : $`cargo build --manifest-path native/android-tui/Cargo.toml --release --target ${rust.target}`
+  await build.env({
     ...process.env,
     [rust.env]: linker,
     SLOPCODE_BUILD_VERSION: Script.version,

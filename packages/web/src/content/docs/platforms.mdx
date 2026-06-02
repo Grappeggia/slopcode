@@ -82,11 +82,16 @@ npm install -g slopcode@latest --include=optional
 
 ---
 
-## Use the TUI carefully
+## Run the TUI
 
-Bun for Android still disables `bun:ffi`, so the native OpenTUI renderer cannot start there yet.
+Interactive Termux sessions use the bundled Rust TUI built on `ratatui` and `crossterm`.
 
-SlopCode uses its bundled Rust sidecar with Linux-like terminal chrome, or you can run the full OpenTUI experience inside `proot-distro`.
+For Android integrations, install Termux:API from the same source as Termux and install the package tools when you want clipboard or file handoff.
+
+```bash
+pkg install termux-api
+slopcode doctor android
+```
 
 ---
 

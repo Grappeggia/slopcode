@@ -2,10 +2,11 @@
 
 This crate is the Rust-native Android TUI entrypoint for Termux.
 
-The first cut includes the existing Android host implementation so release artifacts keep their current behavior while the renderer moves to a Cargo-managed Rust codebase. New Android TUI work should land in this crate, with `ratatui` and `crossterm` as the target rendering and terminal backend.
+The release binary is a Cargo-managed `ratatui`/`crossterm` application. It talks to the SlopCode daemon over the existing HTTP/SSE APIs, renders the interactive terminal UI directly in Rust, and uses Termux command integrations only when they are available.
 
 Compatibility requirements:
 
 - `bin/slopcode` remains the Android package entrypoint.
 - `bin/slopcode-android-host` remains as an alias for existing probes, tests, and manual installs.
 - `slopcode doctor android --json` must keep reporting enough fields for installer and E2E diagnostics.
+- Android does not use OpenTUI or Bun FFI for interactive rendering.

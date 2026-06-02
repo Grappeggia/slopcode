@@ -19,7 +19,7 @@ pkg install nodejs git ripgrep neovim tar
 npm i -g slopcode@latest --include=optional
 ```
 
-The Android package includes the Rust-native TUI runtime for Termux arm64/x64, and the npm launcher bootstraps the Android CLI automatically on `slopcode`. It opens on the SlopCode home prompt when pointed at a daemon with `--url`/`--token`; run `slopcode doctor android` to verify the Rust runtime.
+The Android package includes the Rust-native `ratatui`/`crossterm` TUI runtime for Termux arm64/x64, and the npm launcher bootstraps the Android CLI automatically on `slopcode`. It opens on the SlopCode home prompt when pointed at a daemon with `--url`/`--token`; run `slopcode doctor android` to verify the Rust runtime and Termux integrations.
 
 ## Quickstart
 

@@ -120,6 +120,36 @@ describe("Android native client", () => {
     }
   })
 
+  test("checks the Cargo Android TUI and doctor contract", async () => {
+    if (process.platform === "win32") return
+    const check = Bun.spawn(["cargo", "--version"], { stdout: "pipe", stderr: "pipe" })
+    if ((await check.exited) !== 0) return
+
+    const root = path.join(import.meta.dir, "..")
+    const target = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-android-tui-target-"))
+    try {
+      const build = Bun.spawn(["cargo", "check", "--manifest-path", "native/android-tui/Cargo.toml"], {
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, CARGO_TARGET_DIR: target },
+      })
+      const [buildCode, buildErr] = await Promise.all([build.exited, new Response(build.stderr).text()])
+      if (buildCode !== 0 && buildErr.includes("Xcode license")) return
+      expect(buildErr).not.toContain("error:")
+      expect(buildCode).toBe(0)
+
+      const entry = await Bun.file(path.join(root, "native", "android-tui", "src", "main.rs")).text()
+      expect(entry).toContain("slopcode-android-tui ok")
+      expect(entry).toContain("slopcode-android-host ok")
+      expect(entry).toContain('"renderer": "ratatui/crossterm"')
+      expect(entry).toContain('"tuiCoreVersion": TUI_CORE_VERSION')
+      expect(entry).toContain('"termuxApi"')
+    } finally {
+      await fs.rm(target, { recursive: true, force: true })
+    }
+  })
+
   test("renders sidecar home and creates sessions lazily", async () => {
     if (process.platform === "win32") return
     const check = Bun.spawn(["rustc", "--version"], { stdout: "pipe", stderr: "pipe" })
