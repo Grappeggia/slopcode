@@ -481,7 +481,9 @@ export function commandRows(manifest: Pick<TuiSurfaceManifest, "commands" | "key
     })
     .map((item) => {
       const slash = item.slash ? `/${item.slash.name}` : item.id
-      const aliases = item.slash?.aliases?.length ? ` (${item.slash.aliases.map((alias) => `/${alias}`).join(", ")})` : ""
+      const aliases = item.slash?.aliases?.length
+        ? ` (${item.slash.aliases.map((alias) => `/${alias}`).join(", ")})`
+        : ""
       const key = item.keybind ? manifest.keybinds[item.keybind] : undefined
       return `${item.category}: ${slash}${aliases}  ${item.title}${key && key !== "none" ? `  ${Keybind.toString(Keybind.parse(key)[0])}` : ""}`
     })
@@ -581,10 +583,7 @@ export function createSurfaceSnapshot(input: {
     })),
     transcript: messages.map((message) => {
       const parts = chunks.get(message.id) ?? []
-      const text = parts
-        .map(partText)
-        .filter(Boolean)
-        .join("\n")
+      const text = parts.map(partText).filter(Boolean).join("\n")
       const tools = parts.flatMap((part) => {
         if (part.type !== "tool") return []
         const status = stringify(part.state.status || "pending")
@@ -611,8 +610,9 @@ export function createSurfaceSnapshot(input: {
     sidebar: {
       mode: "summary",
       rows:
-        input.files?.map((item) =>
-          `${item.status.padStart(8)} ${item.path}${item.added || item.removed ? ` +${item.added ?? 0}/-${item.removed ?? 0}` : ""}`,
+        input.files?.map(
+          (item) =>
+            `${item.status.padStart(8)} ${item.path}${item.added || item.removed ? ` +${item.added ?? 0}/-${item.removed ?? 0}` : ""}`,
         ) ?? [],
     },
   }

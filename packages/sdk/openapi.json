@@ -7065,6 +7065,584 @@
         ]
       }
     },
+    "/tui/manifest": {
+      "get": {
+        "operationId": "tui.manifest",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get shared TUI manifest",
+        "description": "Return the shared command, keybind, and capability manifest used by Linux and Android TUI renderers.",
+        "responses": {
+          "200": {
+            "description": "Shared TUI manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "renderer": {
+                      "type": "object",
+                      "properties": {
+                        "linux": {
+                          "type": "string",
+                          "const": "opentui/solid"
+                        },
+                        "android": {
+                          "type": "string",
+                          "const": "ratatui/crossterm"
+                        }
+                      },
+                      "required": ["linux", "android"]
+                    },
+                    "capabilities": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "type": "boolean"
+                      }
+                    },
+                    "commands": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "category": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "slash": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "aliases": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "usage": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["name"]
+                          },
+                          "keybind": {
+                            "type": "string"
+                          },
+                          "capability": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "title", "category"]
+                      }
+                    },
+                    "keybinds": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    },
+                    "prompt": {
+                      "type": "object",
+                      "properties": {
+                        "maxHeight": {
+                          "type": "number"
+                        },
+                        "supportsFileParts": {
+                          "type": "boolean"
+                        },
+                        "supportsShellMode": {
+                          "type": "boolean"
+                        },
+                        "supportsHistory": {
+                          "type": "boolean"
+                        },
+                        "supportsStash": {
+                          "type": "boolean"
+                        },
+                        "supportsQueue": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "maxHeight",
+                        "supportsFileParts",
+                        "supportsShellMode",
+                        "supportsHistory",
+                        "supportsStash",
+                        "supportsQueue"
+                      ]
+                    }
+                  },
+                  "required": ["version", "renderer", "capabilities", "commands", "keybinds", "prompt"]
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.tui.manifest({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/tui/snapshot": {
+      "get": {
+        "operationId": "tui.snapshot",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get shared TUI snapshot",
+        "description": "Return a normalized TUI snapshot that native renderers can display without duplicating Linux presenter logic.",
+        "responses": {
+          "200": {
+            "description": "Shared TUI snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "sessionID": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "header": {
+                      "type": "object",
+                      "properties": {
+                        "title": {
+                          "type": "string"
+                        },
+                        "context": {
+                          "type": "string"
+                        },
+                        "cost": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["title"]
+                    },
+                    "footer": {
+                      "type": "object",
+                      "properties": {
+                        "directory": {
+                          "type": "string"
+                        },
+                        "workspaceID": {
+                          "type": "string"
+                        },
+                        "lsp": {
+                          "type": "number"
+                        },
+                        "mcp": {
+                          "type": "number"
+                        },
+                        "mcpFailed": {
+                          "type": "boolean"
+                        },
+                        "permissions": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["directory", "lsp", "mcp", "mcpFailed", "permissions"]
+                    },
+                    "tabs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "active": {
+                            "type": "boolean"
+                          },
+                          "status": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "title", "active", "status"]
+                      }
+                    },
+                    "transcript": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": "string"
+                          },
+                          "text": {
+                            "type": "string"
+                          },
+                          "tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "tool": {
+                                  "type": "string"
+                                },
+                                "status": {
+                                  "type": "string"
+                                },
+                                "preview": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "diff": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "expandable": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": ["id", "tool", "status", "preview", "diff", "expandable"]
+                            }
+                          }
+                        },
+                        "required": ["id", "role", "tools"]
+                      }
+                    },
+                    "sidebar": {
+                      "type": "object",
+                      "properties": {
+                        "mode": {
+                          "type": "string",
+                          "enum": ["summary", "files"]
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": ["rows"]
+                    }
+                  },
+                  "required": ["version", "title", "status", "header", "footer", "tabs", "transcript", "sidebar"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.tui.snapshot({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/tui/action": {
+      "post": {
+        "operationId": "tui.action",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Dispatch shared TUI action",
+        "description": "Dispatch a typed action from a native TUI renderer through the shared TUI surface contract.",
+        "responses": {
+          "200": {
+            "description": "Action dispatched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "command"
+                      },
+                      "command": {
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "string"
+                      },
+                      "sessionID": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "command"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "prompt.submit"
+                      },
+                      "sessionID": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "model": {
+                        "type": "object",
+                        "properties": {
+                          "providerID": {
+                            "type": "string"
+                          },
+                          "modelID": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["providerID", "modelID"]
+                      },
+                      "agent": {
+                        "type": "string"
+                      },
+                      "parts": {
+                        "type": "array",
+                        "items": {}
+                      }
+                    },
+                    "required": ["type", "text"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "session.select"
+                      },
+                      "sessionID": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "sessionID"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "permission.reply"
+                      },
+                      "sessionID": {
+                        "type": "string"
+                      },
+                      "requestID": {
+                        "type": "string"
+                      },
+                      "reply": {
+                        "type": "string",
+                        "enum": ["once", "always", "reject"]
+                      },
+                      "reason": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "sessionID", "requestID", "reply"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "question.reply"
+                      },
+                      "sessionID": {
+                        "type": "string"
+                      },
+                      "questionID": {
+                        "type": "string"
+                      },
+                      "answers": {
+                        "type": "array",
+                        "items": {}
+                      }
+                    },
+                    "required": ["type", "sessionID", "questionID", "answers"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "editor.input"
+                      },
+                      "sessionID": {
+                        "type": "string"
+                      },
+                      "editorID": {
+                        "type": "string"
+                      },
+                      "keys": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "sessionID", "editorID", "keys"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "editor.save"
+                      },
+                      "sessionID": {
+                        "type": "string"
+                      },
+                      "editorID": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "sessionID", "editorID"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "editor.dismissDiff"
+                      },
+                      "sessionID": {
+                        "type": "string"
+                      },
+                      "editorID": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "sessionID", "editorID"]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.tui.action({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/tui/append-prompt": {
       "post": {
         "operationId": "tui.appendPrompt",

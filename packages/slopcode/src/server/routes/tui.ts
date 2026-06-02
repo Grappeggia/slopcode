@@ -94,12 +94,8 @@ async function snapshot(sessionID?: string) {
   for await (const session of Session.list({ roots: true, limit: 8 })) {
     sessions.push(session)
   }
-  const active = sessionID
-    ? await Session.get(sessionID).catch(() => undefined)
-    : sessions[0]
-  const messages = active
-    ? await MessageV2.index({ sessionID: active.id, limit: 40 }).catch(() => [])
-    : []
+  const active = sessionID ? await Session.get(sessionID).catch(() => undefined) : sessions[0]
+  const messages = active ? await MessageV2.index({ sessionID: active.id, limit: 40 }).catch(() => []) : []
   const chunks =
     active && messages.length
       ? await MessageV2.chunk({
@@ -181,7 +177,8 @@ export const TuiRoutes = lazy(() =>
       "/manifest",
       describeRoute({
         summary: "Get shared TUI manifest",
-        description: "Return the shared command, keybind, and capability manifest used by Linux and Android TUI renderers.",
+        description:
+          "Return the shared command, keybind, and capability manifest used by Linux and Android TUI renderers.",
         operationId: "tui.manifest",
         responses: {
           200: {
@@ -208,7 +205,8 @@ export const TuiRoutes = lazy(() =>
       "/snapshot",
       describeRoute({
         summary: "Get shared TUI snapshot",
-        description: "Return a normalized TUI snapshot that native renderers can display without duplicating Linux presenter logic.",
+        description:
+          "Return a normalized TUI snapshot that native renderers can display without duplicating Linux presenter logic.",
         operationId: "tui.snapshot",
         responses: {
           200: {
