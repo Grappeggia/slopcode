@@ -20,7 +20,10 @@ async function command(command: string) {
 
 async function macosSdkEnv() {
   if (process.platform !== "darwin" || process.env.SDKROOT) return {}
-  const roots = ["/Library/Developer/CommandLineTools/SDKs", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"]
+  const roots = [
+    "/Library/Developer/CommandLineTools/SDKs",
+    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs",
+  ]
   for (const root of roots) {
     const entries = await fs.readdir(root).catch(() => [])
     const sdk = entries

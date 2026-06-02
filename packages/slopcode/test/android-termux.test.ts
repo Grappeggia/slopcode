@@ -140,7 +140,7 @@ describe("Android Termux runtime", () => {
     expect(entry).toContain('&["files", "explorer"]')
     expect(entry).toContain('&["session", "sessions", "resume", "continue"]')
     expect(entry).toContain('"resume-session"')
-    expect(entry).not.toContain('match name {')
+    expect(entry).not.toContain("match name {")
   })
 
   test("Android keeps the shared frame during interactive slash states", async () => {
