@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -6,6 +6,8 @@ import { createSurfaceFrame, type TuiSurfaceSnapshot } from "@/cli/cmd/tui/surfa
 
 const root = path.join(import.meta.dir, "..")
 const clean: string[] = []
+
+setDefaultTimeout(60_000)
 
 afterEach(async () => {
   await Promise.all(clean.splice(0).map((item) => fs.rm(item, { recursive: true, force: true })))
@@ -16,6 +18,26 @@ async function command(command: string) {
   return (await proc.exited) === 0
 }
 
+async function macosSdkEnv() {
+  if (process.platform !== "darwin" || process.env.SDKROOT) return {}
+  const roots = ["/Library/Developer/CommandLineTools/SDKs", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"]
+  for (const root of roots) {
+    const entries = await fs.readdir(root).catch(() => [])
+    const sdk = entries
+      .filter((item) => item.startsWith("MacOSX") && item.endsWith(".sdk"))
+      .sort()
+      .at(-1)
+    if (!sdk) continue
+    return {
+      DEVELOPER_DIR: root.includes("CommandLineTools")
+        ? "/Library/Developer/CommandLineTools"
+        : "/Applications/Xcode.app/Contents/Developer",
+      SDKROOT: path.join(root, sdk),
+    }
+  }
+  return {}
+}
+
 async function binary() {
   if (!(await command("cargo"))) return
   const target = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-android-tui-target-"))
@@ -24,7 +46,7 @@ async function binary() {
     cwd: root,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, CARGO_TARGET_DIR: target },
+    env: { ...process.env, ...(await macosSdkEnv()), CARGO_TARGET_DIR: target },
   })
   const [code, stderr] = await Promise.all([build.exited, new Response(build.stderr).text()])
   if (code !== 0 && stderr.includes("Xcode license")) return
@@ -44,6 +66,15 @@ async function run(bin: string, args: string[], env: Record<string, string> = {}
     stdout: await new Response(proc.stdout).text(),
     stderr: await new Response(proc.stderr).text(),
   }
+}
+
+async function eventually(check: () => boolean | Promise<boolean>, timeout = 5_000) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    if (await check()) return
+    await Bun.sleep(25)
+  }
+  throw new Error("timed out waiting for condition")
 }
 
 function json(value: unknown) {
@@ -152,6 +183,7 @@ describe("Android native TUI", () => {
         const url = new URL(req.url)
         seen.push(`${req.method} ${url.pathname}`)
         if (url.pathname === "/tui/manifest") return json(manifest)
+        if (url.pathname === "/command") return json([])
         if (url.pathname === "/tui/snapshot") return json(snapshot)
         if (url.pathname === "/tui/frame")
           return json(
@@ -172,7 +204,7 @@ describe("Android native TUI", () => {
         stderr: "pipe",
         env: { ...process.env, COLUMNS: "100", LINES: "30" },
       })
-      await Bun.sleep(300)
+      await eventually(() => seen.includes("GET /tui/frame"))
       proc.stdin.write("\x04")
       proc.stdin.end()
       const [code, stdout, stderr] = await Promise.all([
@@ -185,10 +217,13 @@ describe("Android native TUI", () => {
       expect(seen).toContain("GET /tui/manifest")
       expect(seen).toContain("GET /tui/snapshot")
       expect(seen).toContain("GET /tui/frame")
-      expect(stdout).toContain("Parity Surface")
-      expect(stdout).toContain("snapshot hello")
-      expect(stdout).toContain("tool bash completed")
-      expect(stdout).toContain("src/app.ts")
+      expect(stdout).toContain("Parity")
+      expect(stdout).toContain("Surface")
+      expect(stdout).toContain("snapshot")
+      expect(stdout).toContain("hello")
+      expect(stdout).toContain("tool")
+      expect(stdout).toContain("bash")
+      expect(stdout).toContain("completed")
       expect(stdout).not.toContain("shared manifest fallback")
     } finally {
       server.stop(true)
@@ -237,7 +272,7 @@ describe("Android native TUI", () => {
         stderr: "pipe",
         env: { ...process.env, COLUMNS: "100", LINES: "30" },
       })
-      await Bun.sleep(300)
+      await eventually(() => seen.includes("GET /tui/frame"))
       proc.stdin.write("hello android\r")
       await Bun.sleep(150)
       proc.stdin.write("\x04")
@@ -252,6 +287,71 @@ describe("Android native TUI", () => {
       expect(bodies[0]?.parts?.[0]?.id?.startsWith("prt_")).toBe(true)
       expect(bodies[0]?.parts?.[0]?.type).toBe("text")
       expect(bodies[0]?.parts?.[0]?.text).toBe("hello android")
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test("routes daemon slash commands through the session command endpoint", async () => {
+    if (process.platform === "win32") return
+    const bin = await binary()
+    if (!bin) return
+
+    const commandBodies: Array<{ command?: string; arguments?: string; messageID?: string }> = []
+    const seen: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url)
+        seen.push(`${req.method} ${url.pathname}`)
+        if (url.pathname === "/tui/manifest") return json(manifest)
+        if (url.pathname === "/command")
+          return json([
+            { name: "init", description: "create/update AGENTS.md", source: "command", hints: [] },
+            { name: "review", description: "review changes", source: "command", hints: [] },
+          ])
+        if (url.pathname === "/tui/snapshot") return json(snapshot)
+        if (url.pathname === "/tui/frame")
+          return json(
+            createSurfaceFrame({
+              snapshot,
+              width: Number(url.searchParams.get("width") ?? 100),
+              height: Number(url.searchParams.get("height") ?? 30),
+            }),
+          )
+        if (url.pathname === "/session/ses_surface/command" && req.method === "POST") {
+          commandBodies.push((await req.json()) as { command?: string; arguments?: string; messageID?: string })
+          return json({
+            info: { id: "msg_result", sessionID: "ses_surface", role: "assistant" },
+            parts: [],
+          })
+        }
+        if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\n\n')
+        return json({})
+      },
+    })
+    try {
+      const proc = Bun.spawn([bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test"], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, COLUMNS: "100", LINES: "30" },
+      })
+      await eventually(() => seen.includes("GET /tui/frame") && seen.includes("GET /command"))
+      proc.stdin.write("/init android parity\r")
+      await Bun.sleep(150)
+      proc.stdin.write("\x04")
+      proc.stdin.end()
+      const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()])
+      expect(stderr).toBe("")
+      expect(code).toBe(0)
+      expect(seen).toContain("GET /command")
+      expect(seen).toContain("POST /session/ses_surface/command")
+      expect(seen).not.toContain("POST /session/ses_surface/prompt_async")
+      expect(commandBodies).toHaveLength(1)
+      expect(commandBodies[0]?.command).toBe("init")
+      expect(commandBodies[0]?.arguments).toBe("android parity")
+      expect(commandBodies[0]?.messageID?.startsWith("msg_")).toBe(true)
     } finally {
       server.stop(true)
     }

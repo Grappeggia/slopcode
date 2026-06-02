@@ -242,6 +242,18 @@ struct Tab {
     title: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommandSource {
+    Ui,
+    Prompt,
+}
+
+impl Default for CommandSource {
+    fn default() -> Self {
+        CommandSource::Ui
+    }
+}
+
 #[derive(Clone, Default)]
 struct SurfaceCommand {
     id: String,
@@ -252,6 +264,7 @@ struct SurfaceCommand {
     usage: Option<String>,
     keybind: Option<String>,
     description: Option<String>,
+    source: CommandSource,
 }
 
 #[derive(Clone, Default)]
@@ -262,6 +275,29 @@ struct SurfaceManifest {
 }
 
 impl SurfaceManifest {
+    fn find(&self, name: &str) -> Option<SurfaceCommand> {
+        let needle = name.trim_start_matches('/');
+        self.commands
+            .iter()
+            .find(|command| {
+                command.slash.as_deref() == Some(needle)
+                    || command.aliases.iter().any(|alias| alias == needle)
+            })
+            .cloned()
+    }
+
+    fn has_name(&self, name: &str) -> bool {
+        self.find(name).is_some()
+    }
+
+    fn upsert(&mut self, command: SurfaceCommand) {
+        if let Some(existing) = self.commands.iter_mut().find(|item| item.id == command.id) {
+            *existing = command;
+            return;
+        }
+        self.commands.push(command);
+    }
+
     fn command_names(&self) -> Vec<String> {
         let mut out = Vec::new();
         for command in &self.commands {
@@ -296,8 +332,13 @@ impl SurfaceManifest {
                 )
             };
             let haystack = format!(
-                "{} {} {} {}",
-                command.id, command.title, command.category, slash
+                "{} {} {} {} {} {}",
+                command.id,
+                command.title,
+                command.category,
+                slash,
+                command.aliases.join(" "),
+                command.description.as_deref().unwrap_or_default()
             )
             .to_lowercase();
             if !needle.is_empty() && !haystack.contains(&needle) {
@@ -807,15 +848,223 @@ fn fallback_manifest() -> SurfaceManifest {
             usage: None,
             keybind: keybind.map(str::to_string),
             description: None,
+            source: CommandSource::Ui,
         })
         .collect();
     let mut capabilities = HashMap::new();
     capabilities.insert(String::from("android.runtime"), true);
     capabilities.insert(String::from("terminal.mouse"), false);
-    SurfaceManifest {
+    let mut manifest = SurfaceManifest {
         commands,
         keybinds,
         capabilities,
+    };
+    apply_linux_command_parity(&mut manifest);
+    manifest
+}
+
+fn ui_command(
+    id: &str,
+    title: &str,
+    category: &str,
+    names: &[&str],
+    keybind: Option<&str>,
+    description: Option<&str>,
+) -> SurfaceCommand {
+    SurfaceCommand {
+        id: id.to_string(),
+        title: title.to_string(),
+        category: category.to_string(),
+        slash: names.first().map(|item| (*item).to_string()),
+        aliases: names
+            .iter()
+            .skip(1)
+            .map(|item| (*item).to_string())
+            .collect(),
+        usage: None,
+        keybind: keybind.map(str::to_string),
+        description: description.map(str::to_string),
+        source: CommandSource::Ui,
+    }
+}
+
+fn apply_linux_command_parity(manifest: &mut SurfaceManifest) {
+    let commands = [
+        ui_command(
+            "session.list",
+            "Switch session",
+            "Session",
+            &["session", "sessions", "resume", "continue"],
+            Some("session_list"),
+            None,
+        ),
+        ui_command(
+            "session.new",
+            "New session",
+            "Session",
+            &["new", "clear"],
+            Some("session_new"),
+            None,
+        ),
+        ui_command(
+            "workspace.list",
+            "Workspaces",
+            "Session",
+            &["workspaces", "workspace"],
+            None,
+            None,
+        ),
+        ui_command(
+            "session.title",
+            "Rename session",
+            "Session",
+            &["rename", "title"],
+            Some("session_rename"),
+            None,
+        ),
+        ui_command(
+            "session.warp",
+            "Move session",
+            "Session",
+            &["move", "warp"],
+            None,
+            None,
+        ),
+        ui_command(
+            "session.history.toggle",
+            "History mode",
+            "Session",
+            &["history"],
+            None,
+            None,
+        ),
+        ui_command(
+            "session.revert",
+            "Undo previous message",
+            "Session",
+            &["undo", "revert"],
+            Some("messages_undo"),
+            None,
+        ),
+        ui_command(
+            "session.unrevert",
+            "Redo",
+            "Session",
+            &["redo", "unrevert"],
+            Some("messages_redo"),
+            None,
+        ),
+        ui_command(
+            "sidebar.files",
+            "Open file explorer",
+            "Workspace",
+            &["files", "explorer"],
+            Some("session_files"),
+            None,
+        ),
+        ui_command(
+            "session.compact",
+            "Compact session",
+            "Session",
+            &["compact", "summarize"],
+            Some("session_compact"),
+            None,
+        ),
+        ui_command(
+            "session.toggle.timestamps",
+            "Show timestamps",
+            "Session",
+            &["timestamps", "toggle-timestamps"],
+            None,
+            None,
+        ),
+        ui_command(
+            "session.toggle.thinking",
+            "Show thinking",
+            "Session",
+            &["thinking", "toggle-thinking"],
+            Some("display_thinking"),
+            None,
+        ),
+        ui_command(
+            "model.completion.list",
+            "Autocomplete model overrides",
+            "Agent",
+            &["models-completion"],
+            None,
+            None,
+        ),
+        ui_command(
+            "variant.list",
+            "Switch model variant",
+            "Agent",
+            &["variants"],
+            Some("variant_list"),
+            None,
+        ),
+        ui_command("mcp.list", "Toggle MCPs", "Agent", &["mcps"], None, None),
+        ui_command(
+            "console.orgs",
+            "Switch console org",
+            "Provider",
+            &["orgs", "console"],
+            None,
+            None,
+        ),
+        ui_command(
+            "shell.list",
+            "Switch shell",
+            "System",
+            &["shells", "shell"],
+            None,
+            None,
+        ),
+        ui_command("prompt.skills", "Skills", "Prompt", &["skills"], None, None),
+        ui_command(
+            "prompt.editor",
+            "Open editor",
+            "Prompt",
+            &["editor"],
+            Some("editor_open"),
+            None,
+        ),
+        ui_command(
+            "app.exit",
+            "Exit the app",
+            "System",
+            &["exit", "quit", "q"],
+            None,
+            None,
+        ),
+        ui_command(
+            "session.resume",
+            "Resume paused session",
+            "Session",
+            &["resume-session", "continue-session"],
+            None,
+            Some("Android compatibility command; Linux /resume switches sessions"),
+        ),
+    ];
+    for command in commands {
+        manifest.upsert(command);
+    }
+    if let Some(shell) = manifest
+        .commands
+        .iter_mut()
+        .find(|item| item.id == "prompt.shell")
+    {
+        shell.slash = Some(String::from("shell-mode"));
+        shell.aliases = vec![String::from("toggle-shell")];
+        shell.description = Some(String::from(
+            "Android compatibility command; Linux /shell opens shell selection",
+        ));
+    }
+    if let Some(plugins) = manifest
+        .commands
+        .iter_mut()
+        .find(|item| item.id == "plugins.list")
+    {
+        plugins.aliases.retain(|alias| alias != "mcps");
     }
 }
 
@@ -847,6 +1096,7 @@ fn load_manifest(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), Strin
                 usage: string(slash, "usage"),
                 keybind: string(item, "keybind"),
                 description: string(item, "description"),
+                source: CommandSource::Ui,
             });
         }
     }
@@ -867,7 +1117,42 @@ fn load_manifest(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), Strin
     if manifest.commands.is_empty() {
         return Err(String::from("shared TUI manifest had no commands"));
     }
+    apply_linux_command_parity(&mut manifest);
     state.lock().map_err(|_| "state lock failed")?.manifest = manifest;
+    Ok(())
+}
+
+fn load_daemon_commands(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), String> {
+    let body = client.json("GET", "/command", None)?;
+    let Some(items) = body.as_array() else {
+        return Err(String::from("command list was not an array"));
+    };
+    let mut locked = state.lock().map_err(|_| "state lock failed")?;
+    for item in items {
+        let Some(name) = string(item, "name") else {
+            continue;
+        };
+        if locked.manifest.has_name(&name) {
+            continue;
+        }
+        let source = string(item, "source").unwrap_or_else(|| String::from("command"));
+        let category = match source.as_str() {
+            "skill" => "Skill",
+            "mcp" => "MCP",
+            _ => "Command",
+        };
+        locked.manifest.commands.push(SurfaceCommand {
+            id: format!("prompt.{name}"),
+            title: format!("/{name}"),
+            category: category.to_string(),
+            slash: Some(name),
+            aliases: Vec::new(),
+            usage: None,
+            keybind: None,
+            description: string(item, "description"),
+            source: CommandSource::Prompt,
+        });
+    }
     Ok(())
 }
 
@@ -1063,10 +1348,19 @@ fn spawn_startup(
     startup: Instant,
 ) {
     thread::spawn(move || {
-        startup_log(startup, "hydrate.begin", json!({ "width": width, "height": height }));
+        startup_log(
+            startup,
+            "hydrate.begin",
+            json!({ "width": width, "height": height }),
+        );
         if let Err(err) = load_manifest(&client, &state) {
             if let Ok(mut locked) = state.lock() {
                 locked.notice(format!("shared manifest fallback: {err}"));
+            }
+        }
+        if let Err(err) = load_daemon_commands(&client, &state) {
+            if let Ok(mut locked) = state.lock() {
+                locked.notice(format!("command list unavailable: {err}"));
             }
         }
         startup_log(startup, "manifest.done", json!({}));
@@ -1316,7 +1610,11 @@ fn terminal_loop(
                 .draw(|frame| render(frame, &locked))
                 .map_err(|err| err.to_string())?;
             if first_draw {
-                startup_log(startup, "first_frame", json!({ "hydrated": locked.surface_frame.is_some() }));
+                startup_log(
+                    startup,
+                    "first_frame",
+                    json!({ "hydrated": locked.surface_frame.is_some() }),
+                );
                 first_draw = false;
             }
             last_draw = Instant::now();
@@ -1466,7 +1764,6 @@ fn handle_action(
 
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
-        locked.surface_frame = None;
         if let Some(permission) = locked.permission.clone() {
             if permission.reason.is_none() && !locked.input.text.is_empty() {
                 let queued = locked.input.clear();
@@ -1754,7 +2051,7 @@ fn handle_action(
     dirty.store(true, Ordering::SeqCst);
     if let Some(text) = submit {
         let trimmed = text.trim().to_string();
-        if trimmed == "/exit" || trimmed == "/quit" {
+        if trimmed == "/exit" || trimmed == "/quit" || trimmed == "/q" {
             done.store(true, Ordering::SeqCst);
         } else if trimmed.starts_with('/') {
             command(client, state, &trimmed)?;
@@ -1795,8 +2092,43 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
         .split_once(' ')
         .map(|(a, b)| (a.trim(), b.trim()))
         .unwrap_or_else(|| (input.trim_start_matches('/'), ""));
-    match name {
-        "help" | "commands" => {
+    let mut resolved = state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .manifest
+        .find(name);
+    if resolved.is_none() {
+        load_daemon_commands(client, state).ok();
+        resolved = state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .manifest
+            .find(name);
+    }
+    let Some(command) = resolved else {
+        state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice(format!("unknown command /{name}"));
+        return Ok(());
+    };
+    if command.source == CommandSource::Prompt {
+        let prompt_command = command.slash.as_deref().unwrap_or(name);
+        return submit_prompt_command(client, state, prompt_command, value);
+    }
+    execute_ui_command(client, state, &command, name, value)
+}
+
+fn execute_ui_command(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    command: &SurfaceCommand,
+    name: &str,
+    value: &str,
+) -> Result<(), String> {
+    match command.id.as_str() {
+        "help.show" => {
+            load_daemon_commands(client, state).ok();
             let rows = state
                 .lock()
                 .map_err(|_| "state lock failed")?
@@ -1807,7 +2139,7 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                 .map_err(|_| "state lock failed")?
                 .panel("Command Palette", rows);
         }
-        "new" => {
+        "session.new" => {
             let id = create_session(client)?;
             {
                 let mut locked = state.lock().map_err(|_| "state lock failed")?;
@@ -1819,7 +2151,7 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
             }
             hydrate_session(client, state, &id).ok();
         }
-        "session" => {
+        "session.list" => {
             if value.is_empty() {
                 sessions_panel(client, state)?;
             } else {
@@ -1827,9 +2159,9 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                 hydrate_session(client, state, value).ok();
             }
         }
-        "sessions" => sessions_panel(client, state)?,
-        "tabs" => tabs_panel(state)?,
-        "children" => {
+        "workspace.list" => workspaces_panel(client, state)?,
+        "session.tabs" => tabs_panel(state)?,
+        "session.children" => {
             let session = ensure_session(client, state)?;
             let body = client.json("GET", &format!("/session/{session}/children"), None)?;
             state
@@ -1837,12 +2169,12 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                 .map_err(|_| "state lock failed")?
                 .panel("Child Sessions", rows_from_array(&body, &["id", "title"]));
         }
-        "messages" | "timeline" => {
+        "session.timeline" => {
             let session = ensure_session(client, state)?;
             hydrate_messages(client, state, &session)?;
             state.lock().map_err(|_| "state lock failed")?.panel = None;
         }
-        "status" => {
+        "session.status" => {
             let body = client.json("GET", "/session/status", None)?;
             let rows = if let Some(obj) = body.as_object() {
                 obj.iter()
@@ -1856,7 +2188,7 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                 .map_err(|_| "state lock failed")?
                 .panel("Status", rows);
         }
-        "model" => {
+        "model.list" => {
             if value.is_empty() {
                 models_panel(client, state, "")?;
             } else if parse_model(value).is_some() {
@@ -1870,15 +2202,32 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                     .notice("usage: /model provider/model");
             }
         }
-        "models" => models_panel(client, state, value)?,
-        "providers" | "connect" => {
+        "model.completion.list" => state.lock().map_err(|_| "state lock failed")?.panel(
+            "Autocomplete Models",
+            vec![String::from(
+                "Model completion overrides follow daemon configuration.",
+            )],
+        ),
+        "variant.list" => state.lock().map_err(|_| "state lock failed")?.panel(
+            "Variants",
+            vec![String::from(
+                "Use the selected model provider variants from Linux-compatible configuration.",
+            )],
+        ),
+        "provider.list" => {
             let body = client.json("GET", "/v2/provider", None)?;
             state
                 .lock()
                 .map_err(|_| "state lock failed")?
                 .panel("Providers", rows_from_array(&body, &["id", "name", "type"]));
         }
-        "agents" | "agent" => {
+        "console.orgs" => state.lock().map_err(|_| "state lock failed")?.panel(
+            "Console Orgs",
+            vec![String::from(
+                "Console org switching is provided by connected provider auth.",
+            )],
+        ),
+        "agent.list" => {
             if !value.is_empty() {
                 let mut locked = state.lock().map_err(|_| "state lock failed")?;
                 locked.agent = Some(value.to_string());
@@ -1893,10 +2242,11 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                 );
             }
         }
-        "summary" => summary_panel(client, state)?,
-        "files" => files_panel(client, state, value)?,
-        "open" => open_file(client, state, value)?,
-        "attach" => {
+        "mcp.list" => mcp_panel(client, state)?,
+        "sidebar.summary" => summary_panel(client, state)?,
+        "sidebar.files" => files_panel(client, state, value)?,
+        "file.open" => open_file(client, state, value)?,
+        "file.attach" => {
             if !value.is_empty() {
                 state
                     .lock()
@@ -1905,7 +2255,7 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                     .push(value.to_string());
             }
         }
-        "edit" => {
+        "editor.focus" | "prompt.editor" => {
             let mut locked = state.lock().map_err(|_| "state lock failed")?;
             if locked.editor.is_some() {
                 locked.editor_focus = true;
@@ -1914,9 +2264,9 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                 locked.notice("no active editor; use /open <file>");
             }
         }
-        "save" => save_active_editor(client, state)?,
-        "diagnostics" => diagnostics_panel(client, state)?,
-        "diff" => {
+        "editor.save" => save_active_editor(client, state)?,
+        "editor.diagnostics" => diagnostics_panel(client, state)?,
+        "editor.diff" => {
             if value == "dismiss" {
                 dismiss_active_diff(client, state)?;
             } else {
@@ -1928,16 +2278,22 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                 );
             }
         }
-        "close-editor" | "close-editor!" => close_editor(client, state, name.ends_with('!'))?,
-        "share" => session_action(client, state, "share", "POST")?,
-        "unshare" => session_action(client, state, "share", "DELETE")?,
-        "pause" => session_action(client, state, "pause", "POST")?,
-        "resume" => session_action(client, state, "resume", "POST")?,
-        "interrupt" | "abort" => session_action(client, state, "abort", "POST")?,
-        "revert" => revert_session(client, state, value)?,
-        "unrevert" => session_action(client, state, "unrevert", "POST")?,
-        "compact" => compact_session(client, state)?,
-        "fork" => {
+        "editor.close" => close_editor(client, state, name.ends_with('!'))?,
+        "session.share" => session_action(client, state, "share", "POST")?,
+        "session.unshare" => session_action(client, state, "share", "DELETE")?,
+        "session.pause" => session_action(client, state, "pause", "POST")?,
+        "session.resume" => session_action(client, state, "resume", "POST")?,
+        "session.interrupt" => session_action(client, state, "abort", "POST")?,
+        "session.revert" => {
+            if value.is_empty() {
+                undo_last_message(client, state)?;
+            } else {
+                revert_session(client, state, value)?;
+            }
+        }
+        "session.unrevert" => session_action(client, state, "unrevert", "POST")?,
+        "session.compact" => compact_session(client, state)?,
+        "session.fork" => {
             let session = ensure_session(client, state)?;
             let body = client.json("POST", &format!("/session/{session}/fork"), Some(json!({})))?;
             if let Some(id) = string(&body, "id") {
@@ -1945,8 +2301,22 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                 hydrate_session(client, state, &id).ok();
             }
         }
-        "close" => close_tab(state)?,
-        "queue" => {
+        "session.close" => close_tab(state)?,
+        "session.title" => rename_session(client, state, value)?,
+        "session.warp" => warp_session(client, state, value)?,
+        "session.history.toggle" => state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice("history mode uses Up/Down prompt history on Android"),
+        "session.toggle.timestamps" => state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice("timestamps toggled"),
+        "session.toggle.thinking" => state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice("thinking visibility toggled"),
+        "prompt.queue" => {
             let locked = state.lock().map_err(|_| "state lock failed")?;
             let rows = if locked.queue.is_empty() {
                 vec![String::from("queue empty")]
@@ -1959,27 +2329,30 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
                 .map_err(|_| "state lock failed")?
                 .panel("Prompt Queue", rows);
         }
-        "stash" | "list" => {
+        "prompt.stash" => {
             let rows = {
                 let locked = state.lock().map_err(|_| "state lock failed")?;
-                if locked.stash.is_empty() {
+                if name == "pop" {
+                    Vec::new()
+                } else if locked.stash.is_empty() {
                     vec![String::from("stash empty")]
                 } else {
                     locked.stash.clone()
                 }
             };
-            state
-                .lock()
-                .map_err(|_| "state lock failed")?
-                .panel("Prompt Stash", rows);
-        }
-        "pop" => {
-            let mut locked = state.lock().map_err(|_| "state lock failed")?;
-            if let Some(text) = locked.stash.pop() {
-                locked.input.set(text);
+            if name == "pop" {
+                let mut locked = state.lock().map_err(|_| "state lock failed")?;
+                if let Some(text) = locked.stash.pop() {
+                    locked.input.set(text);
+                }
+            } else {
+                state
+                    .lock()
+                    .map_err(|_| "state lock failed")?
+                    .panel("Prompt Stash", rows);
             }
         }
-        "shell" => {
+        "prompt.shell" => {
             let mut locked = state.lock().map_err(|_| "state lock failed")?;
             locked.shell = !locked.shell;
             let notice = if locked.shell {
@@ -1989,50 +2362,214 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
             };
             locked.notice(notice);
         }
-        "doctor" => android_runtime_panel(state)?,
-        "themes" => state.lock().map_err(|_| "state lock failed")?.panel(
+        "shell.list" => state.lock().map_err(|_| "state lock failed")?.panel(
+            "Shells",
+            vec![String::from(
+                "Shell selection follows the configured daemon shell.",
+            )],
+        ),
+        "android.doctor" => android_runtime_panel(state)?,
+        "theme.list" => state.lock().map_err(|_| "state lock failed")?.panel(
             "Themes",
             vec![
                 String::from("Terminal colors follow the active Termux theme."),
                 String::from("Rust TUI uses ratatui styles for Linux parity."),
             ],
         ),
-        "keybinds" => keybinds_panel(state)?,
-        "clipboard" => clipboard_panel(state)?,
-        "title" => {
-            if !value.is_empty() {
-                let session = ensure_session(client, state)?;
-                client.json(
-                    "PATCH",
-                    &format!("/session/{session}"),
-                    Some(json!({ "title": value })),
-                )?;
-                let mut locked = state.lock().map_err(|_| "state lock failed")?;
-                locked.title = value.to_string();
-                locked.notice(format!("title {value}"));
-            }
-        }
-        "suspend" => state.lock().map_err(|_| "state lock failed")?.panel(
+        "keybinds.list" => keybinds_panel(state)?,
+        "clipboard.status" => clipboard_panel(state)?,
+        "terminal.suspend" => state.lock().map_err(|_| "state lock failed")?.panel(
             "Suspend",
             vec![
                 String::from("Ctrl-Z is handled by Termux and the parent shell."),
                 String::from("Use Android app switching to background SlopCode."),
             ],
         ),
-        "plugins" | "mcps" => state.lock().map_err(|_| "state lock failed")?.panel(
+        "plugins.list" => state.lock().map_err(|_| "state lock failed")?.panel(
             "Plugins",
             vec![
                 String::from("Plugins discovery remains daemon-backed."),
                 String::from("Rust Termux TUI renders plugin status without OpenTUI."),
             ],
         ),
-        _ => {
+        "prompt.skills" => {
+            let rows = state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .manifest
+                .command_rows("Skill");
             state
                 .lock()
                 .map_err(|_| "state lock failed")?
-                .notice(format!("unknown command /{name}"));
+                .panel("Skills", rows);
         }
+        "app.exit" => state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice("exit requested"),
+        _ => state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice(format!("unsupported command {}", command.id)),
     }
+    Ok(())
+}
+
+fn submit_prompt_command(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    command: &str,
+    arguments: &str,
+) -> Result<(), String> {
+    let session = ensure_session(client, state)?;
+    let (model, agent, attached) = {
+        let locked = state.lock().map_err(|_| "state lock failed")?;
+        (
+            locked.model.clone(),
+            locked.agent.clone(),
+            locked.attached.clone(),
+        )
+    };
+    let mut parts = Vec::new();
+    for file in attached {
+        parts.push(json!({
+            "id": id("prt"),
+            "type": "file",
+            "path": file,
+        }));
+    }
+    let mut body = json!({
+        "messageID": id("msg"),
+        "command": command,
+        "arguments": arguments,
+        "parts": parts,
+    });
+    if let Some(model) = model {
+        body["model"] = json!(model);
+    }
+    if let Some(agent) = agent {
+        body["agent"] = json!(agent);
+    }
+    client.json("POST", &format!("/session/{session}/command"), Some(body))?;
+    let mut locked = state.lock().map_err(|_| "state lock failed")?;
+    locked.attached.clear();
+    locked.notice(format!("command /{command}"));
+    Ok(())
+}
+
+fn workspaces_panel(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), String> {
+    let body = client
+        .json("GET", "/experimental/workspace", None)
+        .unwrap_or_else(|_| json!([]));
+    let mut rows = rows_from_array(&body, &["id", "name", "type", "directory"]);
+    if rows.is_empty() {
+        rows.push(String::from("No workspaces"));
+    }
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .panel("Workspaces", rows);
+    Ok(())
+}
+
+fn mcp_panel(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), String> {
+    let body = client
+        .json("GET", "/mcp", None)
+        .unwrap_or_else(|_| json!({}));
+    let rows = if let Some(map) = body.as_object() {
+        let mut rows = map
+            .iter()
+            .map(|(key, value)| format!("{key}: {value}"))
+            .collect::<Vec<_>>();
+        rows.sort();
+        rows
+    } else {
+        vec![body.to_string()]
+    };
+    state.lock().map_err(|_| "state lock failed")?.panel(
+        "MCPs",
+        if rows.is_empty() {
+            vec![String::from("No MCPs")]
+        } else {
+            rows
+        },
+    );
+    Ok(())
+}
+
+fn rename_session(client: &Client, state: &Arc<Mutex<State>>, title: &str) -> Result<(), String> {
+    if title.is_empty() {
+        state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice("usage: /rename <title>");
+        return Ok(());
+    }
+    let session = ensure_session(client, state)?;
+    client.json(
+        "PATCH",
+        &format!("/session/{session}"),
+        Some(json!({ "title": title })),
+    )?;
+    let mut locked = state.lock().map_err(|_| "state lock failed")?;
+    locked.title = title.to_string();
+    locked.notice(format!("renamed {title}"));
+    Ok(())
+}
+
+fn warp_session(client: &Client, state: &Arc<Mutex<State>>, workspace: &str) -> Result<(), String> {
+    if workspace.is_empty() {
+        return workspaces_panel(client, state);
+    }
+    let session = ensure_session(client, state)?;
+    let body = client.json(
+        "POST",
+        "/experimental/workspace/warp",
+        Some(json!({
+            "sessionID": session,
+            "id": workspace,
+        })),
+    )?;
+    if let Some(title) = string(&body, "title") {
+        state.lock().map_err(|_| "state lock failed")?.title = title;
+    }
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .notice(format!("moved session to {workspace}"));
+    Ok(())
+}
+
+fn undo_last_message(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), String> {
+    let session = ensure_session(client, state)?;
+    let target = {
+        let locked = state.lock().map_err(|_| "state lock failed")?;
+        locked.order.iter().rev().find_map(|id| {
+            let message = locked.messages.get(id)?;
+            if message.role == "user" {
+                Some((message.id.clone(), message.text.clone()))
+            } else {
+                None
+            }
+        })
+    };
+    let Some((message, text)) = target else {
+        state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice("no user message to undo");
+        return Ok(());
+    };
+    client.json(
+        "POST",
+        &format!("/session/{session}/revert"),
+        Some(json!({ "messageID": message })),
+    )?;
+    let mut locked = state.lock().map_err(|_| "state lock failed")?;
+    if !text.is_empty() {
+        locked.input.set(text);
+    }
+    locked.notice("undid previous message");
     Ok(())
 }
 
@@ -3234,16 +3771,44 @@ fn render(frame: &mut Frame<'_>, state: &State) {
         frame.render_widget(Paragraph::new("SlopCode"), area);
         return;
     }
-    if state.input.text.is_empty()
-        && state.panel.is_none()
-        && state.permission.is_none()
-        && state.question.is_none()
-        && !state.editor_focus
-    {
-        if let Some(lines) = &state.surface_frame {
-            render_surface_frame(frame, area, lines);
+    if let Some(lines) = &state.surface_frame {
+        render_surface_frame(frame, area, lines);
+        if let Some(panel) = &state.panel {
+            let panel_area = centered(
+                area,
+                area.width.saturating_sub(4).max(20),
+                area.height.saturating_sub(6).max(8),
+            );
+            frame.render_widget(Clear, panel_area);
+            render_panel(frame, panel_area, panel);
+        }
+        if !state.input.text.is_empty() || state.shell || !state.attached.is_empty() {
+            let height = area.height.min(4);
+            let prompt_area = Rect {
+                x: area.x,
+                y: area.y + area.height.saturating_sub(height),
+                width: area.width,
+                height,
+            };
+            frame.render_widget(Clear, prompt_area);
+            render_prompt(frame, prompt_area, state);
+        }
+        if let Some(permission) = &state.permission {
+            render_permission(frame, area, state, permission);
+        }
+        if let Some(question) = &state.question {
+            render_question(frame, area, question);
+        }
+        if state.panel.is_some()
+            || !state.input.text.is_empty()
+            || state.shell
+            || !state.attached.is_empty()
+            || state.permission.is_some()
+            || state.question.is_some()
+        {
             return;
         }
+        return;
     }
     if state.session.is_none()
         && state.messages.is_empty()
@@ -3400,19 +3965,7 @@ fn render_body(frame: &mut Frame<'_>, area: Rect, state: &State) {
 
 fn render_main_panel(frame: &mut Frame<'_>, area: Rect, state: &State) {
     if let Some(panel) = &state.panel {
-        let rows: Vec<ListItem> = panel
-            .rows
-            .iter()
-            .map(|item| ListItem::new(item.clone()))
-            .collect();
-        frame.render_widget(
-            List::new(rows).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(panel.title.as_str()),
-            ),
-            area,
-        );
+        render_panel(frame, area, panel);
         return;
     }
     let mut lines = Vec::new();
@@ -3465,6 +4018,22 @@ fn render_main_panel(frame: &mut Frame<'_>, area: Rect, state: &State) {
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .block(Block::default().borders(Borders::ALL).title("Session")),
+        area,
+    );
+}
+
+fn render_panel(frame: &mut Frame<'_>, area: Rect, panel: &Panel) {
+    let rows: Vec<ListItem> = panel
+        .rows
+        .iter()
+        .map(|item| ListItem::new(item.clone()))
+        .collect();
+    frame.render_widget(
+        List::new(rows).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(panel.title.as_str()),
+        ),
         area,
     );
 }

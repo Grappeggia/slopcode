@@ -125,6 +125,33 @@ describe("Android Termux runtime", () => {
     expect(verify).toContain('asset: "slopcode-android-x64.tar.gz"')
   })
 
+  test("Android slash commands are daemon-backed and Linux-aligned", async () => {
+    const entry = await Bun.file(path.join(import.meta.dir, "..", "native", "android-tui", "src", "main.rs")).text()
+
+    expect(entry).toContain("CommandSource::Prompt")
+    expect(entry).toContain("load_daemon_commands")
+    expect(entry).toContain('client.json("GET", "/command", None)')
+    expect(entry).toContain('"/session/{session}/command"')
+    expect(entry).toContain("submit_prompt_command")
+    expect(entry).toContain("apply_linux_command_parity")
+    expect(entry).toContain('&["rename", "title"]')
+    expect(entry).toContain('&["undo", "revert"]')
+    expect(entry).toContain('&["redo", "unrevert"]')
+    expect(entry).toContain('&["files", "explorer"]')
+    expect(entry).toContain('&["session", "sessions", "resume", "continue"]')
+    expect(entry).toContain('"resume-session"')
+    expect(entry).not.toContain('match name {')
+  })
+
+  test("Android keeps the shared frame during interactive slash states", async () => {
+    const entry = await Bun.file(path.join(import.meta.dir, "..", "native", "android-tui", "src", "main.rs")).text()
+
+    expect(entry).toContain("render_surface_frame(frame, area, lines);")
+    expect(entry).toContain("render_panel(frame, panel_area, panel)")
+    expect(entry).toContain("render_prompt(frame, prompt_area, state)")
+    expect(entry).not.toContain("if state.input.text.is_empty()\n        && state.panel.is_none()")
+  })
+
   test("Android E2E declares normalized parity coverage and blockers", async () => {
     const ids = parity.map((item) => item.id)
     const snapshot = await Bun.file(
