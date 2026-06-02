@@ -5491,6 +5491,211 @@ export type McpDisconnectResponses = {
 
 export type McpDisconnectResponse = McpDisconnectResponses[keyof McpDisconnectResponses]
 
+export type TuiManifestData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/tui/manifest"
+}
+
+export type TuiManifestResponses = {
+  /**
+   * Shared TUI manifest
+   */
+  200: {
+    version: 1
+    renderer: {
+      linux: "opentui/solid"
+      android: "ratatui/crossterm"
+    }
+    capabilities: {
+      [key: string]: boolean
+    }
+    commands: Array<{
+      id: string
+      title: string
+      category: string
+      description?: string
+      slash?: {
+        name: string
+        aliases?: Array<string>
+        usage?: string
+      }
+      keybind?: string
+      capability?: string
+    }>
+    keybinds: {
+      [key: string]: string
+    }
+    prompt: {
+      maxHeight: number
+      supportsFileParts: boolean
+      supportsShellMode: boolean
+      supportsHistory: boolean
+      supportsStash: boolean
+      supportsQueue: boolean
+    }
+  }
+}
+
+export type TuiManifestResponse = TuiManifestResponses[keyof TuiManifestResponses]
+
+export type TuiSnapshotData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    sessionID?: string
+  }
+  url: "/tui/snapshot"
+}
+
+export type TuiSnapshotErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type TuiSnapshotError = TuiSnapshotErrors[keyof TuiSnapshotErrors]
+
+export type TuiSnapshotResponses = {
+  /**
+   * Shared TUI snapshot
+   */
+  200: {
+    version: 1
+    sessionID?: string
+    title: string
+    status: string
+    header: {
+      title: string
+      context?: string
+      cost?: string
+    }
+    footer: {
+      directory: string
+      workspaceID?: string
+      lsp: number
+      mcp: number
+      mcpFailed: boolean
+      permissions: number
+    }
+    tabs: Array<{
+      id: string
+      title: string
+      active: boolean
+      status: string
+    }>
+    transcript: Array<{
+      id: string
+      role: string
+      text?: string
+      tools: Array<{
+        id: string
+        tool: string
+        status: string
+        preview: Array<string>
+        diff: Array<string>
+        expandable: boolean
+      }>
+    }>
+    sidebar: {
+      mode?: "summary" | "files"
+      rows: Array<string>
+    }
+  }
+}
+
+export type TuiSnapshotResponse = TuiSnapshotResponses[keyof TuiSnapshotResponses]
+
+export type TuiActionData = {
+  body?:
+    | {
+        type: "command"
+        command: string
+        value?: string
+        sessionID?: string
+      }
+    | {
+        type: "prompt.submit"
+        sessionID?: string
+        text: string
+        model?: {
+          providerID: string
+          modelID: string
+        }
+        agent?: string
+        parts?: Array<unknown>
+      }
+    | {
+        type: "session.select"
+        sessionID: string
+      }
+    | {
+        type: "permission.reply"
+        sessionID: string
+        requestID: string
+        reply: "once" | "always" | "reject"
+        reason?: string
+      }
+    | {
+        type: "question.reply"
+        sessionID: string
+        questionID: string
+        answers: Array<unknown>
+      }
+    | {
+        type: "editor.input"
+        sessionID: string
+        editorID: string
+        keys: string
+      }
+    | {
+        type: "editor.save"
+        sessionID: string
+        editorID: string
+      }
+    | {
+        type: "editor.dismissDiff"
+        sessionID: string
+        editorID: string
+      }
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/tui/action"
+}
+
+export type TuiActionErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type TuiActionError = TuiActionErrors[keyof TuiActionErrors]
+
+export type TuiActionResponses = {
+  /**
+   * Action dispatched
+   */
+  200: boolean
+}
+
+export type TuiActionResponse = TuiActionResponses[keyof TuiActionResponses]
+
 export type TuiAppendPromptData = {
   body?: {
     text: string

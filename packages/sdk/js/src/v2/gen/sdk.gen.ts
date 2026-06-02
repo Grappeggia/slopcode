@@ -196,6 +196,8 @@ import type {
   ToolIdsResponses,
   ToolListErrors,
   ToolListResponses,
+  TuiActionErrors,
+  TuiActionResponses,
   TuiAppendPromptErrors,
   TuiAppendPromptResponses,
   TuiClearPromptResponses,
@@ -203,6 +205,7 @@ import type {
   TuiControlResponseResponses,
   TuiExecuteCommandErrors,
   TuiExecuteCommandResponses,
+  TuiManifestResponses,
   TuiOpenHelpResponses,
   TuiOpenModelsResponses,
   TuiOpenSessionsResponses,
@@ -212,6 +215,8 @@ import type {
   TuiSelectSessionErrors,
   TuiSelectSessionResponses,
   TuiShowToastResponses,
+  TuiSnapshotErrors,
+  TuiSnapshotResponses,
   TuiSubmitPromptResponses,
   V2ModelListResponses,
   V2ProviderGetErrors,
@@ -3806,6 +3811,140 @@ export class Control extends HeyApiClient {
 }
 
 export class Tui extends HeyApiClient {
+  /**
+   * Get shared TUI manifest
+   *
+   * Return the shared command, keybind, and capability manifest used by Linux and Android TUI renderers.
+   */
+  public manifest<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<TuiManifestResponses, unknown, ThrowOnError>({
+      url: "/tui/manifest",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get shared TUI snapshot
+   *
+   * Return a normalized TUI snapshot that native renderers can display without duplicating Linux presenter logic.
+   */
+  public snapshot<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      sessionID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<TuiSnapshotResponses, TuiSnapshotErrors, ThrowOnError>({
+      url: "/tui/snapshot",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Dispatch shared TUI action
+   *
+   * Dispatch a typed action from a native TUI renderer through the shared TUI surface contract.
+   */
+  public action<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      body?:
+        | {
+            type: "command"
+            command: string
+            value?: string
+            sessionID?: string
+          }
+        | {
+            type: "prompt.submit"
+            sessionID?: string
+            text: string
+            model?: {
+              providerID: string
+              modelID: string
+            }
+            agent?: string
+            parts?: Array<unknown>
+          }
+        | {
+            type: "session.select"
+            sessionID: string
+          }
+        | {
+            type: "permission.reply"
+            sessionID: string
+            requestID: string
+            reply: "once" | "always" | "reject"
+            reason?: string
+          }
+        | {
+            type: "question.reply"
+            sessionID: string
+            questionID: string
+            answers: Array<unknown>
+          }
+        | {
+            type: "editor.input"
+            sessionID: string
+            editorID: string
+            keys: string
+          }
+        | {
+            type: "editor.save"
+            sessionID: string
+            editorID: string
+          }
+        | {
+            type: "editor.dismissDiff"
+            sessionID: string
+            editorID: string
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<TuiActionResponses, TuiActionErrors, ThrowOnError>({
+      url: "/tui/action",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
   /**
    * Append TUI prompt
    *
