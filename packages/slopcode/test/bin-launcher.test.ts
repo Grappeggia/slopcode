@@ -24,6 +24,10 @@ async function script(file: string, content: string) {
   await fs.chmod(file, 0o755)
 }
 
+async function real(file: string) {
+  return fs.realpath(file)
+}
+
 async function run(env: Record<string, string>, args: string[] = [], file = launcher) {
   const proc = Bun.spawn([file, ...args], {
     env: {
@@ -232,7 +236,7 @@ describe("bin launcher", () => {
         SLOPCODE_TEST_ARCH: "arm64",
         TERMUX_VERSION: "1",
       },
-      [],
+      ["--version"],
       staged.launcher,
     )
 
@@ -260,7 +264,7 @@ describe("bin launcher", () => {
         SLOPCODE_TEST_ARCH: "arm64",
         TERMUX_VERSION: "1",
       },
-      [],
+      ["--version"],
       staged.launcher,
     )
 
@@ -299,10 +303,190 @@ describe("bin launcher", () => {
     expect(out.code).toBe(0)
     expect(JSON.parse(out.stdout)).toEqual({
       args: ["--print-logs"],
-      entry: path.join(bundle, "index.js"),
-      host: path.join(scoped, "bin", "slopcode-android-host"),
-      root: scoped,
+      entry: await real(path.join(bundle, "index.js")),
+      host: await real(path.join(scoped, "bin", "slopcode-android-host")),
+      root: await real(scoped),
     })
+  })
+
+  test("finds hoisted Android Bun bootstrap from npm install layout", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
+    const bun = path.join(path.dirname(staged.root), "node_modules", "@oven", "bun-linux-aarch64-android", "bin")
+    const bundle = path.join(staged.root, "bundle")
+    await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
+    await fs.mkdir(bun, { recursive: true })
+    await fs.mkdir(bundle, { recursive: true })
+    await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
+    await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
+    await Bun.write(
+      path.join(bundle, "index.js"),
+      "console.log(JSON.stringify({ args: process.argv.slice(2), entry: process.env.SLOPCODE_ENTRYPOINT, host: process.env.SLOPCODE_ANDROID_HOST_PATH, root: process.env.SLOPCODE_ANDROID_ROOT }))\n",
+    )
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        TERMUX_VERSION: "1",
+      },
+      ["--print-logs"],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(JSON.parse(out.stdout)).toEqual({
+      args: ["--print-logs"],
+      entry: await real(path.join(bundle, "index.js")),
+      host: await real(path.join(scoped, "bin", "slopcode-android-host")),
+      root: await real(scoped),
+    })
+  })
+
+  test("treats Termux Linux with Bionic as Android for interactive launch", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
+    const bun = path.join(staged.root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin")
+    const bundle = path.join(staged.root, "bundle")
+    await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
+    await fs.mkdir(bun, { recursive: true })
+    await fs.mkdir(bundle, { recursive: true })
+    await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
+    await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
+    await Bun.write(
+      path.join(bundle, "index.js"),
+      "console.log(JSON.stringify({ platform: process.env.SLOPCODE_TEST_PLATFORM, bionic: process.env.SLOPCODE_BIONIC, host: process.env.SLOPCODE_ANDROID_HOST_PATH }))\n",
+    )
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "linux",
+        SLOPCODE_TEST_ARCH: "arm64",
+        TERMUX_VERSION: "1",
+      },
+      ["--print-logs"],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(JSON.parse(out.stdout)).toEqual({
+      platform: "linux",
+      bionic: "1",
+      host: await real(path.join(scoped, "bin", "slopcode-android-host")),
+    })
+  })
+
+  test("uses x64 Android Bun bootstrap for x64 Android installs", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-x64")
+    const bun = path.join(staged.root, "node_modules", "@oven", "bun-linux-x64-android", "bin")
+    const bundle = path.join(staged.root, "bundle")
+    await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
+    await fs.mkdir(bun, { recursive: true })
+    await fs.mkdir(bundle, { recursive: true })
+    await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-x64" }))
+    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
+    await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
+    await Bun.write(path.join(bundle, "index.js"), 'console.log("x64 bootstrap")\n')
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "x64",
+        TERMUX_VERSION: "1",
+      },
+      ["--print-logs"],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(out.stdout.trim()).toBe("x64 bootstrap")
+  })
+
+  test("uses SLOPCODE_BUN_PATH for Android bootstrap overrides", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const override = await temp()
+    const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
+    const bundle = path.join(staged.root, "bundle")
+    await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
+    await fs.mkdir(bundle, { recursive: true })
+    await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
+    await script(path.join(override.bin, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
+    await Bun.write(path.join(bundle, "index.js"), 'console.log("override bootstrap")\n')
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        SLOPCODE_BUN_PATH: path.join(override.bin, "bun"),
+        TERMUX_VERSION: "1",
+      },
+      ["--print-logs"],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(out.stdout.trim()).toBe("override bootstrap")
+  })
+
+  test("errors clearly when Android bootstrap bundle is missing", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
+    const bun = path.join(staged.root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin")
+    await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
+    await fs.mkdir(bun, { recursive: true })
+    await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
+    await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        TERMUX_VERSION: "1",
+      },
+      ["--print-logs"],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(1)
+    expect(out.stdout).not.toContain("runtime")
+    expect(out.stderr).toContain("bootstrap bundle is missing")
+  })
+
+  test("keeps Android version routed to the Rust runtime without bootstrap", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
+    await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
+    await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+    await script(path.join(scoped, "bin", "slopcode"), '#!/bin/sh\nprintf \'runtime %s\\n\' "$1"\n')
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        TERMUX_VERSION: "1",
+      },
+      ["--version"],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(out.stdout.trim()).toBe("runtime --version")
   })
 
   test("keeps Android doctor routed to the Rust runtime", async () => {
@@ -399,6 +583,25 @@ describe("postinstall", () => {
     const root = path.dirname(file)
     const out = await runPostinstall(file, {
       SLOPCODE_TEST_PLATFORM: "android",
+      SLOPCODE_TEST_ARCH: "arm64",
+      TERMUX_VERSION: "1",
+      SLOPCODE_ANDROID_ASSET_PATH: await androidAsset(),
+    })
+
+    expect(out.code).toBe(0)
+    expect(out.stdout).toContain("runtime installed")
+    expect(
+      await Bun.file(
+        path.join(root, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode"),
+      ).exists(),
+    ).toBe(true)
+  })
+
+  test("treats Linux-shaped Termux postinstall as Android", async () => {
+    const file = await stagePostinstall()
+    const root = path.dirname(file)
+    const out = await runPostinstall(file, {
+      SLOPCODE_TEST_PLATFORM: "linux",
       SLOPCODE_TEST_ARCH: "arm64",
       TERMUX_VERSION: "1",
       SLOPCODE_ANDROID_ASSET_PATH: await androidAsset(),

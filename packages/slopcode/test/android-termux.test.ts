@@ -21,6 +21,15 @@ describe("Android Termux runtime", () => {
     expect(native({ platform: "android", override: "1" })).toBe(false)
     expect(android({ platform: "android", override: undefined })).toBe(true)
     expect(android({ platform: "android", override: "1" })).toBe(true)
+    const bionic = process.env.SLOPCODE_BIONIC
+    try {
+      process.env.SLOPCODE_BIONIC = "1"
+      expect(native()).toBe(false)
+      expect(android()).toBe(true)
+    } finally {
+      if (bionic === undefined) delete process.env.SLOPCODE_BIONIC
+      else process.env.SLOPCODE_BIONIC = bionic
+    }
   })
 
   test("resolves bundled Rust host only when present", async () => {
@@ -89,6 +98,8 @@ describe("Android Termux runtime", () => {
     expect(e2e).toContain('"@oven/bun-linux-x64-android": "1.3.14"')
     expect(verify).toContain("must not include Bun runtime")
     expect(verify).toContain("must not include legacy Termux client")
+    expect(verify).toContain("launcher did not route through the bundled bootstrap")
+    expect(verify).toContain("launcher did not expose Android bootstrap modules")
     expect(e2e).toContain('url.pathname === "/tui/manifest"')
     expect(e2e).toContain('url.pathname === "/tui/snapshot"')
     expect(e2e).toContain('"surface.contract"')

@@ -232,8 +232,13 @@ const alpineSmoke = async () => {
 }
 
 const androidTargets = [
-  { arch: "arm64", asset: "slopcode-android-arm64.tar.gz", pkg: "slopcode-android-arm64" },
-  { arch: "x64", asset: "slopcode-android-x64.tar.gz", pkg: "slopcode-android-x64" },
+  {
+    arch: "arm64",
+    asset: "slopcode-android-arm64.tar.gz",
+    pkg: "slopcode-android-arm64",
+    bun: "bun-linux-aarch64-android",
+  },
+  { arch: "x64", asset: "slopcode-android-x64.tar.gz", pkg: "slopcode-android-x64", bun: "bun-linux-x64-android" },
 ] as const
 
 const androidSmoke = async () => {
@@ -273,6 +278,35 @@ const androidSmoke = async () => {
       throw new Error(
         `verify: packed Android ${target.arch} install did not install the Rust TUI runtime and compatibility host alias`,
       )
+    }
+    const hoistedBun = path.join(work, "node_modules", "@oven", target.bun, "bin", "bun")
+    if (!(await exists(hoistedBun))) {
+      throw new Error(`verify: packed Android ${target.arch} install did not include the Bun bootstrap dependency`)
+    }
+    await Bun.write(hoistedBun, `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
+    await fs.chmod(hoistedBun, 0o755)
+    await Bun.write(
+      bundle,
+      "console.log(JSON.stringify({ entry: process.env.SLOPCODE_ENTRYPOINT, host: process.env.SLOPCODE_ANDROID_HOST_PATH, root: process.env.SLOPCODE_ANDROID_ROOT, nodePath: process.env.NODE_PATH }))\n",
+    )
+    const launcher = path.join(work, "node_modules", pkg.name, "bin", pkg.name)
+    const launched = await $`node ${launcher} --print-logs`
+      .env({
+        ...env,
+        TERMUX_VERSION: "1",
+      })
+      .cwd(work)
+      .text()
+    const expectedEntry = await fs.realpath(bundle)
+    const expectedHost = await fs.realpath(sidecar)
+    const expectedRoot = await fs.realpath(path.dirname(path.dirname(bin)))
+    const expectedModules = await fs.realpath(path.join(work, "node_modules", pkg.name, "android-modules"))
+    const parsed = JSON.parse(launched.trim()) as { entry?: string; host?: string; root?: string; nodePath?: string }
+    if (parsed.entry !== expectedEntry || parsed.host !== expectedHost || parsed.root !== expectedRoot) {
+      throw new Error(`verify: packed Android ${target.arch} launcher did not route through the bundled bootstrap`)
+    }
+    if (!parsed.nodePath?.includes(expectedModules)) {
+      throw new Error(`verify: packed Android ${target.arch} launcher did not expose Android bootstrap modules`)
     }
   }
 }

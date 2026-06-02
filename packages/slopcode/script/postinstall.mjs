@@ -39,7 +39,7 @@ function termuxEnv() {
 }
 
 function detectLibc(platform, arch) {
-  if (platform === "android") return "bionic"
+  if (platform === "android" || termuxEnv()) return "bionic"
   if (platform !== "linux") return
   const report = process.report?.getReport?.()
   if (typeof report?.header?.glibcVersionRuntime === "string" && report.header.glibcVersionRuntime) {
@@ -59,7 +59,7 @@ function detectLibc(platform, arch) {
   const text = ((result.stdout || "") + (result.stderr || "")).toLowerCase()
   if (text.includes("musl")) return "musl"
   if (text.includes("glibc") || text.includes("gnu libc")) return "glibc"
-  if (text.includes("bionic") || termuxEnv()) return "bionic"
+  if (text.includes("bionic")) return "bionic"
   const loader = arch === "arm64" ? "/lib/ld-musl-aarch64.so.1" : arch === "x64" ? "/lib/ld-musl-x86_64.so.1" : ""
   if (loader && fs.existsSync(loader)) return "musl"
 }

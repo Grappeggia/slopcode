@@ -2,13 +2,21 @@ import { UI } from "@/cli/ui"
 import fs from "fs"
 import path from "path"
 
+function bionic() {
+  return (
+    process.env.SLOPCODE_BIONIC === "1" ||
+    process.env.TERMUX_VERSION !== undefined ||
+    process.env.PREFIX?.includes("/com.termux/")
+  )
+}
+
 export function native(
   input: {
     platform: string
     override?: string
   } = { platform: process.platform, override: process.env.SLOPCODE_ANDROID_TUI },
 ) {
-  return input.platform !== "android"
+  return !android(input)
 }
 
 export function android(
@@ -17,7 +25,7 @@ export function android(
     override?: string
   } = { platform: process.platform, override: process.env.SLOPCODE_ANDROID_TUI },
 ) {
-  return input.platform === "android"
+  return input.platform === "android" || (input.platform === process.platform && bionic())
 }
 
 export function client(root = process.env.SLOPCODE_ANDROID_ROOT) {
