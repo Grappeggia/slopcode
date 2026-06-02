@@ -24,6 +24,30 @@ use serde_json::{json, Value};
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 const TUI_CORE_VERSION: &str = "rust-ratatui-1";
 
+fn startup_trace_enabled() -> bool {
+    env::var("SLOPCODE_ANDROID_STARTUP_LOG").is_ok_and(|item| {
+        let value = item.to_ascii_lowercase();
+        value == "1" || value == "true" || value == "on"
+    })
+}
+
+fn startup_log(start: Instant, phase: &str, extra: Value) {
+    if !startup_trace_enabled() {
+        return;
+    }
+    let mut payload = json!({
+        "event": "android.startup",
+        "phase": phase,
+        "ms": start.elapsed().as_millis(),
+    });
+    if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+        for (key, value) in extra {
+            payload.insert(key.clone(), value.clone());
+        }
+    }
+    eprintln!("{payload}");
+}
+
 #[derive(Clone, Default)]
 struct Args {
     url: String,
@@ -389,6 +413,7 @@ struct State {
     permission_index: usize,
     question: Option<Question>,
     manifest: SurfaceManifest,
+    surface_frame: Option<Vec<String>>,
 }
 
 impl State {
@@ -439,6 +464,7 @@ impl State {
             permission_index: 0,
             question: None,
             manifest: fallback_manifest(),
+            surface_frame: None,
             args,
         }
     }
@@ -858,8 +884,47 @@ fn hydrate_surface_snapshot(
     apply_surface_snapshot(state, &body)
 }
 
+fn hydrate_surface_frame(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    session: Option<&str>,
+    width: u16,
+    height: u16,
+) -> Result<(), String> {
+    let mut path = format!("/tui/frame?width={width}&height={height}");
+    if let Some(session) = session {
+        path.push_str("&sessionID=");
+        path.push_str(&encode_query(session));
+    }
+    let body = client.json("GET", &path, None)?;
+    apply_surface_frame(state, &body)
+}
+
+fn apply_surface_frame(state: &Arc<Mutex<State>>, body: &Value) -> Result<(), String> {
+    if body
+        .get("renderer")
+        .and_then(Value::as_str)
+        .is_some_and(|item| item != "shared/terminal-frame")
+    {
+        return Err(String::from("unsupported shared frame renderer"));
+    }
+    let lines = string_array(body.get("lines").unwrap_or(&Value::Null));
+    if lines.is_empty() {
+        return Err(String::from("shared frame had no lines"));
+    }
+    let mut locked = state.lock().map_err(|_| "state lock failed")?;
+    if let Some(id) = string(body, "sessionID") {
+        locked.session = Some(id);
+    }
+    locked.title = string(body, "title").unwrap_or_else(|| locked.title.clone());
+    locked.status = string(body, "status").unwrap_or_else(|| locked.status.clone());
+    locked.surface_frame = Some(lines);
+    Ok(())
+}
+
 fn apply_surface_snapshot(state: &Arc<Mutex<State>>, body: &Value) -> Result<(), String> {
     let mut locked = state.lock().map_err(|_| "state lock failed")?;
+    locked.surface_frame = None;
     if let Some(id) = string(body, "sessionID") {
         locked.session = Some(id);
     }
@@ -960,6 +1025,8 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
+    let startup = Instant::now();
+    startup_log(startup, "rust.start", json!({ "version": version() }));
     let args = parse()?;
     let client = Client {
         url: args.url.clone(),
@@ -968,51 +1035,88 @@ fn run() -> Result<(), String> {
     let state = Arc::new(Mutex::new(State::new(args.clone())));
     let dirty = Arc::new(AtomicBool::new(true));
     let done = Arc::new(AtomicBool::new(false));
-    if let Err(err) = load_manifest(&client, &state) {
-        state
-            .lock()
-            .map_err(|_| "state lock failed")?
-            .notice(format!("shared manifest fallback: {err}"));
-    }
-
-    if args.cont {
-        if let Ok(id) = last_session(&client) {
-            let mut locked = state.lock().map_err(|_| "state lock failed")?;
-            locked.session = Some(id);
-        }
-    }
-    let initial_session = args
-        .session
-        .clone()
-        .or_else(|| state.lock().ok().and_then(|locked| locked.session.clone()));
-    if let Some(session) = initial_session {
-        hydrate_session(&client, &state, &session).ok();
-    } else {
-        hydrate_surface_snapshot(&client, &state, None).ok();
-    }
-    if args.fork {
-        if let Some(session) = state
-            .lock()
-            .map_err(|_| "state lock failed")?
-            .session
-            .clone()
-        {
-            let forked =
-                client.json("POST", &format!("/session/{session}/fork"), Some(json!({})))?;
-            if let Some(id) = string(&forked, "id") {
-                state.lock().map_err(|_| "state lock failed")?.session = Some(id.clone());
-                hydrate_session(&client, &state, &id).ok();
-            }
-        }
-    }
-    if let Some(prompt) = args.prompt.clone() {
-        ensure_session(&client, &state)?;
-        submit_prompt(&client, &state, prompt)?;
-    }
 
     spawn_events(client.clone(), state.clone(), dirty.clone(), done.clone());
-    let result = terminal_loop(&client, state, dirty, done);
+    let (width, height) = initial_terminal_size();
+    spawn_startup(
+        client.clone(),
+        state.clone(),
+        dirty.clone(),
+        done.clone(),
+        args,
+        width,
+        height,
+        startup,
+    );
+    let result = terminal_loop(&client, state, dirty, done, startup);
     result
+}
+
+fn spawn_startup(
+    client: Client,
+    state: Arc<Mutex<State>>,
+    dirty: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+    args: Args,
+    width: u16,
+    height: u16,
+    startup: Instant,
+) {
+    thread::spawn(move || {
+        startup_log(startup, "hydrate.begin", json!({ "width": width, "height": height }));
+        if let Err(err) = load_manifest(&client, &state) {
+            if let Ok(mut locked) = state.lock() {
+                locked.notice(format!("shared manifest fallback: {err}"));
+            }
+        }
+        startup_log(startup, "manifest.done", json!({}));
+
+        if args.cont {
+            if let Ok(id) = last_session(&client) {
+                if let Ok(mut locked) = state.lock() {
+                    locked.session = Some(id);
+                }
+            }
+        }
+        let initial_session = args
+            .session
+            .clone()
+            .or_else(|| state.lock().ok().and_then(|locked| locked.session.clone()));
+        if let Some(session) = initial_session {
+            hydrate_session(&client, &state, &session).ok();
+        } else {
+            hydrate_surface_snapshot(&client, &state, None).ok();
+        }
+        startup_log(startup, "snapshot.done", json!({}));
+
+        if args.fork {
+            if let Some(session) = state.lock().ok().and_then(|locked| locked.session.clone()) {
+                if let Ok(forked) =
+                    client.json("POST", &format!("/session/{session}/fork"), Some(json!({})))
+                {
+                    if let Some(id) = string(&forked, "id") {
+                        if let Ok(mut locked) = state.lock() {
+                            locked.session = Some(id.clone());
+                        }
+                        hydrate_session(&client, &state, &id).ok();
+                    }
+                }
+            }
+        }
+        if let Some(prompt) = args.prompt.clone() {
+            if ensure_session(&client, &state).is_ok() {
+                submit_prompt(&client, &state, prompt).ok();
+            }
+        }
+
+        let session = state.lock().ok().and_then(|locked| locked.session.clone());
+        hydrate_surface_frame(&client, &state, session.as_deref(), width, height).ok();
+        startup_log(startup, "frame.done", json!({}));
+        dirty.store(true, Ordering::SeqCst);
+        if done.load(Ordering::SeqCst) {
+            startup_log(startup, "hydrate.after_exit", json!({}));
+        }
+    });
 }
 
 fn parse() -> Result<Args, String> {
@@ -1144,6 +1248,7 @@ fn terminal_loop(
     state: Arc<Mutex<State>>,
     dirty: Arc<AtomicBool>,
     done: Arc<AtomicBool>,
+    startup: Instant,
 ) -> Result<(), String> {
     let (tx, rx) = mpsc::channel::<Vec<u8>>();
     thread::spawn(move || {
@@ -1191,6 +1296,7 @@ fn terminal_loop(
     };
     let mut input = InputParser::default();
     let mut last_draw = Instant::now() - Duration::from_secs(1);
+    let mut first_draw = true;
 
     while !done.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(24)) {
@@ -1209,6 +1315,10 @@ fn terminal_loop(
             terminal
                 .draw(|frame| render(frame, &locked))
                 .map_err(|err| err.to_string())?;
+            if first_draw {
+                startup_log(startup, "first_frame", json!({ "hydrated": locked.surface_frame.is_some() }));
+                first_draw = false;
+            }
             last_draw = Instant::now();
         }
     }
@@ -1356,6 +1466,7 @@ fn handle_action(
 
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
+        locked.surface_frame = None;
         if let Some(permission) = locked.permission.clone() {
             if permission.reason.is_none() && !locked.input.text.is_empty() {
                 let queued = locked.input.clear();
@@ -2662,6 +2773,9 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &Value) {
     let Ok(mut locked) = state.lock() else {
         return;
     };
+    if kind != "server.connected" {
+        locked.surface_frame = None;
+    }
     match kind {
         "server.connected" => {
             locked.connected = true;
@@ -3026,6 +3140,13 @@ fn env_u16(name: &str, fallback: u16) -> u16 {
         .unwrap_or(fallback)
 }
 
+fn initial_terminal_size() -> (u16, u16) {
+    crossterm::terminal::size()
+        .ok()
+        .filter(|(width, height)| *width > 0 && *height > 0)
+        .unwrap_or_else(|| (env_u16("COLUMNS", 80), env_u16("LINES", 24)))
+}
+
 fn connect(host: &str, port: u16) -> Result<TcpStream, String> {
     let addrs = (host, port)
         .to_socket_addrs()
@@ -3113,6 +3234,17 @@ fn render(frame: &mut Frame<'_>, state: &State) {
         frame.render_widget(Paragraph::new("SlopCode"), area);
         return;
     }
+    if state.input.text.is_empty()
+        && state.panel.is_none()
+        && state.permission.is_none()
+        && state.question.is_none()
+        && !state.editor_focus
+    {
+        if let Some(lines) = &state.surface_frame {
+            render_surface_frame(frame, area, lines);
+            return;
+        }
+    }
     if state.session.is_none()
         && state.messages.is_empty()
         && state.panel.is_none()
@@ -3140,6 +3272,17 @@ fn render(frame: &mut Frame<'_>, state: &State) {
     if let Some(question) = &state.question {
         render_question(frame, area, question);
     }
+}
+
+fn render_surface_frame(frame: &mut Frame<'_>, area: Rect, lines: &[String]) {
+    let text = Text::from(
+        lines
+            .iter()
+            .take(area.height as usize)
+            .map(|line| Line::from(line.as_str()))
+            .collect::<Vec<_>>(),
+    );
+    frame.render_widget(Paragraph::new(text), area);
 }
 
 fn render_home(frame: &mut Frame<'_>, area: Rect, state: &State) {

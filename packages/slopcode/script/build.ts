@@ -368,6 +368,40 @@ const androidLinker = (ndk: string, linker: string) => {
   throw new Error(`Missing Android linker ${linker} under ${prebuilt}`)
 }
 
+const rustupTool = (tool: "rustc" | "rustdoc") => {
+  const result = Bun.spawnSync(["rustup", "which", tool], {
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  if (result.exitCode !== 0) return
+  const value = result.stdout.toString().trim()
+  return value || undefined
+}
+
+const macosSdkEnv = () => {
+  if (process.platform !== "darwin") return {}
+  if (process.env.SDKROOT) return {}
+  const roots = ["/Library/Developer/CommandLineTools/SDKs", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"]
+  for (const root of roots) {
+    if (!fs.existsSync(root)) continue
+    const sdks = fs
+      .readdirSync(root)
+      .filter((item) => item.startsWith("MacOSX") && item.endsWith(".sdk"))
+      .sort()
+    const sdk = sdks.at(-1)
+    if (sdk) {
+      const developer = root.includes("CommandLineTools")
+        ? "/Library/Developer/CommandLineTools"
+        : "/Applications/Xcode.app/Contents/Developer"
+      return {
+        DEVELOPER_DIR: process.env.DEVELOPER_DIR ?? developer,
+        SDKROOT: path.join(root, sdk),
+      }
+    }
+  }
+  return {}
+}
+
 const commandExists = (command: string) => {
   const extensions = process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""]
   return (process.env.PATH ?? "")
@@ -389,6 +423,13 @@ const androidHost = async (name: string, arch: "arm64" | "x64") => {
     : $`cargo build --manifest-path native/android-tui/Cargo.toml --release --target ${rust.target}`
   await build.env({
     ...process.env,
+    ...macosSdkEnv(),
+    ...(rustup
+      ? {
+          RUSTC: rustupTool("rustc"),
+          RUSTDOC: rustupTool("rustdoc"),
+        }
+      : {}),
     [rust.env]: linker,
     SLOPCODE_BUILD_VERSION: Script.version,
   })

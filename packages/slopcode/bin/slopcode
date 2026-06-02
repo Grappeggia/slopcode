@@ -7,7 +7,19 @@ const path = require("path")
 const os = require("os")
 const pkg = require("../package.json")
 
+const startupStart = Date.now()
+function startupTraceEnabled() {
+  const value = (process.env.SLOPCODE_ANDROID_STARTUP_LOG || "").toLowerCase()
+  return value === "1" || value === "true" || value === "on"
+}
+
+function startupLog(phase, extra = {}) {
+  if (!startupTraceEnabled()) return
+  console.error(JSON.stringify({ event: "android.startup", phase, ms: Date.now() - startupStart, ...extra }))
+}
+
 function run(target, options = {}) {
+  startupLog("launcher.exec", { target: path.basename(target) })
   const result = childProcess.spawnSync(target, options.args || process.argv.slice(2), {
     stdio: "inherit",
     env: options.env ? { ...process.env, ...options.env } : process.env,
@@ -51,6 +63,7 @@ const supported = {
 
 const rawPlatform = process.env.SLOPCODE_TEST_PLATFORM || os.platform()
 const rawArch = process.env.SLOPCODE_TEST_ARCH || os.arch()
+startupLog("launcher.start", { platform: rawPlatform, arch: rawArch })
 let platform = platformMap[rawPlatform]
 if (!platform) {
   platform = rawPlatform
@@ -311,6 +324,11 @@ if (!resolved) {
 const args = process.argv.slice(2)
 if (libc() === "bionic" && androidInteractive(args)) {
   const bun = androidBun(arch)
+  startupLog("launcher.android.interactive", {
+    runtime: path.basename(resolved.path),
+    bun: bun ? path.basename(bun) : undefined,
+    legacy: process.env.SLOPCODE_ANDROID_BOOTSTRAP === "legacy",
+  })
   if (!fs.existsSync(androidBundle)) {
     console.error(
       "SlopCode Android CLI bootstrap bundle is missing. Reinstall from Termux with: npm install -g slopcode@latest --include=optional",
@@ -319,6 +337,7 @@ if (libc() === "bionic" && androidInteractive(args)) {
   }
   if (bun && fs.existsSync(androidBundle)) {
     const runtimeRoot = path.dirname(path.dirname(resolved.path))
+    startupLog("launcher.android.legacy_bundle", { bundle: androidBundle })
     run(bun, {
       args: [androidBundle, ...args],
       env: {

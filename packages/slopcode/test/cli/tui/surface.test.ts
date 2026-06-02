@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { commandRows, commandSlashNames, createSurfaceManifest, surfaceCommands } from "@/cli/cmd/tui/surface"
+import {
+  commandRows,
+  commandSlashNames,
+  createSurfaceFrame,
+  createSurfaceManifest,
+  surfaceCommands,
+} from "@/cli/cmd/tui/surface"
 
 describe("shared TUI surface", () => {
   test("exposes a shared command and keybind manifest for native renderers", () => {
@@ -12,10 +18,11 @@ describe("shared TUI surface", () => {
       },
     })
 
-    expect(manifest.version).toBe(1)
+    expect(manifest.version).toBe(2)
     expect(manifest.renderer).toEqual({
       linux: "opentui/solid",
       android: "ratatui/crossterm",
+      frame: "shared/terminal-frame",
     })
     expect(manifest.capabilities["android.runtime"]).toBe(true)
     expect(manifest.capabilities["terminal.mouse"]).toBe(false)
@@ -92,5 +99,62 @@ describe("shared TUI surface", () => {
     ]
 
     expect(androidCore.filter((item) => !slash.has(item))).toEqual([])
+  })
+
+  test("renders a deterministic shared terminal frame for native parity", () => {
+    const frame = createSurfaceFrame({
+      width: 80,
+      height: 16,
+      snapshot: {
+        version: 2,
+        sessionID: "ses_frame",
+        title: "Frame Parity",
+        status: "idle",
+        header: { title: "Frame Parity" },
+        footer: {
+          directory: "/data/data/com.termux/files/home",
+          workspaceID: "wrk_frame",
+          lsp: 1,
+          mcp: 2,
+          mcpFailed: false,
+          permissions: 1,
+        },
+        tabs: [{ id: "ses_frame", title: "Frame Parity", active: true, status: "idle" }],
+        transcript: [
+          {
+            id: "msg_user",
+            role: "user",
+            text: "hello",
+            tools: [],
+          },
+          {
+            id: "msg_assistant",
+            role: "assistant",
+            text: "hi",
+            tools: [
+              {
+                id: "tool_bash",
+                tool: "bash",
+                status: "completed",
+                preview: ["done"],
+                diff: ["+ changed"],
+                expandable: true,
+              },
+            ],
+          },
+        ],
+        sidebar: { mode: "summary", rows: ["modified src/app.ts +2/-1"] },
+      },
+    })
+
+    expect(frame.version).toBe(2)
+    expect(frame.renderer).toBe("shared/terminal-frame")
+    expect(frame.lines).toHaveLength(16)
+    expect(frame.lines.every((line) => line.length === 80)).toBe(true)
+    expect(frame.rows).toHaveLength(16)
+    expect(frame.lines.join("\n")).toContain("SlopCode | Frame Parity | idle")
+    expect(frame.lines.join("\n")).toContain("tool bash completed")
+    expect(frame.lines.join("\n")).toContain("modified src/app.ts")
+    expect(frame.lines.at(-1)).toContain("/data/data/com.termux/files/home")
   })
 })

@@ -312,6 +312,7 @@ describe("bin launcher", () => {
         SLOPCODE_TEST_PLATFORM: "android",
         SLOPCODE_TEST_ARCH: "arm64",
         TERMUX_VERSION: "1",
+        SLOPCODE_ANDROID_STARTUP_LOG: "1",
       },
       ["--print-logs"],
       staged.launcher,
@@ -324,6 +325,15 @@ describe("bin launcher", () => {
       host: await real(path.join(scoped, "bin", "slopcode-android-host")),
       root: await real(scoped),
     })
+    const startup = out.stderr
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { event: string; phase: string })
+    expect(startup.map((item) => item.phase)).toEqual(
+      expect.arrayContaining(["launcher.start", "launcher.android.interactive", "launcher.android.legacy_bundle", "launcher.exec"]),
+    )
+    expect(startup.every((item) => item.event === "android.startup")).toBe(true)
   })
 
   test("finds hoisted Android Bun bootstrap from npm install layout", async () => {

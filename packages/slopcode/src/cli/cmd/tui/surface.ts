@@ -5,7 +5,7 @@ import type { SessionStatus } from "@/session/status"
 import type { Session } from "@/session"
 import type { MessageV2 } from "@/session/message-v2"
 
-export const TUI_SURFACE_VERSION = 1
+export const TUI_SURFACE_VERSION = 2
 
 export const TuiSurfaceCommand = z.object({
   id: z.string(),
@@ -29,6 +29,7 @@ export const TuiSurfaceManifest = z.object({
   renderer: z.object({
     linux: z.literal("opentui/solid"),
     android: z.literal("ratatui/crossterm"),
+    frame: z.literal("shared/terminal-frame"),
   }),
   capabilities: z.record(z.string(), z.boolean()),
   commands: TuiSurfaceCommand.array(),
@@ -149,6 +150,41 @@ export const TuiSurfaceSnapshot = z.object({
   }),
 })
 export type TuiSurfaceSnapshot = z.infer<typeof TuiSurfaceSnapshot>
+
+export const TuiSurfaceFrameStyle = z.object({
+  fg: z.string().optional(),
+  bg: z.string().optional(),
+  bold: z.boolean().optional(),
+  dim: z.boolean().optional(),
+  underline: z.boolean().optional(),
+  reverse: z.boolean().optional(),
+})
+export type TuiSurfaceFrameStyle = z.infer<typeof TuiSurfaceFrameStyle>
+
+export const TuiSurfaceFrameSpan = z.object({
+  x: z.number(),
+  text: z.string(),
+  style: TuiSurfaceFrameStyle.optional(),
+})
+export type TuiSurfaceFrameSpan = z.infer<typeof TuiSurfaceFrameSpan>
+
+export const TuiSurfaceFrame = z.object({
+  version: z.literal(TUI_SURFACE_VERSION),
+  renderer: z.literal("shared/terminal-frame"),
+  width: z.number(),
+  height: z.number(),
+  sessionID: z.string().optional(),
+  title: z.string(),
+  status: z.string(),
+  lines: z.string().array(),
+  rows: z
+    .object({
+      y: z.number(),
+      spans: TuiSurfaceFrameSpan.array(),
+    })
+    .array(),
+})
+export type TuiSurfaceFrame = z.infer<typeof TuiSurfaceFrame>
 
 type ManifestInput = {
   keybinds?: Record<string, string | undefined>
@@ -428,6 +464,7 @@ export function createSurfaceManifest(input: ManifestInput = {}): TuiSurfaceMani
     renderer: {
       linux: "opentui/solid",
       android: "ratatui/crossterm",
+      frame: "shared/terminal-frame",
     },
     capabilities: {
       "android.runtime": input.android ?? false,
@@ -615,5 +652,166 @@ export function createSurfaceSnapshot(input: {
             `${item.status.padStart(8)} ${item.path}${item.added || item.removed ? ` +${item.added ?? 0}/-${item.removed ?? 0}` : ""}`,
         ) ?? [],
     },
+  }
+}
+
+function cellWidth(char: string) {
+  const code = char.codePointAt(0) ?? 0
+  if (code === 0) return 0
+  if (code < 0x20 || (code >= 0x7f && code < 0xa0)) return 0
+  return code >= 0x1100 ? 2 : 1
+}
+
+function visibleWidth(text: string) {
+  let width = 0
+  for (const char of text) width += cellWidth(char)
+  return width
+}
+
+function fit(text: string, width: number) {
+  if (width <= 0) return ""
+  let out = ""
+  let size = 0
+  for (const char of text.replace(/\s+/g, " ")) {
+    const next = cellWidth(char)
+    if (size + next > width) break
+    out += char
+    size += next
+  }
+  return out + " ".repeat(Math.max(0, width - size))
+}
+
+function wrap(text: string, width: number) {
+  if (width <= 0) return [""]
+  const words = text.split(/\s+/).filter(Boolean)
+  if (words.length === 0) return [""]
+  const lines: string[] = []
+  let line = ""
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word
+    if (visibleWidth(candidate) <= width) {
+      line = candidate
+      continue
+    }
+    if (line) lines.push(line)
+    if (visibleWidth(word) <= width) {
+      line = word
+      continue
+    }
+    let chunk = ""
+    let size = 0
+    for (const char of word) {
+      const next = cellWidth(char)
+      if (size + next > width) {
+        lines.push(chunk)
+        chunk = ""
+        size = 0
+      }
+      chunk += char
+      size += next
+    }
+    line = chunk
+  }
+  if (line) lines.push(line)
+  return lines
+}
+
+function clampDimension(value: number, fallback: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return fallback
+  return Math.max(min, Math.min(max, Math.floor(value)))
+}
+
+function tabLine(snapshot: TuiSurfaceSnapshot) {
+  const tabs = snapshot.tabs.length
+    ? snapshot.tabs.map((item) => `${item.active ? "[*]" : "[ ]"} ${item.title} ${item.status}`).join("  ")
+    : "[ ] new session idle"
+  return tabs
+}
+
+function transcriptLines(snapshot: TuiSurfaceSnapshot, width: number) {
+  const lines: string[] = []
+  if (snapshot.transcript.length === 0) {
+    lines.push("Start a conversation or type /help for commands.")
+    return lines
+  }
+  for (const message of snapshot.transcript) {
+    const label = message.role === "user" ? "You" : "Assistant"
+    if (message.text) lines.push(...wrap(`${label}: ${message.text}`, width))
+    for (const tool of message.tools) {
+      lines.push(...wrap(`tool ${tool.tool} ${tool.status}`, width))
+      for (const row of tool.preview) lines.push(...wrap(`output ${row}`, width))
+      for (const row of tool.diff) lines.push(...wrap(`diff ${row}`, width))
+      if (tool.expandable) lines.push("more output available")
+    }
+    if (message.text || message.tools.length > 0) lines.push("")
+  }
+  while (lines.at(-1) === "") lines.pop()
+  return lines.length ? lines : ["No transcript yet."]
+}
+
+function sidebarLines(snapshot: TuiSurfaceSnapshot, width: number) {
+  const title = snapshot.sidebar.mode === "files" ? "Files" : "Modified Files"
+  const rows = snapshot.sidebar.rows.length ? snapshot.sidebar.rows : ["No changed files"]
+  return [title, ...rows.flatMap((row) => wrap(row, width))]
+}
+
+export function createSurfaceFrame(input: {
+  snapshot: TuiSurfaceSnapshot
+  width: number
+  height: number
+}): TuiSurfaceFrame {
+  const width = clampDimension(input.width, 80, 20, 240)
+  const height = clampDimension(input.height, 24, 8, 100)
+  const snapshot = input.snapshot
+  const header = `SlopCode | ${snapshot.header.title} | ${snapshot.status}`
+  const footer = [
+    snapshot.footer.directory,
+    snapshot.footer.workspaceID ? `workspace ${snapshot.footer.workspaceID}` : undefined,
+    `lsp ${snapshot.footer.lsp}`,
+    `mcp ${snapshot.footer.mcp}${snapshot.footer.mcpFailed ? "!" : ""}`,
+    snapshot.footer.permissions ? `perm ${snapshot.footer.permissions}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" | ")
+  const prompt = "> "
+  const bodyHeight = Math.max(1, height - 4)
+  const useSidebar = width >= 90
+  const body: string[] = []
+
+  if (useSidebar) {
+    const sidebarWidth = Math.min(32, Math.max(24, Math.floor(width * 0.3)))
+    const mainWidth = width - sidebarWidth - 3
+    const main = transcriptLines(snapshot, mainWidth)
+    const side = sidebarLines(snapshot, sidebarWidth)
+    for (let index = 0; index < bodyHeight; index++) {
+      body.push(`${fit(main[index] ?? "", mainWidth)} | ${fit(side[index] ?? "", sidebarWidth)}`)
+    }
+  } else {
+    const main = [...transcriptLines(snapshot, width), "", ...sidebarLines(snapshot, width)]
+    for (let index = 0; index < bodyHeight; index++) body.push(fit(main[index] ?? "", width))
+  }
+
+  const lines = [
+    fit(header, width),
+    fit(tabLine(snapshot), width),
+    ...body,
+    fit(prompt, width),
+    fit(footer, width),
+  ].slice(0, height)
+  while (lines.length < height) lines.push(" ".repeat(width))
+
+  return {
+    version: TUI_SURFACE_VERSION,
+    renderer: "shared/terminal-frame",
+    width,
+    height,
+    sessionID: snapshot.sessionID,
+    title: snapshot.title,
+    status: snapshot.status,
+    lines,
+    rows: lines.map((line, y) => ({
+      y,
+      spans: [{ x: 0, text: line }],
+    })),
   }
 }

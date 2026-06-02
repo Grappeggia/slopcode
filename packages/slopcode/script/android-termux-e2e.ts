@@ -407,8 +407,8 @@ function json(res, value, status = 200) {
 
 function surfaceManifest() {
   return {
-    version: 1,
-    renderer: { linux: "opentui/solid", android: "ratatui/crossterm" },
+    version: 2,
+    renderer: { linux: "opentui/solid", android: "ratatui/crossterm", frame: "shared/terminal-frame" },
     capabilities: {
       "android.runtime": true,
       clipboard: true,
@@ -509,7 +509,7 @@ function surfaceSnapshot(input, sessionID) {
     }
   })
   return {
-    version: 1,
+    version: 2,
     sessionID: activeID,
     title,
     status: "idle",
@@ -533,6 +533,68 @@ function surfaceSnapshot(input, sessionID) {
       mode: "summary",
       rows: ["modified src/app.ts +2/-1", "added README.md +1/-0"],
     },
+  }
+}
+
+function fitLine(text, width) {
+  const raw = String(text || "").replace(/\\s+/g, " ")
+  return raw.slice(0, width) + " ".repeat(Math.max(0, width - raw.length))
+}
+
+function wrapLine(text, width) {
+  const words = String(text || "").split(/\\s+/).filter(Boolean)
+  const out = []
+  let line = ""
+  for (const word of words) {
+    const next = line ? line + " " + word : word
+    if (next.length <= width) {
+      line = next
+    } else {
+      if (line) out.push(line)
+      line = word.length <= width ? word : word.slice(0, width)
+    }
+  }
+  if (line) out.push(line)
+  return out.length ? out : [""]
+}
+
+function surfaceFrame(input, sessionID, width = 80, height = 24) {
+  const snapshot = surfaceSnapshot(input, sessionID)
+  width = Math.max(20, Math.min(240, Number(width) || 80))
+  height = Math.max(8, Math.min(100, Number(height) || 24))
+  const transcript = []
+  for (const message of snapshot.transcript) {
+    const label = message.role === "user" ? "You" : "Assistant"
+    if (message.text) transcript.push(...wrapLine(label + ": " + message.text, width))
+    for (const tool of message.tools) {
+      transcript.push(...wrapLine("tool " + tool.tool + " " + tool.status, width))
+      for (const row of tool.preview) transcript.push(...wrapLine("output " + row, width))
+      for (const row of tool.diff) transcript.push(...wrapLine("diff " + row, width))
+    }
+    transcript.push("")
+  }
+  const sidebar = [snapshot.sidebar.mode === "files" ? "Files" : "Modified Files", ...snapshot.sidebar.rows]
+  const body = [...transcript, "", ...sidebar]
+  const footer = [snapshot.footer.directory, "workspace " + snapshot.footer.workspaceID, "lsp " + snapshot.footer.lsp, "mcp " + snapshot.footer.mcp]
+    .filter(Boolean)
+    .join(" | ")
+  const lines = [
+    fitLine("SlopCode | " + snapshot.header.title + " | " + snapshot.status, width),
+    fitLine(snapshot.tabs.map((item) => (item.active ? "[*] " : "[ ] ") + item.title + " " + item.status).join("  "), width),
+  ]
+  while (lines.length < height - 2) lines.push(fitLine(body[lines.length - 2] || "", width))
+  lines.push(fitLine("> ", width))
+  lines.push(fitLine(footer, width))
+  return {
+    version: 2,
+    renderer: "shared/terminal-frame",
+    width,
+    height,
+    sessionID: snapshot.sessionID,
+    title: snapshot.title,
+    status: snapshot.status,
+    lines,
+    rows: lines.map((line, y) => ({ y, spans: [{ x: 0, text: line }] })),
   }
 }
 
@@ -589,6 +651,7 @@ async function runHost(input) {
     state.seen.push(req.method + " " + url.pathname)
     if (url.pathname === "/tui/manifest") return json(res, surfaceManifest())
     if (url.pathname === "/tui/snapshot") return json(res, surfaceSnapshot(input, url.searchParams.get("sessionID")))
+    if (url.pathname === "/tui/frame") return json(res, surfaceFrame(input, url.searchParams.get("sessionID"), url.searchParams.get("width"), url.searchParams.get("height")))
     if (url.pathname === "/tui/action" && req.method === "POST") {
       state.actions.push(await read(req))
       return json(res, true)
@@ -827,6 +890,7 @@ const actions = {
     const rendered = run.screen + "\\n" + run.stdout
     assert(run.seen.includes("GET /tui/manifest"), "missing shared manifest route " + JSON.stringify(run.seen))
     assert(run.seen.includes("GET /tui/snapshot"), "missing shared snapshot route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("GET /tui/frame"), "missing shared frame route " + JSON.stringify(run.seen))
     assert(!rendered.includes("shared manifest fallback"), "manifest fallback was used\\n" + rendered)
     assert(rendered.includes("Surface Contract"), "missing snapshot title\\n" + rendered)
     assert(rendered.includes("[*] Surface Contract"), "missing snapshot-backed tab strip\\n" + rendered)
@@ -970,6 +1034,7 @@ const actions = {
     })
     assert(run.seen.includes("GET /session/ses_termux/children"), "missing children route " + JSON.stringify(run.seen))
     assert(run.seen.includes("GET /tui/snapshot"), "missing shared startup snapshot " + JSON.stringify(run.seen))
+    assert(run.seen.includes("GET /tui/frame"), "missing shared startup frame " + JSON.stringify(run.seen))
     assert(run.seen.filter((item) => item === "GET /session/ses_termux/message/index").length >= 2, "missing timeline/history routes " + JSON.stringify(run.seen))
     assert(run.seen.includes("POST /session/ses_termux/revert"), "missing revert route " + JSON.stringify(run.seen))
     assert(run.seen.includes("POST /session/ses_termux/unrevert"), "missing unrevert route " + JSON.stringify(run.seen))

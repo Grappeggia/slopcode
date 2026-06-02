@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { createSurfaceFrame, type TuiSurfaceSnapshot } from "@/cli/cmd/tui/surface"
 
 const root = path.join(import.meta.dir, "..")
 const clean: string[] = []
@@ -50,6 +51,8 @@ function json(value: unknown) {
 }
 
 const manifest = {
+  version: 2,
+  renderer: { linux: "opentui/solid", android: "ratatui/crossterm", frame: "shared/terminal-frame" },
   commands: [
     {
       id: "sidebar.files",
@@ -64,10 +67,12 @@ const manifest = {
   capabilities: { "android.runtime": true, "terminal.mouse": false },
 }
 
-const snapshot = {
+const snapshot: TuiSurfaceSnapshot = {
+  version: 2,
   sessionID: "ses_surface",
   title: "Parity Surface",
   status: "idle",
+  header: { title: "Parity Surface" },
   footer: {
     directory: "/data/data/com.termux/files/home",
     workspaceID: "wrk_surface",
@@ -76,7 +81,7 @@ const snapshot = {
     mcpFailed: false,
     permissions: 0,
   },
-  tabs: [{ id: "ses_surface", title: "Parity Surface", active: true }],
+  tabs: [{ id: "ses_surface", title: "Parity Surface", active: true, status: "idle" }],
   transcript: [
     {
       id: "msg_surface",
@@ -85,6 +90,7 @@ const snapshot = {
       tools: [
         {
           tool: "bash",
+          id: "tool_bash",
           status: "completed",
           preview: ["done"],
           diff: ["+ changed"],
@@ -147,6 +153,14 @@ describe("Android native TUI", () => {
         seen.push(`${req.method} ${url.pathname}`)
         if (url.pathname === "/tui/manifest") return json(manifest)
         if (url.pathname === "/tui/snapshot") return json(snapshot)
+        if (url.pathname === "/tui/frame")
+          return json(
+            createSurfaceFrame({
+              snapshot,
+              width: Number(url.searchParams.get("width") ?? 100),
+              height: Number(url.searchParams.get("height") ?? 30),
+            }),
+          )
         if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\n\n')
         return json({})
       },
@@ -170,6 +184,7 @@ describe("Android native TUI", () => {
       expect(code).toBe(0)
       expect(seen).toContain("GET /tui/manifest")
       expect(seen).toContain("GET /tui/snapshot")
+      expect(seen).toContain("GET /tui/frame")
       expect(stdout).toContain("Parity Surface")
       expect(stdout).toContain("snapshot hello")
       expect(stdout).toContain("tool bash completed")
@@ -194,6 +209,14 @@ describe("Android native TUI", () => {
         seen.push(`${req.method} ${url.pathname}`)
         if (url.pathname === "/tui/manifest") return json(manifest)
         if (url.pathname === "/tui/snapshot") return json(snapshot)
+        if (url.pathname === "/tui/frame")
+          return json(
+            createSurfaceFrame({
+              snapshot,
+              width: Number(url.searchParams.get("width") ?? 100),
+              height: Number(url.searchParams.get("height") ?? 30),
+            }),
+          )
         if (url.pathname === "/session/ses_surface/prompt_async" && req.method === "POST") {
           bodies.push(
             (await req.json()) as {
@@ -229,6 +252,59 @@ describe("Android native TUI", () => {
       expect(bodies[0]?.parts?.[0]?.id?.startsWith("prt_")).toBe(true)
       expect(bodies[0]?.parts?.[0]?.type).toBe("text")
       expect(bodies[0]?.parts?.[0]?.text).toBe("hello android")
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test("emits opt-in startup telemetry with first frame before hydration", async () => {
+    if (process.platform === "win32") return
+    const bin = await binary()
+    if (!bin) return
+
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url)
+        if (url.pathname === "/tui/manifest") return json(manifest)
+        if (url.pathname === "/tui/snapshot") {
+          await Bun.sleep(150)
+          return json(snapshot)
+        }
+        if (url.pathname === "/tui/frame")
+          return json(
+            createSurfaceFrame({
+              snapshot,
+              width: Number(url.searchParams.get("width") ?? 100),
+              height: Number(url.searchParams.get("height") ?? 30),
+            }),
+          )
+        if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\n\n')
+        return json({})
+      },
+    })
+    try {
+      const proc = Bun.spawn([bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test"], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, COLUMNS: "100", LINES: "30", SLOPCODE_ANDROID_STARTUP_LOG: "1" },
+      })
+      await Bun.sleep(75)
+      proc.stdin.write("\x04")
+      proc.stdin.end()
+      const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()])
+      expect(code).toBe(0)
+      const events = stderr
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { event: string; phase: string; ms: number; hydrated?: boolean })
+      expect(events.map((item) => item.phase)).toContain("rust.start")
+      const first = events.find((item) => item.phase === "first_frame")
+      const snapshotDone = events.find((item) => item.phase === "snapshot.done")
+      expect(first?.event).toBe("android.startup")
+      expect(first?.hydrated).toBe(false)
+      expect(snapshotDone ? first!.ms < snapshotDone.ms : true).toBe(true)
     } finally {
       server.stop(true)
     }

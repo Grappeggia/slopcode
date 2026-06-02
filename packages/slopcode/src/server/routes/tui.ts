@@ -12,8 +12,10 @@ import { PermissionNext } from "@/permission/next"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import {
   createSurfaceManifest,
+  createSurfaceFrame,
   createSurfaceSnapshot,
   TuiSurfaceAction,
+  TuiSurfaceFrame,
   TuiSurfaceManifest,
   TuiSurfaceSnapshot,
 } from "@/cli/cmd/tui/surface"
@@ -228,6 +230,44 @@ export const TuiRoutes = lazy(() =>
       ),
       async (c) => {
         return c.json(await snapshot(c.req.valid("query").sessionID))
+      },
+    )
+    .get(
+      "/frame",
+      describeRoute({
+        summary: "Get shared TUI terminal frame",
+        description:
+          "Return a deterministic terminal-cell frame that native renderers can paint exactly across Linux and Android.",
+        operationId: "tui.frame",
+        responses: {
+          200: {
+            description: "Shared TUI terminal frame",
+            content: {
+              "application/json": {
+                schema: resolver(TuiSurfaceFrame),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          sessionID: z.string().optional(),
+          width: z.coerce.number().optional(),
+          height: z.coerce.number().optional(),
+        }),
+      ),
+      async (c) => {
+        const query = c.req.valid("query")
+        return c.json(
+          createSurfaceFrame({
+            snapshot: await snapshot(query.sessionID),
+            width: query.width ?? 80,
+            height: query.height ?? 24,
+          }),
+        )
       },
     )
     .post(
