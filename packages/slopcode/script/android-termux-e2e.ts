@@ -205,6 +205,69 @@ const cliPath = path.join(root, "slopcode", "bin", "slopcode")
 const androidRoot = path.join(root, ${JSON.stringify(androidPackage)})
 const resultPath = path.join(process.env.HOME || ".", "android-termux-e2e-result.json")
 const results = []
+const surfaceCommands = [
+  { id: "help.show", title: "Help", category: "System", slash: { name: "help", aliases: ["commands"] }, keybind: "command_list" },
+  { id: "session.new", title: "New Session", category: "Session", slash: { name: "new" }, keybind: "session_new" },
+  { id: "session.list", title: "Sessions", category: "Session", slash: { name: "sessions", aliases: ["session"] }, keybind: "session_list" },
+  { id: "session.tabs", title: "Tabs", category: "Session", slash: { name: "tabs" }, keybind: "session_tabs_next" },
+  { id: "session.children", title: "Child Sessions", category: "Session", slash: { name: "children" }, keybind: "session_child_first" },
+  { id: "session.timeline", title: "Timeline", category: "Session", slash: { name: "timeline", aliases: ["messages"] }, keybind: "session_timeline" },
+  { id: "session.status", title: "Status", category: "Session", slash: { name: "status" }, keybind: "status_view" },
+  { id: "session.share", title: "Share", category: "Session", slash: { name: "share" }, keybind: "session_share" },
+  { id: "session.unshare", title: "Unshare", category: "Session", slash: { name: "unshare" }, keybind: "session_unshare" },
+  { id: "session.compact", title: "Compact", category: "Session", slash: { name: "compact" }, keybind: "session_compact" },
+  { id: "session.interrupt", title: "Interrupt", category: "Session", slash: { name: "interrupt", aliases: ["abort"] }, keybind: "session_interrupt" },
+  { id: "session.fork", title: "Fork", category: "Session", slash: { name: "fork" }, keybind: "session_fork" },
+  { id: "session.close", title: "Close Tab", category: "Session", slash: { name: "close" } },
+  { id: "session.pause", title: "Pause", category: "Session", slash: { name: "pause" } },
+  { id: "session.resume", title: "Resume", category: "Session", slash: { name: "resume" } },
+  { id: "session.revert", title: "Revert", category: "Session", slash: { name: "revert", usage: "/revert <message-id>" }, keybind: "messages_undo" },
+  { id: "session.unrevert", title: "Unrevert", category: "Session", slash: { name: "unrevert" }, keybind: "messages_redo" },
+  { id: "session.title", title: "Rename", category: "Session", slash: { name: "title", usage: "/title <title>" }, keybind: "session_rename" },
+  { id: "model.list", title: "Models", category: "Agent", slash: { name: "models", aliases: ["model"] }, keybind: "model_list" },
+  { id: "provider.list", title: "Providers", category: "Agent", slash: { name: "providers", aliases: ["connect"] } },
+  { id: "agent.list", title: "Agents", category: "Agent", slash: { name: "agents", aliases: ["agent"] }, keybind: "agent_list" },
+  { id: "sidebar.summary", title: "Modified Files", category: "Workspace", slash: { name: "summary", aliases: ["sidebar"] }, keybind: "sidebar_toggle" },
+  { id: "sidebar.files", title: "Files", category: "Workspace", slash: { name: "files" }, keybind: "session_files" },
+  { id: "file.open", title: "Open File", category: "Workspace", slash: { name: "open", usage: "/open <file>" } },
+  { id: "file.attach", title: "Attach File", category: "Workspace", slash: { name: "attach", usage: "/attach <file>" } },
+  { id: "editor.focus", title: "Edit", category: "Editor", slash: { name: "edit" }, keybind: "editor_open" },
+  { id: "editor.save", title: "Save Editor", category: "Editor", slash: { name: "save" } },
+  { id: "editor.diagnostics", title: "Diagnostics", category: "Editor", slash: { name: "diagnostics" } },
+  { id: "editor.diff", title: "Diff", category: "Editor", slash: { name: "diff", usage: "/diff [dismiss]" } },
+  { id: "editor.close", title: "Close Editor", category: "Editor", slash: { name: "close-editor", aliases: ["close-editor!"] } },
+  { id: "prompt.queue", title: "Prompt Queue", category: "Prompt", slash: { name: "queue" } },
+  { id: "prompt.stash", title: "Prompt Stash", category: "Prompt", slash: { name: "stash", aliases: ["list", "pop"] } },
+  { id: "prompt.shell", title: "Shell Mode", category: "Prompt", slash: { name: "shell" } },
+  { id: "theme.list", title: "Themes", category: "System", slash: { name: "themes" }, keybind: "theme_list" },
+  { id: "terminal.suspend", title: "Suspend", category: "System", slash: { name: "suspend" }, keybind: "terminal_suspend" },
+  { id: "keybinds.list", title: "Keybinds", category: "System", slash: { name: "keybinds" } },
+  { id: "clipboard.status", title: "Clipboard", category: "System", slash: { name: "clipboard" } },
+  { id: "plugins.list", title: "Plugins", category: "System", slash: { name: "plugins", aliases: ["mcps"] }, keybind: "plugin_manager" },
+  { id: "android.doctor", title: "Android Runtime", category: "System", slash: { name: "doctor" } },
+]
+const surfaceKeybinds = {
+  command_list: "ctrl+p",
+  session_new: "ctrl+x+n",
+  session_list: "ctrl+x+l",
+  session_tabs_next: "ctrl+x+]",
+  session_child_first: "ctrl+x+down",
+  session_timeline: "ctrl+x+g",
+  status_view: "ctrl+x+s",
+  session_compact: "ctrl+x+c",
+  session_interrupt: "escape",
+  messages_undo: "ctrl+x+u",
+  messages_redo: "ctrl+x+r",
+  session_rename: "ctrl+r",
+  model_list: "ctrl+x+m",
+  agent_list: "ctrl+x+a",
+  sidebar_toggle: "ctrl+x+b",
+  session_files: "ctrl+x+f",
+  editor_open: "ctrl+x+e",
+  theme_list: "ctrl+x+t",
+  terminal_suspend: "ctrl+z",
+  plugin_manager: "none",
+}
 
 function wide(char) {
   const code = char.codePointAt(0) || 0
@@ -342,6 +405,137 @@ function json(res, value, status = 200) {
   res.end(JSON.stringify(value))
 }
 
+function surfaceManifest() {
+  return {
+    version: 1,
+    renderer: { linux: "opentui/solid", android: "ratatui/crossterm" },
+    capabilities: {
+      "android.runtime": true,
+      clipboard: true,
+      editor: true,
+      "editor.websocket": true,
+      "files.sidebar": true,
+      "permissions.multi": true,
+      "plugins.declarative": true,
+      "prompt.fileParts": true,
+      "prompt.history": true,
+      "prompt.queue": true,
+      "prompt.shell": true,
+      "prompt.stash": true,
+      "session.tabs": true,
+      "terminal.mouse": false,
+      "theme.switcher": false,
+    },
+    commands: surfaceCommands,
+    keybinds: surfaceKeybinds,
+    prompt: {
+      maxHeight: 6,
+      supportsFileParts: true,
+      supportsShellMode: true,
+      supportsHistory: true,
+      supportsStash: true,
+      supportsQueue: true,
+    },
+  }
+}
+
+function compact(value) {
+  if (typeof value === "string") return value
+  if (value == null) return ""
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function partText(part) {
+  if (part.type === "text" || part.type === "reasoning") return part.text || ""
+  if (part.type === "file") return part.url || part.path || ""
+  return ""
+}
+
+function toolPreview(part) {
+  return compact(part.state && part.state.output)
+    .split("\\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .slice(0, 8)
+}
+
+function toolDiff(part) {
+  const state = part.state || {}
+  const diff = compact((part.metadata && part.metadata.diff) || (state.input && state.input.diff))
+  return diff
+    .split("\\n")
+    .filter((line) => {
+      return (
+        line.startsWith("diff --git") ||
+        line.startsWith("--- ") ||
+        line.startsWith("+++ ") ||
+        line.startsWith("@@") ||
+        (line.startsWith("+") && !line.startsWith("+++")) ||
+        (line.startsWith("-") && !line.startsWith("---"))
+      )
+    })
+    .slice(0, 14)
+}
+
+function surfaceSnapshot(input, sessionID) {
+  const activeID = sessionID || "ses_termux"
+  const title = activeID === "ses_fork" ? "Forked Session" : input.title
+  const sessions = input.sessions || [{ id: "ses_termux", title: input.title }]
+  const chunks = new Map((input.chunks || []).map((item) => [item.messageID, item.parts || []]))
+  const transcript = (input.messages || []).map((message) => {
+    const parts = chunks.get(message.id) || []
+    return {
+      id: message.id,
+      role: message.role || "assistant",
+      text: parts.map(partText).filter(Boolean).join("\\n") || undefined,
+      tools: parts
+        .filter((part) => part.type === "tool")
+        .map((part) => {
+          const preview = toolPreview(part)
+          const diff = toolDiff(part)
+          return {
+            id: part.id || "prt_tool",
+            tool: part.tool || "tool",
+            status: compact(part.state && part.state.status) || "pending",
+            preview,
+            diff,
+            expandable: preview.length >= 8 || diff.length >= 14,
+          }
+        }),
+    }
+  })
+  return {
+    version: 1,
+    sessionID: activeID,
+    title,
+    status: "idle",
+    header: { title },
+    footer: {
+      directory: process.env.HOME || "/data/data/com.termux/files/home",
+      workspaceID: "wrk_termux",
+      lsp: 1,
+      mcp: 1,
+      mcpFailed: false,
+      permissions: input.permission ? 1 : 0,
+    },
+    tabs: sessions.slice(0, 8).map((item) => ({
+      id: item.id,
+      title: item.title || item.id,
+      active: item.id === activeID,
+      status: "idle",
+    })),
+    transcript,
+    sidebar: {
+      mode: "summary",
+      rows: ["modified src/app.ts +2/-1", "added README.md +1/-0"],
+    },
+  }
+}
+
 function selected() {
   return matrix.filter((item) => {
     if (!item.active) return false
@@ -388,11 +582,17 @@ function websocketMessages(buffer) {
 }
 
 async function runHost(input) {
-  const state = { bodies: [], replies: [], permissions: [], shells: [], summaries: [], editorInputs: [], seen: [] }
+  const state = { actions: [], bodies: [], replies: [], permissions: [], shells: [], summaries: [], editorInputs: [], seen: [] }
   const editorState = { dirty: true, diff: true, content: "console.log('ok')" }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1")
     state.seen.push(req.method + " " + url.pathname)
+    if (url.pathname === "/tui/manifest") return json(res, surfaceManifest())
+    if (url.pathname === "/tui/snapshot") return json(res, surfaceSnapshot(input, url.searchParams.get("sessionID")))
+    if (url.pathname === "/tui/action" && req.method === "POST") {
+      state.actions.push(await read(req))
+      return json(res, true)
+    }
     if (url.pathname === "/session" && req.method === "POST") return json(res, { id: "ses_termux", title: input.title })
     if (url.pathname === "/session" && req.method === "GET") return json(res, input.sessions || [{ id: "ses_termux", title: input.title }])
     if (url.pathname === "/session/ses_termux" && req.method === "GET") return json(res, { id: "ses_termux", title: input.title })
@@ -593,6 +793,51 @@ const actions = {
     })
     assert(run.bodies[0]?.parts?.[0]?.text === "native paste", "bracketed paste did not submit through Rust TUI " + JSON.stringify(run.bodies))
   },
+  "surface.contract": async () => {
+    const run = await runHost({
+      title: "Surface Contract",
+      width: 104,
+      height: 32,
+      sessions: [
+        { id: "ses_termux", title: "Surface Contract" },
+        { id: "ses_other", title: "Other Surface Session" },
+      ],
+      messages: [{ id: "msg_surface", sessionID: "ses_termux", role: "assistant" }],
+      chunks: [
+        {
+          messageID: "msg_surface",
+          parts: [
+            { id: "prt_surface_text", type: "text", text: "surface transcript" },
+            {
+              id: "prt_surface_tool",
+              type: "tool",
+              tool: "edit",
+              state: { status: "completed", output: "surface output" },
+              metadata: { diff: "--- a/src/app.ts\\n+++ b/src/app.ts\\n@@ -1 +1 @@\\n-old\\n+surface" },
+            },
+          ],
+        },
+      ],
+      steps: [
+        { delay: 250, text: "/doctor\\r" },
+        { delay: 200, text: "/commands files\\r" },
+        { delay: 150, text: "\\x04" },
+      ],
+    })
+    const rendered = run.screen + "\\n" + run.stdout
+    assert(run.seen.includes("GET /tui/manifest"), "missing shared manifest route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("GET /tui/snapshot"), "missing shared snapshot route " + JSON.stringify(run.seen))
+    assert(!rendered.includes("shared manifest fallback"), "manifest fallback was used\\n" + rendered)
+    assert(rendered.includes("Surface Contract"), "missing snapshot title\\n" + rendered)
+    assert(rendered.includes("[*] Surface Contract"), "missing snapshot-backed tab strip\\n" + rendered)
+    assert(rendered.includes("workspace wrk_termux"), "missing shared footer workspace\\n" + rendered)
+    assert(rendered.includes("surface transcript"), "missing snapshot transcript text\\n" + rendered)
+    assert(rendered.includes("tool edit completed"), "missing snapshot tool row\\n" + rendered)
+    assert(rendered.includes("diff +surface"), "missing snapshot diff preview\\n" + rendered)
+    assert(rendered.includes("/files") && rendered.includes("Command Palette"), "missing manifest-backed command palette\\n" + rendered)
+    assert(rendered.includes("shared manifest commands"), "missing doctor manifest count\\n" + rendered)
+    assert(rendered.includes("snapshot-backed transcript footer and tabs"), "missing doctor snapshot status\\n" + rendered)
+  },
   "home.landing": async () => {
     const run = await runHost({
       title: "Home Landing",
@@ -724,7 +969,8 @@ const actions = {
       ],
     })
     assert(run.seen.includes("GET /session/ses_termux/children"), "missing children route " + JSON.stringify(run.seen))
-    assert(run.seen.filter((item) => item === "GET /session/ses_termux/message/index").length >= 3, "missing timeline/history routes " + JSON.stringify(run.seen))
+    assert(run.seen.includes("GET /tui/snapshot"), "missing shared startup snapshot " + JSON.stringify(run.seen))
+    assert(run.seen.filter((item) => item === "GET /session/ses_termux/message/index").length >= 2, "missing timeline/history routes " + JSON.stringify(run.seen))
     assert(run.seen.includes("POST /session/ses_termux/revert"), "missing revert route " + JSON.stringify(run.seen))
     assert(run.seen.includes("POST /session/ses_termux/unrevert"), "missing unrevert route " + JSON.stringify(run.seen))
   },
@@ -752,7 +998,7 @@ const actions = {
     assert(run.seen.includes("POST /session/ses_termux/summarize"), "missing compact route " + JSON.stringify(run.seen))
     assert(run.seen.includes("POST /session/ses_termux/abort"), "missing interrupt route " + JSON.stringify(run.seen))
     assert(run.seen.includes("POST /session/ses_termux/fork"), "missing fork route " + JSON.stringify(run.seen))
-    assert(run.seen.includes("GET /session/ses_fork"), "missing fork activation " + JSON.stringify(run.seen))
+    assert(run.seen.filter((item) => item === "GET /tui/snapshot").length >= 2, "missing fork snapshot activation " + JSON.stringify(run.seen))
     assert(
       run.summaries[0]?.providerID === "openai" && run.summaries[0]?.modelID === "gpt-5",
       "compact did not send selected model " + JSON.stringify(run.summaries),

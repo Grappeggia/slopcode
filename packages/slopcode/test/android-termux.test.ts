@@ -48,6 +48,8 @@ describe("Android Termux runtime", () => {
     const verify = await Bun.file(path.join(import.meta.dir, "..", "script", "verify-artifacts.ts")).text()
     const e2e = await Bun.file(path.join(import.meta.dir, "..", "script", "android-termux-e2e.ts")).text()
     const thread = await Bun.file(path.join(import.meta.dir, "..", "src", "cli", "cmd", "tui", "thread.ts")).text()
+    const routes = await Bun.file(path.join(import.meta.dir, "..", "src", "server", "routes", "tui.ts")).text()
+    const surface = await Bun.file(path.join(import.meta.dir, "..", "src", "cli", "cmd", "tui", "surface.ts")).text()
     const manifest = await Bun.file(path.join(import.meta.dir, "..", "native", "android-tui", "Cargo.toml")).text()
     const entry = await Bun.file(path.join(import.meta.dir, "..", "native", "android-tui", "src", "main.rs")).text()
 
@@ -66,6 +68,18 @@ describe("Android Termux runtime", () => {
     expect(entry).toContain("ratatui")
     expect(entry).toContain("crossterm")
     expect(entry).toContain("TUI_CORE_VERSION")
+    expect(entry).toContain("/tui/manifest?platform=android")
+    expect(entry).toContain("/tui/snapshot")
+    expect(entry).toContain("hydrate_surface_snapshot")
+    expect(entry).toContain("SurfaceManifest")
+    expect(entry).toContain("snapshot-backed")
+    expect(entry).toContain("shared manifest commands")
+    expect(routes).toContain('"/manifest"')
+    expect(routes).toContain('"/snapshot"')
+    expect(routes).toContain('"/action"')
+    expect(surface).toContain("TUI_SURFACE_VERSION")
+    expect(surface).toContain("createSurfaceManifest")
+    expect(surface).toContain("createSurfaceSnapshot")
     expect(entry).not.toContain('include!("../../android-host/main.rs")')
     expect(build).not.toContain("@oven/bun-linux")
     expect(build).not.toContain("native/android-client/main.rs")
@@ -75,6 +89,9 @@ describe("Android Termux runtime", () => {
     expect(e2e).toContain('"@oven/bun-linux-x64-android": "1.3.14"')
     expect(verify).toContain("must not include Bun runtime")
     expect(verify).toContain("must not include legacy Termux client")
+    expect(e2e).toContain('url.pathname === "/tui/manifest"')
+    expect(e2e).toContain('url.pathname === "/tui/snapshot"')
+    expect(e2e).toContain('"surface.contract"')
     expect(thread).toContain('await import("./android-host")')
     expect(thread).not.toContain('await import("./portable")')
     expect(thread).not.toContain("SLOPCODE_TERMUX_LEGACY")
@@ -121,6 +138,7 @@ describe("Android Termux runtime", () => {
       "editor.diff",
       "terminal.polish",
       "native.rust-tui",
+      "surface.contract",
       "render.parity-gates",
       "permissions.parity-gates",
     ])
@@ -133,6 +151,10 @@ describe("Android Termux runtime", () => {
     expect(parity.find((item) => item.id === "native.rust-tui")?.level).toBe("workflow-parity")
     expect(parity.find((item) => item.id === "tabs.rich")?.level).toBe("workflow-parity")
     expect(report().totals.blocked).toBe(0)
+    const e2e = e2eSource("slopcode-bin-android-x64")
+    for (const item of parity.filter((item) => item.active)) {
+      expect(e2e).toContain(`${JSON.stringify(item.id)}: async`)
+    }
     expect(ids).toEqual(
       expect.arrayContaining([
         "sessions.controls",
@@ -141,6 +163,7 @@ describe("Android Termux runtime", () => {
         "editor.diff",
         "terminal.polish",
         "native.rust-tui",
+        "surface.contract",
         "release.rust-tui-smoke",
         "render.parity-gates",
         "permissions.parity-gates",

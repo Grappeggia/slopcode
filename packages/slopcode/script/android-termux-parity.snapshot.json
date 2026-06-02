@@ -73,10 +73,16 @@
       "phase": 4,
       "label": "rust-native-renderer",
       "status": "active",
-      "active": ["native.rust-tui", "render.parity-gates", "permissions.parity-gates", "release.rust-tui-smoke"],
+      "active": [
+        "native.rust-tui",
+        "surface.contract",
+        "render.parity-gates",
+        "permissions.parity-gates",
+        "release.rust-tui-smoke"
+      ],
       "inactive": [],
       "blocked": [],
-      "trueParity": ["release.rust-tui-smoke"],
+      "trueParity": ["surface.contract", "release.rust-tui-smoke"],
       "workflowParity": ["native.rust-tui", "render.parity-gates", "permissions.parity-gates"],
       "surfaceOnly": []
     },
@@ -93,10 +99,10 @@
     }
   ],
   "totals": {
-    "active": 23,
+    "active": 24,
     "inactive": 0,
     "blocked": 0,
-    "trueParity": 4,
+    "trueParity": 5,
     "workflowParity": 19,
     "surfaceOnly": 0
   },

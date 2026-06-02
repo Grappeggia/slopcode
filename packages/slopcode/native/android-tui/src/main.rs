@@ -218,6 +218,133 @@ struct Tab {
     title: String,
 }
 
+#[derive(Clone, Default)]
+struct SurfaceCommand {
+    id: String,
+    title: String,
+    category: String,
+    slash: Option<String>,
+    aliases: Vec<String>,
+    usage: Option<String>,
+    keybind: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct SurfaceManifest {
+    commands: Vec<SurfaceCommand>,
+    keybinds: HashMap<String, String>,
+    capabilities: HashMap<String, bool>,
+}
+
+impl SurfaceManifest {
+    fn command_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for command in &self.commands {
+            if let Some(slash) = &command.slash {
+                out.push(format!("/{slash}"));
+            }
+            for alias in &command.aliases {
+                out.push(format!("/{alias}"));
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn command_rows(&self, query: &str) -> Vec<String> {
+        let needle = query.trim().to_lowercase();
+        let mut rows = Vec::new();
+        for command in &self.commands {
+            let slash = command.slash.as_deref().unwrap_or(command.id.as_str());
+            let aliases = if command.aliases.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " ({})",
+                    command
+                        .aliases
+                        .iter()
+                        .map(|item| format!("/{item}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            let haystack = format!(
+                "{} {} {} {}",
+                command.id, command.title, command.category, slash
+            )
+            .to_lowercase();
+            if !needle.is_empty() && !haystack.contains(&needle) {
+                continue;
+            }
+            let keybind = command
+                .keybind
+                .as_ref()
+                .and_then(|key| self.keybinds.get(key))
+                .filter(|value| value.as_str() != "none")
+                .map(|value| format!("  {value}"))
+                .unwrap_or_default();
+            let usage = command
+                .usage
+                .as_ref()
+                .map(|value| format!("  {value}"))
+                .unwrap_or_default();
+            let description = command
+                .description
+                .as_ref()
+                .map(|value| format!("  {value}"))
+                .unwrap_or_default();
+            let slash = if slash.starts_with('/') {
+                slash.to_string()
+            } else {
+                format!("/{slash}")
+            };
+            rows.push(format!(
+                "{}: {slash}{aliases}  {}{keybind}{usage}{description}",
+                command.category, command.title
+            ));
+        }
+        if rows.is_empty() {
+            return vec![format!("No commands match {query}")];
+        }
+        rows
+    }
+
+    fn keybind_rows(&self) -> Vec<String> {
+        let mut rows = Vec::new();
+        for command in &self.commands {
+            let Some(key) = &command.keybind else {
+                continue;
+            };
+            let Some(value) = self.keybinds.get(key) else {
+                continue;
+            };
+            if value == "none" {
+                continue;
+            }
+            let slash = command
+                .slash
+                .as_ref()
+                .map(|item| format!("/{item}"))
+                .unwrap_or_else(|| command.id.clone());
+            rows.push(format!("{value:<18} {slash:<18} {}", command.title));
+        }
+        rows.extend([
+            String::from("Enter             submit input"),
+            String::from("Ctrl-D            exit or leave dialog"),
+            String::from("Ctrl-U            clear before cursor"),
+            String::from("Ctrl-K            clear after cursor"),
+            String::from("Ctrl-W            delete previous word"),
+            String::from("Tab               complete slash commands"),
+            String::from("Up/Down           prompt history"),
+            String::from("F12/F13           stash/restore prompt"),
+        ]);
+        rows
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SidebarMode {
     Summary,
@@ -248,6 +375,12 @@ struct State {
     sidebar_mode: SidebarMode,
     sidebar_rows: Vec<String>,
     tabs: Vec<Tab>,
+    footer_directory: String,
+    footer_workspace: Option<String>,
+    footer_lsp: usize,
+    footer_mcp: usize,
+    footer_mcp_failed: bool,
+    footer_permissions: usize,
     open_files: Vec<String>,
     editor: Option<Editor>,
     editor_focus: bool,
@@ -255,6 +388,7 @@ struct State {
     permission: Option<Permission>,
     permission_index: usize,
     question: Option<Question>,
+    manifest: SurfaceManifest,
 }
 
 impl State {
@@ -291,6 +425,12 @@ impl State {
             sidebar_mode: SidebarMode::Summary,
             sidebar_rows: Vec::new(),
             tabs: Vec::new(),
+            footer_directory: cwd,
+            footer_workspace: None,
+            footer_lsp: 0,
+            footer_mcp: 0,
+            footer_mcp_failed: false,
+            footer_permissions: 0,
             open_files: Vec::new(),
             editor: None,
             editor_focus: false,
@@ -298,6 +438,7 @@ impl State {
             permission: None,
             permission_index: 0,
             question: None,
+            manifest: fallback_manifest(),
             args,
         }
     }
@@ -385,6 +526,432 @@ struct Url {
     base: String,
 }
 
+const FALLBACK_COMMANDS: &[(&str, &str, &str, &[&str], Option<&str>)] = &[
+    (
+        "help.show",
+        "Help",
+        "System",
+        &["help", "commands"],
+        Some("command_list"),
+    ),
+    (
+        "session.new",
+        "New Session",
+        "Session",
+        &["new"],
+        Some("session_new"),
+    ),
+    (
+        "session.list",
+        "Sessions",
+        "Session",
+        &["sessions", "session"],
+        Some("session_list"),
+    ),
+    (
+        "session.tabs",
+        "Tabs",
+        "Session",
+        &["tabs"],
+        Some("session_tabs_next"),
+    ),
+    (
+        "session.children",
+        "Child Sessions",
+        "Session",
+        &["children"],
+        Some("session_child_first"),
+    ),
+    (
+        "session.timeline",
+        "Timeline",
+        "Session",
+        &["timeline", "messages"],
+        Some("session_timeline"),
+    ),
+    (
+        "session.status",
+        "Status",
+        "Session",
+        &["status"],
+        Some("status_view"),
+    ),
+    (
+        "session.share",
+        "Share",
+        "Session",
+        &["share"],
+        Some("session_share"),
+    ),
+    (
+        "session.unshare",
+        "Unshare",
+        "Session",
+        &["unshare"],
+        Some("session_unshare"),
+    ),
+    (
+        "session.compact",
+        "Compact",
+        "Session",
+        &["compact"],
+        Some("session_compact"),
+    ),
+    (
+        "session.interrupt",
+        "Interrupt",
+        "Session",
+        &["interrupt", "abort"],
+        Some("session_interrupt"),
+    ),
+    (
+        "session.fork",
+        "Fork",
+        "Session",
+        &["fork"],
+        Some("session_fork"),
+    ),
+    ("session.close", "Close Tab", "Session", &["close"], None),
+    ("session.pause", "Pause", "Session", &["pause"], None),
+    ("session.resume", "Resume", "Session", &["resume"], None),
+    (
+        "session.revert",
+        "Revert",
+        "Session",
+        &["revert"],
+        Some("messages_undo"),
+    ),
+    (
+        "session.unrevert",
+        "Unrevert",
+        "Session",
+        &["unrevert"],
+        Some("messages_redo"),
+    ),
+    (
+        "session.title",
+        "Rename",
+        "Session",
+        &["title"],
+        Some("session_rename"),
+    ),
+    (
+        "model.list",
+        "Models",
+        "Agent",
+        &["models", "model"],
+        Some("model_list"),
+    ),
+    (
+        "provider.list",
+        "Providers",
+        "Agent",
+        &["providers", "connect"],
+        None,
+    ),
+    (
+        "agent.list",
+        "Agents",
+        "Agent",
+        &["agents", "agent"],
+        Some("agent_list"),
+    ),
+    (
+        "sidebar.summary",
+        "Modified Files",
+        "Workspace",
+        &["summary", "sidebar"],
+        Some("sidebar_toggle"),
+    ),
+    (
+        "sidebar.files",
+        "Files",
+        "Workspace",
+        &["files"],
+        Some("session_files"),
+    ),
+    ("file.open", "Open File", "Workspace", &["open"], None),
+    ("file.attach", "Attach File", "Workspace", &["attach"], None),
+    (
+        "editor.focus",
+        "Edit",
+        "Editor",
+        &["edit"],
+        Some("editor_open"),
+    ),
+    ("editor.save", "Save Editor", "Editor", &["save"], None),
+    (
+        "editor.diagnostics",
+        "Diagnostics",
+        "Editor",
+        &["diagnostics"],
+        None,
+    ),
+    ("editor.diff", "Diff", "Editor", &["diff"], None),
+    (
+        "editor.close",
+        "Close Editor",
+        "Editor",
+        &["close-editor", "close-editor!"],
+        None,
+    ),
+    ("prompt.queue", "Prompt Queue", "Prompt", &["queue"], None),
+    (
+        "prompt.stash",
+        "Prompt Stash",
+        "Prompt",
+        &["stash", "list", "pop"],
+        None,
+    ),
+    ("prompt.shell", "Shell Mode", "Prompt", &["shell"], None),
+    (
+        "theme.list",
+        "Themes",
+        "System",
+        &["themes"],
+        Some("theme_list"),
+    ),
+    (
+        "terminal.suspend",
+        "Suspend",
+        "System",
+        &["suspend"],
+        Some("terminal_suspend"),
+    ),
+    ("keybinds.list", "Keybinds", "System", &["keybinds"], None),
+    (
+        "clipboard.status",
+        "Clipboard",
+        "System",
+        &["clipboard"],
+        None,
+    ),
+    (
+        "plugins.list",
+        "Plugins",
+        "System",
+        &["plugins", "mcps"],
+        Some("plugin_manager"),
+    ),
+    (
+        "android.doctor",
+        "Android Runtime",
+        "System",
+        &["doctor"],
+        None,
+    ),
+];
+
+fn fallback_manifest() -> SurfaceManifest {
+    let mut keybinds = HashMap::new();
+    keybinds.insert(String::from("command_list"), String::from("ctrl+p"));
+    keybinds.insert(String::from("session_new"), String::from("ctrl+x+n"));
+    keybinds.insert(String::from("session_list"), String::from("ctrl+x+l"));
+    keybinds.insert(String::from("session_tabs_next"), String::from("ctrl+x+]"));
+    keybinds.insert(
+        String::from("session_child_first"),
+        String::from("ctrl+x+down"),
+    );
+    keybinds.insert(String::from("session_timeline"), String::from("ctrl+x+g"));
+    keybinds.insert(String::from("status_view"), String::from("ctrl+x+s"));
+    keybinds.insert(String::from("session_compact"), String::from("ctrl+x+c"));
+    keybinds.insert(String::from("session_interrupt"), String::from("escape"));
+    keybinds.insert(String::from("messages_undo"), String::from("ctrl+x+u"));
+    keybinds.insert(String::from("messages_redo"), String::from("ctrl+x+r"));
+    keybinds.insert(String::from("session_rename"), String::from("ctrl+r"));
+    keybinds.insert(String::from("model_list"), String::from("ctrl+x+m"));
+    keybinds.insert(String::from("agent_list"), String::from("ctrl+x+a"));
+    keybinds.insert(String::from("sidebar_toggle"), String::from("ctrl+x+b"));
+    keybinds.insert(String::from("session_files"), String::from("ctrl+x+f"));
+    keybinds.insert(String::from("editor_open"), String::from("ctrl+x+e"));
+    keybinds.insert(String::from("theme_list"), String::from("ctrl+x+t"));
+    keybinds.insert(String::from("terminal_suspend"), String::from("ctrl+z"));
+    let commands = FALLBACK_COMMANDS
+        .iter()
+        .map(|(id, title, category, names, keybind)| SurfaceCommand {
+            id: (*id).to_string(),
+            title: (*title).to_string(),
+            category: (*category).to_string(),
+            slash: names.first().map(|item| (*item).to_string()),
+            aliases: names
+                .iter()
+                .skip(1)
+                .map(|item| (*item).to_string())
+                .collect(),
+            usage: None,
+            keybind: keybind.map(str::to_string),
+            description: None,
+        })
+        .collect();
+    let mut capabilities = HashMap::new();
+    capabilities.insert(String::from("android.runtime"), true);
+    capabilities.insert(String::from("terminal.mouse"), false);
+    SurfaceManifest {
+        commands,
+        keybinds,
+        capabilities,
+    }
+}
+
+fn load_manifest(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), String> {
+    let body = client.json("GET", "/tui/manifest?platform=android", None)?;
+    let mut manifest = SurfaceManifest::default();
+    if let Some(commands) = body.get("commands").and_then(Value::as_array) {
+        for item in commands {
+            let slash = item.get("slash").unwrap_or(&Value::Null);
+            let Some(id) = string(item, "id") else {
+                continue;
+            };
+            manifest.commands.push(SurfaceCommand {
+                id,
+                title: string(item, "title").unwrap_or_else(|| String::from("Command")),
+                category: string(item, "category").unwrap_or_else(|| String::from("General")),
+                slash: string(slash, "name"),
+                aliases: slash
+                    .get("aliases")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                usage: string(slash, "usage"),
+                keybind: string(item, "keybind"),
+                description: string(item, "description"),
+            });
+        }
+    }
+    if let Some(map) = body.get("keybinds").and_then(Value::as_object) {
+        for (key, value) in map {
+            if let Some(value) = value.as_str() {
+                manifest.keybinds.insert(key.clone(), value.to_string());
+            }
+        }
+    }
+    if let Some(map) = body.get("capabilities").and_then(Value::as_object) {
+        for (key, value) in map {
+            if let Some(value) = value.as_bool() {
+                manifest.capabilities.insert(key.clone(), value);
+            }
+        }
+    }
+    if manifest.commands.is_empty() {
+        return Err(String::from("shared TUI manifest had no commands"));
+    }
+    state.lock().map_err(|_| "state lock failed")?.manifest = manifest;
+    Ok(())
+}
+
+fn hydrate_surface_snapshot(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    session: Option<&str>,
+) -> Result<(), String> {
+    let path = match session {
+        Some(session) => format!("/tui/snapshot?sessionID={}", encode_query(session)),
+        None => String::from("/tui/snapshot"),
+    };
+    let body = client.json("GET", &path, None)?;
+    apply_surface_snapshot(state, &body)
+}
+
+fn apply_surface_snapshot(state: &Arc<Mutex<State>>, body: &Value) -> Result<(), String> {
+    let mut locked = state.lock().map_err(|_| "state lock failed")?;
+    if let Some(id) = string(body, "sessionID") {
+        locked.session = Some(id);
+    }
+    locked.title = string(body, "title")
+        .or_else(|| {
+            body.get("header")
+                .and_then(|header| string(header, "title"))
+        })
+        .unwrap_or_else(|| locked.title.clone());
+    locked.status = string(body, "status").unwrap_or_else(|| locked.status.clone());
+
+    if let Some(footer) = body.get("footer") {
+        if let Some(directory) = string(footer, "directory") {
+            locked.footer_directory = directory;
+        }
+        locked.footer_workspace = string(footer, "workspaceID");
+        locked.footer_lsp = usize_field(footer, "lsp");
+        locked.footer_mcp = usize_field(footer, "mcp");
+        locked.footer_mcp_failed = boolean(footer, "mcpFailed");
+        locked.footer_permissions = usize_field(footer, "permissions");
+    }
+
+    if let Some(tabs) = body.get("tabs").and_then(Value::as_array) {
+        locked.tabs.clear();
+        for tab in tabs.iter().take(8) {
+            let Some(id) = string(tab, "id") else {
+                continue;
+            };
+            let title = string(tab, "title").unwrap_or_else(|| id.clone());
+            if boolean(tab, "active") {
+                locked.session = Some(id.clone());
+                locked.title = title.clone();
+            }
+            locked.tabs.push(Tab { id, title });
+        }
+    }
+
+    if let Some(items) = body.get("transcript").and_then(Value::as_array) {
+        locked.messages.clear();
+        locked.order.clear();
+        for item in items {
+            if let Some(message) = surface_message(item) {
+                locked.push_message(message);
+            }
+        }
+    }
+
+    if let Some(sidebar) = body.get("sidebar") {
+        if let Some(mode) = string(sidebar, "mode") {
+            locked.sidebar_mode = if mode == "files" {
+                SidebarMode::Files
+            } else {
+                SidebarMode::Summary
+            };
+        }
+        let rows = string_array(sidebar.get("rows").unwrap_or(&Value::Null));
+        if !rows.is_empty() {
+            locked.sidebar_rows = rows;
+        }
+    }
+    Ok(())
+}
+
+fn surface_message(item: &Value) -> Option<Message> {
+    let id = string(item, "id")?;
+    let role = string(item, "role").unwrap_or_else(|| String::from("assistant"));
+    let text = string(item, "text").unwrap_or_default();
+    let mut tools = Vec::new();
+    if let Some(items) = item.get("tools").and_then(Value::as_array) {
+        for tool in items {
+            let name = string(tool, "tool").unwrap_or_else(|| String::from("tool"));
+            let status = string(tool, "status").unwrap_or_else(|| String::from("pending"));
+            tools.push(format!("tool {name} {status}"));
+            for row in string_array(tool.get("preview").unwrap_or(&Value::Null)) {
+                tools.push(format!("output {row}"));
+            }
+            for row in string_array(tool.get("diff").unwrap_or(&Value::Null)) {
+                tools.push(format!("diff {row}"));
+            }
+            if boolean(tool, "expandable") {
+                tools.push(String::from("expandable in Linux TUI"));
+            }
+        }
+    }
+    Some(Message {
+        id,
+        role,
+        text,
+        tools,
+    })
+}
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("{err}");
@@ -401,6 +968,12 @@ fn run() -> Result<(), String> {
     let state = Arc::new(Mutex::new(State::new(args.clone())));
     let dirty = Arc::new(AtomicBool::new(true));
     let done = Arc::new(AtomicBool::new(false));
+    if let Err(err) = load_manifest(&client, &state) {
+        state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice(format!("shared manifest fallback: {err}"));
+    }
 
     if args.cont {
         if let Ok(id) = last_session(&client) {
@@ -408,8 +981,14 @@ fn run() -> Result<(), String> {
             locked.session = Some(id);
         }
     }
-    if let Some(session) = args.session.as_deref() {
-        hydrate_session(&client, &state, session).ok();
+    let initial_session = args
+        .session
+        .clone()
+        .or_else(|| state.lock().ok().and_then(|locked| locked.session.clone()));
+    if let Some(session) = initial_session {
+        hydrate_session(&client, &state, &session).ok();
+    } else {
+        hydrate_surface_snapshot(&client, &state, None).ok();
     }
     if args.fork {
         if let Some(session) = state
@@ -1085,106 +1664,18 @@ fn complete_command(state: &mut State) {
     if !text.starts_with('/') {
         return;
     }
-    let matches: Vec<&str> = COMMANDS
-        .iter()
-        .copied()
+    let matches: Vec<String> = state
+        .manifest
+        .command_names()
+        .into_iter()
         .filter(|cmd| cmd.starts_with(text.trim()))
         .collect();
     if matches.len() == 1 {
-        state.input.set(matches[0].to_string());
+        state.input.set(matches[0].clone());
         state.input.insert(" ");
     } else if !matches.is_empty() {
-        state.panel(
-            "Command Matches",
-            matches.into_iter().map(|item| item.to_string()).collect(),
-        );
+        state.panel("Command Matches", matches);
     }
-}
-
-const COMMANDS: &[&str] = &[
-    "/help",
-    "/commands",
-    "/new",
-    "/sessions",
-    "/tabs",
-    "/session",
-    "/children",
-    "/messages",
-    "/timeline",
-    "/status",
-    "/close",
-    "/model",
-    "/models",
-    "/providers",
-    "/agents",
-    "/summary",
-    "/files",
-    "/open",
-    "/attach",
-    "/edit",
-    "/save",
-    "/diagnostics",
-    "/diff",
-    "/close-editor",
-    "/close-editor!",
-    "/share",
-    "/unshare",
-    "/pause",
-    "/resume",
-    "/interrupt",
-    "/revert",
-    "/unrevert",
-    "/compact",
-    "/fork",
-    "/queue",
-    "/stash",
-    "/list",
-    "/pop",
-    "/shell",
-    "/doctor",
-    "/themes",
-    "/keybinds",
-    "/clipboard",
-    "/title",
-    "/suspend",
-    "/plugins",
-];
-
-fn command_rows(query: &str) -> Vec<String> {
-    let sections = [
-        (
-            "Session",
-            "/sessions /children /messages /timeline /new /session <id> /tabs /close /fork",
-        ),
-        (
-            "Agent",
-            "/models [query] /model provider/model /providers /agents",
-        ),
-        (
-            "Workspace",
-            "/summary /files [dir] /attach <file> /open <file> /edit /save /diagnostics /close-editor[!] /diff [dismiss] /status /queue /stash /list /pop /share /unshare /compact /pause /resume /interrupt /revert <message-id> /unrevert",
-        ),
-        (
-            "System",
-            "/doctor /shell /themes /keybinds /clipboard /title <title> /suspend /plugins /help /exit",
-        ),
-    ];
-    let needle = query.trim().to_lowercase();
-    if !needle.is_empty() {
-        let rows = COMMANDS
-            .iter()
-            .filter(|command| command.to_lowercase().contains(&needle))
-            .map(|command| format!("{command}  run directly or complete with Tab"))
-            .collect::<Vec<_>>();
-        if rows.is_empty() {
-            return vec![format!("No commands match {query}")];
-        }
-        return rows;
-    }
-    sections
-        .iter()
-        .map(|(section, text)| format!("{section}: {text}"))
-        .collect()
 }
 
 fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<(), String> {
@@ -1195,10 +1686,15 @@ fn command(client: &Client, state: &Arc<Mutex<State>>, input: &str) -> Result<()
         .unwrap_or_else(|| (input.trim_start_matches('/'), ""));
     match name {
         "help" | "commands" => {
+            let rows = state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .manifest
+                .command_rows(value);
             state
                 .lock()
                 .map_err(|_| "state lock failed")?
-                .panel("Command Palette", command_rows(value));
+                .panel("Command Palette", rows);
         }
         "new" => {
             let id = create_session(client)?;
@@ -1467,6 +1963,9 @@ fn hydrate_session(
     state: &Arc<Mutex<State>>,
     session: &str,
 ) -> Result<(), String> {
+    if hydrate_surface_snapshot(client, state, Some(session)).is_ok() {
+        return Ok(());
+    }
     let body = client.json("GET", &format!("/session/{session}"), None)?;
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
@@ -1928,12 +2427,20 @@ fn compact_session(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), Str
 fn android_runtime_panel(state: &Arc<Mutex<State>>) -> Result<(), String> {
     let clip = command_exists("termux-clipboard-get") && command_exists("termux-clipboard-set");
     let open = command_exists("termux-open");
+    let commands = state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .manifest
+        .commands
+        .len();
     state.lock().map_err(|_| "state lock failed")?.panel(
         "Android Runtime",
         vec![
             format!("version {}", version()),
             String::from("renderer ratatui/crossterm"),
             format!("tui core {TUI_CORE_VERSION}"),
+            format!("shared manifest commands {commands}"),
+            String::from("snapshot-backed transcript footer and tabs"),
             format!(
                 "termux clipboard {}",
                 if clip { "available" } else { "missing" }
@@ -1946,19 +2453,15 @@ fn android_runtime_panel(state: &Arc<Mutex<State>>) -> Result<(), String> {
 }
 
 fn keybinds_panel(state: &Arc<Mutex<State>>) -> Result<(), String> {
-    state.lock().map_err(|_| "state lock failed")?.panel(
-        "Keybinds",
-        vec![
-            String::from("Enter submit"),
-            String::from("Ctrl-D exit or leave dialog"),
-            String::from("Ctrl-U clear before cursor"),
-            String::from("Ctrl-K clear after cursor"),
-            String::from("Ctrl-W delete previous word"),
-            String::from("Tab complete slash commands"),
-            String::from("Up/Down prompt history"),
-            String::from("F12 stash prompt, F13 restore prompt"),
-        ],
-    );
+    let rows = state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .manifest
+        .keybind_rows();
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .panel("Keybinds", rows);
     Ok(())
 }
 
@@ -2623,7 +3126,7 @@ fn render(frame: &mut Frame<'_>, state: &State) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(5),
             Constraint::Min(5),
             Constraint::Length(4),
         ])
@@ -2692,11 +3195,39 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &State) {
             Span::raw(&state.title),
         ]),
         Line::from(right.join(" | ")),
+        Line::from(tab_strip(state)),
     ];
     frame.render_widget(
         Paragraph::new(text).block(Block::default().borders(Borders::ALL)),
         area,
     );
+}
+
+fn tab_strip(state: &State) -> String {
+    if state.tabs.is_empty() {
+        if let Some(session) = &state.session {
+            return format!("[*] {}", session);
+        }
+        return String::from("[home]");
+    }
+    state
+        .tabs
+        .iter()
+        .map(|tab| {
+            let active = state.session.as_deref() == Some(tab.id.as_str());
+            let dirty = state
+                .editor
+                .as_ref()
+                .is_some_and(|editor| active && editor.dirty);
+            format!(
+                "{}{}{}",
+                if active { "[*] " } else { "[ ] " },
+                tab.title,
+                if dirty { " +" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
 }
 
 fn render_body(frame: &mut Frame<'_>, area: Rect, state: &State) {
@@ -2799,11 +3330,27 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &State) {
     let prefix = if state.shell { "$ " } else { "> " };
     let mut lines = vec![Line::from(format!("{prefix}{}", state.input.rendered()))];
     let mut footer = Vec::new();
-    if let Some(session) = &state.session {
-        footer.push(session.clone());
-    }
-    if let Some(cwd) = &state.args.cwd {
+    if !state.footer_directory.is_empty() {
+        footer.push(state.footer_directory.clone());
+    } else if let Some(cwd) = &state.args.cwd {
         footer.push(cwd.clone());
+    }
+    footer.push(version());
+    if let Some(workspace) = &state.footer_workspace {
+        footer.push(format!("workspace {workspace}"));
+    }
+    if state.footer_lsp > 0 {
+        footer.push(format!("lsp {}", state.footer_lsp));
+    }
+    if state.footer_mcp > 0 || state.footer_mcp_failed {
+        footer.push(format!(
+            "mcp {}{}",
+            state.footer_mcp,
+            if state.footer_mcp_failed { "!" } else { "" }
+        ));
+    }
+    if state.footer_permissions > 0 {
+        footer.push(format!("permissions {}", state.footer_permissions));
     }
     if !state.attached.is_empty() {
         footer.push(format!("{} attached", state.attached.len()));
@@ -2811,6 +3358,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &State) {
     if let Some(notice) = state.notices.last() {
         footer.push(format!("notice: {notice}"));
     }
+    footer.push(String::from("/help"));
     if !footer.is_empty() {
         lines.push(Line::from(footer.join(" | ")));
     }
@@ -2963,8 +3511,29 @@ fn string(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
+fn string_array(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn boolean(value: &Value, key: &str) -> bool {
     value.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn usize_field(value: &Value, key: &str) -> usize {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|item| usize::try_from(item).ok())
+        .unwrap_or(0)
 }
 
 fn parse_model(input: &str) -> Option<(String, String)> {

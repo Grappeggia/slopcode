@@ -3,7 +3,21 @@ import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
 import { Bus } from "../../bus"
 import { Session } from "../../session"
+import { MessageV2 } from "@/session/message-v2"
+import { SessionStatus } from "@/session/status"
+import { File } from "@/file"
+import { LSP } from "@/lsp"
+import { MCP } from "@/mcp"
+import { PermissionNext } from "@/permission/next"
 import { TuiEvent } from "@/cli/cmd/tui/event"
+import {
+  createSurfaceManifest,
+  createSurfaceSnapshot,
+  TuiSurfaceAction,
+  TuiSurfaceManifest,
+  TuiSurfaceSnapshot,
+} from "@/cli/cmd/tui/surface"
+import { TuiConfig } from "@/config/tui"
 import { AsyncQueue } from "../../util/queue"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
@@ -58,6 +72,61 @@ export async function callTui(ctx: Context) {
   return responseQueue().next()
 }
 
+const commandMap: Record<string, string> = {
+  "help.show": "help.show",
+  "session.new": "session.new",
+  "session.list": "session.list",
+  "session.status": "slopcode.status",
+  "session.share": "session.share",
+  "session.compact": "session.compact",
+  "session.interrupt": "session.interrupt",
+  "model.list": "model.list",
+  "provider.list": "provider.connect",
+  "agent.list": "agent.list",
+  "sidebar.summary": "session.sidebar.toggle",
+  "sidebar.files": "session.files.open",
+  "theme.list": "theme.switch",
+  "plugins.list": "plugins.list",
+}
+
+async function snapshot(sessionID?: string) {
+  const sessions: Session.Info[] = []
+  for await (const session of Session.list({ roots: true, limit: 8 })) {
+    sessions.push(session)
+  }
+  const active = sessionID
+    ? await Session.get(sessionID).catch(() => undefined)
+    : sessions[0]
+  const messages = active
+    ? await MessageV2.index({ sessionID: active.id, limit: 40 }).catch(() => [])
+    : []
+  const chunks =
+    active && messages.length
+      ? await MessageV2.chunk({
+          sessionID: active.id,
+          messageIDs: messages.map((item) => item.id),
+        }).catch(() => [])
+      : []
+  const [files, lsp, mcp, permissions] = await Promise.all([
+    File.status().catch(() => []),
+    LSP.status().catch(() => []),
+    MCP.status().catch(() => ({})),
+    PermissionNext.list(active ? { sessionID: active.id } : {}).catch(() => []),
+  ])
+  return createSurfaceSnapshot({
+    directory: Instance.directory,
+    session: active,
+    sessions,
+    status: SessionStatus.list(),
+    messages,
+    chunks,
+    files,
+    lsp,
+    mcp,
+    permissions: permissions.length,
+  })
+}
+
 const TuiControlRoutes = new Hono()
   .get(
     "/next",
@@ -108,6 +177,111 @@ const TuiControlRoutes = new Hono()
 
 export const TuiRoutes = lazy(() =>
   new Hono()
+    .get(
+      "/manifest",
+      describeRoute({
+        summary: "Get shared TUI manifest",
+        description: "Return the shared command, keybind, and capability manifest used by Linux and Android TUI renderers.",
+        operationId: "tui.manifest",
+        responses: {
+          200: {
+            description: "Shared TUI manifest",
+            content: {
+              "application/json": {
+                schema: resolver(TuiSurfaceManifest),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        const config = await TuiConfig.get().catch(() => ({}) as TuiConfig.Info)
+        return c.json(
+          createSurfaceManifest({
+            keybinds: config.keybinds,
+            android: c.req.query("platform") === "android",
+          }),
+        )
+      },
+    )
+    .get(
+      "/snapshot",
+      describeRoute({
+        summary: "Get shared TUI snapshot",
+        description: "Return a normalized TUI snapshot that native renderers can display without duplicating Linux presenter logic.",
+        operationId: "tui.snapshot",
+        responses: {
+          200: {
+            description: "Shared TUI snapshot",
+            content: {
+              "application/json": {
+                schema: resolver(TuiSurfaceSnapshot),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          sessionID: z.string().optional(),
+        }),
+      ),
+      async (c) => {
+        return c.json(await snapshot(c.req.valid("query").sessionID))
+      },
+    )
+    .post(
+      "/action",
+      describeRoute({
+        summary: "Dispatch shared TUI action",
+        description: "Dispatch a typed action from a native TUI renderer through the shared TUI surface contract.",
+        operationId: "tui.action",
+        responses: {
+          200: {
+            description: "Action dispatched",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("json", TuiSurfaceAction),
+      async (c) => {
+        const action = c.req.valid("json")
+        if (action.type === "command") {
+          const command = commandMap[action.command]
+          if (!command) return c.json(false)
+          await Bus.publish(TuiEvent.CommandExecute, {
+            command,
+            viewID: Instance.viewID,
+          })
+          return c.json(true)
+        }
+        if (action.type === "session.select") {
+          await Session.get(action.sessionID)
+          await Bus.publish(TuiEvent.SessionSelect, {
+            sessionID: action.sessionID,
+            viewID: Instance.viewID,
+          })
+          return c.json(true)
+        }
+        if (action.type === "permission.reply") {
+          const ok = await PermissionNext.reply({
+            requestID: action.requestID,
+            reply: action.reply,
+            message: action.reason,
+            sessionID: action.sessionID,
+          })
+          return c.json(ok)
+        }
+        return c.json(false)
+      },
+    )
     .post(
       "/append-prompt",
       describeRoute({
