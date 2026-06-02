@@ -331,7 +331,12 @@ describe("bin launcher", () => {
       .filter(Boolean)
       .map((line) => JSON.parse(line) as { event: string; phase: string })
     expect(startup.map((item) => item.phase)).toEqual(
-      expect.arrayContaining(["launcher.start", "launcher.android.interactive", "launcher.android.legacy_bundle", "launcher.exec"]),
+      expect.arrayContaining([
+        "launcher.start",
+        "launcher.android.interactive",
+        "launcher.android.legacy_bundle",
+        "launcher.exec",
+      ]),
     )
     expect(startup.every((item) => item.event === "android.startup")).toBe(true)
   })

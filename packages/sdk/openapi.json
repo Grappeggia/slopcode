@@ -7089,7 +7089,7 @@
                   "properties": {
                     "version": {
                       "type": "number",
-                      "const": 1
+                      "const": 2
                     },
                     "renderer": {
                       "type": "object",
@@ -7101,9 +7101,13 @@
                         "android": {
                           "type": "string",
                           "const": "ratatui/crossterm"
+                        },
+                        "frame": {
+                          "type": "string",
+                          "const": "shared/terminal-frame"
                         }
                       },
-                      "required": ["linux", "android"]
+                      "required": ["linux", "android", "frame"]
                     },
                     "capabilities": {
                       "type": "object",
@@ -7245,7 +7249,7 @@
                   "properties": {
                     "version": {
                       "type": "number",
-                      "const": 1
+                      "const": 2
                     },
                     "sessionID": {
                       "type": "string"
@@ -7414,6 +7418,163 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.tui.snapshot({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/tui/frame": {
+      "get": {
+        "operationId": "tui.frame",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sessionID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "width",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "height",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "summary": "Get shared TUI terminal frame",
+        "description": "Return a deterministic terminal-cell frame that native renderers can paint exactly across Linux and Android.",
+        "responses": {
+          "200": {
+            "description": "Shared TUI terminal frame",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "number",
+                      "const": 2
+                    },
+                    "renderer": {
+                      "type": "string",
+                      "const": "shared/terminal-frame"
+                    },
+                    "width": {
+                      "type": "number"
+                    },
+                    "height": {
+                      "type": "number"
+                    },
+                    "sessionID": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "y": {
+                            "type": "number"
+                          },
+                          "spans": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "x": {
+                                  "type": "number"
+                                },
+                                "text": {
+                                  "type": "string"
+                                },
+                                "style": {
+                                  "type": "object",
+                                  "properties": {
+                                    "fg": {
+                                      "type": "string"
+                                    },
+                                    "bg": {
+                                      "type": "string"
+                                    },
+                                    "bold": {
+                                      "type": "boolean"
+                                    },
+                                    "dim": {
+                                      "type": "boolean"
+                                    },
+                                    "underline": {
+                                      "type": "boolean"
+                                    },
+                                    "reverse": {
+                                      "type": "boolean"
+                                    }
+                                  }
+                                }
+                              },
+                              "required": ["x", "text"]
+                            }
+                          }
+                        },
+                        "required": ["y", "spans"]
+                      }
+                    }
+                  },
+                  "required": ["version", "renderer", "width", "height", "title", "status", "lines", "rows"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.tui.frame({\n  ...\n})"
           }
         ]
       }

@@ -381,7 +381,10 @@ const rustupTool = (tool: "rustc" | "rustdoc") => {
 const macosSdkEnv = () => {
   if (process.platform !== "darwin") return {}
   if (process.env.SDKROOT) return {}
-  const roots = ["/Library/Developer/CommandLineTools/SDKs", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"]
+  const roots = [
+    "/Library/Developer/CommandLineTools/SDKs",
+    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs",
+  ]
   for (const root of roots) {
     if (!fs.existsSync(root)) continue
     const sdks = fs
