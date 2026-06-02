@@ -5505,10 +5505,11 @@ export type TuiManifestResponses = {
    * Shared TUI manifest
    */
   200: {
-    version: 1
+    version: 2
     renderer: {
       linux: "opentui/solid"
       android: "ratatui/crossterm"
+      frame: "shared/terminal-frame"
     }
     capabilities: {
       [key: string]: boolean
@@ -5570,7 +5571,7 @@ export type TuiSnapshotResponses = {
    * Shared TUI snapshot
    */
   200: {
-    version: 1
+    version: 2
     sessionID?: string
     title: string
     status: string
@@ -5614,6 +5615,64 @@ export type TuiSnapshotResponses = {
 }
 
 export type TuiSnapshotResponse = TuiSnapshotResponses[keyof TuiSnapshotResponses]
+
+export type TuiFrameData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    sessionID?: string
+    width?: number
+    height?: number
+  }
+  url: "/tui/frame"
+}
+
+export type TuiFrameErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type TuiFrameError = TuiFrameErrors[keyof TuiFrameErrors]
+
+export type TuiFrameResponses = {
+  /**
+   * Shared TUI terminal frame
+   */
+  200: {
+    version: 2
+    renderer: "shared/terminal-frame"
+    width: number
+    height: number
+    sessionID?: string
+    title: string
+    status: string
+    lines: Array<string>
+    rows: Array<{
+      y: number
+      spans: Array<{
+        x: number
+        text: string
+        style?: {
+          fg?: string
+          bg?: string
+          bold?: boolean
+          dim?: boolean
+          underline?: boolean
+          reverse?: boolean
+        }
+      }>
+    }>
+  }
+}
+
+export type TuiFrameResponse = TuiFrameResponses[keyof TuiFrameResponses]
 
 export type TuiActionData = {
   body?:

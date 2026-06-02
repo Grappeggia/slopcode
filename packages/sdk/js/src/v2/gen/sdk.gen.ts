@@ -205,6 +205,8 @@ import type {
   TuiControlResponseResponses,
   TuiExecuteCommandErrors,
   TuiExecuteCommandResponses,
+  TuiFrameErrors,
+  TuiFrameResponses,
   TuiManifestResponses,
   TuiOpenHelpResponses,
   TuiOpenModelsResponses,
@@ -3855,6 +3857,40 @@ export class Tui extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<TuiSnapshotResponses, TuiSnapshotErrors, ThrowOnError>({
       url: "/tui/snapshot",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get shared TUI terminal frame
+   *
+   * Return a deterministic terminal-cell frame that native renderers can paint exactly across Linux and Android.
+   */
+  public frame<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      sessionID?: string
+      width?: number
+      height?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "sessionID" },
+            { in: "query", key: "width" },
+            { in: "query", key: "height" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<TuiFrameResponses, TuiFrameErrors, ThrowOnError>({
+      url: "/tui/frame",
       ...options,
       ...params,
     })
