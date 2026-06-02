@@ -251,9 +251,7 @@ async function installAndroidBun(arch) {
     if (result.status !== 0) {
       throw new Error((result.stderr || result.stdout || "tar failed").trim())
     }
-    const source = fs.existsSync(path.join(extract, "package", "bin", "bun"))
-      ? path.join(extract, "package")
-      : extract
+    const source = fs.existsSync(path.join(extract, "package", "bin", "bun")) ? path.join(extract, "package") : extract
     const binary = path.join(source, "bin", "bun")
     if (!fs.existsSync(binary)) throw new Error("Downloaded Android Bun bootstrap is missing bin/bun")
     await fs.promises.rm(target, { recursive: true, force: true })
