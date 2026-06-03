@@ -745,7 +745,7 @@ function websocketMessages(buffer) {
 }
 
 async function runHost(input) {
-  const state = { actions: [], bodies: [], replies: [], permissions: [], shells: [], summaries: [], editorInputs: [], configPatches: [], seen: [] }
+  const state = { actions: [], bodies: [], replies: [], rejects: [], permissions: [], shells: [], summaries: [], editorInputs: [], configPatches: [], seen: [] }
   let config = {
     model: "openai/gpt-5",
     shell: { program: "/data/data/com.termux/files/usr/bin/bash", timeout_ms: 300000 },
@@ -835,8 +835,13 @@ async function runHost(input) {
       state.replies.push(await read(req))
       return json(res, {})
     }
-    if (url.pathname === "/permission/perm_termux/reply" && req.method === "POST") {
-      state.permissions.push(await read(req))
+    if (url.pathname === "/question/que_termux/reject" && req.method === "POST") {
+      state.rejects.push({ sessionID: url.searchParams.get("sessionID") })
+      return json(res, {})
+    }
+    const permissionReply = url.pathname.match(new RegExp("^/permission/([^/]+)/reply$"))
+    if (permissionReply && req.method === "POST") {
+      state.permissions.push({ id: permissionReply[1], ...(await read(req)) })
       return json(res, {})
     }
     if (url.pathname === "/v2/model") return json(res, [
@@ -862,10 +867,18 @@ async function runHost(input) {
       res.writeHead(200, { "content-type": "text/event-stream" })
       res.write('data: {"type":"server.connected"}\\n\\n')
       if (input.question) {
-        res.write('data: {"type":"question.asked","properties":{"id":"que_termux","sessionID":"ses_termux","questions":[{"header":"Mode","question":"Pick one","options":[{"label":"Yes","description":"ok"}]}]}}\\n\\n')
+        const questions = Array.isArray(input.question)
+          ? input.question
+          : [{ header: "Mode", question: "Pick one", options: [{ label: "Yes", description: "ok" }] }]
+        res.write("data: " + JSON.stringify({ type: "question.asked", properties: { id: "que_termux", sessionID: "ses_termux", questions } }) + "\\n\\n")
       }
       if (input.permission) {
-        res.write('data: {"type":"permission.asked","properties":{"id":"perm_termux","sessionID":"ses_termux","permission":"edit","patterns":["src/app.ts"],"metadata":{"filepath":"src/app.ts","diff":"+hello\\\\n-world"}}}\\n\\n')
+        const permissions = Array.isArray(input.permission)
+          ? input.permission
+          : [{ id: "perm_termux", sessionID: "ses_termux", permission: "edit", patterns: ["src/app.ts"], metadata: { filepath: "src/app.ts", diff: "+hello\\n-world" } }]
+        for (const permission of permissions) {
+          res.write("data: " + JSON.stringify({ type: "permission.asked", properties: permission }) + "\\n\\n")
+        }
       }
       setTimeout(() => res.end(), 1000)
       return
@@ -1076,10 +1089,26 @@ const actions = {
         { delay: 100, text: "\\x1b[200~hello\\nworld\\x1b[201~\\r" },
         { delay: 100, text: "first\\r" },
         { delay: 100, text: "\\x1b[A again\\r" },
+        { delay: 100, text: "alpha beta gamma\\x01START \\x05 END\\x02!\\x06?\\r" },
+        { delay: 100, text: "alpha beta gamma\\x01\\x1bf!\\x05\\x1bb\\x1bdomega\\r" },
+        { delay: 100, text: "ab\\x02\\x04c\\r" },
+        { delay: 100, text: "line1\\nline2\\r" },
         { delay: 100, text: "\\x04" },
       ],
     })
-    assert(JSON.stringify(run.bodies.map((item) => item.parts?.[0]?.text)) === JSON.stringify(["hello\\nworld", "first", "first again"]), "unexpected editing bodies " + JSON.stringify(run.bodies))
+    assert(
+      JSON.stringify(run.bodies.map((item) => item.parts?.[0]?.text)) ===
+        JSON.stringify([
+          "hello\\nworld",
+          "first",
+          "first again",
+          "START alpha beta gamma EN!D?",
+          "alpha! beta omega",
+          "ac",
+          "line1\\nline2",
+        ]),
+      "unexpected editing bodies " + JSON.stringify(run.bodies),
+    )
   },
   "composer.advanced": async () => {
     const run = await runHost({
@@ -1102,8 +1131,27 @@ const actions = {
     )
   },
   "dialogs.question": async () => {
-    const run = await runHost({ title: "Question Session", question: true, steps: [{ delay: 200, text: "1\\r" }, { delay: 100, text: "\\x04" }] })
+    const run = await runHost({ title: "Question Session", question: true, steps: [{ delay: 200, text: "1" }, { delay: 100, text: "\\x04" }] })
+    const rendered = run.screen + "\\n" + run.stdout
+    assert(rendered.includes("Question Dialog") && rendered.includes("Pick one") && rendered.includes("1. Yes"), "missing question dialog\\n" + rendered)
     assert(JSON.stringify(run.replies) === JSON.stringify([{ answers: [["Yes"]] }]), "unexpected replies " + JSON.stringify(run.replies))
+
+    const multi = await runHost({
+      title: "Question Multi",
+      question: [
+        { header: "Mode", question: "Pick mode", custom: false, options: [{ label: "Yes", description: "ok" }, { label: "No", description: "skip" }] },
+        { header: "Scope", question: "Pick scope", multiple: true, options: [{ label: "CLI", description: "terminal" }, { label: "Desktop", description: "ui" }] },
+      ],
+      steps: [
+        { delay: 200, text: "\\x1b[B\\r" },
+        { delay: 100, text: "1\\x1b[B\\x1b[BTermux\\r\\t\\r" },
+        { delay: 100, text: "\\x04" },
+      ],
+    })
+    assert(JSON.stringify(multi.replies) === JSON.stringify([{ answers: [["No"], ["CLI", "Termux"]] }]), "unexpected multi replies " + JSON.stringify(multi.replies))
+
+    const rejected = await runHost({ title: "Question Reject", question: true, steps: [{ delay: 200, text: "\\x1b" }, { delay: 100, text: "\\x04" }] })
+    assert(JSON.stringify(rejected.rejects) === JSON.stringify([{ sessionID: "ses_termux" }]), "unexpected question rejects " + JSON.stringify(rejected.rejects))
   },
   "layout.capture": async () => {
     const run = await runHost({
@@ -1125,6 +1173,9 @@ const actions = {
       title: "Command Session",
       steps: [
         { delay: 150, text: "\\x10" },
+        { delay: 150, text: "commands\\x1b[B\\x1b[A\\r" },
+        { delay: 150, text: "\\x10" },
+        { delay: 150, text: "keybinds\\x1b[B\\x1b[A\\r" },
         { delay: 150, text: "\\x18f" },
         { delay: 150, text: "\\x18m" },
         { delay: 150, text: "\\x18s" },
@@ -1138,6 +1189,10 @@ const actions = {
     })
     semantic(run, ["Command Palette", "/models"])
     const rendered = run.screen + "\\n" + run.stdout
+    assert(rendered.includes("filter: commands"), "palette alias filter was not rendered\\n" + rendered)
+    assert(rendered.includes("/help (/commands)"), "palette alias search did not match /commands\\n" + rendered)
+    assert(rendered.includes("filter: keybinds"), "palette command filter was not rendered\\n" + rendered)
+    assert(rendered.includes("Keybinds"), "palette selection did not execute keybinds command\\n" + rendered)
     assert(rendered.includes("Command Matches") && rendered.includes("/session") && rendered.includes("/se"), "partial slash submit did not keep command matches open\\n" + rendered)
     assert(
       rendered.includes("Command Matches") || (rendered.includes("/close-editor") && rendered.includes("/clipboard")),
@@ -1281,13 +1336,26 @@ const actions = {
       chunks: [{ messageID: "msg_tool", parts: [{ type: "text", text: "Done" }, { type: "tool", tool: "edit", state: { status: "completed", output: "patched" }, metadata: { diff: "+next\\n-prev" } }] }],
       steps: [{ delay: 300, text: "\\x04" }],
     })
-    assert(run.screen.includes("tool edit completed") || run.stdout.includes("tool edit completed"), "missing tool card\\n" + run.screen)
-    assert(run.screen.includes("+next") || run.stdout.includes("+next"), "missing diff preview\\n" + run.screen)
+    const rendered = run.screen + "\\n" + run.stdout
+    assert(rendered.includes("+-- tool edit completed") && rendered.includes("| output patched"), "missing tool card\\n" + rendered)
+    assert(rendered.includes("| diff preview") && rendered.includes("| diff +next"), "missing diff preview\\n" + rendered)
   },
   "permissions.preview": async () => {
-    const run = await runHost({ title: "Permission Session", permission: true, steps: [{ delay: 500, text: "a" }, { delay: 100, text: "\\x04" }] })
-    assert(JSON.stringify(run.permissions) === JSON.stringify([{ reply: "always" }]), "unexpected permission replies " + JSON.stringify(run.permissions))
-    assert(run.screen.includes("permission") || run.stdout.includes("permission"), "missing permission panel\\n" + run.screen)
+    const run = await runHost({
+      title: "Permission Session",
+      permission: [
+        { id: "perm_edit", sessionID: "ses_termux", permission: "edit", patterns: ["src/app.ts"], reason: "needs edit", metadata: { filepath: "src/app.ts", diff: "+hello\\n-world" } },
+        { id: "perm_bash", sessionID: "ses_termux", permission: "bash", patterns: ["git status"], reason: "needs status", metadata: { source: "tool" } },
+      ],
+      steps: [
+        { delay: 500, text: "\\x1b[B a" },
+        { delay: 150, text: "rneeds context\\r" },
+        { delay: 100, text: "\\x04" },
+      ],
+    })
+    const rendered = run.screen + "\\n" + run.stdout
+    assert(JSON.stringify(run.permissions) === JSON.stringify([{ id: "perm_edit", reply: "always" }, { id: "perm_bash", reply: "reject", message: "needs context" }]), "unexpected permission replies " + JSON.stringify(run.permissions))
+    assert(rendered.includes("Permission required") && rendered.includes("[x]") && rendered.includes("[ ]") && rendered.includes("needs edit"), "missing selectable permission panel\\n" + rendered)
   },
   "editor.diff": async () => {
     const run = await runHost({
@@ -1370,9 +1438,17 @@ const actions = {
     assert(rendered.includes("more line(s)") || rendered.includes("more code line(s)"), "missing clipping gate\\n" + rendered)
   },
   "permissions.parity-gates": async () => {
-    const run = await runHost({ title: "Permission Gate", permission: true, steps: [{ delay: 500, text: "rneeds context\\r" }, { delay: 100, text: "\\x04" }] })
-    assert(run.permissions.length === 1 && run.permissions[0].reply === "reject" && run.permissions[0].reason === "needs context", "unexpected permission gate replies " + JSON.stringify(run.permissions))
-    assert(run.stdout.includes("permission"), "missing permission gate panel\\n" + run.stdout)
+    const run = await runHost({
+      title: "Permission Gate",
+      permission: [
+        { id: "perm_block", sessionID: "ses_termux", permission: "edit", patterns: ["src/app.ts"], reason: "blocking edit", metadata: { filepath: "src/app.ts", diff: "+gate\\n-old", source: "current session" } },
+        { id: "perm_plan", sessionID: "ses_termux", kind: "forecast", permission: "bash", patterns: ["npm test"], reason: "planned test", metadata: { source: "build plan" } },
+      ],
+      steps: [{ delay: 500, text: "\\x1b[B rneeds context\\r" }, { delay: 100, text: "\\x04" }],
+    })
+    const rendered = run.screen + "\\n" + run.stdout
+    assert(run.permissions.length === 2 && run.permissions[0].id === "perm_block" && run.permissions[0].reply === "reject" && run.permissions[0].message === "needs context" && run.permissions[1].id === "perm_plan" && run.permissions[1].reply === "reject", "unexpected permission gate replies " + JSON.stringify(run.permissions))
+    assert(rendered.includes("1 need approval now - 1 planned for build") && rendered.includes("planned") && rendered.includes("source build plan") && rendered.includes("blocking edit"), "missing permission gate grouping\\n" + rendered)
   },
   "sidebar.files": async () => {
     const narrow = await runHost({

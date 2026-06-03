@@ -163,15 +163,76 @@ impl Buffer {
         self.cursor = self.len();
     }
 
-    fn kill_before(&mut self) {
-        let end = self.byte(self.cursor);
-        self.text.replace_range(0..end, "");
-        self.cursor = 0;
+    fn char_at(&self, index: usize) -> Option<char> {
+        self.text.chars().nth(index)
     }
 
-    fn kill_after(&mut self) {
-        let start = self.byte(self.cursor);
-        self.text.replace_range(start.., "");
+    fn line_home(&mut self) {
+        while self.cursor > 0 && self.char_at(self.cursor - 1) != Some('\n') {
+            self.cursor -= 1;
+        }
+    }
+
+    fn line_end(&mut self) {
+        while self.cursor < self.len() && self.char_at(self.cursor) != Some('\n') {
+            self.cursor += 1;
+        }
+    }
+
+    fn word_forward(&mut self) {
+        while self.cursor < self.len() && self.char_at(self.cursor).is_some_and(char::is_whitespace)
+        {
+            self.cursor += 1;
+        }
+        while self.cursor < self.len()
+            && self
+                .char_at(self.cursor)
+                .is_some_and(|ch| !ch.is_whitespace())
+        {
+            self.cursor += 1;
+        }
+    }
+
+    fn word_backward(&mut self) {
+        while self.cursor > 0
+            && self
+                .char_at(self.cursor - 1)
+                .is_some_and(char::is_whitespace)
+        {
+            self.cursor -= 1;
+        }
+        while self.cursor > 0
+            && self
+                .char_at(self.cursor - 1)
+                .is_some_and(|ch| !ch.is_whitespace())
+        {
+            self.cursor -= 1;
+        }
+    }
+
+    fn delete_range(&mut self, start: usize, end: usize) {
+        if start >= end {
+            return;
+        }
+        let start_byte = self.byte(start);
+        let end_byte = self.byte(end);
+        self.text.replace_range(start_byte..end_byte, "");
+        self.cursor = self.cursor.min(start);
+    }
+
+    fn kill_to_line_start(&mut self) {
+        let end = self.cursor;
+        self.line_home();
+        self.delete_range(self.cursor, end);
+    }
+
+    fn kill_to_line_end(&mut self) {
+        let start = self.cursor;
+        let mut end = self.cursor;
+        while end < self.len() && self.char_at(end) != Some('\n') {
+            end += 1;
+        }
+        self.delete_range(start, end);
     }
 
     fn delete_word_before(&mut self) {
@@ -193,6 +254,18 @@ impl Buffer {
         {
             self.backspace();
         }
+    }
+
+    fn delete_word_after(&mut self) {
+        let start = self.cursor;
+        let mut end = self.cursor;
+        while end < self.len() && self.char_at(end).is_some_and(char::is_whitespace) {
+            end += 1;
+        }
+        while end < self.len() && self.char_at(end).is_some_and(|ch| !ch.is_whitespace()) {
+            end += 1;
+        }
+        self.delete_range(start, end);
     }
 
     fn rendered(&self) -> String {
@@ -222,12 +295,15 @@ struct Message {
 struct Permission {
     id: String,
     session: String,
+    kind: Option<String>,
     permission: String,
     patterns: Vec<String>,
     file: Option<String>,
     diff: Option<String>,
     source: Option<String>,
-    reason: Option<String>,
+    request_reason: Option<String>,
+    reject_reason: Option<String>,
+    selected: bool,
 }
 
 #[derive(Clone)]
@@ -246,7 +322,10 @@ struct Question {
     items: Vec<QuestionItem>,
     index: usize,
     answers: Vec<Vec<String>>,
+    custom: Vec<String>,
     input: Buffer,
+    selected: usize,
+    editing: bool,
 }
 
 #[derive(Clone, Default)]
@@ -263,6 +342,12 @@ struct Editor {
 struct Panel {
     title: String,
     rows: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+struct CommandPalette {
+    query: String,
+    selected: usize,
 }
 
 #[derive(Clone)]
@@ -342,63 +427,76 @@ impl SurfaceManifest {
         out
     }
 
-    fn command_rows(&self, query: &str) -> Vec<String> {
+    fn command_matches(&self, query: &str) -> Vec<SurfaceCommand> {
         let needle = query.trim().to_lowercase();
-        let mut rows = Vec::new();
-        for command in &self.commands {
-            let slash = command.slash.as_deref().unwrap_or(command.id.as_str());
-            let aliases = if command.aliases.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    " ({})",
-                    command
-                        .aliases
-                        .iter()
-                        .map(|item| format!("/{item}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+        self.commands
+            .iter()
+            .filter(|command| {
+                let slash = command.slash.as_deref().unwrap_or(command.id.as_str());
+                let aliases = command.aliases.join(" ");
+                let haystack = format!(
+                    "{} {} {} {} {} {}",
+                    command.id,
+                    command.title,
+                    command.category,
+                    slash,
+                    aliases,
+                    command.description.as_deref().unwrap_or_default()
                 )
-            };
-            let haystack = format!(
-                "{} {} {} {} {} {}",
-                command.id,
-                command.title,
-                command.category,
-                slash,
-                command.aliases.join(" "),
-                command.description.as_deref().unwrap_or_default()
+                .to_lowercase();
+                needle.is_empty() || haystack.contains(&needle)
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn command_display(&self, command: &SurfaceCommand) -> String {
+        let slash = command.slash.as_deref().unwrap_or(command.id.as_str());
+        let aliases = if command.aliases.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " ({})",
+                command
+                    .aliases
+                    .iter()
+                    .map(|item| format!("/{item}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
-            .to_lowercase();
-            if !needle.is_empty() && !haystack.contains(&needle) {
-                continue;
-            }
-            let keybind = command
-                .keybind
-                .as_ref()
-                .and_then(|key| self.keybinds.get(key))
-                .filter(|value| value.as_str() != "none")
-                .map(|value| format!("  {value}"))
-                .unwrap_or_default();
-            let usage = command
-                .usage
-                .as_ref()
-                .map(|value| format!("  {value}"))
-                .unwrap_or_default();
-            let description = command
-                .description
-                .as_ref()
-                .map(|value| format!("  {value}"))
-                .unwrap_or_default();
-            let slash = if slash.starts_with('/') {
-                slash.to_string()
-            } else {
-                format!("/{slash}")
-            };
-            rows.push(format!(
-                "{}: {slash}{aliases}  {}{keybind}{usage}{description}",
-                command.category, command.title
-            ));
+        };
+        let keybind = command
+            .keybind
+            .as_ref()
+            .and_then(|key| self.keybinds.get(key))
+            .filter(|value| value.as_str() != "none")
+            .map(|value| format!("  {value}"))
+            .unwrap_or_default();
+        let usage = command
+            .usage
+            .as_ref()
+            .map(|value| format!("  {value}"))
+            .unwrap_or_default();
+        let description = command
+            .description
+            .as_ref()
+            .map(|value| format!("  {value}"))
+            .unwrap_or_default();
+        let slash = if slash.starts_with('/') {
+            slash.to_string()
+        } else {
+            format!("/{slash}")
+        };
+        format!(
+            "{}: {slash}{aliases}  {}{keybind}{usage}{description}",
+            command.category, command.title
+        )
+    }
+
+    fn command_rows(&self, query: &str) -> Vec<String> {
+        let mut rows = Vec::new();
+        for command in self.command_matches(query) {
+            rows.push(self.command_display(&command));
         }
         if rows.is_empty() {
             return vec![format!("No commands match {query}")];
@@ -468,6 +566,7 @@ struct State {
     order: Vec<String>,
     notices: Vec<String>,
     panel: Option<Panel>,
+    command_palette: Option<CommandPalette>,
     sidebar: bool,
     sidebar_mode: SidebarMode,
     sidebar_rows: Vec<String>,
@@ -523,6 +622,7 @@ impl State {
             order: Vec::new(),
             notices: vec![format!("cwd {cwd}")],
             panel: None,
+            command_palette: None,
             sidebar: false,
             sidebar_mode: SidebarMode::Summary,
             sidebar_rows: Vec::new(),
@@ -555,10 +655,16 @@ impl State {
     }
 
     fn panel(&mut self, title: impl Into<String>, rows: Vec<String>) {
+        self.command_palette = None;
         self.panel = Some(Panel {
             title: title.into(),
             rows,
         });
+    }
+
+    fn command_palette(&mut self) {
+        self.panel = None;
+        self.command_palette = Some(CommandPalette::default());
     }
 
     fn push_message(&mut self, message: Message) {
@@ -1250,6 +1356,8 @@ fn apply_surface_frame(state: &Arc<Mutex<State>>, body: &Value) -> Result<(), St
 
 fn apply_surface_snapshot(state: &Arc<Mutex<State>>, body: &Value) -> Result<(), String> {
     let mut locked = state.lock().map_err(|_| "state lock failed")?;
+    locked.surface_frame = None;
+    locked.surface_hydrated = false;
     if let Some(id) = string(body, "sessionID") {
         locked.session = Some(id);
     }
@@ -1792,12 +1900,18 @@ enum InputAction {
     Text(String),
     Command(String),
     Enter,
+    Newline,
     Backspace,
     Delete,
     Left,
     Right,
     Home,
     End,
+    LineHome,
+    LineEnd,
+    WordForward,
+    WordBackward,
+    DeleteWordForward,
     Up,
     Down,
     Tab,
@@ -1806,9 +1920,11 @@ enum InputAction {
     CtrlU,
     CtrlK,
     CtrlW,
+    CtrlN,
     CtrlP,
     CtrlS,
     CtrlQ,
+    Escape,
     F12,
     F13,
 }
@@ -1826,6 +1942,12 @@ fn escape_sequence_len(rest: &str) -> usize {
         }
     }
     rest.len()
+}
+
+fn matching_sequence_len(rest: &str, sequences: &[&str]) -> Option<usize> {
+    sequences
+        .iter()
+        .find_map(|sequence| rest.starts_with(*sequence).then_some(sequence.len()))
 }
 
 impl InputParser {
@@ -1858,6 +1980,60 @@ impl InputParser {
                         index += escape_sequence_len(rest);
                         continue;
                     }
+                }
+                if let Some(len) =
+                    matching_sequence_len(rest, &["\x1b[1;5C", "\x1b[1;3C", "\x1b[5C", "\x1b[3C"])
+                {
+                    out.push(InputAction::WordForward);
+                    index += len;
+                    continue;
+                }
+                if let Some(len) =
+                    matching_sequence_len(rest, &["\x1b[1;5D", "\x1b[1;3D", "\x1b[5D", "\x1b[3D"])
+                {
+                    out.push(InputAction::WordBackward);
+                    index += len;
+                    continue;
+                }
+                if let Some(len) = matching_sequence_len(rest, &["\x1b[3;5~", "\x1b[3;3~"]) {
+                    out.push(InputAction::DeleteWordForward);
+                    index += len;
+                    continue;
+                }
+                if let Some(len) = matching_sequence_len(rest, &["\x1b[3;2~"]) {
+                    out.push(InputAction::Delete);
+                    index += len;
+                    continue;
+                }
+                if let Some(len) = matching_sequence_len(rest, &["\x1bf", "\x1bF", "\x1b[1;9C"]) {
+                    out.push(InputAction::WordForward);
+                    index += len;
+                    continue;
+                }
+                if let Some(len) = matching_sequence_len(rest, &["\x1bb", "\x1bB", "\x1b[1;9D"]) {
+                    out.push(InputAction::WordBackward);
+                    index += len;
+                    continue;
+                }
+                if let Some(len) = matching_sequence_len(rest, &["\x1bd", "\x1bD"]) {
+                    out.push(InputAction::DeleteWordForward);
+                    index += len;
+                    continue;
+                }
+                if let Some(len) = matching_sequence_len(rest, &["\x1b\x7f", "\x1b\u{8}"]) {
+                    out.push(InputAction::CtrlW);
+                    index += len;
+                    continue;
+                }
+                if let Some(len) = matching_sequence_len(rest, &["\x1ba", "\x1bA"]) {
+                    out.push(InputAction::LineHome);
+                    index += len;
+                    continue;
+                }
+                if let Some(len) = matching_sequence_len(rest, &["\x1be", "\x1bE"]) {
+                    out.push(InputAction::LineEnd);
+                    index += len;
+                    continue;
                 }
                 if rest.starts_with("\x1b[A") {
                     out.push(InputAction::Up);
@@ -1934,17 +2110,24 @@ impl InputParser {
                 continue;
             }
             match ch {
+                '\u{1}' => out.push(InputAction::LineHome),
+                '\u{2}' => out.push(InputAction::Left),
                 '\u{4}' => out.push(InputAction::CtrlD),
+                '\u{5}' => out.push(InputAction::LineEnd),
+                '\u{6}' => out.push(InputAction::Right),
                 '\u{3}' => out.push(InputAction::CtrlC),
                 '\u{15}' => out.push(InputAction::CtrlU),
                 '\u{0b}' => out.push(InputAction::CtrlK),
                 '\u{17}' => out.push(InputAction::CtrlW),
+                '\u{0e}' => out.push(InputAction::CtrlN),
                 '\u{10}' => out.push(InputAction::CtrlP),
                 '\u{13}' => out.push(InputAction::CtrlS),
                 '\u{11}' => out.push(InputAction::CtrlQ),
                 '\u{18}' if !self.paste => self.leader = true,
+                '\u{1b}' if !self.paste => out.push(InputAction::Escape),
                 '\u{1a}' if !self.paste => out.push(InputAction::Command(String::from("/suspend"))),
-                '\r' | '\n' if !self.paste => out.push(InputAction::Enter),
+                '\r' if !self.paste => out.push(InputAction::Enter),
+                '\n' if !self.paste => out.push(InputAction::Newline),
                 '\u{7f}' | '\u{8}' => out.push(InputAction::Backspace),
                 '\t' => out.push(InputAction::Tab),
                 ch => out.push(InputAction::Text(ch.to_string())),
@@ -1962,17 +2145,19 @@ fn handle_action(
     action: InputAction,
 ) -> Result<(), String> {
     let mut submit = None;
-    let mut permission_reply = None;
+    let mut permission_replies = Vec::new();
     let mut question_reply = None;
+    let mut question_rejection = None;
     let mut editor_messages = Vec::new();
     let mut save_editor = false;
     let mut dismiss_diff = false;
     let mut command_input = None;
+    let mut open_palette = false;
 
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
         if let Some(permission) = locked.permission.clone() {
-            if permission.reason.is_none() && !locked.input.text.is_empty() {
+            if permission.reject_reason.is_none() && !locked.input.text.is_empty() {
                 let queued = locked.input.clear();
                 let queued_reply = match queued.as_str() {
                     "a" => Some((String::from("always"), None)),
@@ -1984,131 +2169,122 @@ fn handle_action(
                     _ => None,
                 };
                 if let Some((reply, reason)) = queued_reply {
-                    permission_reply = Some((
-                        permission.id.clone(),
-                        permission.session.clone(),
-                        reply,
-                        reason,
-                    ));
-                    locked.permissions.retain(|item| item.id != permission.id);
-                    locked.permission_index = locked
-                        .permission_index
-                        .min(locked.permissions.len().saturating_sub(1));
-                    locked.permission = locked.permissions.get(locked.permission_index).cloned();
+                    let targets = permission_reply_targets(&locked);
+                    let ids = targets
+                        .iter()
+                        .map(|item| item.id.clone())
+                        .collect::<Vec<_>>();
+                    permission_replies.extend(
+                        targets
+                            .into_iter()
+                            .map(|item| (item.id, item.session, reply.clone(), reason.clone())),
+                    );
+                    permission_remove(&mut locked, &ids);
                 }
             }
-            if permission_reply.is_none() {
-                match (&permission.reason, action) {
+            if permission_replies.is_empty() {
+                match (&permission.reject_reason, action) {
                     (Some(_), InputAction::Text(text)) => {
-                        if let Some(active) = locked.permission.as_mut() {
-                            active
-                                .reason
+                        if let Some(item) = permission_focused_mut(&mut locked) {
+                            item.reject_reason
                                 .get_or_insert_with(String::new)
                                 .push_str(&text);
                         }
-                        if let Some(item) = locked
-                            .permissions
-                            .iter_mut()
-                            .find(|item| item.id == permission.id)
-                        {
-                            item.reason.get_or_insert_with(String::new).push_str(&text);
-                        }
+                        sync_permission_focus(&mut locked);
                     }
                     (Some(_), InputAction::Backspace) => {
-                        if let Some(active) = locked.permission.as_mut() {
-                            active.reason.get_or_insert_with(String::new).pop();
+                        if let Some(item) = permission_focused_mut(&mut locked) {
+                            item.reject_reason.get_or_insert_with(String::new).pop();
                         }
-                        if let Some(item) = locked
-                            .permissions
-                            .iter_mut()
-                            .find(|item| item.id == permission.id)
-                        {
-                            item.reason.get_or_insert_with(String::new).pop();
-                        }
+                        sync_permission_focus(&mut locked);
                     }
                     (Some(_), InputAction::CtrlU) => {
-                        if let Some(active) = locked.permission.as_mut() {
-                            active.reason = Some(String::new());
+                        if let Some(item) = permission_focused_mut(&mut locked) {
+                            item.reject_reason = Some(String::new());
                         }
-                        if let Some(item) = locked
-                            .permissions
-                            .iter_mut()
-                            .find(|item| item.id == permission.id)
-                        {
-                            item.reason = Some(String::new());
-                        }
+                        sync_permission_focus(&mut locked);
                     }
                     (Some(reason), InputAction::Enter) => {
-                        permission_reply = Some((
-                            permission.id.clone(),
-                            permission.session.clone(),
-                            String::from("reject"),
-                            Some(reason.clone()),
-                        ));
-                        locked.permissions.retain(|item| item.id != permission.id);
-                        locked.permission_index = locked
-                            .permission_index
-                            .min(locked.permissions.len().saturating_sub(1));
-                        locked.permission =
-                            locked.permissions.get(locked.permission_index).cloned();
+                        let targets = permission_reply_targets(&locked);
+                        let ids = targets
+                            .iter()
+                            .map(|item| item.id.clone())
+                            .collect::<Vec<_>>();
+                        permission_replies.extend(targets.into_iter().map(|item| {
+                            (
+                                item.id,
+                                item.session,
+                                String::from("reject"),
+                                Some(reason.clone()),
+                            )
+                        }));
+                        permission_remove(&mut locked, &ids);
                     }
                     (_, InputAction::Text(ref text)) if text == "o" || text == "a" => {
                         let reply = if text == "a" { "always" } else { "once" };
-                        permission_reply = Some((
-                            permission.id.clone(),
-                            permission.session.clone(),
-                            reply.to_string(),
-                            None,
-                        ));
-                        locked.permissions.retain(|item| item.id != permission.id);
-                        locked.permission_index = locked
-                            .permission_index
-                            .min(locked.permissions.len().saturating_sub(1));
-                        locked.permission =
-                            locked.permissions.get(locked.permission_index).cloned();
+                        let targets = permission_reply_targets(&locked);
+                        let ids = targets
+                            .iter()
+                            .map(|item| item.id.clone())
+                            .collect::<Vec<_>>();
+                        permission_replies.extend(
+                            targets
+                                .into_iter()
+                                .map(|item| (item.id, item.session, reply.to_string(), None)),
+                        );
+                        permission_remove(&mut locked, &ids);
                     }
                     (_, InputAction::Text(ref text)) if text == "r" => {
-                        if let Some(active) = locked.permission.as_mut() {
-                            active.reason = Some(String::new());
+                        if let Some(item) = permission_focused_mut(&mut locked) {
+                            item.reject_reason = Some(String::new());
                         }
-                        if let Some(item) = locked
-                            .permissions
-                            .iter_mut()
-                            .find(|item| item.id == permission.id)
-                        {
-                            item.reason = Some(String::new());
-                        }
+                        sync_permission_focus(&mut locked);
                         locked.notice("enter rejection reason");
                     }
-                    (_, InputAction::Text(ref text))
-                        if text == "n" && !locked.permissions.is_empty() =>
-                    {
-                        locked.permission_index =
-                            (locked.permission_index + 1) % locked.permissions.len();
-                        locked.permission =
-                            locked.permissions.get(locked.permission_index).cloned();
+                    (_, InputAction::Text(ref text)) if text == " " => {
+                        permission_toggle_focused(&mut locked);
                     }
                     (_, InputAction::Text(ref text))
-                        if text == "p" && !locked.permissions.is_empty() =>
+                        if (text == "n" || text == "j") && !locked.permissions.is_empty() =>
                     {
-                        locked.permission_index =
-                            (locked.permission_index + locked.permissions.len() - 1)
-                                % locked.permissions.len();
-                        locked.permission =
-                            locked.permissions.get(locked.permission_index).cloned();
+                        permission_move_focus(&mut locked, 1);
                     }
-                    (_, InputAction::CtrlD | InputAction::CtrlC) => {
-                        done.store(true, Ordering::SeqCst)
+                    (_, InputAction::Text(ref text))
+                        if (text == "p" || text == "k") && !locked.permissions.is_empty() =>
+                    {
+                        permission_move_focus(&mut locked, -1);
+                    }
+                    (_, InputAction::Up) => {
+                        permission_move_focus(&mut locked, -1);
+                    }
+                    (_, InputAction::Down) => {
+                        permission_move_focus(&mut locked, 1);
+                    }
+                    (_, InputAction::Tab) => {
+                        permission_move_focus(&mut locked, 1);
+                    }
+                    (_, InputAction::CtrlD | InputAction::CtrlC | InputAction::Escape) => {
+                        let targets = permission_reply_targets(&locked);
+                        let ids = targets
+                            .iter()
+                            .map(|item| item.id.clone())
+                            .collect::<Vec<_>>();
+                        permission_replies.extend(
+                            targets
+                                .into_iter()
+                                .map(|item| (item.id, item.session, String::from("reject"), None)),
+                        );
+                        permission_remove(&mut locked, &ids);
                     }
                     _ => {}
                 }
             }
             dirty.store(true, Ordering::SeqCst);
             drop(locked);
-            if let Some((id, session, reply, reason)) = permission_reply {
+            for (id, session, reply, reason) in permission_replies {
                 let mut body = json!({ "reply": reply });
                 if let Some(reason) = reason {
-                    body["reason"] = json!(reason);
+                    body["message"] = json!(reason);
                 }
                 client.json(
                     "POST",
@@ -2123,43 +2299,217 @@ fn handle_action(
         }
 
         if locked.question.is_some() {
+            let editing = locked
+                .question
+                .as_ref()
+                .is_some_and(|question| question.editing);
             match action {
                 InputAction::Enter => {
-                    if let Some(body) = question_submit(&mut locked) {
+                    let body = if editing {
+                        question_commit_custom(&mut locked)
+                    } else {
+                        let selected = locked
+                            .question
+                            .as_ref()
+                            .map(|question| question.selected)
+                            .unwrap_or_default();
+                        question_pick_index(&mut locked, selected)
+                    };
+                    if let Some(body) = body {
                         question_reply = Some(body);
                     }
                 }
                 InputAction::Backspace => {
                     if let Some(question) = locked.question.as_mut() {
+                        question.editing = question.editing || !question.input.text.is_empty();
                         question.input.backspace();
                     }
                 }
                 InputAction::Left => {
                     if let Some(question) = locked.question.as_mut() {
-                        question.input.left();
+                        if question.editing {
+                            question.input.left();
+                        } else {
+                            question_move_tab(question, -1);
+                        }
                     }
                 }
                 InputAction::Right => {
                     if let Some(question) = locked.question.as_mut() {
-                        question.input.right();
+                        if question.editing {
+                            question.input.right();
+                        } else {
+                            question_move_tab(question, 1);
+                        }
+                    }
+                }
+                InputAction::LineHome => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if question.editing {
+                            question.input.line_home();
+                        } else {
+                            question.selected = 0;
+                        }
+                    }
+                }
+                InputAction::LineEnd => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if question.editing {
+                            question.input.line_end();
+                        } else if let Some(item) = question.items.get(question.index) {
+                            question.selected = question_option_count(item).saturating_sub(1);
+                        }
                     }
                 }
                 InputAction::Home => {
                     if let Some(question) = locked.question.as_mut() {
-                        question.input.home();
+                        if question.editing {
+                            question.input.home();
+                        } else {
+                            question.selected = 0;
+                        }
                     }
                 }
                 InputAction::End => {
                     if let Some(question) = locked.question.as_mut() {
-                        question.input.end();
+                        if question.editing {
+                            question.input.end();
+                        } else if let Some(item) = question.items.get(question.index) {
+                            question.selected = question_option_count(item).saturating_sub(1);
+                        }
                     }
                 }
                 InputAction::Text(text) => {
-                    if let Some(question) = locked.question.as_mut() {
-                        question.input.insert(&text);
+                    if editing {
+                        if let Some(question) = locked.question.as_mut() {
+                            question.input.insert(&text);
+                        }
+                    } else {
+                        let mut chars = text.chars();
+                        let first = chars.next();
+                        let single_char = first.is_some() && chars.next().is_none();
+                        let mut handled = false;
+                        if single_char {
+                            match first.unwrap_or_default() {
+                                'h' => {
+                                    if let Some(question) = locked.question.as_mut() {
+                                        question_move_tab(question, -1);
+                                    }
+                                    handled = true;
+                                }
+                                'l' => {
+                                    if let Some(question) = locked.question.as_mut() {
+                                        question_move_tab(question, 1);
+                                    }
+                                    handled = true;
+                                }
+                                'j' => {
+                                    if let Some(question) = locked.question.as_mut() {
+                                        question_move_selection(question, 1);
+                                    }
+                                    handled = true;
+                                }
+                                'k' => {
+                                    if let Some(question) = locked.question.as_mut() {
+                                        question_move_selection(question, -1);
+                                    }
+                                    handled = true;
+                                }
+                                digit if digit.is_ascii_digit() && digit != '0' => {
+                                    let selected =
+                                        digit.to_digit(10).unwrap_or_default().saturating_sub(1)
+                                            as usize;
+                                    if let Some(body) = question_pick_index(&mut locked, selected) {
+                                        question_reply = Some(body);
+                                    }
+                                    handled = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if !handled && !question_start_custom_input(&mut locked, &text) {
+                            locked.notice("use arrows, numbers, enter, or custom answer");
+                        }
                     }
                 }
-                InputAction::CtrlD | InputAction::CtrlC => done.store(true, Ordering::SeqCst),
+                InputAction::Newline => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if question.editing {
+                            question.input.insert("\n");
+                        }
+                    }
+                }
+                InputAction::Tab => {
+                    if let Some(question) = locked.question.as_mut() {
+                        question_move_tab(question, 1);
+                    }
+                }
+                InputAction::Up | InputAction::CtrlP => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if !question.editing {
+                            question_move_selection(question, -1);
+                        }
+                    }
+                }
+                InputAction::Down | InputAction::CtrlN => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if !question.editing {
+                            question_move_selection(question, 1);
+                        }
+                    }
+                }
+                InputAction::CtrlU => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if question.editing {
+                            question.input.kill_to_line_start();
+                        }
+                    }
+                }
+                InputAction::CtrlK => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if question.editing {
+                            question.input.kill_to_line_end();
+                        }
+                    }
+                }
+                InputAction::CtrlW => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if question.editing {
+                            question.input.delete_word_before();
+                        }
+                    }
+                }
+                InputAction::Delete => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if question.editing {
+                            question.input.delete();
+                        }
+                    }
+                }
+                InputAction::WordForward => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if question.editing {
+                            question.input.word_forward();
+                        }
+                    }
+                }
+                InputAction::WordBackward => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if question.editing {
+                            question.input.word_backward();
+                        }
+                    }
+                }
+                InputAction::DeleteWordForward => {
+                    if let Some(question) = locked.question.as_mut() {
+                        if question.editing {
+                            question.input.delete_word_after();
+                        }
+                    }
+                }
+                InputAction::CtrlD | InputAction::CtrlC | InputAction::Escape => {
+                    question_rejection = question_reject(&mut locked);
+                }
                 _ => {}
             }
             dirty.store(true, Ordering::SeqCst);
@@ -2169,6 +2519,13 @@ fn handle_action(
                     "POST",
                     &format!("/question/{id}/reply?sessionID={}", encode_query(&session)),
                     Some(body),
+                )?;
+            }
+            if let Some((id, session)) = question_rejection {
+                client.json(
+                    "POST",
+                    &format!("/question/{id}/reject?sessionID={}", encode_query(&session)),
+                    None,
                 )?;
             }
             return Ok(());
@@ -2182,6 +2539,7 @@ fn handle_action(
                 InputAction::CtrlK | InputAction::CtrlD => dismiss_diff = true,
                 InputAction::CtrlU | InputAction::CtrlS => save_editor = true,
                 InputAction::Enter => editor_messages.push(String::from("<CR>")),
+                InputAction::Newline => editor_messages.push(String::from("\n")),
                 InputAction::Backspace => editor_messages.push(String::from("<BS>")),
                 InputAction::Tab => editor_messages.push(String::from("<Tab>")),
                 InputAction::Text(text) => editor_messages.push(text),
@@ -2208,8 +2566,133 @@ fn handle_action(
             return Ok(());
         }
 
+        if locked.command_palette.is_some() {
+            match action {
+                InputAction::Text(text) => {
+                    if let Some(palette) = locked.command_palette.as_mut() {
+                        palette.query.push_str(&text);
+                        palette.selected = 0;
+                    }
+                }
+                InputAction::Backspace => {
+                    if let Some(palette) = locked.command_palette.as_mut() {
+                        palette.query.pop();
+                        palette.selected = 0;
+                    }
+                }
+                InputAction::CtrlU => {
+                    if let Some(palette) = locked.command_palette.as_mut() {
+                        palette.query.clear();
+                        palette.selected = 0;
+                    }
+                }
+                InputAction::Up | InputAction::CtrlP => {
+                    let query = locked
+                        .command_palette
+                        .as_ref()
+                        .map(|palette| palette.query.clone())
+                        .unwrap_or_default();
+                    let count = locked.manifest.command_matches(&query).len();
+                    if count > 0 {
+                        if let Some(palette) = locked.command_palette.as_mut() {
+                            palette.selected = if palette.selected == 0 {
+                                count - 1
+                            } else {
+                                palette.selected - 1
+                            };
+                        }
+                    }
+                }
+                InputAction::Down | InputAction::CtrlN => {
+                    let query = locked
+                        .command_palette
+                        .as_ref()
+                        .map(|palette| palette.query.clone())
+                        .unwrap_or_default();
+                    let count = locked.manifest.command_matches(&query).len();
+                    if count > 0 {
+                        if let Some(palette) = locked.command_palette.as_mut() {
+                            palette.selected = (palette.selected + 1) % count;
+                        }
+                    }
+                }
+                InputAction::Home => {
+                    if let Some(palette) = locked.command_palette.as_mut() {
+                        palette.selected = 0;
+                    }
+                }
+                InputAction::End => {
+                    let query = locked
+                        .command_palette
+                        .as_ref()
+                        .map(|palette| palette.query.clone())
+                        .unwrap_or_default();
+                    let count = locked.manifest.command_matches(&query).len();
+                    if count > 0 {
+                        if let Some(palette) = locked.command_palette.as_mut() {
+                            palette.selected = count - 1;
+                        }
+                    }
+                }
+                InputAction::Enter => {
+                    let selected = locked.command_palette.as_ref().and_then(|palette| {
+                        let matches = locked.manifest.command_matches(&palette.query);
+                        matches
+                            .get(palette.selected.min(matches.len().saturating_sub(1)))
+                            .cloned()
+                    });
+                    locked.command_palette = None;
+                    if let Some(command) = selected {
+                        let name = command
+                            .slash
+                            .clone()
+                            .or_else(|| command.aliases.first().cloned())
+                            .unwrap_or(command.id);
+                        command_input = Some(format!("/{name}"));
+                    } else {
+                        locked.notice("no command selected");
+                    }
+                }
+                InputAction::Command(input) => {
+                    locked.command_palette = None;
+                    command_input = Some(input);
+                }
+                InputAction::CtrlD | InputAction::CtrlC | InputAction::Escape => {
+                    locked.command_palette = None;
+                }
+                InputAction::CtrlK
+                | InputAction::CtrlW
+                | InputAction::CtrlS
+                | InputAction::CtrlQ
+                | InputAction::Newline
+                | InputAction::LineHome
+                | InputAction::LineEnd
+                | InputAction::WordForward
+                | InputAction::WordBackward
+                | InputAction::DeleteWordForward
+                | InputAction::Delete
+                | InputAction::Left
+                | InputAction::Right
+                | InputAction::Tab
+                | InputAction::F12
+                | InputAction::F13 => {}
+            }
+            dirty.store(true, Ordering::SeqCst);
+            drop(locked);
+            if let Some(input) = command_input {
+                command(client, state, &input)?;
+            }
+            return Ok(());
+        }
+
         match action {
-            InputAction::CtrlD => done.store(true, Ordering::SeqCst),
+            InputAction::CtrlD => {
+                if locked.input.text.is_empty() {
+                    done.store(true, Ordering::SeqCst);
+                } else {
+                    locked.input.delete();
+                }
+            }
             InputAction::CtrlC => {
                 if locked.input.text.is_empty() {
                     done.store(true, Ordering::SeqCst);
@@ -2217,20 +2700,27 @@ fn handle_action(
                     locked.input = Buffer::default();
                 }
             }
-            InputAction::CtrlU => locked.input.kill_before(),
-            InputAction::CtrlK => locked.input.kill_after(),
+            InputAction::CtrlU => locked.input.kill_to_line_start(),
+            InputAction::CtrlK => locked.input.kill_to_line_end(),
             InputAction::CtrlW => locked.input.delete_word_before(),
+            InputAction::CtrlN => {}
             InputAction::Backspace => locked.input.backspace(),
             InputAction::Delete => locked.input.delete(),
             InputAction::Left => locked.input.left(),
             InputAction::Right => locked.input.right(),
             InputAction::Home => locked.input.home(),
             InputAction::End => locked.input.end(),
+            InputAction::LineHome => locked.input.line_home(),
+            InputAction::LineEnd => locked.input.line_end(),
+            InputAction::WordForward => locked.input.word_forward(),
+            InputAction::WordBackward => locked.input.word_backward(),
+            InputAction::DeleteWordForward => locked.input.delete_word_after(),
             InputAction::Up => locked.history_prev(),
             InputAction::Down => locked.history_next(),
             InputAction::Tab => complete_command(&mut locked),
-            InputAction::CtrlP => command_input = Some(String::from("/commands")),
+            InputAction::CtrlP => open_palette = true,
             InputAction::Command(input) => command_input = Some(input),
+            InputAction::Escape => {}
             InputAction::F12 => {
                 let text = locked.input.clear();
                 if !text.is_empty() {
@@ -2253,11 +2743,20 @@ fn handle_action(
                 }
             }
             InputAction::CtrlS | InputAction::CtrlQ => {}
+            InputAction::Newline => locked.input.insert("\n"),
             InputAction::Text(text) => locked.input.insert(&text),
         }
     }
 
     dirty.store(true, Ordering::SeqCst);
+    if open_palette {
+        let load_error = load_daemon_commands(client, state).err();
+        let mut locked = state.lock().map_err(|_| "state lock failed")?;
+        if let Some(err) = load_error {
+            locked.notice(format!("command list unavailable: {err}"));
+        }
+        locked.command_palette();
+    }
     if let Some(input) = command_input {
         command(client, state, &input)?;
     }
@@ -2929,12 +3428,13 @@ fn tabs_panel(state: &Arc<Mutex<State>>) -> Result<(), String> {
     let mut locked = state.lock().map_err(|_| "state lock failed")?;
     let current = locked.session.clone();
     let active_dirty = locked.editor.as_ref().is_some_and(|editor| editor.dirty);
+    let active_editor = locked.editor.as_ref().map(|editor| editor.file.clone());
     if let Some(session) = current.as_deref() {
         let title = locked.title.clone();
         locked.sync_tab(session, &title);
     }
-    let rows = if locked.tabs.is_empty() {
-        vec![String::from("No open tabs")]
+    let mut rows = if locked.tabs.is_empty() {
+        Vec::new()
     } else {
         locked
             .tabs
@@ -2955,6 +3455,23 @@ fn tabs_panel(state: &Arc<Mutex<State>>) -> Result<(), String> {
             })
             .collect()
     };
+    let start = rows.len();
+    rows.extend(locked.open_files.iter().enumerate().map(|(index, file)| {
+        let active = active_editor.as_deref() == Some(file.as_str());
+        let marker = if active { ">" } else { " " };
+        let dirty = if active && active_dirty { " *" } else { "" };
+        format!(
+            "{} {} Editor {}{} [tab: /open {}] [close: /close-editor]",
+            start + index + 1,
+            marker,
+            file,
+            dirty,
+            file
+        )
+    }));
+    if rows.is_empty() {
+        rows.push(String::from("No open tabs"));
+    }
     locked.panel("Tabs", rows);
     Ok(())
 }
@@ -3534,6 +4051,7 @@ fn close_editor(client: &Client, state: &Arc<Mutex<State>>, force: bool) -> Resu
             None,
         )?;
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
+        locked.open_files.retain(|item| item != &latest.file);
         locked.editor = None;
         locked.editor_focus = false;
         locked.notice("closed editor");
@@ -3671,69 +4189,312 @@ fn clipboard_panel(state: &Arc<Mutex<State>>) -> Result<(), String> {
     Ok(())
 }
 
+fn sync_permission_focus(state: &mut State) {
+    if state.permissions.is_empty() {
+        state.permission_index = 0;
+        state.permission = None;
+        return;
+    }
+    state.permission_index = state.permission_index.min(state.permissions.len() - 1);
+    state.permission = state.permissions.get(state.permission_index).cloned();
+}
+
+fn permission_remove(state: &mut State, ids: &[String]) {
+    state
+        .permissions
+        .retain(|item| !ids.iter().any(|id| id == &item.id));
+    sync_permission_focus(state);
+}
+
+fn permission_focused_mut(state: &mut State) -> Option<&mut Permission> {
+    state.permissions.get_mut(state.permission_index)
+}
+
+fn permission_reply_targets(state: &State) -> Vec<Permission> {
+    let mut out = state
+        .permissions
+        .iter()
+        .filter(|item| item.selected)
+        .cloned()
+        .collect::<Vec<_>>();
+    if out.is_empty() {
+        if let Some(permission) = state.permission.clone() {
+            out.push(permission);
+        }
+    }
+    out
+}
+
+fn permission_move_focus(state: &mut State, step: isize) {
+    if state.permissions.is_empty() {
+        sync_permission_focus(state);
+        return;
+    }
+    state.permission_index = (state.permission_index as isize + step)
+        .rem_euclid(state.permissions.len() as isize) as usize;
+    sync_permission_focus(state);
+}
+
+fn permission_toggle_focused(state: &mut State) {
+    if let Some(permission) = permission_focused_mut(state) {
+        permission.selected = !permission.selected;
+    }
+    sync_permission_focus(state);
+}
+
+fn question_single(question: &Question) -> bool {
+    question.items.len() == 1 && question.items.first().is_some_and(|item| !item.multiple)
+}
+
+fn question_tab_count(question: &Question) -> usize {
+    if question_single(question) {
+        1
+    } else {
+        question.items.len() + 1
+    }
+}
+
+fn question_is_confirm(question: &Question) -> bool {
+    !question_single(question) && question.index >= question.items.len()
+}
+
+fn question_option_count(item: &QuestionItem) -> usize {
+    item.options.len() + if item.custom { 1 } else { 0 }
+}
+
+fn question_answer_slot(question: &mut Question, index: usize) -> &mut Vec<String> {
+    while question.answers.len() <= index {
+        question.answers.push(Vec::new());
+    }
+    &mut question.answers[index]
+}
+
+fn question_custom_value(question: &Question, index: usize) -> String {
+    question.custom.get(index).cloned().unwrap_or_default()
+}
+
+fn question_set_custom(question: &mut Question, index: usize, value: String) {
+    while question.custom.len() <= index {
+        question.custom.push(String::new());
+    }
+    question.custom[index] = value;
+}
+
+fn question_select_tab(question: &mut Question, index: usize) {
+    let tabs = question_tab_count(question).max(1);
+    question.index = index.min(tabs - 1);
+    question.selected = 0;
+    question.editing = false;
+    let custom = question_custom_value(question, question.index);
+    question.input.set(custom);
+}
+
+fn question_move_tab(question: &mut Question, direction: isize) {
+    let tabs = question_tab_count(question);
+    if tabs == 0 {
+        return;
+    }
+    let next = (question.index as isize + direction).rem_euclid(tabs as isize) as usize;
+    question_select_tab(question, next);
+}
+
+fn question_next_tab(question: &mut Question) {
+    if question_single(question) {
+        return;
+    }
+    let next = (question.index + 1).min(question_tab_count(question).saturating_sub(1));
+    question_select_tab(question, next);
+}
+
+fn question_move_selection(question: &mut Question, direction: isize) {
+    if question_is_confirm(question) {
+        return;
+    }
+    let Some(item) = question.items.get(question.index) else {
+        return;
+    };
+    let count = question_option_count(item);
+    if count == 0 {
+        return;
+    }
+    question.selected =
+        (question.selected as isize + direction).rem_euclid(count as isize) as usize;
+}
+
 fn question_submit(state: &mut State) -> Option<(String, String, Value)> {
-    let question = state.question.as_mut()?;
-    let item = question.items.get(question.index)?;
-    let answer = parse_answer(&question.input.text, item);
-    if answer.is_empty() {
-        state.notice("answer with option number, label, or text");
-        return None;
-    }
-    question.answers.push(answer);
-    question.input.clear();
-    if question.index + 1 < question.items.len() {
-        question.index += 1;
-        return None;
-    }
     let done = state.question.take()?;
+    let answers = (0..done.items.len())
+        .map(|index| done.answers.get(index).cloned().unwrap_or_default())
+        .collect::<Vec<_>>();
     Some((
         done.id,
         done.session,
         json!({
-            "answers": done.answers
+            "answers": answers
         }),
     ))
 }
 
-fn parse_answer(input: &str, question: &QuestionItem) -> Vec<String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Vec::new();
+fn question_reject(state: &mut State) -> Option<(String, String)> {
+    let done = state.question.take()?;
+    Some((done.id, done.session))
+}
+
+fn question_commit_custom(state: &mut State) -> Option<(String, String, Value)> {
+    if state.question.as_ref().is_some_and(question_is_confirm) {
+        return question_submit(state);
     }
-    let parts: Vec<&str> = if question.multiple {
-        trimmed
-            .split(',')
-            .map(str::trim)
-            .filter(|item| !item.is_empty())
-            .collect()
-    } else {
-        vec![trimmed]
+
+    let (index, multi, single, text) = {
+        let question = state.question.as_ref()?;
+        let item = question.items.get(question.index)?;
+        (
+            question.index,
+            item.multiple,
+            question_single(question),
+            question.input.text.trim().to_string(),
+        )
     };
-    let mut out = Vec::new();
-    for part in parts {
-        if let Ok(index) = part.parse::<usize>() {
-            if let Some((label, _)) = question.options.get(index.saturating_sub(1)) {
-                out.push(label.clone());
-                continue;
+
+    if text.is_empty() {
+        if let Some(question) = state.question.as_mut() {
+            let previous = question_custom_value(question, index);
+            if !previous.is_empty() {
+                question_answer_slot(question, index).retain(|value| value != &previous);
+                question_set_custom(question, index, String::new());
+            }
+            question.editing = false;
+        }
+        return None;
+    }
+
+    let mut submit = false;
+    let mut advance = false;
+    if let Some(question) = state.question.as_mut() {
+        let previous = question_custom_value(question, index);
+        question_set_custom(question, index, text.clone());
+        let slot = question_answer_slot(question, index);
+        if !previous.is_empty() {
+            slot.retain(|value| value != &previous);
+        }
+        if multi {
+            if !slot.contains(&text) {
+                slot.push(text);
+            }
+        } else {
+            *slot = vec![text];
+            submit = single;
+            advance = !single;
+        }
+        question.editing = false;
+    }
+
+    if submit {
+        return question_submit(state);
+    }
+    if advance {
+        if let Some(question) = state.question.as_mut() {
+            question_next_tab(question);
+        }
+    }
+    None
+}
+
+fn question_pick_index(state: &mut State, selected: usize) -> Option<(String, String, Value)> {
+    if state.question.as_ref().is_some_and(question_is_confirm) {
+        return question_submit(state);
+    }
+
+    let Some((index, label, option_len, custom, multi, single)) =
+        state.question.as_ref().and_then(|question| {
+            let item = question.items.get(question.index)?;
+            Some((
+                question.index,
+                item.options.get(selected).map(|(label, _)| label.clone()),
+                item.options.len(),
+                item.custom,
+                item.multiple,
+                question_single(question),
+            ))
+        })
+    else {
+        return None;
+    };
+
+    if let Some(label) = label {
+        let mut submit = false;
+        let mut advance = false;
+        if let Some(question) = state.question.as_mut() {
+            question.selected = selected;
+            question.editing = false;
+            let slot = question_answer_slot(question, index);
+            if multi {
+                if let Some(existing) = slot.iter().position(|value| value == &label) {
+                    slot.remove(existing);
+                } else {
+                    slot.push(label);
+                }
+            } else {
+                *slot = vec![label];
+                submit = single;
+                advance = !single;
             }
         }
-        if let Some((label, _)) = question
-            .options
-            .iter()
-            .find(|(label, _)| label.eq_ignore_ascii_case(part))
-        {
-            out.push(label.clone());
-            continue;
+        if submit {
+            return question_submit(state);
         }
-        if question.custom {
-            out.push(part.to_string());
+        if advance {
+            if let Some(question) = state.question.as_mut() {
+                question_next_tab(question);
+            }
+        }
+        return None;
+    }
+
+    if custom && selected == option_len {
+        let has_text = state
+            .question
+            .as_ref()
+            .is_some_and(|question| !question.input.text.trim().is_empty());
+        if let Some(question) = state.question.as_mut() {
+            question.selected = selected;
+            question.editing = true;
+        }
+        if has_text {
+            return question_commit_custom(state);
         }
     }
-    if question.multiple {
-        out.sort();
-        out.dedup();
+
+    None
+}
+
+fn question_start_custom_input(state: &mut State, text: &str) -> bool {
+    let Some((index, selected, custom_index, custom_value)) =
+        state.question.as_ref().and_then(|question| {
+            if question_is_confirm(question) {
+                return None;
+            }
+            let item = question.items.get(question.index)?;
+            item.custom.then_some((
+                question.index,
+                question.selected,
+                item.options.len(),
+                question_custom_value(question, question.index),
+            ))
+        })
+    else {
+        return false;
+    };
+
+    if let Some(question) = state.question.as_mut() {
+        if selected != custom_index {
+            question.selected = custom_index;
+            question.input.set(custom_value);
+        }
+        question.editing = true;
+        question.input.insert(text);
     }
-    out
+    true
 }
 
 fn spawn_events(
@@ -3991,15 +4752,11 @@ fn apply_event(state: &Arc<Mutex<State>>, event: &Value) {
                 locked.notice("permission requested");
             }
         }
-        "permission.replied" => {
+        "permission.replied" | "permission.rejected" => {
             let id = string(props, "requestID")
                 .or_else(|| string(props, "id"))
                 .unwrap_or_default();
-            locked.permissions.retain(|item| item.id != id);
-            locked.permission_index = locked
-                .permission_index
-                .min(locked.permissions.len().saturating_sub(1));
-            locked.permission = locked.permissions.get(locked.permission_index).cloned();
+            permission_remove(&mut locked, &[id]);
         }
         "question.asked" => {
             if let Some(question) = question_from(props) {
@@ -4049,6 +4806,7 @@ fn permission_from(props: &Value) -> Option<Permission> {
     Some(Permission {
         id: string(props, "id")?,
         session: string(props, "sessionID")?,
+        kind: string(props, "kind"),
         permission: string(props, "permission").unwrap_or_else(|| String::from("unknown")),
         patterns: props
             .get("patterns")
@@ -4067,7 +4825,9 @@ fn permission_from(props: &Value) -> Option<Permission> {
         file: string(metadata, "filepath").or_else(|| string(metadata, "file")),
         diff: string(metadata, "diff"),
         source: string(metadata, "source").or_else(|| string(props, "source")),
-        reason: string(props, "reason"),
+        request_reason: string(props, "reason"),
+        reject_reason: None,
+        selected: true,
     })
 }
 
@@ -4102,7 +4862,10 @@ fn question_from(props: &Value) -> Option<Question> {
         items,
         index: 0,
         answers: Vec::new(),
+        custom: Vec::new(),
         input: Buffer::default(),
+        selected: 0,
+        editing: false,
     })
 }
 
@@ -4416,6 +5179,15 @@ fn render(frame: &mut Frame<'_>, state: &State) {
             frame.render_widget(Clear, panel_area);
             render_panel(frame, panel_area, panel);
         }
+        if let Some(palette) = &state.command_palette {
+            let palette_area = centered(
+                area,
+                area.width.saturating_sub(4).max(20),
+                area.height.saturating_sub(6).max(8),
+            );
+            frame.render_widget(Clear, palette_area);
+            render_command_palette(frame, palette_area, state, palette);
+        }
         if !state.input.text.is_empty() || state.shell || !state.attached.is_empty() {
             let height = area.height.min(4);
             let prompt_area = Rect {
@@ -4434,6 +5206,7 @@ fn render(frame: &mut Frame<'_>, state: &State) {
             render_question(frame, area, question);
         }
         if state.panel.is_some()
+            || state.command_palette.is_some()
             || !state.input.text.is_empty()
             || state.shell
             || !state.attached.is_empty()
@@ -4448,6 +5221,7 @@ fn render(frame: &mut Frame<'_>, state: &State) {
     if state.session.is_none()
         && state.messages.is_empty()
         && state.panel.is_none()
+        && state.command_palette.is_none()
         && state.permission.is_none()
         && state.question.is_none()
         && state.editor.is_none()
@@ -4466,6 +5240,15 @@ fn render(frame: &mut Frame<'_>, state: &State) {
     render_header(frame, layout[0], state);
     render_body(frame, layout[1], state);
     render_prompt(frame, layout[2], state);
+    if let Some(palette) = &state.command_palette {
+        let palette_area = centered(
+            area,
+            area.width.saturating_sub(4).max(20),
+            area.height.saturating_sub(6).max(8),
+        );
+        frame.render_widget(Clear, palette_area);
+        render_command_palette(frame, palette_area, state, palette);
+    }
     if let Some(permission) = &state.permission {
         render_permission(frame, area, state, permission);
     }
@@ -4560,13 +5343,13 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &State) {
 }
 
 fn tab_strip(state: &State) -> String {
-    if state.tabs.is_empty() {
+    if state.tabs.is_empty() && state.open_files.is_empty() {
         if let Some(session) = &state.session {
             return format!("[*] {}", session);
         }
         return String::from("[home]");
     }
-    state
+    let mut rows = state
         .tabs
         .iter()
         .map(|tab| {
@@ -4582,8 +5365,24 @@ fn tab_strip(state: &State) -> String {
                 if dirty { " +" } else { "" }
             )
         })
-        .collect::<Vec<_>>()
-        .join("  ")
+        .collect::<Vec<_>>();
+    rows.extend(state.open_files.iter().map(|file| {
+        let active = state
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.file == *file);
+        let dirty = state
+            .editor
+            .as_ref()
+            .is_some_and(|editor| active && editor.dirty);
+        format!(
+            "{}Editor {}{}",
+            if active { "[*] " } else { "[ ] " },
+            file,
+            if dirty { " +" } else { "" }
+        )
+    }));
+    rows.join("  ")
 }
 
 fn render_body(frame: &mut Frame<'_>, area: Rect, state: &State) {
@@ -4631,13 +5430,13 @@ fn render_main_panel(frame: &mut Frame<'_>, area: Rect, state: &State) {
                 "Assistant"
             };
             if !message.text.is_empty() {
-                lines.push(Line::from(format!("{role}: {}", message.text)));
+                for row in clipped_message_lines(role, &message.text) {
+                    lines.push(Line::from(row));
+                }
             } else {
                 lines.push(Line::from(format!("{role}: {}", message.id)));
             }
-            for tool in &message.tools {
-                lines.push(Line::from(format!("  {tool}")));
-            }
+            render_tool_cards(&mut lines, &message.tools);
         }
     }
     if lines.is_empty() {
@@ -4670,6 +5469,57 @@ fn render_main_panel(frame: &mut Frame<'_>, area: Rect, state: &State) {
     );
 }
 
+fn clipped_message_lines(role: &str, text: &str) -> Vec<String> {
+    let rows = text.lines().collect::<Vec<_>>();
+    if rows.len() <= 12 {
+        return vec![format!("{role}: {text}")];
+    }
+    let mut out = Vec::new();
+    for (index, row) in rows.iter().take(12).enumerate() {
+        if index == 0 {
+            out.push(format!("{role}: {row}"));
+        } else {
+            out.push(format!("  {row}"));
+        }
+    }
+    let kind = if text.trim_start().starts_with("```") {
+        "code line"
+    } else {
+        "line"
+    };
+    out.push(format!("  {} more {kind}(s)", rows.len() - 12));
+    out
+}
+
+fn render_tool_cards(lines: &mut Vec<Line<'static>>, tools: &[String]) {
+    let mut index = 0;
+    while index < tools.len() {
+        let row = &tools[index];
+        if !row.starts_with("tool ") {
+            lines.push(Line::from(format!("  {row}")));
+            index += 1;
+            continue;
+        }
+
+        lines.push(Line::from(format!("  +-- {row}")));
+        index += 1;
+        while index < tools.len() && !tools[index].starts_with("tool ") {
+            let detail = &tools[index];
+            if detail == "diff preview" || detail == "more line(s)" {
+                lines.push(Line::from(format!("  | {detail}")));
+            } else if let Some(output) = detail.strip_prefix("output ") {
+                lines.push(Line::from(format!("  | output {output}")));
+            } else if let Some(diff) = detail.strip_prefix("diff ") {
+                lines.push(Line::from(format!("  | diff {diff}")));
+            } else {
+                lines.push(Line::from(format!("  | {detail}")));
+            }
+            index += 1;
+        }
+        lines.push(Line::from("  +--"));
+    }
+}
+
 fn render_panel(frame: &mut Frame<'_>, area: Rect, panel: &Panel) {
     let rows: Vec<ListItem> = panel
         .rows
@@ -4696,6 +5546,55 @@ fn render_panel(frame: &mut Frame<'_>, area: Rect, panel: &Panel) {
         };
         frame.render_widget(Paragraph::new(title), title_area);
     }
+}
+
+fn render_command_palette(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &State,
+    palette: &CommandPalette,
+) {
+    let matches = state.manifest.command_matches(&palette.query);
+    let selected = if matches.is_empty() {
+        0
+    } else {
+        palette.selected.min(matches.len() - 1)
+    };
+    let list_height = area.height.saturating_sub(5) as usize;
+    let start = if selected >= list_height {
+        selected.saturating_add(1).saturating_sub(list_height)
+    } else {
+        0
+    };
+    let mut rows = vec![
+        ListItem::new(fit_line(
+            &format!("filter: {}", palette.query),
+            area.width.saturating_sub(2),
+        )),
+        ListItem::new("Enter select | Up/Down move | Ctrl-D close"),
+    ];
+    if matches.is_empty() {
+        rows.push(ListItem::new(fit_line(
+            &format!("No commands match {}", palette.query),
+            area.width.saturating_sub(2),
+        )));
+    } else {
+        for (index, command) in matches.iter().enumerate().skip(start).take(list_height) {
+            let marker = if index == selected { "> " } else { "  " };
+            rows.push(ListItem::new(fit_line(
+                &format!("{marker}{}", state.manifest.command_display(command)),
+                area.width.saturating_sub(2),
+            )));
+        }
+    }
+    frame.render_widget(
+        List::new(rows).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Command Palette"),
+        ),
+        area,
+    );
 }
 
 fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &State) {
@@ -4750,15 +5649,26 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &State) {
 }
 
 fn render_permission(frame: &mut Frame<'_>, area: Rect, state: &State, permission: &Permission) {
-    let rect = centered(area, 76, 13);
-    frame.render_widget(Clear, rect);
+    let selected = state
+        .permissions
+        .iter()
+        .filter(|item| item.selected)
+        .count();
+    let forecast = state
+        .permissions
+        .iter()
+        .filter(|item| item.kind.as_deref() == Some("forecast"))
+        .count();
+    let blocking = state.permissions.len().saturating_sub(forecast);
     let mut lines = vec![
         Line::from(Span::styled(
             format!(
-                "permission {}/{} {}",
+                "permission {}/{} {} ({}/{}) selected",
                 state.permission_index + 1,
                 state.permissions.len().max(1),
-                permission.permission
+                permission.permission,
+                selected,
+                state.permissions.len().max(1)
             ),
             Style::default()
                 .fg(Color::Yellow)
@@ -4766,11 +5676,55 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, state: &State, permissio
         )),
         Line::from(format!("session {}", permission.session)),
     ];
+    if forecast > 0 {
+        let summary = if blocking > 0 {
+            format!("{blocking} need approval now - {forecast} planned for build")
+        } else {
+            format!("{forecast} planned for build")
+        };
+        lines.push(Line::from(summary));
+    }
+    if state.permissions.len() > 1 {
+        lines.push(Line::from(
+            "Use Up/Down or j/k to focus; Space toggles selection.",
+        ));
+        for (index, item) in state.permissions.iter().enumerate().take(5) {
+            let marker = if index == state.permission_index {
+                ">"
+            } else {
+                " "
+            };
+            let check = if item.selected { "[x]" } else { "[ ]" };
+            let summary = item
+                .file
+                .as_ref()
+                .or_else(|| item.patterns.first())
+                .cloned()
+                .unwrap_or_else(|| item.permission.clone());
+            let kind = if item.kind.as_deref() == Some("forecast") {
+                " planned"
+            } else {
+                ""
+            };
+            let source = item
+                .source
+                .as_ref()
+                .map(|value| format!(" source {value}"))
+                .unwrap_or_default();
+            lines.push(Line::from(format!(
+                "{marker} {check} {} {}{}{}",
+                item.permission, summary, kind, source
+            )));
+        }
+    }
     if let Some(source) = &permission.source {
         lines.push(Line::from(format!("source {source}")));
     }
-    if let Some(reason) = &permission.reason {
+    if let Some(reason) = &permission.request_reason {
         lines.push(Line::from(format!("reason {reason}")));
+    }
+    if let Some(reason) = &permission.reject_reason {
+        lines.push(Line::from(format!("reject reason {reason}")));
     }
     for pattern in &permission.patterns {
         lines.push(Line::from(format!("pattern {pattern}")));
@@ -4783,42 +5737,161 @@ fn render_permission(frame: &mut Frame<'_>, area: Rect, state: &State, permissio
             lines.push(Line::from(line.to_string()));
         }
     }
-    lines.push(Line::from("o once | a always | r reject | n/p switch"));
+    lines.push(Line::from(
+        "o once | a always | r reject | Space select | Esc reject",
+    ));
+    let rect = centered(area, 78, (lines.len() as u16 + 2).clamp(10, 18));
+    frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title("Permission")),
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Permission required"),
+        ),
         rect,
     );
 }
 
 fn render_question(frame: &mut Frame<'_>, area: Rect, question: &Question) {
-    let rect = centered(area, 72, 12);
-    frame.render_widget(Clear, rect);
-    let item = question.items.get(question.index);
     let mut lines = Vec::new();
-    if let Some(item) = item {
+    let single = question_single(question);
+    if !single {
+        let mut tabs = question
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let answered = question
+                    .answers
+                    .get(index)
+                    .is_some_and(|answers| !answers.is_empty());
+                if index == question.index {
+                    format!("[{}]", item.header)
+                } else if answered {
+                    format!("{}*", item.header)
+                } else {
+                    item.header.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        tabs.push(if question_is_confirm(question) {
+            String::from("[Confirm]")
+        } else {
+            String::from("Confirm")
+        });
+        lines.push(Line::from(tabs.join("  ")));
+        lines.push(Line::from(""));
+    }
+
+    if question_is_confirm(question) {
+        lines.push(Line::from(Span::styled(
+            "Review",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for (index, item) in question.items.iter().enumerate() {
+            let answer = question
+                .answers
+                .get(index)
+                .filter(|answers| !answers.is_empty())
+                .map(|answers| answers.join(", "))
+                .unwrap_or_else(|| String::from("(not answered)"));
+            lines.push(Line::from(format!("{}: {}", item.header, answer)));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from("Enter submit | Tab switch | Esc reject"));
+    } else if let Some(item) = question.items.get(question.index) {
         lines.push(Line::from(Span::styled(
             item.header.clone(),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )));
-        lines.push(Line::from(item.question.clone()));
+        let suffix = if item.multiple {
+            " (select all that apply)"
+        } else {
+            ""
+        };
+        lines.push(Line::from(format!("{}{}", item.question, suffix)));
         for (index, (label, description)) in item.options.iter().enumerate() {
+            let selected = question.selected == index;
+            let picked = question
+                .answers
+                .get(question.index)
+                .is_some_and(|answers| answers.iter().any(|answer| answer == label));
+            let marker = if selected { ">" } else { " " };
+            let check = if item.multiple {
+                if picked {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+            } else if picked {
+                "[x]"
+            } else {
+                "   "
+            };
             lines.push(Line::from(format!(
-                "{}. {}  {}",
+                "{} {} {}. {}  {}",
+                marker,
+                check,
                 index + 1,
                 label,
                 description
             )));
         }
-        lines.push(Line::from(format!("answer {}", question.input.rendered())));
+        if item.custom {
+            let index = item.options.len();
+            let selected = question.selected == index;
+            let custom = question_custom_value(question, question.index);
+            let picked = question.answers.get(question.index).is_some_and(|answers| {
+                !custom.is_empty() && answers.iter().any(|answer| answer == &custom)
+            });
+            let marker = if selected { ">" } else { " " };
+            let check = if item.multiple {
+                if picked {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+            } else if picked {
+                "[x]"
+            } else {
+                "   "
+            };
+            lines.push(Line::from(format!(
+                "{} {} {}. Type your own answer",
+                marker,
+                check,
+                index + 1
+            )));
+            if selected || question.editing || !custom.is_empty() {
+                let value = if question.editing {
+                    question.input.rendered()
+                } else if custom.is_empty() {
+                    String::from("|")
+                } else {
+                    custom
+                };
+                lines.push(Line::from(format!("      {value}")));
+            }
+        }
+        lines.push(Line::from(""));
+        let enter = if item.multiple { "toggle" } else { "select" };
+        let tab = if single { "" } else { " | Tab switch" };
+        lines.push(Line::from(format!(
+            "Enter {enter} | Up/Down move{tab} | Esc reject"
+        )));
     }
+    let rect = centered(area, 76, (lines.len() as u16 + 2).clamp(8, 18));
+    frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title("Question")),
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Question Dialog"),
+        ),
         rect,
     );
 }
