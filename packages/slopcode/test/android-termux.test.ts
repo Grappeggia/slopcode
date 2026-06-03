@@ -99,11 +99,9 @@ describe("Android Termux runtime", () => {
     expect(entry).toContain("initial_surface_frame")
     expect(entry).toContain("surface_hydrated")
     expect(entry).toContain("home_footer_line")
-    expect(entry).toContain("lines = initial_surface_frame(")
-    expect(entry).toContain("locked.footer_workspace.as_deref()")
-    expect(entry).toContain("session_id.is_none()")
+    expect(entry).not.toContain("session_id.is_none()")
+    expect(entry).toContain("locked.surface_frame = Some(lines);")
     expect(entry).toContain('left.push(String::from("/status"))')
-    expect(entry).toContain("height = body")
     expect(entry).toContain("locked.surface_frame = None;")
     expect(entry).toContain('locked.notice("closed last tab")')
     expect(entry).not.toContain("Rust-native Termux TUI")
@@ -136,6 +134,10 @@ describe("Android Termux runtime", () => {
     expect(verify).toContain('"@oven/bun-linux-x64-android": "1.3.14"')
     expect(e2e).toContain('"@oven/bun-linux-x64-android": "1.3.14"')
     expect(e2e).toContain('node "$(npm root -g)/slopcode/postinstall.mjs"')
+    expect(e2e).toContain('"android-runtime"')
+    expect(e2e).toContain('path.join(root, "slopcode", "android-runtime"')
+    expect(e2e).not.toContain("slopcode-android-runtime.tgz")
+    expect(e2e).not.toContain("[androidJson.name]")
     expect(e2e).not.toContain("SLOPCODE_ANDROID_ASSET_PATH=${tmp}/slopcode-android-runtime.tgz")
     expect(e2e).toContain("const rootVersion = JSON.parse")
     expect(workflow).toContain("pull_request:")
@@ -163,8 +165,8 @@ describe("Android Termux runtime", () => {
     expect(e2e).toContain("core-android-x64")
     const nativeTest = await Bun.file(path.join(import.meta.dir, "android-native-client.test.ts")).text()
     expect(nativeTest).toContain("terminalFrame(stdout, width, height)")
-    expect(nativeTest).toContain("expectedHomeFrame(width, height, root)")
-    expect(nativeTest).toContain("expect(screen[23]).toBe(expected[23])")
+    expect(nativeTest).toContain("shared daemon footer")
+    expect(nativeTest).toContain('expect(screen[23]).toBe(fitLine(root + " | shared daemon footer", width))')
     expect(thread).toContain('await import("./android-host")')
     expect(thread).not.toContain('await import("./portable")')
     expect(thread).not.toContain("SLOPCODE_TERMUX_LEGACY")
@@ -267,7 +269,7 @@ describe("Android Termux runtime", () => {
     expect(parity.find((item) => item.id === "native.rust-tui")?.level).toBe("workflow-parity")
     expect(parity.find((item) => item.id === "tabs.rich")?.level).toBe("workflow-parity")
     expect(report().totals.blocked).toBe(0)
-    const e2e = e2eSource("slopcode-bin-android-x64")
+    const e2e = e2eSource("x64")
     for (const item of parity.filter((item) => item.active)) {
       expect(e2e).toContain(`${JSON.stringify(item.id)}: async`)
     }
@@ -283,9 +285,8 @@ describe("Android Termux runtime", () => {
     expect(e2e).toContain("expectedHomeFrame(width, height")
     expect(e2e).toContain("expectedHomeFrame(100, 30")
     expect(e2e).toContain("plain home row")
-    expect(e2e).toContain("stale daemon home frame")
     expect(e2e).toContain('home row " + row + " diverged from canonical landing')
-    expect(e2e).toContain("home leaked stale daemon frame")
+    expect(e2e).toContain("home diverged from shared landing frame")
     expect(ids).toEqual(
       expect.arrayContaining([
         "sessions.controls",
@@ -307,7 +308,7 @@ describe("Android Termux runtime", () => {
     if ((await check.exited) !== 0) return
 
     const file = path.join(os.tmpdir(), `slopcode-android-termux-runner-${process.pid}.mjs`)
-    await Bun.write(file, e2eSource("slopcode-bin-android-x64"))
+    await Bun.write(file, e2eSource("x64"))
     try {
       const proc = Bun.spawn(["node", "--check", file], { stdout: "pipe", stderr: "pipe" })
       const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()])

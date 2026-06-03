@@ -295,6 +295,32 @@ describe("bin launcher", () => {
     expect(out.stdout.trim()).toBe("unscoped")
   })
 
+  test("prefers embedded Android runtime over stale installed Android packages", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const embedded = path.join(staged.root, "android-runtime", "arm64")
+    const stale = path.join(staged.root, "node_modules", "slopcode-bin-android-arm64")
+    await fs.mkdir(path.join(embedded, "bin"), { recursive: true })
+    await fs.mkdir(path.join(stale, "bin"), { recursive: true })
+    await Bun.write(path.join(stale, "package.json"), JSON.stringify({ name: "slopcode-bin-android-arm64" }))
+    await script(path.join(embedded, "bin", "slopcode"), "#!/bin/sh\necho embedded\n")
+    await script(path.join(embedded, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
+    await script(path.join(stale, "bin", "slopcode"), "#!/bin/sh\necho stale\n")
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        TERMUX_VERSION: "1",
+      },
+      ["--version"],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(out.stdout.trim()).toBe("embedded")
+  })
+
   test("routes Android interactive launch through the Rust runtime with daemon bootstrap env", async () => {
     if (process.platform === "win32") return
     const staged = await stageLauncher()

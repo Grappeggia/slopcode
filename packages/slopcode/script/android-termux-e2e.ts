@@ -121,11 +121,6 @@ async function stage() {
     )
   }
 
-  const androidTo = path.join(work, selected.name)
-  await fs.cp(androidFrom, androidTo, { recursive: true, force: true })
-  const androidJson = (await Bun.file(path.join(androidTo, "package.json")).json()) as { name: string; version: string }
-  const android = await pack(androidTo, "slopcode-android-runtime.tgz")
-
   const bundle = path.join(dir, "dist", "android-bundle")
   const modules = path.join(dir, "dist", "android-modules")
   if (!(await exists(path.join(bundle, "index.js")))) {
@@ -145,6 +140,17 @@ async function stage() {
   await fs.cp(path.join(dir, "bin"), path.join(app, "bin"), { recursive: true, force: true })
   await fs.cp(bundle, path.join(app, "bundle"), { recursive: true, force: true })
   await fs.cp(modules, path.join(app, "android-modules"), { recursive: true, force: true })
+  for (const target of androidTargets) {
+    const source = path.join(dir, "dist", target.name, "bin")
+    if (!(await exists(path.join(source, pkg.name)))) {
+      throw new Error(`android e2e: missing embedded ${target.arch} runtime; run bun --cwd packages/slopcode run script/build.ts --target=android`)
+    }
+    if (!(await exists(path.join(source, `${pkg.name}-android-host`)))) {
+      throw new Error(`android e2e: missing embedded ${target.arch} host; run bun --cwd packages/slopcode run script/build.ts --target=android`)
+    }
+    await fs.mkdir(path.join(app, "android-runtime", target.arch), { recursive: true })
+    await fs.cp(source, path.join(app, "android-runtime", target.arch, "bin"), { recursive: true, force: true })
+  }
   await fs.copyFile(path.join(dir, "script", "postinstall.mjs"), path.join(app, "postinstall.mjs"))
   await fs.copyFile(path.join(root, "LICENSE"), path.join(app, "LICENSE"))
   await Bun.write(path.join(app, "README.md"), `${(await Bun.file(path.join(dir, "README.npm.md")).text()).trim()}\n`)
@@ -161,10 +167,9 @@ async function stage() {
         bugs: { url: "https://github.com/teamslop/slopcode/issues" },
         funding: { url: "https://github.com/sponsors/teamslop" },
         bin: { [pkg.name]: `./bin/${pkg.name}` },
-        files: ["bin", "bundle", "android-modules", "postinstall.mjs", "README.md", "LICENSE"],
+        files: ["bin", "bundle", "android-modules", "android-runtime", "postinstall.mjs", "README.md", "LICENSE"],
         scripts: { postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs" },
         optionalDependencies: {
-          [androidJson.name]: androidJson.version,
           "@oven/bun-linux-aarch64-android": "1.3.14",
           "@oven/bun-linux-x64-android": "1.3.14",
         },
@@ -174,7 +179,7 @@ async function stage() {
     ),
   )
   const cli = await pack(app, "slopcode-root.tgz")
-  return { work, android, cli, androidPackage: androidJson.name }
+  return { work, cli, arch: selected.arch }
 }
 
 async function installTermux() {
@@ -192,7 +197,7 @@ async function installTermux() {
   )
 }
 
-export function e2eSource(androidPackage: string) {
+export function e2eSource(arch: "arm64" | "x64") {
   return `import { createServer } from "node:http"
 import { spawn, spawnSync } from "node:child_process"
 import fs from "node:fs"
@@ -203,9 +208,9 @@ const matrix = ${JSON.stringify(parity, null, 2)}
 const phaseReport = ${JSON.stringify(report(), null, 2)}
 const mode = process.env.SLOPCODE_ANDROID_E2E_MODE || "smoke"
 const root = spawnSync("npm", ["root", "-g"], { encoding: "utf8" }).stdout.trim()
-const host = path.join(root, ${JSON.stringify(androidPackage)}, "bin", "slopcode-android-host")
 const cliPath = path.join(root, "slopcode", "bin", "slopcode")
-const androidRoot = path.join(root, ${JSON.stringify(androidPackage)})
+const androidRoot = path.join(root, "slopcode", "android-runtime", ${JSON.stringify(arch)})
+const host = path.join(androidRoot, "bin", "slopcode-android-host")
 const rootVersion = JSON.parse(fs.readFileSync(path.join(root, "slopcode", "package.json"), "utf8")).version
 const resultPath = path.join(process.env.HOME || ".", "android-termux-e2e-result.json")
 const results = []
@@ -621,10 +626,15 @@ function surfaceFrame(input, sessionID, width = 80, height = 24) {
   width = Math.max(20, Math.min(240, Number(width) || 80))
   height = Math.max(8, Math.min(100, Number(height) || 24))
   if (!snapshot.sessionID && snapshot.transcript.length === 0) {
-    const lines = Array.from({ length: height }, () => " ".repeat(width))
-    lines[2] = fitLine("SlopCode Android | stale daemon home frame", width)
-    lines[3] = fitLine("Rust-native Termux TUI stale landing copy", width)
-    lines[height - 1] = fitLine([snapshot.footer.directory, "local", "/help"].filter(Boolean).join(" | "), width)
+    const lines = expectedHomeFrame(
+      width,
+      height,
+      snapshot.footer.directory,
+      rootVersion,
+      snapshot.footer.mcp,
+      snapshot.footer.mcpFailed,
+      snapshot.footer.workspaceID,
+    )
     return {
       version: 2,
       renderer: "shared/terminal-frame",
@@ -1007,7 +1017,7 @@ const actions = {
     assert(!run.stdout.includes("info: connected"), "home should use compact connected status, not a notice\\n" + run.stdout)
     assert(!run.stdout.includes("SlopCode Android |"), "home should not expose Android runtime chrome\\n" + run.stdout)
     assert(!run.stdout.includes("Rust-native Termux TUI"), "home should not expose Android-only landing copy\\n" + run.stdout)
-    assert(!run.screen.includes("SlopCode Android |") && !run.screen.includes("Rust-native Termux TUI") && !run.screen.includes("/help"), "home leaked stale daemon frame\\n" + run.screen)
+    assert(!run.screen.includes("SlopCode Android |") && !run.screen.includes("Rust-native Termux TUI") && !run.screen.includes("/help"), "home diverged from shared landing frame\\n" + run.screen)
     assert(run.seen.includes("POST /session"), "home prompt did not lazily create a session " + JSON.stringify(run.seen))
     assert(run.bodies[0]?.parts?.[0]?.text === "hello from home", "home prompt did not submit " + JSON.stringify(run.bodies))
   },
@@ -1341,13 +1351,12 @@ export async function main() {
   const staged = await stage()
   try {
     await installTermux()
-    await adb("push", staged.android, `${tmp}/slopcode-android-runtime.tgz`)
     await adb("push", staged.cli, `${tmp}/slopcode-root.tgz`)
     const script = path.join(staged.work, "android-termux-e2e.mjs")
-    await Bun.write(script, e2eSource(staged.androidPackage))
+    await Bun.write(script, e2eSource(staged.arch))
     await adb("push", script, `${tmp}/slopcode-android-termux-e2e.mjs`)
     await termux(
-      `export SLOPCODE_ANDROID_E2E_MODE=${quote(mode)}; npm install -g --force --include=optional --ignore-scripts=true ${tmp}/slopcode-android-runtime.tgz ${tmp}/slopcode-root.tgz && node "$(npm root -g)/slopcode/postinstall.mjs" && node ${tmp}/slopcode-android-termux-e2e.mjs`,
+      `export SLOPCODE_ANDROID_E2E_MODE=${quote(mode)}; npm install -g --force --include=optional --ignore-scripts=true ${tmp}/slopcode-root.tgz && node "$(npm root -g)/slopcode/postinstall.mjs" && node ${tmp}/slopcode-android-termux-e2e.mjs`,
     )
     console.log(`android e2e: ok (${mode})`)
   } finally {

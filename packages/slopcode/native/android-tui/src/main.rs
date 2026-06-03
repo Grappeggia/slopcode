@@ -1208,32 +1208,6 @@ fn apply_surface_frame(state: &Arc<Mutex<State>>, body: &Value) -> Result<(), St
     }
     locked.title = string(body, "title").unwrap_or_else(|| locked.title.clone());
     locked.status = string(body, "status").unwrap_or_else(|| locked.status.clone());
-    if session_id.is_none() {
-        let width = body
-            .get("width")
-            .and_then(Value::as_u64)
-            .map(|item| item as u16)
-            .unwrap_or_else(|| {
-                lines
-                    .iter()
-                    .map(|line| line.chars().count())
-                    .max()
-                    .unwrap_or(80) as u16
-            });
-        let height = body
-            .get("height")
-            .and_then(Value::as_u64)
-            .map(|item| item as u16)
-            .unwrap_or(lines.len() as u16);
-        lines = initial_surface_frame(
-            width,
-            height,
-            &locked.footer_directory,
-            locked.footer_workspace.as_deref(),
-            locked.footer_mcp,
-            locked.footer_mcp_failed,
-        );
-    }
     locked.surface_frame = Some(lines);
     locked.surface_hydrated = true;
     Ok(())

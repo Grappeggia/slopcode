@@ -357,7 +357,10 @@ function findBinary(startDir) {
   }
 }
 
-const resolved = resolveBinary() || embeddedAndroidBinary() || findBinary(scriptDir)
+const resolved =
+  libc() === "bionic"
+    ? embeddedAndroidBinary() || resolveBinary() || findBinary(scriptDir)
+    : resolveBinary() || findBinary(scriptDir)
 if (!resolved) {
   if (libc() === "bionic") {
     console.error(termuxMessage())
