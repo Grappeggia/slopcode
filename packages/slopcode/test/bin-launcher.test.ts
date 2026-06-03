@@ -308,7 +308,10 @@ describe("bin launcher", () => {
     await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
     await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
     await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await Bun.write(path.join(bundle, "index.js"), 'throw new Error("bundle should not be the interactive entrypoint")\n')
+    await Bun.write(
+      path.join(bundle, "index.js"),
+      'throw new Error("bundle should not be the interactive entrypoint")\n',
+    )
 
     const out = await run(
       {
@@ -362,7 +365,10 @@ describe("bin launcher", () => {
     await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
     await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
     await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await Bun.write(path.join(bundle, "index.js"), 'throw new Error("bundle should not be the interactive entrypoint")\n')
+    await Bun.write(
+      path.join(bundle, "index.js"),
+      'throw new Error("bundle should not be the interactive entrypoint")\n',
+    )
 
     const out = await run(
       {
@@ -400,7 +406,10 @@ describe("bin launcher", () => {
     await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
     await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
     await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await Bun.write(path.join(bundle, "index.js"), 'throw new Error("bundle should not be the interactive entrypoint")\n')
+    await Bun.write(
+      path.join(bundle, "index.js"),
+      'throw new Error("bundle should not be the interactive entrypoint")\n',
+    )
 
     const out = await run(
       {
@@ -438,7 +447,10 @@ describe("bin launcher", () => {
     await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
     await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
     await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await Bun.write(path.join(bundle, "index.js"), 'throw new Error("bundle should not be the interactive entrypoint")\n')
+    await Bun.write(
+      path.join(bundle, "index.js"),
+      'throw new Error("bundle should not be the interactive entrypoint")\n',
+    )
 
     const out = await run(
       {
@@ -474,7 +486,10 @@ describe("bin launcher", () => {
     await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
     await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
     await script(path.join(override.bin, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await Bun.write(path.join(bundle, "index.js"), 'throw new Error("bundle should not be the interactive entrypoint")\n')
+    await Bun.write(
+      path.join(bundle, "index.js"),
+      'throw new Error("bundle should not be the interactive entrypoint")\n',
+    )
 
     const out = await run(
       {
@@ -537,7 +552,9 @@ describe("bin launcher", () => {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as { phase: string; mode?: string })
-    expect(startup).toEqual(expect.arrayContaining([expect.objectContaining({ phase: "launcher.android.rust_tui", mode: "attached" })]))
+    expect(startup).toEqual(
+      expect.arrayContaining([expect.objectContaining({ phase: "launcher.android.rust_tui", mode: "attached" })]),
+    )
     expect(startup.map((item) => item.phase)).not.toContain("launcher.android.legacy_bundle")
   })
 

@@ -159,7 +159,7 @@ describe("Android Termux runtime", () => {
     expect(e2e).toContain("noSession: true")
     expect(e2e).toContain('run.seen.includes("POST /session")')
     expect(e2e).toContain("Rust-native Termux TUI")
-    expect(e2e).toContain('core-android-x64')
+    expect(e2e).toContain("core-android-x64")
     const nativeTest = await Bun.file(path.join(import.meta.dir, "android-native-client.test.ts")).text()
     expect(nativeTest).toContain("terminalFrame(stdout, width, height)")
     expect(nativeTest).toContain("expectedHomeFrame(width, height, root)")
@@ -283,7 +283,7 @@ describe("Android Termux runtime", () => {
     expect(e2e).toContain("expectedHomeFrame(100, 30")
     expect(e2e).toContain("plain home row")
     expect(e2e).toContain("stale daemon home frame")
-    expect(e2e).toContain("home row \" + row + \" diverged from canonical landing")
+    expect(e2e).toContain('home row " + row + " diverged from canonical landing')
     expect(e2e).toContain("home leaked stale daemon frame")
     expect(ids).toEqual(
       expect.arrayContaining([

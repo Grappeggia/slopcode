@@ -98,7 +98,11 @@ function centerLine(text: string, width: number) {
 }
 
 function homeFooterLine(width: number, directory: string, mcp: number, failed = false, version = "9.9.9") {
-  const left = [directory, mcp > 0 || failed ? `${mcp} MCP${failed ? "!" : ""}` : undefined, mcp > 0 || failed ? "/status" : undefined]
+  const left = [
+    directory,
+    mcp > 0 || failed ? `${mcp} MCP${failed ? "!" : ""}` : undefined,
+    mcp > 0 || failed ? "/status" : undefined,
+  ]
     .filter(Boolean)
     .join(" | ")
   if (!left) return fitLine(version, width)
@@ -714,12 +718,10 @@ setTimeout(() => {
                 height: Number(url.searchParams.get("height") ?? 30),
               }),
             )
-          if (url.pathname === "/file")
-            return json([{ path: "src/app.ts", name: "app.ts", type: "file" }])
+          if (url.pathname === "/file") return json([{ path: "src/app.ts", name: "app.ts", type: "file" }])
           if (url.pathname === "/session" && req.method === "GET")
             return json([{ id: "ses_surface", title: "Session One" }])
-          if (url.pathname === "/v2/model")
-            return json([{ providerID: "openai", id: "gpt-4.1", name: "GPT 4.1" }])
+          if (url.pathname === "/v2/model") return json([{ providerID: "openai", id: "gpt-4.1", name: "GPT 4.1" }])
           if (url.pathname === "/session/status") return json({ health: "ready" })
           if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\n\n')
           return json({})
