@@ -803,7 +803,9 @@ function homeLines(snapshot: TuiSurfaceSnapshot, width: number, height: number) 
   const footer = [
     snapshot.footer.directory,
     snapshot.footer.workspaceID ? `workspace ${snapshot.footer.workspaceID}` : undefined,
-    snapshot.footer.mcp > 0 || snapshot.footer.mcpFailed ? `${snapshot.footer.mcp} MCP${snapshot.footer.mcpFailed ? "!" : ""}` : undefined,
+    snapshot.footer.mcp > 0 || snapshot.footer.mcpFailed
+      ? `${snapshot.footer.mcp} MCP${snapshot.footer.mcpFailed ? "!" : ""}`
+      : undefined,
     snapshot.footer.version ?? runtimeVersion(),
     "/help",
   ]

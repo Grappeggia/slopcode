@@ -7281,6 +7281,9 @@
                         "directory": {
                           "type": "string"
                         },
+                        "version": {
+                          "type": "string"
+                        },
                         "workspaceID": {
                           "type": "string"
                         },

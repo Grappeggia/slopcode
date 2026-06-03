@@ -5582,6 +5582,7 @@ export type TuiSnapshotResponses = {
     }
     footer: {
       directory: string
+      version?: string
       workspaceID?: string
       lsp: number
       mcp: number
