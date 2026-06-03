@@ -281,7 +281,9 @@ const androidSmoke = async () => {
     }
     const rootJson = await Bun.file(path.join(work, "node_modules", pkg.name, "package.json")).json()
     if (rootJson.optionalDependencies?.[target.pkg]) {
-      throw new Error(`verify: packed Android ${target.arch} root package must not depend on unpublished runtime npm packages`)
+      throw new Error(
+        `verify: packed Android ${target.arch} root package must not depend on unpublished runtime npm packages`,
+      )
     }
     const bin = path.join(runtimeRoot, "bin", "slopcode")
     const sidecar = path.join(runtimeRoot, "bin", "slopcode-android-host")
