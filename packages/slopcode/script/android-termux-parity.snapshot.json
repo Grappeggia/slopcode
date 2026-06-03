@@ -35,6 +35,7 @@
       "status": "active",
       "active": [
         "commands.palette",
+        "commands.linux-parity",
         "sessions.tabs",
         "sessions.routes",
         "sessions.controls",
@@ -48,6 +49,7 @@
       "trueParity": [],
       "workflowParity": [
         "commands.palette",
+        "commands.linux-parity",
         "sessions.tabs",
         "sessions.routes",
         "sessions.controls",
@@ -99,11 +101,11 @@
     }
   ],
   "totals": {
-    "active": 24,
+    "active": 25,
     "inactive": 0,
     "blocked": 0,
     "trueParity": 5,
-    "workflowParity": 19,
+    "workflowParity": 20,
     "surfaceOnly": 0
   },
   "overclaims": [
@@ -164,6 +166,28 @@
       "level": "workflow-parity",
       "android": ["command palette panel", "searchable command names", "slash-command completion"],
       "linux": ["interactive command palette", "searchable aliases", "keybound selection"]
+    },
+    {
+      "id": "commands.linux-parity",
+      "level": "workflow-parity",
+      "android": [
+        "daemon-backed autocomplete model panel",
+        "provider model variant panel",
+        "daemon shell selector panel",
+        "provider account/org panel",
+        "config-backed plugin list",
+        "daemon skill command panel",
+        "session display toggles"
+      ],
+      "linux": [
+        "model completion dialog",
+        "variant dialog",
+        "shell selector",
+        "console org dialog",
+        "plugin manager",
+        "skills dialog",
+        "session display toggles"
+      ]
     },
     {
       "id": "sessions.tabs",

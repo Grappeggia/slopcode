@@ -23,6 +23,35 @@ use serde_json::{json, Value};
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 const TUI_CORE_VERSION: &str = "rust-ratatui-1";
+const DEFAULT_THEME_NAMES: &[&str] = &[
+    "aura",
+    "carbonfox",
+    "catppuccin",
+    "catppuccin-frappe",
+    "catppuccin-macchiato",
+    "cobalt2",
+    "dracula",
+    "gruvbox",
+    "kanagawa",
+    "lucent-orng",
+    "mercury",
+    "monokai",
+    "nightowl",
+    "nord",
+    "one-dark",
+    "orng",
+    "osaka-jade",
+    "palenight",
+    "rosepine",
+    "slopcode",
+    "solarized",
+    "synthwave84",
+    "system",
+    "tokyonight",
+    "vercel",
+    "vesper",
+    "zenburn",
+];
 
 fn startup_trace_enabled() -> bool {
     env::var("SLOPCODE_ANDROID_STARTUP_LOG").is_ok_and(|item| {
@@ -429,6 +458,9 @@ struct State {
     model: Option<String>,
     agent: Option<String>,
     shell: bool,
+    history_mode: bool,
+    show_timestamps: bool,
+    show_thinking: bool,
     queue: Vec<String>,
     stash: Vec<String>,
     attached: Vec<String>,
@@ -481,6 +513,9 @@ impl State {
             model: args.model.clone(),
             agent: args.agent.clone(),
             shell: false,
+            history_mode: false,
+            show_timestamps: false,
+            show_thinking: true,
             queue: Vec::new(),
             stash: Vec::new(),
             attached: Vec::new(),
@@ -2316,11 +2351,12 @@ fn execute_ui_command(
     match command.id.as_str() {
         "help.show" => {
             load_daemon_commands(client, state).ok();
-            let rows = state
+            let mut rows = state
                 .lock()
                 .map_err(|_| "state lock failed")?
                 .manifest
                 .command_rows(value);
+            rows.insert(0, String::from("Command Palette"));
             state
                 .lock()
                 .map_err(|_| "state lock failed")?
@@ -2361,7 +2397,7 @@ fn execute_ui_command(
             hydrate_messages(client, state, &session)?;
             state.lock().map_err(|_| "state lock failed")?.panel = None;
         }
-        "session.status" => {
+        "session.status" | "slopcode.status" => {
             let body = client.json("GET", "/session/status", None)?;
             let rows = if let Some(obj) = body.as_object() {
                 obj.iter()
@@ -2389,31 +2425,16 @@ fn execute_ui_command(
                     .notice("usage: /model provider/model");
             }
         }
-        "model.completion.list" => state.lock().map_err(|_| "state lock failed")?.panel(
-            "Autocomplete Models",
-            vec![String::from(
-                "Model completion overrides follow daemon configuration.",
-            )],
-        ),
-        "variant.list" => state.lock().map_err(|_| "state lock failed")?.panel(
-            "Variants",
-            vec![String::from(
-                "Use the selected model provider variants from Linux-compatible configuration.",
-            )],
-        ),
-        "provider.list" => {
+        "model.completion.list" => model_completion_panel(client, state, value)?,
+        "variant.list" => variants_panel(client, state, value)?,
+        "provider.list" | "provider.connect" => {
             let body = client.json("GET", "/v2/provider", None)?;
             state
                 .lock()
                 .map_err(|_| "state lock failed")?
                 .panel("Providers", rows_from_array(&body, &["id", "name", "type"]));
         }
-        "console.orgs" => state.lock().map_err(|_| "state lock failed")?.panel(
-            "Console Orgs",
-            vec![String::from(
-                "Console org switching is provided by connected provider auth.",
-            )],
-        ),
+        "console.orgs" => console_orgs_panel(client, state)?,
         "agent.list" => {
             if !value.is_empty() {
                 let mut locked = state.lock().map_err(|_| "state lock failed")?;
@@ -2430,8 +2451,8 @@ fn execute_ui_command(
             }
         }
         "mcp.list" => mcp_panel(client, state)?,
-        "sidebar.summary" => summary_panel(client, state)?,
-        "sidebar.files" => files_panel(client, state, value)?,
+        "sidebar.summary" | "session.sidebar.toggle" => summary_panel(client, state)?,
+        "sidebar.files" | "session.files.open" => files_panel(client, state, value)?,
         "file.open" => open_file(client, state, value)?,
         "file.attach" => {
             if !value.is_empty() {
@@ -2471,14 +2492,14 @@ fn execute_ui_command(
         "session.pause" => session_action(client, state, "pause", "POST")?,
         "session.resume" => session_action(client, state, "resume", "POST")?,
         "session.interrupt" => session_action(client, state, "abort", "POST")?,
-        "session.revert" => {
+        "session.revert" | "session.undo" => {
             if value.is_empty() {
                 undo_last_message(client, state)?;
             } else {
                 revert_session(client, state, value)?;
             }
         }
-        "session.unrevert" => session_action(client, state, "unrevert", "POST")?,
+        "session.unrevert" | "session.redo" => session_action(client, state, "unrevert", "POST")?,
         "session.compact" => compact_session(client, state)?,
         "session.fork" => {
             let session = ensure_session(client, state)?;
@@ -2489,20 +2510,29 @@ fn execute_ui_command(
             }
         }
         "session.close" => close_tab(state)?,
-        "session.title" => rename_session(client, state, value)?,
+        "session.title" | "session.rename" => rename_session(client, state, value)?,
         "session.warp" => warp_session(client, state, value)?,
-        "session.history.toggle" => state
-            .lock()
-            .map_err(|_| "state lock failed")?
-            .notice("history mode uses Up/Down prompt history on Android"),
-        "session.toggle.timestamps" => state
-            .lock()
-            .map_err(|_| "state lock failed")?
-            .notice("timestamps toggled"),
-        "session.toggle.thinking" => state
-            .lock()
-            .map_err(|_| "state lock failed")?
-            .notice("thinking visibility toggled"),
+        "session.history.toggle" => history_mode_panel(state)?,
+        "session.toggle.timestamps" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            locked.show_timestamps = !locked.show_timestamps;
+            let notice = if locked.show_timestamps {
+                "timestamps shown"
+            } else {
+                "timestamps hidden"
+            };
+            locked.notice(notice);
+        }
+        "session.toggle.thinking" => {
+            let mut locked = state.lock().map_err(|_| "state lock failed")?;
+            locked.show_thinking = !locked.show_thinking;
+            let notice = if locked.show_thinking {
+                "thinking shown"
+            } else {
+                "thinking hidden"
+            };
+            locked.notice(notice);
+        }
         "prompt.queue" => {
             let locked = state.lock().map_err(|_| "state lock failed")?;
             let rows = if locked.queue.is_empty() {
@@ -2549,20 +2579,9 @@ fn execute_ui_command(
             };
             locked.notice(notice);
         }
-        "shell.list" => state.lock().map_err(|_| "state lock failed")?.panel(
-            "Shells",
-            vec![String::from(
-                "Shell selection follows the configured daemon shell.",
-            )],
-        ),
+        "shell.list" => shells_panel(client, state, value)?,
         "android.doctor" => android_runtime_panel(state)?,
-        "theme.list" => state.lock().map_err(|_| "state lock failed")?.panel(
-            "Themes",
-            vec![
-                String::from("Terminal colors follow the active Termux theme."),
-                String::from("Rust TUI uses ratatui styles for Linux parity."),
-            ],
-        ),
+        "theme.list" | "theme.switch" => themes_panel(state, value)?,
         "keybinds.list" => keybinds_panel(state)?,
         "clipboard.status" => clipboard_panel(state)?,
         "terminal.suspend" => state.lock().map_err(|_| "state lock failed")?.panel(
@@ -2572,14 +2591,9 @@ fn execute_ui_command(
                 String::from("Use Android app switching to background SlopCode."),
             ],
         ),
-        "plugins.list" => state.lock().map_err(|_| "state lock failed")?.panel(
-            "Plugins",
-            vec![
-                String::from("Plugins discovery remains daemon-backed."),
-                String::from("Rust Termux TUI renders plugin status without OpenTUI."),
-            ],
-        ),
+        "plugins.list" => plugins_panel(client, state)?,
         "prompt.skills" => {
+            load_daemon_commands(client, state).ok();
             let rows = state
                 .lock()
                 .map_err(|_| "state lock failed")?
@@ -2984,6 +2998,331 @@ fn models_panel(client: &Client, state: &Arc<Mutex<State>>, query: &str) -> Resu
         .lock()
         .map_err(|_| "state lock failed")?
         .panel("Models", rows);
+    Ok(())
+}
+
+fn model_completion_panel(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    value: &str,
+) -> Result<(), String> {
+    if !value.is_empty() {
+        update_autocomplete_override(client, state, value)?;
+    }
+    let config = config_value(client);
+    let providers = client
+        .json("GET", "/v2/provider", None)
+        .unwrap_or_else(|_| json!([]));
+    let models = client
+        .json("GET", "/v2/model", None)
+        .unwrap_or_else(|_| json!([]));
+    let mut rows = Vec::new();
+    if let Some(items) = providers.as_array() {
+        for provider in items {
+            let Some(id) = string(provider, "id") else {
+                continue;
+            };
+            let name = string(provider, "name").unwrap_or_else(|| id.clone());
+            let count = provider
+                .get("models")
+                .and_then(Value::as_object)
+                .map(|items| items.len())
+                .unwrap_or_else(|| flat_model_count(&models, &id));
+            rows.push(format!(
+                "{name}  provider {id}  {}  {count} model(s)",
+                autocomplete_override(&config, &id)
+            ));
+        }
+    }
+    if rows.is_empty() {
+        for id in flat_provider_ids(&models) {
+            rows.push(format!(
+                "provider {id}  {}  {} model(s)",
+                autocomplete_override(&config, &id),
+                flat_model_count(&models, &id)
+            ));
+        }
+    }
+    if rows.is_empty() {
+        rows.push(String::from("No autocomplete providers found"));
+    } else {
+        rows.insert(
+            0,
+            String::from("Use /models-completion <provider>/selected or <provider>/<model>"),
+        );
+    }
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .panel("Autocomplete Model", rows);
+    Ok(())
+}
+
+fn update_autocomplete_override(
+    client: &Client,
+    state: &Arc<Mutex<State>>,
+    value: &str,
+) -> Result<(), String> {
+    let Some((provider, model)) = value.split_once('/') else {
+        state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice("usage: /models-completion provider/selected|model");
+        return Ok(());
+    };
+    if provider.is_empty() || model.is_empty() {
+        state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice("usage: /models-completion provider/selected|model");
+        return Ok(());
+    }
+    if model == "auto" {
+        state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice("automatic autocomplete resets by removing the provider override from config");
+        return Ok(());
+    }
+    let mut overrides = serde_json::Map::new();
+    overrides.insert(
+        provider.to_string(),
+        if model == "selected" {
+            Value::Null
+        } else {
+            Value::String(model.to_string())
+        },
+    );
+    let next = json!({ "autocomplete": { "provider_model_overrides": Value::Object(overrides) } });
+    client.json("PATCH", "/global/config", Some(next))?;
+    client.json("POST", "/global/dispose", Some(json!({}))).ok();
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .notice(format!(
+            "autocomplete {provider} {}",
+            if model == "auto" {
+                "automatic"
+            } else if model == "selected" {
+                "selected model"
+            } else {
+                model
+            }
+        ));
+    Ok(())
+}
+
+fn variants_panel(client: &Client, state: &Arc<Mutex<State>>, value: &str) -> Result<(), String> {
+    if !value.is_empty() {
+        if parse_model(value).is_some() {
+            state.lock().map_err(|_| "state lock failed")?.model = Some(value.to_string());
+        } else if value != "default" {
+            state
+                .lock()
+                .map_err(|_| "state lock failed")?
+                .notice(format!("variant {value}"));
+        }
+    }
+    let config = config_value(client);
+    let selected = state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .model
+        .clone()
+        .or_else(|| string(&config, "model"));
+    let Some(model_id) = selected else {
+        state.lock().map_err(|_| "state lock failed")?.panel(
+            "Variants",
+            vec![String::from("Select a model before /variants")],
+        );
+        return Ok(());
+    };
+    let Some((provider, model)) = parse_model(&model_id) else {
+        state.lock().map_err(|_| "state lock failed")?.panel(
+            "Variants",
+            vec![format!("Selected model has no provider prefix: {model_id}")],
+        );
+        return Ok(());
+    };
+    let providers = client
+        .json("GET", "/v2/provider", None)
+        .unwrap_or_else(|_| json!([]));
+    let models = client
+        .json("GET", "/v2/model", None)
+        .unwrap_or_else(|_| json!([]));
+    let variants = model_variants(&providers, &models, &provider, &model);
+    let mut rows = vec![format!("Model {provider}/{model}"), String::from("Default")];
+    rows.extend(variants.iter().map(|item| format!("Variant {item}")));
+    if variants.is_empty() {
+        rows.push(String::from("No variants configured for this model"));
+    } else {
+        rows.push(String::from(
+            "Use /variants <name> to select a variant for this Android session",
+        ));
+    }
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .panel("Variants", rows);
+    Ok(())
+}
+
+fn console_orgs_panel(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), String> {
+    let config = config_value(client);
+    let providers = client
+        .json("GET", "/v2/provider", None)
+        .unwrap_or_else(|_| json!([]));
+    let mut rows = Vec::new();
+    if let Some(items) = providers.as_array() {
+        for provider in items {
+            let id = string(provider, "id").unwrap_or_else(|| String::from("provider"));
+            let name = string(provider, "name").unwrap_or_else(|| id.clone());
+            let configured = config
+                .get("provider")
+                .and_then(Value::as_object)
+                .is_some_and(|items| items.contains_key(&id));
+            rows.push(format!(
+                "{name}  provider {id}  {}",
+                if configured {
+                    "configured"
+                } else {
+                    "available"
+                }
+            ));
+        }
+    }
+    if rows.is_empty() {
+        rows.push(String::from("No provider accounts found"));
+    } else {
+        rows.insert(
+            0,
+            String::from("Console org switching uses the connected provider account"),
+        );
+    }
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .panel("Console Orgs", rows);
+    Ok(())
+}
+
+fn shells_panel(client: &Client, state: &Arc<Mutex<State>>, value: &str) -> Result<(), String> {
+    if !value.is_empty() {
+        let patch = if value == "default" {
+            json!({ "shell": {} })
+        } else {
+            json!({ "shell": { "program": value } })
+        };
+        client.json("PATCH", "/global/config", Some(patch))?;
+        client.json("POST", "/global/dispose", Some(json!({}))).ok();
+        state
+            .lock()
+            .map_err(|_| "state lock failed")?
+            .notice(if value == "default" {
+                String::from("shell reset to system default")
+            } else {
+                format!("shell set to {value}")
+            });
+    }
+    let config = config_value(client);
+    let current = config
+        .get("shell")
+        .and_then(|item| string(item, "program"))
+        .unwrap_or_else(|| String::from("default"));
+    let body = client
+        .json("GET", "/pty/shells", None)
+        .unwrap_or_else(|_| json!([]));
+    let mut rows = vec![format!("Current {current}")];
+    let mut shells = rows_from_array(&body, &["name", "path", "acceptable"]);
+    shells.retain(|row| !row.contains("acceptable false"));
+    if shells.is_empty() {
+        rows.push(String::from("No acceptable shells found"));
+    } else {
+        rows.push(String::from("Use /shell <path> or /shell default"));
+        rows.extend(shells);
+    }
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .panel("Shells", rows);
+    Ok(())
+}
+
+fn themes_panel(state: &Arc<Mutex<State>>, value: &str) -> Result<(), String> {
+    let mut rows = DEFAULT_THEME_NAMES
+        .iter()
+        .map(|item| format!("Theme {item}"))
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        rows.push(String::from("No themes found"));
+    }
+    let mut locked = state.lock().map_err(|_| "state lock failed")?;
+    if !value.is_empty() {
+        if DEFAULT_THEME_NAMES.iter().any(|item| item == &value) {
+            locked.notice(format!("theme {value}"));
+        } else {
+            locked.notice(format!("unknown theme {value}"));
+        }
+    }
+    locked.panel("Themes", rows);
+    Ok(())
+}
+
+fn plugins_panel(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), String> {
+    let config = config_value(client);
+    let mut rows = Vec::new();
+    if let Some(origins) = config.get("plugin_origins").and_then(Value::as_array) {
+        for origin in origins {
+            let spec = origin
+                .get("spec")
+                .and_then(value_display)
+                .unwrap_or_else(|| origin.to_string());
+            let scope = string(origin, "scope").unwrap_or_else(|| String::from("plugin"));
+            let source = string(origin, "source").unwrap_or_default();
+            rows.push(format!("{scope} {spec} {source}"));
+        }
+    }
+    if rows.is_empty() {
+        if let Some(plugins) = config.get("plugin").and_then(Value::as_array) {
+            rows.extend(
+                plugins
+                    .iter()
+                    .filter_map(value_display)
+                    .map(|item| format!("plugin {item}")),
+            );
+        }
+    }
+    if rows.is_empty() {
+        rows.push(String::from("No plugins configured"));
+    }
+    state
+        .lock()
+        .map_err(|_| "state lock failed")?
+        .panel("Plugins", rows);
+    Ok(())
+}
+
+fn history_mode_panel(state: &Arc<Mutex<State>>) -> Result<(), String> {
+    let mut locked = state.lock().map_err(|_| "state lock failed")?;
+    locked.history_mode = !locked.history_mode;
+    let mut rows = vec![if locked.history_mode {
+        String::from("History mode on")
+    } else {
+        String::from("History mode off")
+    }];
+    if locked.history.is_empty() {
+        rows.push(String::from("No prompt history"));
+    } else {
+        rows.extend(
+            locked
+                .history
+                .iter()
+                .rev()
+                .take(20)
+                .map(|item| format!("Prompt {item}")),
+        );
+    }
+    locked.panel("History", rows);
     Ok(())
 }
 
@@ -4385,6 +4724,15 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &State) {
     if state.footer_permissions > 0 {
         footer.push(format!("permissions {}", state.footer_permissions));
     }
+    if state.history_mode {
+        footer.push(String::from("history"));
+    }
+    if state.show_timestamps {
+        footer.push(String::from("timestamps"));
+    }
+    if !state.show_thinking {
+        footer.push(String::from("thinking hidden"));
+    }
     if !state.attached.is_empty() {
         footer.push(format!("{} attached", state.attached.len()));
     }
@@ -4486,6 +4834,27 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
+fn config_value(client: &Client) -> Value {
+    client
+        .json("GET", "/config", None)
+        .or_else(|_| client.json("GET", "/global/config", None))
+        .unwrap_or_else(|_| json!({}))
+}
+
+fn value_display(value: &Value) -> Option<String> {
+    match value {
+        Value::String(item) => Some(item.clone()),
+        Value::Number(item) => Some(item.to_string()),
+        Value::Bool(item) => Some(item.to_string()),
+        Value::Null => None,
+        Value::Array(_) | Value::Object(_) => Some(value.to_string()),
+    }
+}
+
+fn field_display(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(value_display)
+}
+
 fn rows_from_array(value: &Value, fields: &[&str]) -> Vec<String> {
     let Some(items) = value.as_array() else {
         return if value.is_null() {
@@ -4499,12 +4868,89 @@ fn rows_from_array(value: &Value, fields: &[&str]) -> Vec<String> {
         .map(|item| {
             fields
                 .iter()
-                .filter_map(|field| string(item, field).map(|value| format!("{field} {value}")))
+                .filter_map(|field| {
+                    field_display(item, field).map(|value| format!("{field} {value}"))
+                })
                 .collect::<Vec<_>>()
                 .join("  ")
         })
         .filter(|item| !item.is_empty())
         .collect()
+}
+
+fn flat_provider_ids(models: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(items) = models.as_array() {
+        for item in items {
+            if let Some(id) = string(item, "providerID") {
+                out.push(id);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn flat_model_count(models: &Value, provider: &str) -> usize {
+    models
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| string(item, "providerID").as_deref() == Some(provider))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn autocomplete_override(config: &Value, provider: &str) -> String {
+    let value = config
+        .get("autocomplete")
+        .and_then(|item| item.get("provider_model_overrides"))
+        .and_then(|item| item.get(provider));
+    match value {
+        None => String::from("Automatic"),
+        Some(Value::Null) => String::from("Selected model"),
+        Some(Value::String(model)) => format!("Override {model}"),
+        Some(other) => format!("Override {other}"),
+    }
+}
+
+fn model_variants(providers: &Value, models: &Value, provider: &str, model: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(items) = providers.as_array() {
+        for item in items {
+            if string(item, "id").as_deref() != Some(provider) {
+                continue;
+            }
+            if let Some(variants) = item
+                .get("models")
+                .and_then(|items| items.get(model))
+                .and_then(|item| item.get("variants"))
+                .and_then(Value::as_object)
+            {
+                out.extend(variants.keys().cloned());
+            }
+        }
+    }
+    if out.is_empty() {
+        if let Some(items) = models.as_array() {
+            for item in items {
+                if string(item, "providerID").as_deref() != Some(provider)
+                    || string(item, "id").as_deref() != Some(model)
+                {
+                    continue;
+                }
+                if let Some(variants) = item.get("variants").and_then(Value::as_object) {
+                    out.extend(variants.keys().cloned());
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn editor_rows(editor: &Editor) -> Vec<String> {

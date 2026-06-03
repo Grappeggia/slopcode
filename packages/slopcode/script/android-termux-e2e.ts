@@ -463,6 +463,15 @@ function compact(value) {
   }
 }
 
+function mergeDeep(target, patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return patch
+  const next = target && typeof target === "object" && !Array.isArray(target) ? { ...target } : {}
+  for (const [key, value] of Object.entries(patch)) {
+    next[key] = value && typeof value === "object" && !Array.isArray(value) ? mergeDeep(next[key], value) : value
+  }
+  return next
+}
+
 function partText(part) {
   if (part.type === "text" || part.type === "reasoning") return part.text || ""
   if (part.type === "file") return part.url || part.path || ""
@@ -736,7 +745,17 @@ function websocketMessages(buffer) {
 }
 
 async function runHost(input) {
-  const state = { actions: [], bodies: [], replies: [], permissions: [], shells: [], summaries: [], editorInputs: [], seen: [] }
+  const state = { actions: [], bodies: [], replies: [], permissions: [], shells: [], summaries: [], editorInputs: [], configPatches: [], seen: [] }
+  let config = {
+    model: "openai/gpt-5",
+    shell: { program: "/data/data/com.termux/files/usr/bin/bash", timeout_ms: 300000 },
+    autocomplete: { provider_model_overrides: { anthropic: "claude-sonnet" } },
+    provider: { openai: { apiKey: "test" } },
+    plugin: ["file:///data/data/com.termux/files/home/.slopcode/plugin/sample.js"],
+    plugin_origins: [
+      { spec: "file:///data/data/com.termux/files/home/.slopcode/plugin/sample.js", scope: "local", source: ".slopcode/plugin/sample.js" },
+    ],
+  }
   const editorState = { dirty: true, diff: true, content: "console.log('ok')" }
   const server = createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1")
@@ -748,6 +767,24 @@ async function runHost(input) {
       state.actions.push(await read(req))
       return json(res, true)
     }
+    if (url.pathname === "/config" && req.method === "GET") return json(res, config)
+    if (url.pathname === "/global/config" && req.method === "GET") return json(res, config)
+    if (url.pathname === "/global/config" && req.method === "PATCH") {
+      const patch = await read(req)
+      state.configPatches.push(patch)
+      config = mergeDeep(config, patch)
+      return json(res, config)
+    }
+    if (url.pathname === "/global/dispose" && req.method === "POST") return json(res, true)
+    if (url.pathname === "/pty/shells") return json(res, [
+      { path: "/data/data/com.termux/files/usr/bin/bash", name: "bash", acceptable: true },
+      { path: "/data/data/com.termux/files/usr/bin/zsh", name: "zsh", acceptable: true },
+      { path: "/system/bin/sh", name: "android-sh", acceptable: false },
+    ])
+    if (url.pathname === "/command") return json(res, [
+      { name: "sample-skill", source: "skill", description: "Sample skill command" },
+      { name: "sample-mcp", source: "mcp", description: "Sample MCP command" },
+    ])
     if (url.pathname === "/session" && req.method === "POST") return json(res, { id: "ses_termux", title: input.title })
     if (url.pathname === "/session" && req.method === "GET") return json(res, input.sessions || [{ id: "ses_termux", title: input.title }])
     if (url.pathname === "/session/ses_termux" && req.method === "GET") return json(res, { id: "ses_termux", title: input.title })
@@ -803,12 +840,12 @@ async function runHost(input) {
       return json(res, {})
     }
     if (url.pathname === "/v2/model") return json(res, [
-      { providerID: "openai", id: "gpt-5", name: "GPT 5", release_date: "2026-01-01" },
-      { providerID: "anthropic", id: "claude-sonnet", name: "Claude Sonnet", release_date: "2025-12-01" },
+      { providerID: "openai", id: "gpt-5", name: "GPT 5", release_date: "2026-01-01", variants: { fast: {}, thoughtful: {} } },
+      { providerID: "anthropic", id: "claude-sonnet", name: "Claude Sonnet", release_date: "2025-12-01", variants: { haiku: {} } },
     ])
     if (url.pathname === "/v2/provider") return json(res, [
-      { id: "openai", name: "OpenAI", models: {} },
-      { id: "anthropic", name: "Anthropic", models: {} },
+      { id: "openai", name: "OpenAI", models: { "gpt-5": { id: "gpt-5", name: "GPT 5", modalities: { input: ["text"], output: ["text"] }, variants: { fast: {}, thoughtful: {} } } } },
+      { id: "anthropic", name: "Anthropic", models: { "claude-sonnet": { id: "claude-sonnet", name: "Claude Sonnet", modalities: { input: ["text"], output: ["text"] }, variants: { haiku: {} } } } },
     ])
     if (url.pathname === "/file/status") return json(res, [
       { path: "src/app.ts", status: "modified" },
@@ -1195,6 +1232,41 @@ const actions = {
     })
     assert(run.screen.includes("Models") || run.stdout.includes("Models"), "missing models panel\\n" + run.screen)
     assert(run.bodies[0]?.model?.providerID === "openai" && run.bodies[0]?.model?.modelID === "gpt-5", "missing selected model " + JSON.stringify(run.bodies))
+  },
+  "commands.linux-parity": async () => {
+    const run = await runHost({
+      title: "Linux Command Parity",
+      steps: [
+        { delay: 150, text: "/models-completion\\r" },
+        { delay: 150, text: "/models-completion openai/gpt-5\\r" },
+        { delay: 150, text: "/variants\\r" },
+        { delay: 150, text: "/shells\\r" },
+        { delay: 150, text: "/shell /data/data/com.termux/files/usr/bin/zsh\\r" },
+        { delay: 150, text: "/orgs\\r" },
+        { delay: 150, text: "/plugins\\r" },
+        { delay: 150, text: "/skills\\r" },
+        { delay: 150, text: "/history\\r" },
+        { delay: 150, text: "/timestamps\\r" },
+        { delay: 150, text: "/thinking\\r" },
+        { delay: 150, text: "\\x04" },
+      ],
+    })
+    const rendered = run.screen + "\\n" + run.stdout
+    assert(rendered.includes("Autocomplete Model") && rendered.includes("OpenAI"), "missing autocomplete model panel\\n" + rendered)
+    assert(rendered.includes("Variants") && rendered.includes("Variant fast"), "missing variants panel\\n" + rendered)
+    assert(rendered.includes("Shells") && rendered.includes("zsh"), "missing shell list\\n" + rendered)
+    assert(rendered.includes("Console Orgs") && rendered.includes("OpenAI"), "missing console org/provider list\\n" + rendered)
+    assert(rendered.includes("Plugins") && rendered.includes("sample.js"), "missing plugin list\\n" + rendered)
+    assert(rendered.includes("Skills") && rendered.includes("sample-skill"), "missing skill command list\\n" + rendered)
+    assert(rendered.includes("History mode") && rendered.includes("timestamps shown") && rendered.includes("thinking hidden"), "missing toggle state\\n" + rendered)
+    assert(run.seen.includes("GET /config"), "missing config route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("GET /v2/provider") && run.seen.includes("GET /v2/model"), "missing provider/model routes " + JSON.stringify(run.seen))
+    assert(run.seen.includes("GET /pty/shells"), "missing shell route " + JSON.stringify(run.seen))
+    assert(run.seen.includes("GET /command"), "missing command route " + JSON.stringify(run.seen))
+    assert(run.seen.filter((item) => item === "PATCH /global/config").length >= 2, "missing global config updates " + JSON.stringify(run.seen))
+    assert(run.seen.includes("POST /global/dispose"), "missing dispose after config update " + JSON.stringify(run.seen))
+    assert(run.configPatches.some((item) => item.autocomplete?.provider_model_overrides?.openai === "gpt-5"), "missing autocomplete patch " + JSON.stringify(run.configPatches))
+    assert(run.configPatches.some((item) => item.shell?.program?.includes("zsh")), "missing shell patch " + JSON.stringify(run.configPatches))
   },
   "files.panel": async () => {
     const run = await runHost({ title: "Files Session", steps: [{ delay: 150, text: "/files\\r" }, { delay: 150, text: "/files app\\r" }, { delay: 150, text: "\\x04" }] })

@@ -244,6 +244,7 @@ describe("Android Termux runtime", () => {
       "dialogs.question",
       "layout.capture",
       "commands.palette",
+      "commands.linux-parity",
       "sessions.tabs",
       "sessions.routes",
       "sessions.controls",
