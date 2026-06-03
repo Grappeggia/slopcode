@@ -143,10 +143,14 @@ async function stage() {
   for (const target of androidTargets) {
     const source = path.join(dir, "dist", target.name, "bin")
     if (!(await exists(path.join(source, pkg.name)))) {
-      throw new Error(`android e2e: missing embedded ${target.arch} runtime; run bun --cwd packages/slopcode run script/build.ts --target=android`)
+      throw new Error(
+        `android e2e: missing embedded ${target.arch} runtime; run bun --cwd packages/slopcode run script/build.ts --target=android`,
+      )
     }
     if (!(await exists(path.join(source, `${pkg.name}-android-host`)))) {
-      throw new Error(`android e2e: missing embedded ${target.arch} host; run bun --cwd packages/slopcode run script/build.ts --target=android`)
+      throw new Error(
+        `android e2e: missing embedded ${target.arch} host; run bun --cwd packages/slopcode run script/build.ts --target=android`,
+      )
     }
     await fs.mkdir(path.join(app, "android-runtime", target.arch), { recursive: true })
     await fs.cp(source, path.join(app, "android-runtime", target.arch, "bin"), { recursive: true, force: true })
