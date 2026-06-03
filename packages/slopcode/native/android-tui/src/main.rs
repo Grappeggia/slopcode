@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::io::{self, IsTerminal, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -506,7 +506,7 @@ impl State {
             permission_index: 0,
             question: None,
             manifest: fallback_manifest(),
-            surface_frame: Some(initial_surface_frame(width, height, &cwd)),
+            surface_frame: Some(initial_surface_frame(width, height, &cwd, None, 0, false)),
             surface_hydrated: false,
             args,
         }
@@ -1197,16 +1197,43 @@ fn apply_surface_frame(state: &Arc<Mutex<State>>, body: &Value) -> Result<(), St
     {
         return Err(String::from("unsupported shared frame renderer"));
     }
-    let lines = string_array(body.get("lines").unwrap_or(&Value::Null));
+    let mut lines = string_array(body.get("lines").unwrap_or(&Value::Null));
     if lines.is_empty() {
         return Err(String::from("shared frame had no lines"));
     }
     let mut locked = state.lock().map_err(|_| "state lock failed")?;
-    if let Some(id) = string(body, "sessionID") {
-        locked.session = Some(id);
+    let session_id = string(body, "sessionID");
+    if let Some(id) = session_id.as_deref() {
+        locked.session = Some(id.to_string());
     }
     locked.title = string(body, "title").unwrap_or_else(|| locked.title.clone());
     locked.status = string(body, "status").unwrap_or_else(|| locked.status.clone());
+    if session_id.is_none() {
+        let width = body
+            .get("width")
+            .and_then(Value::as_u64)
+            .map(|item| item as u16)
+            .unwrap_or_else(|| {
+                lines
+                    .iter()
+                    .map(|line| line.chars().count())
+                    .max()
+                    .unwrap_or(80) as u16
+            });
+        let height = body
+            .get("height")
+            .and_then(Value::as_u64)
+            .map(|item| item as u16)
+            .unwrap_or(lines.len() as u16);
+        lines = initial_surface_frame(
+            width,
+            height,
+            &locked.footer_directory,
+            locked.footer_workspace.as_deref(),
+            locked.footer_mcp,
+            locked.footer_mcp_failed,
+        );
+    }
     locked.surface_frame = Some(lines);
     locked.surface_hydrated = true;
     Ok(())
@@ -1286,15 +1313,29 @@ fn surface_message(item: &Value) -> Option<Message> {
         for tool in items {
             let name = string(tool, "tool").unwrap_or_else(|| String::from("tool"));
             let status = string(tool, "status").unwrap_or_else(|| String::from("pending"));
-            tools.push(format!("tool {name} {status}"));
-            for row in string_array(tool.get("preview").unwrap_or(&Value::Null)) {
+            let preview = string_array(tool.get("preview").unwrap_or(&Value::Null));
+            let diff = string_array(tool.get("diff").unwrap_or(&Value::Null));
+            let expandable = boolean(tool, "expandable");
+            let row = if status == "completed" && expandable {
+                format!("tool {name} {status} [expanded]")
+            } else {
+                format!("tool {name} {status}")
+            };
+            tools.push(row);
+            for row in &preview {
                 tools.push(format!("output {row}"));
             }
-            for row in string_array(tool.get("diff").unwrap_or(&Value::Null)) {
+            if expandable && preview.len() >= 8 {
+                tools.push(String::from("more line(s)"));
+            }
+            if !diff.is_empty() {
+                tools.push(String::from("diff preview"));
+            }
+            for row in &diff {
                 tools.push(format!("diff {row}"));
             }
-            if boolean(tool, "expandable") {
-                tools.push(String::from("expandable in Linux TUI"));
+            if expandable && diff.len() >= 14 {
+                tools.push(String::from("more line(s)"));
             }
         }
     }
@@ -1450,12 +1491,112 @@ fn parse() -> Result<Args, String> {
         }
     }
     if args.url.is_empty() {
+        args.url = env::var("SLOPCODE_DAEMON_URL")
+            .or_else(|_| env::var("SLOPCODE_SERVER_URL"))
+            .unwrap_or_default();
+    }
+    if args.token.is_empty() {
+        args.token = env::var("SLOPCODE_DAEMON_TOKEN")
+            .or_else(|_| env::var("SLOPCODE_TOKEN"))
+            .unwrap_or_default();
+    }
+    if args.url.is_empty() || args.token.is_empty() {
+        bootstrap_daemon(&mut args)?;
+    }
+    if args.url.is_empty() {
         return Err(String::from("missing --url"));
     }
     if args.token.is_empty() {
         return Err(String::from("missing --token"));
     }
     Ok(args)
+}
+
+fn bootstrap_daemon(args: &mut Args) -> Result<(), String> {
+    let entrypoint = env::var("SLOPCODE_ENTRYPOINT").map_err(|_| {
+        String::from("missing --url; Android daemon bootstrap entrypoint is not configured")
+    })?;
+    let runner = env::var("SLOPCODE_ANDROID_BOOTSTRAP_RUNNER")
+        .or_else(|_| env::var("SLOPCODE_BUN_PATH"))
+        .unwrap_or_else(|_| String::from("bun"));
+    let directory = args
+        .cwd
+        .clone()
+        .or_else(|| {
+            env::current_dir()
+                .ok()
+                .map(|item| item.display().to_string())
+        })
+        .unwrap_or_else(|| String::from("."));
+    let token = id("tok");
+    let port = available_port()?;
+    let url = format!("http://127.0.0.1:{port}");
+    let idle_timeout = env::var("SLOPCODE_DAEMON_IDLE_TIMEOUT_MS")
+        .ok()
+        .and_then(|item| item.parse::<u64>().ok())
+        .unwrap_or(30 * 60 * 1000);
+    let mut command = Command::new(&runner);
+    command
+        .arg(&entrypoint)
+        .arg("daemon")
+        .arg("run")
+        .arg("--directory")
+        .arg(&directory)
+        .arg("--token")
+        .arg(&token)
+        .arg("--idle-timeout-ms")
+        .arg(idle_timeout.to_string())
+        .arg("--hostname")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .current_dir(&directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .env("SLOPCODE_BIONIC", "1")
+        .env("SLOPCODE_DAEMON_CHILD", "1");
+    if let Some(view_id) = &args.view_id {
+        command.arg("--view-id").arg(view_id);
+    }
+    command
+        .spawn()
+        .map_err(|err| format!("failed to start Android daemon bootstrap {runner}: {err}"))?;
+    wait_for_daemon(&url, &token, Duration::from_secs(45))?;
+    args.url = url;
+    args.token = token;
+    if args.cwd.is_none() {
+        args.cwd = Some(directory);
+    }
+    Ok(())
+}
+
+fn available_port() -> Result<u16, String> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|err| format!("failed to allocate daemon port: {err}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|err| format!("failed to inspect daemon port: {err}"))?
+        .port();
+    drop(listener);
+    Ok(port)
+}
+
+fn wait_for_daemon(url: &str, token: &str, timeout: Duration) -> Result<(), String> {
+    let client = Client {
+        url: url.to_string(),
+        token: token.to_string(),
+    };
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if client.json("GET", "/daemon/status", None).is_ok() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err(String::from(
+        "timed out waiting for Android daemon bootstrap",
+    ))
 }
 
 fn version() -> String {
@@ -1640,6 +1781,7 @@ fn terminal_loop(
 #[derive(Clone, Debug)]
 enum InputAction {
     Text(String),
+    Command(String),
     Enter,
     Backspace,
     Delete,
@@ -1665,6 +1807,16 @@ enum InputAction {
 #[derive(Default)]
 struct InputParser {
     paste: bool,
+    leader: bool,
+}
+
+fn escape_sequence_len(rest: &str) -> usize {
+    for (index, ch) in rest.char_indices().skip(2) {
+        if ch.is_ascii_alphabetic() || ch == '~' {
+            return index + ch.len_utf8();
+        }
+    }
+    rest.len()
 }
 
 impl InputParser {
@@ -1685,6 +1837,19 @@ impl InputParser {
                 continue;
             }
             if !self.paste {
+                if self.leader {
+                    if rest.starts_with("\x1b[B") {
+                        self.leader = false;
+                        out.push(InputAction::Command(String::from("/children")));
+                        index += 3;
+                        continue;
+                    }
+                    if rest.starts_with("\x1b[") {
+                        self.leader = false;
+                        index += escape_sequence_len(rest);
+                        continue;
+                    }
+                }
                 if rest.starts_with("\x1b[A") {
                     out.push(InputAction::Up);
                     index += 3;
@@ -1735,6 +1900,30 @@ impl InputParser {
                 break;
             };
             index += ch.len_utf8();
+            if !self.paste && self.leader {
+                self.leader = false;
+                match ch.to_ascii_lowercase() {
+                    'f' => out.push(InputAction::Command(String::from("/files"))),
+                    'l' => out.push(InputAction::Command(String::from("/sessions"))),
+                    'm' => out.push(InputAction::Command(String::from("/models"))),
+                    's' => out.push(InputAction::Command(String::from("/status"))),
+                    'n' => out.push(InputAction::Command(String::from("/new"))),
+                    'g' => out.push(InputAction::Command(String::from("/timeline"))),
+                    'b' => out.push(InputAction::Command(String::from("/summary"))),
+                    'c' => out.push(InputAction::Command(String::from("/compact"))),
+                    'u' => out.push(InputAction::Command(String::from("/undo"))),
+                    'r' => out.push(InputAction::Command(String::from("/redo"))),
+                    'a' => out.push(InputAction::Command(String::from("/agents"))),
+                    'e' => out.push(InputAction::Command(String::from("/editor"))),
+                    't' => out.push(InputAction::Command(String::from("/themes"))),
+                    'h' => out.push(InputAction::Command(String::from("/help"))),
+                    ']' | '[' => out.push(InputAction::Command(String::from("/tabs"))),
+                    'q' => out.push(InputAction::CtrlD),
+                    '\u{18}' => self.leader = true,
+                    _ => {}
+                }
+                continue;
+            }
             match ch {
                 '\u{4}' => out.push(InputAction::CtrlD),
                 '\u{3}' => out.push(InputAction::CtrlC),
@@ -1744,6 +1933,8 @@ impl InputParser {
                 '\u{10}' => out.push(InputAction::CtrlP),
                 '\u{13}' => out.push(InputAction::CtrlS),
                 '\u{11}' => out.push(InputAction::CtrlQ),
+                '\u{18}' if !self.paste => self.leader = true,
+                '\u{1a}' if !self.paste => out.push(InputAction::Command(String::from("/suspend"))),
                 '\r' | '\n' if !self.paste => out.push(InputAction::Enter),
                 '\u{7f}' | '\u{8}' => out.push(InputAction::Backspace),
                 '\t' => out.push(InputAction::Tab),
@@ -1767,7 +1958,7 @@ fn handle_action(
     let mut editor_messages = Vec::new();
     let mut save_editor = false;
     let mut dismiss_diff = false;
-    let mut command_palette = false;
+    let mut command_input = None;
 
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
@@ -2029,7 +2220,8 @@ fn handle_action(
             InputAction::Up => locked.history_prev(),
             InputAction::Down => locked.history_next(),
             InputAction::Tab => complete_command(&mut locked),
-            InputAction::CtrlP => command_palette = true,
+            InputAction::CtrlP => command_input = Some(String::from("/commands")),
+            InputAction::Command(input) => command_input = Some(input),
             InputAction::F12 => {
                 let text = locked.input.clear();
                 if !text.is_empty() {
@@ -2057,8 +2249,8 @@ fn handle_action(
     }
 
     dirty.store(true, Ordering::SeqCst);
-    if command_palette {
-        command(client, state, "/commands")?;
+    if let Some(input) = command_input {
+        command(client, state, &input)?;
     }
     if let Some(text) = submit {
         let trimmed = text.trim().to_string();
@@ -2795,6 +2987,8 @@ fn close_tab(state: &Arc<Mutex<State>>) -> Result<(), String> {
             locked.editor = None;
             locked.editor_focus = false;
             locked.panel = None;
+            locked.surface_frame = None;
+            locked.surface_hydrated = false;
             locked.notice("closed last tab");
         }
     } else {
@@ -2962,11 +3156,13 @@ fn save_active_editor(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), 
         if next.id.is_empty() {
             next.id = editor.id;
         }
-        state.lock().map_err(|_| "state lock failed")?.editor = Some(next.clone());
-        state
-            .lock()
-            .map_err(|_| "state lock failed")?
-            .panel("Editor", editor_rows(&next));
+        let notice = format!("saved {}", next.file);
+        let mut rows = editor_rows(&next);
+        rows.push(notice.clone());
+        let mut locked = state.lock().map_err(|_| "state lock failed")?;
+        locked.editor = Some(next.clone());
+        locked.panel("Editor", rows);
+        locked.notice(notice);
     }
     Ok(())
 }
@@ -3738,7 +3934,46 @@ fn center_line(text: &str, width: u16) -> String {
     fit_line(&format!("{}{}", " ".repeat(left as usize), text), width)
 }
 
-fn initial_surface_frame(width: u16, height: u16, directory: &str) -> Vec<String> {
+fn home_footer_line(
+    width: u16,
+    directory: &str,
+    workspace: Option<&str>,
+    mcp: usize,
+    mcp_failed: bool,
+) -> String {
+    let mut left = Vec::new();
+    if !directory.is_empty() {
+        left.push(directory.to_string());
+    }
+    if let Some(workspace) = workspace.filter(|item| !item.is_empty()) {
+        left.push(format!("workspace {workspace}"));
+    }
+    if mcp > 0 || mcp_failed {
+        left.push(format!("{} MCP{}", mcp, if mcp_failed { "!" } else { "" }));
+        left.push(String::from("/status"));
+    }
+    let left = left.join(" | ");
+    let right = version();
+    let left_len = left.chars().count() as u16;
+    let right_len = right.chars().count() as u16;
+    if left.is_empty() {
+        return fit_line(&right, width);
+    }
+    if left_len + 1 + right_len >= width {
+        return fit_line(&format!("{left} | {right}"), width);
+    }
+    let gap = width.saturating_sub(left_len + right_len) as usize;
+    fit_line(&format!("{left}{}{}", " ".repeat(gap), right), width)
+}
+
+fn initial_surface_frame(
+    width: u16,
+    height: u16,
+    directory: &str,
+    workspace: Option<&str>,
+    mcp: usize,
+    mcp_failed: bool,
+) -> Vec<String> {
     let width = width.clamp(20, 240);
     let height = height.clamp(8, 100);
     let mut lines = vec![" ".repeat(width as usize); height as usize];
@@ -3764,13 +3999,8 @@ fn initial_surface_frame(width: u16, height: u16, directory: &str) -> Vec<String
         &format!("{}{}", " ".repeat(prompt_left as usize), prompt),
         width,
     );
-    let footer = [directory, version().as_str(), "/help"]
-        .into_iter()
-        .filter(|item| !item.is_empty())
-        .collect::<Vec<_>>()
-        .join(" | ");
     if let Some(last) = lines.last_mut() {
-        *last = fit_line(&footer, width);
+        *last = home_footer_line(width, directory, workspace, mcp, mcp_failed);
     }
     lines
 }
@@ -3899,6 +4129,7 @@ fn render(frame: &mut Frame<'_>, state: &State) {
         {
             return;
         }
+        render_idle_notice(frame, area, state);
         return;
     }
     if state.session.is_none()
@@ -3941,8 +4172,37 @@ fn render_surface_frame(frame: &mut Frame<'_>, area: Rect, lines: &[String]) {
     frame.render_widget(Paragraph::new(text), area);
 }
 
+fn idle_notice(state: &State) -> Option<&str> {
+    state
+        .notices
+        .last()
+        .map(String::as_str)
+        .filter(|notice| !notice.starts_with("cwd "))
+}
+
+fn render_idle_notice(frame: &mut Frame<'_>, area: Rect, state: &State) {
+    let Some(notice) = idle_notice(state) else {
+        return;
+    };
+    let line = fit_line(&format!("notice: {notice}"), area.width);
+    let notice_area = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(3),
+        width: area.width,
+        height: 1,
+    };
+    frame.render_widget(Paragraph::new(line), notice_area);
+}
+
 fn render_home(frame: &mut Frame<'_>, area: Rect, state: &State) {
-    let lines = initial_surface_frame(area.width, area.height, &state.footer_directory);
+    let lines = initial_surface_frame(
+        area.width,
+        area.height,
+        &state.footer_directory,
+        state.footer_workspace.as_deref(),
+        state.footer_mcp,
+        state.footer_mcp_failed,
+    );
     render_surface_frame(frame, area, &lines);
     if !state.input.text.is_empty() || state.shell || !state.attached.is_empty() {
         let height = area.height.min(4);
@@ -3955,6 +4215,7 @@ fn render_home(frame: &mut Frame<'_>, area: Rect, state: &State) {
         frame.render_widget(Clear, prompt_area);
         render_prompt(frame, prompt_area, state);
     }
+    render_idle_notice(frame, area, state);
 }
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, state: &State) {
@@ -4103,13 +4364,25 @@ fn render_panel(frame: &mut Frame<'_>, area: Rect, panel: &Panel) {
         .map(|item| ListItem::new(item.clone()))
         .collect();
     frame.render_widget(
-        List::new(rows).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(panel.title.as_str()),
-        ),
+        List::new(rows).block(Block::default().borders(Borders::ALL)),
         area,
     );
+    let title_width = area.width.saturating_sub(2);
+    if title_width > 0 && !panel.title.is_empty() {
+        let title = fit_line(&panel.title, title_width).trim_end().to_string();
+        let width = title
+            .chars()
+            .count()
+            .saturating_add(2)
+            .min(title_width as usize) as u16;
+        let title_area = Rect {
+            x: area.x.saturating_add(1),
+            y: area.y,
+            width,
+            height: 1,
+        };
+        frame.render_widget(Paragraph::new(title), title_area);
+    }
 }
 
 fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &State) {

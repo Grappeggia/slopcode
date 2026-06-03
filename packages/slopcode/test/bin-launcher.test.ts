@@ -28,6 +28,12 @@ async function real(file: string) {
   return fs.realpath(file)
 }
 
+function runtimeProbeScript() {
+  return `#!/bin/sh
+exec "${process.execPath}" -e 'console.log(JSON.stringify({ args: process.argv.slice(1), entry: process.env.SLOPCODE_ENTRYPOINT ?? null, runner: process.env.SLOPCODE_ANDROID_BOOTSTRAP_RUNNER ?? null, host: process.env.SLOPCODE_ANDROID_HOST_PATH ?? null, root: process.env.SLOPCODE_ANDROID_ROOT ?? null, nodePath: process.env.NODE_PATH ?? null, bionic: process.env.SLOPCODE_BIONIC ?? null, platform: process.env.SLOPCODE_TEST_PLATFORM ?? null }))' -- "$@"
+`
+}
+
 async function run(env: Record<string, string>, args: string[] = [], file = launcher) {
   const proc = Bun.spawn([file, ...args], {
     env: {
@@ -289,7 +295,7 @@ describe("bin launcher", () => {
     expect(out.stdout.trim()).toBe("scoped")
   })
 
-  test("routes Android interactive launch through the bundled bootstrap", async () => {
+  test("routes Android interactive launch through the Rust runtime with daemon bootstrap env", async () => {
     if (process.platform === "win32") return
     const staged = await stageLauncher()
     const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
@@ -299,13 +305,10 @@ describe("bin launcher", () => {
     await fs.mkdir(bun, { recursive: true })
     await fs.mkdir(bundle, { recursive: true })
     await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
-    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
     await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
     await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await Bun.write(
-      path.join(bundle, "index.js"),
-      "console.log(JSON.stringify({ args: process.argv.slice(2), entry: process.env.SLOPCODE_ENTRYPOINT, host: process.env.SLOPCODE_ANDROID_HOST_PATH, root: process.env.SLOPCODE_ANDROID_ROOT }))\n",
-    )
+    await Bun.write(path.join(bundle, "index.js"), 'throw new Error("bundle should not be the interactive entrypoint")\n')
 
     const out = await run(
       {
@@ -320,10 +323,14 @@ describe("bin launcher", () => {
 
     expect(out.code).toBe(0)
     expect(JSON.parse(out.stdout)).toEqual({
-      args: ["--print-logs"],
+      args: [],
       entry: await real(path.join(bundle, "index.js")),
+      runner: await real(path.join(bun, "bun")),
       host: await real(path.join(scoped, "bin", "slopcode-android-host")),
       root: await real(scoped),
+      nodePath: expect.stringContaining(path.join(staged.root, "android-modules")),
+      bionic: "1",
+      platform: "android",
     })
     const startup = out.stderr
       .trim()
@@ -334,10 +341,11 @@ describe("bin launcher", () => {
       expect.arrayContaining([
         "launcher.start",
         "launcher.android.interactive",
-        "launcher.android.legacy_bundle",
+        "launcher.android.rust_tui",
         "launcher.exec",
       ]),
     )
+    expect(startup.map((item) => item.phase)).not.toContain("launcher.android.legacy_bundle")
     expect(startup.every((item) => item.event === "android.startup")).toBe(true)
   })
 
@@ -351,13 +359,10 @@ describe("bin launcher", () => {
     await fs.mkdir(bun, { recursive: true })
     await fs.mkdir(bundle, { recursive: true })
     await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
-    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
     await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
     await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await Bun.write(
-      path.join(bundle, "index.js"),
-      "console.log(JSON.stringify({ args: process.argv.slice(2), entry: process.env.SLOPCODE_ENTRYPOINT, host: process.env.SLOPCODE_ANDROID_HOST_PATH, root: process.env.SLOPCODE_ANDROID_ROOT }))\n",
-    )
+    await Bun.write(path.join(bundle, "index.js"), 'throw new Error("bundle should not be the interactive entrypoint")\n')
 
     const out = await run(
       {
@@ -371,10 +376,14 @@ describe("bin launcher", () => {
 
     expect(out.code).toBe(0)
     expect(JSON.parse(out.stdout)).toEqual({
-      args: ["--print-logs"],
+      args: [],
       entry: await real(path.join(bundle, "index.js")),
+      runner: await real(path.join(bun, "bun")),
       host: await real(path.join(scoped, "bin", "slopcode-android-host")),
       root: await real(scoped),
+      nodePath: expect.stringContaining(path.join(staged.root, "android-modules")),
+      bionic: "1",
+      platform: "android",
     })
   })
 
@@ -388,13 +397,10 @@ describe("bin launcher", () => {
     await fs.mkdir(bun, { recursive: true })
     await fs.mkdir(bundle, { recursive: true })
     await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
-    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
     await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
     await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await Bun.write(
-      path.join(bundle, "index.js"),
-      "console.log(JSON.stringify({ platform: process.env.SLOPCODE_TEST_PLATFORM, bionic: process.env.SLOPCODE_BIONIC, host: process.env.SLOPCODE_ANDROID_HOST_PATH }))\n",
-    )
+    await Bun.write(path.join(bundle, "index.js"), 'throw new Error("bundle should not be the interactive entrypoint")\n')
 
     const out = await run(
       {
@@ -408,6 +414,11 @@ describe("bin launcher", () => {
 
     expect(out.code).toBe(0)
     expect(JSON.parse(out.stdout)).toEqual({
+      args: [],
+      entry: await real(path.join(bundle, "index.js")),
+      runner: await real(path.join(bun, "bun")),
+      root: await real(scoped),
+      nodePath: expect.stringContaining(path.join(staged.root, "android-modules")),
       platform: "linux",
       bionic: "1",
       host: await real(path.join(scoped, "bin", "slopcode-android-host")),
@@ -424,10 +435,10 @@ describe("bin launcher", () => {
     await fs.mkdir(bun, { recursive: true })
     await fs.mkdir(bundle, { recursive: true })
     await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-x64" }))
-    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
     await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
     await script(path.join(bun, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await Bun.write(path.join(bundle, "index.js"), 'console.log("x64 bootstrap")\n')
+    await Bun.write(path.join(bundle, "index.js"), 'throw new Error("bundle should not be the interactive entrypoint")\n')
 
     const out = await run(
       {
@@ -440,7 +451,15 @@ describe("bin launcher", () => {
     )
 
     expect(out.code).toBe(0)
-    expect(out.stdout.trim()).toBe("x64 bootstrap")
+    expect(JSON.parse(out.stdout)).toMatchObject({
+      args: [],
+      entry: await real(path.join(bundle, "index.js")),
+      runner: await real(path.join(bun, "bun")),
+      host: await real(path.join(scoped, "bin", "slopcode-android-host")),
+      root: await real(scoped),
+      bionic: "1",
+      platform: "android",
+    })
   })
 
   test("uses SLOPCODE_BUN_PATH for Android bootstrap overrides", async () => {
@@ -452,10 +471,10 @@ describe("bin launcher", () => {
     await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
     await fs.mkdir(bundle, { recursive: true })
     await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
-    await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho runtime\n")
+    await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
     await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
     await script(path.join(override.bin, "bun"), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
-    await Bun.write(path.join(bundle, "index.js"), 'console.log("override bootstrap")\n')
+    await Bun.write(path.join(bundle, "index.js"), 'throw new Error("bundle should not be the interactive entrypoint")\n')
 
     const out = await run(
       {
@@ -469,7 +488,57 @@ describe("bin launcher", () => {
     )
 
     expect(out.code).toBe(0)
-    expect(out.stdout.trim()).toBe("override bootstrap")
+    expect(JSON.parse(out.stdout)).toMatchObject({
+      args: [],
+      entry: await real(path.join(bundle, "index.js")),
+      runner: path.join(override.bin, "bun"),
+      host: await real(path.join(scoped, "bin", "slopcode-android-host")),
+      root: await real(scoped),
+      bionic: "1",
+      platform: "android",
+    })
+  })
+
+  test("routes preconnected Android interactive launch directly to the Rust runtime", async () => {
+    if (process.platform === "win32") return
+    const staged = await stageLauncher()
+    const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
+    await fs.mkdir(path.join(scoped, "bin"), { recursive: true })
+    await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+    await script(path.join(scoped, "bin", "slopcode"), runtimeProbeScript())
+    await script(path.join(scoped, "bin", "slopcode-android-host"), "#!/bin/sh\necho host\n")
+
+    const out = await run(
+      {
+        SLOPCODE_TEST_PLATFORM: "android",
+        SLOPCODE_TEST_ARCH: "arm64",
+        SLOPCODE_DAEMON_URL: "http://127.0.0.1:9",
+        SLOPCODE_DAEMON_TOKEN: "test",
+        SLOPCODE_ANDROID_STARTUP_LOG: "1",
+        TERMUX_VERSION: "1",
+      },
+      ["--print-logs"],
+      staged.launcher,
+    )
+
+    expect(out.code).toBe(0)
+    expect(JSON.parse(out.stdout)).toEqual({
+      args: [],
+      entry: null,
+      runner: null,
+      host: await real(path.join(scoped, "bin", "slopcode-android-host")),
+      root: await real(scoped),
+      nodePath: expect.stringContaining(path.join(staged.root, "android-modules")),
+      bionic: "1",
+      platform: "android",
+    })
+    const startup = out.stderr
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { phase: string; mode?: string })
+    expect(startup).toEqual(expect.arrayContaining([expect.objectContaining({ phase: "launcher.android.rust_tui", mode: "attached" })]))
+    expect(startup.map((item) => item.phase)).not.toContain("launcher.android.legacy_bundle")
   })
 
   test("errors clearly when Android bootstrap bundle is missing", async () => {
@@ -609,6 +678,31 @@ describe("postinstall", () => {
     expect(out.stdout).toContain("runtime package detected")
     expect(await Bun.file(path.join(root, "bin", ".slopcode")).exists()).toBe(false)
     expect(await Bun.file(path.join(root, "bin", ".slopcode.json")).exists()).toBe(false)
+    expect(
+      await Bun.file(path.join(root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin", "bun")).exists(),
+    ).toBe(true)
+  })
+
+  test("uses npm-installed scoped Android runtime without release asset fallback", async () => {
+    const file = await stagePostinstall()
+    const root = path.dirname(file)
+    const pkg = path.join(root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
+    await fs.mkdir(path.join(pkg, "bin"), { recursive: true })
+    await Bun.write(path.join(pkg, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
+    await script(path.join(pkg, "bin", "slopcode"), "#!/bin/sh\necho android\n")
+
+    const out = await runPostinstall(file, {
+      SLOPCODE_TEST_PLATFORM: "android",
+      SLOPCODE_TEST_ARCH: "arm64",
+      TERMUX_VERSION: "1",
+      SLOPCODE_ANDROID_BUN_ASSET_PATH: await androidBunAsset(),
+    })
+
+    expect(out.code).toBe(0)
+    expect(out.stdout).toContain("runtime package detected")
+    expect(out.stdout).not.toContain("runtime and bootstrap installed")
+    expect(out.stderr).not.toContain("Failed to download Android runtime")
+    expect(await Bun.file(path.join(root, "bin", ".slopcode")).exists()).toBe(false)
     expect(
       await Bun.file(path.join(root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin", "bun")).exists(),
     ).toBe(true)

@@ -3,6 +3,8 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { createSurfaceFrame, type TuiSurfaceSnapshot } from "@/cli/cmd/tui/surface"
+import stripAnsi from "strip-ansi"
+import { frame as terminalFrame } from "./cli/tui/editor-e2e"
 
 const root = path.join(import.meta.dir, "..")
 const clean: string[] = []
@@ -82,6 +84,48 @@ async function eventually(check: () => boolean | Promise<boolean>, timeout = 5_0
 
 function json(value: unknown) {
   return Response.json(value)
+}
+
+function fitLine(text: string, width: number) {
+  const chars = Array.from(text)
+  if (chars.length > width) return chars.slice(0, width).join("")
+  return text + " ".repeat(width - chars.length)
+}
+
+function centerLine(text: string, width: number) {
+  const left = Math.floor((width - Array.from(text).length) / 2)
+  return fitLine(" ".repeat(Math.max(0, left)) + text, width)
+}
+
+function homeFooterLine(width: number, directory: string, mcp: number, failed = false, version = "9.9.9") {
+  const left = [directory, mcp > 0 || failed ? `${mcp} MCP${failed ? "!" : ""}` : undefined, mcp > 0 || failed ? "/status" : undefined]
+    .filter(Boolean)
+    .join(" | ")
+  if (!left) return fitLine(version, width)
+  if (Array.from(left).length + 1 + Array.from(version).length >= width) return fitLine(`${left} | ${version}`, width)
+  return fitLine(left + " ".repeat(width - Array.from(left).length - Array.from(version).length) + version, width)
+}
+
+function expectedHomeFrame(width: number, height: number, directory: string) {
+  const lines = Array.from({ length: height }, () => " ".repeat(width))
+  const logo = [
+    "                                  ",
+    "█▀▀ █   █▀█ █▀█  █▀▀ █▀█ █▀▄ █▀▀",
+    "▀▀█ █   █ █ █▀▀  █   █ █ █ █ █▀▀",
+    "▀▀▀ ▀▀▀ ▀▀▀ ▀    ▀▀▀ ▀▀▀ ▀▀  ▀▀▀",
+  ]
+  const logoStart = Math.max(1, Math.floor((height - 8) / 2))
+  for (let index = 0; index < logo.length; index++) {
+    const row = logoStart + index
+    if (row >= lines.length) break
+    lines[row] = centerLine(logo[index]!, width)
+  }
+  const promptWidth = Math.min(width, 75)
+  const promptLeft = Math.floor((width - promptWidth) / 2)
+  const promptY = Math.min(lines.length - 2, logoStart + logo.length + 2)
+  lines[promptY] = fitLine(" ".repeat(promptLeft) + fitLine("> ", promptWidth), width)
+  lines[height - 1] = homeFooterLine(width, directory, 1)
+  return lines
 }
 
 const manifest = {
@@ -172,6 +216,152 @@ describe("Android native TUI", () => {
       ffiBlocked: false,
       mouse: false,
     })
+  })
+
+  test("bootstraps the daemon from Rust when launched without a preconnected URL", async () => {
+    if (process.platform === "win32") return
+    const bin = await binary()
+    if (!bin) return
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-android-bootstrap-"))
+    clean.push(dir)
+    const marker = path.join(dir, "seen.json")
+    const entrypoint = path.join(dir, "daemon.js")
+    await Bun.write(
+      entrypoint,
+      `
+const args = process.argv.slice(2)
+const seen = []
+function option(name) {
+  const index = args.indexOf(name)
+  return index >= 0 ? args[index + 1] : undefined
+}
+function fitLine(text, width) {
+  const raw = String(text ?? "")
+  if (raw.length >= width) return raw.slice(0, width)
+  return raw + " ".repeat(width - raw.length)
+}
+async function mark(item) {
+  seen.push(item)
+  if (process.env.SLOPCODE_BOOTSTRAP_MARKER) {
+    await Bun.write(process.env.SLOPCODE_BOOTSTRAP_MARKER, JSON.stringify(seen))
+  }
+}
+if (args[0] !== "daemon" || args[1] !== "run") {
+  throw new Error("unexpected bootstrap args " + JSON.stringify(args))
+}
+const port = Number(option("--port"))
+const directory = option("--directory") || process.cwd()
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port,
+  async fetch(req) {
+    const url = new URL(req.url)
+    await mark(req.method + " " + url.pathname)
+    if (url.pathname === "/daemon/status") return Response.json({ ok: true, directory })
+    if (url.pathname === "/tui/manifest") return Response.json({
+      version: 2,
+      renderer: { linux: "opentui/solid", android: "ratatui/crossterm", frame: "shared/terminal-frame" },
+      commands: [],
+      keybinds: {},
+      capabilities: { "android.runtime": true },
+    })
+    if (url.pathname === "/command") return Response.json([])
+    if (url.pathname === "/tui/snapshot") return Response.json({
+      version: 2,
+      title: "Bootstrap Surface",
+      status: "idle",
+      header: { title: "Bootstrap Surface" },
+      footer: { directory, workspaceID: undefined, lsp: 0, mcp: 1, mcpFailed: false, permissions: 0 },
+      tabs: [],
+      transcript: [],
+      sidebar: { mode: "files", rows: [] },
+    })
+    if (url.pathname === "/tui/frame") {
+      const width = Math.max(20, Math.min(120, Number(url.searchParams.get("width") || 80)))
+      const height = Math.max(8, Math.min(60, Number(url.searchParams.get("height") || 24)))
+      const lines = Array.from({ length: height }, () => fitLine("", width))
+      lines[2] = fitLine("Bootstrap Surface", width)
+      lines[3] = fitLine("Rust daemon bootstrap ready", width)
+      lines[height - 1] = fitLine(directory + " | stale bundle footer", width)
+      return Response.json({
+        version: 2,
+        renderer: "shared/terminal-frame",
+        width,
+        height,
+        title: "Bootstrap Surface",
+        status: "idle",
+        lines,
+        rows: lines.map((line, y) => ({ y, spans: [{ x: 0, text: line }] })),
+      })
+    }
+    if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\\n\\n')
+    return Response.json({})
+  },
+})
+setTimeout(() => {
+  server.stop(true)
+  process.exit(0)
+}, 12_000)
+`,
+    )
+
+    const width = 90
+    const height = 24
+    const proc = Bun.spawn([bin], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        COLUMNS: String(width),
+        LINES: String(height),
+        SLOPCODE_ENTRYPOINT: entrypoint,
+        SLOPCODE_ANDROID_BOOTSTRAP_RUNNER: process.execPath,
+        SLOPCODE_BOOTSTRAP_MARKER: marker,
+        SLOPCODE_VERSION: "9.9.9",
+      },
+    })
+    await eventually(async () => {
+      if (!(await Bun.file(marker).exists())) return false
+      const seen = await Bun.file(marker)
+        .json()
+        .catch(() => undefined as string[] | undefined)
+      if (!seen) return false
+      return seen.includes("GET /daemon/status") && seen.includes("GET /tui/frame")
+    }, 10_000)
+    await Bun.sleep(250)
+    proc.stdin.write("\x04")
+    proc.stdin.end()
+    const [code, stdout, stderr] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ])
+    expect(code).toBe(0)
+    expect(stderr).toBe("")
+    const screen = terminalFrame(stdout, width, height)
+    const expected = expectedHomeFrame(width, height, root)
+    expect(screen[8]).toBe(expected[8])
+    expect(screen[9]).toBe(expected[9])
+    expect(screen[10]).toBe(expected[10])
+    expect(screen[11]).toBe(expected[11])
+    expect(screen[13]).toBe(expected[13])
+    expect(screen[23]).toBe(expected[23])
+    const text = stripAnsi(stdout)
+    const normalized = text.replace(/\s+/g, "")
+    expect(text).toContain("█▀▀")
+    expect(normalized).not.toContain("BootstrapSurface")
+    expect(normalized).not.toContain("Rustdaemonbootstrapready")
+    expect(normalized).not.toContain("stalebundlefooter")
+    expect(text).toContain("9.9.9")
+    expect(normalized).toContain("1MCP|/status")
+    expect(text).not.toContain("missing --url")
+    const seen = (await Bun.file(marker).json()) as string[]
+    expect(seen).toContain("GET /daemon/status")
+    expect(seen).toContain("GET /tui/manifest")
+    expect(seen).toContain("GET /tui/snapshot")
+    expect(seen).toContain("GET /tui/frame")
   })
 
   test("hydrates shared manifest and snapshot before rendering", async () => {
@@ -406,11 +596,10 @@ describe("Android native TUI", () => {
       ])
       expect(stderr).toBe("")
       expect(code).toBe(0)
-      expect(stdout).toContain("Command")
-      expect(stdout).toContain("Matches")
-      expect(stdout).toContain("/session")
-      expect(stdout).toContain("/sessions")
-      expect(stdout).toContain("/se")
+      const normalized = stripAnsi(stdout).replace(/\s+/g, "")
+      expect(normalized).toContain("CommandMatches")
+      expect(normalized).toContain("/session")
+      expect(normalized).toContain("/se")
       expect(seen).not.toContain("POST /session/ses_surface/command")
       expect(seen).not.toContain("POST /session/ses_surface/prompt_async")
     } finally {
@@ -474,6 +663,156 @@ describe("Android native TUI", () => {
     }
   })
 
+  test("runs common Linux leader keybinds through Android command handlers", async () => {
+    if (process.platform === "win32") return
+    const bin = await binary()
+    if (!bin) return
+
+    const cases = [
+      {
+        keys: "\x18f",
+        endpoint: "GET /file",
+        tokens: ["Open", "Files", "src/app.ts"],
+      },
+      {
+        keys: "\x18l",
+        endpoint: "GET /session",
+        tokens: ["Sessions", "Session One"],
+      },
+      {
+        keys: "\x18m",
+        endpoint: "GET /v2/model",
+        tokens: ["Models", "openai", "gpt-4.1"],
+      },
+      {
+        keys: "\x18s",
+        endpoint: "GET /session/status",
+        tokens: ["Status", "ready"],
+      },
+      {
+        keys: "\x1a",
+        endpoint: undefined,
+        tokens: ["Suspend", "Android app switching"],
+      },
+    ] as const
+
+    for (const item of cases) {
+      const seen: string[] = []
+      const server = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          const url = new URL(req.url)
+          seen.push(`${req.method} ${url.pathname}`)
+          if (url.pathname === "/tui/manifest") return json(manifest)
+          if (url.pathname === "/command") return json([])
+          if (url.pathname === "/tui/snapshot") return json(snapshot)
+          if (url.pathname === "/tui/frame")
+            return json(
+              createSurfaceFrame({
+                snapshot,
+                width: Number(url.searchParams.get("width") ?? 100),
+                height: Number(url.searchParams.get("height") ?? 30),
+              }),
+            )
+          if (url.pathname === "/file")
+            return json([{ path: "src/app.ts", name: "app.ts", type: "file" }])
+          if (url.pathname === "/session" && req.method === "GET")
+            return json([{ id: "ses_surface", title: "Session One" }])
+          if (url.pathname === "/v2/model")
+            return json([{ providerID: "openai", id: "gpt-4.1", name: "GPT 4.1" }])
+          if (url.pathname === "/session/status") return json({ health: "ready" })
+          if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\n\n')
+          return json({})
+        },
+      })
+      try {
+        const proc = Bun.spawn([bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test"], {
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
+          env: { ...process.env, COLUMNS: "100", LINES: "30" },
+        })
+        await eventually(() => seen.includes("GET /tui/frame") && seen.includes("GET /command"))
+        proc.stdin.write(item.keys)
+        await Bun.sleep(250)
+        proc.stdin.write("\x04")
+        proc.stdin.end()
+        const [code, stdout, stderr] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ])
+        expect(stderr).toBe("")
+        expect(code).toBe(0)
+        const normalized = stripAnsi(stdout).replace(/\s+/g, "")
+        for (const token of item.tokens) {
+          expect(normalized).toContain(token.replace(/\s+/g, ""))
+        }
+        if (item.endpoint) expect(seen).toContain(item.endpoint)
+        expect(seen).not.toContain("POST /session/ses_surface/command")
+        expect(seen).not.toContain("POST /session/ses_surface/prompt_async")
+      } finally {
+        server.stop(true)
+      }
+    }
+  })
+
+  test("shows last-tab close notice on the Android home frame", async () => {
+    if (process.platform === "win32") return
+    const bin = await binary()
+    if (!bin) return
+
+    const seen: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url)
+        seen.push(`${req.method} ${url.pathname}`)
+        if (url.pathname === "/tui/manifest") return json(manifest)
+        if (url.pathname === "/command") return json([])
+        if (url.pathname === "/tui/snapshot") return json(snapshot)
+        if (url.pathname === "/tui/frame")
+          return json(
+            createSurfaceFrame({
+              snapshot,
+              width: Number(url.searchParams.get("width") ?? 100),
+              height: Number(url.searchParams.get("height") ?? 30),
+            }),
+          )
+        if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\n\n')
+        return json({})
+      },
+    })
+    try {
+      const width = 100
+      const height = 30
+      const proc = Bun.spawn([bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test"], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, COLUMNS: String(width), LINES: String(height) },
+      })
+      await eventually(() => seen.includes("GET /tui/frame") && seen.includes("GET /command"))
+      proc.stdin.write("/close\r")
+      await Bun.sleep(250)
+      proc.stdin.write("\x04")
+      proc.stdin.end()
+      const [code, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ])
+      expect(stderr).toBe("")
+      expect(code).toBe(0)
+      const screen = terminalFrame(stdout, width, height).join("\n")
+      expect(screen).toContain("closed last tab")
+      expect(screen).toContain("█▀▀")
+      expect(screen).not.toContain("Parity Surface")
+    } finally {
+      server.stop(true)
+    }
+  })
+
   test("emits opt-in startup telemetry with first frame before hydration", async () => {
     if (process.platform === "win32") return
     const bin = await binary()
@@ -516,10 +855,12 @@ describe("Android native TUI", () => {
         new Response(proc.stderr).text(),
       ])
       expect(code).toBe(0)
-      expect(stdout).toContain("█▀▀")
-      expect(stdout).toContain("/help")
-      expect(stdout).not.toContain("Rust-native Termux TUI")
-      expect(stdout).not.toContain("Fix a TODO in the codebase")
+      const text = stripAnsi(stdout)
+      expect(text).toContain("█▀▀")
+      expect(text).toContain("dev")
+      expect(text).not.toContain("/help")
+      expect(text).not.toContain("Rust-native Termux TUI")
+      expect(text).not.toContain("Fix a TODO in the codebase")
       const events = stderr
         .split("\n")
         .filter(Boolean)

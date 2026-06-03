@@ -627,7 +627,11 @@ const targetKey = (item: (typeof allTargets)[number]) =>
 const targetName = (item: (typeof allTargets)[number]) => `${pkg.name}-${targetKey(item)}`
 
 const targets = targetFlag
-  ? allTargets.filter((item) => targetKey(item) === targetFlag || targetName(item) === targetFlag)
+  ? allTargets.filter((item) =>
+      targetFlag === "android"
+        ? item.os === "android"
+        : targetKey(item) === targetFlag || targetName(item) === targetFlag,
+    )
   : singleFlag
     ? allTargets.filter((item) => {
         if (item.os !== process.platform || item.arch !== process.arch) {
@@ -803,6 +807,16 @@ const debBuild = async (src: string, arch: "amd64" | "arm64") => {
   await fs.promises.rm(root, { recursive: true, force: true })
 }
 
+const archiveAndroidTargets = async () => {
+  for (const key of Object.keys(binaries).filter((key) => key.includes("android"))) {
+    await $`tar -czf ../${key}.tar.gz *`.cwd(`dist/${key}`)
+  }
+}
+
+if (!Script.release && targets.some((item) => item.os === "android")) {
+  await archiveAndroidTargets()
+}
+
 if (Script.release) {
   const winget = `${pkg.name}-windows-x64-baseline`
   const exe = path.join(dir, "dist", winget, "bin", "slopcode.exe")
@@ -810,9 +824,9 @@ if (Script.release) {
     throw new Error(`Missing Winget executable at ${exe}`)
   }
 
+  await archiveAndroidTargets()
   for (const key of Object.keys(binaries)) {
     if (key.includes("android")) {
-      await $`tar -czf ../${key}.tar.gz *`.cwd(`dist/${key}`)
       continue
     }
     if (key.includes("linux")) {

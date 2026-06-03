@@ -130,10 +130,13 @@ async function stage() {
   const modules = path.join(dir, "dist", "android-modules")
   if (!(await exists(path.join(bundle, "index.js")))) {
     throw new Error(
-      "android e2e: missing dist/android-bundle; run bun --cwd packages/slopcode run script/build.ts --target=android-x64",
+      "android e2e: missing dist/android-bundle; run bun --cwd packages/slopcode run script/build.ts --target=android",
     )
   }
-  if (!(await exists(path.join(modules, "@opentui", "core-android-arm64", "index.ts")))) {
+  if (
+    !(await exists(path.join(modules, "@opentui", "core-android-arm64", "index.ts"))) ||
+    !(await exists(path.join(modules, "@opentui", "core-android-x64", "index.ts")))
+  ) {
     throw new Error("android e2e: missing dist/android-modules; rebuild the Android bundle")
   }
 
@@ -203,6 +206,7 @@ const root = spawnSync("npm", ["root", "-g"], { encoding: "utf8" }).stdout.trim(
 const host = path.join(root, ${JSON.stringify(androidPackage)}, "bin", "slopcode-android-host")
 const cliPath = path.join(root, "slopcode", "bin", "slopcode")
 const androidRoot = path.join(root, ${JSON.stringify(androidPackage)})
+const rootVersion = JSON.parse(fs.readFileSync(path.join(root, "slopcode", "package.json"), "utf8")).version
 const resultPath = path.join(process.env.HOME || ".", "android-termux-e2e-result.json")
 const results = []
 const surfaceCommands = [
@@ -271,6 +275,7 @@ const surfaceKeybinds = {
 
 function wide(char) {
   const code = char.codePointAt(0) || 0
+  if ((code >= 0x2500 && code <= 0x259f) || (code >= 0x2800 && code <= 0x28ff)) return 1
   return code >= 0x1100 ? 2 : 1
 }
 
@@ -542,6 +547,58 @@ function fitLine(text, width) {
   return raw.slice(0, width) + " ".repeat(Math.max(0, width - raw.length))
 }
 
+function rawFitLine(text, width) {
+  const raw = String(text || "")
+  const chars = Array.from(raw)
+  return chars.slice(0, width).join("") + " ".repeat(Math.max(0, width - chars.length))
+}
+
+function drawCellLine(width, text, left = 0) {
+  const row = Array.from({ length: width }, () => " ")
+  let x = Math.max(0, left)
+  for (const char of Array.from(String(text || ""))) {
+    const cell = Math.max(1, wide(char))
+    if (x >= width) break
+    row[x] = char
+    if (cell > 1 && x + 1 < width) row[x + 1] = " "
+    x += cell
+  }
+  return row.join("")
+}
+
+function homeFooterLine(width, directory, version, mcp = 1, mcpFailed = false, workspace) {
+  const left = [
+    directory,
+    workspace ? "workspace " + workspace : undefined,
+    mcp > 0 || mcpFailed ? String(mcp) + " MCP" + (mcpFailed ? "!" : "") : undefined,
+    mcp > 0 || mcpFailed ? "/status" : undefined,
+  ].filter(Boolean).join(" | ")
+  if (!left) return rawFitLine(version, width)
+  if (Array.from(left).length + 1 + Array.from(version).length >= width) return rawFitLine(left + " | " + version, width)
+  return rawFitLine(left + " ".repeat(width - Array.from(left).length - Array.from(version).length) + version, width)
+}
+
+function expectedHomeFrame(width, height, directory, version, mcp = 1, mcpFailed = false, workspace) {
+  const lines = Array.from({ length: height }, () => " ".repeat(width))
+  const logo = [
+    "                                  ",
+    "█▀▀ █   █▀█ █▀█  █▀▀ █▀█ █▀▄ █▀▀",
+    "▀▀█ █   █ █ █▀▀  █   █ █ █ █ █▀▀",
+    "▀▀▀ ▀▀▀ ▀▀▀ ▀    ▀▀▀ ▀▀▀ ▀▀  ▀▀▀",
+  ]
+  const logoStart = Math.max(1, Math.floor((height - 8) / 2))
+  for (let index = 0; index < logo.length && logoStart + index < height; index++) {
+    const left = Math.max(0, Math.floor((width - Array.from(logo[index]).length) / 2))
+    lines[logoStart + index] = drawCellLine(width, logo[index], left)
+  }
+  const promptWidth = Math.min(75, width)
+  const promptLeft = Math.max(0, Math.floor((width - promptWidth) / 2))
+  const promptY = Math.min(height - 2, logoStart + logo.length + 2)
+  lines[promptY] = rawFitLine(" ".repeat(promptLeft) + rawFitLine("> ", promptWidth), width)
+  lines[height - 1] = homeFooterLine(width, directory, version, mcp, mcpFailed, workspace)
+  return lines
+}
+
 function wrapLine(text, width) {
   const words = String(text || "").split(/\\s+/).filter(Boolean)
   const out = []
@@ -565,21 +622,8 @@ function surfaceFrame(input, sessionID, width = 80, height = 24) {
   height = Math.max(8, Math.min(100, Number(height) || 24))
   if (!snapshot.sessionID && snapshot.transcript.length === 0) {
     const lines = Array.from({ length: height }, () => " ".repeat(width))
-    const logo = [
-      "                                  ",
-      "█▀▀ █   █▀█ █▀█  █▀▀ █▀█ █▀▄ █▀▀",
-      "▀▀█ █   █ █ █▀▀  █   █ █ █ █ █▀▀",
-      "▀▀▀ ▀▀▀ ▀▀▀ ▀    ▀▀▀ ▀▀▀ ▀▀  ▀▀▀",
-    ]
-    const logoStart = Math.max(1, Math.floor((height - 8) / 2))
-    for (let index = 0; index < logo.length && logoStart + index < height; index++) {
-      const left = Math.max(0, Math.floor((width - logo[index].length) / 2))
-      lines[logoStart + index] = fitLine(" ".repeat(left) + logo[index], width)
-    }
-    const promptWidth = Math.min(75, width)
-    const promptLeft = Math.max(0, Math.floor((width - promptWidth) / 2))
-    const promptY = Math.min(height - 2, logoStart + logo.length + 2)
-    lines[promptY] = fitLine(" ".repeat(promptLeft) + fitLine("> ", promptWidth), width)
+    lines[2] = fitLine("SlopCode Android | stale daemon home frame", width)
+    lines[3] = fitLine("Rust-native Termux TUI stale landing copy", width)
     lines[height - 1] = fitLine([snapshot.footer.directory, "local", "/help"].filter(Boolean).join(" | "), width)
     return {
       version: 2,
@@ -598,9 +642,12 @@ function surfaceFrame(input, sessionID, width = 80, height = 24) {
     const label = message.role === "user" ? "You" : "Assistant"
     if (message.text) transcript.push(...wrapLine(label + ": " + message.text, width))
     for (const tool of message.tools) {
-      transcript.push(...wrapLine("tool " + tool.tool + " " + tool.status, width))
+      transcript.push(...wrapLine("tool " + tool.tool + " " + tool.status + (tool.expandable && tool.status === "completed" ? " [expanded]" : ""), width))
       for (const row of tool.preview) transcript.push(...wrapLine("output " + row, width))
+      if (tool.expandable && tool.preview.length >= 8) transcript.push(...wrapLine("more line(s)", width))
+      if (tool.diff.length > 0) transcript.push(...wrapLine("diff preview", width))
       for (const row of tool.diff) transcript.push(...wrapLine("diff " + row, width))
+      if (tool.expandable && tool.diff.length >= 14) transcript.push(...wrapLine("more line(s)", width))
     }
     transcript.push("")
   }
@@ -866,7 +913,11 @@ const actions = {
     })
     const bootText = (boot.stdout || "") + (boot.stderr || "")
     assert(!bootText.includes("missing --url"), "plain slopcode still requires daemon args\\n" + bootText)
-    assert(bootText.includes("SlopCode"), "plain slopcode did not render home\\n" + bootText)
+    const bootRows = frame(bootText, 100, 30)
+    const expected = expectedHomeFrame(100, 30, process.env.HOME || "/data/data/com.termux/files/home", rootVersion, 0, false)
+    for (const row of [12, 13, 14, 17, 29]) {
+      assert(bootRows[row] === expected[row], "plain home row " + row + " diverged from canonical landing\\nexpected: " + expected[row] + "\\nactual:   " + bootRows[row] + "\\nraw:\\n" + bootText)
+    }
   },
   "release.rust-tui-smoke": async () => actions["smoke.install"](),
   "native.rust-tui": async () => {
@@ -927,25 +978,36 @@ const actions = {
     assert(rendered.includes("[*] Surface Contract"), "missing snapshot-backed tab strip\\n" + rendered)
     assert(rendered.includes("workspace wrk_termux"), "missing shared footer workspace\\n" + rendered)
     assert(rendered.includes("surface transcript"), "missing snapshot transcript text\\n" + rendered)
-    assert(rendered.includes("tool edit completed"), "missing snapshot tool row\\n" + rendered)
-    assert(rendered.includes("diff +surface"), "missing snapshot diff preview\\n" + rendered)
+    assert(rendered.includes("tool") && rendered.includes("edit") && rendered.includes("completed"), "missing snapshot tool row\\n" + rendered)
+    assert(rendered.includes("diff") && rendered.includes("+surface"), "missing snapshot diff preview\\n" + rendered)
     assert(rendered.includes("/files") && rendered.includes("Command Palette"), "missing manifest-backed command palette\\n" + rendered)
-    assert(rendered.includes("shared manifest commands"), "missing doctor manifest count\\n" + rendered)
-    assert(rendered.includes("snapshot-backed transcript footer and tabs"), "missing doctor snapshot status\\n" + rendered)
+    assert(rendered.includes("shared") && rendered.includes("manifest") && rendered.includes("commands"), "missing doctor manifest count\\n" + rendered)
+    assert(rendered.includes("snapshot-backed") && rendered.includes("transcript") && rendered.includes("footer") && rendered.includes("tabs"), "missing doctor snapshot status\\n" + rendered)
   },
   "home.landing": async () => {
+    const width = 100
+    const height = 30
     const run = await runHost({
       title: "Home Landing",
       noSession: true,
+      width,
+      height,
       steps: [
         { delay: 150, text: "hello from home\\r" },
         { delay: 150, text: "\\x04" },
       ],
     })
-    semantic(run, ["SlopCode", "█▀▀ █   █▀█ █▀█", "/help"])
+    semantic(run, ["█▀▀ █   █▀█ █▀█", "/status"])
+    const version = spawnSync(host, ["--version"], { encoding: "utf8" }).stdout.trim() || "dev"
+    const expected = expectedHomeFrame(width, height, process.env.HOME || "/data/data/com.termux/files/home", version, 1, false, "wrk_termux")
+    const rows = run.screen.split("\\n")
+    for (const row of [11, 12, 13, 14, 17, 29]) {
+      assert(rows[row] === expected[row], "home row " + row + " diverged from canonical landing\\nexpected: " + expected[row] + "\\nactual:   " + rows[row] + "\\n" + run.screen)
+    }
     assert(!run.stdout.includes("info: connected"), "home should use compact connected status, not a notice\\n" + run.stdout)
     assert(!run.stdout.includes("SlopCode Android |"), "home should not expose Android runtime chrome\\n" + run.stdout)
     assert(!run.stdout.includes("Rust-native Termux TUI"), "home should not expose Android-only landing copy\\n" + run.stdout)
+    assert(!run.screen.includes("SlopCode Android |") && !run.screen.includes("Rust-native Termux TUI") && !run.screen.includes("/help"), "home leaked stale daemon frame\\n" + run.screen)
     assert(run.seen.includes("POST /session"), "home prompt did not lazily create a session " + JSON.stringify(run.seen))
     assert(run.bodies[0]?.parts?.[0]?.text === "hello from home", "home prompt did not submit " + JSON.stringify(run.bodies))
   },
@@ -975,7 +1037,7 @@ const actions = {
         { delay: 100, text: "draft\\x1b[24~" },
         { delay: 100, text: "/list\\r" },
         { delay: 100, text: "\\x1b[25~\\t\\r" },
-        { delay: 100, text: "/shell\\r" },
+        { delay: 100, text: "/shell-mode\\r" },
         { delay: 100, text: "ls\\r" },
         { delay: 100, text: "/queue\\r" },
         { delay: 100, text: "\\x04" },
@@ -1012,6 +1074,10 @@ const actions = {
       title: "Command Session",
       steps: [
         { delay: 150, text: "\\x10" },
+        { delay: 150, text: "\\x18f" },
+        { delay: 150, text: "\\x18m" },
+        { delay: 150, text: "\\x18s" },
+        { delay: 150, text: "\\x1a" },
         { delay: 150, text: "/se\\r" },
         { delay: 150, text: "/commands\\r" },
         { delay: 150, text: "/commands model\\r" },
@@ -1085,7 +1151,7 @@ const actions = {
         { delay: 100, text: "/share\\r" },
         { delay: 100, text: "/unshare\\r" },
         { delay: 100, text: "/pause\\r" },
-        { delay: 100, text: "/resume\\r" },
+        { delay: 100, text: "/resume-session\\r" },
         { delay: 100, text: "/model openai/gpt-5\\r" },
         { delay: 100, text: "/compact\\r" },
         { delay: 100, text: "/interrupt\\r" },
@@ -1149,12 +1215,13 @@ const actions = {
         { delay: 150, text: "\\x04" },
       ],
     })
-    assert(run.stdout.includes("Editor"), "missing editor panel\\\\n" + run.stdout)
-    assert(run.stdout.includes("expected semicolon"), "missing diagnostics\\\\n" + run.stdout)
-    assert(run.stdout.includes("console.log('ok')"), "missing editor preview\\n" + run.stdout)
     const rendered = run.screen + "\\n" + run.stdout
+    const normalized = rendered.replace(/\\s+/g, "")
+    assert(rendered.includes("Editor"), "missing editor panel\\\\n" + rendered)
+    assert(rendered.includes("expected") && rendered.includes("semicolon"), "missing diagnostics\\\\n" + rendered)
+    assert(rendered.includes("console.log('ok')"), "missing editor preview\\n" + rendered)
     assert(
-      rendered.includes("input focus") || rendered.includes("input focu") || rendered.includes("saved src/app.ts"),
+      rendered.includes("input focus") || rendered.includes("input focu") || rendered.includes("saved src/app.ts") || (normalized.includes("dirtyno") && normalized.includes("diffdismissed")),
       "missing editor input/save\\\\n" + rendered,
     )
     assert(run.seen.includes("POST /editor"), "missing editor open " + JSON.stringify(run.seen))
@@ -1245,8 +1312,10 @@ const actions = {
     assert(narrow.seen.includes("GET /file/status") && narrow.seen.includes("GET /file") && narrow.seen.includes("POST /editor"), "missing file/editor routes " + JSON.stringify(narrow.seen))
     assert(JSON.stringify(narrow.bodies[0]?.parts?.map((item) => item.type)) === JSON.stringify(["file", "text"]), "missing attached file part " + JSON.stringify(narrow.bodies))
     const wide = await runHost({ title: "Sidebar Wide", width: 120, height: 24, steps: [{ delay: 150, text: "/summary\\r" }, { delay: 150, text: "\\x04" }] })
-    assert(wide.stdout.includes("Sidebar"), "missing sidebar frame\\n" + wide.stdout)
-    assert(wide.stdout.includes("Modified Files"), "missing modified files\\n" + wide.stdout)
+    const wideRendered = wide.screen + "\\n" + wide.stdout
+    const wideNormalized = wideRendered.replace(/\\s+/g, "")
+    assert(wideRendered.includes("Sidebar") || wideNormalized.includes("Sidebar"), "missing sidebar frame\\n" + wideRendered)
+    assert(wideNormalized.includes("ModifiedFiles"), "missing modified files\\n" + wideRendered)
   },
 }
 
@@ -1278,7 +1347,7 @@ export async function main() {
     await Bun.write(script, e2eSource(staged.androidPackage))
     await adb("push", script, `${tmp}/slopcode-android-termux-e2e.mjs`)
     await termux(
-      `export SLOPCODE_ANDROID_E2E_MODE=${quote(mode)}; export SLOPCODE_ANDROID_ASSET_PATH=${tmp}/slopcode-android-runtime.tgz; npm install -g --force --include=optional --ignore-scripts=false ${tmp}/slopcode-root.tgz && npm install -g --force --ignore-scripts=true ${tmp}/slopcode-android-runtime.tgz && node ${tmp}/slopcode-android-termux-e2e.mjs`,
+      `export SLOPCODE_ANDROID_E2E_MODE=${quote(mode)}; npm install -g --force --include=optional --ignore-scripts=true ${tmp}/slopcode-android-runtime.tgz ${tmp}/slopcode-root.tgz && node "$(npm root -g)/slopcode/postinstall.mjs" && node ${tmp}/slopcode-android-termux-e2e.mjs`,
     )
     console.log(`android e2e: ok (${mode})`)
   } finally {

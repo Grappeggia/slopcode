@@ -11,6 +11,7 @@ import { Script } from "@slopcode-ai/script"
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 
+const androidOnly = process.argv.includes("--android-only") || process.env.SLOPCODE_VERIFY_ANDROID_ONLY === "1"
 const registry = (process.env.npm_config_registry ?? "https://registry.npmjs.org").replace(/\/$/, "")
 const readme = (await Bun.file("./README.npm.md").text()).trim()
 const alias = {
@@ -71,13 +72,12 @@ if (binaries.length === 0) {
   throw new Error("verify: missing binary packages in ./dist")
 }
 
-const publishable = binaries.filter((item) => !item.name.includes("-android-"))
 const androidBootstrapDeps = {
   "@oven/bun-linux-aarch64-android": "1.3.14",
   "@oven/bun-linux-x64-android": "1.3.14",
 }
 const deps = {
-  ...Object.fromEntries(publishable.map((item) => [item.name, item.version])),
+  ...Object.fromEntries(binaries.map((item) => [item.name, item.version])),
   ...androidBootstrapDeps,
 }
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-verify-"))
@@ -134,7 +134,10 @@ const stageRoot = async (input: { name: string; bin: string; description: string
   if (!(await exists(path.join(bundle, "index.js")))) {
     throw new Error("verify: missing Android bundle at ./dist/android-bundle/index.js")
   }
-  if (!(await exists(path.join(modules, "@opentui", "core-android-arm64", "index.ts")))) {
+  if (
+    !(await exists(path.join(modules, "@opentui", "core-android-arm64", "index.ts"))) ||
+    !(await exists(path.join(modules, "@opentui", "core-android-x64", "index.ts")))
+  ) {
     throw new Error("verify: missing Android bootstrap modules at ./dist/android-modules")
   }
   const to = path.join(stage, input.name)
@@ -247,30 +250,34 @@ const androidSmoke = async () => {
     if (!(await exists(android))) {
       throw new Error(`verify: missing Android ${target.arch} release asset`)
     }
+    const runtime = packed.find((item) => item.name === `@slopcode-ai/slopcode-android-${target.arch}`)
+    if (!runtime) {
+      throw new Error(`verify: missing packed Android ${target.arch} npm runtime`)
+    }
     const work = path.join(tmp, `install-android-${target.arch}`)
     await fs.mkdir(work, { recursive: true })
     const env = {
       ...process.env,
       SLOPCODE_TEST_PLATFORM: "android",
       SLOPCODE_TEST_ARCH: target.arch,
-      SLOPCODE_ANDROID_ASSET_PATH: android,
     }
-    await $`npm install --force --no-package-lock --ignore-scripts=true --os=android --cpu=${target.arch} ${root.tgz}`
+    await $`npm install --force --no-package-lock --ignore-scripts=true --os=android --cpu=${target.arch} ${runtime.tgz} ${root.tgz}`
       .env(env)
       .cwd(work)
     await $`node ./node_modules/${pkg.name}/postinstall.mjs`.env(env).cwd(work)
     const bundle = path.join(work, "node_modules", pkg.name, "bundle", "index.js")
-    const bin = path.join(work, "node_modules", pkg.name, "node_modules", "@slopcode-ai", target.pkg, "bin", "slopcode")
-    const sidecar = path.join(
-      work,
-      "node_modules",
-      pkg.name,
-      "node_modules",
-      "@slopcode-ai",
-      target.pkg,
-      "bin",
-      "slopcode-android-host",
+    const runtimeRoots = [
+      path.join(work, "node_modules", pkg.name, "node_modules", "@slopcode-ai", target.pkg),
+      path.join(work, "node_modules", "@slopcode-ai", target.pkg),
+    ]
+    const runtimeRoot = (await Promise.all(runtimeRoots.map(async (item) => ((await exists(item)) ? item : "")))).find(
+      Boolean,
     )
+    if (!runtimeRoot) {
+      throw new Error(`verify: packed Android ${target.arch} install did not install the scoped Rust TUI runtime`)
+    }
+    const bin = path.join(runtimeRoot, "bin", "slopcode")
+    const sidecar = path.join(runtimeRoot, "bin", "slopcode-android-host")
     if (!(await exists(bundle))) {
       throw new Error(`verify: packed Android ${target.arch} install did not include the Android launcher bundle`)
     }
@@ -288,8 +295,15 @@ const androidSmoke = async () => {
     await Bun.write(bun, `#!/bin/sh\nexec "${process.execPath}" "$@"\n`)
     await fs.chmod(bun, 0o755)
     await Bun.write(
+      bin,
+      `#!/bin/sh
+exec "${process.execPath}" -e 'console.log(JSON.stringify({ args: process.argv.slice(1), entry: process.env.SLOPCODE_ENTRYPOINT ?? null, runner: process.env.SLOPCODE_ANDROID_BOOTSTRAP_RUNNER ?? null, host: process.env.SLOPCODE_ANDROID_HOST_PATH ?? null, root: process.env.SLOPCODE_ANDROID_ROOT ?? null, nodePath: process.env.NODE_PATH ?? null, bionic: process.env.SLOPCODE_BIONIC ?? null }))' -- "$@"
+`,
+    )
+    await fs.chmod(bin, 0o755)
+    await Bun.write(
       bundle,
-      "console.log(JSON.stringify({ entry: process.env.SLOPCODE_ENTRYPOINT, host: process.env.SLOPCODE_ANDROID_HOST_PATH, root: process.env.SLOPCODE_ANDROID_ROOT, nodePath: process.env.NODE_PATH }))\n",
+      'throw new Error("verify: Android launcher executed the daemon bundle as the interactive UI")\n',
     )
     const launcher = path.join(work, "node_modules", pkg.name, "bin", pkg.name)
     const launched = await $`node ${launcher} --print-logs`
@@ -303,9 +317,25 @@ const androidSmoke = async () => {
     const expectedHost = await fs.realpath(sidecar)
     const expectedRoot = await fs.realpath(path.dirname(path.dirname(bin)))
     const expectedModules = await fs.realpath(path.join(work, "node_modules", pkg.name, "android-modules"))
-    const parsed = JSON.parse(launched.trim()) as { entry?: string; host?: string; root?: string; nodePath?: string }
-    if (parsed.entry !== expectedEntry || parsed.host !== expectedHost || parsed.root !== expectedRoot) {
-      throw new Error(`verify: packed Android ${target.arch} launcher did not route through the bundled bootstrap`)
+    const parsed = JSON.parse(launched.trim()) as {
+      args?: string[]
+      entry?: string | null
+      runner?: string | null
+      host?: string | null
+      root?: string | null
+      nodePath?: string | null
+      bionic?: string | null
+    }
+    const expectedRunner = await fs.realpath(bun)
+    if (
+      parsed.entry !== expectedEntry ||
+      parsed.runner !== expectedRunner ||
+      parsed.host !== expectedHost ||
+      parsed.root !== expectedRoot ||
+      parsed.bionic !== "1" ||
+      parsed.args?.includes("--print-logs")
+    ) {
+      throw new Error(`verify: packed Android ${target.arch} launcher did not route through the Rust TUI bootstrap`)
     }
     if (!parsed.nodePath?.includes(expectedModules)) {
       throw new Error(`verify: packed Android ${target.arch} launcher did not expose Android bootstrap modules`)
@@ -380,9 +410,11 @@ const verifyAlias = async () => {
 }
 
 await verifyArchives()
-await installSmoke()
 await androidSmoke()
-await verifyAlias()
-await alpineSmoke()
+if (!androidOnly) {
+  await installSmoke()
+  await verifyAlias()
+  await alpineSmoke()
+}
 
 console.log("verify: ok", registry)

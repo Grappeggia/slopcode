@@ -50,13 +50,12 @@ const binaries = await Array.fromAsync(new Bun.Glob("*/package.json").scan({ cwd
     }),
   ).then((arr) => arr.flatMap((item) => (item ? [item] : []))),
 )
-const publishable = binaries.filter((item) => !item.name.includes("-android-"))
 const androidBootstrapDeps = {
   "@oven/bun-linux-aarch64-android": "1.3.14",
   "@oven/bun-linux-x64-android": "1.3.14",
 }
 const deps = {
-  ...Object.fromEntries(publishable.map((item) => [item.name, item.version])),
+  ...Object.fromEntries(binaries.map((item) => [item.name, item.version])),
   ...androidBootstrapDeps,
 }
 console.log("binaries", deps)
@@ -293,7 +292,10 @@ const stage = async (input: { name: string; bin: string; description: string }) 
   if (!(await Bun.file(`${bundle}/index.js`).exists())) {
     throw new Error("Missing Android bundle at ./dist/android-bundle/index.js")
   }
-  if (!(await Bun.file(`${modules}/@opentui/core-android-arm64/index.ts`).exists())) {
+  if (
+    !(await Bun.file(`${modules}/@opentui/core-android-arm64/index.ts`).exists()) ||
+    !(await Bun.file(`${modules}/@opentui/core-android-x64/index.ts`).exists())
+  ) {
     throw new Error("Missing Android bootstrap modules at ./dist/android-modules")
   }
   await $`rm -rf ./dist/${input.name}`
@@ -393,10 +395,10 @@ const publishPackage = async (name: string) => {
   await publish.cwd(`./dist/${name}`)
 }
 
-for (const binary of publishable) {
+for (const binary of binaries) {
   await publishBinary(binary)
 }
-await verifyNpmTargets(publishable)
+await verifyNpmTargets(binaries)
 await publishPackage(pkg.name)
 await verifyNpmTargets([{ name: pkg.name, version }])
 for (const item of aliases) {

@@ -261,6 +261,50 @@ function androidBun(arch) {
   ].find((item) => item && fs.existsSync(item))
 }
 
+function androidRuntimeArgs(args) {
+  const out = []
+  let project
+  let skip = false
+  const valueOptions = new Set(["--cwd", "--session", "--model", "--agent", "--prompt", "--view-id", "--log-level"])
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (skip) {
+      skip = false
+      continue
+    }
+    if (arg === "--print-logs" || arg === "--pure") continue
+    if (arg.startsWith("--log-level=")) continue
+    if (valueOptions.has(arg)) {
+      if (arg !== "--log-level") {
+        out.push(arg, args[i + 1])
+      }
+      skip = true
+      continue
+    }
+    if (!project && arg && !arg.startsWith("-")) {
+      project = arg
+      continue
+    }
+    out.push(arg)
+  }
+  if (project && !out.includes("--cwd")) {
+    out.unshift("--cwd", path.resolve(process.env.PWD || process.cwd(), project))
+  }
+  return out.filter((item) => item !== undefined)
+}
+
+function androidRuntimeEnv(runtimeRoot, extra = {}) {
+  return {
+    SLOPCODE_BIONIC: "1",
+    SLOPCODE_VERSION: pkg.version,
+    SLOPCODE_ANDROID_ROOT: runtimeRoot,
+    SLOPCODE_ANDROID_HOST_PATH: path.join(runtimeRoot, "bin", "slopcode-android-host"),
+    SLOPCODE_ANDROID_HOST: process.env.SLOPCODE_ANDROID_HOST || "sidecar",
+    NODE_PATH: [path.join(rootDir, "android-modules"), process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
+    ...extra,
+  }
+}
+
 const useCache = libc() !== "bionic"
 
 const packageNames = names("slopcode-bin")
@@ -324,36 +368,40 @@ if (!resolved) {
 const args = process.argv.slice(2)
 if (libc() === "bionic" && androidInteractive(args)) {
   const bun = androidBun(arch)
+  const runtimeRoot = path.dirname(path.dirname(resolved.path))
+  const daemonURL = process.env.SLOPCODE_DAEMON_URL || process.env.SLOPCODE_SERVER_URL
+  const daemonToken = process.env.SLOPCODE_DAEMON_TOKEN || process.env.SLOPCODE_TOKEN
   startupLog("launcher.android.interactive", {
     runtime: path.basename(resolved.path),
     bun: bun ? path.basename(bun) : undefined,
-    legacy: process.env.SLOPCODE_ANDROID_BOOTSTRAP === "legacy",
+    rustFirst: true,
   })
+  if (daemonURL && daemonToken) {
+    startupLog("launcher.android.rust_tui", { mode: "attached" })
+    run(resolved.path, {
+      args: androidRuntimeArgs(args),
+      env: androidRuntimeEnv(runtimeRoot),
+    })
+  }
   if (!fs.existsSync(androidBundle)) {
     console.error(
-      "SlopCode Android CLI bootstrap bundle is missing. Reinstall from Termux with: npm install -g slopcode@latest --include=optional",
+      "SlopCode Android daemon bootstrap bundle is missing. Reinstall from Termux with: npm install -g slopcode@latest --include=optional",
     )
     process.exit(1)
   }
   if (bun && fs.existsSync(androidBundle)) {
-    const runtimeRoot = path.dirname(path.dirname(resolved.path))
-    startupLog("launcher.android.legacy_bundle", { bundle: androidBundle })
-    run(bun, {
-      args: [androidBundle, ...args],
-      env: {
-        SLOPCODE_BIONIC: "1",
-        SLOPCODE_VERSION: pkg.version,
+    startupLog("launcher.android.rust_tui", { mode: "bootstrap", bundle: androidBundle })
+    run(resolved.path, {
+      args: androidRuntimeArgs(args),
+      env: androidRuntimeEnv(runtimeRoot, {
         SLOPCODE_ENTRYPOINT: androidBundle,
-        SLOPCODE_ANDROID_ROOT: runtimeRoot,
-        SLOPCODE_ANDROID_HOST_PATH: path.join(runtimeRoot, "bin", "slopcode-android-host"),
-        SLOPCODE_ANDROID_HOST: process.env.SLOPCODE_ANDROID_HOST || "sidecar",
-        NODE_PATH: [path.join(rootDir, "android-modules"), process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
-      },
+        SLOPCODE_ANDROID_BOOTSTRAP_RUNNER: bun,
+      }),
     })
   }
   if (!bun) {
     console.error(
-      "SlopCode Android CLI bootstrap is missing. Run npm rebuild slopcode or reinstall from Termux with: npm install -g slopcode@latest --include=optional",
+      "SlopCode Android daemon bootstrap is missing. Run npm rebuild slopcode or reinstall from Termux with: npm install -g slopcode@latest --include=optional",
     )
     process.exit(1)
   }
