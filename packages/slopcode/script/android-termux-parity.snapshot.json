@@ -4,14 +4,10 @@
       "phase": 0,
       "label": "bootstrap",
       "status": "active",
-      "active": [
-        "smoke.install"
-      ],
+      "active": ["smoke.install"],
       "inactive": [],
       "blocked": [],
-      "trueParity": [
-        "smoke.install"
-      ],
+      "trueParity": ["smoke.install"],
       "workflowParity": [],
       "surfaceOnly": []
     },
@@ -75,16 +71,10 @@
       "phase": 3,
       "label": "rich-ui",
       "status": "active",
-      "active": [
-        "tabs.rich",
-        "sidebar.files"
-      ],
+      "active": ["tabs.rich", "sidebar.files"],
       "inactive": [],
       "blocked": [],
-      "trueParity": [
-        "tabs.rich",
-        "sidebar.files"
-      ],
+      "trueParity": ["tabs.rich", "sidebar.files"],
       "workflowParity": [],
       "surfaceOnly": []
     },
@@ -115,16 +105,10 @@
       "phase": 5,
       "label": "editor-terminal-polish",
       "status": "active",
-      "active": [
-        "editor.diff",
-        "terminal.polish"
-      ],
+      "active": ["editor.diff", "terminal.polish"],
       "inactive": [],
       "blocked": [],
-      "trueParity": [
-        "editor.diff",
-        "terminal.polish"
-      ],
+      "trueParity": ["editor.diff", "terminal.polish"],
       "workflowParity": [],
       "surfaceOnly": []
     }

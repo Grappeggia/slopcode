@@ -435,7 +435,8 @@ setTimeout(() => {
     const bin = await binary()
     if (!bin) return
 
-    const codeBlock = "```ts\n" + Array.from({ length: 20 }, (_, index) => `const item${index} = true`).join("\n") + "\n```"
+    const codeBlock =
+      "```ts\n" + Array.from({ length: 20 }, (_, index) => `const item${index} = true`).join("\n") + "\n```"
     const renderSnapshot: TuiSurfaceSnapshot = {
       ...snapshot,
       title: "Render Gate",
@@ -490,12 +491,15 @@ setTimeout(() => {
       },
     })
     try {
-      const proc = Bun.spawn([bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test", "--session", "ses_surface"], {
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...process.env, COLUMNS: "120", LINES: "60" },
-      })
+      const proc = Bun.spawn(
+        [bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test", "--session", "ses_surface"],
+        {
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
+          env: { ...process.env, COLUMNS: "120", LINES: "60" },
+        },
+      )
       await eventually(() => seen.includes("GET /tui/snapshot") && seen.includes("GET /tui/frame"))
       await Bun.sleep(1_000)
       proc.stdin.write("\x04")
@@ -980,7 +984,9 @@ setTimeout(() => {
       proc.stdin.write("/models-completion\r")
       await eventually(() => seen.includes("GET /v2/provider") && seen.includes("GET /v2/model"))
       proc.stdin.write("/models-completion openai/gpt-5\r")
-      await eventually(() => configPatches.some((item) => item.autocomplete?.provider_model_overrides?.openai === "gpt-5"))
+      await eventually(() =>
+        configPatches.some((item) => item.autocomplete?.provider_model_overrides?.openai === "gpt-5"),
+      )
       proc.stdin.write("/variants\r")
       await Bun.sleep(200)
       proc.stdin.write("/shells\r")
@@ -1611,11 +1617,23 @@ setTimeout(() => {
           return json([{ file: "src/app.ts", added: 2, removed: 1 }])
         if (url.pathname === "/editor/edt_surface/save" && req.method === "POST") {
           editorState.dirty = false
-          return json({ id: "edt_surface", sessionID: "ses_surface", file: "src/app.ts", dirty: false, diff: editorState.diff })
+          return json({
+            id: "edt_surface",
+            sessionID: "ses_surface",
+            file: "src/app.ts",
+            dirty: false,
+            diff: editorState.diff,
+          })
         }
         if (url.pathname === "/editor/edt_surface/diff/dismiss" && req.method === "POST") {
           editorState.diff = false
-          return json({ id: "edt_surface", sessionID: "ses_surface", file: "src/app.ts", dirty: editorState.dirty, diff: false })
+          return json({
+            id: "edt_surface",
+            sessionID: "ses_surface",
+            file: "src/app.ts",
+            dirty: editorState.dirty,
+            diff: false,
+          })
         }
         if (url.pathname === "/editor/edt_surface" && req.method === "DELETE") return json(true)
         if (url.pathname === "/editor/edt_surface/connect") {
@@ -1766,7 +1784,9 @@ setTimeout(() => {
       proc.stdin.write("/tabs\r")
       await Bun.sleep(250)
       proc.stdin.write("/open src/app.ts\r")
-      await eventually(() => seenFull.filter((item) => item === "GET /editor/edt_app/snapshot?sessionID=ses_surface").length >= 2)
+      await eventually(
+        () => seenFull.filter((item) => item === "GET /editor/edt_app/snapshot?sessionID=ses_surface").length >= 2,
+      )
       proc.stdin.write("/tabs\r")
       await Bun.sleep(250)
       proc.stdin.write("/close-editor!\r")
@@ -1815,11 +1835,14 @@ setTimeout(() => {
         if (url.pathname === "/tui/manifest") return json(manifest)
         if (url.pathname === "/command") return json([])
         if (url.pathname === "/tui/snapshot")
-          return json(url.searchParams.get("sessionID") === "ses_fork" ? { ...snapshot, sessionID: "ses_fork" } : snapshot)
+          return json(
+            url.searchParams.get("sessionID") === "ses_fork" ? { ...snapshot, sessionID: "ses_fork" } : snapshot,
+          )
         if (url.pathname === "/tui/frame")
           return json(
             createSurfaceFrame({
-              snapshot: url.searchParams.get("sessionID") === "ses_fork" ? { ...snapshot, sessionID: "ses_fork" } : snapshot,
+              snapshot:
+                url.searchParams.get("sessionID") === "ses_fork" ? { ...snapshot, sessionID: "ses_fork" } : snapshot,
               width: Number(url.searchParams.get("width") ?? 100),
               height: Number(url.searchParams.get("height") ?? 30),
             }),
@@ -1835,7 +1858,11 @@ setTimeout(() => {
         if (url.pathname === "/session/ses_surface/unrevert" && req.method === "POST")
           return json({ id: "ses_surface", title: "Parity Surface" })
         if (url.pathname === "/session/ses_surface/share" && req.method === "POST")
-          return json({ id: "ses_surface", title: "Parity Surface", share: { url: "https://share.example/ses_surface" } })
+          return json({
+            id: "ses_surface",
+            title: "Parity Surface",
+            share: { url: "https://share.example/ses_surface" },
+          })
         if (url.pathname === "/session/ses_surface/share" && req.method === "DELETE")
           return json({ id: "ses_surface", title: "Parity Surface" })
         if (url.pathname === "/session/ses_surface/pause" && req.method === "POST") return json(true)
