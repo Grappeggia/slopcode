@@ -418,6 +418,62 @@ describe("Android native TUI", () => {
     }
   })
 
+  test("opens the command palette with the Linux Ctrl-P keybind", async () => {
+    if (process.platform === "win32") return
+    const bin = await binary()
+    if (!bin) return
+
+    const seen: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url)
+        seen.push(`${req.method} ${url.pathname}`)
+        if (url.pathname === "/tui/manifest") return json(manifest)
+        if (url.pathname === "/command") return json([])
+        if (url.pathname === "/tui/snapshot") return json(snapshot)
+        if (url.pathname === "/tui/frame")
+          return json(
+            createSurfaceFrame({
+              snapshot,
+              width: Number(url.searchParams.get("width") ?? 100),
+              height: Number(url.searchParams.get("height") ?? 30),
+            }),
+          )
+        if (url.pathname === "/event") return new Response('data: {"type":"server.connected"}\n\n')
+        return json({})
+      },
+    })
+    try {
+      const proc = Bun.spawn([bin, "--url", `http://127.0.0.1:${server.port}`, "--token", "test"], {
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, COLUMNS: "100", LINES: "30" },
+      })
+      await eventually(() => seen.includes("GET /tui/frame") && seen.includes("GET /command"))
+      proc.stdin.write("\x10")
+      await Bun.sleep(200)
+      proc.stdin.write("\x04")
+      proc.stdin.end()
+      const [code, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ])
+      expect(stderr).toBe("")
+      expect(code).toBe(0)
+      expect(stdout).toContain("Command")
+      expect(stdout).toContain("Palette")
+      expect(stdout).toContain("/files")
+      expect(stdout).toContain("/help")
+      expect(seen).not.toContain("POST /session/ses_surface/command")
+      expect(seen).not.toContain("POST /session/ses_surface/prompt_async")
+    } finally {
+      server.stop(true)
+    }
+  })
+
   test("emits opt-in startup telemetry with first frame before hydration", async () => {
     if (process.platform === "win32") return
     const bin = await binary()

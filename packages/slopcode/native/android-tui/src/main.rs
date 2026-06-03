@@ -1072,14 +1072,16 @@ fn apply_linux_command_parity(manifest: &mut SurfaceManifest) {
 
 fn load_manifest(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), String> {
     let body = client.json("GET", "/tui/manifest?platform=android", None)?;
-    let mut manifest = SurfaceManifest::default();
+    let mut manifest = fallback_manifest();
+    let mut loaded_commands = 0;
     if let Some(commands) = body.get("commands").and_then(Value::as_array) {
         for item in commands {
             let slash = item.get("slash").unwrap_or(&Value::Null);
             let Some(id) = string(item, "id") else {
                 continue;
             };
-            manifest.commands.push(SurfaceCommand {
+            loaded_commands += 1;
+            manifest.upsert(SurfaceCommand {
                 id,
                 title: string(item, "title").unwrap_or_else(|| String::from("Command")),
                 category: string(item, "category").unwrap_or_else(|| String::from("General")),
@@ -1116,7 +1118,7 @@ fn load_manifest(client: &Client, state: &Arc<Mutex<State>>) -> Result<(), Strin
             }
         }
     }
-    if manifest.commands.is_empty() {
+    if loaded_commands == 0 {
         return Err(String::from("shared TUI manifest had no commands"));
     }
     apply_linux_command_parity(&mut manifest);
@@ -1653,6 +1655,7 @@ enum InputAction {
     CtrlU,
     CtrlK,
     CtrlW,
+    CtrlP,
     CtrlS,
     CtrlQ,
     F12,
@@ -1738,6 +1741,7 @@ impl InputParser {
                 '\u{15}' => out.push(InputAction::CtrlU),
                 '\u{0b}' => out.push(InputAction::CtrlK),
                 '\u{17}' => out.push(InputAction::CtrlW),
+                '\u{10}' => out.push(InputAction::CtrlP),
                 '\u{13}' => out.push(InputAction::CtrlS),
                 '\u{11}' => out.push(InputAction::CtrlQ),
                 '\r' | '\n' if !self.paste => out.push(InputAction::Enter),
@@ -1763,6 +1767,7 @@ fn handle_action(
     let mut editor_messages = Vec::new();
     let mut save_editor = false;
     let mut dismiss_diff = false;
+    let mut command_palette = false;
 
     {
         let mut locked = state.lock().map_err(|_| "state lock failed")?;
@@ -2024,6 +2029,7 @@ fn handle_action(
             InputAction::Up => locked.history_prev(),
             InputAction::Down => locked.history_next(),
             InputAction::Tab => complete_command(&mut locked),
+            InputAction::CtrlP => command_palette = true,
             InputAction::F12 => {
                 let text = locked.input.clear();
                 if !text.is_empty() {
@@ -2051,6 +2057,9 @@ fn handle_action(
     }
 
     dirty.store(true, Ordering::SeqCst);
+    if command_palette {
+        command(client, state, "/commands")?;
+    }
     if let Some(text) = submit {
         let trimmed = text.trim().to_string();
         if trimmed == "/exit" || trimmed == "/quit" || trimmed == "/q" {

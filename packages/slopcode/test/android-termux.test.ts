@@ -142,6 +142,11 @@ describe("Android Termux runtime", () => {
     expect(entry).toContain('"/session/{session}/command"')
     expect(entry).toContain("submit_prompt_command")
     expect(entry).toContain("apply_linux_command_parity")
+    expect(entry).toContain("let mut manifest = fallback_manifest()")
+    expect(entry).toContain("manifest.upsert(SurfaceCommand")
+    expect(entry).toContain("CtrlP")
+    expect(entry).toContain("'\\u{10}' => out.push(InputAction::CtrlP)")
+    expect(entry).toContain('command(client, state, "/commands")')
     expect(entry).toContain("cmd.starts_with(&prefix)")
     expect(entry).toContain("locked.input.set(input.to_string())")
     expect(entry).toContain('&["rename", "title"]')
@@ -209,6 +214,7 @@ describe("Android Termux runtime", () => {
       expect(e2e).toContain(`${JSON.stringify(item.id)}: async`)
     }
     expect(e2e).toContain("/se")
+    expect(e2e).toContain("\\x10")
     expect(e2e).toContain("partial slash submit did not keep command matches open")
     expect(ids).toEqual(
       expect.arrayContaining([

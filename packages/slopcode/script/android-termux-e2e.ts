@@ -1011,6 +1011,7 @@ const actions = {
     const run = await runHost({
       title: "Command Session",
       steps: [
+        { delay: 150, text: "\\x10" },
         { delay: 150, text: "/se\\r" },
         { delay: 150, text: "/commands\\r" },
         { delay: 150, text: "/commands model\\r" },
