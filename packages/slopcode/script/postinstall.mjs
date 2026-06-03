@@ -94,7 +94,7 @@ function supportsAvx2(platform, arch) {
 function names(platform, arch) {
   const libc = detectLibc(platform, arch)
   const base = `slopcode-bin-${libc === "bionic" ? "android" : platform}-${arch}`
-  if (libc === "bionic") return [`@slopcode-ai/slopcode-android-${arch}`, base, `slopcode-android-${arch}`]
+  if (libc === "bionic") return [base, `@slopcode-ai/slopcode-android-${arch}`, `slopcode-android-${arch}`]
   const avx2 = supportsAvx2(platform, arch)
   const baseline = arch === "x64" && !avx2
 
@@ -152,11 +152,11 @@ function termuxMessage() {
 }
 
 function androidPackage(arch) {
-  return `@slopcode-ai/slopcode-android-${arch}`
+  return `slopcode-bin-android-${arch}`
 }
 
 function androidTarget(arch) {
-  return path.join(__dirname, "node_modules", "@slopcode-ai", `slopcode-android-${arch}`)
+  return path.join(__dirname, "node_modules", androidPackage(arch))
 }
 
 function androidUrl(arch) {
@@ -278,6 +278,20 @@ function findBinary() {
       }
     } catch {
       continue
+    }
+  }
+
+  if (detectLibc(platform, arch) === "bionic") {
+    const binaryPath = path.join(__dirname, "android-runtime", arch, "bin", binaryName)
+    if (fs.existsSync(binaryPath)) {
+      return {
+        binaryPath,
+        binaryName,
+        packageName: `slopcode-embedded-android-${arch}`,
+        platform,
+        arch,
+        libc: "bionic",
+      }
     }
   }
 }

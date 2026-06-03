@@ -72,12 +72,14 @@ if (binaries.length === 0) {
   throw new Error("verify: missing binary packages in ./dist")
 }
 
+const isAndroidRuntime = (item: { name: string }) => item.name.startsWith(`${pkg.name}-bin-android-`)
+const npmBinaries = binaries.filter((item) => !isAndroidRuntime(item))
 const androidBootstrapDeps = {
   "@oven/bun-linux-aarch64-android": "1.3.14",
   "@oven/bun-linux-x64-android": "1.3.14",
 }
 const deps = {
-  ...Object.fromEntries(binaries.map((item) => [item.name, item.version])),
+  ...Object.fromEntries(npmBinaries.map((item) => [item.name, item.version])),
   ...androidBootstrapDeps,
 }
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-verify-"))
@@ -146,6 +148,17 @@ const stageRoot = async (input: { name: string; bin: string; description: string
   await fs.cp(path.join(dir, "bin"), path.join(to, "bin"), { recursive: true, force: true })
   await fs.cp(bundle, path.join(to, "bundle"), { recursive: true, force: true })
   await fs.cp(modules, path.join(to, "android-modules"), { recursive: true, force: true })
+  for (const arch of ["arm64", "x64"] as const) {
+    const source = path.join(dir, "dist", `${pkg.name}-android-${arch}`, "bin")
+    if (!(await exists(path.join(source, pkg.name)))) {
+      throw new Error(`verify: missing embedded Android ${arch} runtime`)
+    }
+    if (!(await exists(path.join(source, `${pkg.name}-android-host`)))) {
+      throw new Error(`verify: missing embedded Android ${arch} host`)
+    }
+    await fs.mkdir(path.join(to, "android-runtime", arch), { recursive: true })
+    await fs.cp(source, path.join(to, "android-runtime", arch, "bin"), { recursive: true, force: true })
+  }
   await fs.copyFile(path.join(dir, "script", "postinstall.mjs"), path.join(to, "postinstall.mjs"))
   await Bun.write(path.join(to, "README.md"), `${readme}\n`)
   await fs.copyFile(path.join(dir, "..", "..", "LICENSE"), path.join(to, "LICENSE"))
@@ -163,7 +176,7 @@ const stageRoot = async (input: { name: string; bin: string; description: string
         bin: {
           [input.bin]: `./bin/${pkg.name}`,
         },
-        files: ["bin", "bundle", "android-modules", "postinstall.mjs", "README.md", "LICENSE"],
+        files: ["bin", "bundle", "android-modules", "android-runtime", "postinstall.mjs", "README.md", "LICENSE"],
         scripts: {
           postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs",
         },
@@ -238,10 +251,10 @@ const androidTargets = [
   {
     arch: "arm64",
     asset: "slopcode-android-arm64.tar.gz",
-    pkg: "slopcode-android-arm64",
+    pkg: "slopcode-bin-android-arm64",
     bun: "bun-linux-aarch64-android",
   },
-  { arch: "x64", asset: "slopcode-android-x64.tar.gz", pkg: "slopcode-android-x64", bun: "bun-linux-x64-android" },
+  { arch: "x64", asset: "slopcode-android-x64.tar.gz", pkg: "slopcode-bin-android-x64", bun: "bun-linux-x64-android" },
 ] as const
 
 const androidSmoke = async () => {
@@ -250,10 +263,6 @@ const androidSmoke = async () => {
     if (!(await exists(android))) {
       throw new Error(`verify: missing Android ${target.arch} release asset`)
     }
-    const runtime = packed.find((item) => item.name === `@slopcode-ai/slopcode-android-${target.arch}`)
-    if (!runtime) {
-      throw new Error(`verify: missing packed Android ${target.arch} npm runtime`)
-    }
     const work = path.join(tmp, `install-android-${target.arch}`)
     await fs.mkdir(work, { recursive: true })
     const env = {
@@ -261,20 +270,18 @@ const androidSmoke = async () => {
       SLOPCODE_TEST_PLATFORM: "android",
       SLOPCODE_TEST_ARCH: target.arch,
     }
-    await $`npm install --force --no-package-lock --ignore-scripts=true --os=android --cpu=${target.arch} ${runtime.tgz} ${root.tgz}`
+    await $`npm install --force --no-package-lock --ignore-scripts=true --os=android --cpu=${target.arch} ${root.tgz}`
       .env(env)
       .cwd(work)
     await $`node ./node_modules/${pkg.name}/postinstall.mjs`.env(env).cwd(work)
     const bundle = path.join(work, "node_modules", pkg.name, "bundle", "index.js")
-    const runtimeRoots = [
-      path.join(work, "node_modules", pkg.name, "node_modules", "@slopcode-ai", target.pkg),
-      path.join(work, "node_modules", "@slopcode-ai", target.pkg),
-    ]
-    const runtimeRoot = (await Promise.all(runtimeRoots.map(async (item) => ((await exists(item)) ? item : "")))).find(
-      Boolean,
-    )
-    if (!runtimeRoot) {
-      throw new Error(`verify: packed Android ${target.arch} install did not install the scoped Rust TUI runtime`)
+    const runtimeRoot = path.join(work, "node_modules", pkg.name, "android-runtime", target.arch)
+    if (!(await exists(runtimeRoot))) {
+      throw new Error(`verify: packed Android ${target.arch} install did not embed the Rust TUI runtime`)
+    }
+    const rootJson = await Bun.file(path.join(work, "node_modules", pkg.name, "package.json")).json()
+    if (rootJson.optionalDependencies?.[target.pkg]) {
+      throw new Error(`verify: packed Android ${target.arch} root package must not depend on unpublished runtime npm packages`)
     }
     const bin = path.join(runtimeRoot, "bin", "slopcode")
     const sidecar = path.join(runtimeRoot, "bin", "slopcode-android-host")

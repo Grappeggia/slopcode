@@ -268,7 +268,7 @@ describe("bin launcher", () => {
     expect(out.stderr).not.toContain("proot")
   })
 
-  test("prefers scoped Android runtime", async () => {
+  test("prefers npm-publishable Android runtime", async () => {
     if (process.platform === "win32") return
     const staged = await stageLauncher()
     const scoped = path.join(staged.root, "node_modules", "@slopcode-ai", "slopcode-android-arm64")
@@ -276,10 +276,10 @@ describe("bin launcher", () => {
     await Bun.write(path.join(scoped, "package.json"), JSON.stringify({ name: "@slopcode-ai/slopcode-android-arm64" }))
     await script(path.join(scoped, "bin", "slopcode"), "#!/bin/sh\necho scoped\n")
 
-    const legacy = path.join(staged.root, "node_modules", "slopcode-bin-android-arm64")
-    await fs.mkdir(path.join(legacy, "bin"), { recursive: true })
-    await Bun.write(path.join(legacy, "package.json"), JSON.stringify({ name: "slopcode-bin-android-arm64" }))
-    await script(path.join(legacy, "bin", "slopcode"), "#!/bin/sh\necho legacy\n")
+    const unscoped = path.join(staged.root, "node_modules", "slopcode-bin-android-arm64")
+    await fs.mkdir(path.join(unscoped, "bin"), { recursive: true })
+    await Bun.write(path.join(unscoped, "package.json"), JSON.stringify({ name: "slopcode-bin-android-arm64" }))
+    await script(path.join(unscoped, "bin", "slopcode"), "#!/bin/sh\necho unscoped\n")
 
     const out = await run(
       {
@@ -292,7 +292,7 @@ describe("bin launcher", () => {
     )
 
     expect(out.code).toBe(0)
-    expect(out.stdout.trim()).toBe("scoped")
+    expect(out.stdout.trim()).toBe("unscoped")
   })
 
   test("routes Android interactive launch through the Rust runtime with daemon bootstrap env", async () => {
@@ -739,9 +739,7 @@ describe("postinstall", () => {
     expect(out.code).toBe(0)
     expect(out.stdout).toContain("runtime and bootstrap installed")
     expect(
-      await Bun.file(
-        path.join(root, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode"),
-      ).exists(),
+      await Bun.file(path.join(root, "node_modules", "slopcode-bin-android-arm64", "bin", "slopcode")).exists(),
     ).toBe(true)
     expect(
       await Bun.file(path.join(root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin", "bun")).exists(),
@@ -784,9 +782,7 @@ describe("postinstall", () => {
     expect(out.code).toBe(0)
     expect(out.stdout).toContain("runtime and bootstrap installed")
     expect(
-      await Bun.file(
-        path.join(root, "node_modules", "@slopcode-ai", "slopcode-android-arm64", "bin", "slopcode"),
-      ).exists(),
+      await Bun.file(path.join(root, "node_modules", "slopcode-bin-android-arm64", "bin", "slopcode")).exists(),
     ).toBe(true)
     expect(
       await Bun.file(path.join(root, "node_modules", "@oven", "bun-linux-aarch64-android", "bin", "bun")).exists(),

@@ -154,7 +154,7 @@ function supportsAvx2() {
 function names(prefix) {
   const kind = libc()
   const base = kind === "bionic" ? `${prefix}-android-${arch}` : `${prefix}-${platform}-${arch}`
-  if (kind === "bionic") return [`@slopcode-ai/slopcode-android-${arch}`, base]
+  if (kind === "bionic") return [base, `@slopcode-ai/slopcode-android-${arch}`, `slopcode-android-${arch}`]
   const avx2 = supportsAvx2()
   const baseline = arch === "x64" && !avx2
 
@@ -333,6 +333,12 @@ function resolveBinary() {
   }
 }
 
+function embeddedAndroidBinary() {
+  if (libc() !== "bionic") return
+  const candidate = path.join(rootDir, "android-runtime", arch, "bin", binary)
+  if (fs.existsSync(candidate)) return { path: candidate, package: `slopcode-embedded-android-${arch}` }
+}
+
 function findBinary(startDir) {
   let current = startDir
   for (;;) {
@@ -351,7 +357,7 @@ function findBinary(startDir) {
   }
 }
 
-const resolved = resolveBinary() || findBinary(scriptDir)
+const resolved = resolveBinary() || embeddedAndroidBinary() || findBinary(scriptDir)
 if (!resolved) {
   if (libc() === "bionic") {
     console.error(termuxMessage())
