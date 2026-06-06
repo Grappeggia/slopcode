@@ -44,6 +44,11 @@ export namespace ProviderTransform {
     return undefined
   }
 
+  function cacheKey(id: string) {
+    if (/^ses_[0-9a-f]{64}$/.test(id)) return id.slice(4)
+    return id
+  }
+
   function normalizeMessages(
     msgs: ModelMessage[],
     model: Provider.Model,
@@ -718,7 +723,7 @@ export namespace ProviderTransform {
     }
 
     if (input.model.providerID === "openai" || input.providerOptions?.setCacheKey) {
-      result["promptCacheKey"] = input.sessionID
+      result["promptCacheKey"] = cacheKey(input.sessionID)
     }
 
     if (input.model.api.npm === "@ai-sdk/google" || input.model.api.npm === "@ai-sdk/google-vertex") {
@@ -774,18 +779,18 @@ export namespace ProviderTransform {
       }
 
       if (input.model.providerID.startsWith("slopcode")) {
-        result["promptCacheKey"] = input.sessionID
+        result["promptCacheKey"] = cacheKey(input.sessionID)
         result["include"] = ["reasoning.encrypted_content"]
         result["reasoningSummary"] = "auto"
       }
     }
 
     if (input.model.providerID === "venice") {
-      result["promptCacheKey"] = input.sessionID
+      result["promptCacheKey"] = cacheKey(input.sessionID)
     }
 
     if (input.model.providerID === "openrouter") {
-      result["prompt_cache_key"] = input.sessionID
+      result["prompt_cache_key"] = cacheKey(input.sessionID)
     }
     if (input.model.api.npm === "@ai-sdk/gateway") {
       result["gateway"] = {

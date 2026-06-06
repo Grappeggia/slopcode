@@ -47,6 +47,16 @@ describe("ProviderTransform.options - setCacheKey", () => {
     expect(result.promptCacheKey).toBe(sessionID)
   })
 
+  test("should trim internal session prefix from promptCacheKey", () => {
+    const key = "a".repeat(64)
+    const result = ProviderTransform.options({
+      model: mockModel,
+      sessionID: `ses_${key}`,
+      providerOptions: { setCacheKey: true },
+    })
+    expect(result.promptCacheKey).toBe(key)
+  })
+
   test("should not set promptCacheKey when providerOptions.setCacheKey is false", () => {
     const result = ProviderTransform.options({
       model: mockModel,
@@ -82,6 +92,21 @@ describe("ProviderTransform.options - setCacheKey", () => {
     }
     const result = ProviderTransform.options({ model: openaiModel, sessionID, providerOptions: {} })
     expect(result.promptCacheKey).toBe(sessionID)
+  })
+
+  test("should trim internal session prefix for openrouter prompt_cache_key", () => {
+    const key = "b".repeat(64)
+    const model = {
+      ...mockModel,
+      providerID: "openrouter",
+      api: {
+        id: "openai/gpt-5",
+        url: "https://openrouter.ai/api/v1",
+        npm: "@openrouter/ai-sdk-provider",
+      },
+    }
+    const result = ProviderTransform.options({ model, sessionID: `ses_${key}`, providerOptions: {} })
+    expect(result.prompt_cache_key).toBe(key)
   })
 
   test("should set store=false for openai provider", () => {
