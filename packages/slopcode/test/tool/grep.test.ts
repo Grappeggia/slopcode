@@ -37,6 +37,32 @@ describe("tool.grep", () => {
     })
   })
 
+  test("searches a single file path", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "target.txt"), "alpha\nbeta\n")
+        await Bun.write(path.join(dir, "other.txt"), "alpha\n")
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const grep = await GrepTool.init()
+        const result = await grep.execute(
+          {
+            pattern: "alpha",
+            path: path.join(tmp.path, "target.txt"),
+          },
+          ctx,
+        )
+        expect(result.metadata.matches).toBe(1)
+        expect(result.output).toContain("target.txt")
+        expect(result.output).not.toContain("other.txt")
+      },
+    })
+  })
+
   test("hashline disabled keeps Line N format", async () => {
     await using tmp = await tmpdir({
       config: {
