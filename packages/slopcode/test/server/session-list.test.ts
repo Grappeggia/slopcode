@@ -184,6 +184,37 @@ describe("Session.list", () => {
     })
   })
 
+  test("filters workspace sessions by directory", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await mkdir(path.join(tmp.path, "packages", "slopcode"), { recursive: true })
+    await mkdir(path.join(tmp.path, "packages", "app"), { recursive: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const workspaceID = Identifier.ascending("workspace")
+        const current = await Instance.provide({
+          directory: path.join(tmp.path, "packages", "slopcode"),
+          fn: async () => Session.create({ title: "workspace-current", workspaceID }),
+        })
+        const sibling = await Instance.provide({
+          directory: path.join(tmp.path, "packages", "app"),
+          fn: async () => Session.create({ title: "workspace-sibling", workspaceID }),
+        })
+
+        const ids = [
+          ...Session.list({
+            workspaceID,
+            directory: path.join(tmp.path, "packages", "slopcode"),
+          }),
+        ].map((session) => session.id)
+
+        expect(ids).toContain(current.id)
+        expect(ids).not.toContain(sibling.id)
+      },
+    })
+  })
+
   test("supports cursor pagination", async () => {
     await using tmp = await tmpdir({ git: true })
 
