@@ -134,6 +134,45 @@ test("Bedrock: loads when bearer token from auth.json is present", async () => {
   }
 })
 
+test("Bedrock: autoloads when apiKey is configured without environment credentials", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Filesystem.write(
+        path.join(dir, "slopcode.json"),
+        JSON.stringify({
+          $schema: "https://slopcode.dev/config.json",
+          provider: {
+            "amazon-bedrock": {
+              options: {
+                apiKey: "test-bearer-token",
+                region: "us-east-2",
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    init: async () => {
+      Env.set("AWS_REGION", "")
+      Env.set("AWS_PROFILE", "")
+      Env.set("AWS_ACCESS_KEY_ID", "")
+      Env.set("AWS_BEARER_TOKEN_BEDROCK", "")
+      Env.set("AWS_WEB_IDENTITY_TOKEN_FILE", "")
+      Env.set("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "")
+      Env.set("AWS_CONTAINER_CREDENTIALS_FULL_URI", "")
+    },
+    fn: async () => {
+      const providers = await Provider.list()
+      expect(providers["amazon-bedrock"]).toBeDefined()
+      expect(providers["amazon-bedrock"].options?.region).toBe("us-east-2")
+      expect(providers["amazon-bedrock"].options?.credentialProvider).toBeUndefined()
+    },
+  })
+})
+
 test("Bedrock: config profile takes precedence over AWS_PROFILE env var", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

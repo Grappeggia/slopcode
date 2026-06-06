@@ -232,6 +232,7 @@ export namespace Provider {
       const profile = configProfile ?? envProfile
 
       const awsAccessKeyId = Env.get("AWS_ACCESS_KEY_ID")
+      const configApiKey = providerConfig?.options?.apiKey
       const awsBearerToken = Env.get("AWS_BEARER_TOKEN_BEDROCK") ?? (auth?.type === "api" ? auth.key : undefined)
       const awsWebIdentityTokenFile = Env.get("AWS_WEB_IDENTITY_TOKEN_FILE")
 
@@ -239,7 +240,7 @@ export namespace Provider {
         Env.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") || Env.get("AWS_CONTAINER_CREDENTIALS_FULL_URI"),
       )
 
-      if (!profile && !awsAccessKeyId && !awsBearerToken && !awsWebIdentityTokenFile && !containerCreds)
+      if (!profile && !awsAccessKeyId && !awsBearerToken && !configApiKey && !awsWebIdentityTokenFile && !containerCreds)
         return { autoload: false }
 
       const providerOptions: AmazonBedrockProviderSettings = {
@@ -248,7 +249,7 @@ export namespace Provider {
 
       // Only use credential chain if no bearer token exists
       // Bearer token takes precedence over credential chain (profiles, access keys, IAM roles, web identity tokens)
-      if (!awsBearerToken) {
+      if (!awsBearerToken && !configApiKey) {
         // Build credential provider options (only pass profile if specified)
         const credentialProviderOptions = profile ? { profile } : {}
 
