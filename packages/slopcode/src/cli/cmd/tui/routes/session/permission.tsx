@@ -240,6 +240,7 @@ export function PermissionPrompt(props: { requests: PermissionRequest[]; session
             reply,
             requestID: item.id,
             sessionID: item.sessionID,
+            directory: session(item)?.directory,
             message,
           })
           .catch(() => undefined),

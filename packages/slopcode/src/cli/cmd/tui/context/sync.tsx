@@ -295,6 +295,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               reply: "once",
               requestID: request.id,
               sessionID: request.sessionID,
+              directory: store.session.find((item) => item.id === request.sessionID)?.directory,
             })
             break
           }

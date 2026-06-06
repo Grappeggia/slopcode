@@ -9,13 +9,16 @@ import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../component/border"
 import { useTextareaKeybindings } from "../../component/textarea-keybindings"
 import { useDialog } from "../../ui/dialog"
+import { useSync } from "../../context/sync"
 
 export function QuestionPrompt(props: { request: QuestionRequest }) {
   const sdk = useSDK()
+  const sync = useSync()
   const { theme } = useTheme()
   const keybind = useKeybind()
   const bindings = useTextareaKeybindings()
 
+  const directory = createMemo(() => sync.data.session.find((item) => item.id === props.request.sessionID)?.directory)
   const questions = createMemo(() => props.request.questions)
   const single = createMemo(() => questions().length === 1 && questions()[0]?.multiple !== true)
   const tabs = createMemo(() => (single() ? 1 : questions().length + 1)) // questions + confirm tab (no confirm for single select)
@@ -48,6 +51,7 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
     sdk.client.question.reply({
       requestID: props.request.id,
       sessionID: props.request.sessionID,
+      directory: directory(),
       answers,
     })
   }
@@ -56,6 +60,7 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
     sdk.client.question.reject({
       requestID: props.request.id,
       sessionID: props.request.sessionID,
+      directory: directory(),
     })
   }
 
@@ -72,6 +77,7 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
       sdk.client.question.reply({
         requestID: props.request.id,
         sessionID: props.request.sessionID,
+        directory: directory(),
         answers: [[answer]],
       })
       return
