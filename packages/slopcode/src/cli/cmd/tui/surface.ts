@@ -329,7 +329,7 @@ export const surfaceCommands = [
     id: "model.list",
     title: "Models",
     category: "Agent",
-    slash: { name: "models", aliases: ["model"] },
+    slash: { name: "models", aliases: ["mo", "model"] },
     keybind: "model_list",
   }),
   command({

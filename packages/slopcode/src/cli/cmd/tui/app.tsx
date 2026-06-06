@@ -493,6 +493,7 @@ function App() {
       category: "Agent",
       slash: {
         name: "models",
+        aliases: ["mo"],
       },
       onSelect: () => {
         dialog.replace(() => <DialogModel />)
@@ -603,6 +604,14 @@ function App() {
         name: "variants",
       },
       onSelect: () => {
+        if (local.model.variant.list().length === 0) {
+          toast.show({
+            title: "No variants available",
+            message: "The current model does not support any variants.",
+            variant: "info",
+          })
+          return
+        }
         dialog.replace(() => <DialogVariant />)
       },
     },

@@ -106,12 +106,11 @@ export namespace LLM {
           sessionID: input.sessionID,
           providerOptions: provider.options,
         })
-    const options: Record<string, any> = pipe(
-      base,
-      mergeDeep(input.model.options),
-      mergeDeep(input.agent.options),
-      mergeDeep(variant),
-    )
+    const options = ProviderTransform.requestOptions({
+      model: input.model,
+      providerOptions: provider.options,
+      options: pipe(base, mergeDeep(input.model.options), mergeDeep(input.agent.options), mergeDeep(variant)),
+    })
     if (isCodex) {
       options.instructions = SystemPrompt.instructions()
     }

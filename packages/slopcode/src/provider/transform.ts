@@ -49,6 +49,15 @@ export namespace ProviderTransform {
     return id
   }
 
+  function summary(npm: string) {
+    return [
+      "@ai-sdk/openai",
+      "@ai-sdk/azure",
+      "@ai-sdk/github-copilot",
+      "@ai-sdk/amazon-bedrock/mantle",
+    ].includes(npm)
+  }
+
   function normalizeMessages(
     msgs: ModelMessage[],
     model: Provider.Model,
@@ -831,7 +840,7 @@ export namespace ProviderTransform {
     if (input.model.api.id.includes("gpt-5") && !input.model.api.id.includes("gpt-5-chat")) {
       if (!input.model.api.id.includes("gpt-5-pro")) {
         result["reasoningEffort"] = "medium"
-        result["reasoningSummary"] = "auto"
+        if (summary(input.model.api.npm)) result["reasoningSummary"] = "auto"
       }
 
       // Only set textVerbosity for non-chat gpt-5.x models
@@ -866,6 +875,24 @@ export namespace ProviderTransform {
     }
 
     return result
+  }
+
+  export function requestOptions(input: {
+    model: Provider.Model
+    providerOptions?: Record<string, any>
+    options: Record<string, any>
+  }) {
+    if (
+      input.model.api.npm === "@ai-sdk/azure" &&
+      (input.providerOptions?.useCompletionUrls ||
+        input.model.options.useCompletionUrls ||
+        input.options.useCompletionUrls)
+    ) {
+      delete input.options.reasoningSummary
+      delete input.options.include
+    }
+
+    return input.options
   }
 
   export function smallOptions(model: Provider.Model) {

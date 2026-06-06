@@ -6,6 +6,7 @@ import { Installation } from "../installation"
 import { Flag } from "../flag/flag"
 import { lazy } from "@/util/lazy"
 import { Filesystem } from "../util/filesystem"
+import fs from "fs/promises"
 
 // Try to import bundled snapshot (generated at build time)
 // Falls back to undefined in dev mode when snapshot doesn't exist
@@ -86,7 +87,10 @@ export namespace ModelsDev {
   }
 
   export const Data = lazy(async () => {
-    const result = await Filesystem.readJson(Flag.SLOPCODE_MODELS_PATH ?? filepath).catch(() => {})
+    const result = await Filesystem.readJson(Flag.SLOPCODE_MODELS_PATH ?? filepath).catch(async () => {
+      if (!Flag.SLOPCODE_MODELS_PATH) await fs.rm(filepath, { force: true }).catch(() => {})
+      return undefined
+    })
     if (result) return result
     // @ts-ignore
     const snapshot = await import("./models-snapshot")
@@ -115,7 +119,14 @@ export namespace ModelsDev {
       })
     })
     if (result && result.ok) {
-      await Filesystem.write(filepath, await result.text())
+      const text = await result.text()
+      const temp = `${filepath}.${process.pid}.${Date.now()}.tmp`
+      await Filesystem.write(temp, text)
+        .then(() => fs.rename(temp, filepath))
+        .catch(async (error) => {
+          await fs.rm(temp, { force: true }).catch(() => {})
+          throw error
+        })
       ModelsDev.Data.reset()
     }
   }

@@ -57,6 +57,7 @@ describe("shared TUI surface", () => {
       "timeline",
       "status",
       "close",
+      "mo",
       "model",
       "models",
       "providers",

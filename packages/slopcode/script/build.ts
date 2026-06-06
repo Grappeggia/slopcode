@@ -449,7 +449,7 @@ const androidBundle = async (parserWorker: string, workerPath: string) => {
   await fs.promises.rm(path.join(dir, "dist", "android-bundle"), { recursive: true, force: true })
   await fs.promises.mkdir(path.join(dir, "dist", "android-bundle"), { recursive: true })
   const result = await Bun.build({
-    conditions: ["browser"],
+    conditions: ["node"],
     tsconfig: "./tsconfig.json",
     plugins: [solidPlugin],
     sourcemap: "none",
@@ -690,7 +690,7 @@ for (const item of targets) {
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
 
   const result = await Bun.build({
-    conditions: ["browser"],
+    conditions: ["node"],
     tsconfig: "./tsconfig.json",
     plugins: [solidPlugin],
     sourcemap: "external",

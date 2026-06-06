@@ -163,6 +163,57 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
     expect(result.textVerbosity).toBe("low")
   })
 
+  test("openai-compatible gpt-5 models omit Responses-only reasoningSummary", () => {
+    const model = {
+      ...createGpt5Model("gpt-5.4"),
+      id: "cortecs/gpt-5.4",
+      providerID: "cortecs",
+      api: {
+        id: "gpt-5.4",
+        url: "https://api.cortecs.ai/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    }
+    const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
+    expect(result.reasoningEffort).toBe("medium")
+    expect(result.reasoningSummary).toBeUndefined()
+    expect(result.include).toBeUndefined()
+  })
+
+  test("openai gpt-5 models keep reasoningSummary", () => {
+    const result = ProviderTransform.options({
+      model: createGpt5Model("gpt-5.4"),
+      sessionID,
+      providerOptions: {},
+    })
+    expect(result.reasoningSummary).toBe("auto")
+  })
+
+  test("azure completion URLs omit Responses-only reasoning options after merge", () => {
+    const model = {
+      ...createGpt5Model("gpt-5.4"),
+      id: "azure/gpt-5.4",
+      providerID: "azure",
+      api: {
+        id: "gpt-5.4",
+        url: "https://azure.com",
+        npm: "@ai-sdk/azure",
+      },
+    }
+    const result = ProviderTransform.requestOptions({
+      model,
+      providerOptions: { useCompletionUrls: true },
+      options: {
+        reasoningEffort: "high",
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+      },
+    })
+    expect(result.reasoningEffort).toBe("high")
+    expect(result.reasoningSummary).toBeUndefined()
+    expect(result.include).toBeUndefined()
+  })
+
   test("gpt-5.1 should have textVerbosity set to low", () => {
     const model = createGpt5Model("gpt-5.1")
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })

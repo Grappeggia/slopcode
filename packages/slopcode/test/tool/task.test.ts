@@ -12,6 +12,7 @@ type Rule = {
 }
 
 let createdPermission: Rule[] = []
+let promptAgent: string | undefined
 let promptTools: Record<string, boolean> | undefined
 let promptVariant: string | undefined
 
@@ -42,6 +43,7 @@ async function provide(permission: Record<string, "allow" | "ask" | "deny">, fn:
 
 beforeEach(() => {
   createdPermission = []
+  promptAgent = undefined
   promptTools = undefined
   promptVariant = undefined
   spyOn(Session, "get").mockImplementation((async () => undefined) as any)
@@ -62,7 +64,12 @@ beforeEach(() => {
   spyOn(SessionPrompt, "resolvePromptParts").mockImplementation((async (prompt: string) => [
     { type: "text", text: prompt },
   ]) as any)
-  spyOn(SessionPrompt, "prompt").mockImplementation((async (input: { tools: Record<string, boolean>; variant?: string }) => {
+  spyOn(SessionPrompt, "prompt").mockImplementation((async (input: {
+    agent: string
+    tools: Record<string, boolean>
+    variant?: string
+  }) => {
+    promptAgent = input.agent
     promptTools = input.tools
     promptVariant = input.variant
     return { parts: [{ type: "text", text: "done" }] }
@@ -95,6 +102,7 @@ describe("tool.task todo permissions", () => {
 
       await task.execute({ description: "helper task", prompt: "ship it", subagent_type: "helper" }, ctx)
 
+      expect(promptAgent).toBe("helper")
       expect(promptVariant).toBe("xhigh")
     })
   })

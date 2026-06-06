@@ -81,6 +81,8 @@ describe("Android Termux runtime", () => {
     expect(build).toContain("dist/android-bundle/index.js")
     expect(build).toContain("const androidModules = async")
     expect(build).toContain("SLOPCODE_BUILD_VERSION")
+    expect(build).toContain('conditions: ["node"]')
+    expect(build).not.toContain('conditions: ["browser"]')
     expect(manifest).toContain("ratatui")
     expect(manifest).toContain("crossterm")
     expect(entry).toContain("ratatui")
