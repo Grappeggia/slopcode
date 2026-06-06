@@ -13,6 +13,7 @@ type Rule = {
 
 let createdPermission: Rule[] = []
 let promptTools: Record<string, boolean> | undefined
+let promptVariant: string | undefined
 
 const ctx = {
   sessionID: "session",
@@ -42,6 +43,7 @@ async function provide(permission: Record<string, "allow" | "ask" | "deny">, fn:
 beforeEach(() => {
   createdPermission = []
   promptTools = undefined
+  promptVariant = undefined
   spyOn(Session, "get").mockImplementation((async () => undefined) as any)
   spyOn(Session, "create").mockImplementation((async (input: { permission: Rule[] }) => {
     createdPermission = input.permission
@@ -52,6 +54,7 @@ beforeEach(() => {
       role: "assistant",
       modelID: "model-id",
       providerID: "provider-id",
+      variant: "xhigh",
     },
     parts: [],
   })) as any)
@@ -59,8 +62,9 @@ beforeEach(() => {
   spyOn(SessionPrompt, "resolvePromptParts").mockImplementation((async (prompt: string) => [
     { type: "text", text: prompt },
   ]) as any)
-  spyOn(SessionPrompt, "prompt").mockImplementation((async (input: { tools: Record<string, boolean> }) => {
+  spyOn(SessionPrompt, "prompt").mockImplementation((async (input: { tools: Record<string, boolean>; variant?: string }) => {
     promptTools = input.tools
+    promptVariant = input.variant
     return { parts: [{ type: "text", text: "done" }] }
   }) as any)
 })
@@ -81,6 +85,17 @@ describe("tool.task todo permissions", () => {
       expect(createdPermission.some((rule) => rule.permission === "todoread" && rule.action === "deny")).toBe(false)
       expect(promptTools?.todowrite).toBeUndefined()
       expect(promptTools?.todoread).toBeUndefined()
+    })
+  })
+
+  test("preserves the parent model variant for delegated tasks", async () => {
+    await provide({}, async () => {
+      const { TaskTool } = await import("../../src/tool/task")
+      const task = await TaskTool.init()
+
+      await task.execute({ description: "helper task", prompt: "ship it", subagent_type: "helper" }, ctx)
+
+      expect(promptVariant).toBe("xhigh")
     })
   })
 

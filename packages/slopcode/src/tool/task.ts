@@ -142,6 +142,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
       })
       const msg = await MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID })
       if (msg.info.role !== "assistant") throw new Error("Not an assistant message")
+      const variant = msg.info.variant
 
       const model = agent.model ?? {
         modelID: msg.info.modelID,
@@ -168,6 +169,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
             modelID: model.modelID,
             providerID: model.providerID,
           },
+          variant: agent.model ? undefined : variant,
           agent: agent.name,
           tools: {
             ...(hasTodoWritePermission ? {} : { todowrite: false }),
