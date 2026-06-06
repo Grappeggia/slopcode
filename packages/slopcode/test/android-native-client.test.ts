@@ -360,7 +360,7 @@ setTimeout(() => {
     const normalized = text.replace(/\s+/g, "")
     expect(normalized).toContain("BootstrapSurface")
     expect(normalized).toContain("Rustdaemonbootstrapready")
-    expect(normalized).toContain("shareddaemonfooter")
+    expect(normalized).toContain(fitLine(root + " | shared daemon footer", width).replace(/\s+/g, ""))
     expect(text).not.toContain("█▀▀")
     expect(text).not.toContain("missing --url")
     const seen = (await Bun.file(marker).json()) as string[]

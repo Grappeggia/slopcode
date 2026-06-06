@@ -24,6 +24,12 @@ const extraProviders = {
     env: ["BRAVE_SEARCH_API_KEY"],
     url: "https://api.search.brave.com/app/keys",
   },
+  "snowflake-cortex": {
+    name: "Snowflake Cortex",
+    hint: "Snowflake-hosted models",
+    env: ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_CORTEX_PAT"],
+    url: "https://docs.snowflake.com/en/user-guide/programmatic-access-tokens",
+  },
 } as const
 
 function providerName(provider: string, database: Record<string, { name?: string }>) {
@@ -407,11 +413,13 @@ export const AuthLoginCommand = cmd({
             value: x.id,
             hint: "plugin",
           })),
-          ...Object.entries(extraProviders).map(([id, provider]) => ({
-            label: provider.name,
-            value: id,
-            hint: provider.hint,
-          })),
+          ...Object.entries(extraProviders)
+            .filter(([id]) => !providers[id])
+            .map(([id, provider]) => ({
+              label: provider.name,
+              value: id,
+              hint: provider.hint,
+            })),
         ]
 
         let provider: string
@@ -492,6 +500,29 @@ export const AuthLoginCommand = cmd({
           prompts.log.info(
             "Cloudflare AI Gateway can be configured with CLOUDFLARE_GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_API_TOKEN environment variables. Read more: https://slopcode.dev/docs/providers/#cloudflare-ai-gateway",
           )
+        }
+
+        if (provider === "snowflake-cortex") {
+          const account = await prompts.text({
+            message: "Snowflake Account Identifier",
+            placeholder: "xy12345.us-east-1",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          })
+          if (prompts.isCancel(account)) throw new UI.CancelledError()
+          const pat = await prompts.password({
+            message: "Programmatic Access Token (PAT)",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          })
+          if (prompts.isCancel(pat)) throw new UI.CancelledError()
+          await Auth.set(provider, {
+            type: "api",
+            key: pat,
+            metadata: {
+              account,
+            },
+          })
+          prompts.outro("Done")
+          return
         }
 
         const key = await prompts.password({

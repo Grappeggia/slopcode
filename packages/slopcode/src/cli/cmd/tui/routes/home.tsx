@@ -123,7 +123,7 @@ export function Home() {
     }
     if (argsPromptSubmitted || !args.prompt) return
     argsPromptSubmitted = true
-    prompt.set({ input: args.prompt, parts: [] })
+    prompt.set({ input: args.prompt, parts: args.promptParts ?? [] })
     prompt.submit()
   })
   const directory = useDirectory()

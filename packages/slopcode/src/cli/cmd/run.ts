@@ -27,6 +27,8 @@ import { SkillTool } from "../../tool/skill"
 import { BashTool } from "../../tool/bash"
 import { TodoWriteTool } from "../../tool/todo"
 import { Locale } from "../../util/locale"
+import { basicAuth } from "../server-auth"
+import { interactivePrompt } from "./run/input"
 
 type ToolProps<T extends Tool.Info> = {
   input: Tool.InferParameters<T>
@@ -219,6 +221,141 @@ function normalizePath(input?: string) {
   return input
 }
 
+async function interactive(input: {
+  attach?: string
+  directory?: string
+  prompt?: string
+  promptParts?: {
+    type: "file"
+    url: string
+    filename: string
+    mime: string
+  }[]
+  continue?: boolean
+  session?: string
+  fork?: boolean
+  agent?: string
+  model?: string
+  username?: string
+  password?: string
+}) {
+  const { existsSync } = await import("fs")
+  const { randomUUID } = await import("crypto")
+  const { Instance } = await import("../../project/instance")
+  const { TuiConfig } = await import("../../config/tui")
+  const { android, client, guard } = await import("./tui/platform")
+  const win32 = android() ? undefined : await import("./tui/win32")
+  const unguard = win32?.win32InstallCtrlCGuard()
+  try {
+    win32?.win32DisableProcessedInput()
+    if (!android() && guard()) process.exit(1)
+
+    const cwd = input.directory && existsSync(input.directory) ? input.directory : process.cwd()
+    const config = await Instance.provide({
+      directory: cwd,
+      fn: () => TuiConfig.get(),
+    })
+    const viewID = randomUUID()
+    const headers = basicAuth({
+      username: input.username,
+      password: input.password,
+    })
+    const args = {
+      continue: input.continue,
+      sessionID: input.session,
+      fork: input.fork,
+      agent: input.agent,
+      model: input.model,
+      prompt: input.prompt,
+      promptParts: input.promptParts,
+    }
+
+    if (input.attach) {
+      if (android()) {
+        const { androidHostTui } = await import("./tui/android-host")
+        if (
+          await androidHostTui({
+            url: input.attach,
+            config,
+            directory: cwd,
+            viewID,
+            headers,
+            args,
+          })
+        ) {
+          return
+        }
+        if (!client()) {
+          UI.error(
+            "SlopCode Android runtime is missing. Reinstall with: npm install -g slopcode@latest --include=optional",
+          )
+          process.exit(1)
+        }
+        UI.error(
+          "SlopCode Android now runs only through the bundled Rust runtime. Remove old Android TUI overrides and try again.",
+        )
+        process.exit(1)
+      }
+      const { tui } = await import("./tui/app")
+      await tui({
+        url: input.attach,
+        config,
+        directory: cwd,
+        viewID,
+        headers,
+        args,
+      })
+      return
+    }
+
+    const { DaemonLauncher } = await import("../../daemon/launcher")
+    const daemon = await DaemonLauncher.ensure({
+      directory: cwd,
+      viewID,
+    })
+
+    if (android()) {
+      const { androidHostTui } = await import("./tui/android-host")
+      if (
+        await androidHostTui({
+          url: daemon.url,
+          config,
+          directory: cwd,
+          viewID,
+          headers: daemon.headers,
+          args,
+          onExit: async () => {},
+        })
+      ) {
+        return
+      }
+      if (!client()) {
+        UI.error(
+          "SlopCode Android runtime is missing. Reinstall with: npm install -g slopcode@latest --include=optional",
+        )
+        process.exit(1)
+      }
+      UI.error(
+        "SlopCode Android now runs only through the bundled Rust runtime. Remove old Android TUI overrides and try again.",
+      )
+      process.exit(1)
+    }
+
+    const { tui } = await import("./tui/app")
+    await tui({
+      url: daemon.url,
+      config,
+      directory: cwd,
+      viewID,
+      headers: daemon.headers,
+      args,
+      onExit: async () => {},
+    })
+  } finally {
+    unguard?.()
+  }
+}
+
 export const RunCommand = cmd({
   command: "run [message..]",
   describe: "run slopcode with a message",
@@ -281,6 +418,16 @@ export const RunCommand = cmd({
         type: "string",
         describe: "attach to a running slopcode server (e.g., http://localhost:4096)",
       })
+      .option("password", {
+        alias: ["p"],
+        type: "string",
+        describe: "basic auth password (defaults to SLOPCODE_SERVER_PASSWORD)",
+      })
+      .option("username", {
+        alias: ["u"],
+        type: "string",
+        describe: "basic auth username (defaults to SLOPCODE_SERVER_USERNAME or 'slopcode')",
+      })
       .option("dir", {
         type: "string",
         describe: "directory to run in, path on remote server if attaching",
@@ -296,6 +443,12 @@ export const RunCommand = cmd({
       .option("thinking", {
         type: "boolean",
         describe: "show thinking blocks",
+        default: false,
+      })
+      .option("interactive", {
+        alias: ["i"],
+        type: "boolean",
+        describe: "run in interactive TUI mode",
         default: false,
       })
       .option("dangerously-skip-permissions", {
@@ -344,6 +497,23 @@ export const RunCommand = cmd({
     }
 
     if (!process.stdin.isTTY) message += "\n" + (await Bun.stdin.text())
+
+    if (args.interactive) {
+      await interactive({
+        attach: args.attach,
+        directory,
+        prompt: interactivePrompt({ command: args.command, message }),
+        promptParts: files,
+        continue: args.continue,
+        session: args.session,
+        fork: args.fork,
+        agent: args.agent,
+        model: args.model,
+        username: args.username,
+        password: args.password,
+      })
+      return
+    }
 
     if (message.trim().length === 0 && !args.command) {
       UI.error("You must provide a message or a command")
@@ -629,7 +799,14 @@ export const RunCommand = cmd({
     }
 
     if (args.attach) {
-      const sdk = createSlopcodeClient({ baseUrl: args.attach, directory })
+      const sdk = createSlopcodeClient({
+        baseUrl: args.attach,
+        directory,
+        headers: basicAuth({
+          username: args.username,
+          password: args.password,
+        }),
+      })
       return await execute(sdk)
     }
 

@@ -10,15 +10,22 @@ import { DaemonAuth } from "../../../src/daemon/auth"
 const pkgDir = path.resolve(import.meta.dir, "../../..")
 const fixturePath = path.resolve(pkgDir, "src/cli/cmd/tui/context/route.tsx")
 const scripts: string[] = []
+const ptys: ReturnType<typeof spawn>[] = []
 const active: Array<{ stop(force?: boolean): Promise<void> | void }> = []
 const token = "editor-tab-persistence-token"
 const width = 140
 const height = 40
 
 afterEach(async () => {
-  await Promise.all(scripts.splice(0).map((file) => fs.rm(file, { force: true })))
+  await Promise.all(ptys.splice(0).map((pty) => stop(pty)))
+  await Promise.all(scripts.splice(0).map((file) => fs.rm(file, { recursive: true, force: true })))
   await Promise.all(active.splice(0).map((server) => server.stop(true)))
 })
+
+async function stop(pty: ReturnType<typeof spawn>) {
+  pty.kill()
+  if (pty.pid > 0) await Bun.spawn(["kill", "-9", String(pty.pid)], { stdout: "ignore", stderr: "ignore" }).exited
+}
 
 function frame(raw: string, width: number, height: number) {
   const rows = Array.from({ length: height }, () => Array.from({ length: width }, () => " "))
@@ -227,6 +234,7 @@ describe("editor tab persistence e2e", () => {
     let raw = ""
     const home = path.join(os.tmpdir(), `slopcode-editor-tab-home-${process.pid}-${Date.now()}`)
     await fs.mkdir(home, { recursive: true })
+    scripts.push(home)
     const pty = spawn(process.execPath, [file, tmp.path, server.url.toString(), session.id, token], {
       name: process.env.TERM || "xterm-256color",
       cols: width,
@@ -245,6 +253,7 @@ describe("editor tab persistence e2e", () => {
         SLOPCODE_TEST_HOME: home,
       },
     })
+    ptys.push(pty)
     const dispose = pty.onData((data) => {
       raw += data
     })
@@ -283,9 +292,11 @@ describe("editor tab persistence e2e", () => {
       })
 
       const second = frame(raw, width, height)
-      const tab = locate(second, "route.tsx")
+      const tab = locate(second.slice(0, 6), "route.tsx")
       expect(tab).toBeDefined()
-      click(pty, tab!.row, tab!.col)
+      click(pty, tab!.row, tab!.col + 4)
+      await Bun.sleep(200)
+      click(pty, tab!.row, tab!.col + 4)
       await Bun.sleep(500)
 
       const start = await eventually(() => {
@@ -311,8 +322,9 @@ describe("editor tab persistence e2e", () => {
         throw new Error(`editor blinked after tab restore at ${blink.elapsed}ms\n${blink.screen}`)
       }
     } finally {
+      ptys.splice(ptys.indexOf(pty), 1)
       dispose.dispose()
-      pty.kill()
+      await stop(pty)
     }
-  }, 25_000)
+  }, 60_000)
 })

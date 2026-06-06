@@ -19,6 +19,7 @@ import path from "path"
 import { Filesystem } from "../util/filesystem"
 
 // Direct imports for bundled providers
+import { createAlibaba } from "@ai-sdk/alibaba"
 import { createAmazonBedrock, type AmazonBedrockProviderSettings } from "@ai-sdk/amazon-bedrock"
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createAzure } from "@ai-sdk/azure"
@@ -40,12 +41,14 @@ import { createTogetherAI } from "@ai-sdk/togetherai"
 import { createPerplexity } from "@ai-sdk/perplexity"
 import { createVercel } from "@ai-sdk/vercel"
 import { createGitLab, VERSION as GITLAB_PROVIDER_VERSION } from "@gitlab/gitlab-ai-provider"
+import { createVenice } from "venice-ai-sdk-provider"
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers"
 import { GoogleAuth } from "google-auth-library"
 import { ProviderTransform } from "./transform"
 import { Installation } from "../installation"
 import { ProviderLimit } from "./limit"
 import { LlamaCppSessionCache } from "./llamacpp-cache"
+import { SnowflakeCortex } from "./snowflake-cortex"
 
 export namespace Provider {
   const log = Log.create({ service: "provider" })
@@ -87,6 +90,7 @@ export namespace Provider {
   }
 
   const BUNDLED_PROVIDERS: Record<string, (options: any) => SDK> = {
+    "@ai-sdk/alibaba": createAlibaba,
     "@ai-sdk/amazon-bedrock": createAmazonBedrock,
     "@ai-sdk/anthropic": createAnthropic,
     "@ai-sdk/azure": createAzure,
@@ -107,6 +111,7 @@ export namespace Provider {
     "@ai-sdk/perplexity": createPerplexity,
     "@ai-sdk/vercel": createVercel,
     "@gitlab/gitlab-ai-provider": createGitLab,
+    "venice-ai-sdk-provider": createVenice,
     // @ts-ignore (TODO: kill this code so we dont have to maintain it)
     "@ai-sdk/github-copilot": createGitHubCopilotOpenAICompatible,
   }
@@ -510,6 +515,38 @@ export namespace Provider {
         },
       }
     },
+    "snowflake-cortex": async (input) => {
+      const auth = await Auth.get(input.id)
+      const account =
+        Env.get("SNOWFLAKE_ACCOUNT") ??
+        (auth?.type === "api" ? auth.metadata?.account : undefined) ??
+        (typeof input.options.account === "string" ? input.options.account : undefined)
+      const apiKey =
+        Env.get("SNOWFLAKE_CORTEX_PAT") ??
+        (auth?.type === "api" ? auth.key : undefined) ??
+        (typeof input.options.apiKey === "string" ? input.options.apiKey : undefined)
+
+      if (!account || !apiKey) {
+        const missing = [!account && "SNOWFLAKE_ACCOUNT", !apiKey && "SNOWFLAKE_CORTEX_PAT"].filter(Boolean).join(", ")
+        return {
+          autoload: false,
+          async getModel() {
+            throw new Error(
+              `Snowflake Cortex: missing credentials (${missing}). Set via env var, slopcode auth, or provider options.`,
+            )
+          },
+        }
+      }
+
+      return {
+        autoload: input.source === "config",
+        options: {
+          baseURL: `https://${account}.snowflakecomputing.com/api/v2/cortex/v1`,
+          apiKey,
+          fetch: SnowflakeCortex.cortexFetch(),
+        },
+      }
+    },
     "cloudflare-workers-ai": async (input) => {
       const accountId = Env.get("CLOUDFLARE_ACCOUNT_ID")
       if (!accountId) return { autoload: false }
@@ -763,6 +800,9 @@ export namespace Provider {
     const config = await Config.get()
     const modelsDev = await ModelsDev.get()
     const database = mapValues(modelsDev, fromModelsDevProvider)
+    if (!database["snowflake-cortex"]) {
+      database["snowflake-cortex"] = fromModelsDevProvider(SnowflakeCortex.provider as ModelsDev.Provider)
+    }
 
     const disabled = new Set(config.disabled_providers ?? [])
     const enabled = config.enabled_providers ? new Set(config.enabled_providers) : null

@@ -7,6 +7,7 @@ import { TuiConfig } from "@/config/tui"
 import { Instance } from "@/project/instance"
 import { randomUUID } from "crypto"
 import { existsSync } from "fs"
+import { basicAuth } from "../../server-auth"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -40,6 +41,11 @@ export const AttachCommand = cmd({
         alias: ["p"],
         type: "string",
         describe: "basic auth password (defaults to SLOPCODE_SERVER_PASSWORD)",
+      })
+      .option("username", {
+        alias: ["u"],
+        type: "string",
+        describe: "basic auth username (defaults to SLOPCODE_SERVER_USERNAME or 'slopcode')",
       }),
   handler: async (args) => {
     const unguard = win32InstallCtrlCGuard()
@@ -65,12 +71,10 @@ export const AttachCommand = cmd({
           return args.dir
         }
       })()
-      const headers = (() => {
-        const password = args.password ?? process.env.SLOPCODE_SERVER_PASSWORD
-        if (!password) return undefined
-        const auth = `Basic ${Buffer.from(`slopcode:${password}`).toString("base64")}`
-        return { Authorization: auth }
-      })()
+      const headers = basicAuth({
+        username: args.username,
+        password: args.password,
+      })
       const config = await Instance.provide({
         directory: directory && existsSync(directory) ? directory : process.cwd(),
         fn: () => TuiConfig.get(),

@@ -1535,6 +1535,53 @@ To use [Scaleway Generative APIs](https://www.scaleway.com/en/docs/generative-ap
 
 ---
 
+### Snowflake Cortex
+
+[Snowflake Cortex](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api) gives you access to Claude and OpenAI models through an OpenAI-compatible API inside the Snowflake perimeter.
+
+Run the auth command and enter your Snowflake account identifier plus Programmatic Access Token:
+
+```bash
+slopcode auth login --provider snowflake-cortex
+```
+
+Set your Snowflake account identifier and Programmatic Access Token before starting slopcode:
+
+```bash
+export SNOWFLAKE_ACCOUNT=myorg-myaccount
+export SNOWFLAKE_CORTEX_PAT=your-pat
+```
+
+Then select a Snowflake Cortex model:
+
+```json title="slopcode.json"
+{
+  "$schema": "https://slopcode.dev/config.json",
+  "model": "snowflake-cortex/claude-sonnet-4-6",
+  "small_model": "snowflake-cortex/claude-haiku-4-5"
+}
+```
+
+You can also set credentials directly in provider options:
+
+```json title="slopcode.json"
+{
+  "$schema": "https://slopcode.dev/config.json",
+  "provider": {
+    "snowflake-cortex": {
+      "options": {
+        "account": "myorg-myaccount",
+        "apiKey": "your-pat"
+      }
+    }
+  }
+}
+```
+
+Only Claude and OpenAI model families are exposed because slopcode relies on tool calling for its core workflow.
+
+---
+
 ### Together AI
 
 1. Head over to the [Together AI console](https://api.together.ai), create an account, and click **Add Key**.
