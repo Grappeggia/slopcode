@@ -334,6 +334,77 @@ export namespace ProviderTransform {
   const WIDELY_SUPPORTED_EFFORTS = ["low", "medium", "high"]
   const OPENAI_EFFORTS = ["none", "minimal", ...WIDELY_SUPPORTED_EFFORTS, "xhigh"]
 
+  function googleThinkingBudgetMax(id: string) {
+    if (id.includes("2.5") && id.includes("pro") && !id.includes("flash")) return 32_768
+    return 24_576
+  }
+
+  function googleThinkingLevelEfforts(id: string) {
+    if (!id.includes("gemini-3")) return ["low", "high"]
+    if (id.includes("flash-image")) return ["minimal", "high"]
+    if (id.includes("pro-image")) return ["high"]
+    if (id.includes("flash")) return ["minimal", "low", "medium", "high"]
+    return ["low", "medium", "high"]
+  }
+
+  function googleThinkingVariants(model: Provider.Model): Record<string, Record<string, any>> {
+    const id = model.api.id.toLowerCase()
+    if (id.includes("2.5")) {
+      return {
+        high: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: 16000,
+          },
+        },
+        max: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: googleThinkingBudgetMax(id),
+          },
+        },
+      }
+    }
+    return Object.fromEntries(
+      googleThinkingLevelEfforts(id).map((effort) => [
+        effort,
+        {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingLevel: effort,
+          },
+        },
+      ]),
+    )
+  }
+
+  function sapModelParams(variants: Record<string, Record<string, any>>) {
+    return Object.fromEntries(Object.entries(variants).map(([key, value]) => [key, { modelParams: value }]))
+  }
+
+  function sapAdaptiveEfforts(id: string) {
+    const match = /opus-(\d+)[.-](\d+)(?:[.@-]|$)|claude-(\d+)[.-](\d+)-opus(?:[.@-]|$)/i.exec(id)
+    const major = match ? Number(match[1] ?? match[3]) : 0
+    const minor = match ? Number(match[2] ?? match[4]) : 0
+    if (major > 4 || (major === 4 && minor >= 7)) return ["low", "medium", "high", "xhigh", "max"]
+    if (
+      ["opus-4-6", "opus-4.6", "4-6-opus", "4.6-opus", "sonnet-4-6", "sonnet-4.6", "4-6-sonnet", "4.6-sonnet"].some(
+        (value) => id.includes(value),
+      )
+    ) {
+      return ["low", "medium", "high", "max"]
+    }
+    return
+  }
+
+  function sapOpenaiEfforts(id: string, release: string) {
+    const efforts = [...WIDELY_SUPPORTED_EFFORTS]
+    if (id.includes("gpt-5")) efforts.unshift("minimal")
+    if (release >= "2025-11-13") efforts.unshift("none")
+    if (release >= "2025-12-04") efforts.push("xhigh")
+    return efforts
+  }
+
   export function variants(model: Provider.Model): Record<string, Record<string, any>> {
     if (!model.capabilities.reasoning) return {}
 
@@ -603,38 +674,7 @@ export namespace ProviderTransform {
       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/google-vertex
       case "@ai-sdk/google":
         // https://v5.ai-sdk.dev/providers/ai-sdk-providers/google-generative-ai
-        if (id.includes("2.5")) {
-          return {
-            high: {
-              thinkingConfig: {
-                includeThoughts: true,
-                thinkingBudget: 16000,
-              },
-            },
-            max: {
-              thinkingConfig: {
-                includeThoughts: true,
-                thinkingBudget: 24576,
-              },
-            },
-          }
-        }
-        let levels = ["low", "high"]
-        if (id.includes("3.1")) {
-          levels = ["low", "medium", "high"]
-        }
-
-        return Object.fromEntries(
-          levels.map((effort) => [
-            effort,
-            {
-              thinkingConfig: {
-                includeThoughts: true,
-                thinkingLevel: effort,
-              },
-            },
-          ]),
-        )
+        return googleThinkingVariants(model)
 
       case "@ai-sdk/mistral":
         // https://v5.ai-sdk.dev/providers/ai-sdk-providers/mistral
@@ -662,23 +702,50 @@ export namespace ProviderTransform {
 
       case "@mymediset/sap-ai-provider":
       case "@jerome-benoit/sap-ai-provider-v2":
-        if (model.api.id.includes("anthropic")) {
-          return {
+        if (id.includes("anthropic")) {
+          const efforts = sapAdaptiveEfforts(id)
+          if (efforts) {
+            return sapModelParams(
+              Object.fromEntries(
+                efforts.map((effort) => [
+                  effort,
+                  {
+                    thinking: {
+                      type: "adaptive",
+                      ...(efforts.includes("xhigh") ? { display: "summarized" } : {}),
+                    },
+                    output_config: { effort },
+                  },
+                ]),
+              ),
+            )
+          }
+          return sapModelParams({
             high: {
               thinking: {
                 type: "enabled",
-                budgetTokens: 16000,
+                budget_tokens: 16000,
               },
             },
             max: {
               thinking: {
                 type: "enabled",
-                budgetTokens: 31999,
+                budget_tokens: 31999,
               },
             },
-          }
+          })
         }
-        return Object.fromEntries(WIDELY_SUPPORTED_EFFORTS.map((effort) => [effort, { reasoningEffort: effort }]))
+        if (id.includes("gemini")) return sapModelParams(googleThinkingVariants(model))
+        if (id.includes("gpt") || /\bo[1-9]/.test(id)) {
+          return sapModelParams(
+            Object.fromEntries(
+              sapOpenaiEfforts(id, model.release_date).map((effort) => [effort, { reasoning_effort: effort }]),
+            ),
+          )
+        }
+        return sapModelParams(
+          Object.fromEntries(WIDELY_SUPPORTED_EFFORTS.map((effort) => [effort, { reasoning_effort: effort }])),
+        )
     }
     return {}
   }

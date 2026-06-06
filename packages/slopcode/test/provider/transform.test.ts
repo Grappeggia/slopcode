@@ -2260,7 +2260,7 @@ describe("ProviderTransform.variants", () => {
       expect(result.max).toEqual({
         thinkingConfig: {
           includeThoughts: true,
-          thinkingBudget: 24576,
+          thinkingBudget: 32768,
         },
       })
     })
@@ -2319,6 +2319,70 @@ describe("ProviderTransform.variants", () => {
       })
       const result = ProviderTransform.variants(model)
       expect(Object.keys(result)).toEqual(["low", "high"])
+    })
+  })
+
+  describe("@jerome-benoit/sap-ai-provider-v2", () => {
+    const sapModel = (apiId: string, releaseDate = "2024-01-01") =>
+      createMockModel({
+        id: `sap-ai-core/${apiId}`,
+        providerID: "sap-ai-core",
+        api: {
+          id: apiId,
+          url: "https://api.ai.sap",
+          npm: "@jerome-benoit/sap-ai-provider-v2",
+        },
+        release_date: releaseDate,
+      })
+
+    test("anthropic sonnet 4 returns budget_tokens variants under modelParams", () => {
+      const result = ProviderTransform.variants(sapModel("anthropic--claude-sonnet-4"))
+      expect(Object.keys(result)).toEqual(["high", "max"])
+      expect(result.high).toEqual({
+        modelParams: { thinking: { type: "enabled", budget_tokens: 16000 } },
+      })
+      expect(result.max).toEqual({
+        modelParams: { thinking: { type: "enabled", budget_tokens: 31999 } },
+      })
+    })
+
+    test("anthropic opus 4.7 returns adaptive variants under modelParams", () => {
+      const result = ProviderTransform.variants(sapModel("anthropic--claude-4.7-opus"))
+      expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh", "max"])
+      expect(result.high).toEqual({
+        modelParams: {
+          thinking: { type: "adaptive", display: "summarized" },
+          output_config: { effort: "high" },
+        },
+      })
+      expect(result.xhigh).toEqual({
+        modelParams: {
+          thinking: { type: "adaptive", display: "summarized" },
+          output_config: { effort: "xhigh" },
+        },
+      })
+    })
+
+    test("gemini 2.5 pro returns thinkingConfig variants under modelParams", () => {
+      const result = ProviderTransform.variants(sapModel("gemini-2.5-pro"))
+      expect(Object.keys(result)).toEqual(["high", "max"])
+      expect(result.high).toEqual({
+        modelParams: { thinkingConfig: { includeThoughts: true, thinkingBudget: 16000 } },
+      })
+      expect(result.max).toEqual({
+        modelParams: { thinkingConfig: { includeThoughts: true, thinkingBudget: 32768 } },
+      })
+    })
+
+    test("gpt models return reasoning_effort variants under modelParams", () => {
+      const result = ProviderTransform.variants(sapModel("azure-openai--gpt-5", "2025-11-13"))
+      expect(Object.keys(result)).toEqual(["none", "minimal", "low", "medium", "high"])
+      expect(result.low).toEqual({
+        modelParams: { reasoning_effort: "low" },
+      })
+      expect(result.minimal).toEqual({
+        modelParams: { reasoning_effort: "minimal" },
+      })
     })
   })
 
