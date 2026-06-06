@@ -571,8 +571,9 @@ export const AuthLogoutCommand = cmd({
       prompts.outro(`Logged out from ${providerName(match[0], database)}`)
       return
     }
-    const providerID = await prompts.select({
+    const providerID = await prompts.autocomplete({
       message: "Select provider",
+      maxItems: 8,
       options: credentials.map(([key, value]) => ({
         label: providerName(key, database) + UI.Style.TEXT_DIM + " (" + value.type + ")",
         value: key,
