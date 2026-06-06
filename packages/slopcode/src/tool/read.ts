@@ -19,6 +19,11 @@ const MAX_LINE_LENGTH = 2000
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
 const MAX_BYTES = 50 * 1024
 const MAX_BYTES_LABEL = `${MAX_BYTES / 1024} KB`
+const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
+const MAX_IMAGE_BASE64_BYTES = 5 * 1024 * 1024
+const MAX_IMAGE_WIDTH = 2_000
+const MAX_IMAGE_HEIGHT = 2_000
+const JPEG_QUALITIES = [80, 85, 70, 55, 40]
 
 export const ReadTool = Tool.define("read", {
   description: DESCRIPTION,
@@ -125,6 +130,9 @@ export const ReadTool = Tool.define("read", {
     const isPdf = mime === "application/pdf"
     if (isImage || isPdf) {
       const msg = `${isImage ? "Image" : "PDF"} read successfully`
+      const attachment = isImage
+        ? await imageAttachment(filepath, mime, await Filesystem.readBytes(filepath))
+        : { mime, bytes: await Filesystem.readBytes(filepath) }
       return {
         title,
         output: msg,
@@ -136,8 +144,8 @@ export const ReadTool = Tool.define("read", {
         attachments: [
           {
             type: "file",
-            mime,
-            url: `data:${mime};base64,${(await Filesystem.readBytes(filepath)).toString("base64")}`,
+            mime: attachment.mime,
+            url: `data:${attachment.mime};base64,${attachment.bytes.toString("base64")}`,
           },
         ],
       }
@@ -238,6 +246,78 @@ export const ReadTool = Tool.define("read", {
     }
   },
 })
+
+async function imageAttachment(filepath: string, mime: string, bytes: Buffer) {
+  if (!SUPPORTED_IMAGE_MIMES.has(mime)) return { mime, bytes }
+
+  const cfg = (await Config.get()).attachment?.image ?? {}
+  const limits = {
+    autoResize: cfg.auto_resize ?? true,
+    maxWidth: cfg.max_width ?? MAX_IMAGE_WIDTH,
+    maxHeight: cfg.max_height ?? MAX_IMAGE_HEIGHT,
+    maxBase64Bytes: cfg.max_base64_bytes ?? MAX_IMAGE_BASE64_BYTES,
+  }
+  const sharp = (await import("sharp")).default
+  const image = sharp(bytes, { limitInputPixels: false })
+  const meta = await image.metadata().catch(() => {
+    throw new Error(`Image could not be decoded: ${filepath}`)
+  })
+  const width = meta.width ?? 0
+  const height = meta.height ?? 0
+  const size = Buffer.byteLength(bytes.toString("base64"), "utf8")
+  if (
+    width > 0 &&
+    height > 0 &&
+    width <= limits.maxWidth &&
+    height <= limits.maxHeight &&
+    size <= limits.maxBase64Bytes
+  ) {
+    return { mime, bytes }
+  }
+  if (!limits.autoResize) {
+    throw new Error(
+      `Image ${filepath} is ${width}x${height} with base64 size ${size}, exceeding configured image attachment limits ${limits.maxWidth}x${limits.maxHeight}/${limits.maxBase64Bytes} bytes`,
+    )
+  }
+
+  const scale = Math.min(1, limits.maxWidth / Math.max(width, 1), limits.maxHeight / Math.max(height, 1))
+  const sizes = Array.from({ length: 32 }).reduce<Array<{ width: number; height: number }>>((acc) => {
+    const previous = acc.at(-1) ?? {
+      width: Math.max(1, Math.round(Math.max(width, 1) * scale)),
+      height: Math.max(1, Math.round(Math.max(height, 1) * scale)),
+    }
+    const next =
+      acc.length === 0
+        ? previous
+        : {
+            width: previous.width === 1 ? 1 : Math.max(1, Math.floor(previous.width * 0.75)),
+            height: previous.height === 1 ? 1 : Math.max(1, Math.floor(previous.height * 0.75)),
+          }
+    if (acc.some((item) => item.width === next.width && item.height === next.height)) return acc
+    return [...acc, next]
+  }, [])
+
+  for (const size of sizes) {
+    const resized = sharp(bytes, { limitInputPixels: false }).resize(size.width, size.height, {
+      fit: "inside",
+      withoutEnlargement: true,
+    })
+    const png = await resized.clone().png().toBuffer()
+    if (Buffer.byteLength(png.toString("base64"), "utf8") <= limits.maxBase64Bytes) {
+      return { mime: "image/png", bytes: png }
+    }
+    for (const quality of JPEG_QUALITIES) {
+      const jpeg = await resized.clone().jpeg({ quality }).toBuffer()
+      if (Buffer.byteLength(jpeg.toString("base64"), "utf8") <= limits.maxBase64Bytes) {
+        return { mime: "image/jpeg", bytes: jpeg }
+      }
+    }
+  }
+
+  throw new Error(
+    `Image ${filepath} could not be resized within configured image attachment limits ${limits.maxWidth}x${limits.maxHeight}/${limits.maxBase64Bytes} bytes`,
+  )
+}
 
 async function isBinaryFile(filepath: string, fileSize: number): Promise<boolean> {
   const ext = path.extname(filepath).toLowerCase()

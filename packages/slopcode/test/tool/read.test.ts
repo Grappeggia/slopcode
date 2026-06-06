@@ -416,6 +416,99 @@ describe("tool.read truncation", () => {
     })
   })
 
+  test("resizes supported image files using attachment config", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const sharp = (await import("sharp")).default
+        await Bun.write(
+          path.join(dir, "slopcode.json"),
+          JSON.stringify({
+            attachment: {
+              image: {
+                max_width: 10,
+                max_height: 10,
+                max_base64_bytes: 500,
+              },
+            },
+          }),
+        )
+        await Bun.write(
+          path.join(dir, "large.png"),
+          await sharp({
+            create: {
+              width: 80,
+              height: 60,
+              channels: 3,
+              background: { r: 210, g: 20, b: 80 },
+            },
+          })
+            .png()
+            .toBuffer(),
+        )
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const sharp = (await import("sharp")).default
+        const read = await ReadTool.init()
+        const result = await read.execute({ filePath: path.join(tmp.path, "large.png") }, ctx)
+        const attachment = result.attachments?.[0]
+        expect(attachment?.type).toBe("file")
+        expect(attachment?.mime).toBe("image/png")
+
+        const data = attachment!.url.split(",")[1]
+        const metadata = await sharp(Buffer.from(data, "base64")).metadata()
+        expect(metadata.width).toBeLessThanOrEqual(10)
+        expect(metadata.height).toBeLessThanOrEqual(10)
+        expect(Buffer.byteLength(data, "utf8")).toBeLessThanOrEqual(500)
+      },
+    })
+  })
+
+  test("rejects oversized supported images when auto resize is disabled", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const sharp = (await import("sharp")).default
+        await Bun.write(
+          path.join(dir, "slopcode.json"),
+          JSON.stringify({
+            attachment: {
+              image: {
+                auto_resize: false,
+                max_width: 10,
+                max_height: 10,
+                max_base64_bytes: 500,
+              },
+            },
+          }),
+        )
+        await Bun.write(
+          path.join(dir, "large.png"),
+          await sharp({
+            create: {
+              width: 80,
+              height: 60,
+              channels: 3,
+              background: { r: 20, g: 90, b: 210 },
+            },
+          })
+            .png()
+            .toBuffer(),
+        )
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const read = await ReadTool.init()
+        await expect(read.execute({ filePath: path.join(tmp.path, "large.png") }, ctx)).rejects.toThrow(
+          "exceeding configured image attachment limits",
+        )
+      },
+    })
+  })
+
   test(".fbs files (FlatBuffers schema) are read as text, not images", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
