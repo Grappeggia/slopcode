@@ -1024,7 +1024,7 @@ setTimeout(() => {
       expect(configPatches).toContainEqual({ autocomplete: { provider_model_overrides: { openai: "gpt-5" } } })
       expect(configPatches).toContainEqual({ shell: { program: "/data/data/com.termux/files/usr/bin/zsh" } })
       const normalized = stripAnsi(stdout).replace(/\s+/g, "")
-      expect(normalized).toContain("AutocompleteModel")
+      expect(normalized).toContain("Use/models-completion")
       expect(normalized).toContain("OpenAIprovideropenai")
       expect(normalized).toContain("Variants")
       expect(normalized).toContain("Variantfast")

@@ -18,6 +18,13 @@ function crash(screen: string) {
   return screen.includes("A fatal error occurred!") || screen.includes("context must be used within a context provider")
 }
 
+function body(screen: string) {
+  return screen
+    .split("\n")
+    .filter((line) => !line.includes("● Tip"))
+    .join("\n")
+}
+
 describe("prompt slash new e2e", () => {
   test("opens a fresh draft without carrying /new into the next prompt", async () => {
     await using tmp = await tmpdir({ git: true })
@@ -50,13 +57,13 @@ describe("prompt slash new e2e", () => {
         const screen = app.text()
         if (crash(screen)) throw new Error(screen)
         if (!screen.includes("New Session")) return
-        if (screen.includes("/new")) return
+        if (body(screen).includes("/new")) return
         return screen
       }, 10_000).catch(() => {
         throw new Error(app.text())
       })
 
-      expect(opened).not.toContain("/new")
+      expect(body(opened)).not.toContain("/new")
 
       app.pty.write("after")
 
@@ -64,14 +71,14 @@ describe("prompt slash new e2e", () => {
         const screen = app.text()
         if (crash(screen)) throw new Error(screen)
         if (!screen.includes("after")) return
-        if (screen.includes("/newafter") || screen.includes("/new after")) return
+        if (body(screen).includes("/newafter") || body(screen).includes("/new after")) return
         return screen
       }, 5_000).catch(() => {
         throw new Error(app.text())
       })
 
       expect(typed).toContain("after")
-      expect(typed).not.toContain("/new")
+      expect(body(typed)).not.toContain("/new")
     } finally {
       await app.stop()
     }
