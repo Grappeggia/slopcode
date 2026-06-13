@@ -34,27 +34,25 @@ export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers)
         return HttpServerResponse.stream(
           Stream.make(connected).pipe(
             Stream.concat(
-              events
-                .all()
-                .pipe(
-                  Stream.filter(
-                    (event) =>
-                      event.location?.directory === location.directory &&
-                      event.location.workspaceID === location.workspaceID,
-                  ),
-                  Stream.map((event) => ({
-                    id: event.id,
-                    type: event.type,
-                    ...(event.metadata ? { metadata: event.metadata } : {}),
-                    ...(event.version === undefined ? {} : { version: event.version }),
-                    location: new Location.Info({
-                      directory: event.location?.directory ?? location.directory,
-                      workspaceID: event.location?.workspaceID ?? location.workspaceID,
-                      project: location.project,
-                    }),
-                    data: event.data,
-                  })),
+              events.all().pipe(
+                Stream.filter(
+                  (event) =>
+                    event.location?.directory === location.directory &&
+                    event.location.workspaceID === location.workspaceID,
                 ),
+                Stream.map((event) => ({
+                  id: event.id,
+                  type: event.type,
+                  ...(event.metadata ? { metadata: event.metadata } : {}),
+                  ...(event.version === undefined ? {} : { version: event.version }),
+                  location: new Location.Info({
+                    directory: event.location?.directory ?? location.directory,
+                    workspaceID: event.location?.workspaceID ?? location.workspaceID,
+                    project: location.project,
+                  }),
+                  data: event.data,
+                })),
+              ),
             ),
             Stream.map(eventData),
             Stream.pipeThroughChannel(Sse.encode()),

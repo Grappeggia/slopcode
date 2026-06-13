@@ -181,9 +181,7 @@ const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effe
 )
 
 const statusResponse = lazy(() => HttpServerResponse.jsonUnsafe({ healthy: true }))
-const statusRoute = HttpRouter.use((router) =>
-  router.add("GET", "/status", () => Effect.succeed(statusResponse())),
-)
+const statusRoute = HttpRouter.use((router) => router.add("GET", "/status", () => Effect.succeed(statusResponse())))
 
 const uiRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
