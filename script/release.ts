@@ -104,18 +104,24 @@ await $`bun ./script/publish.ts`.env({
   SLOPCODE_PREPARE_ONLY: "true",
 })
 
-const sha = (await $`git rev-parse HEAD`.text()).trim()
+const before = new Set(
+  parse<Array<{ databaseId: number }>>(
+    await $`gh run list --workflow publish.yml --branch ${ref} --json databaseId --limit 30`.text(),
+  ).map((item) => item.databaseId),
+)
 
 await $`gh workflow run publish.yml --ref ${ref} -f version=${version}`
 
 const waitForRun = async (left: number): Promise<{ databaseId: number; url?: string }> => {
-  const runs = parse<Array<{ databaseId: number; headSha?: string; url?: string }>>(
-    await $`gh run list --workflow publish.yml --branch ${ref} --json databaseId,headSha,url`.text(),
+  const runs = parse<Array<{ databaseId: number; displayTitle?: string; url?: string }>>(
+    await $`gh run list --workflow publish.yml --branch ${ref} --json databaseId,displayTitle,url --limit 30`.text(),
   )
-  const hit = runs.find((item) => item.headSha === sha)
+  const hit =
+    runs.find((item) => !before.has(item.databaseId) && item.displayTitle === `release ${version}`) ??
+    runs.find((item) => !before.has(item.databaseId))
   if (hit) return hit
   if (left <= 0) {
-    throw new Error(`Timed out waiting for publish.yml run for ${sha}`)
+    throw new Error(`Timed out waiting for publish.yml run for ${version}`)
   }
   const next = Math.min(runPoll, left)
   await Bun.sleep(next)

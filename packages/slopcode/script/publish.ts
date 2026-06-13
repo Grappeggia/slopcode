@@ -6,6 +6,7 @@ import { fileURLToPath } from "url"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
+const dry = process.env.SLOPCODE_PUBLISH_DRY_RUN === "true"
 
 async function published(name: string, version: string) {
   return (await $`npm view ${name}@${version} version`.nothrow()).exitCode === 0
@@ -15,6 +16,11 @@ async function publish(dir: string, name: string, version: string) {
   // GitHub artifact downloads can drop the executable bit, and Docker uses the
   // unpacked dist binaries directly rather than the published tarball.
   if (process.platform !== "win32") await $`chmod -R 755 .`.cwd(dir)
+  if (dry) {
+    console.log(`dry run ${name}@${version}`)
+    await $`bun pm pack --filename ${name.replaceAll("/", "-")}.tgz`.cwd(dir)
+    return
+  }
   if (await published(name, version)) {
     console.log(`already published ${name}@${version}`)
     return
@@ -24,12 +30,18 @@ async function publish(dir: string, name: string, version: string) {
 }
 
 const binaries: Record<string, string> = {}
+const packages = []
 for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" })) {
-  const pkg = await Bun.file(`./dist/${filepath}`).json()
-  binaries[pkg.name] = pkg.version
+  const json = (await Bun.file(`./dist/${filepath}`).json()) as { name: string; version: string }
+  const dir = filepath.replace(/\/package\.json$/, "")
+  packages.push({ dir, name: json.name, version: json.version })
+  binaries[json.name] = json.version
 }
 console.log("binaries", binaries)
 const version = Object.values(binaries)[0]
+if (!version) {
+  throw new Error("Missing binary packages in ./dist")
+}
 
 await $`mkdir -p ./dist/${pkg.name}`
 await $`mkdir -p ./dist/${pkg.name}/bin`
@@ -72,8 +84,8 @@ await Bun.file(`./dist/${pkg.name}/package.json`).write(
   ),
 )
 
-const tasks = Object.entries(binaries).map(async ([name]) => {
-  await publish(`./dist/${name}`, name, binaries[name])
+const tasks = packages.map(async (item) => {
+  await publish(`./dist/${item.dir}`, item.name, item.version)
 })
 await Promise.all(tasks)
 await publish(`./dist/${pkg.name}`, `${pkg.name}-ai`, version)
@@ -84,7 +96,7 @@ const tags = [`${image}:${version}`, `${image}:${Script.channel}`]
 const tagFlags = tags.flatMap((t) => ["-t", t])
 
 // registries
-if (!Script.preview) {
+if (!Script.preview && process.env.SLOPCODE_PUBLISH_LEGACY_REGISTRIES === "true") {
   await $`docker buildx build --platform ${platforms} ${tagFlags} --push .`
   // Calculate SHA values
   const arm64Sha = await $`sha256sum ./dist/slopcode-linux-arm64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
@@ -210,4 +222,7 @@ if (!Script.preview) {
     await $`cd ./dist/homebrew-tap && git commit -m "Update to v${Script.version}"`
     await $`cd ./dist/homebrew-tap && git push`
   }
+}
+if (!Script.preview && process.env.SLOPCODE_PUBLISH_LEGACY_REGISTRIES !== "true") {
+  console.log("legacy registries: skipped")
 }
