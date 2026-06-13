@@ -13,7 +13,7 @@ SlopCode obsługuje formaty **JSON** i **JSONC** (JSON z komentarzami).
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   // Theme configuration
   "theme": "slopcode",
   "model": "anthropic/claude-sonnet-4-5",
@@ -94,7 +94,9 @@ Możesz włączyć serwer w konfiguracji projektu:
 
 ### Globalna
 
-Umieść swoją globalną konfigurację SlopCode w `~/.config/slopcode/slopcode.json`. Użyj jej do ustawień ogólnych dla użytkownika, takich jak motywy, domyślny dostawca lub skróty klawiszowe.
+Umieść swoją globalną konfigurację SlopCode w `~/.config/slopcode/slopcode.json`. Użyj jej do ustawień ogólnych dla użytkownika, takich jak dostawcy, modele i uprawnienia.
+
+Dla ustawień specyficznych dla TUI, użyj `~/.config/slopcode/tui.json`.
 
 Konfiguracja globalna ma pierwszeństwo przed konfiguracją zdalną.
 
@@ -104,8 +106,10 @@ Konfiguracja globalna ma pierwszeństwo przed konfiguracją zdalną.
 
 Dodaj `slopcode.json` w katalogu głównym projektu. Konfiguracja projektu ma najwyższy priorytet wśród plików konfiguracyjnych — nadpisuje konfiguracje globalne i zdalne.
 
+Dla ustawień TUI specyficznych dla projektu, dodaj plik `tui.json` obok niego.
+
 :::tip
-Dodaj ten plik do kontroli wersji, aby udostępniać konfigurację zespołowi.
+Umieść konfigurację specyficzną dla projektu w katalogu głównym projektu.
 :::
 
 Kiedy SlopCode się uruchamia, szuka pliku konfiguracyjnego w katalogu głównym repozytorium Git.
@@ -142,7 +146,7 @@ Katalog niestandardowy jest ładowany po globalnej konfiguracji i katalogach `.s
 
 ## Schemat
 
-Plik konfiguracyjny ma schemat JSON dostępny pod adresem [**`slopcode.dev/config.json`**](https://slopcode.dev/config.json).
+Plik konfiguracyjny ma schemat JSON dostępny pod adresem [**`slopcode.ai/config.json`**](https://slopcode.ai/config.json).
 
 Twój edytor powinien zapewniać walidację i autouzupełnianie na podstawie tego schematu.
 
@@ -150,28 +154,24 @@ Twój edytor powinien zapewniać walidację i autouzupełnianie na podstawie teg
 
 ### TUI
 
-Możesz skonfigurować zachowanie TUI za pomocą opcji `tui`.
+Użyj dedykowanego pliku `tui.json` (lub `tui.jsonc`) dla ustawień specyficznych dla TUI.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  "tui": {
-    "scroll_speed": 3,
-    "scroll_acceleration": {
-      "enabled": true
-    },
-    "diff_style": "auto"
-  }
+  "$schema": "https://slopcode.ai/tui.json",
+  "scroll_speed": 3,
+  "scroll_acceleration": {
+    "enabled": true
+  },
+  "diff_style": "auto"
 }
 ```
 
-Dostępne opcje:
+Użyj `SLOPCODE_TUI_CONFIG`, aby wskazać niestandardowy plik konfiguracyjny TUI.
 
-- `scroll_acceleration.enabled` - Włącz przyspieszenie przewijania na gładzikach macOS. **Ma pierwszeństwo przed `scroll_speed`.**
-- `scroll_speed` - Niestandardowy mnożnik szybkości przewijania (domyślnie: `3`, minimalnie: `1`). Ignorowane, jeśli `scroll_acceleration.enabled` ustawiono na `true`.
-- `diff_style` – Sterowanie renderowaniem różnic. `"auto"` przełącza się w zależności od szerokości terminala, `"stacked"` zawsze wymusza pojedynczą kolumnę.
+Przestarzałe klucze `theme`, `keybinds` i `tui` w `slopcode.json` są wycofywane i automatycznie migrowane, gdy to możliwe.
 
-[Dowiedz się więcej o korzystaniu z TUI](/docs/tui).
+[Dowiedz się więcej o konfiguracji TUI tutaj](/docs/tui#configure).
 
 ---
 
@@ -181,7 +181,7 @@ Możesz skonfigurować serwer dla `slopcode serve` i `slopcode web` za pomocą o
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "server": {
     "port": 4096,
     "hostname": "0.0.0.0",
@@ -210,7 +210,7 @@ Kontroluj, które narzędzia są dostępne dla LLM, za pomocą opcji `tools`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "tools": {
     "write": false,
     "bash": false
@@ -228,7 +228,7 @@ Możesz skonfigurować dostawców i modele, których chcesz używać, za pomocą
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {},
   "model": "anthropic/claude-sonnet-4-5",
   "small_model": "anthropic/claude-haiku-4-5"
@@ -241,7 +241,7 @@ Opcje dostawcy mogą zawierać `timeout` i `setCacheKey`:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -270,7 +270,7 @@ Amazon Bedrock umożliwia konfigurację połączenia z AWS:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -297,16 +297,16 @@ Token okaziciela (`AWS_BEARER_TOKEN_BEDROCK` lub `/connect`) ma pierwszeństwo p
 
 ### Theme (Motyw)
 
-Skonfiguruj motyw interfejsu SlopCode za pomocą opcji `theme`.
+Ustaw motyw interfejsu użytkownika w `tui.json`.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  "theme": ""
+  "$schema": "https://slopcode.ai/tui.json",
+  "theme": "tokyonight"
 }
 ```
 
-[Dowiedz się więcej o motywach](/docs/themes).
+[Dowiedz się więcej tutaj](/docs/themes).
 
 ---
 
@@ -316,7 +316,7 @@ Możesz zdefiniować i skonfigurować agentów za pomocą opcji `agent`.
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "code-reviewer": {
       "description": "Reviews code for best practices and potential issues",
@@ -342,7 +342,7 @@ Domyślnego agenta można ustawić za pomocą opcji `default_agent`. Określa to
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "default_agent": "plan"
 }
 ```
@@ -359,7 +359,7 @@ Możesz skonfigurować [udostępnianie](/docs/share) za pomocą opcji `share`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "share": "manual"
 }
 ```
@@ -380,7 +380,7 @@ Możesz zdefiniować niestandardowe polecenia dla powtarzalnych zadań za pomoc�
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "command": {
     "test": {
       "template": "Run the full test suite with coverage report and show any failures.\nFocus on the failing tests and suggest fixes.",
@@ -402,16 +402,16 @@ Możesz także definiować polecenia przy użyciu plików Markdown w `~/.config/
 
 ### Keybinds (Skróty klawiszowe)
 
-Możesz dostosować skróty klawiszowe za pomocą opcji `keybinds`.
+Dostosuj skróty klawiszowe w `tui.json`.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {}
 }
 ```
 
-[Dowiedz się więcej o skrótach klawiszowych](/docs/keybinds).
+[Dowiedz się więcej tutaj](/docs/keybinds).
 
 ---
 
@@ -421,7 +421,7 @@ SlopCode może automatycznie pobierać nowe wersje. Możesz to kontrolować za p
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "autoupdate": false
 }
 ```
@@ -437,7 +437,7 @@ Możesz skonfigurować formatery kodu za pomocą opcji `formatter`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -465,7 +465,7 @@ Na przykład, aby wymagać zatwierdzenia dla narzędzi `edit` i `bash`:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "ask",
     "bash": "ask"
@@ -483,16 +483,16 @@ Możesz kontrolować zachowanie kompaktowania kontekstu za pomocą opcji `compac
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "compaction": {
     "auto": true,
-    "prune": true
+    "prune": false
   }
 }
 ```
 
 - `auto` - Automatycznie kompaktuj, gdy kontekst jest pełny (domyślnie: `true`).
-- `prune` - Usuń stare wyniki narzędzi, aby zaoszczędzić tokeny (domyślnie: `true`).
+- `prune` - Usuń stare wyniki narzędzi, aby zaoszczędzić tokeny (domyślnie: `false`).
 
 ---
 
@@ -502,7 +502,7 @@ Skonfiguruj ignorowane wzorce plików dla obserwatora plików za pomocą `watche
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "watcher": {
     "ignore": ["node_modules/**", "dist/**", ".git/**"]
   }
@@ -519,7 +519,7 @@ Skonfiguruj serwery MCP, których chcesz używać, za pomocą opcji `mcp`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "mcp": {}
 }
 ```
@@ -536,7 +536,7 @@ Umieść pliki wtyczek w `.slopcode/plugins/` lub `~/.config/slopcode/plugins/`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": ["slopcode-helicone-session", "@my-org/custom-plugin"]
 }
 ```
@@ -551,7 +551,7 @@ Określ pliki instrukcji dla modelu, używając opcji `instructions`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["CONTRIBUTING.md", "docs/guidelines.md", ".cursor/rules/*.md"]
 }
 ```
@@ -566,7 +566,7 @@ Zapobiegaj automatycznemu ładowaniu dostawców za pomocą opcji `disabled_provi
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "disabled_providers": ["openai", "gemini"]
 }
 ```
@@ -589,7 +589,7 @@ Możesz określić listę dozwolonych dostawców za pomocą `enabled_providers`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "enabled_providers": ["anthropic", "openai"]
 }
 ```
@@ -610,7 +610,7 @@ Klucz `experimental` zawiera opcje, które są we wczesnej fazie rozwoju.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "experimental": {}
 }
 ```
@@ -633,7 +633,7 @@ Użyj `{env:VARIABLE_NAME}`, aby wstawić wartość zmiennej środowiskowej:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "model": "{env:SLOPCODE_MODEL}",
   "provider": {
     "anthropic": {
@@ -656,7 +656,7 @@ Użyj `{file:path/to/file}`, aby wstawić zawartość pliku:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["./custom-instructions.md"],
   "provider": {
     "openai": {

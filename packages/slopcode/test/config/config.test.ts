@@ -1,1967 +1,1754 @@
-import { test, expect, describe, mock, afterEach } from "bun:test"
-import { Config } from "../../src/config/config"
-import { ConfigPlugin } from "../../src/config/plugin"
-import { Instance } from "../../src/project/instance"
+import { test, expect, describe, afterEach, beforeEach, spyOn } from "bun:test"
+import { ConfigV1 } from "@slopcode-ai/core/v1/config/config"
+import { Cause, Effect, Exit, Layer, Option } from "effect"
+import { NamedError } from "@slopcode-ai/core/util/error"
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { NodeFileSystem, NodePath } from "@effect/platform-node"
+import { Config } from "@/config/config"
+import { ConfigManaged } from "@/config/managed"
+import { ConfigParse } from "../../src/config/parse"
+import { EffectFlock } from "@slopcode-ai/core/util/effect-flock"
+
+import { InstanceRef } from "../../src/effect/instance-ref"
+import type { InstanceContext } from "../../src/project/instance-context"
 import { Auth } from "../../src/auth"
-import { AccountStateTable, AccountTable } from "../../src/account/account.sql"
-import { Database } from "../../src/storage/db"
-import { tmpdir } from "../fixture/fixture"
-import { resetDatabase } from "../fixture/db"
+import { Account } from "../../src/account/account"
+import { AccessToken, AccountID, OrgID } from "../../src/account/schema"
+import { FSUtil } from "@slopcode-ai/core/fs-util"
+import { Env } from "../../src/env"
+import {
+  provideTmpdirInstance,
+  TestInstance,
+  tmpdir,
+  tmpdirScoped,
+  withTestInstance,
+  provideInstanceEffect,
+  testInstanceStoreLayer,
+} from "../fixture/fixture"
+import { InstanceRuntime } from "@/project/instance-runtime"
+import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
+import { testEffect } from "../lib/effect"
 import path from "path"
 import fs from "fs/promises"
+import os from "os"
 import { pathToFileURL } from "url"
-import { Global } from "../../src/global"
-import { Filesystem } from "../../src/util/filesystem"
+import { Global } from "@slopcode-ai/core/global"
+import { ProjectV2 } from "@slopcode-ai/core/project"
+import { Filesystem } from "@/util/filesystem"
+import { ConfigPlugin } from "@/config/plugin"
+import { ConfigPluginV1 } from "@slopcode-ai/core/v1/config/plugin"
+import { AccountTest } from "../fake/account"
+import { AuthTest } from "../fake/auth"
+import { NpmTest } from "../fake/npm"
 
+/** Infra layer that provides FileSystem, Path, ChildProcessSpawner for test fixtures */
+const infra = CrossSpawnSpawner.defaultLayer.pipe(
+  Layer.provideMerge(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer)),
+)
+
+const testFlock = EffectFlock.defaultLayer
+
+const unexpectedHttp = HttpClient.make((request) =>
+  Effect.die(`unexpected http request: ${request.method} ${request.url}`),
+)
+
+const json = (request: Parameters<typeof HttpClientResponse.fromWeb>[0], body: unknown, status = 200) =>
+  HttpClientResponse.fromWeb(
+    request,
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    }),
+  )
+
+const wellKnownAuth = (url: string) =>
+  Layer.mock(Auth.Service)({
+    all: () =>
+      Effect.succeed({
+        [url]: new Auth.WellKnown({ type: "wellknown", key: "TEST_TOKEN", token: "test-token" }),
+      }),
+  })
+
+function remoteConfigClient(input: {
+  wellKnown: unknown
+  remote?: unknown
+  remoteHtml?: string
+  seen: { wellKnown?: string; remote?: string; authorization?: string }
+}) {
+  return HttpClient.make((request) => {
+    if (request.url.includes(".well-known/slopcode")) {
+      input.seen.wellKnown = request.url
+      return Effect.succeed(json(request, input.wellKnown))
+    }
+    if (request.url.includes("config.example.com") && (input.remote !== undefined || input.remoteHtml !== undefined)) {
+      input.seen.remote = request.url
+      input.seen.authorization = request.headers.authorization
+      if (input.remoteHtml !== undefined) {
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(input.remoteHtml, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } }),
+          ),
+        )
+      }
+      return Effect.succeed(json(request, input.remote))
+    }
+    return Effect.succeed(json(request, {}, 404))
+  })
+}
+
+const configLayer = (
+  options: {
+    auth?: Layer.Layer<Auth.Service>
+    account?: Layer.Layer<Account.Service>
+    client?: HttpClient.HttpClient
+  } = {},
+) =>
+  Config.layer.pipe(
+    Layer.provide(testFlock),
+    Layer.provide(Env.defaultLayer),
+    Layer.provide(options.auth ?? AuthTest.empty),
+    Layer.provide(options.account ?? AccountTest.empty),
+    Layer.provideMerge(infra),
+    Layer.provide(NpmTest.noop),
+    Layer.provide(Layer.succeed(HttpClient.HttpClient, options.client ?? unexpectedHttp)),
+    Layer.provideMerge(FSUtil.defaultLayer),
+  )
+
+const layer = configLayer()
+
+const it = testEffect(layer)
+const configIt = (options?: Parameters<typeof configLayer>[0]) => testEffect(configLayer(options))
+
+const schemaConfig = (config: object) => ({ $schema: "https://slopcode.ai/config.json", ...config })
+
+const provideCurrentInstance = <A, E, R>(effect: Effect.Effect<A, E, R>, ctx: InstanceContext) =>
+  effect.pipe(Effect.provideService(InstanceRef, ctx))
+
+const load = (ctx: InstanceContext) =>
+  Effect.runPromise(
+    Config.Service.use((svc) => provideCurrentInstance(svc.get(), ctx)).pipe(Effect.scoped, Effect.provide(layer)),
+  )
+const clearEffect = (wait = false) =>
+  Config.use
+    .invalidate()
+    .pipe(
+      Effect.scoped,
+      Effect.provide(layer),
+      Effect.andThen(wait ? Effect.promise(() => InstanceRuntime.disposeAllInstances()) : Effect.void),
+    )
+const clear = (wait = false) => Effect.runPromise(clearEffect(wait))
 // Get managed config directory from environment (set in preload.ts)
 const managedConfigDir = process.env.SLOPCODE_TEST_MANAGED_CONFIG_DIR!
-const legacyGlobalConfigDir = path.join(path.dirname(Global.Path.config), "opencode")
+const originalTestToken = process.env.TEST_TOKEN
+const originalConsoleToken = process.env.SLOPCODE_CONSOLE_TOKEN
 
-afterEach(async () => {
-  Config.global.reset()
-  await fs.rm(managedConfigDir, { force: true, recursive: true }).catch(() => {})
-  for (const dir of [legacyGlobalConfigDir, Global.Path.config]) {
-    for (const file of [
-      "opencode.json",
-      "opencode.jsonc",
-      "slopcode.json",
-      "slopcode.jsonc",
-      "config.json",
-      "config",
-    ]) {
-      await fs.rm(path.join(dir, file), { force: true }).catch(() => {})
-    }
-  }
-  await resetDatabase()
+beforeEach(async () => {
+  await clear(true)
 })
 
-async function writeManagedSettings(settings: object, filename = "slopcode.json") {
-  await fs.mkdir(managedConfigDir, { recursive: true })
-  await Filesystem.write(path.join(managedConfigDir, filename), JSON.stringify(settings))
-}
+afterEach(async () => {
+  await fs.rm(managedConfigDir, { force: true, recursive: true }).catch(() => {})
+  if (originalTestToken === undefined) delete process.env.TEST_TOKEN
+  else process.env.TEST_TOKEN = originalTestToken
+  if (originalConsoleToken === undefined) delete process.env.SLOPCODE_CONSOLE_TOKEN
+  else process.env.SLOPCODE_CONSOLE_TOKEN = originalConsoleToken
+  await clear(true)
+})
+
+const writeManagedSettingsEffect = (settings: object, filename?: string) =>
+  FSUtil.use.writeWithDirs(path.join(managedConfigDir, filename ?? "slopcode.json"), JSON.stringify(settings))
 
 async function writeConfig(dir: string, config: object, name = "slopcode.json") {
   await Filesystem.write(path.join(dir, name), JSON.stringify(config))
 }
 
-test("loads config with defaults when no files exist", async () => {
-  await using tmp = await tmpdir()
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.username).toBeDefined()
-      expect(config.session?.turn_timeout_ms).toBe(Config.DEFAULT_SESSION_TURN_TIMEOUT)
-    },
-  })
-})
+const writeConfigEffect = (dir: string, config: object, name = "slopcode.json") =>
+  FSUtil.use.writeWithDirs(path.join(dir, name), JSON.stringify(config))
 
-test("loads JSON config file", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        model: "test/model",
-        username: "testuser",
-      })
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.model).toBe("test/model")
-      expect(config.username).toBe("testuser")
-    },
-  })
-})
+const withInstanceDir = <A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.provideService(TestInstance, { directory: dir }),
+    provideInstanceEffect(dir),
+    Effect.provide(testInstanceStoreLayer),
+    Effect.provide(CrossSpawnSpawner.defaultLayer),
+  )
 
-test("loads legacy opencode.json config file", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(
-        dir,
-        {
-          $schema: "https://opencode.ai/config.json",
-          model: "legacy/model",
-          username: "legacy-user",
-        },
-        "opencode.json",
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.model).toBe("legacy/model")
-      expect(config.username).toBe("legacy-user")
-    },
-  })
-})
+const withGlobalConfigDir = <A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) =>
+  Effect.acquireUseRelease(
+    Effect.gen(function* () {
+      const previous = Global.Path.config
+      ;(Global.Path as { config: string }).config = dir
+      yield* clearEffect(true)
+      return previous
+    }),
+    () => effect,
+    (previous) =>
+      Effect.gen(function* () {
+        ;(Global.Path as { config: string }).config = previous
+        yield* clearEffect(true)
+      }),
+  )
 
-test("prefers slopcode.json over legacy opencode.json", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(
-        dir,
-        {
-          $schema: "https://opencode.ai/config.json",
-          model: "legacy/model",
-        },
-        "opencode.json",
-      )
-      await writeConfig(
-        dir,
-        {
-          $schema: "https://slopcode.dev/config.json",
-          model: "modern/model",
-        },
-        "slopcode.json",
-      )
-    },
+const withGlobalConfig = <A, E, R>(
+  input: { config?: object; name?: string },
+  fn: (input: { dir: string }) => Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    if (input.config) yield* writeConfigEffect(dir, schemaConfig(input.config), input.name)
+    return yield* withGlobalConfigDir(dir, fn({ dir }))
   })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.model).toBe("modern/model")
-    },
-  })
-})
 
-test("loads config from .opencode directory", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      const opencodeDir = path.join(dir, ".opencode")
-      await fs.mkdir(opencodeDir, { recursive: true })
-      const agentDir = path.join(opencodeDir, "agent")
-      await fs.mkdir(agentDir, { recursive: true })
+const withConfigTree = <A, E, R>(
+  input: { global?: object; project?: object; local?: object },
+  effect: Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped()
+    const global = yield* tmpdirScoped()
+    const directory = path.join(root, "project")
+    yield* Effect.all(
+      [
+        input.global ? writeConfigEffect(global, schemaConfig(input.global)) : undefined,
+        input.project ? writeConfigEffect(directory, schemaConfig(input.project)) : undefined,
+        input.local ? writeConfigEffect(path.join(directory, ".slopcode"), schemaConfig(input.local)) : undefined,
+      ].filter((effect): effect is Effect.Effect<void, FSUtil.Error, FSUtil.Service> => effect !== undefined),
+      { concurrency: "unbounded" },
+    )
+    return yield* withGlobalConfigDir(global, withInstanceDir(directory, effect))
+  })
 
-      await Filesystem.write(
-        path.join(agentDir, "legacy.md"),
-        `---
-model: test/model
----
-Legacy agent prompt`,
-      )
+const wellKnown = (input: {
+  authUrl?: string
+  config?: unknown
+  remoteConfig?: { url: string; headers?: Record<string, string> }
+  remote?: unknown
+  remoteHtml?: string
+  wellKnown?: unknown
+}) => {
+  const seen: { wellKnown?: string; remote?: string; authorization?: string } = {}
+  const client = remoteConfigClient({
+    seen,
+    wellKnown: input.wellKnown ?? {
+      ...(input.config !== undefined ? { config: input.config } : {}),
+      ...(input.remoteConfig !== undefined ? { remote_config: input.remoteConfig } : {}),
     },
+    remote: input.remote,
+    remoteHtml: input.remoteHtml,
   })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["legacy"]).toEqual(
-        expect.objectContaining({
-          name: "legacy",
-          model: "test/model",
-          prompt: "Legacy agent prompt",
-        }),
-      )
-    },
-  })
-})
+  return {
+    seen,
+    it: configIt({ auth: wellKnownAuth(input.authUrl ?? "https://example.com"), client }),
+  }
+}
 
-test("loads legacy global opencode config directory", async () => {
-  await using tmp = await tmpdir({
-    init: async () => {
-      await fs.mkdir(legacyGlobalConfigDir, { recursive: true })
-      await Filesystem.write(
-        path.join(legacyGlobalConfigDir, "opencode.json"),
-        JSON.stringify({
-          $schema: "https://opencode.ai/config.json",
-          model: "global/legacy",
-          username: "global-legacy-user",
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      Config.global.reset()
-      const config = await Config.get()
-      expect(config.model).toBe("global/legacy")
-      expect(config.username).toBe("global-legacy-user")
-    },
-  })
-})
+function withProcessEnv<A, E, R>(key: string, value: string | undefined, effect: Effect.Effect<A, E, R>) {
+  return withProcessEnvs({ [key]: value }, effect)
+}
 
-test("writes global updates to slopcode config without mutating legacy opencode config", async () => {
-  await using tmp = await tmpdir({
-    init: async () => {
-      for (const file of ["slopcode.jsonc", "slopcode.json", "config.json", "opencode.json", "opencode.jsonc"]) {
-        await fs.rm(path.join(Global.Path.config, file), { force: true }).catch(() => {})
+function withProcessEnvs<A, E, R>(entries: Record<string, string | undefined>, effect: Effect.Effect<A, E, R>) {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const originals: Record<string, string | undefined> = {}
+      for (const [key, value] of Object.entries(entries)) {
+        originals[key] = process.env[key]
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
       }
-      await fs.mkdir(legacyGlobalConfigDir, { recursive: true })
-      await Filesystem.write(
-        path.join(legacyGlobalConfigDir, "opencode.json"),
-        JSON.stringify({
-          $schema: "https://opencode.ai/config.json",
-          model: "global/legacy",
-          username: "global-legacy-user",
-        }),
-      )
-    },
-  })
+      return originals
+    }),
+    () => effect,
+    (originals) =>
+      Effect.sync(() => {
+        for (const [key, original] of Object.entries(originals)) {
+          if (original !== undefined) process.env[key] = original
+          else delete process.env[key]
+        }
+      }),
+  )
+}
 
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      Config.global.reset()
-      const legacyPath = path.join(legacyGlobalConfigDir, "opencode.json")
-      const legacyBefore = await Filesystem.readText(legacyPath)
+async function check(map: (dir: string) => string) {
+  if (process.platform !== "win32") return
+  await using globalTmp = await tmpdir()
+  await using tmp = await tmpdir({ git: true, config: { snapshot: true } })
+  const prev = Global.Path.config
+  ;(Global.Path as { config: string }).config = globalTmp.path
+  await clear()
+  try {
+    await writeConfig(globalTmp.path, {
+      $schema: "https://slopcode.ai/config.json",
+      snapshot: false,
+    })
+    await withTestInstance({
+      directory: map(tmp.path),
+      fn: async (ctx) => {
+        const cfg = await load(ctx)
+        expect(cfg.snapshot).toBe(true)
+        expect(ctx.directory).toBe(Filesystem.resolve(tmp.path))
+        expect(ctx.project.id).not.toBe(ProjectV2.ID.global)
+      },
+    })
+  } finally {
+    await InstanceRuntime.disposeAllInstances()
+    ;(Global.Path as { config: string }).config = prev
+    await clear()
+  }
+}
 
-      await Config.updateGlobal({
-        autocomplete: {
-          provider_model_overrides: {
-            openai: "codex-mini-latest",
-          },
-        },
-      })
+it.instance("loads config with defaults when no files exist", () =>
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.username).toBeDefined()
+  }),
+)
 
-      const legacyAfter = await Filesystem.readText(legacyPath)
-      expect(legacyAfter).toBe(legacyBefore)
+it.instance("falls back to generic username when system user info is unavailable", () =>
+  Effect.gen(function* () {
+    const userInfo = spyOn(os, "userInfo").mockImplementation(() => {
+      throw Object.assign(new Error("missing passwd entry"), { code: "ENOENT" })
+    })
+    try {
+      const config = yield* Config.use.get()
+      expect(config.username).toBe("user")
+    } finally {
+      userInfo.mockRestore()
+    }
+  }),
+)
 
-      const modernPath = path.join(Global.Path.config, "slopcode.jsonc")
-      expect(await Filesystem.exists(modernPath)).toBe(true)
+it.effect("creates global jsonc config with schema when no global configs exist", () =>
+  withGlobalConfig({}, ({ dir }) =>
+    Effect.gen(function* () {
+      yield* Config.use.get().pipe(provideInstanceEffect(dir))
 
-      const modern = JSON.parse(await Filesystem.readText(modernPath))
-      expect(modern.autocomplete?.provider_model_overrides?.openai).toBe("codex-mini-latest")
+      const content = yield* FSUtil.use.readFileString(path.join(dir, "slopcode.jsonc"))
+      expect(content).toContain('"$schema": "https://slopcode.ai/config.json"')
+    }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+  ),
+)
 
-      const global = await Config.getGlobal()
-      expect(global.model).toBe("global/legacy")
-      expect(global.autocomplete?.provider_model_overrides?.openai).toBe("codex-mini-latest")
-    },
+it.effect("does not create global config when SLOPCODE_CONFIG_DIR is set", () =>
+  Effect.gen(function* () {
+    const custom = yield* tmpdirScoped()
+    yield* withGlobalConfig({}, ({ dir }) =>
+      withProcessEnv(
+        "SLOPCODE_CONFIG_DIR",
+        custom,
+        Effect.gen(function* () {
+          yield* Config.use.get().pipe(provideInstanceEffect(dir))
+
+          expect(yield* FSUtil.use.existsSafe(path.join(dir, "slopcode.jsonc"))).toBe(false)
+        }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+      ),
+    )
+  }),
+)
+
+it.instance(
+  "loads JSON config file",
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.model).toBe("test/model")
+    expect(config.username).toBe("testuser")
+  }),
+  { config: { model: "test/model", username: "testuser" } },
+)
+
+it.instance(
+  "loads shell config field",
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.shell).toBe("bash")
+  }),
+  { config: { shell: "bash" } },
+)
+
+it.instance("updates config and preserves empty shell sentinel", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(
+      test.directory,
+      { $schema: "https://slopcode.ai/config.json", shell: "bash" },
+      "config.json",
+    )
+
+    yield* Config.Service.use((svc) => svc.update(ConfigParse.schema(ConfigV1.Info, { shell: "" }, "test:config")))
+
+    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
+    expect(writtenConfig).toMatchObject({ shell: "" })
+  }),
+)
+
+it.effect("updates global config and omits empty shell key in json", () =>
+  withGlobalConfig({ config: { shell: "bash" } }, ({ dir }) =>
+    Effect.gen(function* () {
+      yield* Config.use.updateGlobal({ shell: "" })
+
+      const writtenConfig = yield* FSUtil.use.readJson(path.join(dir, "slopcode.json"))
+      expect(writtenConfig).not.toHaveProperty("shell")
+    }),
+  ),
+)
+
+it.effect("updates global config and omits empty shell key in jsonc", () =>
+  withGlobalConfig({ config: { shell: "bash", model: "test/model" }, name: "slopcode.jsonc" }, ({ dir }) =>
+    Effect.gen(function* () {
+      yield* Config.use.updateGlobal({ shell: "" })
+
+      const file = path.join(dir, "slopcode.jsonc")
+      const writtenConfig = yield* FSUtil.use.readFileString(file)
+      const parsed = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(writtenConfig, file), file)
+      expect(writtenConfig).not.toContain('"shell"')
+      expect(parsed.shell).toBeUndefined()
+      expect(parsed.model).toBe("test/model")
+    }),
+  ),
+)
+
+it.instance(
+  "loads formatter boolean config",
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.formatter).toBe(true)
+  }),
+  { config: { formatter: true } },
+)
+
+it.instance(
+  "loads lsp boolean config",
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.lsp).toBe(true)
+  }),
+  { config: { lsp: true } },
+)
+
+test("loads project config from Git Bash and MSYS2 paths on Windows", async () => {
+  // Git Bash and MSYS2 both use /<drive>/... paths on Windows.
+  await check((dir) => {
+    const drive = dir[0].toLowerCase()
+    const rest = dir.slice(2).replaceAll("\\", "/")
+    return `/${drive}${rest}`
   })
 })
 
-test("ignores legacy tui keys in slopcode config", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        model: "test/model",
-        theme: "legacy",
-        tui: { scroll_speed: 4 },
-      })
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.model).toBe("test/model")
-      expect((config as Record<string, unknown>).theme).toBeUndefined()
-      expect((config as Record<string, unknown>).tui).toBeUndefined()
-    },
+test("loads project config from Cygwin paths on Windows", async () => {
+  await check((dir) => {
+    const drive = dir[0].toLowerCase()
+    const rest = dir.slice(2).replaceAll("\\", "/")
+    return `/cygdrive/${drive}${rest}`
   })
 })
 
-test("loads JSONC config file", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.jsonc"),
-        `{
+it.instance("ignores legacy tui keys in slopcode config", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      model: "test/model",
+      theme: "legacy",
+      tui: { scroll_speed: 4 },
+    })
+
+    const config = yield* Config.use.get()
+    expect(config.model).toBe("test/model")
+    expect((config as Record<string, unknown>).theme).toBeUndefined()
+    expect((config as Record<string, unknown>).tui).toBeUndefined()
+  }),
+)
+
+it.instance("loads JSONC config file", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, "slopcode.jsonc"),
+      `{
         // This is a comment
-        "$schema": "https://slopcode.dev/config.json",
+        "$schema": "https://slopcode.ai/config.json",
         "model": "test/model",
         "username": "testuser"
       }`,
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.model).toBe("test/model")
-      expect(config.username).toBe("testuser")
-    },
-  })
-})
+    )
+    const config = yield* Config.use.get()
+    expect(config.model).toBe("test/model")
+    expect(config.username).toBe("testuser")
+  }),
+)
 
-test("parses experimental.hashline_edit and experimental.hashline_autocorrect", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://opencode.ai/config.json",
-        experimental: {
-          hashline_edit: true,
-          hashline_autocorrect: true,
-        },
-      })
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.experimental?.hashline_edit).toBe(true)
-      expect(config.experimental?.hashline_autocorrect).toBe(true)
-    },
-  })
-})
-
-test("defaults queue_mode to serial and accepts explicit override", async () => {
-  await using defaults = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-      })
-    },
-  })
-  await Instance.provide({
-    directory: defaults.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.queue_mode).toBe("serial")
-    },
-  })
-
-  await using injection = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        queue_mode: "injection",
-      })
-    },
-  })
-  await Instance.provide({
-    directory: injection.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.queue_mode).toBe("injection")
-    },
-  })
-})
-
-test("rejects invalid queue_mode", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          queue_mode: "parallel",
-        }),
-      )
-    },
-  })
-
-  await expect(
-    Instance.provide({
-      directory: tmp.path,
-      fn: async () => Config.get(),
-    }),
-  ).rejects.toThrow(/ConfigInvalidError/)
-})
-
-test("merges multiple config files with correct precedence", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(
-        dir,
-        {
-          $schema: "https://slopcode.dev/config.json",
-          model: "base",
-          username: "base",
-        },
-        "slopcode.jsonc",
-      )
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        model: "override",
-      })
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.model).toBe("override")
-      expect(config.username).toBe("base")
-    },
-  })
-})
-
-test("handles environment variable substitution", async () => {
-  const originalEnv = process.env["TEST_VAR"]
-  process.env["TEST_VAR"] = "test-user"
-
-  try {
-    await using tmp = await tmpdir({
-      init: async (dir) => {
-        await writeConfig(dir, {
-          $schema: "https://slopcode.dev/config.json",
-          username: "{env:TEST_VAR}",
-        })
+it.instance("jsonc overrides json in the same directory", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(
+      test.directory,
+      {
+        $schema: "https://slopcode.ai/config.json",
+        model: "base",
+        username: "base",
       },
+      "slopcode.jsonc",
+    )
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      model: "override",
     })
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const config = await Config.get()
-        expect(config.username).toBe("test-user")
-      },
-    })
-  } finally {
-    if (originalEnv !== undefined) {
-      process.env["TEST_VAR"] = originalEnv
-    } else {
-      delete process.env["TEST_VAR"]
-    }
-  }
-})
+    const config = yield* Config.use.get()
+    expect(config.model).toBe("base")
+    expect(config.username).toBe("base")
+  }),
+)
 
-test("preserves env variables when adding $schema to config", async () => {
-  const originalEnv = process.env["PRESERVE_VAR"]
-  process.env["PRESERVE_VAR"] = "secret_value"
-
-  try {
-    await using tmp = await tmpdir({
-      init: async (dir) => {
-        // Config without $schema - should trigger auto-add
-        await Filesystem.write(
-          path.join(dir, "slopcode.json"),
-          JSON.stringify({
-            username: "{env:PRESERVE_VAR}",
-          }),
-        )
-      },
-    })
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const config = await Config.get()
-        expect(config.username).toBe("secret_value")
-
-        // Read the file to verify the env variable was preserved
-        const content = await Filesystem.readText(path.join(tmp.path, "slopcode.json"))
-        expect(content).toContain("{env:PRESERVE_VAR}")
-        expect(content).not.toContain("secret_value")
-        expect(content).toContain("$schema")
-      },
-    })
-  } finally {
-    if (originalEnv !== undefined) {
-      process.env["PRESERVE_VAR"] = originalEnv
-    } else {
-      delete process.env["PRESERVE_VAR"]
-    }
-  }
-})
-
-test("handles file inclusion substitution", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(path.join(dir, "included.txt"), "test-user")
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        username: "{file:included.txt}",
+it.instance("handles environment variable substitution", () =>
+  withProcessEnv(
+    "TEST_VAR",
+    "test-user",
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* writeConfigEffect(test.directory, {
+        $schema: "https://slopcode.ai/config.json",
+        username: "{env:TEST_VAR}",
       })
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
+      const config = yield* Config.use.get()
       expect(config.username).toBe("test-user")
-    },
-  })
-})
+    }),
+  ),
+)
 
-test("handles file inclusion with replacement tokens", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(path.join(dir, "included.md"), "const out = await Bun.$`echo hi`")
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        username: "{file:included.md}",
-      })
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.username).toBe("const out = await Bun.$`echo hi`")
-    },
-  })
-})
+it.instance("preserves env variables when adding $schema to config", () =>
+  withProcessEnv(
+    "PRESERVE_VAR",
+    "secret_value",
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      // Config without $schema - should trigger auto-add
+      yield* FSUtil.use.writeWithDirs(
+        path.join(test.directory, "slopcode.json"),
+        JSON.stringify({ username: "{env:PRESERVE_VAR}" }),
+      )
+      const config = yield* Config.use.get()
+      expect(config.username).toBe("secret_value")
 
-test("rejects project config file inclusion outside the project", async () => {
-  let outside = ""
-  await using tmp = await tmpdir<string>({
-    init: async (dir) => {
-      outside = path.join(path.dirname(dir), "outside-secret.txt")
-      await Filesystem.write(outside, "secret")
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        username: `{file:${outside}}`,
-      })
-      return outside
-    },
-    dispose: async (_dir) => {
-      await fs.rm(outside, { force: true }).catch(() => {})
-      return outside
-    },
-  })
+      // Read the file to verify the env variable was preserved
+      const content = yield* FSUtil.use.readFileString(path.join(test.directory, "slopcode.json"))
+      expect(content).toContain("{env:PRESERVE_VAR}")
+      expect(content).not.toContain("secret_value")
+      expect(content).toContain("$schema")
+    }),
+  ),
+)
 
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      await expect(Config.get()).rejects.toMatchObject({
-        name: "ConfigInvalidError",
-        data: { message: expect.stringContaining("outside allowed config roots") },
-      })
-    },
-  })
-})
+it.instance("handles file inclusion substitution", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* FSUtil.use.writeWithDirs(path.join(test.directory, "included.txt"), "test-user")
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      username: "{file:included.txt}",
+    })
+    const config = yield* Config.use.get()
+    expect(config.username).toBe("test-user")
+  }),
+)
 
-test("rejects project config file inclusion through an in-project symlink", async () => {
-  let outside = ""
-  await using tmp = await tmpdir<string>({
-    init: async (dir) => {
-      outside = path.join(path.dirname(dir), "outside-symlink-secret.txt")
-      await Filesystem.write(outside, "secret")
-      await fs.symlink(outside, path.join(dir, "linked-secret.txt"))
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        username: "{file:linked-secret.txt}",
-      })
-      return outside
-    },
-    dispose: async (_dir) => {
-      await fs.rm(outside, { force: true }).catch(() => {})
-      return outside
-    },
-  })
+it.instance("handles file inclusion with replacement tokens", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* FSUtil.use.writeWithDirs(path.join(test.directory, "included.md"), "const out = await Bun.$`echo hi`")
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      username: "{file:included.md}",
+    })
+    const config = yield* Config.use.get()
+    expect(config.username).toBe("const out = await Bun.$`echo hi`")
+  }),
+)
 
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      await expect(Config.get()).rejects.toMatchObject({
-        name: "ConfigInvalidError",
-        data: { message: expect.stringContaining("outside allowed config roots") },
-      })
-    },
-  })
-})
-
-test("validates config schema and throws on invalid fields", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        invalid_field: "should cause error",
-      })
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      // Strict schema should throw an error for invalid fields
-      await expect(Config.get()).rejects.toThrow()
-    },
-  })
-})
-
-test("throws error for invalid JSON", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(path.join(dir, "slopcode.json"), "{ invalid json }")
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      await expect(Config.get()).rejects.toThrow()
-    },
-  })
-})
-
-test("handles agent configuration", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        agent: {
-          test_agent: {
-            model: "test/model",
-            temperature: 0.7,
-            description: "test agent",
+const accountTokenIt = configIt({
+  account: Layer.mock(Account.Service)({
+    active: () =>
+      Effect.succeed(
+        Option.some({
+          id: AccountID.make("account-1"),
+          email: "user@example.com",
+          url: "https://control.example.com",
+          active_org_id: OrgID.make("org-1"),
+        }),
+      ),
+    activeOrg: () =>
+      Effect.succeed(
+        Option.some({
+          account: {
+            id: AccountID.make("account-1"),
+            email: "user@example.com",
+            url: "https://control.example.com",
+            active_org_id: OrgID.make("org-1"),
           },
-        },
-      })
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test_agent"]).toEqual(
-        expect.objectContaining({
+          org: {
+            id: OrgID.make("org-1"),
+            name: "Example Org",
+          },
+        }),
+      ),
+    config: () =>
+      Effect.succeed(
+        Option.some({
+          provider: { slopcode: { options: { apiKey: "{env:SLOPCODE_CONSOLE_TOKEN}" } } },
+        }),
+      ),
+    token: () => Effect.succeed(Option.some(AccessToken.make("st_test_token"))),
+  }),
+})
+
+accountTokenIt.instance("resolves env templates in account config with account token", () =>
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.provider?.["slopcode"]?.options?.apiKey).toBe("st_test_token")
+  }),
+)
+
+it.instance("validates config schema and throws on invalid fields", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      invalid_field: "should cause error",
+    })
+    const exit = yield* Config.use.get().pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+  }),
+)
+
+it.instance("throws error for invalid JSON", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* FSUtil.use.writeWithDirs(path.join(test.directory, "slopcode.json"), "{ invalid json }")
+    const exit = yield* Config.use.get().pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+  }),
+)
+
+it.instance("handles agent configuration", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      agent: {
+        test_agent: {
           model: "test/model",
           temperature: 0.7,
           description: "test agent",
-        }),
-      )
-    },
-  })
-})
-
-test("treats agent variant as model-scoped setting (not provider option)", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        agent: {
-          test_agent: {
-            model: "openai/gpt-5.2",
-            variant: "xhigh",
-            max_tokens: 123,
-          },
         },
-      })
-    },
-  })
-
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      const agent = config.agent?.["test_agent"]
-
-      expect(agent?.variant).toBe("xhigh")
-      expect(agent?.options).toMatchObject({
-        max_tokens: 123,
-      })
-      expect(agent?.options).not.toHaveProperty("variant")
-    },
-  })
-})
-
-test("handles command configuration", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        command: {
-          test_command: {
-            template: "test template",
-            description: "test command",
-            agent: "test_agent",
-          },
-        },
-      })
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.command?.["test_command"]).toEqual({
-        template: "test template",
-        description: "test command",
-        agent: "test_agent",
-      })
-    },
-  })
-})
-
-test("migrates autoshare to share field", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          autoshare: true,
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.share).toBe("auto")
-      expect(config.autoshare).toBe(true)
-    },
-  })
-})
-
-test("migrates mode field to agent field", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          mode: {
-            test_mode: {
-              model: "test/model",
-              temperature: 0.5,
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test_mode"]).toEqual({
+      },
+    })
+    const config = yield* Config.use.get()
+    expect(config.agent?.["test_agent"]).toEqual(
+      expect.objectContaining({
         model: "test/model",
-        temperature: 0.5,
-        mode: "primary",
-        options: {},
-        permission: {},
-      })
-    },
-  })
-})
+        temperature: 0.7,
+        description: "test agent",
+      }),
+    )
+  }),
+)
 
-test("loads config from .slopcode directory", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      const slopcodeDir = path.join(dir, ".slopcode")
-      await fs.mkdir(slopcodeDir, { recursive: true })
-      const agentDir = path.join(slopcodeDir, "agent")
-      await fs.mkdir(agentDir, { recursive: true })
+it.instance("treats agent variant as model-scoped setting (not provider option)", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      agent: {
+        test_agent: {
+          model: "openai/gpt-5.2",
+          variant: "xhigh",
+          max_tokens: 123,
+        },
+      },
+    })
+    const config = yield* Config.use.get()
+    const agent = config.agent?.["test_agent"]
 
-      await Filesystem.write(
-        path.join(agentDir, "test.md"),
-        `---
+    expect(agent?.variant).toBe("xhigh")
+    expect(agent?.options).toMatchObject({
+      max_tokens: 123,
+    })
+    expect(agent?.options).not.toHaveProperty("variant")
+  }),
+)
+
+it.instance("handles command configuration", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      command: {
+        test_command: {
+          template: "test template",
+          description: "test command",
+          agent: "test_agent",
+        },
+      },
+    })
+    const config = yield* Config.use.get()
+    expect(config.command?.["test_command"]).toEqual({
+      template: "test template",
+      description: "test command",
+      agent: "test_agent",
+    })
+  }),
+)
+
+it.instance("migrates autoshare to share field", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      autoshare: true,
+    })
+    const config = yield* Config.use.get()
+    expect(config.share).toBe("auto")
+    expect(config.autoshare).toBe(true)
+  }),
+)
+
+it.instance("migrates mode field to agent field", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      mode: {
+        test_mode: {
+          model: "test/model",
+          temperature: 0.5,
+        },
+      },
+    })
+    const config = yield* Config.use.get()
+    expect(config.agent?.["test_mode"]).toEqual({
+      model: "test/model",
+      temperature: 0.5,
+      mode: "primary",
+      options: {},
+      permission: {},
+    })
+  }),
+)
+
+it.instance("accepts the deprecated reference field", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      reference: {
+        local: { path: "../library" },
+        sdk: { repository: "github.com/example/sdk", branch: "main" },
+        shorthand: "github.com/example/docs",
+      },
+    })
+    const config = yield* Config.use.get()
+    expect(config.reference).toEqual({
+      local: { path: "../library" },
+      sdk: { repository: "github.com/example/sdk", branch: "main" },
+      shorthand: "github.com/example/docs",
+    })
+  }),
+)
+
+it.instance("loads config from .slopcode directory", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, ".slopcode", "agent", "test.md"),
+      `---
 model: test/model
 ---
 Test agent prompt`,
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test"]).toEqual(
-        expect.objectContaining({
-          name: "test",
-          model: "test/model",
-          prompt: "Test agent prompt",
-        }),
-      )
-    },
-  })
-})
+    )
 
-test("loads agents from .slopcode/agents (plural)", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      const slopcodeDir = path.join(dir, ".slopcode")
-      await fs.mkdir(slopcodeDir, { recursive: true })
+    const config = yield* Config.use.get()
+    expect(config.agent?.["test"]).toEqual(
+      expect.objectContaining({
+        name: "test",
+        model: "test/model",
+        prompt: "Test agent prompt",
+      }),
+    )
+  }),
+)
 
-      const agentsDir = path.join(slopcodeDir, "agents")
-      await fs.mkdir(path.join(agentsDir, "nested"), { recursive: true })
+it.instance("agent markdown permission config preserves user key order", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, ".slopcode", "agent", "ordered.md"),
+      `---
+permission:
+  bash: allow
+  "*": deny
+  edit: ask
+---
+Ordered permissions`,
+    )
 
-      await Filesystem.write(
-        path.join(agentsDir, "helper.md"),
-        `---
+    const config = yield* Config.use.get()
+    expect(Object.keys(config.agent?.ordered?.permission ?? {})).toEqual(["bash", "*", "edit"])
+  }),
+)
+
+it.instance("loads agents from .slopcode/agents (plural)", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, ".slopcode", "agents", "helper.md"),
+      `---
 model: test/model
 mode: subagent
 ---
 Helper agent prompt`,
-      )
+    )
 
-      await Filesystem.write(
-        path.join(agentsDir, "nested", "child.md"),
-        `---
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, ".slopcode", "agents", "nested", "child.md"),
+      `---
 model: test/model
 mode: subagent
 ---
 Nested agent prompt`,
-      )
-    },
-  })
+    )
 
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
+    const config = yield* Config.use.get()
 
-      expect(config.agent?.["helper"]).toMatchObject({
-        name: "helper",
-        model: "test/model",
-        mode: "subagent",
-        prompt: "Helper agent prompt",
-      })
+    expect(config.agent?.["helper"]).toMatchObject({
+      name: "helper",
+      model: "test/model",
+      mode: "subagent",
+      prompt: "Helper agent prompt",
+    })
 
-      expect(config.agent?.["nested/child"]).toMatchObject({
-        name: "nested/child",
-        model: "test/model",
-        mode: "subagent",
-        prompt: "Nested agent prompt",
-      })
-    },
-  })
-})
+    expect(config.agent?.["nested/child"]).toMatchObject({
+      name: "nested/child",
+      model: "test/model",
+      mode: "subagent",
+      prompt: "Nested agent prompt",
+    })
+  }),
+)
 
-test("loads commands from .slopcode/command (singular)", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      const slopcodeDir = path.join(dir, ".slopcode")
-      await fs.mkdir(slopcodeDir, { recursive: true })
-
-      const commandDir = path.join(slopcodeDir, "command")
-      await fs.mkdir(path.join(commandDir, "nested"), { recursive: true })
-
-      await Filesystem.write(
-        path.join(commandDir, "hello.md"),
-        `---
+it.instance("loads commands from .slopcode/command (singular)", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, ".slopcode", "command", "hello.md"),
+      `---
 description: Test command
 ---
 Hello from singular command`,
-      )
+    )
 
-      await Filesystem.write(
-        path.join(commandDir, "nested", "child.md"),
-        `---
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, ".slopcode", "command", "nested", "child.md"),
+      `---
 description: Nested command
 ---
 Nested command template`,
-      )
-    },
-  })
+    )
 
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
+    const config = yield* Config.use.get()
 
-      expect(config.command?.["hello"]).toEqual({
-        description: "Test command",
-        template: "Hello from singular command",
-      })
+    expect(config.command?.["hello"]).toEqual({
+      description: "Test command",
+      template: "Hello from singular command",
+    })
 
-      expect(config.command?.["nested/child"]).toEqual({
-        description: "Nested command",
-        template: "Nested command template",
-      })
-    },
-  })
-})
+    expect(config.command?.["nested/child"]).toEqual({
+      description: "Nested command",
+      template: "Nested command template",
+    })
+  }),
+)
 
-test("loads commands from .slopcode/commands (plural)", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      const slopcodeDir = path.join(dir, ".slopcode")
-      await fs.mkdir(slopcodeDir, { recursive: true })
-
-      const commandsDir = path.join(slopcodeDir, "commands")
-      await fs.mkdir(path.join(commandsDir, "nested"), { recursive: true })
-
-      await Filesystem.write(
-        path.join(commandsDir, "hello.md"),
-        `---
+it.instance("loads commands from .slopcode/commands (plural)", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, ".slopcode", "commands", "hello.md"),
+      `---
 description: Test command
 ---
 Hello from plural commands`,
-      )
+    )
 
-      await Filesystem.write(
-        path.join(commandsDir, "nested", "child.md"),
-        `---
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, ".slopcode", "commands", "nested", "child.md"),
+      `---
 description: Nested command
 ---
 Nested command template`,
-      )
-    },
-  })
+    )
 
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
+    const config = yield* Config.use.get()
 
-      expect(config.command?.["hello"]).toEqual({
-        description: "Test command",
-        template: "Hello from plural commands",
-      })
-
-      expect(config.command?.["nested/child"]).toEqual({
-        description: "Nested command",
-        template: "Nested command template",
-      })
-    },
-  })
-})
-
-test("updates config and writes to file", async () => {
-  await using tmp = await tmpdir()
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const newConfig = { model: "updated/model" }
-      await Config.update(newConfig as any)
-
-      const writtenConfig = await Filesystem.readJson(path.join(tmp.path, "config.json"))
-      expect(writtenConfig.model).toBe("updated/model")
-    },
-  })
-})
-
-test("gets config directories", async () => {
-  await using tmp = await tmpdir()
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const dirs = await Config.directories()
-      expect(dirs.length).toBeGreaterThanOrEqual(1)
-    },
-  })
-})
-
-test("does not try to install dependencies in read-only SLOPCODE_CONFIG_DIR", async () => {
-  if (process.platform === "win32") return
-
-  await using tmp = await tmpdir<string>({
-    init: async (dir) => {
-      const ro = path.join(dir, "readonly")
-      await fs.mkdir(ro, { recursive: true })
-      await fs.chmod(ro, 0o555)
-      return ro
-    },
-    dispose: async (dir) => {
-      const ro = path.join(dir, "readonly")
-      await fs.chmod(ro, 0o755).catch(() => {})
-      return ro
-    },
-  })
-
-  const prev = process.env.SLOPCODE_CONFIG_DIR
-  process.env.SLOPCODE_CONFIG_DIR = tmp.extra
-
-  try {
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        await Config.get()
-      },
-    })
-  } finally {
-    if (prev === undefined) delete process.env.SLOPCODE_CONFIG_DIR
-    else process.env.SLOPCODE_CONFIG_DIR = prev
-  }
-})
-
-test("installs dependencies in writable SLOPCODE_CONFIG_DIR", async () => {
-  await using tmp = await tmpdir<string>({
-    init: async (dir) => {
-      const cfg = path.join(dir, "configdir")
-      await fs.mkdir(cfg, { recursive: true })
-      return cfg
-    },
-  })
-
-  const prev = process.env.SLOPCODE_CONFIG_DIR
-  process.env.SLOPCODE_CONFIG_DIR = tmp.extra
-
-  try {
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        await Config.get()
-        await Config.waitForDependencies()
-      },
+    expect(config.command?.["hello"]).toEqual({
+      description: "Test command",
+      template: "Hello from plural commands",
     })
 
-    expect(await Filesystem.exists(path.join(tmp.extra, "package.json"))).toBe(true)
-    expect(await Filesystem.exists(path.join(tmp.extra, ".gitignore"))).toBe(true)
-  } finally {
-    if (prev === undefined) delete process.env.SLOPCODE_CONFIG_DIR
-    else process.env.SLOPCODE_CONFIG_DIR = prev
-  }
-})
+    expect(config.command?.["nested/child"]).toEqual({
+      description: "Nested command",
+      template: "Nested command template",
+    })
+  }),
+)
 
-test("does not install dependencies in project config directories", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      const configDir = path.join(dir, ".slopcode")
-      await fs.mkdir(configDir, { recursive: true })
-      await writeConfig(configDir, {
-        $schema: "https://slopcode.dev/config.json",
-        username: "project-config",
-      })
+it.instance("updates config and writes to file", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* Config.Service.use((svc) =>
+      svc.update(ConfigParse.schema(ConfigV1.Info, { model: "updated/model" }, "test:config")),
+    )
+
+    const writtenConfig = yield* FSUtil.use.readJson(path.join(test.directory, "config.json"))
+    expect(writtenConfig).toMatchObject({ model: "updated/model" })
+  }),
+)
+
+it.instance("gets config directories", () =>
+  Effect.gen(function* () {
+    const dirs = yield* Config.use.directories()
+    expect(dirs.length).toBeGreaterThanOrEqual(1)
+  }),
+)
+
+it.effect("does not try to install dependencies in read-only SLOPCODE_CONFIG_DIR", () =>
+  Effect.gen(function* () {
+    if (process.platform === "win32") return
+
+    const dir = yield* tmpdirScoped()
+    const readonly = path.join(dir, "readonly")
+    yield* FSUtil.use.ensureDir(readonly)
+    yield* FSUtil.use.chmod(readonly, 0o555)
+    yield* Effect.addFinalizer(() => FSUtil.use.chmod(readonly, 0o755).pipe(Effect.ignore))
+
+    yield* withProcessEnv("SLOPCODE_CONFIG_DIR", readonly, Config.use.get().pipe(provideInstanceEffect(dir)))
+  }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+)
+
+it.effect("installs dependencies in writable SLOPCODE_CONFIG_DIR", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped()
+    const configDir = path.join(dir, "configdir")
+    yield* FSUtil.use.ensureDir(configDir)
+
+    yield* withProcessEnv(
+      "SLOPCODE_CONFIG_DIR",
+      configDir,
+      Config.Service.use((svc) => svc.get().pipe(Effect.andThen(svc.waitForDependencies()))).pipe(
+        provideInstanceEffect(dir),
+      ),
+    )
+
+    expect(yield* FSUtil.use.readFileString(path.join(configDir, ".gitignore"))).toContain("package-lock.json")
+  }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+)
+
+// Note: deduplication and serialization of npm installs is now handled by the
+// core Npm.Service (via EffectFlock). Those behaviors are tested in the core
+// package's npm tests, not here.
+
+it.instance("resolves scoped npm plugins in config", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const pluginDir = path.join(test.directory, "node_modules", "@scope", "plugin")
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, "package.json"),
+      JSON.stringify({ name: "config-fixture", version: "1.0.0", type: "module" }, null, 2),
+    )
+    yield* FSUtil.use.writeWithDirs(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@scope/plugin",
+          version: "1.0.0",
+          type: "module",
+          main: "./index.js",
+        },
+        null,
+        2,
+      ),
+    )
+    yield* FSUtil.use.writeWithDirs(path.join(pluginDir, "index.js"), "export default {}\n")
+    yield* writeConfigEffect(test.directory, { plugin: ["@scope/plugin"] })
+
+    const config = yield* Config.use.get()
+    expect(config.plugin ?? []).toContain("@scope/plugin")
+  }),
+)
+
+it.effect("merges plugin arrays from global and local configs", () =>
+  withConfigTree(
+    {
+      global: { plugin: ["global-plugin-1", "global-plugin-2"] },
+      local: { plugin: ["local-plugin-1"] },
     },
-  })
+    Effect.gen(function* () {
+      const plugins = (yield* Config.use.get()).plugin ?? []
 
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      await Config.get()
-      await Config.waitForDependencies()
-    },
-  })
-
-  const configDir = path.join(tmp.path, ".slopcode")
-  expect(await Filesystem.exists(path.join(configDir, "package.json"))).toBe(false)
-  expect(await Filesystem.exists(path.join(configDir, ".gitignore"))).toBe(false)
-  expect(await Filesystem.exists(path.join(configDir, "node_modules"))).toBe(false)
-  expect(await Filesystem.exists(path.join(configDir, "bun.lock"))).toBe(false)
-})
-
-test("resolves scoped npm plugins in config", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      const pluginDir = path.join(dir, "node_modules", "@scope", "plugin")
-      await fs.mkdir(pluginDir, { recursive: true })
-
-      await Filesystem.write(
-        path.join(dir, "package.json"),
-        JSON.stringify({ name: "config-fixture", version: "1.0.0", type: "module" }, null, 2),
-      )
-
-      await Filesystem.write(
-        path.join(pluginDir, "package.json"),
-        JSON.stringify(
-          {
-            name: "@scope/plugin",
-            version: "1.0.0",
-            type: "module",
-            main: "./index.js",
-          },
-          null,
-          2,
-        ),
-      )
-
-      await Filesystem.write(path.join(pluginDir, "index.js"), "export default {}\n")
-
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({ $schema: "https://slopcode.dev/config.json", plugin: ["@scope/plugin"] }, null, 2),
-      )
-    },
-  })
-
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      const pluginEntries = config.plugin ?? []
-
-      const baseUrl = pathToFileURL(path.join(tmp.path, "slopcode.json")).href
-      const expected = pathToFileURL(path.join(tmp.path, "node_modules", "@scope", "plugin", "index.js")).href
-
-      expect(pluginEntries.includes(expected)).toBe(true)
-
-      const scopedEntry = pluginEntries.find((entry) => entry === expected)
-      expect(scopedEntry).toBeDefined()
-      expect(scopedEntry?.includes("/node_modules/@scope/plugin/")).toBe(true)
-    },
-  })
-})
-
-test("merges plugin arrays from global and local configs", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      // Create a nested project structure with local .slopcode config
-      const projectDir = path.join(dir, "project")
-      const slopcodeDir = path.join(projectDir, ".slopcode")
-      await fs.mkdir(slopcodeDir, { recursive: true })
-
-      // Global config with plugins
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          plugin: ["global-plugin-1", "global-plugin-2"],
-        }),
-      )
-
-      // Local .slopcode config with different plugins
-      await Filesystem.write(
-        path.join(slopcodeDir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          plugin: ["local-plugin-1"],
-        }),
-      )
-    },
-  })
-
-  await Instance.provide({
-    directory: path.join(tmp.path, "project"),
-    fn: async () => {
-      const config = await Config.get()
-      const plugins = config.plugin ?? []
-
-      // Should contain both global and local plugins
       expect(plugins.some((p) => p.includes("global-plugin-1"))).toBe(true)
       expect(plugins.some((p) => p.includes("global-plugin-2"))).toBe(true)
       expect(plugins.some((p) => p.includes("local-plugin-1"))).toBe(true)
+      expect(
+        plugins.filter((p) => p.includes("global-plugin") || p.includes("local-plugin")).length,
+      ).toBeGreaterThanOrEqual(3)
+    }),
+  ),
+)
 
-      // Should have all 3 plugins (not replaced, but merged)
-      const pluginNames = plugins.filter((p) => p.includes("global-plugin") || p.includes("local-plugin"))
-      expect(pluginNames.length).toBeGreaterThanOrEqual(3)
+it.effect("global config remains global when project config is disabled", () =>
+  withConfigTree(
+    {
+      global: { model: "global/model", plugin: ["global-plugin"] },
+      project: { model: "project/model" },
+      local: { model: "local/model" },
     },
-  })
-})
+    withProcessEnv(
+      "SLOPCODE_DISABLE_PROJECT_CONFIG",
+      "true",
+      Effect.gen(function* () {
+        const config = yield* Config.use.get()
+        expect(config.model).toBe("global/model")
+        expect(config.plugin_origins?.find((item) => item.spec === "global-plugin")?.scope).toBe("global")
+      }),
+    ),
+  ),
+)
 
-test("does not error when only custom agent is a subagent", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      const slopcodeDir = path.join(dir, ".slopcode")
-      await fs.mkdir(slopcodeDir, { recursive: true })
-      const agentDir = path.join(slopcodeDir, "agent")
-      await fs.mkdir(agentDir, { recursive: true })
-
-      await Filesystem.write(
-        path.join(agentDir, "helper.md"),
-        `---
+it.instance("does not error when only custom agent is a subagent", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* FSUtil.use.writeWithDirs(
+      path.join(test.directory, ".slopcode", "agent", "helper.md"),
+      `---
 model: test/model
 mode: subagent
 ---
 Helper subagent prompt`,
-      )
+    )
+
+    const config = yield* Config.use.get()
+    expect(config.agent?.["helper"]).toMatchObject({
+      name: "helper",
+      model: "test/model",
+      mode: "subagent",
+      prompt: "Helper subagent prompt",
+    })
+  }),
+)
+
+it.effect("merges instructions arrays from global and local configs", () =>
+  withConfigTree(
+    {
+      global: { instructions: ["global-instructions.md", "shared-rules.md"] },
+      local: { instructions: ["local-instructions.md"] },
     },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["helper"]).toMatchObject({
-        name: "helper",
-        model: "test/model",
-        mode: "subagent",
-        prompt: "Helper subagent prompt",
-      })
+    Effect.gen(function* () {
+      expect((yield* Config.use.get()).instructions).toEqual([
+        "global-instructions.md",
+        "shared-rules.md",
+        "local-instructions.md",
+      ])
+    }),
+  ),
+)
+
+it.effect("deduplicates duplicate instructions from global and local configs", () =>
+  withConfigTree(
+    {
+      global: { instructions: ["duplicate.md", "global-only.md"] },
+      local: { instructions: ["duplicate.md", "local-only.md"] },
     },
-  })
-})
+    Effect.gen(function* () {
+      expect((yield* Config.use.get()).instructions).toEqual(["duplicate.md", "global-only.md", "local-only.md"])
+    }),
+  ),
+)
 
-test("merges instructions arrays from global and local configs", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      const projectDir = path.join(dir, "project")
-      const slopcodeDir = path.join(projectDir, ".slopcode")
-      await fs.mkdir(slopcodeDir, { recursive: true })
-
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          instructions: ["global-instructions.md", "shared-rules.md"],
-        }),
-      )
-
-      await Filesystem.write(
-        path.join(slopcodeDir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          instructions: ["local-instructions.md"],
-        }),
-      )
+it.effect("deduplicates duplicate plugins from global and local configs", () =>
+  withConfigTree(
+    {
+      global: { plugin: ["duplicate-plugin", "global-plugin-1"] },
+      local: { plugin: ["duplicate-plugin", "local-plugin-1"] },
     },
-  })
+    Effect.gen(function* () {
+      const plugins = (yield* Config.use.get()).plugin ?? []
 
-  await Instance.provide({
-    directory: path.join(tmp.path, "project"),
-    fn: async () => {
-      const config = await Config.get()
-      const instructions = config.instructions ?? []
-
-      expect(instructions).toContain("global-instructions.md")
-      expect(instructions).toContain("shared-rules.md")
-      expect(instructions).toContain("local-instructions.md")
-      expect(instructions.length).toBe(3)
-    },
-  })
-})
-
-test("deduplicates duplicate instructions from global and local configs", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      const projectDir = path.join(dir, "project")
-      const slopcodeDir = path.join(projectDir, ".slopcode")
-      await fs.mkdir(slopcodeDir, { recursive: true })
-
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          instructions: ["duplicate.md", "global-only.md"],
-        }),
-      )
-
-      await Filesystem.write(
-        path.join(slopcodeDir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          instructions: ["duplicate.md", "local-only.md"],
-        }),
-      )
-    },
-  })
-
-  await Instance.provide({
-    directory: path.join(tmp.path, "project"),
-    fn: async () => {
-      const config = await Config.get()
-      const instructions = config.instructions ?? []
-
-      expect(instructions).toContain("global-only.md")
-      expect(instructions).toContain("local-only.md")
-      expect(instructions).toContain("duplicate.md")
-
-      const duplicates = instructions.filter((i) => i === "duplicate.md")
-      expect(duplicates.length).toBe(1)
-      expect(instructions.length).toBe(3)
-    },
-  })
-})
-
-test("deduplicates duplicate plugins from global and local configs", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      // Create a nested project structure with local .slopcode config
-      const projectDir = path.join(dir, "project")
-      const slopcodeDir = path.join(projectDir, ".slopcode")
-      await fs.mkdir(slopcodeDir, { recursive: true })
-
-      // Global config with plugins
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          plugin: ["duplicate-plugin", "global-plugin-1"],
-        }),
-      )
-
-      // Local .slopcode config with some overlapping plugins
-      await Filesystem.write(
-        path.join(slopcodeDir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          plugin: ["duplicate-plugin", "local-plugin-1"],
-        }),
-      )
-    },
-  })
-
-  await Instance.provide({
-    directory: path.join(tmp.path, "project"),
-    fn: async () => {
-      const config = await Config.get()
-      const plugins = config.plugin ?? []
-
-      // Should contain all unique plugins
       expect(plugins.some((p) => p.includes("global-plugin-1"))).toBe(true)
       expect(plugins.some((p) => p.includes("local-plugin-1"))).toBe(true)
-      expect(plugins.some((p) => p.includes("duplicate-plugin"))).toBe(true)
+      expect(plugins.filter((p) => p.includes("duplicate-plugin")).length).toBe(1)
+      expect(
+        plugins.filter(
+          (p) => p.includes("global-plugin") || p.includes("local-plugin") || p.includes("duplicate-plugin"),
+        ).length,
+      ).toBe(3)
+    }),
+  ),
+)
 
-      // Should deduplicate the duplicate plugin
-      const duplicatePlugins = plugins.filter((p) => p.includes("duplicate-plugin"))
-      expect(duplicatePlugins.length).toBe(1)
-
-      // Should have exactly 3 unique plugins
-      const pluginNames = plugins.filter(
-        (p) => p.includes("global-plugin") || p.includes("local-plugin") || p.includes("duplicate-plugin"),
-      )
-      expect(pluginNames.length).toBe(3)
+it.effect("keeps plugin origins aligned with merged plugin list", () =>
+  withConfigTree(
+    {
+      global: { plugin: [["shared-plugin@1.0.0", { source: "global" }], "global-only@1.0.0"] },
+      local: { plugin: [["shared-plugin@2.0.0", { source: "local" }], "local-only@1.0.0"] },
     },
-  })
-})
+    Effect.gen(function* () {
+      const config = yield* Config.use.get()
+      const plugins = config.plugin ?? []
+      const origins = config.plugin_origins ?? []
+      const names = plugins.map((item) => ConfigPlugin.pluginSpecifier(item))
+
+      expect(names).toContain("shared-plugin@2.0.0")
+      expect(names).not.toContain("shared-plugin@1.0.0")
+      expect(names).toContain("global-only@1.0.0")
+      expect(names).toContain("local-only@1.0.0")
+      expect(origins.map((item) => item.spec)).toEqual(plugins)
+      expect(origins.find((item) => ConfigPlugin.pluginSpecifier(item.spec) === "shared-plugin@2.0.0")?.scope).toBe(
+        "local",
+      )
+    }),
+  ),
+)
 
 // Legacy tools migration tests
 
-test("migrates legacy tools config to permissions - allow", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          agent: {
-            test: {
-              tools: {
-                bash: true,
-                read: true,
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test"]?.permission).toEqual({
-        bash: "allow",
-        read: "allow",
-      })
-    },
-  })
-})
+it.instance("migrates legacy tools config to permissions - allow", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      agent: { test: { tools: { bash: true, read: true } } },
+    })
 
-test("migrates legacy tools config to permissions - deny", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          agent: {
-            test: {
-              tools: {
-                bash: false,
-                webfetch: false,
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test"]?.permission).toEqual({
-        bash: "deny",
-        webfetch: "deny",
-      })
-    },
-  })
-})
+    const config = yield* Config.use.get()
+    expect(config.agent?.["test"]?.permission).toEqual({
+      bash: "allow",
+      read: "allow",
+    })
+  }),
+)
 
-test("migrates legacy write tool to edit permission", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          agent: {
-            test: {
-              tools: {
-                write: true,
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test"]?.permission).toEqual({
-        edit: "allow",
-      })
-    },
-  })
-})
+it.instance("migrates legacy tools config to permissions - deny", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      agent: { test: { tools: { bash: false, webfetch: false } } },
+    })
+
+    const config = yield* Config.use.get()
+    expect(config.agent?.["test"]?.permission).toEqual({
+      bash: "deny",
+      webfetch: "deny",
+    })
+  }),
+)
+
+it.instance("migrates legacy write tool to edit permission", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      agent: { test: { tools: { write: true } } },
+    })
+
+    const config = yield* Config.use.get()
+    expect(config.agent?.["test"]?.permission).toEqual({ edit: "allow" })
+  }),
+)
 
 // Managed settings tests
 // Note: preload.ts sets SLOPCODE_TEST_MANAGED_CONFIG which Global.Path.managedConfig uses
 
-test("managed settings override user settings", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        model: "user/model",
-        share: "auto",
-        username: "testuser",
-      })
-    },
-  })
+it.instance(
+  "managed settings override user settings",
+  Effect.gen(function* () {
+    yield* writeManagedSettingsEffect({
+      $schema: "https://slopcode.ai/config.json",
+      model: "managed/model",
+      share: "disabled",
+    })
 
-  await writeManagedSettings({
-    $schema: "https://slopcode.dev/config.json",
-    model: "managed/model",
-    share: "disabled",
-  })
+    const config = yield* Config.use.get()
+    expect(config.model).toBe("managed/model")
+    expect(config.share).toBe("disabled")
+    expect(config.username).toBe("testuser")
+  }),
+  { config: { model: "user/model", share: "auto", username: "testuser" } },
+)
 
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.model).toBe("managed/model")
-      expect(config.share).toBe("disabled")
-      expect(config.username).toBe("testuser")
-    },
-  })
-})
+it.instance(
+  "managed settings override project settings",
+  Effect.gen(function* () {
+    yield* writeManagedSettingsEffect({
+      $schema: "https://slopcode.ai/config.json",
+      autoupdate: false,
+      disabled_providers: ["openai"],
+    })
 
-test("managed settings override project settings", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        autoupdate: true,
-        disabled_providers: [],
-      })
-    },
-  })
+    const config = yield* Config.use.get()
+    expect(config.autoupdate).toBe(false)
+    expect(config.disabled_providers).toEqual(["openai"])
+  }),
+  { config: { autoupdate: true, disabled_providers: [] } },
+)
 
-  await writeManagedSettings({
-    $schema: "https://slopcode.dev/config.json",
-    autoupdate: false,
-    disabled_providers: ["openai"],
-  })
+it.instance("managed jsonc settings override managed json settings", () =>
+  Effect.gen(function* () {
+    yield* writeManagedSettingsEffect({ model: "managed/json" })
+    yield* writeManagedSettingsEffect({ model: "managed/jsonc" }, "slopcode.jsonc")
 
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.autoupdate).toBe(false)
-      expect(config.disabled_providers).toEqual(["openai"])
-    },
-  })
-})
+    const config = yield* Config.use.get()
+    expect(config.model).toBe("managed/jsonc")
+  }),
+)
 
-test("missing managed settings file is not an error", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await writeConfig(dir, {
-        $schema: "https://slopcode.dev/config.json",
-        model: "user/model",
-      })
-    },
-  })
+it.instance(
+  "missing managed settings file is not an error",
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(config.model).toBe("user/model")
+  }),
+  { config: { model: "user/model" } },
+)
 
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.model).toBe("user/model")
-    },
-  })
-})
+it.instance("migrates legacy edit tool to edit permission", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      agent: { test: { tools: { edit: false } } },
+    })
 
-test("migrates legacy edit tool to edit permission", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          agent: {
-            test: {
-              tools: {
-                edit: false,
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test"]?.permission).toEqual({
-        edit: "deny",
-      })
-    },
-  })
-})
+    const config = yield* Config.use.get()
+    expect(config.agent?.["test"]?.permission).toEqual({ edit: "deny" })
+  }),
+)
 
-test("migrates legacy patch tool to edit permission", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          agent: {
-            test: {
-              tools: {
-                patch: true,
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test"]?.permission).toEqual({
-        edit: "allow",
-      })
-    },
-  })
-})
+it.instance("migrates legacy patch tool to edit permission", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      agent: { test: { tools: { patch: true } } },
+    })
 
-test("migrates legacy multiedit tool to edit permission", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          agent: {
-            test: {
-              tools: {
-                multiedit: false,
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test"]?.permission).toEqual({
-        edit: "deny",
-      })
-    },
-  })
-})
+    const config = yield* Config.use.get()
+    expect(config.agent?.["test"]?.permission).toEqual({ edit: "allow" })
+  }),
+)
 
-test("migrates mixed legacy tools config", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          agent: {
-            test: {
-              tools: {
-                bash: true,
-                write: true,
-                read: false,
-                webfetch: true,
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test"]?.permission).toEqual({
+it.instance("migrates mixed legacy tools config", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      agent: { test: { tools: { bash: true, write: true, read: false, webfetch: true } } },
+    })
+
+    const config = yield* Config.use.get()
+    expect(config.agent?.["test"]?.permission).toEqual({
+      bash: "allow",
+      edit: "allow",
+      read: "deny",
+      webfetch: "allow",
+    })
+  }),
+)
+
+it.instance("merges legacy tools with existing permission config", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      agent: { test: { permission: { glob: "allow" }, tools: { bash: true } } },
+    })
+
+    const config = yield* Config.use.get()
+    expect(config.agent?.["test"]?.permission).toEqual({
+      glob: "allow",
+      bash: "allow",
+    })
+  }),
+)
+
+it.instance("permission config preserves user key order", () =>
+  // Permission precedence follows the order users write in config, so parsing
+  // must not canonicalise known keys ahead of wildcard or custom keys.
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      permission: {
+        "*": "deny",
+        edit: "ask",
+        write: "ask",
+        external_directory: "ask",
+        read: "allow",
+        todowrite: "allow",
+        "thoughts_*": "allow",
+        "reasoning_model_*": "allow",
+        "tools_*": "allow",
+        "pr_comments_*": "allow",
+      },
+    })
+
+    const config = yield* Config.use.get()
+    expect(Object.keys(config.permission!)).toEqual([
+      "*",
+      "edit",
+      "write",
+      "external_directory",
+      "read",
+      "todowrite",
+      "thoughts_*",
+      "reasoning_model_*",
+      "tools_*",
+      "pr_comments_*",
+    ])
+  }),
+)
+
+test("config parser preserves permission order while rejecting unknown top-level keys", () => {
+  const config = ConfigParse.schema(
+    ConfigV1.Info,
+    {
+      permission: {
         bash: "allow",
-        edit: "allow",
-        read: "deny",
-        webfetch: "allow",
-      })
+        "*": "deny",
+        edit: "ask",
+      },
     },
-  })
-})
+    "test",
+  )
 
-test("merges legacy tools with existing permission config", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          agent: {
-            test: {
-              permission: {
-                glob: "allow",
-              },
-              tools: {
-                bash: true,
-              },
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.agent?.["test"]?.permission).toEqual({
-        glob: "allow",
-        bash: "allow",
-      })
-    },
-  })
-})
-
-test("permission config preserves key order", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          permission: {
-            "*": "deny",
-            edit: "ask",
-            write: "ask",
-            external_directory: "ask",
-            read: "allow",
-            todowrite: "allow",
-            todoread: "allow",
-            "thoughts_*": "allow",
-            "reasoning_model_*": "allow",
-            "tools_*": "allow",
-            "pr_comments_*": "allow",
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(Object.keys(config.permission!)).toEqual([
-        "*",
-        "edit",
-        "write",
-        "external_directory",
-        "read",
-        "todowrite",
-        "todoread",
-        "thoughts_*",
-        "reasoning_model_*",
-        "tools_*",
-        "pr_comments_*",
-      ])
-    },
-  })
+  expect(Object.keys(config.permission!)).toEqual(["bash", "*", "edit"])
+  try {
+    ConfigParse.schema(ConfigV1.Info, { invalid_field: true }, "test")
+    throw new Error("expected config parse to fail")
+  } catch (err) {
+    const error = err as { data?: { issues?: Array<{ code?: string; keys?: string[]; path?: string[] }> } }
+    expect(error.data?.issues?.[0]).toMatchObject({ code: "unrecognized_keys", keys: ["invalid_field"], path: [] })
+  }
 })
 
 // MCP config merging tests
 
-test("project config can override MCP server enabled status", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      // Simulates a base config (like from remote .well-known) with disabled MCP
-      await Filesystem.write(
-        path.join(dir, "slopcode.jsonc"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          mcp: {
-            jira: {
-              type: "remote",
-              url: "https://jira.example.com/mcp",
-              enabled: false,
-            },
-            wiki: {
-              type: "remote",
-              url: "https://wiki.example.com/mcp",
-              enabled: false,
-            },
-          },
-        }),
-      )
-      // Project config enables just jira
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          mcp: {
-            jira: {
-              type: "remote",
-              url: "https://jira.example.com/mcp",
-              enabled: true,
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      // jira should be enabled (overridden by project config)
-      expect(config.mcp?.jira).toEqual({
-        type: "remote",
-        url: "https://jira.example.com/mcp",
-        enabled: true,
-      })
-      // wiki should still be disabled (not overridden)
-      expect(config.mcp?.wiki).toEqual({
-        type: "remote",
-        url: "https://wiki.example.com/mcp",
-        enabled: false,
-      })
-    },
-  })
-})
-
-test("MCP config deep merges preserving base config properties", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      // Base config with full MCP definition
-      await Filesystem.write(
-        path.join(dir, "slopcode.jsonc"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          mcp: {
-            myserver: {
-              type: "remote",
-              url: "https://myserver.example.com/mcp",
-              enabled: false,
-              headers: {
-                "X-Custom-Header": "value",
-              },
-            },
-          },
-        }),
-      )
-      // Override just enables it, should preserve other properties
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          mcp: {
-            myserver: {
-              type: "remote",
-              url: "https://myserver.example.com/mcp",
-              enabled: true,
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.mcp?.myserver).toEqual({
-        type: "remote",
-        url: "https://myserver.example.com/mcp",
-        enabled: true,
-        headers: {
-          "X-Custom-Header": "value",
+it.instance("project config can override MCP server enabled status", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    // Simulates a base config (like from remote .well-known) with disabled MCP.
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      mcp: {
+        jira: {
+          type: "remote",
+          url: "https://jira.example.com/mcp",
+          enabled: false,
         },
-      })
-    },
-  })
-})
-
-test("local .slopcode config can override MCP from project config", async () => {
-  await using tmp = await tmpdir({
-    init: async (dir) => {
-      // Project config with disabled MCP
-      await Filesystem.write(
-        path.join(dir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          mcp: {
-            docs: {
-              type: "remote",
-              url: "https://docs.example.com/mcp",
-              enabled: false,
-            },
-          },
-        }),
-      )
-      // Local .slopcode directory config enables it
-      const slopcodeDir = path.join(dir, ".slopcode")
-      await fs.mkdir(slopcodeDir, { recursive: true })
-      await Filesystem.write(
-        path.join(slopcodeDir, "slopcode.json"),
-        JSON.stringify({
-          $schema: "https://slopcode.dev/config.json",
-          mcp: {
-            docs: {
-              type: "remote",
-              url: "https://docs.example.com/mcp",
-              enabled: true,
-            },
-          },
-        }),
-      )
-    },
-  })
-  await Instance.provide({
-    directory: tmp.path,
-    fn: async () => {
-      const config = await Config.get()
-      expect(config.mcp?.docs?.enabled).toBe(true)
-    },
-  })
-})
-
-test("project config overrides remote well-known config", async () => {
-  const originalFetch = globalThis.fetch
-  let fetchedUrl: string | undefined
-  const mockFetch = mock((url: string | URL | Request) => {
-    const urlStr = url.toString()
-    if (urlStr.includes(".well-known/slopcode")) {
-      fetchedUrl = urlStr
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            config: {
-              mcp: {
-                jira: {
-                  type: "remote",
-                  url: "https://jira.example.com/mcp",
-                  enabled: false,
-                },
-              },
-            },
-          }),
-          { status: 200 },
-        ),
-      )
-    }
-    return originalFetch(url)
-  })
-  globalThis.fetch = mockFetch as unknown as typeof fetch
-
-  const originalAuthAll = Auth.all
-  Auth.all = mock(() =>
-    Promise.resolve({
-      "https://example.com": {
-        type: "wellknown" as const,
-        key: "TEST_TOKEN",
-        token: "test-token",
+        wiki: {
+          type: "remote",
+          url: "https://wiki.example.com/mcp",
+          enabled: false,
+        },
       },
+    })
+    // Project config enables just jira.
+    yield* writeConfigEffect(
+      test.directory,
+      {
+        $schema: "https://slopcode.ai/config.json",
+        mcp: {
+          jira: {
+            type: "remote",
+            url: "https://jira.example.com/mcp",
+            enabled: true,
+          },
+        },
+      },
+      "slopcode.jsonc",
+    )
+
+    const config = yield* Config.use.get()
+    expect(config.mcp?.jira).toEqual({
+      type: "remote",
+      url: "https://jira.example.com/mcp",
+      enabled: true,
+    })
+    expect(config.mcp?.wiki).toEqual({
+      type: "remote",
+      url: "https://wiki.example.com/mcp",
+      enabled: false,
+    })
+  }),
+)
+
+it.instance("MCP config deep merges preserving base config properties", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      mcp: {
+        myserver: {
+          type: "remote",
+          url: "https://myserver.example.com/mcp",
+          enabled: false,
+          headers: {
+            "X-Custom-Header": "value",
+          },
+        },
+      },
+    })
+    yield* writeConfigEffect(
+      test.directory,
+      {
+        $schema: "https://slopcode.ai/config.json",
+        mcp: {
+          myserver: {
+            type: "remote",
+            url: "https://myserver.example.com/mcp",
+            enabled: true,
+          },
+        },
+      },
+      "slopcode.jsonc",
+    )
+
+    const config = yield* Config.use.get()
+    expect(config.mcp?.myserver).toEqual({
+      type: "remote",
+      url: "https://myserver.example.com/mcp",
+      enabled: true,
+      headers: {
+        "X-Custom-Header": "value",
+      },
+    })
+  }),
+)
+
+it.instance("local .slopcode config can override MCP from project config", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    yield* writeConfigEffect(test.directory, {
+      $schema: "https://slopcode.ai/config.json",
+      mcp: {
+        docs: {
+          type: "remote",
+          url: "https://docs.example.com/mcp",
+          enabled: false,
+        },
+      },
+    })
+    yield* FSUtil.use.ensureDir(path.join(test.directory, ".slopcode"))
+    yield* writeConfigEffect(
+      path.join(test.directory, ".slopcode"),
+      {
+        $schema: "https://slopcode.ai/config.json",
+        mcp: {
+          docs: {
+            type: "remote",
+            url: "https://docs.example.com/mcp",
+            enabled: true,
+          },
+        },
+      },
+      "slopcode.json",
+    )
+
+    const config = yield* Config.use.get()
+    expect(config.mcp?.docs?.enabled).toBe(true)
+  }),
+)
+
+const remoteProjectOverride = wellKnown({
+  config: {
+    mcp: { jira: { type: "remote", url: "https://jira.example.com/mcp", enabled: false } },
+  },
+})
+
+remoteProjectOverride.it.instance(
+  "project config overrides remote well-known config",
+  () =>
+    Effect.gen(function* () {
+      const config = yield* Config.use.get()
+      expect(remoteProjectOverride.seen.wellKnown).toBe("https://example.com/.well-known/slopcode")
+      expect(config.mcp?.jira?.enabled).toBe(true)
     }),
-  )
+  {
+    git: true,
+    config: { mcp: { jira: { type: "remote", url: "https://jira.example.com/mcp", enabled: true } } },
+  },
+)
 
-  try {
-    await using tmp = await tmpdir({
-      git: true,
-      init: async (dir) => {
-        // Project config enables jira (overriding remote default)
-        await Filesystem.write(
-          path.join(dir, "slopcode.json"),
-          JSON.stringify({
-            $schema: "https://slopcode.dev/config.json",
-            mcp: {
-              jira: {
-                type: "remote",
-                url: "https://jira.example.com/mcp",
-                enabled: true,
-              },
-            },
-          }),
-        )
-      },
-    })
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const config = await Config.get()
-        // Verify fetch was called for wellknown config
-        expect(fetchedUrl).toBe("https://example.com/.well-known/slopcode")
-        // Project config (enabled: true) should override remote (enabled: false)
-        expect(config.mcp?.jira?.enabled).toBe(true)
-      },
-    })
-  } finally {
-    globalThis.fetch = originalFetch
-    Auth.all = originalAuthAll
-  }
+const trailingSlashWellKnown = wellKnown({
+  authUrl: "https://example.com/",
+  config: {
+    mcp: { slack: { type: "remote", url: "https://slack.example.com/mcp", enabled: true } },
+  },
 })
 
-test("loads remote config from the active org account", async () => {
-  Database.use((db) => {
-    db.insert(AccountTable)
-      .values({
-        id: "acc-1",
-        email: "dev@example.com",
-        url: "https://console.example.com",
-        access_token: "access-1",
-        refresh_token: "refresh-1",
-        token_expiry: Date.now() + 10 * 60_000,
-        time_created: 1,
-        time_updated: 1,
-      })
-      .run()
-    db.insert(AccountStateTable)
-      .values({
-        id: 1,
-        active_account_id: "acc-1",
-        active_org_id: "org-1",
-      })
-      .run()
-  })
+trailingSlashWellKnown.it.instance("wellknown URL with trailing slash is normalized", () =>
+  Effect.gen(function* () {
+    yield* Config.use.get()
+    expect(trailingSlashWellKnown.seen.wellKnown).toBe("https://example.com/.well-known/slopcode")
+  }),
+)
 
-  let fetched = false
-  const originalFetch = globalThis.fetch
-  const mockFetch = mock((input: string | URL | Request, init?: RequestInit) => {
-    const url = new URL(input.toString())
-    if (url.pathname === "/api/orgs") {
-      return Promise.resolve(new Response(JSON.stringify([{ id: "org-1", name: "Acme" }]), { status: 200 }))
-    }
-    if (url.pathname === "/api/config") {
-      fetched = true
-      expect(new Headers(init?.headers).get("x-org-id")).toBe("org-1")
-      return Promise.resolve(
-        new Response(JSON.stringify({ config: { instructions: ["remote-instruction-123"] } }), { status: 200 }),
+test("remote well-known config can use FetchHttpClient layer", async () => {
+  let fetchedUrl: string | undefined
+  const server = Bun.serve({
+    port: 0,
+    fetch: (request) => {
+      fetchedUrl = request.url
+      return new Response(
+        JSON.stringify({
+          config: {
+            mcp: { jira: { type: "remote", url: "https://jira.example.com/mcp", enabled: true } },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
       )
-    }
-    return Promise.resolve(new Response("not found", { status: 404 }))
+    },
   })
-  globalThis.fetch = mockFetch as unknown as typeof fetch
 
   try {
-    await using tmp = await tmpdir()
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const config = await Config.get()
-        expect(fetched).toBe(true)
-        expect(config.instructions).toContain("remote-instruction-123")
-      },
-    })
+    await provideTmpdirInstance(
+      () =>
+        Config.Service.use((svc) =>
+          Effect.gen(function* () {
+            const config = yield* svc.get()
+            expect(fetchedUrl).toBe(`${server.url.origin}/.well-known/slopcode`)
+            expect(config.mcp?.jira?.enabled).toBe(true)
+          }),
+        ),
+      { git: true },
+    ).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          Config.layer.pipe(
+            Layer.provide(testFlock),
+            Layer.provide(FSUtil.defaultLayer),
+            Layer.provide(Env.defaultLayer),
+            Layer.provide(wellKnownAuth(server.url.origin)),
+            Layer.provide(AccountTest.empty),
+            Layer.provideMerge(infra),
+            Layer.provide(NpmTest.noop),
+            Layer.provide(FetchHttpClient.layer),
+          ),
+          testInstanceStoreLayer,
+        ),
+      ),
+      Effect.runPromise,
+    )
   } finally {
-    globalThis.fetch = originalFetch
+    await server.stop(true)
   }
 })
 
-describe("getPluginName", () => {
-  test("extracts name from file:// URL", () => {
-    expect(Config.getPluginName("file:///path/to/plugin/foo.js")).toBe("foo")
-    expect(Config.getPluginName("file:///path/to/plugin/bar.ts")).toBe("bar")
-    expect(Config.getPluginName("file:///some/path/my-plugin.js")).toBe("my-plugin")
+const templatedHeaderWellKnown = wellKnown({
+  remoteConfig: {
+    url: "https://config.example.com/slopcode.json",
+    headers: { Authorization: "Bearer {env:TEST_TOKEN}" },
+  },
+  remote: {
+    mcp: { confluence: { type: "remote", url: "https://confluence.example.com/mcp", enabled: true } },
+  },
+})
+
+templatedHeaderWellKnown.it.instance("wellknown remote_config supports templated env vars in headers", () =>
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(templatedHeaderWellKnown.seen.wellKnown).toBe("https://example.com/.well-known/slopcode")
+    expect(templatedHeaderWellKnown.seen.remote).toBe("https://config.example.com/slopcode.json")
+    expect(templatedHeaderWellKnown.seen.authorization).toBe("Bearer test-token")
+    expect(config.mcp?.confluence?.enabled).toBe(true)
+  }),
+)
+
+const remotePrecedenceWellKnown = wellKnown({
+  config: {
+    mcp: { confluence: { type: "remote", url: "https://confluence.example.com/mcp", enabled: false } },
+  },
+  remoteConfig: { url: "https://config.example.com/{env:TEST_TOKEN}/slopcode.json" },
+  remote: {
+    config: { mcp: { confluence: { type: "remote", url: "https://confluence.example.com/mcp", enabled: true } } },
+  },
+})
+
+remotePrecedenceWellKnown.it.instance(
+  "wellknown remote_config url tokens and nested config override embedded config",
+  () =>
+    Effect.gen(function* () {
+      const config = yield* Config.use.get()
+      expect(remotePrecedenceWellKnown.seen.remote).toBe("https://config.example.com/test-token/slopcode.json")
+      expect(config.mcp?.confluence?.enabled).toBe(true)
+    }),
+)
+
+const envIsolationWellKnown = wellKnown({
+  remoteConfig: {
+    url: "https://config.example.com/slopcode.json",
+    headers: { Authorization: "Bearer {env:TEST_TOKEN}" },
+  },
+  remote: {
+    mcp: { confluence: { type: "remote", url: "https://confluence.example.com/mcp", enabled: true } },
+  },
+})
+
+envIsolationWellKnown.it.instance(
+  "wellknown token env substitution does not mutate process env",
+  () =>
+    Effect.gen(function* () {
+      process.env.TEST_TOKEN = "preexisting-token"
+      const config = yield* Config.use.get()
+      expect(envIsolationWellKnown.seen.authorization).toBe("Bearer test-token")
+      expect(config.username).toBe("test-token")
+      expect(process.env.TEST_TOKEN).toBe("preexisting-token")
+    }),
+  { git: true, config: { username: "{env:TEST_TOKEN}" } },
+)
+
+const nullConfigWellKnown = wellKnown({
+  wellKnown: {
+    config: null,
+    remote_config: { url: "https://config.example.com/slopcode.json" },
+  },
+  remote: {
+    mcp: { confluence: { type: "remote", url: "https://confluence.example.com/mcp", enabled: true } },
+  },
+})
+
+nullConfigWellKnown.it.instance("wellknown config null is treated as absent", () =>
+  Effect.gen(function* () {
+    const config = yield* Config.use.get()
+    expect(nullConfigWellKnown.seen.remote).toBe("https://config.example.com/slopcode.json")
+    expect(config.mcp?.confluence?.enabled).toBe(true)
+  }),
+)
+
+const invalidRemoteWellKnown = wellKnown({
+  remoteConfig: { url: "https://config.example.com/slopcode.json" },
+  remote: "not an object",
+})
+
+invalidRemoteWellKnown.it.instance("wellknown remote_config rejects non-object config responses", () =>
+  Effect.gen(function* () {
+    const exit = yield* Config.use.get().pipe(Effect.exit)
+    expect(invalidRemoteWellKnown.seen.remote).toBe("https://config.example.com/slopcode.json")
+    expect(Exit.isFailure(exit)).toBe(true)
+  }),
+)
+
+const loginPageWellKnown = wellKnown({
+  remoteConfig: { url: "https://config.example.com/slopcode.json" },
+  remoteHtml: "<!DOCTYPE html><html><head><title>Sign in</title></head><body>Login required</body></html>",
+})
+
+loginPageWellKnown.it.instance(
+  "wellknown remote_config surfaces an actionable auth error when the gateway returns an HTML login page",
+  () =>
+    Effect.gen(function* () {
+      const exit = yield* Config.use.get().pipe(Effect.exit)
+      expect(loginPageWellKnown.seen.remote).toBe("https://config.example.com/slopcode.json")
+      expect(Exit.isFailure(exit)).toBe(true)
+      const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
+      expect(NamedError.hasName(error, "ConfigRemoteAuthError")).toBe(true)
+      expect((error as { data?: { url?: string } }).data?.url).toBe("https://example.com")
+    }),
+)
+
+describe("resolvePluginSpec", () => {
+  test("keeps package specs unchanged", async () => {
+    await using tmp = await tmpdir()
+    const file = path.join(tmp.path, "slopcode.json")
+    expect(await ConfigPlugin.resolvePluginSpec("oh-my-slopcode@2.4.3", file)).toBe("oh-my-slopcode@2.4.3")
+    expect(await ConfigPlugin.resolvePluginSpec("@scope/pkg", file)).toBe("@scope/pkg")
   })
 
-  test("extracts name from npm package with version", () => {
-    expect(Config.getPluginName("oh-my-slopcode@2.4.3")).toBe("oh-my-slopcode")
-    expect(Config.getPluginName("some-plugin@1.0.0")).toBe("some-plugin")
-    expect(Config.getPluginName("plugin@latest")).toBe("plugin")
+  test("resolves windows-style relative plugin directory specs", async () => {
+    if (process.platform !== "win32") return
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const plugin = path.join(dir, "plugin")
+        await fs.mkdir(plugin, { recursive: true })
+        await Filesystem.write(path.join(plugin, "index.ts"), "export default {}")
+      },
+    })
+
+    const file = path.join(tmp.path, "slopcode.json")
+    const hit = await ConfigPlugin.resolvePluginSpec(".\\plugin", file)
+    expect(ConfigPlugin.pluginSpecifier(hit)).toBe(pathToFileURL(path.join(tmp.path, "plugin", "index.ts")).href)
   })
 
-  test("extracts name from scoped npm package", () => {
-    expect(Config.getPluginName("@scope/pkg@1.0.0")).toBe("@scope/pkg")
-    expect(Config.getPluginName("@slopcode/plugin@2.0.0")).toBe("@slopcode/plugin")
+  test("resolves relative file plugin paths to file urls", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Filesystem.write(path.join(dir, "plugin.ts"), "export default {}")
+      },
+    })
+
+    const file = path.join(tmp.path, "slopcode.json")
+    const hit = await ConfigPlugin.resolvePluginSpec("./plugin.ts", file)
+    expect(ConfigPlugin.pluginSpecifier(hit)).toBe(pathToFileURL(path.join(tmp.path, "plugin.ts")).href)
   })
 
-  test("returns full string for package without version", () => {
-    expect(Config.getPluginName("some-plugin")).toBe("some-plugin")
-    expect(Config.getPluginName("@scope/pkg")).toBe("@scope/pkg")
+  test("resolves plugin directory paths to directory urls", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const plugin = path.join(dir, "plugin")
+        await fs.mkdir(plugin, { recursive: true })
+        await Filesystem.writeJson(path.join(plugin, "package.json"), {
+          name: "demo-plugin",
+          type: "module",
+          main: "./index.ts",
+        })
+        await Filesystem.write(path.join(plugin, "index.ts"), "export default {}")
+      },
+    })
+
+    const file = path.join(tmp.path, "slopcode.json")
+    const hit = await ConfigPlugin.resolvePluginSpec("./plugin", file)
+    expect(ConfigPlugin.pluginSpecifier(hit)).toBe(pathToFileURL(path.join(tmp.path, "plugin")).href)
+  })
+
+  test("resolves plugin directories without package.json to index.ts", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const plugin = path.join(dir, "plugin")
+        await fs.mkdir(plugin, { recursive: true })
+        await Filesystem.write(path.join(plugin, "index.ts"), "export default {}")
+      },
+    })
+
+    const file = path.join(tmp.path, "slopcode.json")
+    const hit = await ConfigPlugin.resolvePluginSpec("./plugin", file)
+    expect(ConfigPlugin.pluginSpecifier(hit)).toBe(pathToFileURL(path.join(tmp.path, "plugin", "index.ts")).href)
   })
 })
 
-describe("deduplicatePlugins", () => {
+describe("deduplicatePluginOrigins", () => {
+  const dedupe = (plugins: ConfigPluginV1.Spec[]) =>
+    ConfigPlugin.deduplicatePluginOrigins(
+      plugins.map((spec) => ({
+        spec,
+        source: "",
+        scope: "global" as const,
+      })),
+    ).map((item) => item.spec)
+
   test("removes duplicates keeping higher priority (later entries)", () => {
     const plugins = ["global-plugin@1.0.0", "shared-plugin@1.0.0", "local-plugin@2.0.0", "shared-plugin@2.0.0"]
 
-    const result = Config.deduplicatePlugins(plugins)
+    const result = dedupe(plugins)
 
     expect(result).toContain("global-plugin@1.0.0")
     expect(result).toContain("local-plugin@2.0.0")
@@ -1970,315 +1757,285 @@ describe("deduplicatePlugins", () => {
     expect(result.length).toBe(3)
   })
 
-  test("prefers local file over npm package with same name", () => {
+  test("keeps path plugins separate from package plugins", () => {
     const plugins = ["oh-my-slopcode@2.4.3", "file:///project/.slopcode/plugin/oh-my-slopcode.js"]
 
-    const result = Config.deduplicatePlugins(plugins)
+    const result = dedupe(plugins)
 
-    expect(result.length).toBe(1)
-    expect(result[0]).toBe("file:///project/.slopcode/plugin/oh-my-slopcode.js")
+    expect(result).toEqual(plugins)
+  })
+
+  test("deduplicates direct path plugins by exact spec", () => {
+    const plugins = ["file:///project/.slopcode/plugin/demo.ts", "file:///project/.slopcode/plugin/demo.ts"]
+
+    const result = dedupe(plugins)
+
+    expect(result).toEqual(["file:///project/.slopcode/plugin/demo.ts"])
   })
 
   test("preserves order of remaining plugins", () => {
     const plugins = ["a-plugin@1.0.0", "b-plugin@1.0.0", "c-plugin@1.0.0"]
 
-    const result = Config.deduplicatePlugins(plugins)
+    const result = dedupe(plugins)
 
     expect(result).toEqual(["a-plugin@1.0.0", "b-plugin@1.0.0", "c-plugin@1.0.0"])
   })
 
-  test("local plugin directory overrides global slopcode.json plugin", async () => {
-    await using tmp = await tmpdir({
-      init: async (dir) => {
-        const projectDir = path.join(dir, "project")
-        const slopcodeDir = path.join(projectDir, ".slopcode")
-        const pluginDir = path.join(slopcodeDir, "plugin")
-        await fs.mkdir(pluginDir, { recursive: true })
-
-        await Filesystem.write(
-          path.join(dir, "slopcode.json"),
-          JSON.stringify({
-            $schema: "https://slopcode.dev/config.json",
-            plugin: ["my-plugin@1.0.0"],
-          }),
+  it.effect("loads auto-discovered local plugins as file urls", () =>
+    withConfigTree(
+      { global: { plugin: ["my-plugin@1.0.0"] } },
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* FSUtil.use.writeWithDirs(
+          path.join(test.directory, ".slopcode", "plugin", "my-plugin.js"),
+          "export default {}",
         )
 
-        await Filesystem.write(path.join(pluginDir, "my-plugin.js"), "export default {}")
-      },
-    })
-
-    await Instance.provide({
-      directory: path.join(tmp.path, "project"),
-      fn: async () => {
-        const config = await Config.get()
-        const plugins = config.plugin ?? []
-
-        const myPlugins = plugins.filter((p) => Config.getPluginName(p) === "my-plugin")
-        expect(myPlugins.length).toBe(1)
-        expect(ConfigPlugin.pluginSpecifier(myPlugins[0]!).startsWith("file://")).toBe(true)
-      },
-    })
-  })
+        const plugins = (yield* Config.use.get()).plugin ?? []
+        expect(plugins.some((p) => ConfigPlugin.pluginSpecifier(p) === "my-plugin@1.0.0")).toBe(true)
+        expect(plugins.some((p) => ConfigPlugin.pluginSpecifier(p).startsWith("file://"))).toBe(true)
+      }),
+    ),
+  )
 })
 
 describe("SLOPCODE_DISABLE_PROJECT_CONFIG", () => {
-  test("skips project config files when flag is set", async () => {
-    const originalEnv = process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"]
-    process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"] = "true"
-
-    try {
-      await using tmp = await tmpdir({
-        init: async (dir) => {
-          // Create a project config that would normally be loaded
-          await Filesystem.write(
-            path.join(dir, "slopcode.json"),
-            JSON.stringify({
-              $schema: "https://slopcode.dev/config.json",
-              model: "project/model",
-              username: "project-user",
-            }),
-          )
-        },
-      })
-      await Instance.provide({
-        directory: tmp.path,
-        fn: async () => {
-          const config = await Config.get()
-          // Project config should NOT be loaded - model should be default, not "project/model"
+  it.instance(
+    "skips project config files when flag is set",
+    () =>
+      withProcessEnv(
+        "SLOPCODE_DISABLE_PROJECT_CONFIG",
+        "true",
+        Effect.gen(function* () {
+          const config = yield* Config.use.get()
           expect(config.model).not.toBe("project/model")
           expect(config.username).not.toBe("project-user")
-        },
-      })
-    } finally {
-      if (originalEnv === undefined) {
-        delete process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"]
-      } else {
-        process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"] = originalEnv
-      }
-    }
-  })
+        }),
+      ),
+    { config: { model: "project/model", username: "project-user" } },
+  )
 
-  test("skips project .slopcode/ directories when flag is set", async () => {
-    const originalEnv = process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"]
-    process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"] = "true"
+  it.instance("skips project .slopcode/ directories when flag is set", () =>
+    withProcessEnv(
+      "SLOPCODE_DISABLE_PROJECT_CONFIG",
+      "true",
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* FSUtil.use.writeWithDirs(
+          path.join(test.directory, ".slopcode", "command", "test-cmd.md"),
+          "# Test Command\nThis is a test command.",
+        )
+        const directories = yield* Config.use.directories()
+        expect(directories.some((d) => d.startsWith(test.directory))).toBe(false)
+      }),
+    ),
+  )
 
-    try {
-      await using tmp = await tmpdir({
-        init: async (dir) => {
-          // Create a .slopcode directory with a command
-          const slopcodeDir = path.join(dir, ".slopcode", "command")
-          await fs.mkdir(slopcodeDir, { recursive: true })
-          await Filesystem.write(path.join(slopcodeDir, "test-cmd.md"), "# Test Command\nThis is a test command.")
-        },
-      })
-      await Instance.provide({
-        directory: tmp.path,
-        fn: async () => {
-          const directories = await Config.directories()
-          // Project .slopcode should NOT be in directories list
-          const hasProjectSlopcode = directories.some((d) => d.startsWith(tmp.path))
-          expect(hasProjectSlopcode).toBe(false)
-        },
-      })
-    } finally {
-      if (originalEnv === undefined) {
-        delete process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"]
-      } else {
-        process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"] = originalEnv
-      }
-    }
-  })
+  it.instance("still loads global config when flag is set", () =>
+    withProcessEnv(
+      "SLOPCODE_DISABLE_PROJECT_CONFIG",
+      "true",
+      Effect.gen(function* () {
+        const config = yield* Config.use.get()
+        expect(config).toBeDefined()
+        expect(config.username).toBeDefined()
+      }),
+    ),
+  )
 
-  test("still loads global config when flag is set", async () => {
-    const originalEnv = process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"]
-    process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"] = "true"
-
-    try {
-      await using tmp = await tmpdir()
-      await Instance.provide({
-        directory: tmp.path,
-        fn: async () => {
-          // Should still get default config (from global or defaults)
-          const config = await Config.get()
-          expect(config).toBeDefined()
-          expect(config.username).toBeDefined()
-        },
-      })
-    } finally {
-      if (originalEnv === undefined) {
-        delete process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"]
-      } else {
-        process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"] = originalEnv
-      }
-    }
-  })
-
-  test("skips relative instructions with warning when flag is set but no config dir", async () => {
-    const originalDisable = process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"]
-    const originalConfigDir = process.env["SLOPCODE_CONFIG_DIR"]
-
-    try {
-      // Ensure no config dir is set
-      delete process.env["SLOPCODE_CONFIG_DIR"]
-      process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"] = "true"
-
-      await using tmp = await tmpdir({
-        init: async (dir) => {
-          // Create a config with relative instruction path
-          await Filesystem.write(
-            path.join(dir, "slopcode.json"),
-            JSON.stringify({
-              $schema: "https://slopcode.dev/config.json",
-              instructions: ["./CUSTOM.md"],
-            }),
-          )
-          // Create the instruction file (should be skipped)
-          await Filesystem.write(path.join(dir, "CUSTOM.md"), "# Custom Instructions")
-        },
-      })
-
-      await Instance.provide({
-        directory: tmp.path,
-        fn: async () => {
+  it.instance(
+    "skips relative instructions with warning when flag is set but no config dir",
+    () =>
+      withProcessEnvs(
+        { SLOPCODE_CONFIG_DIR: undefined, SLOPCODE_DISABLE_PROJECT_CONFIG: "true" },
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          yield* FSUtil.use.writeWithDirs(path.join(test.directory, "CUSTOM.md"), "# Custom Instructions")
           // The relative instruction should be skipped without error
-          // We're mainly verifying this doesn't throw and the config loads
-          const config = await Config.get()
+          const config = yield* Config.use.get()
           expect(config).toBeDefined()
-          // The instruction should have been skipped (warning logged)
-          // We can't easily test the warning was logged, but we verify
-          // the relative path didn't cause an error
-        },
-      })
-    } finally {
-      if (originalDisable === undefined) {
-        delete process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"]
-      } else {
-        process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"] = originalDisable
-      }
-      if (originalConfigDir === undefined) {
-        delete process.env["SLOPCODE_CONFIG_DIR"]
-      } else {
-        process.env["SLOPCODE_CONFIG_DIR"] = originalConfigDir
-      }
-    }
-  })
+        }),
+      ),
+    { config: { instructions: ["./CUSTOM.md"] } },
+  )
 
-  test("SLOPCODE_CONFIG_DIR still works when flag is set", async () => {
-    const originalDisable = process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"]
-    const originalConfigDir = process.env["SLOPCODE_CONFIG_DIR"]
+  it.instance(
+    "SLOPCODE_CONFIG_DIR still works when flag is set",
+    () =>
+      Effect.gen(function* () {
+        const configDir = yield* tmpdirScoped({ config: { model: "configdir/model" } })
+        yield* withProcessEnvs(
+          { SLOPCODE_DISABLE_PROJECT_CONFIG: "true", SLOPCODE_CONFIG_DIR: configDir },
+          Effect.gen(function* () {
+            const config = yield* Config.use.get()
+            expect(config.model).toBe("configdir/model")
+          }),
+        )
+      }),
+    { config: { model: "project/model" } },
+  )
+})
 
-    try {
-      await using configDirTmp = await tmpdir({
-        init: async (dir) => {
-          // Create config in the custom config dir
-          await Filesystem.write(
-            path.join(dir, "slopcode.json"),
-            JSON.stringify({
-              $schema: "https://slopcode.dev/config.json",
-              model: "configdir/model",
-            }),
-          )
-        },
-      })
-
-      await using projectTmp = await tmpdir({
-        init: async (dir) => {
-          // Create config in project (should be ignored)
-          await Filesystem.write(
-            path.join(dir, "slopcode.json"),
-            JSON.stringify({
-              $schema: "https://slopcode.dev/config.json",
-              model: "project/model",
-            }),
-          )
-        },
-      })
-
-      process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"] = "true"
-      process.env["SLOPCODE_CONFIG_DIR"] = configDirTmp.path
-
-      await Instance.provide({
-        directory: projectTmp.path,
-        fn: async () => {
-          const config = await Config.get()
-          // Should load from SLOPCODE_CONFIG_DIR, not project
-          expect(config.model).toBe("configdir/model")
-        },
-      })
-    } finally {
-      if (originalDisable === undefined) {
-        delete process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"]
-      } else {
-        process.env["SLOPCODE_DISABLE_PROJECT_CONFIG"] = originalDisable
-      }
-      if (originalConfigDir === undefined) {
-        delete process.env["SLOPCODE_CONFIG_DIR"]
-      } else {
-        process.env["SLOPCODE_CONFIG_DIR"] = originalConfigDir
-      }
-    }
-  })
+// Regression for #28206: malformed SLOPCODE_PERMISSION JSON used to crash
+// the app on startup with an unhandled SyntaxError. Loading the config with
+// an invalid JSON value in this env var should not throw.
+describe("SLOPCODE_PERMISSION env var", () => {
+  it.instance("does not crash when SLOPCODE_PERMISSION contains invalid JSON", () =>
+    withProcessEnv(
+      "SLOPCODE_PERMISSION",
+      "{invalid",
+      Effect.gen(function* () {
+        const config = yield* Config.use.get()
+        // Regression: load() used to throw before returning anything.
+        expect(config).toBeDefined()
+      }),
+    ),
+  )
 })
 
 describe("SLOPCODE_CONFIG_CONTENT token substitution", () => {
-  test("substitutes {env:} tokens in SLOPCODE_CONFIG_CONTENT", async () => {
-    const originalEnv = process.env["SLOPCODE_CONFIG_CONTENT"]
-    const originalTestVar = process.env["TEST_CONFIG_VAR"]
-    process.env["TEST_CONFIG_VAR"] = "test_api_key_12345"
-    process.env["SLOPCODE_CONFIG_CONTENT"] = JSON.stringify({
-      $schema: "https://slopcode.dev/config.json",
-      username: "{env:TEST_CONFIG_VAR}",
-    })
-
-    try {
-      await using tmp = await tmpdir()
-      await Instance.provide({
-        directory: tmp.path,
-        fn: async () => {
-          const config = await Config.get()
+  it.instance("substitutes {env:} tokens in SLOPCODE_CONFIG_CONTENT", () =>
+    withProcessEnv(
+      "TEST_CONFIG_VAR",
+      "test_api_key_12345",
+      withProcessEnv(
+        "SLOPCODE_CONFIG_CONTENT",
+        JSON.stringify({
+          $schema: "https://slopcode.ai/config.json",
+          username: "{env:TEST_CONFIG_VAR}",
+        }),
+        Effect.gen(function* () {
+          const config = yield* Config.use.get()
           expect(config.username).toBe("test_api_key_12345")
-        },
-      })
-    } finally {
-      if (originalEnv !== undefined) {
-        process.env["SLOPCODE_CONFIG_CONTENT"] = originalEnv
-      } else {
-        delete process.env["SLOPCODE_CONFIG_CONTENT"]
-      }
-      if (originalTestVar !== undefined) {
-        process.env["TEST_CONFIG_VAR"] = originalTestVar
-      } else {
-        delete process.env["TEST_CONFIG_VAR"]
-      }
-    }
-  })
+        }),
+      ),
+    ),
+  )
 
-  test("substitutes {file:} tokens in SLOPCODE_CONFIG_CONTENT", async () => {
-    const originalEnv = process.env["SLOPCODE_CONFIG_CONTENT"]
-
-    try {
-      await using tmp = await tmpdir({
-        init: async (dir) => {
-          await Filesystem.write(path.join(dir, "api_key.txt"), "secret_key_from_file")
-          process.env["SLOPCODE_CONFIG_CONTENT"] = JSON.stringify({
-            $schema: "https://slopcode.dev/config.json",
-            username: "{file:./api_key.txt}",
-          })
-        },
-      })
-      await Instance.provide({
-        directory: tmp.path,
-        fn: async () => {
-          const config = await Config.get()
+  it.instance("substitutes {file:} tokens in SLOPCODE_CONFIG_CONTENT", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      yield* FSUtil.use.writeWithDirs(path.join(test.directory, "api_key.txt"), "secret_key_from_file")
+      yield* withProcessEnv(
+        "SLOPCODE_CONFIG_CONTENT",
+        JSON.stringify({
+          $schema: "https://slopcode.ai/config.json",
+          username: "{file:./api_key.txt}",
+        }),
+        Effect.gen(function* () {
+          const config = yield* Config.use.get()
           expect(config.username).toBe("secret_key_from_file")
-        },
-      })
-    } finally {
-      if (originalEnv !== undefined) {
-        process.env["SLOPCODE_CONFIG_CONTENT"] = originalEnv
-      } else {
-        delete process.env["SLOPCODE_CONFIG_CONTENT"]
-      }
-    }
-  })
+        }),
+      )
+    }),
+  )
+})
+
+// parseManagedPlist unit tests — pure function, no OS interaction
+
+test("parseManagedPlist strips MDM metadata keys", async () => {
+  const config = ConfigParse.schema(
+    ConfigV1.Info,
+    ConfigParse.jsonc(
+      await ConfigManaged.parseManagedPlist(
+        JSON.stringify({
+          PayloadDisplayName: "SlopCode Managed",
+          PayloadIdentifier: "ai.slopcode.managed.test",
+          PayloadType: "ai.slopcode.managed",
+          PayloadUUID: "AAAA-BBBB-CCCC",
+          PayloadVersion: 1,
+          _manualProfile: true,
+          share: "disabled",
+          model: "mdm/model",
+        }),
+      ),
+      "test:mobileconfig",
+    ),
+    "test:mobileconfig",
+  )
+  expect(config.share).toBe("disabled")
+  expect(config.model).toBe("mdm/model")
+  // MDM keys must not leak into the parsed config
+  expect((config as any).PayloadUUID).toBeUndefined()
+  expect((config as any).PayloadType).toBeUndefined()
+  expect((config as any)._manualProfile).toBeUndefined()
+})
+
+test("parseManagedPlist parses server settings", async () => {
+  const config = ConfigParse.schema(
+    ConfigV1.Info,
+    ConfigParse.jsonc(
+      await ConfigManaged.parseManagedPlist(
+        JSON.stringify({
+          $schema: "https://slopcode.ai/config.json",
+          server: { hostname: "127.0.0.1", mdns: false },
+          autoupdate: true,
+        }),
+      ),
+      "test:mobileconfig",
+    ),
+    "test:mobileconfig",
+  )
+  expect(config.server?.hostname).toBe("127.0.0.1")
+  expect(config.server?.mdns).toBe(false)
+  expect(config.autoupdate).toBe(true)
+})
+
+test("parseManagedPlist parses permission rules", async () => {
+  const config = ConfigParse.schema(
+    ConfigV1.Info,
+    ConfigParse.jsonc(
+      await ConfigManaged.parseManagedPlist(
+        JSON.stringify({
+          $schema: "https://slopcode.ai/config.json",
+          permission: {
+            "*": "ask",
+            bash: { "*": "ask", "rm -rf *": "deny", "curl *": "deny" },
+            grep: "allow",
+            glob: "allow",
+            webfetch: "ask",
+            "~/.ssh/*": "deny",
+          },
+        }),
+      ),
+      "test:mobileconfig",
+    ),
+    "test:mobileconfig",
+  )
+  expect(config.permission?.["*"]).toBe("ask")
+  expect(config.permission?.grep).toBe("allow")
+  expect(config.permission?.webfetch).toBe("ask")
+  expect(config.permission?.["~/.ssh/*"]).toBe("deny")
+  const bash = config.permission?.bash as Record<string, string>
+  expect(bash?.["rm -rf *"]).toBe("deny")
+  expect(bash?.["curl *"]).toBe("deny")
+})
+
+test("parseManagedPlist parses enabled_providers", async () => {
+  const config = ConfigParse.schema(
+    ConfigV1.Info,
+    ConfigParse.jsonc(
+      await ConfigManaged.parseManagedPlist(
+        JSON.stringify({
+          $schema: "https://slopcode.ai/config.json",
+          enabled_providers: ["anthropic", "google"],
+        }),
+      ),
+      "test:mobileconfig",
+    ),
+    "test:mobileconfig",
+  )
+  expect(config.enabled_providers).toEqual(["anthropic", "google"])
+})
+
+test("parseManagedPlist handles empty config", async () => {
+  const config = ConfigParse.schema(
+    ConfigV1.Info,
+    ConfigParse.jsonc(
+      await ConfigManaged.parseManagedPlist(JSON.stringify({ $schema: "https://slopcode.ai/config.json" })),
+      "test:mobileconfig",
+    ),
+    "test:mobileconfig",
+  )
+  expect(config.$schema).toBe("https://slopcode.ai/config.json")
 })

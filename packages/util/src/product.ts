@@ -1,20 +1,20 @@
 export const product = {
   id: "slopcode",
-  // Legacy OpenCode identifiers are read-compat only.
+  // Legacy SlopCode identifiers are read-compat only.
   // New writes should always use SlopCode identifiers.
-  legacy_id: "opencode",
+  legacy_id: "slopcode",
   app: "SlopCode",
-  legacy_app: "OpenCode",
+  legacy_app: "SlopCode",
   package: "slopcode",
   config: {
     schema: "https://slopcode.dev/config.json",
     well_known: ".well-known/slopcode",
-    dirs: [".slopcode", ".opencode"],
-    names: ["opencode", "slopcode"],
-    global_files: ["slopcode.jsonc", "slopcode.json", "config.json", "opencode.jsonc", "opencode.json"],
+    dirs: [".slopcode", ".slopcode"],
+    names: ["slopcode", "slopcode"],
+    global_files: ["slopcode.jsonc", "slopcode.json", "config.json", "slopcode.jsonc", "slopcode.json"],
   },
   deep_link: {
-    schemes: ["slopcode://", "opencode://"],
+    schemes: ["slopcode://", "slopcode://"],
   },
   share: {
     default_url: "https://slopcode.dev",

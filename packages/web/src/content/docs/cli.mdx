@@ -17,10 +17,6 @@ But it also accepts commands as documented on this page. This allows you to inte
 slopcode run "Explain how closures work in JavaScript"
 ```
 
-CLI, server commands, and interactive TUI sessions work natively in Android Termux on arm64 and x64 when installed from npm with optional dependencies.
-
-Android uses the bundled Rust `ratatui`/`crossterm` TUI instead of OpenTUI/Bun FFI.
-
 ---
 
 ### tui
@@ -33,16 +29,19 @@ slopcode [project]
 
 #### Flags
 
-| Flag         | Short | Description                                                             |
-| ------------ | ----- | ----------------------------------------------------------------------- |
-| `--continue` | `-c`  | Continue the last session                                               |
-| `--session`  | `-s`  | Session ID to continue                                                  |
-| `--fork`     |       | Fork the session when continuing (use with `--continue` or `--session`) |
-| `--prompt`   |       | Prompt to use                                                           |
-| `--model`    | `-m`  | Model to use in the form of provider/model                              |
-| `--agent`    |       | Agent to use                                                            |
-| `--port`     |       | Port to listen on                                                       |
-| `--hostname` |       | Hostname to listen on                                                   |
+| Flag                                        | Short | Description                                                             |
+| ------------------------------------------- | ----- | ----------------------------------------------------------------------- |
+| <nobr><code>{"--continue"}</code></nobr>    | `-c`  | Continue the last session                                               |
+| <nobr><code>{"--session"}</code></nobr>     | `-s`  | Session ID to continue                                                  |
+| <nobr><code>{"--fork"}</code></nobr>        |       | Fork the session when continuing (use with `--continue` or `--session`) |
+| <nobr><code>{"--prompt"}</code></nobr>      |       | Prompt to use                                                           |
+| <nobr><code>{"--model"}</code></nobr>       | `-m`  | Model to use in the form of provider/model                              |
+| <nobr><code>{"--agent"}</code></nobr>       |       | Agent to use                                                            |
+| <nobr><code>{"--port"}</code></nobr>        |       | Port to listen on                                                       |
+| <nobr><code>{"--hostname"}</code></nobr>    |       | Hostname to listen on                                                   |
+| <nobr><code>{"--mdns"}</code></nobr>        |       | Enable mDNS discovery                                                   |
+| <nobr><code>{"--mdns-domain"}</code></nobr> |       | Custom mDNS domain name                                                 |
+| <nobr><code>{"--cors"}</code></nobr>        |       | Additional browser origin(s) to allow CORS                              |
 
 ---
 
@@ -58,6 +57,40 @@ Manage agents for SlopCode.
 
 ```bash
 slopcode agent [command]
+```
+
+---
+
+#### create
+
+Create a new agent with custom configuration.
+
+```bash
+slopcode agent create
+```
+
+This command will guide you through creating a new agent with a custom system prompt and permission configuration. Anything you don't allow is denied in the generated agent's frontmatter.
+
+#### Flags
+
+| Flag                                        | Short | Description                                                                                                                                                                                                                |
+| ------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <nobr><code>{"--path"}</code></nobr>        |       | Directory to write the agent file to (defaults to global or `.slopcode/agent` based on the prompt)                                                                                                                         |
+| <nobr><code>{"--description"}</code></nobr> |       | What the agent should do                                                                                                                                                                                                   |
+| <nobr><code>{"--mode"}</code></nobr>        |       | Agent mode: `all`, `primary`, or `subagent`                                                                                                                                                                                |
+| <nobr><code>{"--permissions"}</code></nobr> |       | Comma-separated list of permissions to allow (default: all). Available: `bash`, `read`, `edit`, `glob`, `grep`, `webfetch`, `task`, `todowrite`, `websearch`, `lsp`, `skill`. Anything omitted is denied. Alias: `--tools` |
+| <nobr><code>{"--model"}</code></nobr>       | `-m`  | Model to use, in `provider/model` format                                                                                                                                                                                   |
+
+Passing all of `--path`, `--description`, `--mode`, and `--permissions` runs the command non-interactively.
+
+---
+
+#### list
+
+List all available agents.
+
+```bash
+slopcode agent list
 ```
 
 ---
@@ -80,36 +113,16 @@ slopcode web --port 4096 --hostname 0.0.0.0
 slopcode attach http://10.20.30.40:4096
 ```
 
-This is the recommended way to use a richer desktop TUI with a server running elsewhere, including a Termux-hosted backend.
-
 #### Flags
 
-| Flag        | Short | Description                       |
-| ----------- | ----- | --------------------------------- |
-| `--dir`     |       | Working directory to start TUI in |
-| `--session` | `-s`  | Session ID to continue            |
-
----
-
-#### create
-
-Create a new agent with custom configuration.
-
-```bash
-slopcode agent create
-```
-
-This command will guide you through creating a new agent with a custom system prompt and tool configuration.
-
----
-
-#### list
-
-List all available agents.
-
-```bash
-slopcode agent list
-```
+| Flag                                     | Short | Description                                                                |
+| ---------------------------------------- | ----- | -------------------------------------------------------------------------- |
+| <nobr><code>{"--dir"}</code></nobr>      |       | Working directory to start TUI in                                          |
+| <nobr><code>{"--continue"}</code></nobr> | `-c`  | Continue the last session                                                  |
+| <nobr><code>{"--session"}</code></nobr>  | `-s`  | Session ID to continue                                                     |
+| <nobr><code>{"--fork"}</code></nobr>     |       | Fork the session when continuing (use with `--continue` or `--session`)    |
+| <nobr><code>{"--password"}</code></nobr> | `-p`  | Basic auth password (defaults to `SLOPCODE_SERVER_PASSWORD`)               |
+| <nobr><code>{"--username"}</code></nobr> | `-u`  | Basic auth username (defaults to `SLOPCODE_SERVER_USERNAME` or `slopcode`) |
 
 ---
 
@@ -132,6 +145,13 @@ slopcode auth login
 ```
 
 When SlopCode starts up it loads the providers from the credentials file. And if there are any keys defined in your environments or a `.env` file in your project.
+
+##### Flags
+
+| Flag                                     | Short | Description                                          |
+| ---------------------------------------- | ----- | ---------------------------------------------------- |
+| <nobr><code>{"--provider"}</code></nobr> | `-p`  | Provider ID or name to log in to                     |
+| <nobr><code>{"--method"}</code></nobr>   | `-m`  | Login method label to use, skipping method selection |
 
 ---
 
@@ -193,10 +213,10 @@ slopcode github run
 
 ##### Flags
 
-| Flag      | Description                            |
-| --------- | -------------------------------------- |
-| `--event` | GitHub mock event to run the agent for |
-| `--token` | GitHub personal access token           |
+| Flag                                  | Description                            |
+| ------------------------------------- | -------------------------------------- |
+| <nobr><code>{"--event"}</code></nobr> | GitHub mock event to run the agent for |
+| <nobr><code>{"--token"}</code></nobr> | GitHub personal access token           |
 
 ---
 
@@ -302,10 +322,10 @@ slopcode models anthropic
 
 #### Flags
 
-| Flag        | Description                                                  |
-| ----------- | ------------------------------------------------------------ |
-| `--refresh` | Refresh the models cache from models.dev                     |
-| `--verbose` | Use more verbose model output (includes metadata like costs) |
+| Flag                                    | Description                                                  |
+| --------------------------------------- | ------------------------------------------------------------ |
+| <nobr><code>{"--refresh"}</code></nobr> | Refresh the models cache from models.dev                     |
+| <nobr><code>{"--verbose"}</code></nobr> | Use more verbose model output (includes metadata like costs) |
 
 Use the `--refresh` flag to update the cached model list. This is useful when new models have been added to a provider and you want to see them in SlopCode.
 
@@ -341,23 +361,26 @@ slopcode run --attach http://localhost:4096 "Explain async/await in JavaScript"
 
 #### Flags
 
-| Flag                             | Short | Description                                                             |
-| -------------------------------- | ----- | ----------------------------------------------------------------------- |
-| `--command`                      |       | The command to run, use message for args                                |
-| `--continue`                     | `-c`  | Continue the last session                                               |
-| `--session`                      | `-s`  | Session ID to continue                                                  |
-| `--fork`                         |       | Fork the session when continuing (use with `--continue` or `--session`) |
-| `--share`                        |       | Share the session                                                       |
-| `--model`                        | `-m`  | Model to use in the form of provider/model                              |
-| `--agent`                        |       | Agent to use                                                            |
-| `--file`                         | `-f`  | File(s) to attach to message                                            |
-| `--format`                       |       | Format: default (formatted) or json (raw JSON events)                   |
-| `--title`                        |       | Title for the session (uses truncated prompt if no value provided)      |
-| `--attach`                       |       | Attach to a running slopcode server (e.g., http://localhost:4096)       |
-| `--port`                         |       | Port for the local server (defaults to random port)                     |
-| `--dangerously-skip-permissions` |       | Auto-approve permissions that are not explicitly denied                 |
-
-Use `--dangerously-skip-permissions` only in trusted automation. It automatically approves permission requests unless they are explicitly denied.
+| Flag                                                         | Short | Description                                                                |
+| ------------------------------------------------------------ | ----- | -------------------------------------------------------------------------- |
+| <nobr><code>{"--command"}</code></nobr>                      |       | The command to run, use message for args                                   |
+| <nobr><code>{"--continue"}</code></nobr>                     | `-c`  | Continue the last session                                                  |
+| <nobr><code>{"--session"}</code></nobr>                      | `-s`  | Session ID to continue                                                     |
+| <nobr><code>{"--fork"}</code></nobr>                         |       | Fork the session when continuing (use with `--continue` or `--session`)    |
+| <nobr><code>{"--share"}</code></nobr>                        |       | Share the session                                                          |
+| <nobr><code>{"--model"}</code></nobr>                        | `-m`  | Model to use in the form of provider/model                                 |
+| <nobr><code>{"--agent"}</code></nobr>                        |       | Agent to use                                                               |
+| <nobr><code>{"--file"}</code></nobr>                         | `-f`  | File(s) to attach to message                                               |
+| <nobr><code>{"--format"}</code></nobr>                       |       | Format: default (formatted) or json (raw JSON events)                      |
+| <nobr><code>{"--title"}</code></nobr>                        |       | Title for the session (uses truncated prompt if no value provided)         |
+| <nobr><code>{"--attach"}</code></nobr>                       |       | Attach to a running slopcode server (e.g., http://localhost:4096)          |
+| <nobr><code>{"--password"}</code></nobr>                     | `-p`  | Basic auth password (defaults to `SLOPCODE_SERVER_PASSWORD`)               |
+| <nobr><code>{"--username"}</code></nobr>                     | `-u`  | Basic auth username (defaults to `SLOPCODE_SERVER_USERNAME` or `slopcode`) |
+| <nobr><code>{"--dir"}</code></nobr>                          |       | Directory to run in, or path on the remote server when attaching           |
+| <nobr><code>{"--port"}</code></nobr>                         |       | Port for the local server (defaults to random port)                        |
+| <nobr><code>{"--variant"}</code></nobr>                      |       | Model variant (provider-specific reasoning effort)                         |
+| <nobr><code>{"--thinking"}</code></nobr>                     |       | Show thinking blocks                                                       |
+| <nobr><code>{"--dangerously-skip-permissions"}</code></nobr> |       | Auto-approve permissions that are not explicitly denied (dangerous!)       |
 
 ---
 
@@ -373,12 +396,13 @@ This starts an HTTP server that provides API access to slopcode functionality wi
 
 #### Flags
 
-| Flag         | Description                                |
-| ------------ | ------------------------------------------ |
-| `--port`     | Port to listen on                          |
-| `--hostname` | Hostname to listen on                      |
-| `--mdns`     | Enable mDNS discovery                      |
-| `--cors`     | Additional browser origin(s) to allow CORS |
+| Flag                                        | Description                                |
+| ------------------------------------------- | ------------------------------------------ |
+| <nobr><code>{"--port"}</code></nobr>        | Port to listen on                          |
+| <nobr><code>{"--hostname"}</code></nobr>    | Hostname to listen on                      |
+| <nobr><code>{"--mdns"}</code></nobr>        | Enable mDNS discovery                      |
+| <nobr><code>{"--mdns-domain"}</code></nobr> | Custom mDNS domain name                    |
+| <nobr><code>{"--cors"}</code></nobr>        | Additional browser origin(s) to allow CORS |
 
 ---
 
@@ -402,10 +426,20 @@ slopcode session list
 
 ##### Flags
 
-| Flag          | Short | Description                          |
-| ------------- | ----- | ------------------------------------ |
-| `--max-count` | `-n`  | Limit to N most recent sessions      |
-| `--format`    |       | Output format: table or json (table) |
+| Flag                                      | Short | Description                          |
+| ----------------------------------------- | ----- | ------------------------------------ |
+| <nobr><code>{"--max-count"}</code></nobr> | `-n`  | Limit to N most recent sessions      |
+| <nobr><code>{"--format"}</code></nobr>    |       | Output format: table or json (table) |
+
+---
+
+#### delete
+
+Delete an SlopCode session.
+
+```bash
+slopcode session delete <sessionID>
+```
 
 ---
 
@@ -419,12 +453,12 @@ slopcode stats
 
 #### Flags
 
-| Flag        | Description                                                                 |
-| ----------- | --------------------------------------------------------------------------- |
-| `--days`    | Show stats for the last N days (all time)                                   |
-| `--tools`   | Number of tools to show (all)                                               |
-| `--models`  | Show model usage breakdown (hidden by default). Pass a number to show top N |
-| `--project` | Filter by project (all projects, empty string: current project)             |
+| Flag                                    | Description                                                                 |
+| --------------------------------------- | --------------------------------------------------------------------------- |
+| <nobr><code>{"--days"}</code></nobr>    | Show stats for the last N days (all time)                                   |
+| <nobr><code>{"--tools"}</code></nobr>   | Number of tools to show (all)                                               |
+| <nobr><code>{"--models"}</code></nobr>  | Show model usage breakdown (hidden by default). Pass a number to show top N |
+| <nobr><code>{"--project"}</code></nobr> | Filter by project (all projects, empty string: current project)             |
 
 ---
 
@@ -438,13 +472,11 @@ slopcode export [sessionID]
 
 If you don't provide a session ID, you'll be prompted to select from available sessions.
 
-Use `--sanitize` to redact sensitive transcript fields, paths, diffs, and file contents before exporting.
-
 #### Flags
 
-| Flag         | Description                               |
-| ------------ | ----------------------------------------- |
-| `--sanitize` | Redact sensitive transcript and file data |
+| Flag                                     | Description                           |
+| ---------------------------------------- | ------------------------------------- |
+| <nobr><code>{"--sanitize"}</code></nobr> | Redact sensitive transcript/file data |
 
 ---
 
@@ -460,7 +492,7 @@ You can import from a local file or an SlopCode share URL.
 
 ```bash
 slopcode import session.json
-slopcode import https://slopcode.dev/share/abc123
+slopcode import https://opncd.ai/s/abc123
 ```
 
 ---
@@ -477,12 +509,13 @@ This starts an HTTP server and opens a web browser to access SlopCode through a 
 
 #### Flags
 
-| Flag         | Description                                |
-| ------------ | ------------------------------------------ |
-| `--port`     | Port to listen on                          |
-| `--hostname` | Hostname to listen on                      |
-| `--mdns`     | Enable mDNS discovery                      |
-| `--cors`     | Additional browser origin(s) to allow CORS |
+| Flag                                        | Description                                |
+| ------------------------------------------- | ------------------------------------------ |
+| <nobr><code>{"--port"}</code></nobr>        | Port to listen on                          |
+| <nobr><code>{"--hostname"}</code></nobr>    | Hostname to listen on                      |
+| <nobr><code>{"--mdns"}</code></nobr>        | Enable mDNS discovery                      |
+| <nobr><code>{"--mdns-domain"}</code></nobr> | Custom mDNS domain name                    |
+| <nobr><code>{"--cors"}</code></nobr>        | Additional browser origin(s) to allow CORS |
 
 ---
 
@@ -498,11 +531,83 @@ This command starts an ACP server that communicates via stdin/stdout using nd-JS
 
 #### Flags
 
-| Flag         | Description           |
-| ------------ | --------------------- |
-| `--cwd`      | Working directory     |
-| `--port`     | Port to listen on     |
-| `--hostname` | Hostname to listen on |
+| Flag                                        | Description                                |
+| ------------------------------------------- | ------------------------------------------ |
+| <nobr><code>{"--cwd"}</code></nobr>         | Working directory                          |
+| <nobr><code>{"--port"}</code></nobr>        | Port to listen on                          |
+| <nobr><code>{"--hostname"}</code></nobr>    | Hostname to listen on                      |
+| <nobr><code>{"--mdns"}</code></nobr>        | Enable mDNS discovery                      |
+| <nobr><code>{"--mdns-domain"}</code></nobr> | Custom mDNS domain name                    |
+| <nobr><code>{"--cors"}</code></nobr>        | Additional browser origin(s) to allow CORS |
+
+---
+
+### plugin
+
+Install a plugin and update your config.
+
+```bash
+slopcode plugin <module>
+```
+
+Or use the alias.
+
+```bash
+slopcode plug <module>
+```
+
+#### Flags
+
+| Flag                                   | Short | Description                     |
+| -------------------------------------- | ----- | ------------------------------- |
+| <nobr><code>{"--global"}</code></nobr> | `-g`  | Install in global config        |
+| <nobr><code>{"--force"}</code></nobr>  | `-f`  | Replace existing plugin version |
+
+---
+
+### pr
+
+Fetch and checkout a GitHub PR branch, then run SlopCode.
+
+```bash
+slopcode pr <number>
+```
+
+---
+
+### db
+
+Database tools.
+
+```bash
+slopcode db [query]
+```
+
+#### Flags
+
+| Flag                                   | Description                    |
+| -------------------------------------- | ------------------------------ |
+| <nobr><code>{"--format"}</code></nobr> | Output format: `json` or `tsv` |
+
+---
+
+#### path
+
+Print the database path.
+
+```bash
+slopcode db path
+```
+
+---
+
+### debug
+
+Debugging and troubleshooting tools.
+
+```bash
+slopcode debug [command]
+```
 
 ---
 
@@ -516,12 +621,12 @@ slopcode uninstall
 
 #### Flags
 
-| Flag            | Short | Description                                 |
-| --------------- | ----- | ------------------------------------------- |
-| `--keep-config` | `-c`  | Keep configuration files                    |
-| `--keep-data`   | `-d`  | Keep session data and snapshots             |
-| `--dry-run`     |       | Show what would be removed without removing |
-| `--force`       | `-f`  | Skip confirmation prompts                   |
+| Flag                                        | Short | Description                                 |
+| ------------------------------------------- | ----- | ------------------------------------------- |
+| <nobr><code>{"--keep-config"}</code></nobr> | `-c`  | Keep configuration files                    |
+| <nobr><code>{"--keep-data"}</code></nobr>   | `-d`  | Keep session data and snapshots             |
+| <nobr><code>{"--dry-run"}</code></nobr>     |       | Show what would be removed without removing |
+| <nobr><code>{"--force"}</code></nobr>       | `-f`  | Skip confirmation prompts                   |
 
 ---
 
@@ -547,11 +652,9 @@ slopcode upgrade v0.1.48
 
 #### Flags
 
-| Flag       | Short | Description                                                                                                                                               |
-| ---------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--method` | `-m`  | The installation method that was used; curl, npm, pnpm, yarn, bun, nix, brew, macports, apt, zypper, dnf, yum, apk, pkg, pacman, paru, snap, choco, scoop |
-
-SlopCode also supports `winget` and direct release binaries, so pick the method that matches how you installed it.
+| Flag                                   | Short | Description                                                       |
+| -------------------------------------- | ----- | ----------------------------------------------------------------- |
+| <nobr><code>{"--method"}</code></nobr> | `-m`  | The installation method that was used; curl, npm, pnpm, bun, brew |
 
 ---
 
@@ -559,12 +662,13 @@ SlopCode also supports `winget` and direct release binaries, so pick the method 
 
 The slopcode CLI takes the following global flags.
 
-| Flag           | Short | Description                          |
-| -------------- | ----- | ------------------------------------ |
-| `--help`       | `-h`  | Display help                         |
-| `--version`    | `-v`  | Print version number                 |
-| `--print-logs` |       | Print logs to stderr                 |
-| `--log-level`  |       | Log level (DEBUG, INFO, WARN, ERROR) |
+| Flag                                       | Short | Description                          |
+| ------------------------------------------ | ----- | ------------------------------------ |
+| <nobr><code>{"--help"}</code></nobr>       | `-h`  | Display help                         |
+| <nobr><code>{"--version"}</code></nobr>    | `-v`  | Print version number                 |
+| <nobr><code>{"--print-logs"}</code></nobr> |       | Print logs to stderr                 |
+| <nobr><code>{"--log-level"}</code></nobr>  |       | Log level (DEBUG, INFO, WARN, ERROR) |
+| <nobr><code>{"--pure"}</code></nobr>       |       | Run without external plugins         |
 
 ---
 
@@ -572,39 +676,33 @@ The slopcode CLI takes the following global flags.
 
 SlopCode can be configured using environment variables.
 
-| Variable                              | Type    | Description                                          |
-| ------------------------------------- | ------- | ---------------------------------------------------- |
-| `SLOPCODE_AUTO_SHARE`                 | boolean | Automatically share sessions                         |
-| `SLOPCODE_GIT_BASH_PATH`              | string  | Path to Git Bash executable on Windows               |
-| `SLOPCODE_CONFIG`                     | string  | Path to config file                                  |
-| `SLOPCODE_TUI_CONFIG`                 | string  | Path to TUI config file                              |
-| `SLOPCODE_CONFIG_DIR`                 | string  | Path to config directory                             |
-| `SLOPCODE_CONFIG_CONTENT`             | string  | Inline json config content                           |
-| `SLOPCODE_DISABLE_AUTOUPDATE`         | boolean | Disable automatic update checks                      |
-| `SLOPCODE_DISABLE_PRUNE`              | boolean | Disable pruning of old data                          |
-| `SLOPCODE_DISABLE_MOUSE`              | boolean | Disable mouse support in the TUI                     |
-| `SLOPCODE_DISABLE_TERMINAL_TITLE`     | boolean | Disable automatic terminal title updates             |
-| `SLOPCODE_PERMISSION`                 | string  | Inlined json permissions config                      |
-| `SLOPCODE_PURE`                       | boolean | Reduce terminal styling and feature detection        |
-| `SLOPCODE_DISABLE_DEFAULT_PLUGINS`    | boolean | Disable default plugins                              |
-| `SLOPCODE_DISABLE_LSP_DOWNLOAD`       | boolean | Disable automatic LSP server downloads               |
-| `SLOPCODE_ENABLE_EXPERIMENTAL_MODELS` | boolean | Enable experimental models                           |
-| `SLOPCODE_DISABLE_AUTOCOMPACT`        | boolean | Disable automatic context compaction                 |
-| `SLOPCODE_DISABLE_CLAUDE_CODE`        | boolean | Disable reading from `.claude` (prompt + skills)     |
-| `SLOPCODE_DISABLE_CLAUDE_CODE_PROMPT` | boolean | Disable reading `~/.claude/CLAUDE.md`                |
-| `SLOPCODE_DISABLE_CLAUDE_CODE_SKILLS` | boolean | Disable loading `.claude/skills`                     |
-| `SLOPCODE_DISABLE_EXTERNAL_SKILLS`    | boolean | Disable external `.claude` and `.agents` skills      |
-| `SLOPCODE_DISABLE_MODELS_FETCH`       | boolean | Disable fetching models from remote sources          |
-| `SLOPCODE_DISABLE_PROJECT_CONFIG`     | boolean | Ignore project config files                          |
-| `SLOPCODE_FAKE_VCS`                   | string  | Fake VCS provider for testing purposes               |
-| `SLOPCODE_DISABLE_FILETIME_CHECK`     | boolean | Disable file time checking for optimization          |
-| `SLOPCODE_CLIENT`                     | string  | Client identifier (defaults to `cli`)                |
-| `SLOPCODE_ENABLE_EXA`                 | boolean | Enable Exa web search tools                          |
-| `SLOPCODE_SERVER_PASSWORD`            | string  | Enable basic auth for `serve`/`web`                  |
-| `SLOPCODE_SERVER_USERNAME`            | string  | Override basic auth username (default `slopcode`)    |
-| `SLOPCODE_ENABLE_QUESTION_TOOL`       | boolean | Enable the question tool for non-interactive clients |
-| `SLOPCODE_MODELS_URL`                 | string  | Custom URL for fetching models configuration         |
-| `SLOPCODE_MODELS_PATH`                | string  | Load model metadata from a local file                |
+| Variable                              | Type    | Description                                       |
+| ------------------------------------- | ------- | ------------------------------------------------- |
+| `SLOPCODE_AUTO_SHARE`                 | boolean | Automatically share sessions                      |
+| `SLOPCODE_GIT_BASH_PATH`              | string  | Path to Git Bash executable on Windows            |
+| `SLOPCODE_CONFIG`                     | string  | Path to config file                               |
+| `SLOPCODE_TUI_CONFIG`                 | string  | Path to TUI config file                           |
+| `SLOPCODE_CONFIG_DIR`                 | string  | Path to config directory                          |
+| `SLOPCODE_CONFIG_CONTENT`             | string  | Inline json config content                        |
+| `SLOPCODE_DISABLE_AUTOUPDATE`         | boolean | Disable automatic update checks                   |
+| `SLOPCODE_DISABLE_PRUNE`              | boolean | Disable pruning of old data                       |
+| `SLOPCODE_DISABLE_TERMINAL_TITLE`     | boolean | Disable automatic terminal title updates          |
+| `SLOPCODE_PERMISSION`                 | string  | Inlined json permissions config                   |
+| `SLOPCODE_DISABLE_DEFAULT_PLUGINS`    | boolean | Disable default plugins                           |
+| `SLOPCODE_DISABLE_LSP_DOWNLOAD`       | boolean | Disable automatic LSP server downloads            |
+| `SLOPCODE_ENABLE_EXPERIMENTAL_MODELS` | boolean | Enable experimental models                        |
+| `SLOPCODE_DISABLE_AUTOCOMPACT`        | boolean | Disable automatic context compaction              |
+| `SLOPCODE_DISABLE_CLAUDE_CODE`        | boolean | Disable reading from `.claude` (prompt + skills)  |
+| `SLOPCODE_DISABLE_CLAUDE_CODE_PROMPT` | boolean | Disable reading `~/.claude/CLAUDE.md`             |
+| `SLOPCODE_DISABLE_CLAUDE_CODE_SKILLS` | boolean | Disable loading `.claude/skills`                  |
+| `SLOPCODE_DISABLE_MODELS_FETCH`       | boolean | Disable fetching models from remote sources       |
+| `SLOPCODE_DISABLE_MOUSE`              | boolean | Disable mouse capture in the TUI                  |
+| `SLOPCODE_FAKE_VCS`                   | string  | Fake VCS provider for testing purposes            |
+| `SLOPCODE_CLIENT`                     | string  | Client identifier (defaults to `cli`)             |
+| `SLOPCODE_ENABLE_EXA`                 | boolean | Enable Exa web search tools                       |
+| `SLOPCODE_SERVER_PASSWORD`            | string  | Enable basic auth for `serve`/`web`               |
+| `SLOPCODE_SERVER_USERNAME`            | string  | Override basic auth username (default `slopcode`) |
+| `SLOPCODE_MODELS_URL`                 | string  | Custom URL for fetching models configuration      |
 
 ---
 
@@ -612,20 +710,23 @@ SlopCode can be configured using environment variables.
 
 These environment variables enable experimental features that may change or be removed.
 
-| Variable                                        | Type    | Description                                   |
-| ----------------------------------------------- | ------- | --------------------------------------------- |
-| `SLOPCODE_EXPERIMENTAL`                         | boolean | Enable all experimental features              |
-| `SLOPCODE_EXPERIMENTAL_ICON_DISCOVERY`          | boolean | Enable icon discovery                         |
-| `SLOPCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT`  | boolean | Disable copy on select in TUI                 |
-| `SLOPCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | number  | Default timeout for bash commands in ms       |
-| `SLOPCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX`        | number  | Max output tokens for LLM responses           |
-| `SLOPCODE_EXPERIMENTAL_FILEWATCHER`             | boolean | Enable file watcher for entire dir            |
-| `SLOPCODE_EXPERIMENTAL_OXFMT`                   | boolean | Enable oxfmt formatter                        |
-| `SLOPCODE_EXPERIMENTAL_LSP_TOOL`                | boolean | Enable experimental LSP tool                  |
-| `SLOPCODE_EXPERIMENTAL_DISABLE_FILEWATCHER`     | boolean | Disable file watcher                          |
-| `SLOPCODE_EXPERIMENTAL_EXA`                     | boolean | Enable experimental Exa features              |
-| `SLOPCODE_EXPERIMENTAL_LSP_TY`                  | boolean | Enable experimental LSP type checking         |
-| `SLOPCODE_EXPERIMENTAL_MARKDOWN`                | boolean | Enable experimental markdown features         |
-| `SLOPCODE_EXPERIMENTAL_PLAN_MODE`               | boolean | Enable plan mode                              |
-| `SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS`    | boolean | Enable background subagents and `task_status` |
-| `SLOPCODE_EXPERIMENTAL_SCOUT`                   | boolean | Enable reference repo scout tools             |
+| Variable                                        | Type    | Description                             |
+| ----------------------------------------------- | ------- | --------------------------------------- |
+| `SLOPCODE_EXPERIMENTAL`                         | boolean | Enable the experimental umbrella flag   |
+| `SLOPCODE_EXPERIMENTAL_ICON_DISCOVERY`          | boolean | Enable icon discovery                   |
+| `SLOPCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT`  | boolean | Disable copy on select in TUI           |
+| `SLOPCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | number  | Default timeout for bash commands in ms |
+| `SLOPCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX`        | number  | Max output tokens for LLM responses     |
+| `SLOPCODE_EXPERIMENTAL_FILEWATCHER`             | boolean | Enable file watcher for entire dir      |
+| `SLOPCODE_EXPERIMENTAL_OXFMT`                   | boolean | Enable oxfmt formatter                  |
+| `SLOPCODE_EXPERIMENTAL_LSP_TOOL`                | boolean | Enable experimental LSP tool            |
+| `SLOPCODE_EXPERIMENTAL_DISABLE_FILEWATCHER`     | boolean | Disable file watcher                    |
+| `SLOPCODE_EXPERIMENTAL_EXA`                     | boolean | Enable experimental Exa features        |
+| `SLOPCODE_EXPERIMENTAL_LSP_TY`                  | boolean | Enable TY LSP for python files          |
+| `SLOPCODE_EXPERIMENTAL_PLAN_MODE`               | boolean | Enable plan mode                        |
+| `SLOPCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS`    | boolean | Enable background subagent tasks        |
+| `SLOPCODE_EXPERIMENTAL_EVENT_SYSTEM`            | boolean | Enable experimental event system        |
+| `SLOPCODE_EXPERIMENTAL_NATIVE_LLM`              | boolean | Enable native LLM request path          |
+| `SLOPCODE_EXPERIMENTAL_PARALLEL`                | boolean | Enable parallel web search execution    |
+| `SLOPCODE_EXPERIMENTAL_SCOUT`                   | boolean | Enable Scout subagent                   |
+| `SLOPCODE_EXPERIMENTAL_WORKSPACES`              | boolean | Enable workspace support                |

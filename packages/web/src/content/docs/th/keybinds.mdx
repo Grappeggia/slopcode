@@ -3,11 +3,11 @@ title: ปุ่มลัด
 description: ปรับแต่งปุ่มลัดของคุณ
 ---
 
-SlopCode มีรายการปุ่มลัดที่คุณปรับแต่งได้ผ่านการกำหนดค่า SlopCode
+SlopCode มีรายการปุ่มลัดที่คุณปรับแต่งได้ผ่าน `tui.json`
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {
     "leader": "ctrl+x",
     "app_exit": "ctrl+c,ctrl+d,<leader>q",
@@ -28,6 +28,7 @@ SlopCode มีรายการปุ่มลัดที่คุณปร�
     "session_unshare": "none",
     "session_interrupt": "escape",
     "session_compact": "<leader>c",
+    "session_child_first": "<leader>down",
     "session_child_cycle": "<leader>right",
     "session_child_cycle_reverse": "<leader>left",
     "session_parent": "<leader>up",
@@ -52,6 +53,7 @@ SlopCode มีรายการปุ่มลัดที่คุณปร�
     "model_cycle_favorite": "none",
     "model_cycle_favorite_reverse": "none",
     "variant_cycle": "ctrl+t",
+    "variant_list": "none",
     "command_list": "ctrl+p",
     "agent_list": "<leader>a",
     "agent_cycle": "tab",
@@ -117,39 +119,16 @@ SlopCode ใช้ปุ่ม `leader` สำหรับการเชื่�
 
 ## ปิดการใช้งานการผูกปุ่ม
 
-คุณสามารถปิดการใช้งานการผูกปุ่มได้โดยการเพิ่มคีย์ลงในการกำหนดค่าของคุณด้วยค่า "none"
+คุณสามารถปิดการใช้งานการผูกปุ่มได้โดยการเพิ่มคีย์ลงใน `tui.json` ด้วยค่า "none"
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {
     "session_compact": "none"
   }
 }
 ```
-
----
-
-## History mode keybinds
-
-Use `history_mode_toggle` to switch between edit mode and history mode.
-
-Use `history_previous` and `history_next` to move through history-mode prompt entries.
-
-```json title="tui.json"
-{
-  "$schema": "https://slopcode.dev/tui.json",
-  "keybinds": {
-    "history_mode_toggle": "ctrl+y",
-    "history_previous": "pageup",
-    "history_next": "pagedown"
-  }
-}
-```
-
-:::tip
-By default, `history_mode_toggle` is `ctrl+y`.
-:::
 
 ---
 

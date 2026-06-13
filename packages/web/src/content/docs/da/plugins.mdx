@@ -32,7 +32,7 @@ Angiv npm-pakker i din konfigurationsfil.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": ["slopcode-helicone-session", "slopcode-wakatime", "@my-org/custom-plugin"]
 }
 ```
@@ -119,7 +119,7 @@ Plugin-funktionen modtager:
 - `directory`: Den aktuelle arbejdsmappe.
 - `worktree`: Git worktree-stien.
 - `client`: En slopcode SDK klient til interaktion med AI.
-- `-: Buns [shell API](https://bun.com/docs/runtime/shell) til udførelse af kommandoer.
+- `$`: Buns [shell API](https://bun.com/docs/runtime/shell) til udførelse af kommandoer.
 
 ---
 
@@ -308,6 +308,10 @@ export const CustomToolsPlugin: Plugin = async (ctx) => {
 
 Dine tilpassede værktøjer vil være tilgængelige for slopcode sammen med indbyggede værktøjer.
 
+:::note
+Hvis et plugin-værktøj bruger samme navn som et indbygget værktøj, har plugin-værktøjet forrang.
+:::
+
 ---
 
 ### Logning
@@ -327,7 +331,7 @@ export const MyPlugin = async ({ client }) => {
 }
 ```
 
-Niveauer: `debug`, `info`, `warn`, `error`. Se [SDK documentation](https://slopcode.dev/docs/sdk) for detaljer.
+Niveauer: `debug`, `info`, `warn`, `error`. Se [SDK documentation](https://slopcode.ai/docs/sdk) for detaljer.
 
 ---
 

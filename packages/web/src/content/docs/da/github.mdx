@@ -3,7 +3,7 @@ title: GitHub
 description: Brug SlopCode i GitHub-problemer og Pull Requests.
 ---
 
-SlopCode integreres med din GitHub arbejdsgang. Nævn `/slopcode` eller `/sc` i din kommentar, og SlopCode vil udføre opgaver i din GitHub Actions-løber.
+SlopCode integreres med din GitHub arbejdsgang. Nævn `/slopcode` eller `/oc` i din kommentar, og SlopCode vil udføre opgaver i din GitHub Actions-løber.
 
 ---
 
@@ -51,7 +51,7 @@ Eller du kan indstille det manuelt.
    jobs:
      slopcode:
        if: |
-         contains(github.event.comment.body, '/sc') ||
+         contains(github.event.comment.body, '/oc') ||
          contains(github.event.comment.body, '/slopcode')
        runs-on: ubuntu-latest
        permissions:
@@ -64,7 +64,7 @@ Eller du kan indstille det manuelt.
               persist-credentials: false
 
           - name: Run SlopCode
-           uses: teamslop/slopcode/github@latest
+           uses: anomalyco/slopcode/github@latest
            env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
            with:
@@ -107,8 +107,8 @@ SlopCode kan udløses af følgende GitHub hændelser:
 
 | Begivenhedstype               | Udløst af                               | Detaljer                                                                                                                |
 | ----------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `issue_comment`               | Kommentarer og problemer eller PR       | Nævn `/slopcode` eller `/sc` i din kommentar. SlopCode læser kontekst og kan oprette brancher, åbne PR'er eller svare.  |
-| `pull_request_review_comment` | Kommenter specifikke kodelinjer i en PR | Nævn `/slopcode` eller `/sc`, mens du gennemgår koden. SlopCode modtager filsti, linjenumre og diff-kontekst.           |
+| `issue_comment`               | Kommentarer og problemer eller PR       | Nævn `/slopcode` eller `/oc` i din kommentar. SlopCode læser kontekst og kan oprette brancher, åbne PR'er eller svare.  |
+| `pull_request_review_comment` | Kommenter specifikke kodelinjer i en PR | Nævn `/slopcode` eller `/oc`, mens du gennemgår koden. SlopCode modtager filsti, linjenumre og diff-kontekst.           |
 | `issues`                      | Udgave åbnet eller redigeret            | Udløs automatisk SlopCode, når problemer oprettes eller ændres. Kræver `prompt` input.                                  |
 | `pull_request`                | PR åbnet eller opdateret                | Udløs automatisk SlopCode, når PR'er åbnes, synkroniseres eller genåbnes. Nyttigt til automatiserede kodegennemgange.   |
 | `schedule`                    | Cron-baseret tidsplan                   | Kør SlopCode efter en tidsplan. Kræver `prompt` input. Output går til logfiler og PR'er (intet problem ved kommentere). |
@@ -140,7 +140,7 @@ jobs:
           persist-credentials: false
 
       - name: Run SlopCode
-        uses: teamslop/slopcode/github@latest
+        uses: anomalyco/slopcode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
@@ -177,7 +177,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: teamslop/slopcode/github@latest
+      - uses: anomalyco/slopcode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -233,7 +233,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: teamslop/slopcode/github@latest
+      - uses: anomalyco/slopcode/github@latest
         if: steps.check.outputs.result == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -255,7 +255,7 @@ For `issues` begivenheder er `prompt` input **påkrævet**, da der ikke er nogen
 Tilsidesæt standardprompten for at tilpasse SlopCodes adfærd til din arbejdsgang.
 
 ```yaml title=".github/workflows/slopcode.yml"
-- uses: teamslop/slopcode/github@latest
+- uses: anomalyco/slopcode/github@latest
   with:
     model: anthropic/claude-sonnet-4-5
     prompt: |
@@ -298,7 +298,7 @@ Her er nogle eksempler på, hvordan du kan bruge SlopCode i GitHub.
   Efterlad følgende kommentar på en GitHub PR.
 
   ```
-  Delete the attachment from S3 when the note is removed /sc
+  Delete the attachment from S3 when the note is removed /oc
   ```
 
   SlopCode vil implementere den ønskede ændring og forpligtelse til den samme PR.
@@ -309,7 +309,7 @@ Her er nogle eksempler på, hvordan du kan bruge SlopCode i GitHub.
 
   ```
   [Comment on specific lines in Files tab]
-  /sc add error handling here
+  /oc add error handling here
   ```
 
   Når du kommenterer på specifikke linjer, modtager SlopCode:

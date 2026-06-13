@@ -2,7 +2,7 @@ import { Component, For, Show } from "solid-js"
 import { FileIcon } from "@slopcode-ai/ui/file-icon"
 import { IconButton } from "@slopcode-ai/ui/icon-button"
 import { Tooltip } from "@slopcode-ai/ui/tooltip"
-import { getDirectory, getFilename, getFilenameTruncated } from "@slopcode-ai/util/path"
+import { getDirectory, getFilename, getFilenameTruncated } from "@slopcode-ai/core/util/path"
 import type { ContextItem } from "@/context/prompt"
 
 type PromptContextItem = ContextItem & { key: string }

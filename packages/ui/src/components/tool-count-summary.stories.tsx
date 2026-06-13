@@ -1,5 +1,6 @@
 // @ts-nocheck
-import { createSignal, onCleanup, For } from "solid-js"
+import { onCleanup } from "solid-js"
+import { createStore } from "solid-js/store"
 import { AnimatedCountList, type CountItem } from "./tool-count-summary"
 import { ToolStatusTitle } from "./tool-status-title"
 
@@ -21,74 +22,13 @@ as it appears in the context tool group on the session page.`,
   },
 }
 
-const LOCALES = {
-  en: {
-    label: "English",
-    active: "Exploring",
-    done: "Explored",
-    read: { one: "{{count}} read", other: "{{count}} reads" },
-    search: { one: "{{count}} search", other: "{{count}} searches" },
-    list: { one: "{{count}} list", other: "{{count}} lists" },
-  },
-  fr: {
-    label: "Français",
-    active: "Exploration",
-    done: "Exploré",
-    read: { one: "{{count}} lecture", other: "{{count}} lectures" },
-    search: { one: "{{count}} recherche", other: "{{count}} recherches" },
-    list: { one: "{{count}} liste", other: "{{count}} listes" },
-  },
-  ja: {
-    label: "日本語",
-    active: "探索中",
-    done: "探索済み",
-    read: { one: "{{count}} 件の読み取り", other: "{{count}} 件の読み取り" },
-    search: { one: "{{count}} 件の検索", other: "{{count}} 件の検索" },
-    list: { one: "{{count}} 件のリスト", other: "{{count}} 件のリスト" },
-  },
-  ko: {
-    label: "한국어",
-    active: "탐색 중",
-    done: "탐색됨",
-    read: { one: "{{count}}개 읽음", other: "{{count}}개 읽음" },
-    search: { one: "{{count}}개 검색", other: "{{count}}개 검색" },
-    list: { one: "{{count}}개 목록", other: "{{count}}개 목록" },
-  },
-  de: {
-    label: "Deutsch",
-    active: "Erkunden",
-    done: "Erkundet",
-    read: { one: "{{count}} Lesevorgang", other: "{{count}} Lesevorgänge" },
-    search: { one: "{{count}} Suche", other: "{{count}} Suchen" },
-    list: { one: "{{count}} Liste", other: "{{count}} Listen" },
-  },
-  es: {
-    label: "Español",
-    active: "Explorando",
-    done: "Explorado",
-    read: { one: "{{count}} lectura", other: "{{count}} lecturas" },
-    search: { one: "{{count}} búsqueda", other: "{{count}} búsquedas" },
-    list: { one: "{{count}} lista", other: "{{count}} listas" },
-  },
-  th: {
-    label: "ไทย",
-    active: "กำลังสำรวจ",
-    done: "สำรวจแล้ว",
-    read: { one: "อ่าน {{count}} รายการ", other: "อ่าน {{count}} รายการ" },
-    search: { one: "ค้นหา {{count}} รายการ", other: "ค้นหา {{count}} รายการ" },
-    list: { one: "รายการ {{count}} รายการ", other: "รายการ {{count}} รายการ" },
-  },
-  ar: {
-    label: "العربية",
-    active: "استكشاف",
-    done: "تم الاستكشاف",
-    read: { one: "{{count}} قراءة", other: "{{count}} قراءات" },
-    search: { one: "{{count}} بحث", other: "{{count}} عمليات بحث" },
-    list: { one: "{{count}} قائمة", other: "{{count}} قوائم" },
-  },
+const TEXT = {
+  active: "Exploring",
+  done: "Explored",
+  read: { one: "{{count}} read", other: "{{count}} reads" },
+  search: { one: "{{count}} search", other: "{{count}} searches" },
+  list: { one: "{{count}} list", other: "{{count}} lists" },
 } as const
-
-type LocaleKey = keyof typeof LOCALES
 
 function rand(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min
@@ -118,14 +58,18 @@ const smallBtn = (active?: boolean) =>
 
 export const Playground = {
   render: () => {
-    const [reads, setReads] = createSignal(0)
-    const [searches, setSearches] = createSignal(0)
-    const [lists, setLists] = createSignal(0)
-    const [active, setActive] = createSignal(false)
-    const [locale, setLocale] = createSignal<LocaleKey>("en")
-    const [reducedMotion, setReducedMotion] = createSignal(false)
-
-    const l = () => LOCALES[locale()]
+    const [state, setState] = createStore({
+      reads: 0,
+      searches: 0,
+      lists: 0,
+      active: false,
+      reducedMotion: false,
+    })
+    const reads = () => state.reads
+    const searches = () => state.searches
+    const lists = () => state.lists
+    const active = () => state.active
+    const reducedMotion = () => state.reducedMotion
 
     let timeouts: ReturnType<typeof setTimeout>[] = []
 
@@ -138,10 +82,10 @@ export const Playground = {
 
     const startSim = () => {
       clearAll()
-      setReads(0)
-      setSearches(0)
-      setLists(0)
-      setActive(true)
+      setState("reads", 0)
+      setState("searches", 0)
+      setState("lists", 0)
+      setState("active", true)
       const steps = rand(3, 10)
       let elapsed = 0
 
@@ -150,33 +94,33 @@ export const Playground = {
         elapsed += delay
         const t = setTimeout(() => {
           const pick = rand(0, 2)
-          if (pick === 0) setReads((n) => n + 1)
-          else if (pick === 1) setSearches((n) => n + 1)
-          else setLists((n) => n + 1)
+          if (pick === 0) setState("reads", (value) => value + 1)
+          else if (pick === 1) setState("searches", (value) => value + 1)
+          else setState("lists", (value) => value + 1)
         }, elapsed)
         timeouts.push(t)
       }
 
-      const end = setTimeout(() => setActive(false), elapsed + 100)
+      const end = setTimeout(() => setState("active", false), elapsed + 100)
       timeouts.push(end)
     }
 
     const stopSim = () => {
       clearAll()
-      setActive(false)
+      setState("active", false)
     }
 
     const reset = () => {
       stopSim()
-      setReads(0)
-      setSearches(0)
-      setLists(0)
+      setState("reads", 0)
+      setState("searches", 0)
+      setState("lists", 0)
     }
 
     const items = (): CountItem[] => [
-      { key: "read", count: reads(), one: l().read.one, other: l().read.other },
-      { key: "search", count: searches(), one: l().search.one, other: l().search.other },
-      { key: "list", count: lists(), one: l().list.one, other: l().list.other },
+      { key: "read", count: reads(), one: TEXT.read.one, other: TEXT.read.other },
+      { key: "search", count: searches(), one: TEXT.search.one, other: TEXT.search.other },
+      { key: "list", count: lists(), one: TEXT.list.one, other: TEXT.list.other },
     ]
 
     return (
@@ -205,7 +149,7 @@ export const Playground = {
           }}
         >
           <span style={{ "flex-shrink": "0" }}>
-            <ToolStatusTitle active={active()} activeText={l().active} doneText={l().done} split={false} />
+            <ToolStatusTitle active={active()} activeText={TEXT.active} doneText={TEXT.done} split={false} />
           </span>
           <span
             style={{
@@ -221,17 +165,6 @@ export const Playground = {
           </span>
         </span>
 
-        {/* Language picker */}
-        <div style={{ display: "flex", gap: "6px", "flex-wrap": "wrap" }}>
-          <For each={Object.keys(LOCALES) as LocaleKey[]}>
-            {(key) => (
-              <button onClick={() => setLocale(key)} style={smallBtn(locale() === key)}>
-                {LOCALES[key].label}
-              </button>
-            )}
-          </For>
-        </div>
-
         <div style={{ display: "flex", gap: "8px", "flex-wrap": "wrap" }}>
           <button onClick={() => (active() ? stopSim() : startSim())} style={btn(active())}>
             {active() ? "Stop" : "Simulate"}
@@ -239,19 +172,19 @@ export const Playground = {
           <button onClick={reset} style={btn()}>
             Reset
           </button>
-          <button onClick={() => setReducedMotion((v) => !v)} style={smallBtn(reducedMotion())}>
+          <button onClick={() => setState("reducedMotion", (value) => !value)} style={smallBtn(reducedMotion())}>
             {reducedMotion() ? "Motion: reduced" : "Motion: normal"}
           </button>
         </div>
 
         <div style={{ display: "flex", gap: "8px", "flex-wrap": "wrap" }}>
-          <button onClick={() => setReads((n) => n + 1)} style={smallBtn()}>
+          <button onClick={() => setState("reads", (value) => value + 1)} style={smallBtn()}>
             + read
           </button>
-          <button onClick={() => setSearches((n) => n + 1)} style={smallBtn()}>
+          <button onClick={() => setState("searches", (value) => value + 1)} style={smallBtn()}>
             + search
           </button>
-          <button onClick={() => setLists((n) => n + 1)} style={smallBtn()}>
+          <button onClick={() => setState("lists", (value) => value + 1)} style={smallBtn()}>
             + list
           </button>
         </div>
@@ -263,8 +196,8 @@ export const Playground = {
             "font-family": "monospace",
           }}
         >
-          {locale()} · motion: {reducedMotion() ? "reduced" : "normal"} · active: {active() ? "true" : "false"} · reads:{" "}
-          {reads()} · searches: {searches()} · lists: {lists()}
+          motion: {reducedMotion() ? "reduced" : "normal"} · active: {active() ? "true" : "false"} · reads: {reads()} ·
+          searches: {searches()} · lists: {lists()}
         </div>
       </div>
     )

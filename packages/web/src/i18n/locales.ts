@@ -14,6 +14,7 @@ export const docsLocale = [
   "ru",
   "th",
   "tr",
+  "uk",
   "zh-cn",
   "zh-tw",
 ] as const
@@ -26,6 +27,7 @@ export type Locale = (typeof locale)[number]
 
 export const localeAlias = {
   ar: "ar",
+  br: "pt-br",
   bs: "bs",
   da: "da",
   de: "de",
@@ -36,22 +38,39 @@ export const localeAlias = {
   ja: "ja",
   ko: "ko",
   nb: "nb",
+  nn: "nb",
   no: "nb",
   pl: "pl",
-  "pt-br": "pt-br",
   pt: "pt-br",
+  "pt-br": "pt-br",
   root: "root",
   ru: "ru",
   th: "th",
   tr: "tr",
+  uk: "uk",
   zh: "zh-cn",
   "zh-cn": "zh-cn",
-  "zh-hans": "zh-cn",
-  "zh-sg": "zh-cn",
+  zht: "zh-tw",
   "zh-tw": "zh-tw",
-  "zh-hant": "zh-tw",
-  "zh-hk": "zh-tw",
 } as const satisfies Record<string, Locale>
+
+const starts = [
+  ["ko", "ko"],
+  ["bs", "bs"],
+  ["de", "de"],
+  ["es", "es"],
+  ["fr", "fr"],
+  ["it", "it"],
+  ["da", "da"],
+  ["ja", "ja"],
+  ["pl", "pl"],
+  ["ru", "ru"],
+  ["uk", "uk"],
+  ["ar", "ar"],
+  ["th", "th"],
+  ["tr", "tr"],
+  ["en", "root"],
+] as const
 
 function parse(input: string) {
   let decoded = ""
@@ -61,7 +80,7 @@ function parse(input: string) {
     return null
   }
 
-  const value = decoded.trim().toLowerCase().replaceAll("_", "-")
+  const value = decoded.trim().toLowerCase()
   if (!value) return null
   return value
 }
@@ -80,13 +99,19 @@ export function matchLocale(input: string) {
   const value = parse(input)
   if (!value) return null
 
+  if (value.startsWith("zh")) {
+    if (value.includes("hant") || value.includes("-tw") || value.includes("-hk") || value.includes("-mo")) {
+      return "zh-tw"
+    }
+    return "zh-cn"
+  }
+
   if (value in localeAlias) {
     return localeAlias[value as keyof typeof localeAlias]
   }
 
-  const hit = Object.keys(localeAlias).find((item) => value.startsWith(`${item}-`))
-  if (hit) return localeAlias[hit as keyof typeof localeAlias]
+  if (value.startsWith("pt")) return "pt-br"
+  if (value.startsWith("no") || value.startsWith("nb") || value.startsWith("nn")) return "nb"
 
-  if (value.startsWith("en")) return "root"
-  return null
+  return starts.find((item) => value.startsWith(item[0]))?.[1] ?? null
 }

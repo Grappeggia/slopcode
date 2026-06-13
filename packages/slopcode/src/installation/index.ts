@@ -1,897 +1,348 @@
-import { BusEvent } from "@/bus/bus-event"
+import { LayerNode } from "@slopcode-ai/core/effect/layer-node"
+import { httpClient } from "@slopcode-ai/core/effect/layer-node-platform"
+import { Effect, Layer, Schema, Context, Stream } from "effect"
+import { serviceUse } from "@slopcode-ai/core/effect/service-use"
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { withTransientReadRetry } from "@/util/effect-http-client"
+import { errorMessage } from "@/util/error"
+import { ChildProcess } from "effect/unstable/process"
+import { AppProcess } from "@slopcode-ai/core/process"
 import path from "path"
-import { $ } from "bun"
-import z from "zod"
-import { NamedError } from "@slopcode-ai/util/error"
-import { product } from "@slopcode-ai/util/product"
-import { Log } from "../util/log"
-import { Flag } from "../flag/flag"
+import { EventV2 } from "@slopcode-ai/core/event"
+import { makeRuntime } from "@slopcode-ai/core/effect/runtime"
+import semver from "semver"
+import { InstallationChannel, InstallationVersion } from "@slopcode-ai/core/installation/version"
+import { NpmConfig } from "@slopcode-ai/core/npm-config"
 
-declare global {
-  const SLOPCODE_VERSION: string
-  const SLOPCODE_CHANNEL: string
+export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "unknown"
+
+export type ReleaseType = "patch" | "minor" | "major"
+
+export const Event = {
+  Updated: EventV2.define({
+    type: "installation.updated",
+    schema: {
+      version: Schema.String,
+    },
+  }),
+  UpdateAvailable: EventV2.define({
+    type: "installation.update-available",
+    schema: {
+      version: Schema.String,
+    },
+  }),
 }
 
-export namespace Installation {
-  const log = Log.create({ service: "installation" })
-  const pkg = product.package
-  const nixRef = product.id
-  const repo = product.github.full_repo
-  const nixMatch = new RegExp(`(^|[^a-z0-9])${nixRef}([^a-z0-9]|$)`, "i")
+export function getReleaseType(current: string, latest: string): ReleaseType {
+  const currMajor = semver.major(current)
+  const currMinor = semver.minor(current)
+  const newMajor = semver.major(latest)
+  const newMinor = semver.minor(latest)
 
-  const aptNormalizedVersion = (value: string) => {
-    const plain = value.trim().replace(/^v/, "")
-    if (!plain) return plain
-    const noEpoch = plain.includes(":") ? plain.split(":").slice(-1)[0] : plain
-    const upstream = noEpoch.replace(/-[^-]+$/, "")
-    return upstream.replace(/~/g, "-")
+  if (newMajor > currMajor) return "major"
+  if (newMinor > currMinor) return "minor"
+  return "patch"
+}
+
+export const Info = Schema.Struct({
+  version: Schema.String,
+  latest: Schema.String,
+}).annotate({ identifier: "InstallationInfo" })
+export type Info = Schema.Schema.Type<typeof Info>
+
+export function userAgent(client = "cli") {
+  return `slopcode/${InstallationChannel}/${InstallationVersion}/${client}`
+}
+
+export const USER_AGENT = userAgent()
+
+export function isPreview() {
+  return InstallationChannel !== "latest"
+}
+
+export function isLocal() {
+  return InstallationChannel === "local"
+}
+
+export class UpgradeFailedError extends Schema.TaggedErrorClass<UpgradeFailedError>()("UpgradeFailedError", {
+  stderr: Schema.String,
+}) {
+  override get message() {
+    return this.stderr
   }
+}
 
-  const aptPackageVersion = (value: string) => {
-    const plain = value.trim().replace(/^v/, "")
-    if (!plain) return plain
-    if (plain.includes(":")) return plain
-    if (/-\d+$/.test(plain)) return plain
-    return `${plain.replace(/-/g, "~")}-1`
-  }
+// Response schemas for external version APIs
+const GitHubRelease = Schema.Struct({ tag_name: Schema.String })
+const NpmPackage = Schema.Struct({ version: Schema.String })
+const BrewFormula = Schema.Struct({ versions: Schema.Struct({ stable: Schema.String }) })
+const BrewInfoV2 = Schema.Struct({
+  formulae: Schema.Array(Schema.Struct({ versions: Schema.Struct({ stable: Schema.String }) })),
+})
+const ChocoPackage = Schema.Struct({
+  d: Schema.Struct({ results: Schema.Array(Schema.Struct({ Version: Schema.String })) }),
+})
+const ScoopManifest = NpmPackage
 
-  const aptCandidate = (policy: string) => {
-    const match = policy.match(/^\s*Candidate:\s*(\S+)/m)
-    if (!match) {
-      return
-    }
-    const value = match[1]
-    if (value === "(none)") {
-      return
-    }
-    return value
-  }
+export interface Interface {
+  readonly info: () => Effect.Effect<Info>
+  readonly method: () => Effect.Effect<Method>
+  readonly latest: (method?: Method) => Effect.Effect<string>
+  readonly upgrade: (method: Method, target: string) => Effect.Effect<void, UpgradeFailedError>
+}
 
-  const aptPolicy = () => $`apt-cache policy ${pkg}`.throws(false).quiet().text()
+export class Service extends Context.Service<Service, Interface>()("@slopcode/Installation") {}
 
-  const infoVersion = (info: string) => {
-    const match = info.match(/^\s*Version\s*:\s*(\S+)/m)
-    if (!match) {
-      return
-    }
-    return match[1]
-  }
+export const use = serviceUse(Service)
 
-  const rpmVersion = (info: string) => {
-    const version = infoVersion(info)
-    if (!version) {
-      return
-    }
-    const release = info.match(/^\s*Release\s*:\s*(\S+)/m)?.[1]
-    if (!release) {
-      return version
-    }
-    return `${version}-${release}`
-  }
+export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Service> = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const http = yield* HttpClient.HttpClient
+    const httpOk = HttpClient.filterStatusOk(withTransientReadRetry(http))
+    const appProcess = yield* AppProcess.Service
 
-  const apkVersion = (info: string) => {
-    const value = info.match(/^\s*([0-9][A-Za-z0-9._:+~-]*)\s*:/m)?.[1]
-    if (!value) {
-      return
-    }
-    return value.replace(/-r\d+$/, "")
-  }
-
-  const pkgVersion = (info: string) => {
-    const value = info.trim().split("\n")[0]?.trim().replace(/^v/, "")
-    if (!value) {
-      return
-    }
-    const noEpoch = value.includes(":") ? value.split(":").slice(-1)[0] : value
-    return noEpoch.replace(/_[0-9]+$/, "")
-  }
-
-  const portVersion = (info: string) => {
-    const value = info.match(/@([0-9][A-Za-z0-9._:+~-]*)/)?.[1]
-    if (!value) {
-      return
-    }
-    return value.replace(/_[0-9]+$/, "")
-  }
-
-  const aptNeedsPrivilege = (stderr: string) => {
-    const text = stderr.toLowerCase()
-    return (
-      text.includes("a password is required") ||
-      text.includes("not in the sudoers") ||
-      text.includes("permission denied") ||
-      text.includes("no tty present") ||
-      text.includes("command not found")
+    const text = Effect.fnUntraced(
+      function* (cmd: string[], opts?: { cwd?: string; env?: Record<string, string> }) {
+        const result = yield* appProcess.run(
+          ChildProcess.make(cmd[0], cmd.slice(1), {
+            cwd: opts?.cwd,
+            env: opts?.env,
+            extendEnv: true,
+          }),
+        )
+        return result.stdout.toString("utf8")
+      },
+      Effect.catch(() => Effect.succeed("")),
     )
-  }
 
-  const rpmNeedsPrivilege = (stderr: string) => {
-    const text = stderr.toLowerCase()
-    return (
-      aptNeedsPrivilege(stderr) ||
-      text.includes("superuser privileges") ||
-      text.includes("run under the root user") ||
-      text.includes("need to be root") ||
-      text.includes("run this command as root") ||
-      text.includes("root privileges are required")
-    )
-  }
-
-  const zypperNeedsPrivilege = (stderr: string) => {
-    const text = stderr.toLowerCase()
-    return rpmNeedsPrivilege(stderr) || text.includes("you must be root")
-  }
-
-  const macportsNeedsPrivilege = (stderr: string) => {
-    const text = stderr.toLowerCase()
-    return (
-      aptNeedsPrivilege(stderr) ||
-      text.includes("insufficient privileges") ||
-      text.includes("must be run as root") ||
-      text.includes("are not allowed to write") ||
-      text.includes("permission denied")
-    )
-  }
-
-  const apkNeedsPrivilege = (stderr: string) => {
-    const text = stderr.toLowerCase()
-    return (
-      aptNeedsPrivilege(stderr) ||
-      text.includes("unable to lock database") ||
-      text.includes("failed to open apk database") ||
-      text.includes("operation not permitted")
-    )
-  }
-
-  const pkgNeedsPrivilege = (stderr: string) => {
-    const text = stderr.toLowerCase()
-    return (
-      aptNeedsPrivilege(stderr) ||
-      text.includes("insufficient privileges") ||
-      text.includes("not enough privileges") ||
-      text.includes("must be root")
-    )
-  }
-
-  const snapNeedsPrivilege = (stderr: string) => {
-    const text = stderr.toLowerCase()
-    return (
-      text.includes("a password is required") ||
-      text.includes("not in the sudoers") ||
-      text.includes("permission denied") ||
-      text.includes("requires root") ||
-      text.includes("must be run as root") ||
-      text.includes("no tty present") ||
-      text.includes("command not found")
-    )
-  }
-
-  const pacmanNeedsPrivilege = (stderr: string) => {
-    const text = stderr.toLowerCase()
-    return (
-      text.includes("a password is required") ||
-      text.includes("not in the sudoers") ||
-      text.includes("permission denied") ||
-      text.includes("no tty present") ||
-      text.includes("command not found") ||
-      text.includes("you cannot perform this operation unless you are root")
-    )
-  }
-
-  const aptUpgradeCommand = (pkg: string) => {
-    const env = {
-      DEBIAN_FRONTEND: "noninteractive",
-      ...process.env,
-    }
-    if (typeof process.getuid === "function" && process.getuid() === 0) {
-      return $`apt-get install -y --only-upgrade ${pkg}`.env(env)
-    }
-    return $`sudo -n apt-get install -y --only-upgrade ${pkg}`.env(env)
-  }
-
-  const zypperUpgradeCommand = (pkg: string) => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) {
-      return $`zypper --non-interactive update ${pkg}`
-    }
-    return $`sudo -n zypper --non-interactive update ${pkg}`
-  }
-
-  const dnfUpgradeCommand = (pkg: string) => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) {
-      return $`dnf upgrade -y ${pkg}`
-    }
-    return $`sudo -n dnf upgrade -y ${pkg}`
-  }
-
-  const yumUpgradeCommand = (pkg: string) => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) {
-      return $`yum update -y ${pkg}`
-    }
-    return $`sudo -n yum update -y ${pkg}`
-  }
-
-  const apkUpgradeCommand = (pkg: string) => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) {
-      return $`apk upgrade --no-interactive ${pkg}`
-    }
-    return $`sudo -n apk upgrade --no-interactive ${pkg}`
-  }
-
-  const pkgUpgradeCommand = (pkg: string) => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) {
-      return $`pkg upgrade -y ${pkg}`
-    }
-    return $`sudo -n pkg upgrade -y ${pkg}`
-  }
-
-  const macportsUpgradeCommand = (pkg: string) => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) {
-      return $`port -N upgrade ${pkg}`
-    }
-    return $`sudo -n port -N upgrade ${pkg}`
-  }
-
-  const pacmanUpgradeCommand = (pkg: string) => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) {
-      return $`pacman -S --noconfirm --needed ${pkg}`
-    }
-    return $`sudo -n pacman -S --noconfirm --needed ${pkg}`
-  }
-
-  const snapUpgradeCommand = () => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) {
-      return $`snap refresh ${pkg}`
-    }
-    return $`sudo -n snap refresh ${pkg}`
-  }
-
-  const normalizeValue = (value: string) => {
-    const clean = value.trim().replace(/^"|"$/g, "")
-    if (!clean || clean === "undefined" || clean === "null") {
-      return
-    }
-    return clean
-  }
-
-  const normalizeRegistry = (value: string) => {
-    const clean = normalizeValue(value)
-    if (!clean) {
-      return
-    }
-    return clean.endsWith("/") ? clean.slice(0, -1) : clean
-  }
-
-  const npmRegistry = async () => {
-    const value = await $`npm config get registry`.quiet().nothrow().text()
-    return normalizeRegistry(value) || "https://registry.npmjs.org"
-  }
-
-  const yarnRegistry = async () => {
-    const value = await $`yarn config get npmRegistryServer`.quiet().nothrow().text()
-    return normalizeRegistry(value) || (await npmRegistry())
-  }
-
-  const yarnMajor = async () => {
-    const value = (await $`yarn --version`.quiet().nothrow().text()).trim().replace(/^v/, "")
-    const major = Number.parseInt(value.split(".")[0] || "", 10)
-    if (!Number.isFinite(major)) {
-      return
-    }
-    return major
-  }
-
-  const yarnProject = async () => {
-    const value = await $`yarn config get projectCwd`.quiet().nothrow().text()
-    return normalizeValue(value)
-  }
-
-  export async function yarnContext() {
-    const major = await yarnMajor()
-    const mode = major && major >= 2 ? "berry" : major === 1 ? "classic" : "unknown"
-    if (mode !== "berry") {
-      return { mode }
-    }
-    return {
-      mode,
-      root: await yarnProject(),
-    }
-  }
-
-  const nixVersionInstallable = (source: string) => {
-    const normalized = source.startsWith("flake:") ? source.replace(/^flake:/, "") : source
-    const arch = process.arch === "x64" ? "x86_64" : process.arch === "arm64" ? "aarch64" : process.arch
-    const os = process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : process.platform
-    return `${normalized}#packages.${arch}-${os}.${nixRef}.version`
-  }
-
-  const isNixEntry = (entry: {
-    attrPath?: string
-    flake?: string
-    originalUrl?: string
-    url?: string
-    storePaths?: string[]
-  }) => {
-    const source = [entry.attrPath, entry.flake, entry.originalUrl, entry.url, ...(entry.storePaths ?? [])]
-    return source.some((item) => !!item && nixMatch.test(item))
-  }
-
-  const nixEntry = async () => {
-    const output = await $`nix profile list --json`.throws(false).quiet().text()
-    if (!output.trim()) {
-      return
-    }
-    try {
-      const parsed = JSON.parse(output) as Record<
-        string,
-        {
-          attrPath?: string
-          flake?: string
-          originalUrl?: string
-          url?: string
-          storePaths?: string[]
+    const run = Effect.fnUntraced(
+      function* (cmd: string[], opts?: { cwd?: string; env?: Record<string, string> }) {
+        const result = yield* appProcess.run(
+          ChildProcess.make(cmd[0], cmd.slice(1), {
+            cwd: opts?.cwd,
+            env: opts?.env,
+            extendEnv: true,
+          }),
+        )
+        return {
+          code: result.exitCode,
+          stdout: result.stdout.toString("utf8"),
+          stderr: result.stderr.toString("utf8"),
         }
-      >
-      const pair = Object.entries(parsed).find(([, value]) => isNixEntry(value))
-      if (!pair) {
-        return
-      }
-      const [index, value] = pair
-      return {
-        index,
-        ...value,
-      }
-    } catch {
-      return
-    }
-  }
-
-  const nixSource = (entry: {
-    attrPath?: string
-    flake?: string
-    originalUrl?: string
-    url?: string
-    storePaths?: string[]
-  }) => {
-    if (entry.flake) {
-      return entry.flake
-    }
-    if (entry.originalUrl) {
-      return entry.originalUrl
-    }
-    if (entry.url) {
-      return entry.url
-    }
-    return
-  }
-
-  export type Method = Awaited<ReturnType<typeof method>>
-
-  export async function nixSelector() {
-    return (await nixEntry())?.index
-  }
-
-  export const Event = {
-    Updated: BusEvent.define(
-      "installation.updated",
-      z.object({
-        version: z.string(),
-      }),
-    ),
-    UpdateAvailable: BusEvent.define(
-      "installation.update-available",
-      z.object({
-        version: z.string(),
-      }),
-    ),
-  }
-
-  export const Info = z
-    .object({
-      version: z.string(),
-      latest: z.string(),
-    })
-    .meta({
-      ref: "InstallationInfo",
-    })
-  export type Info = z.infer<typeof Info>
-
-  export async function info() {
-    return {
-      version: VERSION,
-      latest: await latest(),
-    }
-  }
-
-  export function isPreview() {
-    return CHANNEL !== "latest"
-  }
-
-  export function isLocal() {
-    return CHANNEL === "local"
-  }
-
-  export async function method() {
-    if (process.execPath.includes(path.join(`.${product.id}`, "bin"))) return "curl"
-    if (process.execPath.includes(path.join(".local", "bin"))) return "curl"
-    const exec = process.execPath.toLowerCase()
-    if (await nixSelector()) return "nix"
-    const agent = process.env.npm_config_user_agent?.toLowerCase()
-    if (agent?.includes("yarn/")) return "yarn"
-
-    const checks = [
-      {
-        name: "npm" as const,
-        command: () => $`npm list -g --depth=0`.throws(false).quiet().text(),
       },
-      {
-        name: "yarn" as const,
-        command: () => $`yarn global list`.throws(false).quiet().text(),
-      },
-      {
-        name: "pnpm" as const,
-        command: () => $`pnpm list -g --depth=0`.throws(false).quiet().text(),
-      },
-      {
-        name: "bun" as const,
-        command: () => $`bun pm ls -g`.throws(false).quiet().text(),
-      },
-      {
-        name: "brew" as const,
-        command: () => $`brew list --formula ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "macports" as const,
-        command: () => $`port installed ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "apt" as const,
-        command: () => $`dpkg-query -W -f='\${Package}' ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "zypper" as const,
-        command: () => $`zypper search --installed-only --match-exact ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "dnf" as const,
-        command: () => $`dnf list --installed ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "yum" as const,
-        command: () => $`yum list installed ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "apk" as const,
-        command: () => $`apk info -e ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "pkg" as const,
-        command: () => $`pkg info ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "pacman" as const,
-        command: () => $`pacman -Q ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "paru" as const,
-        match: "slopcode-bin",
-        command: () => $`paru -Q slopcode-bin`.throws(false).quiet().text(),
-      },
-      {
-        name: "snap" as const,
-        command: () => $`snap list ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "scoop" as const,
-        command: () => $`scoop list ${pkg}`.throws(false).quiet().text(),
-      },
-      {
-        name: "choco" as const,
-        command: () => $`choco list --limit-output ${pkg}`.throws(false).quiet().text(),
-      },
-    ]
-
-    checks.sort((a, b) => {
-      const aMatches = exec.includes(a.name)
-      const bMatches = exec.includes(b.name)
-      if (aMatches && !bMatches) return -1
-      if (!aMatches && bMatches) return 1
-      return 0
-    })
-
-    for (const check of checks) {
-      const output = await check.command()
-      const installedName = check.match || pkg
-      if (output.includes(installedName)) {
-        return check.name
-      }
-    }
-
-    return "unknown"
-  }
-
-  export const UpgradeFailedError = NamedError.create(
-    "UpgradeFailedError",
-    z.object({
-      stderr: z.string(),
-    }),
-  )
-
-  async function getBrewFormula() {
-    const tap = `${product.github.owner}/${product.github.repo}/${pkg}`
-    const tapFormula = await $`brew list --formula ${tap}`.throws(false).quiet().text()
-    if (tapFormula.includes(pkg)) return tap
-    const coreFormula = await $`brew list --formula ${pkg}`.throws(false).quiet().text()
-    if (coreFormula.includes(pkg)) return pkg
-    return pkg
-  }
-
-  function android() {
-    return (
-      process.platform === "android" ||
-      process.env.TERMUX_VERSION !== undefined ||
-      process.env.SLOPCODE_TEST_PLATFORM === "android"
+      Effect.catch((err) => Effect.succeed({ code: 1, stdout: "", stderr: errorMessage(err) })),
     )
-  }
 
-  export async function upgrade(method: Method, target: string) {
-    let cmd
-    switch (method) {
-      case "curl":
-        cmd = $`curl -fsSL ${product.urls.install} | bash`.env({
-          ...process.env,
-          VERSION: target,
+    const getBrewFormula = Effect.fnUntraced(function* () {
+      const tapFormula = yield* text(["brew", "list", "--formula", "anomalyco/tap/slopcode"])
+      if (tapFormula.includes("slopcode")) return "anomalyco/tap/slopcode"
+      const coreFormula = yield* text(["brew", "list", "--formula", "slopcode"])
+      if (coreFormula.includes("slopcode")) return "slopcode"
+      return "slopcode"
+    })
+
+    const upgradeFailure = (method: Method, result?: { code: number; stdout: string; stderr: string }) => {
+      if (method === "choco") return "not running from an elevated command shell"
+      if (result) return `Upgrade failed for ${method} (exit code ${result.code}).`
+      return `Upgrade failed for ${method}.`
+    }
+
+    const upgradeScriptShell = Effect.fnUntraced(function* () {
+      const bashVersion = yield* text(["bash", "--version"])
+      if (bashVersion) return "bash"
+      return "sh"
+    })
+
+    const upgradeCurl = Effect.fnUntraced(
+      function* (target: string) {
+        const response = yield* httpOk.execute(HttpClientRequest.get("https://slopcode.ai/install"))
+        const body = yield* response.text
+        const bodyBytes = new TextEncoder().encode(body)
+        const shell = yield* upgradeScriptShell()
+        const result = yield* appProcess.run(
+          ChildProcess.make(shell, [], {
+            stdin: Stream.make(bodyBytes),
+            env: { VERSION: target },
+            extendEnv: true,
+          }),
+        )
+        return {
+          code: result.exitCode,
+          stdout: result.stdout.toString("utf8"),
+          stderr: result.stderr.toString("utf8"),
+        }
+      },
+      Effect.mapError(() => new UpgradeFailedError({ stderr: upgradeFailure("curl") })),
+    )
+
+    const result: Interface = {
+      info: Effect.fn("Installation.info")(function* () {
+        return {
+          version: InstallationVersion,
+          latest: yield* result.latest(),
+        }
+      }),
+      method: Effect.fn("Installation.method")(function* () {
+        if (process.execPath.includes(path.join(".slopcode", "bin"))) return "curl" as Method
+        if (process.execPath.includes(path.join(".local", "bin"))) return "curl" as Method
+        const exec = process.execPath.toLowerCase()
+
+        const checks: Array<{ name: Method; command: () => Effect.Effect<string> }> = [
+          { name: "npm", command: () => text(["npm", "list", "-g", "--depth=0"]) },
+          { name: "yarn", command: () => text(["yarn", "global", "list"]) },
+          { name: "pnpm", command: () => text(["pnpm", "list", "-g", "--depth=0"]) },
+          { name: "bun", command: () => text(["bun", "pm", "ls", "-g"]) },
+          { name: "brew", command: () => text(["brew", "list", "--formula", "slopcode"]) },
+          { name: "scoop", command: () => text(["scoop", "list", "slopcode"]) },
+          { name: "choco", command: () => text(["choco", "list", "--limit-output", "slopcode"]) },
+        ]
+
+        checks.sort((a, b) => {
+          const aMatches = exec.includes(a.name)
+          const bMatches = exec.includes(b.name)
+          if (aMatches && !bMatches) return -1
+          if (!aMatches && bMatches) return 1
+          return 0
         })
-        break
-      case "npm":
-        cmd = android() ? $`npm install -g ${pkg}@${target} --include=optional` : $`npm install -g ${pkg}@${target}`
-        break
-      case "pnpm":
-        cmd = $`pnpm install -g ${pkg}@${target}`
-        break
-      case "yarn": {
-        const yarn = await yarnContext()
-        if (yarn.mode === "berry") {
-          if (!yarn.root) {
-            throw new UpgradeFailedError({
-              stderr:
-                "Could not detect a Yarn Berry project root. Run this command from your Yarn project or use --method npm, --method pnpm, or --method bun.",
-            })
+
+        for (const check of checks) {
+          const output = yield* check.command()
+          if (output.includes("slopcode")) {
+            return check.name
           }
-          cmd = $`yarn up ${pkg}@${target}`.cwd(yarn.root)
-          break
         }
-        cmd = $`yarn global add ${pkg}@${target}`
-        break
-      }
-      case "bun":
-        cmd = $`bun install -g ${pkg}@${target}`
-        break
-      case "nix": {
-        const selector = await nixSelector()
-        if (!selector) {
-          throw new UpgradeFailedError({
-            stderr: `Could not find ${pkg} in your nix profile. Install with: nix profile install github:${repo}#${nixRef}`,
-          })
+
+        return "unknown" as Method
+      }),
+      latest: Effect.fn("Installation.latest")(function* (installMethod?: Method) {
+        const detectedMethod = installMethod || (yield* result.method())
+
+        if (detectedMethod === "brew") {
+          const formula = yield* getBrewFormula()
+          if (formula.includes("/")) {
+            const infoJson = yield* text(["brew", "info", "--json=v2", formula])
+            const info = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(BrewInfoV2))(infoJson)
+            return info.formulae[0].versions.stable
+          }
+          const response = yield* httpOk.execute(
+            HttpClientRequest.get("https://formulae.brew.sh/api/formula/slopcode.json").pipe(
+              HttpClientRequest.acceptJson,
+            ),
+          )
+          const data = yield* HttpClientResponse.schemaBodyJson(BrewFormula)(response)
+          return data.versions.stable
         }
-        cmd = $`nix profile upgrade ${selector}`
-        break
-      }
-      case "brew": {
-        const formula = await getBrewFormula()
-        if (formula.includes("/")) {
-          const tap = `${product.github.owner}/${product.github.repo}`
-          cmd = $`brew tap ${tap} && cd "$(brew --repo ${tap})" && git pull --ff-only && brew upgrade ${formula}`.env({
-            HOMEBREW_NO_AUTO_UPDATE: "1",
-            ...process.env,
-          })
-          break
+
+        if (detectedMethod === "npm" || detectedMethod === "bun" || detectedMethod === "pnpm") {
+          const response = yield* httpOk.execute(
+            HttpClientRequest.get(`${yield* NpmConfig.registry(process.cwd())}/slopcode/${InstallationChannel}`).pipe(
+              HttpClientRequest.acceptJson,
+            ),
+          )
+          const data = yield* HttpClientResponse.schemaBodyJson(NpmPackage)(response)
+          return data.version
         }
-        cmd = $`brew upgrade ${formula}`.env({
-          HOMEBREW_NO_AUTO_UPDATE: "1",
-          ...process.env,
-        })
-        break
-      }
-      case "apt": {
-        const candidate = aptCandidate(await aptPolicy())
-        const version = candidate && aptNormalizedVersion(candidate) === target ? undefined : aptPackageVersion(target)
-        const targetPkg = version ? `${pkg}=${version}` : pkg
-        cmd = aptUpgradeCommand(targetPkg)
-        break
-      }
-      case "zypper":
-        cmd = zypperUpgradeCommand(pkg)
-        break
-      case "dnf":
-        cmd = dnfUpgradeCommand(pkg)
-        break
-      case "yum":
-        cmd = yumUpgradeCommand(pkg)
-        break
-      case "apk":
-        cmd = apkUpgradeCommand(pkg)
-        break
-      case "pkg":
-        cmd = pkgUpgradeCommand(pkg)
-        break
-      case "macports":
-        cmd = macportsUpgradeCommand(pkg)
-        break
-      case "pacman":
-        cmd = pacmanUpgradeCommand(pkg)
-        break
-      case "paru":
-        cmd = $`paru -S --noconfirm --needed slopcode-bin`
-        break
-      case "choco":
-        cmd = $`echo Y | choco upgrade ${pkg} --version=${target}`
-        break
-      case "scoop":
-        cmd = $`scoop install ${pkg}@${target}`
-        break
 
-      case "snap":
-        cmd = snapUpgradeCommand()
-        break
-      default:
-        throw new Error(`Unknown method: ${method}`)
-    }
-    const result = await cmd.quiet().throws(false)
-    if (result.exitCode !== 0) {
-      const stderrText = result.stderr.toString("utf8")
-      const stdoutText = result.stdout.toString("utf8")
-      const output = stderrText.trim() ? stderrText : stdoutText
-      const stderr =
-        method === "choco"
-          ? "not running from an elevated command shell"
-          : method === "apt" && aptNeedsPrivilege(stderrText)
-            ? "not running from a privileged shell"
-            : method === "zypper" && zypperNeedsPrivilege(stderrText)
-              ? "not running from a privileged shell"
-              : (method === "dnf" || method === "yum") && rpmNeedsPrivilege(stderrText)
-                ? "not running from a privileged shell"
-                : method === "apk" && apkNeedsPrivilege(stderrText)
-                  ? "not running from a privileged shell"
-                  : method === "pkg" && pkgNeedsPrivilege(stderrText)
-                    ? "not running from a privileged shell"
-                    : method === "macports" && macportsNeedsPrivilege(stderrText)
-                      ? "not running from a privileged shell"
-                      : method === "pacman" && pacmanNeedsPrivilege(stderrText)
-                        ? "not running from a privileged shell"
-                        : method === "snap" && snapNeedsPrivilege(stderrText)
-                          ? "not running from a privileged shell"
-                          : output
-      throw new UpgradeFailedError({
-        stderr: stderr,
-      })
-    }
-    log.info("upgraded", {
-      method,
-      target,
-      stdout: result.stdout.toString(),
-      stderr: result.stderr.toString(),
-    })
-    await $`${process.execPath} --version`.nothrow().quiet().text()
-  }
-
-  export const VERSION = typeof SLOPCODE_VERSION === "string" ? SLOPCODE_VERSION : "local"
-  export const CHANNEL = typeof SLOPCODE_CHANNEL === "string" ? SLOPCODE_CHANNEL : "local"
-  export const USER_AGENT = `${product.id}/${CHANNEL}/${VERSION}/${Flag.SLOPCODE_CLIENT}`
-
-  export async function latest(installMethod?: Method) {
-    const detectedMethod = installMethod || (await method())
-
-    if (detectedMethod === "brew") {
-      const formula = await getBrewFormula()
-      if (formula.includes("/")) {
-        const infoJson = await $`brew info --json=v2 ${formula}`.quiet().text()
-        const info = JSON.parse(infoJson)
-        const version = info.formulae?.[0]?.versions?.stable
-        if (!version) throw new Error(`Could not detect version for tap formula: ${formula}`)
-        return version
-      }
-      return fetch(`https://formulae.brew.sh/api/formula/${pkg}.json`)
-        .then((res) => {
-          if (!res.ok) throw new Error(res.statusText)
-          return res.json()
-        })
-        .then((data: any) => data.versions.stable)
-    }
-
-    if (detectedMethod === "macports") {
-      const info = await $`port info ${pkg}`.throws(false).quiet().text()
-      const version = portVersion(info)
-      if (!version) {
-        return VERSION
-      }
-      const latest = aptNormalizedVersion(version)
-      if (!latest) {
-        return VERSION
-      }
-      return latest
-    }
-
-    if (detectedMethod === "apt") {
-      const candidate = aptCandidate(await aptPolicy())
-      if (!candidate) {
-        return VERSION
-      }
-      const latest = aptNormalizedVersion(candidate)
-      if (!latest) {
-        return VERSION
-      }
-      return latest
-    }
-
-    if (detectedMethod === "zypper") {
-      const info = await $`zypper info ${pkg}`.throws(false).quiet().text()
-      const version = rpmVersion(info)
-      if (!version) {
-        return VERSION
-      }
-      const latest = aptNormalizedVersion(version)
-      if (!latest) {
-        return VERSION
-      }
-      return latest
-    }
-
-    if (detectedMethod === "dnf") {
-      const info = await $`dnf info ${pkg}`.throws(false).quiet().text()
-      const version = rpmVersion(info)
-      if (!version) {
-        return VERSION
-      }
-      const latest = aptNormalizedVersion(version)
-      if (!latest) {
-        return VERSION
-      }
-      return latest
-    }
-
-    if (detectedMethod === "yum") {
-      const info = await $`yum info ${pkg}`.throws(false).quiet().text()
-      const version = rpmVersion(info)
-      if (!version) {
-        return VERSION
-      }
-      const latest = aptNormalizedVersion(version)
-      if (!latest) {
-        return VERSION
-      }
-      return latest
-    }
-
-    if (detectedMethod === "apk") {
-      const info = await $`apk policy ${pkg}`.throws(false).quiet().text()
-      const version = apkVersion(info)
-      if (!version) {
-        return VERSION
-      }
-      const latest = aptNormalizedVersion(version)
-      if (!latest) {
-        return VERSION
-      }
-      return latest
-    }
-
-    if (detectedMethod === "pkg") {
-      const info = await $`pkg rquery %v ${pkg}`.throws(false).quiet().text()
-      const version = pkgVersion(info)
-      if (!version) {
-        return VERSION
-      }
-      const latest = aptNormalizedVersion(version)
-      if (!latest) {
-        return VERSION
-      }
-      return latest
-    }
-
-    if (detectedMethod === "pacman") {
-      const info = await $`pacman -Si ${pkg}`.throws(false).quiet().text()
-      const version = infoVersion(info)
-      if (!version) {
-        return VERSION
-      }
-      const latest = aptNormalizedVersion(version)
-      if (!latest) {
-        return VERSION
-      }
-      return latest
-    }
-
-    if (detectedMethod === "paru") {
-      const info = await $`paru -Si slopcode-bin`.throws(false).quiet().text()
-      const version = infoVersion(info)
-      if (!version) {
-        return VERSION
-      }
-      const latest = aptNormalizedVersion(version)
-      if (!latest) {
-        return VERSION
-      }
-      return latest
-    }
-
-    if (detectedMethod === "snap") {
-      const info = await $`snap info ${pkg}`.throws(false).quiet().text()
-      const stable = info.match(/^\s*(?:latest\/)?stable:\s*([^\s]+)/m)?.[1]?.replace(/^v/, "")
-      return stable || VERSION
-    }
-
-    if (detectedMethod === "nix") {
-      const entry = await nixEntry()
-      if (!entry) {
-        return VERSION
-      }
-      const source = nixSource(entry)
-      if (!source) {
-        return VERSION
-      }
-      if (source.includes("nixpkgs")) {
-        const latest = (await $`nix eval --raw nixpkgs#${nixRef}.version`.quiet().nothrow().text()).trim()
-        if (latest) {
-          return latest
+        if (detectedMethod === "choco") {
+          const response = yield* httpOk.execute(
+            HttpClientRequest.get(
+              "https://community.chocolatey.org/api/v2/Packages?$filter=Id%20eq%20%27slopcode%27%20and%20IsLatestVersion&$select=Version",
+            ).pipe(HttpClientRequest.setHeaders({ Accept: "application/json;odata=verbose" })),
+          )
+          const data = yield* HttpClientResponse.schemaBodyJson(ChocoPackage)(response)
+          return data.d.results[0].Version
         }
-      }
-      const latest = (await $`nix eval --raw ${nixVersionInstallable(source)}`.quiet().nothrow().text()).trim()
-      if (latest) {
-        return latest
-      }
-      return VERSION
-    }
 
-    if (detectedMethod === "yarn") {
-      const registry = await yarnRegistry()
-      const channel = CHANNEL
-      return fetch(`${registry}/${pkg}/${channel}`)
-        .then((res) => {
-          if (!res.ok) throw new Error(res.statusText)
-          return res.json()
+        if (detectedMethod === "scoop") {
+          const response = yield* httpOk.execute(
+            HttpClientRequest.get(
+              "https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/slopcode.json",
+            ).pipe(HttpClientRequest.setHeaders({ Accept: "application/json" })),
+          )
+          const data = yield* HttpClientResponse.schemaBodyJson(ScoopManifest)(response)
+          return data.version
+        }
+
+        const response = yield* httpOk.execute(
+          HttpClientRequest.get("https://api.github.com/repos/anomalyco/slopcode/releases/latest").pipe(
+            HttpClientRequest.acceptJson,
+          ),
+        )
+        const data = yield* HttpClientResponse.schemaBodyJson(GitHubRelease)(response)
+        return data.tag_name.replace(/^v/, "")
+      }, Effect.orDie),
+      upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {
+        let upgradeResult: { code: number; stdout: string; stderr: string } | undefined
+        switch (m) {
+          case "curl":
+            upgradeResult = yield* upgradeCurl(target)
+            break
+          case "npm":
+            upgradeResult = yield* run(["npm", "install", "-g", `slopcode@${target}`])
+            break
+          case "pnpm":
+            upgradeResult = yield* run(["pnpm", "install", "-g", `slopcode@${target}`])
+            break
+          case "bun":
+            upgradeResult = yield* run(["bun", "install", "-g", `slopcode@${target}`])
+            break
+          case "brew": {
+            const formula = yield* getBrewFormula()
+            const env = { HOMEBREW_NO_AUTO_UPDATE: "1" }
+            if (formula.includes("/")) {
+              const tap = yield* run(["brew", "tap", "anomalyco/tap"], { env })
+              if (tap.code !== 0) {
+                upgradeResult = tap
+                break
+              }
+              const repo = yield* text(["brew", "--repo", "anomalyco/tap"])
+              const dir = repo.trim()
+              if (dir) {
+                const pull = yield* run(["git", "pull", "--ff-only"], { cwd: dir, env })
+                if (pull.code !== 0) {
+                  upgradeResult = pull
+                  break
+                }
+              }
+            }
+            upgradeResult = yield* run(["brew", "upgrade", formula], { env })
+            break
+          }
+          case "choco":
+            upgradeResult = yield* run(["choco", "upgrade", "slopcode", `--version=${target}`, "-y"])
+            break
+          case "scoop":
+            upgradeResult = yield* run(["scoop", "install", `slopcode@${target}`])
+            break
+          default:
+            return yield* new UpgradeFailedError({ stderr: `Unknown installation method: ${m}` })
+        }
+        if (!upgradeResult || upgradeResult.code !== 0) {
+          return yield* new UpgradeFailedError({ stderr: upgradeFailure(m, upgradeResult) })
+        }
+        yield* Effect.logInfo("upgraded", {
+          method: m,
+          target,
+          stdout: upgradeResult.stdout,
+          stderr: upgradeResult.stderr,
         })
-        .then((data: any) => data.version)
+        yield* text([process.execPath, "--version"])
+      }),
     }
 
-    if (detectedMethod === "npm" || detectedMethod === "bun" || detectedMethod === "pnpm") {
-      const registry = await npmRegistry()
-      const channel = CHANNEL
-      return fetch(`${registry}/${pkg}/${channel}`)
-        .then((res) => {
-          if (!res.ok) throw new Error(res.statusText)
-          return res.json()
-        })
-        .then((data: any) => data.version)
-    }
+    return Service.of(result)
+  }),
+)
 
-    if (detectedMethod === "choco") {
-      return fetch(
-        `https://community.chocolatey.org/api/v2/Packages?$filter=Id%20eq%20%27${pkg}%27%20and%20IsLatestVersion&$select=Version`,
-        { headers: { Accept: "application/json;odata=verbose" } },
-      )
-        .then((res) => {
-          if (!res.ok) throw new Error(res.statusText)
-          return res.json()
-        })
-        .then((data: any) => data.d.results[0].Version)
-    }
+export const defaultLayer = layer.pipe(Layer.provide(FetchHttpClient.layer), Layer.provide(AppProcess.defaultLayer))
 
-    if (detectedMethod === "scoop") {
-      return fetch(`https://raw.githubusercontent.com/ScoopInstaller/Main/master/bucket/${pkg}.json`, {
-        headers: { Accept: "application/json" },
-      })
-        .then((res) => {
-          if (!res.ok) throw new Error(res.statusText)
-          return res.json()
-        })
-        .then((data: any) => data.version)
-    }
+const { runPromise } = makeRuntime(Service, defaultLayer)
 
-    return fetch(`https://api.github.com/repos/${repo}/releases/latest`)
-      .then((res) => {
-        if (!res.ok) throw new Error(res.statusText)
-        return res.json()
-      })
-      .then((data: any) => data.tag_name.replace(/^v/, ""))
-  }
-}
+export const latest = (...args: Parameters<Interface["latest"]>) => runPromise((s) => s.latest(...args))
+export const method = () => runPromise((s) => s.method())
+export const upgrade = (...args: Parameters<Interface["upgrade"]>) => runPromise((s) => s.upgrade(...args))
+
+export const node = LayerNode.make(layer, [httpClient, AppProcess.node])
+
+export * as Installation from "."

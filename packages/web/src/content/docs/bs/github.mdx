@@ -3,7 +3,7 @@ title: GitHub
 description: Koristite SlopCode u GitHub problemima i zahtjevima za povlačenjem.
 ---
 
-SlopCode se integriše sa vašim GitHub tokovom rada. Spomenite `/slopcode` ili `/sc` u svom komentaru i SlopCode će izvršiti zadatke unutar vašeg GitHub Actions runnera.
+SlopCode se integriše sa vašim GitHub tokovom rada. Spomenite `/slopcode` ili `/oc` u svom komentaru i SlopCode će izvršiti zadatke unutar vašeg GitHub Actions runnera.
 
 ---
 
@@ -48,7 +48,7 @@ Ili ga možete postaviti ručno.
    jobs:
      slopcode:
        if: |
-         contains(github.event.comment.body, '/sc') ||
+         contains(github.event.comment.body, '/oc') ||
          contains(github.event.comment.body, '/slopcode')
        runs-on: ubuntu-latest
        permissions:
@@ -61,7 +61,7 @@ Ili ga možete postaviti ručno.
               persist-credentials: false
 
           - name: Run SlopCode
-           uses: teamslop/slopcode/github@latest
+           uses: anomalyco/slopcode/github@latest
            env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
            with:
@@ -101,8 +101,8 @@ Također možete koristiti [Personal Access Tokens](https://docs.github.com/en/a
 SlopCode se može pokrenuti sljedećim GitHub događajima:
 | Vrsta događaja | Pokrenuo | Detalji
 |----------------------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `issue_comment` | Komentirajte problem ili PR | Navedite `/slopcode` ili `/sc` u svom komentaru. SlopCode čita kontekst i može kreirati grane, otvarati PR-ove ili odgovarati. |
-| `pull_request_review_comment` | Komentirajte određene linije koda u PR-u | Navedite `/slopcode` ili `/sc` dok pregledavate kod. SlopCode prima putanju datoteke, brojeve redova i kontekst razlike. |
+| `issue_comment` | Komentirajte problem ili PR | Navedite `/slopcode` ili `/oc` u svom komentaru. SlopCode čita kontekst i može kreirati grane, otvarati PR-ove ili odgovarati. |
+| `pull_request_review_comment` | Komentirajte određene linije koda u PR-u | Navedite `/slopcode` ili `/oc` dok pregledavate kod. SlopCode prima putanju datoteke, brojeve redova i kontekst razlike. |
 | `issues` | Broj otvoren ili uređen | Automatski pokrenite SlopCode kada se problemi kreiraju ili modificiraju. Zahtijeva `prompt` unos. |
 | `pull_request` | PR otvoren ili ažuriran | Automatski pokrenite SlopCode kada se PR-ovi otvore, sinkroniziraju ili ponovo otvore. Korisno za automatske recenzije. |
 | `schedule` | Cron baziran raspored | Pokrenite SlopCode prema rasporedu. Zahtijeva `prompt` unos. Izlaz ide u dnevnike i PR-ove (nema problema za komentarisanje). |
@@ -134,7 +134,7 @@ jobs:
           persist-credentials: false
 
       - name: Run SlopCode
-        uses: teamslop/slopcode/github@latest
+        uses: anomalyco/slopcode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
@@ -171,7 +171,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: teamslop/slopcode/github@latest
+      - uses: anomalyco/slopcode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -227,7 +227,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: teamslop/slopcode/github@latest
+      - uses: anomalyco/slopcode/github@latest
         if: steps.check.outputs.result == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -249,7 +249,7 @@ Za `issues` događaje, `prompt` unos je **potreban** jer nema komentara za izvla
 Zaobiđite zadani prompt da biste prilagodili ponašanje SlopCode za vaš tok posla.
 
 ```yaml title=".github/workflows/slopcode.yml"
-- uses: teamslop/slopcode/github@latest
+- uses: anomalyco/slopcode/github@latest
   with:
     model: anthropic/claude-sonnet-4-5
     prompt: |
@@ -289,7 +289,7 @@ I SlopCode će kreirati novu granu, implementirati promjene i otvoriti PR sa pro
   Ostavite sljedeći komentar na GitHub PR-u.
 
 ```
-  Delete the attachment from S3 when the note is removed /sc
+  Delete the attachment from S3 when the note is removed /oc
 ```
 
 SlopCode će implementirati traženu promjenu i posvetiti je istom PR-u.
@@ -299,7 +299,7 @@ SlopCode će implementirati traženu promjenu i posvetiti je istom PR-u.
 
 ```
   [Comment on specific lines in Files tab]
-  /sc add error handling here
+  /oc add error handling here
 ```
 
 Kada komentarišete određene linije, SlopCode prima:

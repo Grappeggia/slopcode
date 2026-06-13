@@ -3,9 +3,9 @@ title: Temaer
 description: Velg et innebygd tema eller definer ditt eget.
 ---
 
-Med slopcode kan du velge fra ett av flere innebygde temaer, bruke et tema som tilpasser seg terminaltemaet ditt, eller definere ditt eget tilpassede tema.
+Med SlopCode kan du velge fra ett av flere innebygde temaer, bruke et tema som tilpasser seg terminaltemaet ditt, eller definere ditt eget tilpassede tema.
 
-Som standard bruker slopcode vårt eget `slopcode`-tema.
+Som standard bruker SlopCode vårt eget `slopcode`-tema.
 
 ---
 
@@ -23,7 +23,7 @@ Uten truecolor-støtte kan temaer vises med redusert fargenøyaktighet eller fal
 
 ## Innebygde temaer
 
-slopcode kommer med flere innebygde temaer.
+SlopCode kommer med flere innebygde temaer.
 
 | Navn                   | Beskrivelse                                                               |
 | ---------------------- | ------------------------------------------------------------------------- |
@@ -53,7 +53,7 @@ Og mer, vi legger stadig til nye temaer.
 
 Systemtemaet er for brukere som:
 
-- Vil at slopcode skal matche terminalens utseende
+- Vil at SlopCode skal matche terminalens utseende
 - Bruker tilpassede terminalfargeskjemaer
 - Foretrekker et konsistent utseende på tvers av alle terminalapplikasjoner
 
@@ -61,11 +61,11 @@ Systemtemaet er for brukere som:
 
 ## Bruke et tema
 
-Du kan velge et tema ved å åpne temavelgeren med kommandoen `/themes`. Eller du kan spesifisere det i [config](/docs/config).
+Du kan velge et tema ved å åpne temavelgeren med kommandoen `/theme`. Eller du kan spesifisere det i `tui.json`.
 
-```json title="slopcode.json" {3}
+```json title="tui.json" {3}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "theme": "tokyonight"
 }
 ```
@@ -74,7 +74,7 @@ Du kan velge et tema ved å åpne temavelgeren med kommandoen `/themes`. Eller d
 
 ## Egendefinerte temaer
 
-slopcode støtter et fleksibelt JSON-basert temasystem som lar brukere enkelt lage og tilpasse temaer.
+SlopCode støtter et fleksibelt JSON-basert temasystem som lar brukere enkelt lage og tilpasse temaer.
 
 ---
 
@@ -144,7 +144,7 @@ Her er et eksempel på et tilpasset tema:
 
 ```json title="my-theme.json"
 {
-  "$schema": "https://slopcode.dev/theme.json",
+  "$schema": "https://slopcode.ai/theme.json",
   "defs": {
     "nord0": "#2E3440",
     "nord1": "#3B4252",

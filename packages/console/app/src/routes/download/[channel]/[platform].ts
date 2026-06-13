@@ -1,12 +1,21 @@
 import type { APIEvent } from "@solidjs/start"
 import type { DownloadPlatform } from "../types"
 
-const assetNames: Record<string, string> = {
-  "darwin-aarch64-dmg": "slopcode-desktop-darwin-aarch64.dmg",
-  "darwin-x64-dmg": "slopcode-desktop-darwin-x64.dmg",
-  "windows-x64-nsis": "slopcode-desktop-windows-x64.exe",
+const prodAssetNames: Record<string, string> = {
+  "darwin-aarch64-dmg": "slopcode-desktop-mac-arm64.dmg",
+  "darwin-x64-dmg": "slopcode-desktop-mac-x64.dmg",
+  "windows-x64-nsis": "slopcode-desktop-win-x64.exe",
   "linux-x64-deb": "slopcode-desktop-linux-amd64.deb",
-  "linux-x64-appimage": "slopcode-desktop-linux-amd64.AppImage",
+  "linux-x64-appimage": "slopcode-desktop-linux-x86_64.AppImage",
+  "linux-x64-rpm": "slopcode-desktop-linux-x86_64.rpm",
+} satisfies Record<DownloadPlatform, string>
+
+const betaAssetNames: Record<string, string> = {
+  "darwin-aarch64-dmg": "slopcode-desktop-mac-arm64.dmg",
+  "darwin-x64-dmg": "slopcode-desktop-mac-x64.dmg",
+  "windows-x64-nsis": "slopcode-desktop-win-x64.exe",
+  "linux-x64-deb": "slopcode-desktop-linux-amd64.deb",
+  "linux-x64-appimage": "slopcode-desktop-linux-x86_64.AppImage",
   "linux-x64-rpm": "slopcode-desktop-linux-x86_64.rpm",
 } satisfies Record<DownloadPlatform, string>
 
@@ -18,18 +27,11 @@ const downloadNames: Record<string, string> = {
 } satisfies { [K in DownloadPlatform]?: string }
 
 export async function GET({ params: { platform, channel } }: APIEvent) {
-  const assetName = assetNames[platform]
+  const assetName = channel === "stable" ? prodAssetNames[platform] : betaAssetNames[platform]
   if (!assetName) return new Response(null, { status: 404 })
 
   const resp = await fetch(
     `https://github.com/anomalyco/${channel === "stable" ? "slopcode" : "slopcode-beta"}/releases/latest/download/${assetName}`,
-    {
-      cf: {
-        // in case gh releases has rate limits
-        cacheTtl: 60 * 5,
-        cacheEverything: true,
-      },
-    } as any,
   )
 
   const downloadName = downloadNames[platform]
@@ -37,5 +39,5 @@ export async function GET({ params: { platform, channel } }: APIEvent) {
   const headers = new Headers(resp.headers)
   if (downloadName) headers.set("content-disposition", `attachment; filename="${downloadName}"`)
 
-  return new Response(resp.body, { ...resp, headers })
+  return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers })
 }

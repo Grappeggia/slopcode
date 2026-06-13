@@ -8,6 +8,8 @@ beforeAll(async () => {
   mock.module("@solidjs/router", () => ({
     useNavigate: () => () => undefined,
     useParams: () => ({}),
+    useLocation: () => ({}),
+    useSearchParams: () => [{}, () => undefined],
   }))
   mock.module("@slopcode-ai/ui/context", () => ({
     createSimpleContext: () => ({

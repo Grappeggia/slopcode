@@ -3,438 +3,211 @@ import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@slopcode-ai/script"
 import { fileURLToPath } from "url"
-import { gunzipSync } from "zlib"
 
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 
-const aliasNames = new Set(["sloppycode"])
+async function published(name: string, version: string) {
+  return (await $`npm view ${name}@${version} version`.nothrow()).exitCode === 0
+}
 
-const binaries = await Array.fromAsync(new Bun.Glob("*/package.json").scan({ cwd: "./dist" })).then((arr) =>
-  Promise.all(
-    arr.map(async (filepath) => {
-      const dir = filepath.replace(/\/package\.json$/, "")
-      if (dir === pkg.name || aliasNames.has(dir)) return
+async function publish(dir: string, name: string, version: string) {
+  // GitHub artifact downloads can drop the executable bit, and Docker uses the
+  // unpacked dist binaries directly rather than the published tarball.
+  if (process.platform !== "win32") await $`chmod -R 755 .`.cwd(dir)
+  if (await published(name, version)) {
+    console.log(`already published ${name}@${version}`)
+    return
+  }
+  await $`bun pm pack`.cwd(dir)
+  await $`npm publish *.tgz --access public --tag ${Script.channel}`.cwd(dir)
+}
 
-      const item = await Bun.file(`./dist/${filepath}`).json()
-      let name = item.name
-      if (name.startsWith(`${pkg.name}-bin-bin-`)) {
-        name = name.replace(`${pkg.name}-bin-bin-`, `${pkg.name}-bin-`)
-      }
-      if (name.startsWith(`${pkg.name}-`) && !name.startsWith(`${pkg.name}-bin-`)) {
-        name = name.replace(`${pkg.name}-`, `${pkg.name}-bin-`)
-      }
+const binaries: Record<string, string> = {}
+for (const filepath of new Bun.Glob("*/package.json").scanSync({ cwd: "./dist" })) {
+  const pkg = await Bun.file(`./dist/${filepath}`).json()
+  binaries[pkg.name] = pkg.version
+}
+console.log("binaries", binaries)
+const version = Object.values(binaries)[0]
 
-      if (name !== item.name) {
-        await Bun.file(`./dist/${filepath}`).write(
-          JSON.stringify(
-            {
-              ...item,
-              name,
-            },
-            null,
-            2,
-          ),
-        )
-      }
-
-      if (item.version !== Script.version) {
-        throw new Error(`Binary artifact version mismatch for ${name}: expected ${Script.version}, got ${item.version}`)
-      }
-
-      return {
-        dir,
-        name,
-        version: item.version,
-      }
-    }),
-  ).then((arr) => arr.flatMap((item) => (item ? [item] : []))),
+await $`mkdir -p ./dist/${pkg.name}`
+await $`mkdir -p ./dist/${pkg.name}/bin`
+await $`cp ./script/postinstall.mjs ./dist/${pkg.name}/postinstall.mjs`
+await Bun.file(`./dist/${pkg.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
+await Bun.file(`./dist/${pkg.name}/bin/${pkg.name}.exe`).write(
+  [
+    `echo "Error: ${pkg.name}-ai's postinstall script was not run." >&2`,
+    'echo "" >&2',
+    'echo "This occurs when using --ignore-scripts during installation, or when using a" >&2',
+    'echo "package manager like pnpm that does not run postinstall scripts by default." >&2',
+    'echo "" >&2',
+    'echo "To fix this, run the postinstall script manually:" >&2',
+    `echo "  cd node_modules/${pkg.name}-ai && node postinstall.mjs" >&2`,
+    'echo "" >&2',
+    `echo "Or reinstall ${pkg.name}-ai without the --ignore-scripts flag." >&2`,
+    "exit 1",
+    "",
+  ].join("\n"),
 )
-const isAndroidRuntime = (item: { name: string }) => item.name.startsWith(`${pkg.name}-bin-android-`)
-const npmBinaries = binaries.filter((item) => !isAndroidRuntime(item))
-const androidBootstrapDeps = {
-  "@oven/bun-linux-aarch64-android": "1.3.14",
-  "@oven/bun-linux-x64-android": "1.3.14",
-}
-const deps = {
-  ...Object.fromEntries(npmBinaries.map((item) => [item.name, item.version])),
-  ...androidBootstrapDeps,
-}
-console.log("binaries", deps)
-const version = Script.version
-if (binaries.length === 0) {
-  throw new Error("No binary artifacts found in ./dist")
-}
-const otp = process.env.NPM_OTP?.trim()
-const skipPack = process.env.SLOPCODE_SKIP_PACK === "true"
-const registry = (process.env.npm_config_registry ?? "https://registry.npmjs.org").replace(/\/$/, "")
-const npmPath = (name: string) => encodeURIComponent(name).replace(/^%40/, "@")
-const exists = (name: string, version: string) => fetch(`${registry}/${npmPath(name)}/${version}`).then((x) => x.ok)
-const latestRelease = Script.channel === "latest" && Script.release
-const supplemental = process.env.SLOPCODE_ENABLE_SUPPLEMENTAL_CHANNELS === "true"
-const enforceApt = process.env.SLOPCODE_ENFORCE_APT === "true"
-const enforceRpm = process.env.SLOPCODE_ENFORCE_RPM === "true"
-const enforceApk = process.env.SLOPCODE_ENFORCE_APK === "true"
-const enforceMacports = process.env.SLOPCODE_ENFORCE_MACPORTS === "true"
-const aptBase = (process.env.APT_REPO_BASE_URL ?? "https://teamslop.github.io/apt-slopcode").replace(/\/$/, "")
-const aptDist = process.env.APT_REPO_DIST ?? "stable"
-const aptComponent = process.env.APT_REPO_COMPONENT ?? "main"
-const rpmBase = (process.env.RPM_REPO_BASE_URL ?? "https://teamslop.github.io/rpm-slopcode").replace(/\/$/, "")
-const apkBase = (process.env.APK_REPO_BASE_URL ?? "https://teamslop.github.io/apk-slopcode").replace(/\/$/, "")
-const parse = (value: string | undefined, fallback: number) => {
-  const next = Number(value)
-  if (Number.isFinite(next) && next > 0) {
-    return next
-  }
-  return fallback
-}
-const aptWait = parse(process.env.SLOPCODE_APT_PARITY_WAIT_MS, 600000)
-const aptPoll = parse(process.env.SLOPCODE_APT_PARITY_POLL_MS, 5000)
-const npmWait = parse(process.env.SLOPCODE_NPM_PARITY_WAIT_MS, 600000)
-const npmPoll = parse(process.env.SLOPCODE_NPM_PARITY_POLL_MS, 5000)
-const rpmWait = parse(process.env.SLOPCODE_RPM_PARITY_WAIT_MS, 600000)
-const rpmPoll = parse(process.env.SLOPCODE_RPM_PARITY_POLL_MS, 5000)
-const apkWait = parse(process.env.SLOPCODE_APK_PARITY_WAIT_MS, 600000)
-const apkPoll = parse(process.env.SLOPCODE_APK_PARITY_POLL_MS, 5000)
-const normalize = (value: string) => {
-  const raw = value.trim().replace(/^v/, "")
-  if (!raw) {
-    return ""
-  }
-  const noEpoch = raw.includes(":") ? raw.split(":").slice(-1)[0] : raw
-  const upstream = noEpoch.replace(/-[^-]+$/, "")
-  return upstream.replace(/~/g, "-")
-}
-const aptVersion = (value: string) => {
-  const raw = value.match(/^Version:\s*(.+)$/m)?.[1]
-  if (!raw) {
-    return ""
-  }
-  return normalize(raw)
-}
-const rpmVersion = (value: string) => {
-  const match = value.match(/<name>slopcode<\/name>[\s\S]*?<version\s+[^>]*ver="([^"]+)"[^>]*rel="([^"]+)"/)
-  if (!match) {
-    return ""
-  }
-  return normalize(`${match[1]}-${match[2]}`)
-}
-const apkVersion = (value: string) => {
-  const match = value.match(/(?:^|\n)P:slopcode\nV:([^\n]+)/)
-  if (!match) {
-    return ""
-  }
-  return normalize(match[1])
-}
-const readNpm = () =>
-  fetch(`${registry}/${npmPath(pkg.name)}/latest`)
-    .then((res) => {
-      if (!res.ok) {
-        throw new Error(res.statusText)
-      }
-      return res.json()
-    })
-    .then((data: { version?: string }) => data.version?.replace(/^v/, "") ?? "")
-    .catch(() => "")
-const readApt = (arch: string) =>
-  fetch(`${aptBase}/dists/${aptDist}/${aptComponent}/binary-${arch}/Packages`)
-    .then((res) => {
-      if (!res.ok) {
-        throw new Error(res.statusText)
-      }
-      return res.text()
-    })
-    .then(aptVersion)
-    .catch(() => "")
-const readRpm = () =>
-  fetch(`${rpmBase}/stable/repodata/primary.xml.gz`)
-    .then((res) => {
-      if (!res.ok) {
-        throw new Error(res.statusText)
-      }
-      return res.arrayBuffer()
-    })
-    .then((data) => rpmVersion(gunzipSync(new Uint8Array(data)).toString("utf8")))
-    .catch(() => "")
-const readApk = () =>
-  fetch(`${apkBase}/x86_64/APKINDEX`)
-    .then((res) => {
-      if (!res.ok) {
-        throw new Error(res.statusText)
-      }
-      return res.text()
-    })
-    .then(apkVersion)
-    .catch(() => "")
-const verifyAptParity = async () => {
-  if (!latestRelease || !enforceApt) {
-    return
-  }
-  const target = Script.version.replace(/^v/, "")
-  const loop = async (left: number) => {
-    const [npm, amd64, arm64] = await Promise.all([readNpm(), readApt("amd64"), readApt("arm64")])
-    if (npm === target && amd64 === target && arm64 === target) {
-      console.log("apt parity: ok", target)
-      return
-    }
-    if (left <= 0) {
-      throw new Error(
-        `apt parity failed: expected ${target}, npm=${npm || "missing"}, apt-amd64=${amd64 || "missing"}, apt-arm64=${arm64 || "missing"}`,
-      )
-    }
-    const next = Math.min(aptPoll, left)
-    await Bun.sleep(next)
-    return loop(left - next)
-  }
-  await loop(aptWait)
-}
-const verifyRpmParity = async () => {
-  if (!latestRelease || !enforceRpm) {
-    return
-  }
-  const target = Script.version.replace(/^v/, "")
-  const loop = async (left: number) => {
-    const [npm, rpm] = await Promise.all([readNpm(), readRpm()])
-    if (npm === target && rpm === target) {
-      console.log("rpm parity: ok", target)
-      return
-    }
-    if (left <= 0) {
-      throw new Error(`rpm parity failed: expected ${target}, npm=${npm || "missing"}, rpm=${rpm || "missing"}`)
-    }
-    const next = Math.min(rpmPoll, left)
-    await Bun.sleep(next)
-    return loop(left - next)
-  }
-  await loop(rpmWait)
-}
-const verifyApkParity = async () => {
-  if (!latestRelease || !enforceApk) {
-    return
-  }
-  const target = Script.version.replace(/^v/, "")
-  const loop = async (left: number) => {
-    const [npm, apk] = await Promise.all([readNpm(), readApk()])
-    if (npm === target && apk === target) {
-      console.log("apk parity: ok", target)
-      return
-    }
-    if (left <= 0) {
-      throw new Error(`apk parity failed: expected ${target}, npm=${npm || "missing"}, apk=${apk || "missing"}`)
-    }
-    const next = Math.min(apkPoll, left)
-    await Bun.sleep(next)
-    return loop(left - next)
-  }
-  await loop(apkWait)
-}
 
-const verifyNpmTargets = async (items: { name: string; version: string }[]) => {
-  const loop = async (left: number) => {
-    const result = await Promise.all(
-      items.map(async (item) => ({ ...item, ready: await exists(item.name, item.version) })),
-    )
-    const missing = result.filter((item) => !item.ready)
-    if (missing.length === 0) {
-      console.log("npm parity: ok", items.map((item) => `${item.name}@${item.version}`).join(", "))
-      return
-    }
-    if (left <= 0) {
-      throw new Error(`npm parity failed: ${missing.map((item) => `${item.name}@${item.version}`).join(", ")}`)
-    }
-    const next = Math.min(npmPoll, left)
-    await Bun.sleep(next)
-    return loop(left - next)
-  }
-  await loop(npmWait)
-}
-
-const readme = (await Bun.file("./README.npm.md").text()).trim()
-if (!readme) {
-  throw new Error("README.npm.md is missing or empty")
-}
-
-const metadata = {
-  description: "The open source AI slopcoding agent.",
-  homepage: "https://slopcode.dev",
-  repository: {
-    type: "git",
-    url: "git+https://github.com/teamslop/slopcode.git",
-  },
-  bugs: {
-    url: "https://github.com/teamslop/slopcode/issues",
-  },
-  keywords: ["ai", "agent", "coding", "cli", "terminal", "tui", "developer-tools", "llm"],
-  funding: {
-    url: "https://github.com/sponsors/teamslop",
-  },
-}
-
-for (const key of ["description", "homepage", "repository", "bugs", "keywords"] as const) {
-  if (!metadata[key]) {
-    throw new Error(`Missing npm metadata field: ${key}`)
-  }
-}
-
-if (metadata.keywords.length === 0) {
-  throw new Error("Missing npm metadata field: keywords")
-}
-
-const aliases = [
-  {
-    name: "sloppycode",
-    bin: "sloppycode",
-    description: "Alias for slopcode, the open source AI slopcoding agent.",
-  },
-] as const
-
-const stage = async (input: { name: string; bin: string; description: string }) => {
-  const bundle = "./dist/android-bundle"
-  const modules = "./dist/android-modules"
-  if (!(await Bun.file(`${bundle}/index.js`).exists())) {
-    throw new Error("Missing Android bundle at ./dist/android-bundle/index.js")
-  }
-  if (
-    !(await Bun.file(`${modules}/@opentui/core-android-arm64/index.ts`).exists()) ||
-    !(await Bun.file(`${modules}/@opentui/core-android-x64/index.ts`).exists())
-  ) {
-    throw new Error("Missing Android bootstrap modules at ./dist/android-modules")
-  }
-  await $`rm -rf ./dist/${input.name}`
-  await $`mkdir -p ./dist/${input.name}`
-  await $`cp -r ./bin ./dist/${input.name}/bin`
-  await $`cp -r ${bundle} ./dist/${input.name}/bundle`
-  await $`cp -r ${modules} ./dist/${input.name}/android-modules`
-  for (const arch of ["arm64", "x64"]) {
-    const source = `./dist/${pkg.name}-android-${arch}/bin`
-    if (!(await Bun.file(`${source}/${pkg.name}`).exists())) {
-      throw new Error(`Missing embedded Android ${arch} runtime at ${source}/${pkg.name}`)
-    }
-    if (!(await Bun.file(`${source}/${pkg.name}-android-host`).exists())) {
-      throw new Error(`Missing embedded Android ${arch} host at ${source}/${pkg.name}-android-host`)
-    }
-    await $`mkdir -p ./dist/${input.name}/android-runtime/${arch}`
-    await $`cp -r ${source} ./dist/${input.name}/android-runtime/${arch}/bin`
-  }
-  await $`cp ./script/postinstall.mjs ./dist/${input.name}/postinstall.mjs`
-  await Bun.file(`./dist/${input.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
-  await Bun.file(`./dist/${input.name}/README.md`).write(readme + "\n")
-  await Bun.file(`./dist/${input.name}/package.json`).write(
-    JSON.stringify(
-      {
-        name: input.name,
-        description: input.description,
-        homepage: metadata.homepage,
-        repository: metadata.repository,
-        bugs: metadata.bugs,
-        keywords: metadata.keywords,
-        funding: metadata.funding,
-        bin: {
-          [input.bin]: `./bin/${pkg.name}`,
-        },
-        files: ["bin", "bundle", "android-modules", "android-runtime", "postinstall.mjs", "README.md", "LICENSE"],
-        scripts: {
-          postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs",
-        },
-        version: version,
-        license: pkg.license,
-        optionalDependencies: deps,
+await Bun.file(`./dist/${pkg.name}/package.json`).write(
+  JSON.stringify(
+    {
+      name: pkg.name + "-ai",
+      bin: {
+        [pkg.name]: `./bin/${pkg.name}.exe`,
       },
-      null,
-      2,
-    ),
-  )
-}
+      scripts: {
+        postinstall: "node ./postinstall.mjs",
+      },
+      version: version,
+      license: pkg.license,
+      os: ["darwin", "linux", "win32"],
+      cpu: ["arm64", "x64"],
+      optionalDependencies: binaries,
+    },
+    null,
+    2,
+  ),
+)
 
-await Promise.all([
-  stage({
-    name: pkg.name,
-    bin: pkg.name,
-    description: metadata.description,
-  }),
-  ...aliases.map((item) => stage(item)),
-])
+const tasks = Object.entries(binaries).map(async ([name]) => {
+  await publish(`./dist/${name}`, name, binaries[name])
+})
+await Promise.all(tasks)
+await publish(`./dist/${pkg.name}`, `${pkg.name}-ai`, version)
 
-if (latestRelease) {
-  if (enforceApt && process.env.SLOPCODE_DISABLE_APT === "true") {
-    throw new Error("apt repo: disabled in a required release")
-  }
-  if (enforceRpm && process.env.SLOPCODE_DISABLE_RPM === "true") {
-    throw new Error("rpm repo: disabled in a required release")
-  }
-  if (enforceApk && process.env.SLOPCODE_DISABLE_APK === "true") {
-    throw new Error("apk repo: disabled in a required release")
-  }
-  if (enforceMacports && process.env.SLOPCODE_DISABLE_MACPORTS === "true") {
-    throw new Error("macports sync: disabled in a required release")
-  }
-  await import("./publish-apt.ts")
-  await import("./publish-rpm.ts")
-  await import("./publish-apk.ts")
-  await import("./publish-macports.ts")
-}
+const image = "ghcr.io/anomalyco/slopcode"
+const platforms = "linux/amd64,linux/arm64"
+const tags = [`${image}:${version}`, `${image}:${Script.channel}`]
+const tagFlags = tags.flatMap((t) => ["-t", t])
 
-const publishBinary = async (binary: (typeof binaries)[number]) => {
-  if (await exists(binary.name, binary.version)) {
-    console.log("skip", binary.name, binary.version)
-    return
-  }
+// registries
+if (!Script.preview) {
+  await $`docker buildx build --platform ${platforms} ${tagFlags} --push .`
+  // Calculate SHA values
+  const arm64Sha = await $`sha256sum ./dist/slopcode-linux-arm64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
+  const x64Sha = await $`sha256sum ./dist/slopcode-linux-x64.tar.gz | cut -d' ' -f1`.text().then((x) => x.trim())
+  const macX64Sha = await $`sha256sum ./dist/slopcode-darwin-x64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
+  const macArm64Sha = await $`sha256sum ./dist/slopcode-darwin-arm64.zip | cut -d' ' -f1`.text().then((x) => x.trim())
 
-  if (!skipPack) {
-    if (process.platform !== "win32") {
-      await $`chmod -R 755 .`.cwd(`./dist/${binary.dir}`)
+  const [pkgver, _subver = ""] = Script.version.split(/(-.*)/, 2)
+
+  // arch
+  const binaryPkgbuild = [
+    "# Maintainer: dax",
+    "# Maintainer: adam",
+    "",
+    "pkgname='slopcode-bin'",
+    `pkgver=${pkgver}`,
+    `_subver=${_subver}`,
+    "options=('!debug' '!strip')",
+    "pkgrel=1",
+    "pkgdesc='The AI coding agent built for the terminal.'",
+    "url='https://github.com/teamslop/slopcode'",
+    "arch=('aarch64' 'x86_64')",
+    "license=('MIT')",
+    "provides=('slopcode')",
+    "conflicts=('slopcode')",
+    "depends=('ripgrep')",
+    "",
+    `source_aarch64=("\${pkgname}_\${pkgver}_aarch64.tar.gz::https://github.com/teamslop/slopcode/releases/download/v\${pkgver}\${_subver}/slopcode-linux-arm64.tar.gz")`,
+    `sha256sums_aarch64=('${arm64Sha}')`,
+
+    `source_x86_64=("\${pkgname}_\${pkgver}_x86_64.tar.gz::https://github.com/teamslop/slopcode/releases/download/v\${pkgver}\${_subver}/slopcode-linux-x64.tar.gz")`,
+    `sha256sums_x86_64=('${x64Sha}')`,
+    "",
+    "package() {",
+    '  install -Dm755 ./slopcode "${pkgdir}/usr/bin/slopcode"',
+    "}",
+    "",
+  ].join("\n")
+
+  for (const [pkg, pkgbuild] of [["slopcode-bin", binaryPkgbuild]]) {
+    for (let i = 0; i < 30; i++) {
+      try {
+        await $`rm -rf ./dist/aur-${pkg}`
+        await $`git clone ssh://aur@aur.archlinux.org/${pkg}.git ./dist/aur-${pkg}`
+        await $`cd ./dist/aur-${pkg} && git checkout master`
+        await Bun.file(`./dist/aur-${pkg}/PKGBUILD`).write(pkgbuild)
+        await $`cd ./dist/aur-${pkg} && makepkg --printsrcinfo > .SRCINFO`
+        await $`cd ./dist/aur-${pkg} && git add PKGBUILD .SRCINFO`
+        if ((await $`cd ./dist/aur-${pkg} && git diff --cached --quiet`.nothrow()).exitCode === 0) break
+        await $`cd ./dist/aur-${pkg} && git commit -m "Update to v${Script.version}"`
+        await $`cd ./dist/aur-${pkg} && git push`
+        break
+      } catch {
+        continue
+      }
     }
-    await $`bash -lc "rm -f ./*.tgz"`.cwd(`./dist/${binary.dir}`)
-    await $`bun pm pack`.cwd(`./dist/${binary.dir}`)
   }
 
-  const publish = otp
-    ? $`npm publish *.tgz --access public --tag ${Script.channel} --otp=${otp}`
-    : $`npm publish *.tgz --access public --tag ${Script.channel}`
-  await publish.cwd(`./dist/${binary.dir}`)
-}
+  // Homebrew formula
+  const homebrewFormula = [
+    "# typed: false",
+    "# frozen_string_literal: true",
+    "",
+    "# This file was generated by GoReleaser. DO NOT EDIT.",
+    "class Slopcode < Formula",
+    `  desc "The AI coding agent built for the terminal."`,
+    `  homepage "https://github.com/teamslop/slopcode"`,
+    `  version "${Script.version.split("-")[0]}"`,
+    "",
+    `  depends_on "ripgrep"`,
+    "",
+    "  on_macos do",
+    "    if Hardware::CPU.intel?",
+    `      url "https://github.com/teamslop/slopcode/releases/download/v${Script.version}/slopcode-darwin-x64.zip"`,
+    `      sha256 "${macX64Sha}"`,
+    "",
+    "      def install",
+    '        bin.install "slopcode"',
+    "      end",
+    "    end",
+    "    if Hardware::CPU.arm?",
+    `      url "https://github.com/teamslop/slopcode/releases/download/v${Script.version}/slopcode-darwin-arm64.zip"`,
+    `      sha256 "${macArm64Sha}"`,
+    "",
+    "      def install",
+    '        bin.install "slopcode"',
+    "      end",
+    "    end",
+    "  end",
+    "",
+    "  on_linux do",
+    "    if Hardware::CPU.intel? and Hardware::CPU.is_64_bit?",
+    `      url "https://github.com/teamslop/slopcode/releases/download/v${Script.version}/slopcode-linux-x64.tar.gz"`,
+    `      sha256 "${x64Sha}"`,
+    "      def install",
+    '        bin.install "slopcode"',
+    "      end",
+    "    end",
+    "    if Hardware::CPU.arm? and Hardware::CPU.is_64_bit?",
+    `      url "https://github.com/teamslop/slopcode/releases/download/v${Script.version}/slopcode-linux-arm64.tar.gz"`,
+    `      sha256 "${arm64Sha}"`,
+    "      def install",
+    '        bin.install "slopcode"',
+    "      end",
+    "    end",
+    "  end",
+    "end",
+    "",
+    "",
+  ].join("\n")
 
-const publishPackage = async (name: string) => {
-  if (await exists(name, version)) {
-    console.log("skip", name, version)
-    return
+  const token = process.env.GITHUB_TOKEN
+  if (!token) {
+    console.error("GITHUB_TOKEN is required to update homebrew tap")
+    process.exit(1)
   }
-
-  await $`bash -lc "rm -f ./*.tgz"`.cwd(`./dist/${name}`)
-  await $`bun pm pack`.cwd(`./dist/${name}`)
-  const publish = otp
-    ? $`npm publish *.tgz --access public --tag ${Script.channel} --otp=${otp}`
-    : $`npm publish *.tgz --access public --tag ${Script.channel}`
-  await publish.cwd(`./dist/${name}`)
-}
-
-for (const binary of npmBinaries) {
-  await publishBinary(binary)
-}
-await verifyNpmTargets(npmBinaries)
-await publishPackage(pkg.name)
-await verifyNpmTargets([{ name: pkg.name, version }])
-for (const item of aliases) {
-  await publishPackage(item.name)
-}
-await verifyNpmTargets(aliases.map((item) => ({ name: item.name, version })))
-await verifyAptParity()
-await verifyRpmParity()
-await verifyApkParity()
-
-if (Script.channel === "latest" && supplemental) {
-  const jobs = [import("./publish-aur.ts"), import("./publish-snap.ts")]
-  if (process.env.SLOPCODE_DISABLE_HOMEBREW !== "true") {
-    jobs.push(import("./publish-homebrew.ts"))
-  } else {
-    console.log("homebrew tap: disabled")
+  const tap = `https://x-access-token:${token}@github.com/anomalyco/homebrew-tap.git`
+  await $`rm -rf ./dist/homebrew-tap`
+  await $`git clone ${tap} ./dist/homebrew-tap`
+  await Bun.file("./dist/homebrew-tap/slopcode.rb").write(homebrewFormula)
+  await $`cd ./dist/homebrew-tap && git add slopcode.rb`
+  if ((await $`cd ./dist/homebrew-tap && git diff --cached --quiet`.nothrow()).exitCode !== 0) {
+    await $`cd ./dist/homebrew-tap && git commit -m "Update to v${Script.version}"`
+    await $`cd ./dist/homebrew-tap && git push`
   }
-  await Promise.all(jobs)
-} else if (Script.channel === "latest") {
-  console.log("supplemental channels: disabled")
 }
-
-// Supplemental channels sourced from npm artifacts.
-//
-// Disabled channels:
-// - GHCR container publish

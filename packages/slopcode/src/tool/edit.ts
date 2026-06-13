@@ -3,502 +3,216 @@
 // https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/utils/editCorrector.ts
 // https://github.com/cline/cline/blob/main/evals/diff-edits/diff-apply/diff-06-26-25.ts
 
-import z from "zod"
 import * as path from "path"
-import * as fs from "fs/promises"
-import { Tool } from "./tool"
-import { LSP } from "../lsp"
+import { Effect, Schema, Semaphore } from "effect"
+import * as Tool from "./tool"
+import { LSP } from "@/lsp/lsp"
 import { createTwoFilesPatch, diffLines } from "diff"
 import DESCRIPTION from "./edit.txt"
-import { File } from "../file"
-import { FileWatcher } from "../file/watcher"
-import { Bus } from "../bus"
-import { FileTime } from "../file/time"
-import { Filesystem } from "../util/filesystem"
-import { Instance } from "../project/instance"
+import { FileSystem } from "@slopcode-ai/core/filesystem"
+import { Watcher } from "@slopcode-ai/core/filesystem/watcher"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { Format } from "../format"
+import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
-import { assertExternalDirectory } from "./external-directory"
-import {
-  HashlineEdit,
-  applyHashlineEdits,
-  hashlineOnlyCreates,
-  parseHashlineContent,
-  serializeHashlineContent,
-} from "./hashline"
-import { Config } from "../config/config"
-
-const MAX_DIAGNOSTICS_PER_FILE = 20
-const LEGACY_EDIT_MODE = "legacy"
-const HASHLINE_EDIT_MODE = "hashline"
-
-const LegacyEditParams = z.object({
-  filePath: z.string().describe("The absolute path to the file to modify"),
-  oldString: z.string().describe("The text to replace"),
-  newString: z.string().describe("The text to replace it with (must be different from oldString)"),
-  replaceAll: z.boolean().optional().describe("Replace all occurrences of oldString (default false)"),
-})
-
-const HashlineEditParams = z.object({
-  filePath: z.string().describe("The absolute path to the file to modify"),
-  edits: z.array(HashlineEdit).default([]),
-  delete: z.boolean().optional(),
-  rename: z.string().optional(),
-})
-
-const EditParams = z
-  .object({
-    filePath: z.string().describe("The absolute path to the file to modify"),
-    oldString: z.string().optional().describe("The text to replace"),
-    newString: z.string().optional().describe("The text to replace it with (must be different from oldString)"),
-    replaceAll: z.boolean().optional().describe("Replace all occurrences of oldString (default false)"),
-    edits: z.array(HashlineEdit).optional(),
-    delete: z.boolean().optional(),
-    rename: z.string().optional(),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    const legacy = value.oldString !== undefined || value.newString !== undefined || value.replaceAll !== undefined
-    const hashline = value.edits !== undefined || value.delete !== undefined || value.rename !== undefined
-
-    if (legacy && hashline) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Do not mix legacy (oldString/newString) and hashline (edits/delete/rename) fields.",
-      })
-      return
-    }
-
-    if (!legacy && !hashline) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Provide either legacy fields (oldString/newString) or hashline fields (edits/delete/rename).",
-      })
-      return
-    }
-
-    if (legacy) {
-      if (value.oldString === undefined || value.newString === undefined) {
-        ctx.addIssue({
-          code: "custom",
-          message: "Legacy payload requires both oldString and newString.",
-        })
-      }
-      return
-    }
-
-    if (value.edits === undefined) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Hashline payload requires edits (use [] when only delete is intended).",
-      })
-    }
-  })
-
-type LegacyEditParams = z.infer<typeof LegacyEditParams>
-type HashlineEditParams = z.infer<typeof HashlineEditParams>
-type EditParams = z.infer<typeof EditParams>
+import { assertExternalDirectoryEffect } from "./external-directory"
+import { FSUtil } from "@slopcode-ai/core/fs-util"
+import * as Bom from "@/util/bom"
 
 function normalizeLineEndings(text: string): string {
   return text.replaceAll("\r\n", "\n")
 }
 
-function isLegacyParams(params: EditParams): params is LegacyEditParams {
-  return params.oldString !== undefined || params.newString !== undefined || params.replaceAll !== undefined
+function detectLineEnding(text: string): "\n" | "\r\n" {
+  return text.includes("\r\n") ? "\r\n" : "\n"
 }
 
-async function withLocks(paths: string[], fn: () => Promise<void>) {
-  const unique = Array.from(new Set(paths)).sort((a, b) => a.localeCompare(b))
-  const recurse = async (idx: number): Promise<void> => {
-    if (idx >= unique.length) return fn()
-    await FileTime.withLock(unique[idx], () => recurse(idx + 1))
-  }
-  await recurse(0)
+function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
+  if (ending === "\n") return text
+  return text.replaceAll("\n", "\r\n")
 }
 
-function createFileDiff(file: string, before: string, after: string): Snapshot.FileDiff {
-  const filediff: Snapshot.FileDiff = {
-    file,
-    before,
-    after,
-    additions: 0,
-    deletions: 0,
-  }
-  for (const change of diffLines(before, after)) {
-    if (change.added) filediff.additions += change.count || 0
-    if (change.removed) filediff.deletions += change.count || 0
-  }
-  return filediff
+const locks = new Map<string, Semaphore.Semaphore>()
+
+function lock(filePath: string) {
+  const resolvedFilePath = FSUtil.resolve(filePath)
+  const hit = locks.get(resolvedFilePath)
+  if (hit) return hit
+
+  const next = Semaphore.makeUnsafe(1)
+  locks.set(resolvedFilePath, next)
+  return next
 }
 
-async function diagnosticsOutput(filePath: string, output: string) {
-  await LSP.touchFile(filePath, true)
-  const diagnostics = await LSP.diagnostics()
-  const normalizedFilePath = Filesystem.normalizePath(filePath)
-  const issues = diagnostics[normalizedFilePath] ?? []
-  const errors = issues.filter((item) => item.severity === 1)
-  if (errors.length === 0) {
-    return {
-      output,
-      diagnostics,
-    }
-  }
-
-  const limited = errors.slice(0, MAX_DIAGNOSTICS_PER_FILE)
-  const suffix =
-    errors.length > MAX_DIAGNOSTICS_PER_FILE ? `\n... and ${errors.length - MAX_DIAGNOSTICS_PER_FILE} more` : ""
-  return {
-    output:
-      output +
-      `\n\nLSP errors detected in this file, please fix:\n<diagnostics file="${filePath}">\n${limited.map(LSP.Diagnostic.pretty).join("\n")}${suffix}\n</diagnostics>`,
-    diagnostics,
-  }
-}
-
-async function executeLegacy(params: LegacyEditParams, ctx: Tool.Context) {
-  if (params.oldString === params.newString) {
-    throw new Error("No changes to apply: oldString and newString are identical.")
-  }
-
-  const filePath = path.isAbsolute(params.filePath) ? params.filePath : path.join(Instance.directory, params.filePath)
-  await assertExternalDirectory(ctx, filePath)
-
-  let diff = ""
-  let contentOld = ""
-  let contentNew = ""
-  await FileTime.withLock(filePath, async () => {
-    if (params.oldString === "") {
-      const existed = await Filesystem.exists(filePath)
-      if (existed) {
-        throw new Error(
-          "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
-        )
-      }
-      contentNew = params.newString
-      diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
-      await ctx.ask({
-        permission: "edit",
-        patterns: [path.relative(Instance.worktree, filePath)],
-        always: ["*"],
-        metadata: {
-          filepath: filePath,
-          diff,
-        },
-      })
-      await Filesystem.write(filePath, params.newString)
-      await Bus.publish(File.Event.Edited, {
-        file: filePath,
-      })
-      await Bus.publish(FileWatcher.Event.Updated, {
-        file: filePath,
-        event: "add",
-      })
-      FileTime.read(ctx.sessionID, filePath)
-      return
-    }
-
-    const stats = Filesystem.stat(filePath)
-    if (!stats) throw new Error(`File ${filePath} not found`)
-    if (stats.isDirectory()) throw new Error(`Path is a directory, not a file: ${filePath}`)
-    await FileTime.assert(ctx.sessionID, filePath)
-    contentOld = await Filesystem.readText(filePath)
-    contentNew = replace(contentOld, params.oldString, params.newString, params.replaceAll)
-
-    diff = trimDiff(
-      createTwoFilesPatch(filePath, filePath, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)),
-    )
-    await ctx.ask({
-      permission: "edit",
-      patterns: [path.relative(Instance.worktree, filePath)],
-      always: ["*"],
-      metadata: {
-        filepath: filePath,
-        diff,
-      },
-    })
-
-    await Filesystem.write(filePath, contentNew)
-    await Bus.publish(File.Event.Edited, {
-      file: filePath,
-    })
-    await Bus.publish(FileWatcher.Event.Updated, {
-      file: filePath,
-      event: "change",
-    })
-    contentNew = await Filesystem.readText(filePath)
-    diff = trimDiff(
-      createTwoFilesPatch(filePath, filePath, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)),
-    )
-    FileTime.read(ctx.sessionID, filePath)
-  })
-
-  const filediff = createFileDiff(filePath, contentOld, contentNew)
-
-  ctx.metadata({
-    metadata: {
-      diff,
-      filediff,
-      diagnostics: {},
-      edit_mode: LEGACY_EDIT_MODE,
-    },
-  })
-
-  const result = await diagnosticsOutput(filePath, "Edit applied successfully.")
-
-  return {
-    metadata: {
-      diagnostics: result.diagnostics,
-      diff,
-      filediff,
-      edit_mode: LEGACY_EDIT_MODE,
-    },
-    title: `${path.relative(Instance.worktree, filePath)}`,
-    output: result.output,
-  }
-}
-
-async function executeHashline(
-  params: HashlineEditParams,
-  ctx: Tool.Context,
-  autocorrect: boolean,
-  aggressiveAutocorrect: boolean,
-) {
-  const sourcePath = path.isAbsolute(params.filePath) ? params.filePath : path.join(Instance.directory, params.filePath)
-  const targetPath = params.rename
-    ? path.isAbsolute(params.rename)
-      ? params.rename
-      : path.join(Instance.directory, params.rename)
-    : sourcePath
-
-  await assertExternalDirectory(ctx, sourcePath)
-  if (params.rename) {
-    await assertExternalDirectory(ctx, targetPath)
-  }
-
-  if (params.delete && params.edits.length > 0) {
-    throw new Error("delete=true cannot be combined with edits")
-  }
-  if (params.delete && params.rename) {
-    throw new Error("delete=true cannot be combined with rename")
-  }
-
-  let diff = ""
-  let before = ""
-  let after = ""
-  let noop = 0
-  let deleted = false
-  let changed = false
-  let diagnostics: Awaited<ReturnType<typeof LSP.diagnostics>> = {}
-  const paths = [sourcePath, targetPath]
-  await withLocks(paths, async () => {
-    const sourceStat = Filesystem.stat(sourcePath)
-    if (sourceStat?.isDirectory()) throw new Error(`Path is a directory, not a file: ${sourcePath}`)
-    const exists = Boolean(sourceStat)
-
-    if (params.rename && !exists) {
-      throw new Error("rename requires an existing source file")
-    }
-
-    if (params.delete) {
-      if (!exists) {
-        noop = 1
-        return
-      }
-      await FileTime.assert(ctx.sessionID, sourcePath)
-      before = await Filesystem.readText(sourcePath)
-      after = ""
-      diff = trimDiff(
-        createTwoFilesPatch(sourcePath, sourcePath, normalizeLineEndings(before), normalizeLineEndings(after)),
-      )
-      await ctx.ask({
-        permission: "edit",
-        patterns: [path.relative(Instance.worktree, sourcePath)],
-        always: ["*"],
-        metadata: {
-          filepath: sourcePath,
-          diff,
-        },
-      })
-      await fs.rm(sourcePath, { force: true })
-      await Bus.publish(File.Event.Edited, {
-        file: sourcePath,
-      })
-      await Bus.publish(FileWatcher.Event.Updated, {
-        file: sourcePath,
-        event: "unlink",
-      })
-      deleted = true
-      changed = true
-      return
-    }
-
-    if (!exists && !hashlineOnlyCreates(params.edits)) {
-      throw new Error("Missing file can only be created with append/prepend hashline edits")
-    }
-    if (exists) {
-      await FileTime.assert(ctx.sessionID, sourcePath)
-    }
-
-    const parsed = exists
-      ? parseHashlineContent(await Filesystem.readBytes(sourcePath))
-      : {
-          bom: false,
-          eol: "\n",
-          trailing: false,
-          lines: [] as string[],
-          text: "",
-          raw: "",
-        }
-
-    before = parsed.raw
-    const next = applyHashlineEdits({
-      lines: parsed.lines,
-      trailing: parsed.trailing,
-      edits: params.edits,
-      autocorrect,
-      aggressiveAutocorrect,
-    })
-    const output = serializeHashlineContent({
-      lines: next.lines,
-      trailing: next.trailing,
-      eol: parsed.eol,
-      bom: parsed.bom,
-    })
-    after = output.text
-
-    const noContentChange = before === after && sourcePath === targetPath
-    if (noContentChange) {
-      noop = 1
-      diff = trimDiff(
-        createTwoFilesPatch(sourcePath, sourcePath, normalizeLineEndings(before), normalizeLineEndings(after)),
-      )
-      return
-    }
-
-    diff = trimDiff(
-      createTwoFilesPatch(sourcePath, targetPath, normalizeLineEndings(before), normalizeLineEndings(after)),
-    )
-    const patterns = [path.relative(Instance.worktree, sourcePath)]
-    if (sourcePath !== targetPath) patterns.push(path.relative(Instance.worktree, targetPath))
-    await ctx.ask({
-      permission: "edit",
-      patterns: Array.from(new Set(patterns)),
-      always: ["*"],
-      metadata: {
-        filepath: sourcePath,
-        diff,
-      },
-    })
-
-    if (sourcePath === targetPath) {
-      await Filesystem.write(sourcePath, output.bytes)
-      await Bus.publish(File.Event.Edited, {
-        file: sourcePath,
-      })
-      await Bus.publish(FileWatcher.Event.Updated, {
-        file: sourcePath,
-        event: exists ? "change" : "add",
-      })
-      FileTime.read(ctx.sessionID, sourcePath)
-      changed = true
-      return
-    }
-
-    const targetExists = await Filesystem.exists(targetPath)
-    await Filesystem.write(targetPath, output.bytes)
-    await fs.rm(sourcePath, { force: true })
-    await Bus.publish(File.Event.Edited, {
-      file: sourcePath,
-    })
-    await Bus.publish(File.Event.Edited, {
-      file: targetPath,
-    })
-    await Bus.publish(FileWatcher.Event.Updated, {
-      file: sourcePath,
-      event: "unlink",
-    })
-    await Bus.publish(FileWatcher.Event.Updated, {
-      file: targetPath,
-      event: targetExists ? "change" : "add",
-    })
-    FileTime.read(ctx.sessionID, targetPath)
-    changed = true
-  })
-
-  const file = deleted ? sourcePath : targetPath
-  const filediff = createFileDiff(file, before, after)
-  ctx.metadata({
-    metadata: {
-      diff,
-      filediff,
-      diagnostics,
-      edit_mode: HASHLINE_EDIT_MODE,
-      noop,
-    },
-  })
-
-  if (!deleted && (changed || noop === 0)) {
-    const result = await diagnosticsOutput(targetPath, noop > 0 ? "No changes applied." : "Edit applied successfully.")
-    diagnostics = result.diagnostics
-    return {
-      metadata: {
-        diagnostics,
-        diff,
-        filediff,
-        edit_mode: HASHLINE_EDIT_MODE,
-        noop,
-      },
-      title: `${path.relative(Instance.worktree, targetPath)}`,
-      output: result.output,
-    }
-  }
-
-  return {
-    metadata: {
-      diagnostics,
-      diff,
-      filediff,
-      edit_mode: HASHLINE_EDIT_MODE,
-      noop,
-    },
-    title: `${path.relative(Instance.worktree, file)}`,
-    output: deleted ? "Edit applied successfully." : "No changes applied.",
-  }
-}
-
-export const EditTool = Tool.define("edit", {
-  description: DESCRIPTION,
-  parameters: EditParams,
-  async execute(params, ctx) {
-    if (!params.filePath) {
-      throw new Error("filePath is required")
-    }
-
-    if (isLegacyParams(params)) {
-      return executeLegacy(params, ctx)
-    }
-
-    const config = await Config.get()
-    if (config.experimental?.hashline_edit === false) {
-      throw new Error(
-        "Hashline edit payload is disabled. Set experimental.hashline_edit to true to use hashline operations.",
-      )
-    }
-
-    const hashlineParams: HashlineEditParams = {
-      filePath: params.filePath,
-      edits: params.edits ?? [],
-      delete: params.delete,
-      rename: params.rename,
-    }
-
-    return executeHashline(
-      hashlineParams,
-      ctx,
-      config.experimental?.hashline_autocorrect !== false || Bun.env.OPENCODE_HL_AUTOCORRECT === "1",
-      Bun.env.OPENCODE_HL_AUTOCORRECT === "1",
-    )
-  },
+export const Parameters = Schema.Struct({
+  filePath: Schema.String.annotate({ description: "The absolute path to the file to modify" }),
+  oldString: Schema.String.annotate({ description: "The text to replace" }),
+  newString: Schema.String.annotate({
+    description: "The text to replace it with (must be different from oldString)",
+  }),
+  replaceAll: Schema.optional(Schema.Boolean).annotate({
+    description: "Replace all occurrences of oldString (default false)",
+  }),
 })
+
+export const EditTool = Tool.define(
+  "edit",
+  Effect.gen(function* () {
+    const lsp = yield* LSP.Service
+    const afs = yield* FSUtil.Service
+    const format = yield* Format.Service
+    const events = yield* EventV2Bridge.Service
+
+    return {
+      description: DESCRIPTION,
+      parameters: Parameters,
+      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
+        Effect.gen(function* () {
+          if (!params.filePath) {
+            throw new Error("filePath is required")
+          }
+
+          if (params.oldString === params.newString) {
+            throw new Error("No changes to apply: oldString and newString are identical.")
+          }
+
+          const instance = yield* InstanceState.context
+          const filePath = path.isAbsolute(params.filePath)
+            ? params.filePath
+            : path.join(instance.directory, params.filePath)
+          yield* assertExternalDirectoryEffect(ctx, filePath)
+
+          let diff = ""
+          let contentOld = ""
+          let contentNew = ""
+          yield* lock(filePath).withPermits(1)(
+            Effect.gen(function* () {
+              if (params.oldString === "") {
+                const existed = yield* afs.existsSafe(filePath)
+                if (existed) {
+                  throw new Error(
+                    "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
+                  )
+                }
+                const next = Bom.split(params.newString)
+                const desiredBom = next.bom
+                contentOld = ""
+                contentNew = next.text
+                diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
+                yield* ctx.ask({
+                  permission: "edit",
+                  patterns: [path.relative(instance.worktree, filePath)],
+                  always: ["*"],
+                  metadata: {
+                    filepath: filePath,
+                    diff,
+                  },
+                })
+                yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
+                if (yield* format.file(filePath)) {
+                  contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
+                }
+                yield* events.publish(FileSystem.Event.Edited, { file: filePath })
+                yield* events.publish(Watcher.Event.Updated, {
+                  file: filePath,
+                  event: "add",
+                })
+                return
+              }
+
+              const info = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+              if (!info) throw new Error(`File ${filePath} not found`)
+              if (info.type === "Directory") throw new Error(`Path is a directory, not a file: ${filePath}`)
+              const source = yield* Bom.readFile(afs, filePath)
+              contentOld = source.text
+
+              const ending = detectLineEnding(contentOld)
+              const old = convertToLineEnding(normalizeLineEndings(params.oldString), ending)
+              const replacement = convertToLineEnding(normalizeLineEndings(params.newString), ending)
+
+              const next = Bom.split(replace(contentOld, old, replacement, params.replaceAll))
+              const desiredBom = source.bom || next.bom
+              contentNew = next.text
+
+              diff = trimDiff(
+                createTwoFilesPatch(
+                  filePath,
+                  filePath,
+                  normalizeLineEndings(contentOld),
+                  normalizeLineEndings(contentNew),
+                ),
+              )
+              yield* ctx.ask({
+                permission: "edit",
+                patterns: [path.relative(instance.worktree, filePath)],
+                always: ["*"],
+                metadata: {
+                  filepath: filePath,
+                  diff,
+                },
+              })
+
+              yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
+              if (yield* format.file(filePath)) {
+                contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
+              }
+              yield* events.publish(FileSystem.Event.Edited, { file: filePath })
+              yield* events.publish(Watcher.Event.Updated, {
+                file: filePath,
+                event: "change",
+              })
+              diff = trimDiff(
+                createTwoFilesPatch(
+                  filePath,
+                  filePath,
+                  normalizeLineEndings(contentOld),
+                  normalizeLineEndings(contentNew),
+                ),
+              )
+            }).pipe(Effect.orDie),
+          )
+
+          let additions = 0
+          let deletions = 0
+          for (const change of diffLines(contentOld, contentNew)) {
+            if (change.added) additions += change.count || 0
+            if (change.removed) deletions += change.count || 0
+          }
+          const filediff: Snapshot.FileDiff = {
+            file: filePath,
+            patch: diff,
+            additions,
+            deletions,
+          }
+
+          yield* ctx.metadata({
+            metadata: {
+              diff,
+              filediff,
+              diagnostics: {},
+            },
+          })
+
+          let output = "Edit applied successfully."
+          yield* lsp.touchFile(filePath, "document")
+          const diagnostics = yield* lsp.diagnostics()
+          const normalizedFilePath = FSUtil.normalizePath(filePath)
+          const block = LSP.Diagnostic.report(filePath, diagnostics[normalizedFilePath] ?? [])
+          if (block) output += `\n\nLSP errors detected in this file, please fix:\n${block}`
+
+          return {
+            metadata: {
+              diagnostics,
+              diff,
+              filediff,
+            },
+            title: `${path.relative(instance.worktree, filePath)}`,
+            output,
+          }
+        }),
+    }
+  }),
+)
 
 export type Replacer = (content: string, find: string) => Generator<string, void, unknown>
 
@@ -734,7 +448,7 @@ export const WhitespaceNormalizedReplacer: Replacer = function* (content, find) 
             if (match) {
               yield match[0]
             }
-          } catch (e) {
+          } catch {
             // Invalid regex pattern, skip
           }
         }

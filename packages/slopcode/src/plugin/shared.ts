@@ -1,19 +1,36 @@
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
-import { BunProc } from "@/bun"
+import npa from "npm-package-arg"
+import semver from "semver"
 import { Filesystem } from "@/util/filesystem"
+import { isRecord } from "@/util/record"
+import { Npm } from "@slopcode-ai/core/npm"
 
+// Old npm package names for plugins that are now built-in
 export const DEPRECATED_PLUGIN_PACKAGES = ["slopcode-openai-codex-auth", "slopcode-copilot-auth"]
 
 export function isDeprecatedPlugin(spec: string) {
   return DEPRECATED_PLUGIN_PACKAGES.some((pkg) => spec.includes(pkg))
 }
 
+function parse(spec: string) {
+  try {
+    return npa(spec)
+  } catch {}
+}
+
 export function parsePluginSpecifier(spec: string) {
-  const index = spec.lastIndexOf("@")
-  const pkg = index > 0 ? spec.slice(0, index) : spec
-  const version = index > 0 ? spec.slice(index + 1) : "latest"
-  return { pkg, version }
+  const hit = parse(spec)
+  if (hit?.type === "alias" && !hit.name) {
+    const sub = (hit as npa.AliasResult).subSpec
+    if (sub?.name) {
+      const version = !sub.rawSpec || sub.rawSpec === "*" ? "latest" : sub.rawSpec
+      return { pkg: sub.name, version }
+    }
+  }
+  if (!hit?.name) return { pkg: spec, version: "" }
+  if (hit.raw === hit.name) return { pkg: hit.name, version: "latest" }
+  return { pkg: hit.name, version: hit.rawSpec }
 }
 
 export type PluginSource = "file" | "npm"
@@ -34,11 +51,7 @@ export type PluginEntry = {
   entry?: string
 }
 
-const INDEX = ["index.ts", "index.tsx", "index.js", "index.mjs", "index.cjs"]
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-}
+const INDEX_FILES = ["index.ts", "index.tsx", "index.js", "index.mjs", "index.cjs"]
 
 export function pluginSource(spec: string): PluginSource {
   if (isPathPluginSpec(spec)) return "file"
@@ -56,27 +69,27 @@ function isAbsolutePath(raw: string) {
 }
 
 function extractExportValue(value: unknown): string | undefined {
-  if (typeof value === "string") return value.trim() || undefined
+  if (typeof value === "string") return value
   if (!isRecord(value)) return undefined
   for (const key of ["import", "default"]) {
     const nested = value[key]
-    if (typeof nested !== "string") continue
-    const hit = nested.trim()
-    if (hit) return hit
+    if (typeof nested === "string") return nested
   }
+  return undefined
 }
 
 function packageMain(pkg: PluginPackage) {
   const value = pkg.json.main
   if (typeof value !== "string") return
   const next = value.trim()
-  if (next) return next
+  if (!next) return
+  return next
 }
 
 function resolvePackageFile(spec: string, raw: string, kind: string, pkg: PluginPackage) {
   const resolved = resolveExportPath(raw, pkg.dir)
-  const root = path.resolve(pkg.dir)
-  const next = path.resolve(resolved)
+  const root = Filesystem.resolve(pkg.dir)
+  const next = Filesystem.resolve(resolved)
   if (!Filesystem.contains(root, next)) {
     throw new Error(`Plugin ${spec} resolved ${kind} entry outside plugin directory`)
   }
@@ -106,7 +119,7 @@ function targetPath(target: string) {
 }
 
 async function resolveDirectoryIndex(dir: string) {
-  for (const name of INDEX) {
+  for (const name of INDEX_FILES) {
     const file = path.join(dir, name)
     if (await Filesystem.exists(file)) return file
   }
@@ -115,7 +128,7 @@ async function resolveDirectoryIndex(dir: string) {
 async function resolveTargetDirectory(target: string) {
   const file = targetPath(target)
   if (!file) return
-  const stat = Filesystem.stat(file)
+  const stat = await Filesystem.statAsync(file)
   if (!stat?.isDirectory()) return
   return file
 }
@@ -130,13 +143,16 @@ async function resolvePluginEntrypoint(spec: string, target: string, kind: Plugi
   if (entry) return entry
 
   const dir = await resolveTargetDirectory(target)
+
   if (kind === "tui") {
     if (source === "file" && dir) {
       const index = await resolveDirectoryIndex(dir)
       if (index) return pathToFileURL(index).href
     }
+
     if (source === "npm") return
     if (dir) return
+
     return target
   }
 
@@ -145,6 +161,7 @@ async function resolvePluginEntrypoint(spec: string, target: string, kind: Plugi
       const index = await resolveDirectoryIndex(dir)
       if (index) return pathToFileURL(index).href
     }
+
     return
   }
 
@@ -158,7 +175,7 @@ export function isPathPluginSpec(spec: string) {
 export async function resolvePathPluginTarget(spec: string) {
   const raw = spec.startsWith("file://") ? fileURLToPath(spec) : spec
   const file = path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw) ? raw : path.resolve(raw)
-  const stat = Filesystem.stat(file)
+  const stat = await Filesystem.statAsync(file)
   if (!stat?.isDirectory()) {
     if (spec.startsWith("file://")) return spec
     return pathToFileURL(file).href
@@ -170,17 +187,34 @@ export async function resolvePathPluginTarget(spec: string) {
 
   const index = await resolveDirectoryIndex(file)
   if (index) return pathToFileURL(index).href
+
   throw new Error(`Plugin directory ${file} is missing package.json or index file`)
 }
 
-export async function resolvePluginTarget(spec: string, parsed = parsePluginSpecifier(spec)) {
+export async function checkPluginCompatibility(target: string, slopcodeVersion: string, pkg?: PluginPackage) {
+  if (!semver.valid(slopcodeVersion) || semver.major(slopcodeVersion) === 0) return
+  const hit = pkg ?? (await readPluginPackage(target).catch(() => undefined))
+  if (!hit) return
+  const engines = hit.json.engines
+  if (!isRecord(engines)) return
+  const range = engines.slopcode
+  if (typeof range !== "string") return
+  if (!semver.satisfies(slopcodeVersion, range)) {
+    throw new Error(`Plugin requires slopcode ${range} but running ${slopcodeVersion}`)
+  }
+}
+
+export async function resolvePluginTarget(spec: string) {
   if (isPathPluginSpec(spec)) return resolvePathPluginTarget(spec)
-  return BunProc.install(parsed.pkg, parsed.version)
+  const hit = parse(spec)
+  const pkg = hit?.name && hit.raw === hit.name ? `${hit.name}@latest` : spec
+  const result = await Npm.add(pkg)
+  return result.directory
 }
 
 export async function readPluginPackage(target: string): Promise<PluginPackage> {
   const file = target.startsWith("file://") ? fileURLToPath(target) : target
-  const stat = Filesystem.stat(file)
+  const stat = await Filesystem.statAsync(file)
   const dir = stat?.isDirectory() ? file : path.dirname(file)
   const pkg = path.join(dir, "package.json")
   const json = await Filesystem.readJson<Record<string, unknown>>(pkg)
@@ -202,18 +236,26 @@ export async function createPluginEntry(spec: string, target: string, kind: Plug
 }
 
 export function readPackageThemes(spec: string, pkg: PluginPackage) {
-  const field = pkg.json["sc-themes"] ?? pkg.json["oc-themes"]
+  const field = pkg.json["oc-themes"]
   if (field === undefined) return []
-  if (!Array.isArray(field)) throw new TypeError(`Plugin ${spec} has invalid themes field`)
+  if (!Array.isArray(field)) {
+    throw new TypeError(`Plugin ${spec} has invalid oc-themes field`)
+  }
 
   const list = field.map((item) => {
-    if (typeof item !== "string") throw new TypeError(`Plugin ${spec} has invalid themes entry`)
-    const raw = item.trim()
-    if (!raw) throw new TypeError(`Plugin ${spec} has empty themes entry`)
-    if (raw.startsWith("file://") || isAbsolutePath(raw)) {
-      throw new TypeError(`Plugin ${spec} themes entry must be relative: ${item}`)
+    if (typeof item !== "string") {
+      throw new TypeError(`Plugin ${spec} has invalid oc-themes entry`)
     }
-    return resolvePackageFile(spec, raw, "themes", pkg)
+
+    const raw = item.trim()
+    if (!raw) {
+      throw new TypeError(`Plugin ${spec} has empty oc-themes entry`)
+    }
+    if (raw.startsWith("file://") || isAbsolutePath(raw)) {
+      throw new TypeError(`Plugin ${spec} oc-themes entry must be relative: ${item}`)
+    }
+
+    return resolvePackageFile(spec, raw, "oc-themes", pkg)
   })
 
   return Array.from(new Set(list))
@@ -242,16 +284,22 @@ export function readV1Plugin(
 
   const server = "server" in value ? value.server : undefined
   const tui = "tui" in value ? value.tui : undefined
-  if (server !== undefined && typeof server !== "function")
+  if (server !== undefined && typeof server !== "function") {
     throw new TypeError(`Plugin ${spec} has invalid server export`)
-  if (tui !== undefined && typeof tui !== "function") throw new TypeError(`Plugin ${spec} has invalid tui export`)
+  }
+  if (tui !== undefined && typeof tui !== "function") {
+    throw new TypeError(`Plugin ${spec} has invalid tui export`)
+  }
   if (server !== undefined && tui !== undefined) {
     throw new TypeError(`Plugin ${spec} must default export either server() or tui(), not both`)
   }
-  if (kind === "server" && server === undefined)
+  if (kind === "server" && server === undefined) {
     throw new TypeError(`Plugin ${spec} must default export an object with server()`)
-  if (kind === "tui" && tui === undefined)
+  }
+  if (kind === "tui" && tui === undefined) {
     throw new TypeError(`Plugin ${spec} must default export an object with tui()`)
+  }
+
   return value
 }
 

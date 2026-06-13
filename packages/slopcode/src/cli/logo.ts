@@ -1,6 +1,1 @@
-export const logo = {
-  left: ["                 ", "█▀▀ █   █▀█ █▀█", "▀▀█ █   █ █ █▀▀", "▀▀▀ ▀▀▀ ▀▀▀ ▀  "],
-  right: ["                ", "█▀▀ █▀█ █▀▄ █▀▀", "█   █ █ █ █ █▀▀", "▀▀▀ ▀▀▀ ▀▀  ▀▀▀"],
-}
-
-export const marks = "_^~"
+export * from "@slopcode-ai/tui/logo"

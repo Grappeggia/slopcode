@@ -1,207 +1,252 @@
-import type { Hooks } from "@slopcode-ai/plugin"
+import type { Hooks, PluginInput } from "@slopcode-ai/plugin"
+import type { Model } from "@slopcode-ai/sdk/v2"
+import { InstallationVersion } from "@slopcode-ai/core/installation/version"
 import { createServer } from "http"
-import { Installation } from "@/installation"
-import { Log } from "@/util/log"
-import type { Provider } from "@/provider/provider"
+import open from "open"
 
-const log = Log.create({ service: "plugin.digitalocean" })
+const DO_OAUTH_CLIENT_ID = "b1a6c5158156caac821fd1b30253ca8acb52454a48fa744420e41889cb589f82"
+const DO_AUTHORIZE_URL = "https://cloud.digitalocean.com/v1/oauth/authorize"
+const DO_API_BASE = "https://api.digitalocean.com"
+const DO_GENAI_API = `${DO_API_BASE}/v2/gen-ai`
+const DO_INFERENCE_BASE = "https://inference.do-ai.run/v1"
+const OAUTH_PORT = 1456
+const OAUTH_REDIRECT_PATH = "/auth/callback"
+const OAUTH_TOKEN_PATH = "/auth/token"
+const ROUTER_REFRESH_INTERVAL_MS = 5 * 60 * 1000
+const OAUTH_SCOPES = "genai:read inference:query"
 
-const clientID = "b1a6c5158156caac821fd1b30253ca8acb52454a48fa744420e41889cb589f82"
-const authorizeURL = "https://cloud.digitalocean.com/v1/oauth/authorize"
-const apiBase = "https://api.digitalocean.com"
-const inferenceBase = "https://inference.do-ai.run/v1"
-const port = 1456
-const redirectPath = "/auth/callback"
-const tokenPath = "/auth/token"
-const makPrefix = "slopcode-oauth"
-
-type TokenPayload = {
+interface ImplicitTokenPayload {
   access_token: string
   expires_in: number
   state: string
 }
 
-type Router = {
+interface PendingOAuth {
+  state: string
+  resolve: (tokens: ImplicitTokenPayload) => void
+  reject: (error: Error) => void
+}
+
+interface RouterEntry {
   name: string
   uuid?: string
   description?: string
 }
 
-let server: ReturnType<typeof createServer> | undefined
-let pending:
-  | {
-      state: string
-      resolve: (tokens: TokenPayload) => void
-      reject: (error: Error) => void
-    }
-  | undefined
+let oauthServer: ReturnType<typeof createServer> | undefined
+let pendingOAuth: PendingOAuth | undefined
 
-function state() {
-  return crypto.getRandomValues(new Uint8Array(32)).reduce((acc, byte) => acc + byte.toString(16).padStart(2, "0"), "")
+function generateState(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
 }
 
-function redirect() {
-  return `http://localhost:${port}${redirectPath}`
+function redirectUri(): string {
+  return `http://localhost:${OAUTH_PORT}${OAUTH_REDIRECT_PATH}`
 }
 
-function authorize(state: string) {
+function buildAuthorizeUrl(state: string): string {
   const params = new URLSearchParams({
     response_type: "token",
-    client_id: clientID,
-    redirect_uri: redirect(),
-    scope: "genai:create genai:read",
+    client_id: DO_OAUTH_CLIENT_ID,
+    redirect_uri: redirectUri(),
+    scope: OAUTH_SCOPES,
     state,
   })
-  return `${authorizeURL}?${params.toString()}`
+  return `${DO_AUTHORIZE_URL}?${params.toString()}`
 }
 
-const html = `<!doctype html>
+const HTML_CALLBACK = `<!doctype html>
 <html>
-  <head><meta charset="utf-8" /><title>SlopCode - DigitalOcean Authorization</title></head>
+  <head>
+    <meta charset="utf-8" />
+    <title>SlopCode - DigitalOcean Authorization</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0b1220; color: #e8eef9; }
+      .container { text-align: center; padding: 2rem; max-width: 32rem; }
+      h1 { color: #e8eef9; margin-bottom: 1rem; }
+      p { color: #9aa9c0; }
+      .error { color: #ff917b; font-family: monospace; margin-top: 1rem; padding: 1rem; background: #3c140d; border-radius: 0.5rem; }
+    </style>
+  </head>
   <body>
-    <h1 id="title">Finishing sign-in...</h1>
-    <p id="msg">You can close this window once sign-in completes.</p>
+    <div class="container">
+      <h1 id="title">Finishing sign-in...</h1>
+      <p id="msg">You can close this window once it says you're signed in.</p>
+    </div>
     <script>
       (async function() {
         const params = new URLSearchParams((window.location.hash || "").slice(1))
         const search = new URLSearchParams(window.location.search)
         const error = params.get("error") || search.get("error")
-        const body = error
-          ? { error, error_description: params.get("error_description") || search.get("error_description") || "" }
-          : { access_token: params.get("access_token") || "", expires_in: params.get("expires_in") || "0", state: params.get("state") || "" }
-        await fetch(${JSON.stringify(tokenPath)}, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
-        document.getElementById("title").textContent = error ? "Authorization Failed" : "Authorization Successful"
-        document.getElementById("msg").textContent = error ? (body.error_description || error) : "You can close this window and return to SlopCode."
-        if (!error) setTimeout(function() { window.close() }, 2000)
-      })().catch(function(e) {
-        document.getElementById("title").textContent = "Authorization Failed"
-        document.getElementById("msg").textContent = String(e && e.message ? e.message : e)
-      })
+        const errorDescription = params.get("error_description") || search.get("error_description")
+        const titleEl = document.getElementById("title")
+        const msgEl = document.getElementById("msg")
+        const tokenUrl = new URL(${JSON.stringify(OAUTH_TOKEN_PATH)}, window.location.origin).href
+        try {
+          const body = error
+            ? { error, error_description: errorDescription || "" }
+            : { access_token: params.get("access_token") || "", expires_in: params.get("expires_in") || "0", state: params.get("state") || "" }
+          const res = await fetch(tokenUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          })
+          if (!res.ok) {
+            const detail = await res.text().catch(function () { return "" })
+            throw new Error(detail || ("callback failed (" + res.status + ")"))
+          }
+          if (error) {
+            titleEl.textContent = "Authorization Failed"
+            msgEl.textContent = errorDescription || error
+            msgEl.className = "error"
+            return
+          }
+          titleEl.textContent = "Authorization Successful"
+          msgEl.textContent = "You can close this window and return to SlopCode."
+          setTimeout(function () { window.close() }, 2000)
+        } catch (e) {
+          titleEl.textContent = "Authorization Failed"
+          msgEl.textContent = String(e && e.message ? e.message : e)
+          msgEl.className = "error"
+        }
+      })()
     </script>
   </body>
 </html>`
 
-async function start() {
-  if (server) return
-  server = createServer((req, res) => {
-    const url = new URL(req.url || "/", `http://localhost:${port}`)
-    if (req.method === "GET" && url.pathname === redirectPath) {
+async function startOAuthServer(): Promise<void> {
+  if (oauthServer) return
+  oauthServer = createServer((req, res) => {
+    const url = new URL(req.url || "/", `http://localhost:${OAUTH_PORT}`)
+
+    if (req.method === "GET" && url.pathname === OAUTH_REDIRECT_PATH) {
       res.writeHead(200, { "Content-Type": "text/html" })
-      res.end(html)
+      res.end(HTML_CALLBACK)
       return
     }
-    if (req.method === "POST" && url.pathname === tokenPath) {
+
+    if (req.method === "POST" && url.pathname === OAUTH_TOKEN_PATH) {
       const chunks: Buffer[] = []
       req.on("data", (chunk: Buffer) => chunks.push(chunk))
       req.on("end", () => {
-        const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<string, string>
-        if (!pending) {
+        const raw = Buffer.concat(chunks).toString("utf8")
+        let body: Record<string, string> = {}
+        try {
+          body = raw ? JSON.parse(raw) : {}
+        } catch {
+          body = {}
+        }
+        if (!pendingOAuth) {
           res.writeHead(409, { "Content-Type": "application/json" })
           res.end(JSON.stringify({ error: "no_pending_oauth" }))
           return
         }
         if (body.error) {
-          pending.reject(new Error(body.error_description || body.error))
-          pending = undefined
+          const message = body.error_description || body.error || "OAuth error"
+          pendingOAuth.reject(new Error(String(message)))
+          pendingOAuth = undefined
           res.writeHead(200, { "Content-Type": "application/json" })
           res.end(JSON.stringify({ ok: true }))
           return
         }
-        if (!body.access_token || body.state !== pending.state) {
-          pending.reject(new Error(!body.access_token ? "Missing access_token in callback" : "Invalid state"))
-          pending = undefined
+        if (!body.access_token) {
+          pendingOAuth.reject(new Error("Missing access_token in callback"))
+          pendingOAuth = undefined
           res.writeHead(400, { "Content-Type": "application/json" })
-          res.end(JSON.stringify({ error: "invalid_callback" }))
+          res.end(JSON.stringify({ error: "missing_access_token" }))
           return
         }
-        const expires = Number.parseInt(body.expires_in || "0", 10)
-        pending.resolve({
+        if (body.state !== pendingOAuth.state) {
+          pendingOAuth.reject(new Error("Invalid state - potential CSRF attack"))
+          pendingOAuth = undefined
+          res.writeHead(400, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: "invalid_state" }))
+          return
+        }
+        const expires = parseInt(body.expires_in || "0", 10)
+        pendingOAuth.resolve({
           access_token: body.access_token,
           expires_in: Number.isFinite(expires) && expires > 0 ? expires : 60 * 60 * 24 * 30,
           state: body.state,
         })
-        pending = undefined
+        pendingOAuth = undefined
         res.writeHead(200, { "Content-Type": "application/json" })
         res.end(JSON.stringify({ ok: true }))
       })
       return
     }
+
     res.writeHead(404)
     res.end("Not found")
   })
 
   await new Promise<void>((resolve, reject) => {
-    server!.listen(port, () => resolve())
-    server!.on("error", reject)
+    oauthServer!.listen(OAUTH_PORT, () => {
+      resolve()
+    })
+    oauthServer!.on("error", reject)
   })
 }
 
-function stop() {
-  server?.close(() => log.info("digitalocean oauth server stopped"))
-  server = undefined
+function stopOAuthServer() {
+  if (!oauthServer) return
+  oauthServer.close()
+  oauthServer = undefined
 }
 
-function wait(state: string) {
-  return new Promise<TokenPayload>((resolve, reject) => {
-    const timer = setTimeout(
+function waitForOAuthCallback(state: string): Promise<ImplicitTokenPayload> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(
       () => {
-        pending = undefined
-        reject(new Error("OAuth callback timeout - authorization took too long"))
+        if (pendingOAuth) {
+          pendingOAuth = undefined
+          reject(new Error("OAuth callback timeout - authorization took too long"))
+        }
       },
       5 * 60 * 1000,
     )
-    pending = {
+    pendingOAuth = {
       state,
-      resolve(tokens) {
-        clearTimeout(timer)
+      resolve: (tokens) => {
+        clearTimeout(timeout)
         resolve(tokens)
       },
-      reject(error) {
-        clearTimeout(timer)
+      reject: (error) => {
+        clearTimeout(timeout)
         reject(error)
       },
     }
   })
 }
 
-async function createKey(bearer: string) {
-  const response = await fetch(`${apiBase}/v2/gen-ai/models/api_keys`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${bearer}`,
-      "Content-Type": "application/json",
-      "User-Agent": `slopcode/${Installation.VERSION}`,
-    },
-    body: JSON.stringify({ name: `${makPrefix}-${Math.floor(Date.now() / 1000)}` }),
-  })
-  if (!response.ok) throw new Error(`Failed to create Model Access Key (${response.status}): ${await response.text()}`)
-  const data = (await response.json()) as { api_key_info?: { uuid: string; name: string; secret_key: string } }
-  if (!data.api_key_info?.secret_key) throw new Error("Model Access Key response missing secret_key")
-  return data.api_key_info
-}
-
-async function routers(bearer: string) {
-  const response = await fetch(`${apiBase}/v2/gen-ai/models/routers`, {
+async function listRouters(
+  bearer: string,
+): Promise<{ ok: true; routers: RouterEntry[] } | { ok: false; status: number }> {
+  const res = await fetch(`${DO_GENAI_API}/models/routers`, {
     headers: {
       Authorization: `Bearer ${bearer}`,
       Accept: "application/json",
-      "User-Agent": `slopcode/${Installation.VERSION}`,
+      "User-Agent": `slopcode/${InstallationVersion}`,
     },
     signal: AbortSignal.timeout(10_000),
   }).catch(() => undefined)
-  if (!response?.ok) return []
-  const body = (await response.json().catch(() => undefined)) as { model_routers?: Router[] } | undefined
-  return body?.model_routers ?? []
+  if (!res) return { ok: false, status: 0 }
+  if (!res.ok) return { ok: false, status: res.status }
+  const body = (await res.json().catch(() => undefined)) as { model_routers?: RouterEntry[] } | undefined
+  return { ok: true, routers: body?.model_routers ?? [] }
 }
 
-function model(router: Router, providerID: string): Provider.Model {
+function routerModel(router: RouterEntry, providerID: string): Model {
   const id = `router:${router.name}`
   return {
     id,
     providerID,
     name: router.name,
     family: "digitalocean-inference-routers",
-    api: { id, url: inferenceBase, npm: "@ai-sdk/openai-compatible" },
+    api: { id, url: DO_INFERENCE_BASE, npm: "@ai-sdk/openai-compatible" },
     status: "active",
     headers: {},
     options: {},
@@ -221,32 +266,62 @@ function model(router: Router, providerID: string): Provider.Model {
   }
 }
 
-function cached(raw: string | undefined): Router[] {
+function parseRoutersJSON(raw: string | undefined): RouterEntry[] {
   if (!raw) return []
   try {
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.flatMap((item) =>
-      item && typeof item.name === "string"
-        ? [{ name: item.name, uuid: item.uuid, description: item.description }]
-        : [],
+    return parsed.flatMap((r) =>
+      r && typeof r.name === "string" ? [{ name: r.name, uuid: r.uuid, description: r.description }] : [],
     )
   } catch {
     return []
   }
 }
 
-export async function DigitalOceanAuthPlugin(): Promise<Hooks> {
+export async function DigitalOceanAuthPlugin(input: PluginInput): Promise<Hooks> {
   return {
     provider: {
       id: "digitalocean",
       async models(provider, ctx) {
-        const base = (provider as Provider.Info).models
-        const metadata = (ctx.auth as { metadata?: Record<string, string> } | undefined)?.metadata ?? {}
-        const merged: Record<string, Provider.Model> = { ...base }
-        for (const router of cached(metadata.routers)) {
+        const baseModels = provider.models
+        if (ctx.auth?.type !== "api") return baseModels
+
+        const metadata = ctx.auth.metadata ?? {}
+        const oauthAccess = metadata["oauth_access"]
+        const oauthExpires = parseInt(metadata["oauth_expires"] || "0", 10)
+        const fetchedAt = parseInt(metadata["routers_fetched_at"] || "0", 10)
+        const cached = parseRoutersJSON(metadata["routers"])
+
+        let routers = cached
+        const stale = Date.now() - fetchedAt > ROUTER_REFRESH_INTERVAL_MS
+        const bearerValid = oauthAccess && oauthExpires > Date.now()
+
+        if (bearerValid && stale) {
+          const result = await listRouters(oauthAccess)
+          if (result.ok) {
+            routers = result.routers
+            const updated: Record<string, string> = {
+              ...metadata,
+              routers: JSON.stringify(routers.map((r) => ({ name: r.name, uuid: r.uuid, description: r.description }))),
+              routers_fetched_at: String(Date.now()),
+            }
+            await input.client.auth
+              .set({
+                path: { id: "digitalocean" },
+                body: { type: "api", key: ctx.auth.key, metadata: updated },
+              })
+              .catch(() => {})
+          } else if (result.status === 401 || result.status === 403) {
+          } else if (result.status !== 0) {
+          }
+        }
+
+        const merged: Record<string, Model> = { ...baseModels }
+        for (const router of routers) {
           const id = `router:${router.name}`
-          if (!merged[id]) merged[id] = model(router, "digitalocean")
+          if (merged[id]) continue
+          merged[id] = routerModel(router, "digitalocean")
         }
         return merged
       },
@@ -258,43 +333,41 @@ export async function DigitalOceanAuthPlugin(): Promise<Hooks> {
           type: "oauth",
           label: "Login with DigitalOcean",
           async authorize() {
-            await start()
-            const nonce = state()
-            const callback = wait(nonce)
+            await startOAuthServer()
+            const state = generateState()
+            const callbackPromise = waitForOAuthCallback(state)
+            const url = buildAuthorizeUrl(state)
+            await open(url).catch(() => undefined)
             return {
-              url: authorize(nonce),
-              method: "auto" as const,
+              url,
               instructions:
-                "Sign in to DigitalOcean in your browser. SlopCode will create a Model Access Key named slopcode-oauth-* and load your Inference Routers. Re-run connect to refresh routers later.",
+                "Sign in to DigitalOcean in your browser. SlopCode will use your DigitalOcean API token directly for inference and load your Inference Routers. Re-run /connect to refresh routers later.",
+              method: "auto" as const,
               async callback() {
                 try {
-                  const tokens = await callback
-                  const key = await createKey(tokens.access_token)
-                  const list = await routers(tokens.access_token)
+                  const tokens = await callbackPromise
+                  const routerResult = await listRouters(tokens.access_token)
+                  const routers = routerResult.ok ? routerResult.routers : []
+                  if (!routerResult.ok) {
+                  }
                   return {
                     type: "success" as const,
                     provider: "digitalocean",
-                    key: key.secret_key,
+                    key: tokens.access_token,
                     metadata: {
-                      mak_uuid: key.uuid,
-                      mak_name: key.name,
                       oauth_access: tokens.access_token,
                       oauth_expires: String(Date.now() + tokens.expires_in * 1000),
+                      oauth_scopes: OAUTH_SCOPES,
                       routers: JSON.stringify(
-                        list.map((router) => ({
-                          name: router.name,
-                          uuid: router.uuid,
-                          description: router.description,
-                        })),
+                        routers.map((r) => ({ name: r.name, uuid: r.uuid, description: r.description })),
                       ),
                       routers_fetched_at: String(Date.now()),
                     },
                   }
-                } catch (error) {
-                  log.error("digitalocean oauth callback failed", { error })
+                } catch (err) {
                   return { type: "failed" as const }
                 } finally {
-                  stop()
+                  stopOAuthServer()
                 }
               },
             }

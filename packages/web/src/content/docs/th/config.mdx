@@ -13,11 +13,12 @@ SlopCode รองรับทั้งรูปแบบ **JSON** และ **J
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  // Theme configuration
-  "theme": "slopcode",
+  "$schema": "https://slopcode.ai/config.json",
   "model": "anthropic/claude-sonnet-4-5",
   "autoupdate": true,
+  "server": {
+    "port": 4096,
+  },
 }
 ```
 
@@ -34,7 +35,7 @@ SlopCode รองรับทั้งรูปแบบ **JSON** และ **J
 
 ไฟล์การกำหนดค่าจะถูกรวมเข้าด้วยกัน โดยไม่มีการแทนที่ การตั้งค่าจากตำแหน่งการกำหนดค่าต่อไปนี้จะรวมกัน การกำหนดค่าในภายหลังจะแทนที่การกำหนดค่าก่อนหน้าสำหรับคีย์ที่ขัดแย้งกันเท่านั้น การตั้งค่าที่ไม่ขัดแย้งจากการกำหนดค่าทั้งหมดจะยังคงอยู่
 
-ตัวอย่างเช่น หากการกำหนดค่าส่วนกลางของคุณตั้งค่า `theme: "slopcode"` และ `autoupdate: true` และการกำหนดค่าโปรเจ็กต์ของคุณตั้งค่า `model: "anthropic/claude-sonnet-4-5"` การกำหนดค่าสุดท้ายจะรวมการตั้งค่าทั้งสามรายการไว้ด้วย
+ตัวอย่างเช่น หากการกำหนดค่าส่วนกลางของคุณตั้งค่า `autoupdate: true` และการกำหนดค่าโปรเจ็กต์ของคุณตั้งค่า `model: "anthropic/claude-sonnet-4-5"` การกำหนดค่าสุดท้ายจะรวมการตั้งค่าทั้งสองรายการไว้ด้วย
 
 ---
 
@@ -95,7 +96,9 @@ SlopCode รองรับทั้งรูปแบบ **JSON** และ **J
 
 ### ทั่วโลก
 
-วางการกำหนดค่า SlopCode ส่วนกลางของคุณใน `~/.config/slopcode/slopcode.json` ใช้การกำหนดค่าส่วนกลางสำหรับการตั้งค่าทั้งผู้ใช้ เช่น ธีม ผู้ให้บริการ หรือปุ่มลัด
+วางการกำหนดค่า SlopCode ส่วนกลางของคุณใน `~/.config/slopcode/slopcode.json` ใช้การกำหนดค่าส่วนกลางสำหรับการตั้งค่าทั้งผู้ใช้ เช่น ผู้ให้บริการ รุ่น และสิทธิ์
+
+สำหรับการตั้งค่าเฉพาะ TUI ให้ใช้ `~/.config/slopcode/tui.json`
 
 การกำหนดค่าส่วนกลางจะแทนที่ค่าเริ่มต้นขององค์กรระยะไกล
 
@@ -104,6 +107,8 @@ SlopCode รองรับทั้งรูปแบบ **JSON** และ **J
 ### ต่อโครงการ
 
 เพิ่ม `slopcode.json` ในรูทโปรเจ็กต์ของคุณ การกำหนดค่าโปรเจ็กต์มีความสำคัญสูงสุดในบรรดาไฟล์กำหนดค่ามาตรฐาน โดยจะแทนที่การกำหนดค่าทั้งส่วนกลางและระยะไกล
+
+สำหรับการตั้งค่า TUI เฉพาะโครงการ ให้เพิ่ม `tui.json` ควบคู่ไปกับมัน
 
 :::tip
 วางการกำหนดค่าเฉพาะโปรเจ็กต์ไว้ที่รากของโปรเจ็กต์ของคุณ
@@ -146,7 +151,9 @@ slopcode run "Hello world"
 
 ## สคีมา
 
-ไฟล์กำหนดค่ามีสคีมาที่กำหนดไว้ใน [**`slopcode.dev/config.json`**](https://slopcode.dev/config.json)
+ไฟล์กำหนดค่ามีสคีมาที่กำหนดไว้ใน [**`slopcode.ai/config.json`**](https://slopcode.ai/config.json)
+
+การกำหนดค่า TUI ใช้ [**`slopcode.ai/tui.json`**](https://slopcode.ai/tui.json)
 
 ผู้แก้ไขของคุณควรสามารถตรวจสอบและเติมข้อความอัตโนมัติตามสคีมาได้
 
@@ -154,28 +161,24 @@ slopcode run "Hello world"
 
 ### TUI
 
-คุณสามารถกำหนดการตั้งค่าเฉพาะ TUI ผ่านตัวเลือก `tui`
+ใช้ไฟล์ `tui.json` (หรือ `tui.jsonc`) เฉพาะสำหรับการตั้งค่าเฉพาะ TUI
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  "tui": {
-    "scroll_speed": 3,
-    "scroll_acceleration": {
-      "enabled": true
-    },
-    "diff_style": "auto"
-  }
+  "$schema": "https://slopcode.ai/tui.json",
+  "scroll_speed": 3,
+  "scroll_acceleration": {
+    "enabled": true
+  },
+  "diff_style": "auto"
 }
 ```
 
-ตัวเลือกที่มี:
+ใช้ `SLOPCODE_TUI_CONFIG` เพื่อชี้ไปยังไฟล์กำหนดค่า TUI ที่กำหนดเอง
 
-- `scroll_acceleration.enabled` - ​​เปิดใช้งานการเร่งความเร็วการเลื่อนแบบ macOS **มีลำดับความสำคัญมากกว่า `scroll_speed`.**
-- `scroll_speed` - ​​ตัวคูณความเร็วการเลื่อนแบบกำหนดเอง (ค่าเริ่มต้น: `3` ขั้นต่ำ: `1`) ไม่สนใจหาก `scroll_acceleration.enabled` คือ `true`
-- `diff_style` - ​​ควบคุมการเรนเดอร์ต่าง `"auto"` ปรับให้เข้ากับความกว้างของ terminal `"stacked"` จะแสดงคอลัมน์เดียวเสมอ
+คีย์ `theme`, `keybinds` และ `tui` แบบเดิมใน `slopcode.json` เลิกใช้แล้วและจะถูกย้ายโดยอัตโนมัติเมื่อเป็นไปได้
 
-[เรียนรู้เพิ่มเติมเกี่ยวกับการใช้ TUI ที่นี่](/docs/tui)
+[เรียนรู้เพิ่มเติมเกี่ยวกับการใช้ TUI ที่นี่](/docs/tui#configure)
 
 ---
 
@@ -185,7 +188,7 @@ slopcode run "Hello world"
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "server": {
     "port": 4096,
     "hostname": "0.0.0.0",
@@ -214,7 +217,7 @@ slopcode run "Hello world"
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "tools": {
     "write": false,
     "bash": false
@@ -232,7 +235,7 @@ slopcode run "Hello world"
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {},
   "model": "anthropic/claude-sonnet-4-5",
   "small_model": "anthropic/claude-haiku-4-5"
@@ -245,7 +248,7 @@ slopcode run "Hello world"
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -274,7 +277,7 @@ Amazon Bedrock รองรับ AWS-การกำหนดค่าเฉพ
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -301,12 +304,12 @@ Bearer Token (`AWS_BEARER_TOKEN_BEDROCK` หรือ `/connect`) มีคว�
 
 ### Themes
 
-คุณสามารถกำหนดค่าธีมที่คุณต้องการใช้ในการกำหนดค่า SlopCode ของคุณได้ผ่านตัวเลือก `theme`
+ตั้งค่าธีม UI ของคุณใน `tui.json`
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  "theme": ""
+  "$schema": "https://slopcode.ai/tui.json",
+  "theme": "tokyonight"
 }
 ```
 
@@ -320,7 +323,7 @@ Bearer Token (`AWS_BEARER_TOKEN_BEDROCK` หรือ `/connect`) มีคว�
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "code-reviewer": {
       "description": "Reviews code for best practices and potential issues",
@@ -346,7 +349,7 @@ Bearer Token (`AWS_BEARER_TOKEN_BEDROCK` หรือ `/connect`) มีคว�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "default_agent": "plan"
 }
 ```
@@ -363,7 +366,7 @@ Bearer Token (`AWS_BEARER_TOKEN_BEDROCK` หรือ `/connect`) มีคว�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "share": "manual"
 }
 ```
@@ -384,7 +387,7 @@ Bearer Token (`AWS_BEARER_TOKEN_BEDROCK` หรือ `/connect`) มีคว�
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "command": {
     "test": {
       "template": "Run the full test suite with coverage report and show any failures.\nFocus on the failing tests and suggest fixes.",
@@ -406,11 +409,11 @@ Bearer Token (`AWS_BEARER_TOKEN_BEDROCK` หรือ `/connect`) มีคว�
 
 ### คีย์ลัด
 
-คุณสามารถปรับแต่งปุ่มลัดของคุณได้ผ่านตัวเลือก `keybinds`
+ปรับแต่งปุ่มลัดใน `tui.json`
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {}
 }
 ```
@@ -425,7 +428,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "autoupdate": false
 }
 ```
@@ -441,7 +444,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -469,7 +472,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "ask",
     "bash": "ask"
@@ -487,16 +490,18 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "compaction": {
     "auto": true,
-    "prune": true
+    "prune": false,
+    "reserved": 10000
   }
 }
 ```
 
 - `auto` - ​​กระชับเซสชันโดยอัตโนมัติเมื่อบริบทเต็ม (ค่าเริ่มต้น: `true`)
-- `prune` - ​​ลบเอาท์พุตเครื่องมือเก่าเพื่อบันทึก tokens (ค่าเริ่มต้น: `true`)
+- `prune` - ​​ลบเอาท์พุตเครื่องมือเก่าเพื่อบันทึก tokens (ค่าเริ่มต้น: `false`)
+- `reserved` - บัฟเฟอร์โทเค็นสำหรับการบีบอัด ให้หน้าต่างเพียงพอเพื่อหลีกเลี่ยงการล้นระหว่างการบีบอัด
 
 ---
 
@@ -506,7 +511,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "watcher": {
     "ignore": ["node_modules/**", "dist/**", ".git/**"]
   }
@@ -523,7 +528,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "mcp": {}
 }
 ```
@@ -540,7 +545,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": ["slopcode-helicone-session", "@my-org/custom-plugin"]
 }
 ```
@@ -555,7 +560,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["CONTRIBUTING.md", "docs/guidelines.md", ".cursor/rules/*.md"]
 }
 ```
@@ -571,7 +576,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "disabled_providers": ["openai", "gemini"]
 }
 ```
@@ -594,7 +599,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "enabled_providers": ["anthropic", "openai"]
 }
 ```
@@ -615,7 +620,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "experimental": {}
 }
 ```
@@ -638,7 +643,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "model": "{env:SLOPCODE_MODEL}",
   "provider": {
     "anthropic": {
@@ -661,7 +666,7 @@ SlopCode จะดาวน์โหลดการอัปเดตใหม�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["./custom-instructions.md"],
   "provider": {
     "openai": {

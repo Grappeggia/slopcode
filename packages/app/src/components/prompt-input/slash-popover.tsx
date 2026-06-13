@@ -1,7 +1,7 @@
 import { Component, For, Match, Show, Switch } from "solid-js"
 import { FileIcon } from "@slopcode-ai/ui/file-icon"
 import { Icon } from "@slopcode-ai/ui/icon"
-import { getDirectory, getFilename } from "@slopcode-ai/util/path"
+import { getDirectory, getFilename } from "@slopcode-ai/core/util/path"
 
 export type AtOption =
   | { type: "agent"; name: string; display: string }

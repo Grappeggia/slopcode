@@ -91,6 +91,18 @@ How is auth handled in @packages/functions/src/api/index.ts?
 
 ---
 
+### details
+
+Переключить детали выполнения инструмента.
+
+```bash frame="none"
+/details
+```
+
+**Привязка клавиш:** `ctrl+x d`
+
+---
+
 ### editor
 
 Открыть внешний редактор для составления сообщений. Использует редактор, установленный в переменной среды `EDITOR`. [Подробнее ](#editor-setup).
@@ -136,18 +148,6 @@ How is auth handled in @packages/functions/src/api/index.ts?
 ```
 
 **Привязка клавиш:** `ctrl+x h`
-
----
-
-### history
-
-Toggle history mode for session navigation.
-
-```bash frame="none"
-/history
-```
-
-**Привязка клавиш:** `history_mode_toggle` defaults to `ctrl+y`
 
 ---
 
@@ -230,12 +230,12 @@ Toggle history mode for session navigation.
 
 ---
 
-### themes
+### theme
 
 Список доступных тем.
 
 ```bash frame="none"
-/themes
+/theme
 ```
 
 **Привязка клавиш:** `ctrl+x t`
@@ -282,20 +282,6 @@ Toggle history mode for session navigation.
 ```bash frame="none"
 /unshare
 ```
-
----
-
-## History mode
-
-Use history mode when you want to navigate existing session messages and traces without moving your hands to the mouse.
-
-While history mode is active, `up` and `down` move between prompts, `left` and `right` move between traces, and `space` runs the context action.
-
-Pressing `space` expands or collapses tool output, and opens a child task session when the selected item supports it.
-
-Use `history_mode_toggle` (defaults to `ctrl+y`) to exit history mode and return to normal edit mode.
-
-Unlike normal prompt input history (`history_previous` and `history_next`), history mode navigates rendered session content instead of cycling through text in the input box.
 
 ---
 
@@ -369,24 +355,63 @@ Unlike normal prompt input history (`history_previous` and `history_next`), hist
 
 ## Настройка
 
-Вы можете настроить поведение TUI через файл конфигурации slopcode.
+Вы можете настроить поведение TUI через `tui.json` (или `tui.jsonc`).
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  "tui": {
-    "scroll_speed": 3,
-    "scroll_acceleration": {
-      "enabled": true
+  "$schema": "https://slopcode.ai/tui.json",
+  "theme": "slopcode",
+  "leader_timeout": 2000,
+  "keybinds": {
+    "leader": "ctrl+x",
+    "command_list": "ctrl+p"
+  },
+  "scroll_speed": 3,
+  "scroll_acceleration": {
+    "enabled": false
+  },
+  "diff_style": "auto",
+  "mouse": true,
+  "attention": {
+    "enabled": true,
+    "notifications": true,
+    "sound": true,
+    "volume": 0.4,
+    "sound_pack": "slopcode.default",
+    "sounds": {
+      "error": "./sounds/error.mp3"
     }
   }
 }
 ```
 
+Это отдельный файл от `slopcode.json`, который настраивает поведение сервера/выполнения.
+
+`keybinds` объединяется со встроенными значениями по умолчанию, поэтому достаточно настроить только те сочетания клавиш, которые вы хотите изменить.
+
 ### Параметры
 
-- `scroll_acceleration` — включите ускорение прокрутки в стиле macOS для плавной и естественной прокрутки. Если этот параметр включен, скорость прокрутки увеличивается при быстрой прокрутке и остается точной при более медленных движениях. **Этот параметр имеет приоритет над `scroll_speed` и переопределяет его, если он включен.**
-- `scroll_speed` — контролирует скорость прокрутки TUI при использовании команд прокрутки (минимум: `1`). По умолчанию `3`. **Примечание. Это игнорируется, если для `scroll_acceleration.enabled` установлено значение `true`.**
+- `theme` — Устанавливает тему пользовательского интерфейса. [Подробнее](/docs/themes).
+- `keybinds` — Настраивает сочетания клавиш. [Подробнее](/docs/keybinds).
+- `leader_timeout` — Управляет тем, как долго SlopCode ждёт после нажатия leader key. По умолчанию `2000`.
+- `scroll_acceleration.enabled` — включите ускорение прокрутки в стиле macOS для плавной и естественной прокрутки. Если этот параметр включен, скорость прокрутки увеличивается при быстрой прокрутке и остается точной при более медленных движениях. **Этот параметр имеет приоритет над `scroll_speed` и переопределяет его, если он включен.**
+- `scroll_speed` — контролирует скорость прокрутки TUI при использовании команд прокрутки (минимум: `0.001`, поддерживает десятичные значения). По умолчанию `3`. **Примечание. Это игнорируется, если для `scroll_acceleration.enabled` установлено значение `true`.**
+- `diff_style` — Управляет отображением различий. `"auto"` адаптируется к ширине терминала, `"stacked"` всегда показывает одноколоночный макет.
+- `mouse` — Включает или отключает захват мыши в TUI (по умолчанию `true`). Если отключено, сохраняется нативное поведение терминала для выделения мышью и прокрутки.
+- `attention` — Настраивает уведомления рабочего стола и звуки TUI. По умолчанию отключено.
+
+Используйте `SLOPCODE_TUI_CONFIG` для загрузки пользовательского пути конфигурации TUI.
+
+### Attention
+
+Attention позволяет TUI уведомлять вас, когда SlopCode ждёт ответа, требует подтверждения разрешения, сообщает об ошибке сеанса или завершает сеанс. Включите это с помощью `attention.enabled`; встроенные события воспроизводят звук при срабатывании. Уведомления рабочего стола отправляются только тогда, когда окно терминала не в фокусе, и не используются для событий subagent.
+
+- `enabled` — Включает все уведомления и звуки Attention. По умолчанию `false`.
+- `notifications` — Когда Attention включён, разрешает TUI отправлять уведомления рабочего стола через терминал. По умолчанию `true`.
+- `sound` — Когда Attention включён, разрешает воспроизводить звуковые оповещения. По умолчанию `true`.
+- `volume` — Громкость звуковых оповещений по умолчанию от `0` до `1`. По умолчанию `0.4`.
+- `sound_pack` — ID sound pack для использования. По умолчанию `slopcode.default`.
+- `sounds` — Задаёт пользовательские звуковые файлы для `default`, `question`, `permission`, `error`, `done` или `subagent_done`. Пути могут быть абсолютными, `file://` URL или относительными к `tui.json`.
 
 ---
 

@@ -1,20 +1,23 @@
 {
-  "$schema": "https://turborepo.com/schema.json",
+  "$schema": "https://v2-8-13.turborepo.dev/schema.json",
   "globalEnv": ["CI", "SLOPCODE_DISABLE_SHARE"],
   "globalPassThroughEnv": ["CI", "SLOPCODE_DISABLE_SHARE"],
   "tasks": {
-    "typecheck": {
-      "dependsOn": ["^build"]
-    },
+    "typecheck": {},
     "build": {
-      "dependsOn": ["^build"],
+      "dependsOn": [],
       "outputs": ["dist/**"]
     },
     "slopcode#test": {
       "dependsOn": ["^build"],
-      "outputs": []
+      "outputs": [],
+      "passThroughEnv": ["*"]
     },
     "@slopcode-ai/app#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@slopcode-ai/ui#test": {
       "dependsOn": ["^build"],
       "outputs": []
     }

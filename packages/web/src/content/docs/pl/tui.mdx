@@ -91,6 +91,18 @@ Kompaktuj bieżącą sesję. _Alias_: `/summarize`
 
 ---
 
+### details
+
+Przełącz szczegóły wykonywania narzędzi.
+
+```bash frame="none"
+/details
+```
+
+**Keybind:** `ctrl+x d`
+
+---
+
 ### editor
 
 Otwórz zewnętrzny edytor do tworzenia wiadomości. Używa edytora ustawionego w zmiennej środowiskowej `EDITOR`. [Dowiedz się więcej](#editor-setup).
@@ -136,18 +148,6 @@ Pokaż okno pomocy.
 ```
 
 **Keybind:** `ctrl+x h`
-
----
-
-### history
-
-Toggle history mode for session navigation.
-
-```bash frame="none"
-/history
-```
-
-**Keybind:** `history_mode_toggle` defaults to `ctrl+y`
 
 ---
 
@@ -235,7 +235,7 @@ Udostępnij bieżącą sesję. [Dowiedz się więcej](/docs/share).
 Lista dostępnych motywów.
 
 ```bash frame="none"
-/themes
+/theme
 ```
 
 **Keybind:** `ctrl+x t`
@@ -282,20 +282,6 @@ Anuluj udostępnianie bieżącej sesji. [Dowiedz się więcej](/docs/share#un-sh
 ```bash frame="none"
 /unshare
 ```
-
----
-
-## History mode
-
-Use history mode when you want to navigate existing session messages and traces without moving your hands to the mouse.
-
-While history mode is active, `up` and `down` move between prompts, `left` and `right` move between traces, and `space` runs the context action.
-
-Pressing `space` expands or collapses tool output, and opens a child task session when the selected item supports it.
-
-Use `history_mode_toggle` (defaults to `ctrl+y`) to exit history mode and return to normal edit mode.
-
-Unlike normal prompt input history (`history_previous` and `history_next`), history mode navigates rendered session content instead of cycling through text in the input box.
 
 ---
 
@@ -369,24 +355,63 @@ Niektórzy edytory potrzebują argumentów wiersza poleceń, aby działać w try
 
 ## Skonfiguruj
 
-Możesz dostosować zachowanie TUI za pomocą pliku konfiguracyjnego slopcode.
+Możesz dostosować zachowanie TUI za pomocą pliku `tui.json` (lub `tui.jsonc`).
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  "tui": {
-    "scroll_speed": 3,
-    "scroll_acceleration": {
-      "enabled": true
+  "$schema": "https://slopcode.ai/tui.json",
+  "theme": "slopcode",
+  "leader_timeout": 2000,
+  "keybinds": {
+    "leader": "ctrl+x",
+    "command_list": "ctrl+p"
+  },
+  "scroll_speed": 3,
+  "scroll_acceleration": {
+    "enabled": false
+  },
+  "diff_style": "auto",
+  "mouse": true,
+  "attention": {
+    "enabled": true,
+    "notifications": true,
+    "sound": true,
+    "volume": 0.4,
+    "sound_pack": "slopcode.default",
+    "sounds": {
+      "error": "./sounds/error.mp3"
     }
   }
 }
 ```
 
+Jest to oddzielny plik od `slopcode.json`, który konfiguruje zachowanie serwera/runtime.
+
+`keybinds` jest łączone z wbudowanymi wartościami domyślnymi, więc wystarczy skonfigurować tylko te skróty, które chcesz zmienić.
+
 ### Opcje
 
-- `scroll_acceleration` — Włącz przyspieszenie przewijania w stylu macOS, aby zapewnić płynne, naturalne przewijanie. Po włączeniu prędkość przewijania wzrasta wraz z szybkimi gestami przewijania i pozostaje precyzyjna w przypadku wolniejszych ruchów. **To ustawienie ma pierwszeństwo przed `scroll_speed` i zastępuje je, gdy jest włączone.**
-- `scroll_speed` - Kontroluje szybkość przewijania TUI podczas korzystania z poleceń przewijania (minimum: `1`). Wartość domyślna to `3`. **Uwaga: jest to ignorowane, jeśli `scroll_acceleration.enabled` jest ustawione na `true`.**
+- `theme` - Ustawia motyw interfejsu. [Dowiedz się więcej](/docs/themes).
+- `keybinds` - Dostosowuje skróty klawiszowe. [Dowiedz się więcej](/docs/keybinds).
+- `leader_timeout` - Określa, jak długo SlopCode czeka po naciśnięciu leader key. Domyślnie `2000`.
+- `scroll_acceleration.enabled` — Włącz przyspieszenie przewijania w stylu macOS, aby zapewnić płynne, naturalne przewijanie. Po włączeniu prędkość przewijania wzrasta wraz z szybkimi gestami przewijania i pozostaje precyzyjna w przypadku wolniejszych ruchów. **To ustawienie ma pierwszeństwo przed `scroll_speed` i zastępuje je, gdy jest włączone.**
+- `scroll_speed` - Kontroluje szybkość przewijania TUI podczas korzystania z poleceń przewijania (minimum: `0.001`, obsługuje wartości dziesiętne). Wartość domyślna to `3`. **Uwaga: jest to ignorowane, jeśli `scroll_acceleration.enabled` jest ustawione na `true`.**
+- `diff_style` - Steruje renderowaniem różnic. `"auto"` dostosowuje się do szerokości terminala, `"stacked"` zawsze pokazuje układ jednokolumnowy.
+- `mouse` - Włącza lub wyłącza przechwytywanie myszy w TUI (domyślnie `true`). Po wyłączeniu zachowane zostaje natywne zachowanie terminala przy zaznaczaniu i przewijaniu myszą.
+- `attention` - Konfiguruje powiadomienia pulpitu i dźwięki TUI. Domyślnie wyłączone.
+
+Użyj `SLOPCODE_TUI_CONFIG`, aby załadować niestandardową ścieżkę konfiguracji TUI.
+
+### Attention
+
+Attention pozwala TUI powiadomić Cię, gdy SlopCode czeka na odpowiedź, wymaga zatwierdzenia uprawnienia, zgłasza błąd sesji albo informuje o zakończeniu sesji. Włącz tę funkcję za pomocą `attention.enabled`; wbudowane zdarzenia odtwarzają dźwięk, gdy wystąpią. Powiadomienia pulpitu są wysyłane tylko wtedy, gdy okno terminala nie jest aktywne, i nie są używane dla zdarzeń subagent.
+
+- `enabled` - Włącza wszystkie powiadomienia i dźwięki Attention. Domyślnie `false`.
+- `notifications` - Gdy Attention jest włączone, pozwala TUI wysyłać powiadomienia pulpitu przez terminal. Domyślnie `true`.
+- `sound` - Gdy Attention jest włączone, pozwala odtwarzać dźwięki powiadomień. Domyślnie `true`.
+- `volume` - Domyślna głośność dźwięków powiadomień od `0` do `1`. Domyślnie `0.4`.
+- `sound_pack` - ID sound pack do użycia. Domyślnie `slopcode.default`.
+- `sounds` - Ustawia niestandardowe pliki dźwiękowe dla `default`, `question`, `permission`, `error`, `done` lub `subagent_done`. Ścieżki mogą być bezwzględne, być URL-ami `file://` albo być względne względem `tui.json`.
 
 ---
 

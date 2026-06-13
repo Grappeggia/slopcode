@@ -16,7 +16,7 @@
           {
             "group": "Getting started",
             "pages": ["index", "quickstart", "development"],
-            "openapi": "https://slopcode.dev/openapi.json"
+            "openapi": "https://slopcode.ai/openapi.json"
           }
         ]
       }

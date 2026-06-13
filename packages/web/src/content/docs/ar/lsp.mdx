@@ -3,7 +3,7 @@ title: خوادم LSP
 description: يتكامل SlopCode مع خوادم LSP لديك.
 ---
 
-يتكامل SlopCode مع بروتوكول خادم اللغة (LSP) لمساعدة LLM على التفاعل مع قاعدة الشيفرة لديك. ويستخدم التشخيصات لتزويد LLM بتغذية راجعة.
+يمكن أن يتكامل SlopCode مع خوادم Language Server Protocol (LSP) لاستخدام التشخيصات كملاحظات للوكيل.
 
 ---
 
@@ -46,7 +46,7 @@ description: يتكامل SlopCode مع خوادم LSP لديك.
 | yaml-ls            | .yaml, .yml                                                         | يثبت `yaml-language-server` من Red Hat تلقائيا       |
 | zls                | .zig, .zon                                                          | توفر أمر `zig`                                       |
 
-تُفعَّل خوادم LSP تلقائيا عند اكتشاف أحد امتدادات الملفات المذكورة أعلاه واستيفاء المتطلبات.
+تكون ميزة LSP معطلة افتراضيا. عند تفعيلها، تبدأ الخوادم عند اكتشاف أحد امتدادات الملفات المذكورة أعلاه واستيفاء المتطلبات.
 
 :::note
 يمكنك تعطيل تنزيلات خوادم LSP التلقائية عبر ضبط متغير البيئة `SLOPCODE_DISABLE_LSP_DOWNLOAD` على `true`.
@@ -56,20 +56,39 @@ description: يتكامل SlopCode مع خوادم LSP لديك.
 
 ## كيف يعمل
 
-عندما يفتح slopcode ملفا، فإنه:
+عند تفعيل LSP وفتح slopcode لملف، فإنه:
 
 1. يفحص امتداد الملف مقابل جميع خوادم LSP المفعّلة.
 2. يشغّل خادم LSP المناسب إذا لم يكن قيد التشغيل بالفعل.
 
 ---
 
+## أفضل الممارسات
+
+يمكن أن تساعد LSP الوكيل على العثور على المشاكل وإصلاحها عبر توفير التشخيصات من خوادم اللغة. هذا مفيد في بعض المشاريع، لكنه ليس دائما مكسبا صافيا.
+
+قد تخرج خوادم اللغة عن المزامنة، وتستهلك ذاكرة كبيرة، وتختلف حسب الإصدار أو المشروع، وتبطئ سير عمل الوكيل. في كثير من المشاريع، يكون من الأفضل أن يشغّل الوكيل lint أو typecheck أو أدوات CLI التشخيصية الأخرى مباشرة، بحيث تعود الأخطاء إلى حلقة الوكيل دون هذه المفاضلات. وثّق هذه الأوامر في ملفات التعليمات مثل `AGENTS.md` أو المهارات حتى يعرف الوكيل ما يجب تشغيله. فعّل LSP عندما يستفيد مشروعك من ملاحظات إضافية من خادم اللغة.
+
+---
+
 ## الإعداد
 
-يمكنك تخصيص خوادم LSP عبر قسم `lsp` في إعدادات slopcode.
+يمكنك تفعيل خوادم LSP وتخصيصها عبر قسم `lsp` في إعدادات slopcode.
+
+لتفعيل جميع خوادم LSP المدمجة، اضبط `lsp` على `true`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
+  "lsp": true
+}
+```
+
+استخدم كائنا لإبقاء الخوادم المدمجة مفعلة أثناء إعداد التجاوزات أو الخوادم المخصصة.
+
+```json title="slopcode.json"
+{
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": {}
 }
 ```
@@ -94,7 +113,7 @@ description: يتكامل SlopCode مع خوادم LSP لديك.
 
 ```json title="slopcode.json" {5-7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": {
     "rust": {
       "env": {
@@ -113,7 +132,7 @@ description: يتكامل SlopCode مع خوادم LSP لديك.
 
 ```json title="slopcode.json" {5-9}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": {
     "typescript": {
       "initialization": {
@@ -134,11 +153,11 @@ description: يتكامل SlopCode مع خوادم LSP لديك.
 
 ### تعطيل خوادم LSP
 
-لتعطيل **جميع** خوادم LSP على مستوى التطبيق، اضبط `lsp` على `false`:
+إذا تم حذف `lsp`، فستكون جميع خوادم LSP معطلة. لتعطيل جميع خوادم LSP بعد أن فعّلها إعداد آخر، اضبط `lsp` على `false`:
 
 ```json title="slopcode.json" {3}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": false
 }
 ```
@@ -147,7 +166,7 @@ description: يتكامل SlopCode مع خوادم LSP لديك.
 
 ```json title="slopcode.json" {5}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": {
     "typescript": {
       "disabled": true
@@ -164,7 +183,7 @@ description: يتكامل SlopCode مع خوادم LSP لديك.
 
 ```json title="slopcode.json" {4-7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": {
     "custom-lsp": {
       "command": ["custom-lsp-server", "--stdio"],
@@ -182,7 +201,7 @@ description: يتكامل SlopCode مع خوادم LSP لديك.
 
 يوفر PHP Intelephense ميزات مدفوعة عبر مفتاح ترخيص. يمكنك تزويده بمفتاح الترخيص عبر وضع (فقط) المفتاح داخل ملف نصي في:
 
-- على macOS/Linux: `$HOME/intelephense/licence.txt`
-- على Windows: `%USERPROFILE%/intelephense/licence.txt`
+- على macOS/Linux: `$HOME/intelephense/license.txt`
+- على Windows: `%USERPROFILE%/intelephense/license.txt`
 
 يجب أن يحتوي الملف على مفتاح الترخيص فقط دون أي محتوى إضافي.

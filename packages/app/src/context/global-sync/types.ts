@@ -2,21 +2,20 @@ import type {
   Agent,
   Command,
   Config,
-  SessionDiffEntry,
   LspStatus,
   McpStatus,
   Message,
   Part,
   Path,
   PermissionRequest,
-  Project,
-  ProviderListResponse,
   QuestionRequest,
   Session,
   SessionStatus,
+  SnapshotFileDiff,
   Todo,
   VcsInfo,
 } from "@slopcode-ai/sdk/v2/client"
+import { NormalizedProviderListResponse } from "@slopcode-ai/ui/context"
 import type { Accessor } from "solid-js"
 import type { SetStoreFunction, Store } from "solid-js/store"
 
@@ -31,13 +30,6 @@ export type ProjectMeta = {
   }
 }
 
-export type SessionHistory = {
-  message: Message[]
-  part: Record<string, Part[]>
-  limit: number
-  complete: boolean
-}
-
 export type State = {
   status: "loading" | "partial" | "complete"
   agent: Agent[]
@@ -45,7 +37,8 @@ export type State = {
   project: string
   projectMeta: ProjectMeta | undefined
   icon: string | undefined
-  provider: ProviderListResponse
+  provider_ready: boolean
+  provider: NormalizedProviderListResponse
   config: Config
   path: Path
   session: Session[]
@@ -53,8 +46,9 @@ export type State = {
   session_status: {
     [sessionID: string]: SessionStatus
   }
+  session_working(id: string): boolean
   session_diff: {
-    [sessionID: string]: SessionDiffEntry[]
+    [sessionID: string]: SnapshotFileDiff[]
   }
   todo: {
     [sessionID: string]: Todo[]
@@ -65,9 +59,11 @@ export type State = {
   question: {
     [sessionID: string]: QuestionRequest[]
   }
+  mcp_ready: boolean
   mcp: {
     [name: string]: McpStatus
   }
+  lsp_ready: boolean
   lsp: LspStatus[]
   vcs: VcsInfo | undefined
   limit: number
@@ -77,11 +73,8 @@ export type State = {
   part: {
     [messageID: string]: Part[]
   }
-  history: {
-    [sessionID: string]: {
-      limit: number
-      complete: boolean
-    }
+  part_text_accum_delta: {
+    [partID: string]: string
   }
 }
 
@@ -103,14 +96,9 @@ export type IconCache = {
   ready: Accessor<boolean>
 }
 
-export type HistoryCache = {
-  store: Store<{ value: Record<string, SessionHistory | undefined> }>
-  setStore: SetStoreFunction<{ value: Record<string, SessionHistory | undefined> }>
-  ready: Accessor<boolean>
-}
-
 export type ChildOptions = {
   bootstrap?: boolean
+  mcp?: boolean
 }
 
 export type DirState = {

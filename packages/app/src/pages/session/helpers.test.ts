@@ -1,12 +1,22 @@
 import { describe, expect, test } from "bun:test"
+import { createMemo, createRoot } from "solid-js"
+import { createStore } from "solid-js/store"
 import {
-  adjacentTab,
   createOpenReviewFile,
   createOpenSessionFileTab,
+  createSessionTabs,
   focusTerminalById,
   getTabReorderIndex,
-  visibleTabs,
+  shouldFocusTerminalOnKeyDown,
+  shouldShowFileTree,
 } from "./helpers"
+
+describe("shouldShowFileTree", () => {
+  test("does not reserve space for a disabled file tree", () => {
+    expect(shouldShowFileTree({ visible: false, opened: true })).toBe(false)
+    expect(shouldShowFileTree({ visible: true, opened: true })).toBe(true)
+  })
+})
 
 describe("createOpenReviewFile", () => {
   test("opens and loads selected review file", () => {
@@ -18,12 +28,13 @@ describe("createOpenReviewFile", () => {
         return `file://${path}`
       },
       openTab: (tab) => calls.push(`open:${tab}`),
+      setActive: (tab) => calls.push(`active:${tab}`),
       loadFile: (path) => calls.push(`load:${path}`),
     })
 
     openReviewFile("src/a.ts")
 
-    expect(calls).toEqual(["show", "load:src/a.ts", "tab:src/a.ts", "open:file://src/a.ts"])
+    expect(calls).toEqual(["show", "load:src/a.ts", "tab:src/a.ts", "open:file://src/a.ts", "active:file://src/a.ts"])
   })
 })
 
@@ -84,6 +95,26 @@ describe("focusTerminalById", () => {
   })
 })
 
+describe("shouldFocusTerminalOnKeyDown", () => {
+  test("skips pure modifier keys", () => {
+    expect(shouldFocusTerminalOnKeyDown(new KeyboardEvent("keydown", { key: "Meta", metaKey: true }))).toBe(false)
+    expect(shouldFocusTerminalOnKeyDown(new KeyboardEvent("keydown", { key: "Control", ctrlKey: true }))).toBe(false)
+    expect(shouldFocusTerminalOnKeyDown(new KeyboardEvent("keydown", { key: "Alt", altKey: true }))).toBe(false)
+    expect(shouldFocusTerminalOnKeyDown(new KeyboardEvent("keydown", { key: "Shift", shiftKey: true }))).toBe(false)
+  })
+
+  test("skips shortcut key combos", () => {
+    expect(shouldFocusTerminalOnKeyDown(new KeyboardEvent("keydown", { key: "c", metaKey: true }))).toBe(false)
+    expect(shouldFocusTerminalOnKeyDown(new KeyboardEvent("keydown", { key: "c", ctrlKey: true }))).toBe(false)
+    expect(shouldFocusTerminalOnKeyDown(new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true }))).toBe(false)
+  })
+
+  test("keeps plain typing focused on terminal", () => {
+    expect(shouldFocusTerminalOnKeyDown(new KeyboardEvent("keydown", { key: "a" }))).toBe(true)
+    expect(shouldFocusTerminalOnKeyDown(new KeyboardEvent("keydown", { key: "A", shiftKey: true }))).toBe(true)
+  })
+})
+
 describe("getTabReorderIndex", () => {
   test("returns target index for valid drag reorder", () => {
     expect(getTabReorderIndex(["a", "b", "c"], "a", "c")).toBe(2)
@@ -94,46 +125,65 @@ describe("getTabReorderIndex", () => {
   })
 })
 
-describe("visibleTabs", () => {
-  test("includes review first when reviewTab is true", () => {
-    expect(visibleTabs({ reviewTab: true, contextOpen: false, openedTabs: ["a"] })).toEqual(["review", "a"])
+describe("createSessionTabs", () => {
+  test("normalizes the effective file tab", () => {
+    createRoot((dispose) => {
+      const [state] = createStore({
+        active: undefined as string | undefined,
+        all: ["file://src/a.ts", "context"],
+      })
+      const tabs = createMemo(() => ({ active: () => state.active, all: () => state.all }))
+      const result = createSessionTabs({
+        tabs,
+        pathFromTab: (tab) => (tab.startsWith("file://") ? tab.slice("file://".length) : undefined),
+        normalizeTab: (tab) => (tab.startsWith("file://") ? `norm:${tab.slice("file://".length)}` : tab),
+      })
+
+      expect(result.activeTab()).toBe("norm:src/a.ts")
+      expect(result.activeFileTab()).toBe("norm:src/a.ts")
+      expect(result.closableTab()).toBe("norm:src/a.ts")
+      dispose()
+    })
   })
 
-  test("includes context after review when both open", () => {
-    expect(visibleTabs({ reviewTab: true, contextOpen: true, openedTabs: ["a"] })).toEqual(["review", "context", "a"])
-  })
+  test("prefers context and review fallbacks when no file tab is active", () => {
+    createRoot((dispose) => {
+      const [state] = createStore({
+        active: undefined as string | undefined,
+        all: ["context"],
+      })
+      const tabs = createMemo(() => ({ active: () => state.active, all: () => state.all }))
+      const result = createSessionTabs({
+        tabs,
+        pathFromTab: () => undefined,
+        normalizeTab: (tab) => tab,
+        review: () => true,
+        hasReview: () => true,
+      })
 
-  test("omits review when reviewTab is false", () => {
-    expect(visibleTabs({ reviewTab: false, contextOpen: true, openedTabs: ["a"] })).toEqual(["context", "a"])
-  })
+      expect(result.activeTab()).toBe("context")
+      expect(result.closableTab()).toBe("context")
+      dispose()
+    })
 
-  test("returns only file tabs when review and context are closed", () => {
-    expect(visibleTabs({ reviewTab: false, contextOpen: false, openedTabs: ["a", "b"] })).toEqual(["a", "b"])
-  })
-})
+    createRoot((dispose) => {
+      const [state] = createStore({
+        active: undefined as string | undefined,
+        all: [],
+      })
+      const tabs = createMemo(() => ({ active: () => state.active, all: () => state.all }))
+      const result = createSessionTabs({
+        tabs,
+        pathFromTab: () => undefined,
+        normalizeTab: (tab) => tab,
+        review: () => true,
+        hasReview: () => true,
+      })
 
-describe("adjacentTab", () => {
-  test("returns next tab", () => {
-    expect(adjacentTab(["review", "a", "b"], "review", 1)).toBe("a")
-  })
-
-  test("returns previous tab", () => {
-    expect(adjacentTab(["review", "a", "b"], "a", -1)).toBe("review")
-  })
-
-  test("wraps from last to first", () => {
-    expect(adjacentTab(["a", "b", "c"], "c", 1)).toBe("a")
-  })
-
-  test("wraps from first to last", () => {
-    expect(adjacentTab(["a", "b", "c"], "a", -1)).toBe("c")
-  })
-
-  test("returns first tab when active is not in list", () => {
-    expect(adjacentTab(["a", "b"], "unknown", 1)).toBe("a")
-  })
-
-  test("returns undefined for empty list", () => {
-    expect(adjacentTab([], "a", 1)).toBeUndefined()
+      expect(result.activeTab()).toBe("review")
+      expect(result.activeFileTab()).toBeUndefined()
+      expect(result.closableTab()).toBeUndefined()
+      dispose()
+    })
   })
 })

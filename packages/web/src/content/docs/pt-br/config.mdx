@@ -13,11 +13,12 @@ O slopcode suporta os formatos **JSON** e **JSONC** (JSON com Comentários).
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  // Theme configuration
-  "theme": "slopcode",
+  "$schema": "https://slopcode.ai/config.json",
   "model": "anthropic/claude-sonnet-4-5",
   "autoupdate": true,
+  "server": {
+    "port": 4096,
+  },
 }
 ```
 
@@ -34,7 +35,7 @@ Os arquivos de configuração são **mesclados**, não substituídos.
 
 Os arquivos de configuração são mesclados, não substituídos. As configurações das seguintes localizações de configuração são combinadas. Configurações posteriores substituem as anteriores apenas para chaves conflitantes. Configurações não conflitantes de todas as configurações são preservadas.
 
-Por exemplo, se sua configuração global define `theme: "slopcode"` e `autoupdate: true`, e sua configuração de projeto define `model: "anthropic/claude-sonnet-4-5"`, a configuração final incluirá as três configurações.
+Por exemplo, se sua configuração global define `autoupdate: true` e sua configuração de projeto define `model: "anthropic/claude-sonnet-4-5"`, a configuração final incluirá as duas configurações.
 
 ---
 
@@ -95,7 +96,9 @@ Você pode habilitar servidores específicos em sua configuração local:
 
 ### Global
 
-Coloque sua configuração global do slopcode em `~/.config/slopcode/slopcode.json`. Use a configuração global para preferências de usuário, como temas, provedores ou atalhos de teclado.
+Coloque sua configuração global do slopcode em `~/.config/slopcode/slopcode.json`. Use a configuração global para preferências de todo o usuário, como provedores, modelos e permissões.
+
+Para configurações específicas do TUI, use `~/.config/slopcode/tui.json`.
 
 A configuração global substitui os padrões organizacionais remotos.
 
@@ -104,6 +107,8 @@ A configuração global substitui os padrões organizacionais remotos.
 ### Por projeto
 
 Adicione `slopcode.json` na raiz do seu projeto. A configuração do projeto tem a maior precedência entre os arquivos de configuração padrão - ela substitui tanto as configurações globais quanto as remotas.
+
+Para configurações específicas do TUI do projeto, adicione `tui.json` junto a ele.
 
 :::tip
 Coloque a configuração específica do projeto na raiz do seu projeto.
@@ -143,7 +148,9 @@ O diretório personalizado é carregado após a configuração global e os diret
 
 ## Esquema
 
-O arquivo de configuração tem um esquema que está definido em [**`slopcode.dev/config.json`**](https://slopcode.dev/config.json).
+O esquema de configuração do servidor/tempo de execução é definido em [**`slopcode.ai/config.json`**](https://slopcode.ai/config.json).
+
+A configuração do TUI usa [**`slopcode.ai/tui.json`**](https://slopcode.ai/tui.json).
 
 Seu editor deve ser capaz de validar e autocompletar com base no esquema.
 
@@ -151,28 +158,24 @@ Seu editor deve ser capaz de validar e autocompletar com base no esquema.
 
 ### TUI
 
-Você pode configurar as configurações específicas do TUI através da opção `tui`.
+Use um arquivo `tui.json` (ou `tui.jsonc`) dedicado para configurações específicas do TUI.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  "tui": {
-    "scroll_speed": 3,
-    "scroll_acceleration": {
-      "enabled": true
-    },
-    "diff_style": "auto"
-  }
+  "$schema": "https://slopcode.ai/tui.json",
+  "scroll_speed": 3,
+  "scroll_acceleration": {
+    "enabled": true
+  },
+  "diff_style": "auto"
 }
 ```
 
-Opções disponíveis:
+Use `SLOPCODE_TUI_CONFIG` para apontar para um arquivo de configuração TUI personalizado.
 
-- `scroll_acceleration.enabled` - Habilitar aceleração de rolagem estilo macOS. **Tem precedência sobre `scroll_speed`.**
-- `scroll_speed` - Multiplicador de velocidade de rolagem personalizada (padrão: `3`, mínimo: `1`). Ignorado se `scroll_acceleration.enabled` for `true`.
-- `diff_style` - Controlar a renderização de diffs. `"auto"` se adapta à largura do terminal, `"stacked"` sempre mostra uma coluna única.
+Chaves legadas `theme`, `keybinds` e `tui` em `slopcode.json` estão obsoletas e são migradas automaticamente quando possível.
 
-[Saiba mais sobre o uso do TUI aqui](/docs/tui).
+[Saiba mais sobre a configuração do TUI aqui](/docs/tui#configure).
 
 ---
 
@@ -182,7 +185,7 @@ Você pode configurar as configurações do servidor para os comandos `slopcode 
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "server": {
     "port": 4096,
     "hostname": "0.0.0.0",
@@ -211,7 +214,7 @@ Você pode gerenciar as ferramentas que um LLM pode usar através da opção `to
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "tools": {
     "write": false,
     "bash": false
@@ -229,7 +232,7 @@ Você pode configurar os provedores e modelos que deseja usar em sua configuraç
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {},
   "model": "anthropic/claude-sonnet-4-5",
   "small_model": "anthropic/claude-haiku-4-5"
@@ -242,7 +245,7 @@ As opções do provedor podem incluir `timeout` e `setCacheKey`:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -271,7 +274,7 @@ Amazon Bedrock suporta configuração específica da AWS:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -298,12 +301,12 @@ Tokens Bearer (`AWS_BEARER_TOKEN_BEDROCK` ou `/connect`) têm precedência sobre
 
 ### Temas
 
-Você pode configurar o tema que deseja usar em sua configuração do slopcode através da opção `theme`.
+Defina seu tema de interface em `tui.json`.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  "theme": ""
+  "$schema": "https://slopcode.ai/tui.json",
+  "theme": "tokyonight"
 }
 ```
 
@@ -317,7 +320,7 @@ Você pode configurar agentes especializados para tarefas específicas através 
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "code-reviewer": {
       "description": "Revisa código para melhores práticas e potenciais problemas",
@@ -343,7 +346,7 @@ Você pode definir o agente padrão usando a opção `default_agent`. Isso deter
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "default_agent": "plan"
 }
 ```
@@ -360,7 +363,7 @@ Você pode configurar o recurso [share](/docs/share) através da opção `share`
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "share": "manual"
 }
 ```
@@ -381,7 +384,7 @@ Você pode configurar comandos personalizados para tarefas repetitivas através 
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "command": {
     "test": {
       "template": "Execute a suíte de testes completa com relatório de cobertura e mostre quaisquer falhas.\nConcentre-se nos testes com falha e sugira correções.",
@@ -403,11 +406,11 @@ Você também pode definir comandos usando arquivos markdown em `~/.config/slopc
 
 ### Atalhos de teclado
 
-Você pode personalizar seus atalhos de teclado através da opção `keybinds`.
+Personalize atalhos de teclado em `tui.json`.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {}
 }
 ```
@@ -422,7 +425,7 @@ O slopcode fará o download automaticamente de quaisquer novas atualizações qu
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "autoupdate": false
 }
 ```
@@ -438,7 +441,7 @@ Você pode configurar formatadores de código através da opção `formatter`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -466,7 +469,7 @@ Por exemplo, para garantir que as ferramentas `edit` e `bash` exijam aprovação
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "ask",
     "bash": "ask"
@@ -484,16 +487,18 @@ Você pode controlar o comportamento de compactação de contexto através da op
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "compaction": {
     "auto": true,
-    "prune": true
+    "prune": false,
+    "reserved": 10000
   }
 }
 ```
 
 - `auto` - Compactar automaticamente a sessão quando o contexto estiver cheio (padrão: `true`).
-- `prune` - Remover saídas antigas de ferramentas para economizar tokens (padrão: `true`).
+- `prune` - Remover saídas antigas de ferramentas para economizar tokens (padrão: `false`).
+- `reserved` - Buffer de tokens para compactação. Deixa janela suficiente para evitar estouro durante a compactação
 
 ---
 
@@ -503,7 +508,7 @@ Você pode configurar padrões de ignorar do observador de arquivos através da 
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "watcher": {
     "ignore": ["node_modules/**", "dist/**", ".git/**"]
   }
@@ -520,7 +525,7 @@ Você pode configurar servidores MCP que deseja usar através da opção `mcp`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "mcp": {}
 }
 ```
@@ -537,7 +542,7 @@ Coloque arquivos de plugin em `.slopcode/plugins/` ou `~/.config/slopcode/plugin
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": ["slopcode-helicone-session", "@my-org/custom-plugin"]
 }
 ```
@@ -552,7 +557,7 @@ Você pode configurar as instruções para o modelo que está usando através da
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["CONTRIBUTING.md", "docs/guidelines.md", ".cursor/rules/*.md"]
 }
 ```
@@ -567,7 +572,7 @@ Você pode desabilitar provedores que são carregados automaticamente através d
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "disabled_providers": ["openai", "gemini"]
 }
 ```
@@ -590,7 +595,7 @@ Você pode especificar uma lista de permissão de provedores através da opção
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "enabled_providers": ["anthropic", "openai"]
 }
 ```
@@ -611,7 +616,7 @@ A chave `experimental` contém opções que estão em desenvolvimento ativo.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "experimental": {}
 }
 ```
@@ -634,7 +639,7 @@ Use `{env:VARIABLE_NAME}` para substituir variáveis de ambiente:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "model": "{env:SLOPCODE_MODEL}",
   "provider": {
     "anthropic": {
@@ -657,7 +662,7 @@ Use `{file:path/to/file}` para substituir o conteúdo de um arquivo:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["./custom-instructions.md"],
   "provider": {
     "openai": {
@@ -673,6 +678,7 @@ Os caminhos dos arquivos podem ser:
 
 - Relativos ao diretório do arquivo de configuração
 - Ou caminhos absolutos começando com `/` ou `~`
+-
 
 Esses são úteis para:
 

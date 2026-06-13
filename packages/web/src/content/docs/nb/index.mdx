@@ -34,7 +34,7 @@ For å bruke SlopCode i terminalen din trenger du:
 Den enkleste måten å installere SlopCode på er gjennom installasjonsskriptet.
 
 ```bash
-curl -fsSL https://slopcode.dev/install | bash
+curl -fsSL https://slopcode.ai/install | bash
 ```
 
 Du kan også installere den med følgende kommandoer:
@@ -45,28 +45,28 @@ Du kan også installere den med følgende kommandoer:
 
       <TabItem label="npm">
       ```bash
-      npm install -g slopcode
+      npm install -g slopcode-ai
       ```
 
           </TabItem>
 
         <TabItem label="Bun">
         ```bash
-        bun install -g slopcode
+        bun install -g slopcode-ai
         ```
 
           </TabItem>
 
         <TabItem label="pnpm">
         ```bash
-        pnpm install -g slopcode
+        pnpm install -g slopcode-ai
         ```
 
           </TabItem>
 
         <TabItem label="Yarn">
         ```bash
-        yarn global add slopcode
+        yarn global add slopcode-ai
         ```
 
       </TabItem>
@@ -76,7 +76,7 @@ Du kan også installere den med følgende kommandoer:
 - **Bruke Homebrew på macOS og Linux**
 
   ```bash
-  brew install slopcode
+  brew install anomalyco/tap/slopcode
   ```
 
   > Vi anbefaler å bruke SlopCode-tappen for de mest oppdaterte utgivelsene. Den offisielle `brew install slopcode`-formelen vedlikeholdes av Homebrew-teamet og oppdateres sjeldnere.
@@ -109,24 +109,24 @@ For den beste opplevelsen på Windows anbefaler vi å bruke [Windows Subsystem f
 - **Bruke npm**
 
   ```bash
-  npm install -g slopcode
+  npm install -g slopcode-ai
   ```
 
 - **Bruke Mise**
 
   ```bash
-  mise use -g github:teamslop/slopcode
+  mise use -g github:anomalyco/slopcode
   ```
 
 - **Bruke Docker**
 
   ```bash
-  docker run -it --rm ghcr.io/teamslop/slopcode
+  docker run -it --rm ghcr.io/anomalyco/slopcode
   ```
 
 Støtte for installasjon av SlopCode på Windows med Bun er under arbeid.
 
-Du kan også hente binæren fra [Releases](http://github.com/teamslop/slopcode/releases).
+Du kan også hente binæren fra [Releases](https://github.com/teamslop/slopcode/releases).
 
 ---
 
@@ -137,7 +137,7 @@ Med SlopCode kan du bruke hvilken som helst LLM-leverandør ved å konfigurere d
 Hvis du er ukjent med LLM-leverandører, anbefaler vi å bruke [SlopCode Zen](/docs/zen).
 Det er en kuratert liste over modeller som har blitt testet og verifisert av SlopCode-teamet.
 
-1. Kjør kommandoen `/connect` i TUI, velg SlopCode og gå til [slopcode.dev/auth](https://slopcode.dev/auth).
+1. Kjør kommandoen `/connect` i TUI, velg SlopCode og gå til [slopcode.ai/auth](https://slopcode.ai/auth).
 
    ```txt
    /connect
@@ -348,7 +348,7 @@ Dette vil opprette en kobling til den gjeldende samtalen og kopiere den til utkl
 Samtaler deles ikke som standard.
 :::
 
-Her er en eksempelsamtale `https://slopcode.dev/share/<share-id>` med SlopCode.
+Her er en [eksempelsamtale](https://slopcode.ai/s/4XP1fce5) med SlopCode.
 
 ---
 

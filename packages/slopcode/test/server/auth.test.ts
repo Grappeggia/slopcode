@@ -1,61 +1,59 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { DaemonAuth } from "../../src/daemon/auth"
-import { Server } from "../../src/server/server"
+import { Option, Redacted } from "effect"
+import { Flag } from "@slopcode-ai/core/flag/flag"
+import { ServerAuth } from "../../src/server/auth"
 
-const password = process.env.SLOPCODE_SERVER_PASSWORD
-const username = process.env.SLOPCODE_SERVER_USERNAME
+const original = {
+  SLOPCODE_SERVER_PASSWORD: Flag.SLOPCODE_SERVER_PASSWORD,
+  SLOPCODE_SERVER_USERNAME: Flag.SLOPCODE_SERVER_USERNAME,
+}
 
 afterEach(() => {
-  if (password === undefined) delete process.env.SLOPCODE_SERVER_PASSWORD
-  else process.env.SLOPCODE_SERVER_PASSWORD = password
-  if (username === undefined) delete process.env.SLOPCODE_SERVER_USERNAME
-  else process.env.SLOPCODE_SERVER_USERNAME = username
+  Flag.SLOPCODE_SERVER_PASSWORD = original.SLOPCODE_SERVER_PASSWORD
+  Flag.SLOPCODE_SERVER_USERNAME = original.SLOPCODE_SERVER_USERNAME
 })
 
-describe("server auth", () => {
-  test("refuses to start without configured auth", () => {
-    delete process.env.SLOPCODE_SERVER_PASSWORD
-    expect(() => Server.listen({ hostname: "127.0.0.1", port: 0 })).toThrow(
-      "SLOPCODE_SERVER_PASSWORD is required to start the slopcode server",
-    )
+describe("ServerAuth", () => {
+  test("does not emit auth headers without a password", () => {
+    Flag.SLOPCODE_SERVER_PASSWORD = undefined
+    Flag.SLOPCODE_SERVER_USERNAME = "alice"
+
+    expect(ServerAuth.header()).toBeUndefined()
+    expect(ServerAuth.headers()).toBeUndefined()
   })
 
-  test("daemon token protects all routes when password is unset", async () => {
-    delete process.env.SLOPCODE_SERVER_PASSWORD
-    const token = "daemon-test-token"
-    const server = Server.listen({ hostname: "127.0.0.1", port: 0, daemonToken: token })
-    try {
-      const unauthorized = await fetch(new URL("/global/health", server.url))
-      expect(unauthorized.status).toBe(401)
+  test("defaults to the slopcode username", () => {
+    Flag.SLOPCODE_SERVER_PASSWORD = "secret"
+    Flag.SLOPCODE_SERVER_USERNAME = undefined
 
-      const authorized = await fetch(new URL("/global/health", server.url), {
-        headers: {
-          [DaemonAuth.Header]: token,
-        },
-      })
-      expect(authorized.status).toBe(200)
-    } finally {
-      await server.stop(true)
-    }
+    expect(ServerAuth.headers()).toEqual({
+      Authorization: `Basic ${Buffer.from("slopcode:secret").toString("base64")}`,
+    })
   })
 
-  test("basic auth protects all routes when password is configured", async () => {
-    process.env.SLOPCODE_SERVER_PASSWORD = "secret"
-    delete process.env.SLOPCODE_SERVER_USERNAME
-    const auth = `Basic ${Buffer.from("slopcode:secret").toString("base64")}`
-    const server = Server.listen({ hostname: "127.0.0.1", port: 0 })
-    try {
-      const unauthorized = await fetch(new URL("/global/health", server.url))
-      expect(unauthorized.status).toBe(401)
+  test("uses the configured username", () => {
+    Flag.SLOPCODE_SERVER_PASSWORD = "secret"
+    Flag.SLOPCODE_SERVER_USERNAME = "alice"
 
-      const authorized = await fetch(new URL("/global/health", server.url), {
-        headers: {
-          Authorization: auth,
-        },
-      })
-      expect(authorized.status).toBe(200)
-    } finally {
-      await server.stop(true)
-    }
+    expect(ServerAuth.headers()).toEqual({
+      Authorization: `Basic ${Buffer.from("alice:secret").toString("base64")}`,
+    })
+  })
+
+  test("prefers explicit credentials", () => {
+    Flag.SLOPCODE_SERVER_PASSWORD = "secret"
+    Flag.SLOPCODE_SERVER_USERNAME = "alice"
+
+    expect(ServerAuth.headers({ password: "cli-secret", username: "bob" })).toEqual({
+      Authorization: `Basic ${Buffer.from("bob:cli-secret").toString("base64")}`,
+    })
+  })
+
+  test("validates decoded credentials against effect config", () => {
+    const config = { password: Option.some("secret"), username: "alice" }
+
+    expect(ServerAuth.required(config)).toBe(true)
+    expect(ServerAuth.authorized({ username: "alice", password: Redacted.make("secret") }, config)).toBe(true)
+    expect(ServerAuth.authorized({ username: "slopcode", password: Redacted.make("secret") }, config)).toBe(false)
   })
 })

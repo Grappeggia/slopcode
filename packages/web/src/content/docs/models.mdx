@@ -23,20 +23,6 @@ Once you've configured your provider you can select the model you want by typing
 /models
 ```
 
-The model dialog keeps recent and favorite models near the top. Use the favorite shortcut to pin a model, the provider shortcut to jump across connected providers, and the show-all shortcut when you need models hidden by the latest-only filter.
-
----
-
-## Complete prompts
-
-Prompt autocomplete can use a different model from the one answering your chat.
-
-```bash frame="none"
-/models-completion
-```
-
-Pick a small, fast, text-capable model for inline suggestions while keeping the active session on the model you want for reasoning and tool calls. Choose `Automatic` to let SlopCode route autocomplete to its built-in fast model for each provider, or `Use selected model` to reuse the current chat model.
-
 ---
 
 ## Recommended models
@@ -67,7 +53,7 @@ SlopCode config.
 
 ```json title="slopcode.json" {3}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "model": "lmstudio/google/gemma-3n-e4b"
 }
 ```
@@ -84,7 +70,7 @@ You can globally configure a model's options through the config.
 
 ```jsonc title="slopcode.jsonc" {7-12,19-24}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "openai": {
       "models": {
@@ -123,7 +109,7 @@ You can also define custom variants that extend built-in ones. Variants let you 
 
 ```jsonc title="slopcode.jsonc" {6-21}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "slopcode": {
       "models": {
@@ -188,7 +174,7 @@ You can override existing variants or add your own:
 
 ```jsonc title="slopcode.jsonc" {7-18}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "openai": {
       "models": {
@@ -225,7 +211,7 @@ When SlopCode starts up, it checks for models in the following priority order:
 
    ```json title="slopcode.json"
    {
-     "$schema": "https://slopcode.dev/config.json",
+     "$schema": "https://slopcode.ai/config.json",
      "model": "anthropic/claude-sonnet-4-20250514"
    }
    ```

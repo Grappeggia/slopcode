@@ -12,7 +12,6 @@ import { Header } from "~/component/header"
 import { Footer } from "~/component/footer"
 import { Legal } from "~/component/legal"
 import { github } from "~/lib/github"
-import { createMemo } from "solid-js"
 import { config } from "~/config"
 import { useI18n } from "~/context/i18n"
 import { useLanguage } from "~/context/language"
@@ -30,14 +29,12 @@ function CopyStatus() {
 export default function Home() {
   const i18n = useI18n()
   const language = useLanguage()
-  const githubData = createAsync(() => github())
-  const release = createMemo(() => githubData()?.release)
-
+  const _githubData = createAsync(() => github())
   const handleCopyClick = (event: Event) => {
     const button = event.currentTarget as HTMLButtonElement
     const text = button.textContent
     if (text) {
-      navigator.clipboard.writeText(text)
+      void navigator.clipboard.writeText(text)
       button.setAttribute("data-copied", "")
       setTimeout(() => {
         button.removeAttribute("data-copied")
@@ -104,12 +101,6 @@ export default function Home() {
                   <Tabs.Trigger value="bun" data-slot="tab">
                     bun
                   </Tabs.Trigger>
-                  <Tabs.Trigger value="nix" data-slot="tab">
-                    nix
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="apt" data-slot="tab">
-                    apt
-                  </Tabs.Trigger>
                   <Tabs.Trigger value="brew" data-slot="tab">
                     brew
                   </Tabs.Trigger>
@@ -124,7 +115,7 @@ export default function Home() {
                       <span data-slot="command-script">
                         <span>curl -fsSL </span>
                         <span data-slot="protocol">https://</span>
-                        <span data-slot="highlight">slopcode.dev/install</span>
+                        <span data-slot="highlight">slopcode.ai/install</span>
                         <span> | bash</span>
                       </span>
                       <CopyStatus />
@@ -134,7 +125,7 @@ export default function Home() {
                     <button data-copy data-slot="command" onClick={handleCopyClick}>
                       <span>
                         <span data-slot="protocol">npm i -g </span>
-                        <span data-slot="highlight">slopcode</span>
+                        <span data-slot="highlight">slopcode-ai</span>
                       </span>
                       <CopyStatus />
                     </button>
@@ -142,27 +133,8 @@ export default function Home() {
                   <Tabs.Content as="pre" data-slot="panel" value="bun">
                     <button data-copy data-slot="command" onClick={handleCopyClick}>
                       <span>
-                        <span data-slot="protocol">bun install -g </span>
-                        <span data-slot="highlight">slopcode</span>
-                      </span>
-                      <CopyStatus />
-                    </button>
-                  </Tabs.Content>
-                  <Tabs.Content as="pre" data-slot="panel" value="nix">
-                    <button data-copy data-slot="command" onClick={handleCopyClick}>
-                      <span>
-                        <span data-slot="protocol">nix profile install </span>
-                        <span data-slot="highlight">github:teamslop/slopcode#slopcode</span>
-                      </span>
-                      <CopyStatus />
-                    </button>
-                  </Tabs.Content>
-                  <Tabs.Content as="pre" data-slot="panel" value="apt">
-                    <button data-copy data-slot="command" onClick={handleCopyClick}>
-                      <span>
-                        <span data-slot="protocol">curl -fsSL </span>
-                        <span data-slot="highlight">teamslop.github.io/apt-slopcode/install.sh</span>
-                        <span> | sudo bash</span>
+                        <span data-slot="protocol">bun add -g </span>
+                        <span data-slot="highlight">slopcode-ai</span>
                       </span>
                       <CopyStatus />
                     </button>
@@ -171,7 +143,7 @@ export default function Home() {
                     <button data-copy data-slot="command" onClick={handleCopyClick}>
                       <span>
                         <span data-slot="protocol">brew install </span>
-                        <span data-slot="highlight">teamslop/slopcode/slopcode</span>
+                        <span data-slot="highlight">anomalyco/tap/slopcode</span>
                       </span>
                       <CopyStatus />
                     </button>

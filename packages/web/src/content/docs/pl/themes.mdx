@@ -53,19 +53,19 @@ Motyw `system` został zaprojektowany tak, aby automatycznie dostosowywał się 
 
 Motyw systemu przeznaczony jest dla użytkowników, którzy:
 
-- Want slopcode to match their terminal's appearance
-- Użyj niestandardowych schematów kolorów terminali
-- Prefer a consistent look across all terminal applications
+- Chcą, aby SlopCode pasował do wyglądu ich terminala
+- Używają niestandardowych schematów kolorów terminala
+- Preferują spójny wygląd we wszystkich aplikacjach terminalowych
 
 ---
 
 ## Używanie motywu
 
-Możesz wybrać motyw, wywołując opcję wyboru motywu za pomocą polecenia `/themes`. Możesz też określić to w [config](/docs/config).
+Możesz wybrać motyw, wywołując opcję wyboru motywu za pomocą polecenia `/theme`. Możesz też określić to w `tui.json`.
 
-```json title="slopcode.json" {3}
+```json title="tui.json" {3}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "theme": "tokyonight"
 }
 ```
@@ -144,7 +144,7 @@ Oto przykład niestandardowego motywu:
 
 ```json title="my-theme.json"
 {
-  "$schema": "https://slopcode.dev/theme.json",
+  "$schema": "https://slopcode.ai/theme.json",
   "defs": {
     "nord0": "#2E3440",
     "nord1": "#3B4252",

@@ -5,7 +5,7 @@ import { FileIcon } from "@slopcode-ai/ui/file-icon"
 import { IconButton } from "@slopcode-ai/ui/icon-button"
 import { TooltipKeybind } from "@slopcode-ai/ui/tooltip"
 import { Tabs } from "@slopcode-ai/ui/tabs"
-import { getFilename } from "@slopcode-ai/util/path"
+import { getFilename } from "@slopcode-ai/core/util/path"
 import { useFile } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { useCommand } from "@/context/command"
@@ -39,8 +39,8 @@ export function SortableTab(props: { tab: string; onTabClose: (tab: string) => v
     return <FileVisual path={value} />
   })
   return (
-    <div use:sortable class="h-full shrink-0 flex items-center" classList={{ "opacity-0": sortable.isActiveDraggable }}>
-      <div class="relative h-full">
+    <div use:sortable class="h-full flex items-center" classList={{ "opacity-0": sortable.isActiveDraggable }}>
+      <div class="relative">
         <Tabs.Trigger
           value={props.tab}
           closeButton={

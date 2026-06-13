@@ -15,7 +15,7 @@ Użyj pola `permission` do kontrolowania zachowania narzędzia. Dla każdego nar
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "deny",
     "bash": "ask",
@@ -28,7 +28,7 @@ Możesz także używać symboli wieloznacznych do kontrolowania wielu narzędzi 
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "mymcp_*": "ask"
   }
@@ -51,7 +51,7 @@ Wykonuj polecenia powłoki (shell) w środowisku projektu.
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "bash": "allow"
   }
@@ -68,7 +68,7 @@ Modyfikuj istniejące pliki poprzez precyzyjne zastępowanie tekstu.
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "allow"
   }
@@ -85,7 +85,7 @@ Twórz nowe pliki lub nadpisuj istniejące.
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "allow"
   }
@@ -95,7 +95,7 @@ Twórz nowe pliki lub nadpisuj istniejące.
 Użyj tego, aby umożliwić LLM tworzenie nowych plików. Zastąpi istniejące pliki, jeśli już istnieją.
 
 :::note
-Narzędzie `write` jest kontrolowane przez uprawnienie `edit`, które obejmuje wszystkie modyfikacje plików (`edit`, `write`, `patch`, `multiedit`).
+Narzędzie `write` jest kontrolowane przez uprawnienie `edit`, które obejmuje wszystkie modyfikacje plików (`edit`, `write`, `patch`).
 :::
 
 ---
@@ -106,7 +106,7 @@ Odczytaj zawartość pliku z bazy kodu.
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "read": "allow"
   }
@@ -123,7 +123,7 @@ Przeszukuj zawartość plików za pomocą wyrażeń regularnych.
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "grep": "allow"
   }
@@ -140,7 +140,7 @@ Znajduj pliki na podstawie wzorców.
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "glob": "allow"
   }
@@ -148,23 +148,6 @@ Znajduj pliki na podstawie wzorców.
 ```
 
 Szukaj plików przy użyciu wzorców glob, takich jak `**/*.js` lub `src/**/*.ts`. Zwraca pasujące ścieżki plików posortowane według czasu modyfikacji.
-
----
-
-### list
-
-Wyświetla listę plików i katalogów w podanej ścieżce.
-
-```json title="slopcode.json" {4}
-{
-  "$schema": "https://slopcode.dev/config.json",
-  "permission": {
-    "list": "allow"
-  }
-}
-```
-
-To narzędzie wyświetla zawartość katalogu. Akceptuje wzorce glob do filtrowania wyników.
 
 ---
 
@@ -178,7 +161,7 @@ To narzędzie jest dostępne tylko wtedy, gdy `SLOPCODE_EXPERIMENTAL_LSP_TOOL=tr
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "lsp": "allow"
   }
@@ -197,7 +180,7 @@ Stosuj łatki (patches) do plików.
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "allow"
   }
@@ -207,7 +190,7 @@ Stosuj łatki (patches) do plików.
 To narzędzie stosuje pliki różnicowe (diffs) do bazy kodu. Przydatne do stosowania zmian z różnych źródeł.
 
 :::note
-Narzędzie `patch` jest kontrolowane przez uprawnienie `edit`, które obejmuje wszystkie modyfikacje plików (`edit`, `write`, `patch`, `multiedit`).
+Narzędzie `patch` jest kontrolowane przez uprawnienie `edit`, które obejmuje wszystkie modyfikacje plików (`edit`, `write`, `patch`).
 :::
 
 ---
@@ -218,7 +201,7 @@ Załaduj [umiejętność](/docs/skills) (plik `SKILL.md`) i zwróć jej treść 
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "skill": "allow"
   }
@@ -233,7 +216,7 @@ Zarządzaj listami zadań (todo) podczas sesji kodowania.
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "todowrite": "allow"
   }
@@ -248,34 +231,13 @@ To narzędzie jest domyślnie wyłączone dla subagentów, ale można je włącz
 
 ---
 
-### todoread
-
-Odczytuj istniejące listy zadań (todo).
-
-```json title="slopcode.json" {4}
-{
-  "$schema": "https://slopcode.dev/config.json",
-  "permission": {
-    "todoread": "allow"
-  }
-}
-```
-
-Odczytuje bieżący stan listy rzeczy do zrobienia. Używany przez LLM do śledzenia zadań oczekujących lub ukończonych.
-
-:::note
-To narzędzie jest domyślnie wyłączone dla subagentów, ale można je włączyć ręcznie. [Dowiedz się więcej](/docs/agents/#permissions)
-:::
-
----
-
 ### webfetch
 
 Pobieraj treści z sieci.
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "webfetch": "allow"
   }
@@ -303,7 +265,7 @@ SLOPCODE_ENABLE_EXA=1 slopcode
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "websearch": "allow"
   }
@@ -326,7 +288,7 @@ Zadawaj pytania użytkownikowi podczas wykonywania.
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "question": "allow"
   }
@@ -362,7 +324,7 @@ Serwery MCP (Model Context Protocol) umożliwiają integrację zewnętrznych nar
 
 ## Szczegóły techniczne
 
-Wewnętrznie narzędzia takie jak `grep`, `glob` i `list` używają [ripgrep](https://github.com/BurntSushi/ripgrep). Domyślnie ripgrep respektuje wzorce `.gitignore`, co oznacza, że pliki i katalogi wymienione w Twoim `.gitignore` zostaną wykluczone z wyszukiwań i list.
+Wewnętrznie narzędzia takie jak `grep` i `glob` używają [ripgrep](https://github.com/BurntSushi/ripgrep). Domyślnie ripgrep respektuje wzorce `.gitignore`, co oznacza, że pliki i katalogi wymienione w Twoim `.gitignore` zostaną wykluczone z wyszukiwań i list.
 
 ---
 

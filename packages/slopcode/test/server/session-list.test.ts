@@ -1,240 +1,312 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect } from "bun:test"
+import { Effect, Layer } from "effect"
+import { Database } from "@slopcode-ai/core/database/database"
+import { SessionProjector } from "@slopcode-ai/core/session/projector"
+import { Session as SessionNs } from "@/session/session"
+import { disposeAllInstances, provideInstance, TestInstance } from "../fixture/fixture"
 import { mkdir } from "fs/promises"
 import path from "path"
-import { Identifier } from "../../src/id/id"
-import { Instance } from "../../src/project/instance"
-import { Session } from "../../src/session"
-import { Log } from "../../src/util/log"
-import { tmpdir } from "../fixture/fixture"
+import { SessionTable } from "@slopcode-ai/core/session/sql"
+import { eq } from "drizzle-orm"
+import { testEffect } from "../lib/effect"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { Storage } from "@/storage/storage"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { BackgroundJob } from "@/background/job"
 
-const projectRoot = path.join(__dirname, "../..")
-Log.init({ print: false })
+const layer = (experimentalWorkspaces: boolean) =>
+  Layer.mergeAll(
+    Database.defaultLayer,
+    SessionNs.layer.pipe(
+      Layer.provide(EventV2Bridge.defaultLayer),
+      Layer.provide(Storage.defaultLayer),
+      Layer.provide(Database.defaultLayer),
+      Layer.provide(EventV2Bridge.defaultLayer),
+      Layer.provide(SessionProjector.defaultLayer),
+      Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces })),
+      Layer.provide(BackgroundJob.defaultLayer),
+    ),
+  )
+const it = testEffect(layer(false))
+const itWorkspaces = testEffect(layer(true))
 
-describe("Session.list", () => {
-  test("filters by directory", async () => {
-    await Instance.provide({
-      directory: projectRoot,
-      fn: async () => {
-        const first = await Session.create({})
+const withSession = (input?: Parameters<SessionNs.Interface["create"]>[0]) =>
+  Effect.acquireRelease(SessionNs.use.create(input), (created) =>
+    SessionNs.Service.use((session) => session.remove(created.id).pipe(Effect.ignore)),
+  )
 
-        const otherDir = path.join(projectRoot, "..", "__session_list_other")
-        const second = await Instance.provide({
-          directory: otherDir,
-          fn: async () => Session.create({}),
-        })
+afterEach(async () => {
+  await disposeAllInstances()
+})
 
-        const sessions = [...Session.list({ directory: projectRoot })]
-        const ids = sessions.map((s) => s.id)
+describe("session.list", () => {
+  it.instance(
+    "does not filter by directory when directory is omitted",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* Effect.promise(() => mkdir(path.join(test.directory, "packages", "slopcode"), { recursive: true }))
+        yield* Effect.promise(() => mkdir(path.join(test.directory, "packages", "app"), { recursive: true }))
 
-        expect(ids).toContain(first.id)
-        expect(ids).not.toContain(second.id)
-      },
-    })
-  })
+        const root = yield* withSession({ title: "root" })
+        const parent = yield* withSession({ title: "parent" }).pipe(
+          provideInstance(path.join(test.directory, "packages")),
+        )
+        const current = yield* withSession({ title: "current" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "slopcode")),
+        )
+        const sibling = yield* withSession({ title: "sibling" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "app")),
+        )
 
-  test("filters root sessions", async () => {
-    await Instance.provide({
-      directory: projectRoot,
-      fn: async () => {
-        const root = await Session.create({ title: "root-session" })
-        const child = await Session.create({ title: "child-session", parentID: root.id })
+        const ids = (yield* SessionNs.use.list()).map((session) => session.id)
+        expect(ids).toContain(root.id)
+        expect(ids).toContain(parent.id)
+        expect(ids).toContain(current.id)
+        expect(ids).toContain(sibling.id)
+      }),
+    { git: true },
+  )
 
-        const sessions = [...Session.list({ roots: true })]
-        const ids = sessions.map((s) => s.id)
+  it.instance(
+    "filters by directory when directory is provided",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* Effect.promise(() => mkdir(path.join(test.directory, "packages", "slopcode"), { recursive: true }))
+        yield* Effect.promise(() => mkdir(path.join(test.directory, "packages", "app"), { recursive: true }))
+
+        const root = yield* withSession({ title: "root" })
+        const parent = yield* withSession({ title: "parent" }).pipe(
+          provideInstance(path.join(test.directory, "packages")),
+        )
+        const current = yield* withSession({ title: "current" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "slopcode")),
+        )
+        const sibling = yield* withSession({ title: "sibling" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "app")),
+        )
+
+        const ids = (yield* SessionNs.Service.use((session) =>
+          session.list({ directory: path.join(test.directory, "packages", "slopcode") }),
+        )).map((session) => session.id)
+        expect(ids).not.toContain(root.id)
+        expect(ids).not.toContain(parent.id)
+        expect(ids).toContain(current.id)
+        expect(ids).not.toContain(sibling.id)
+      }),
+    { git: true },
+  )
+
+  itWorkspaces.instance(
+    "filters by directory when experimental workspaces are enabled",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* Effect.promise(() => mkdir(path.join(test.directory, "packages", "slopcode"), { recursive: true }))
+        yield* Effect.promise(() => mkdir(path.join(test.directory, "packages", "app"), { recursive: true }))
+
+        const current = yield* withSession({ title: "current" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "slopcode")),
+        )
+        const sibling = yield* withSession({ title: "sibling" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "app")),
+        )
+
+        const ids = (yield* SessionNs.Service.use((session) =>
+          session.list({ directory: path.join(test.directory, "packages", "slopcode") }),
+        )).map((session) => session.id)
+        expect(ids).toContain(current.id)
+        expect(ids).not.toContain(sibling.id)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "matches a session regardless of directory separator on Windows",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+        const test = yield* TestInstance
+        const dir = path.join(test.directory, "packages", "slopcode")
+        yield* Effect.promise(() => mkdir(dir, { recursive: true }))
+
+        const created = yield* withSession({ title: "separator" }).pipe(provideInstance(dir))
+
+        // A forward-slash query (e.g. from the SDK/HTTP layer) must still find it —
+        // this is the regression: backslash-stored vs forward-slash-queried.
+        const forwardIDs = (yield* SessionNs.Service.use((session) =>
+          session.list({ directory: dir.replaceAll("\\", "/") }),
+        )).map((session) => session.id)
+        expect(forwardIDs).toContain(created.id)
+
+        // The native form must keep matching too.
+        const nativeIDs = (yield* SessionNs.Service.use((session) => session.list({ directory: dir }))).map(
+          (session) => session.id,
+        )
+        expect(nativeIDs).toContain(created.id)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "filters by path and ignores directory when path is provided",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* Effect.promise(() =>
+          mkdir(path.join(test.directory, "packages", "slopcode", "src", "deep"), { recursive: true }),
+        )
+        yield* Effect.promise(() => mkdir(path.join(test.directory, "packages", "app"), { recursive: true }))
+
+        const parent = yield* withSession({ title: "parent" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "slopcode")),
+        )
+        const current = yield* withSession({ title: "current" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "slopcode", "src")),
+        )
+        const deeper = yield* withSession({ title: "deeper" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "slopcode", "src", "deep")),
+        )
+        const sibling = yield* withSession({ title: "sibling" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "app")),
+        )
+
+        const pathIDs = (yield* SessionNs.Service.use((session) =>
+          session.list({
+            directory: path.join(test.directory, "packages", "app"),
+            path: "packages/slopcode/src",
+          }),
+        )).map((session) => session.id)
+        expect(pathIDs).not.toContain(parent.id)
+        expect(pathIDs).toContain(current.id)
+        expect(pathIDs).toContain(deeper.id)
+        expect(pathIDs).not.toContain(sibling.id)
+
+        if (process.platform === "win32") {
+          const windowsPathIDs = (yield* SessionNs.Service.use((session) =>
+            session.list({ path: "packages\\slopcode\\src" }),
+          )).map((session) => session.id)
+          expect(windowsPathIDs).toContain(current.id)
+          expect(windowsPathIDs).toContain(deeper.id)
+        }
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "falls back to directory when filtering legacy sessions without path",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* Effect.promise(() =>
+          mkdir(path.join(test.directory, "packages", "slopcode", "src"), { recursive: true }),
+        )
+        yield* Effect.promise(() => mkdir(path.join(test.directory, "packages", "app"), { recursive: true }))
+
+        const current = yield* withSession({ title: "legacy-current" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "slopcode", "src")),
+        )
+        const sibling = yield* withSession({ title: "legacy-sibling" }).pipe(
+          provideInstance(path.join(test.directory, "packages", "app")),
+        )
+
+        const { db } = yield* Database.Service
+        yield* db
+          .update(SessionTable)
+          .set({ path: null })
+          .where(eq(SessionTable.id, current.id))
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ path: null })
+          .where(eq(SessionTable.id, sibling.id))
+          .run()
+          .pipe(Effect.orDie)
+
+        const pathIDs = (yield* SessionNs.Service.use((session) =>
+          session.list({
+            directory: path.join(test.directory, "packages", "slopcode", "src"),
+            path: "packages/slopcode/src",
+          }),
+        )).map((session) => session.id)
+        expect(pathIDs).toContain(current.id)
+        expect(pathIDs).not.toContain(sibling.id)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "filters root sessions",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* withSession({ title: "root-session" })
+        const child = yield* withSession({ title: "child-session", parentID: root.id })
+
+        const sessions = yield* SessionNs.use.list({ roots: true })
+        const ids = sessions.map((session) => session.id)
 
         expect(ids).toContain(root.id)
         expect(ids).not.toContain(child.id)
-      },
-    })
-  })
+      }),
+    { git: true },
+  )
 
-  test("filters by start time", async () => {
-    await Instance.provide({
-      directory: projectRoot,
-      fn: async () => {
-        const session = await Session.create({ title: "new-session" })
-        const futureStart = Date.now() + 86400000
-
-        const sessions = [...Session.list({ start: futureStart })]
+  it.instance(
+    "filters by start time",
+    () =>
+      Effect.gen(function* () {
+        yield* withSession({ title: "new-session" })
+        const sessions = yield* SessionNs.Service.use((session) => session.list({ start: Date.now() + 86400000 }))
         expect(sessions.length).toBe(0)
-      },
-    })
-  })
+      }),
+    { git: true },
+  )
 
-  test("filters by search term", async () => {
-    await Instance.provide({
-      directory: projectRoot,
-      fn: async () => {
-        await Session.create({ title: "unique-search-term-abc" })
-        await Session.create({ title: "other-session-xyz" })
+  it.instance(
+    "filters by search term",
+    () =>
+      Effect.gen(function* () {
+        yield* withSession({ title: "unique-search-term-abc" })
+        yield* withSession({ title: "other-session-xyz" })
 
-        const sessions = [...Session.list({ search: "unique-search" })]
-        const titles = sessions.map((s) => s.title)
+        const sessions = yield* SessionNs.use.list({ search: "unique-search" })
+        const titles = sessions.map((session) => session.title)
 
         expect(titles).toContain("unique-search-term-abc")
         expect(titles).not.toContain("other-session-xyz")
-      },
-    })
-  })
+      }),
+    { git: true },
+  )
 
-  test("respects limit parameter", async () => {
-    await Instance.provide({
-      directory: projectRoot,
-      fn: async () => {
-        await Session.create({ title: "session-1" })
-        await Session.create({ title: "session-2" })
-        await Session.create({ title: "session-3" })
+  it.instance(
+    "respects limit parameter",
+    () =>
+      Effect.gen(function* () {
+        yield* withSession({ title: "session-1" })
+        yield* withSession({ title: "session-2" })
+        yield* withSession({ title: "session-3" })
 
-        const sessions = [...Session.list({ limit: 2 })]
+        const sessions = yield* SessionNs.use.list({ limit: 2 })
         expect(sessions.length).toBe(2)
-      },
-    })
-  })
+      }),
+    { git: true },
+  )
 
-  test("filters sessions by project-relative path", async () => {
-    await using tmp = await tmpdir({ git: true })
-    await mkdir(path.join(tmp.path, "packages", "slopcode", "src"), { recursive: true })
-    await mkdir(path.join(tmp.path, "packages", "app"), { recursive: true })
+  it.instance(
+    "includes metadata in listed sessions",
+    () =>
+      Effect.gen(function* () {
+        const meta = { source: "sdk", trace: { id: "abc" } }
+        const created = yield* withSession({ title: "meta-session", metadata: meta })
 
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const root = await Session.create({ title: "root-path" })
-        const parent = await Instance.provide({
-          directory: path.join(tmp.path, "packages", "slopcode"),
-          fn: async () => Session.create({ title: "parent-path" }),
-        })
-        const current = await Instance.provide({
-          directory: path.join(tmp.path, "packages", "slopcode", "src"),
-          fn: async () => Session.create({ title: "current-path" }),
-        })
-        const sibling = await Instance.provide({
-          directory: path.join(tmp.path, "packages", "app"),
-          fn: async () => Session.create({ title: "sibling-path" }),
-        })
+        const listed = (yield* SessionNs.Service.use((session) => session.list({ search: "meta-session" }))).find(
+          (item) => item.id === created.id,
+        )
 
-        const ids = [
-          ...Session.list({
-            directory: path.join(tmp.path, "packages", "slopcode", "src"),
-            path: "packages/slopcode",
-          }),
-        ].map((session) => session.id)
-
-        expect(ids).toContain(parent.id)
-        expect(ids).toContain(current.id)
-        expect(ids).not.toContain(root.id)
-        expect(ids).not.toContain(sibling.id)
-      },
-    })
-  })
-
-  test("lists all project sessions when scope is project", async () => {
-    await using tmp = await tmpdir({ git: true })
-    await mkdir(path.join(tmp.path, "packages", "slopcode"), { recursive: true })
-    await mkdir(path.join(tmp.path, "packages", "app"), { recursive: true })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const root = await Session.create({ title: "root-project" })
-        const current = await Instance.provide({
-          directory: path.join(tmp.path, "packages", "slopcode"),
-          fn: async () => Session.create({ title: "current-project" }),
-        })
-        const sibling = await Instance.provide({
-          directory: path.join(tmp.path, "packages", "app"),
-          fn: async () => Session.create({ title: "sibling-project" }),
-        })
-
-        const ids = [
-          ...Session.list({
-            directory: path.join(tmp.path, "packages", "slopcode"),
-            scope: "project",
-          }),
-        ].map((session) => session.id)
-
-        expect(ids).toContain(root.id)
-        expect(ids).toContain(current.id)
-        expect(ids).toContain(sibling.id)
-      },
-    })
-  })
-
-  test("filters sessions by workspace", async () => {
-    await using tmp = await tmpdir({ git: true })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const local = await Session.create({ title: "local-workspace" })
-        const workspaceID = Identifier.ascending("workspace")
-        const warped = await Session.create({
-          title: "workspace-only",
-          workspaceID,
-        })
-
-        const localIDs = [...Session.list({ workspaceID: null })].map((session) => session.id)
-        const workspaceIDs = [...Session.list({ workspaceID })].map((session) => session.id)
-
-        expect(localIDs).toContain(local.id)
-        expect(localIDs).not.toContain(warped.id)
-        expect(workspaceIDs).toContain(warped.id)
-        expect(workspaceIDs).not.toContain(local.id)
-      },
-    })
-  })
-
-  test("filters workspace sessions by directory", async () => {
-    await using tmp = await tmpdir({ git: true })
-    await mkdir(path.join(tmp.path, "packages", "slopcode"), { recursive: true })
-    await mkdir(path.join(tmp.path, "packages", "app"), { recursive: true })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const workspaceID = Identifier.ascending("workspace")
-        const current = await Instance.provide({
-          directory: path.join(tmp.path, "packages", "slopcode"),
-          fn: async () => Session.create({ title: "workspace-current", workspaceID }),
-        })
-        const sibling = await Instance.provide({
-          directory: path.join(tmp.path, "packages", "app"),
-          fn: async () => Session.create({ title: "workspace-sibling", workspaceID }),
-        })
-
-        const ids = [
-          ...Session.list({
-            workspaceID,
-            directory: path.join(tmp.path, "packages", "slopcode"),
-          }),
-        ].map((session) => session.id)
-
-        expect(ids).toContain(current.id)
-        expect(ids).not.toContain(sibling.id)
-      },
-    })
-  })
-
-  test("supports cursor pagination", async () => {
-    await using tmp = await tmpdir({ git: true })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const first = await Session.create({ title: "page-one" })
-        await new Promise((resolve) => setTimeout(resolve, 5))
-        const second = await Session.create({ title: "page-two" })
-
-        const page = [...Session.list({ directory: tmp.path, limit: 1 })]
-        expect(page.length).toBe(1)
-        expect(page[0].id).toBe(second.id)
-
-        const next = [...Session.list({ directory: tmp.path, limit: 10, cursor: page[0].time.updated })]
-        const ids = next.map((session) => session.id)
-
-        expect(ids).toContain(first.id)
-        expect(ids).not.toContain(second.id)
-      },
-    })
-  })
+        expect(listed?.metadata).toEqual(meta)
+      }),
+    { git: true },
+  )
 })

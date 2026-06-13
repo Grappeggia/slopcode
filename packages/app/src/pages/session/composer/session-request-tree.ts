@@ -1,12 +1,12 @@
 import type { PermissionRequest, QuestionRequest, Session } from "@slopcode-ai/sdk/v2/client"
 
-function sessionTreeRequests<T>(
+function sessionTreeRequest<T>(
   session: Session[],
   request: Record<string, T[] | undefined>,
   sessionID?: string,
   include: (item: T) => boolean = () => true,
 ) {
-  if (!sessionID) return [] as T[]
+  if (!sessionID) return
 
   const map = session.reduce((acc, item) => {
     if (!item.parentID) return acc
@@ -28,16 +28,9 @@ function sessionTreeRequests<T>(
     }
   }
 
-  return ids.flatMap((id) => request[id]?.filter(include) ?? [])
-}
-
-export function sessionPermissionRequests(
-  session: Session[],
-  request: Record<string, PermissionRequest[] | undefined>,
-  sessionID?: string,
-  include?: (item: PermissionRequest) => boolean,
-) {
-  return sessionTreeRequests(session, request, sessionID, include)
+  const id = ids.find((id) => request[id]?.some(include))
+  if (!id) return
+  return request[id]?.find(include)
 }
 
 export function sessionPermissionRequest(
@@ -46,7 +39,7 @@ export function sessionPermissionRequest(
   sessionID?: string,
   include?: (item: PermissionRequest) => boolean,
 ) {
-  return sessionPermissionRequests(session, request, sessionID, include)[0]
+  return sessionTreeRequest(session, request, sessionID, include)
 }
 
 export function sessionQuestionRequest(
@@ -55,19 +48,5 @@ export function sessionQuestionRequest(
   sessionID?: string,
   include?: (item: QuestionRequest) => boolean,
 ) {
-  return sessionTreeRequests(session, request, sessionID, include)[0]
-}
-
-export function sessionWaiting(input: {
-  session: Session[]
-  permission: Record<string, PermissionRequest[] | undefined>
-  question: Record<string, QuestionRequest[] | undefined>
-  sessionID?: string
-  includePermission?: (item: PermissionRequest) => boolean
-  includeQuestion?: (item: QuestionRequest) => boolean
-}) {
-  return (
-    !!sessionPermissionRequest(input.session, input.permission, input.sessionID, input.includePermission) ||
-    !!sessionQuestionRequest(input.session, input.question, input.sessionID, input.includeQuestion)
-  )
+  return sessionTreeRequest(session, request, sessionID, include)
 }

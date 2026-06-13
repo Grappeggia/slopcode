@@ -39,8 +39,20 @@ export const dict = {
 
   "ui.sessionTurn.retry.retrying": "ponawianie",
   "ui.sessionTurn.retry.inSeconds": "za {{seconds}}s",
+  "ui.sessionTurn.retry.attempt": "próba #{{attempt}}",
+  "ui.sessionTurn.retry.attemptLine": "{{line}} - próba #{{attempt}}",
+  "ui.sessionTurn.retry.geminiHot": "gemini jest teraz mocno przeciążony",
   "ui.sessionTurn.error.freeUsageExceeded": "Przekroczono limit darmowego użytkowania",
   "ui.sessionTurn.error.addCredits": "Dodaj kredyty",
+
+  "dialog.usageExceeded.freeTier.title": "Osiągnięto limit darmowy",
+  "dialog.usageExceeded.freeTier.description":
+    "Subskrybuj SlopCode Go, aby uzyskać niezawodny dostęp do najlepszych modeli open source, od $5/miesiąc.",
+  "dialog.usageExceeded.freeTier.actionLabel": "Subskrybuj",
+  "dialog.usageExceeded.accountRateLimit.title": "Osiągnięto limit Go",
+  "dialog.usageExceeded.accountRateLimit.description":
+    "Osiągnięto limit użycia. Aby kontynuować korzystanie z tego modelu teraz, włącz użycie z dostępnego salda",
+  "dialog.usageExceeded.accountRateLimit.actionLabel": "Otwórz ustawienia",
 
   "ui.sessionTurn.status.delegating": "Delegowanie pracy",
   "ui.sessionTurn.status.planning": "Planowanie kolejnych kroków",
@@ -56,6 +68,7 @@ export const dict = {
   "ui.sessionTurn.status.consideringNextSteps": "Rozważanie kolejnych kroków",
 
   "ui.messagePart.questions.dismissed": "Pytania odrzucone",
+  "ui.messagePart.compaction": "Sesja skompaktowana",
   "ui.messagePart.context.read.one": "{{count}} odczyt",
   "ui.messagePart.context.read.other": "{{count}} odczyty",
   "ui.messagePart.context.search.one": "{{count}} wyszukiwanie",
@@ -89,12 +102,14 @@ export const dict = {
   "ui.tool.glob": "Glob",
   "ui.tool.grep": "Grep",
   "ui.tool.webfetch": "Pobieranie sieciowe",
+  "ui.tool.websearch": "Wyszukiwanie w sieci",
   "ui.tool.shell": "Terminal",
   "ui.tool.patch": "Patch",
   "ui.tool.todos": "Zadania",
   "ui.tool.todos.read": "Czytaj zadania",
   "ui.tool.questions": "Pytania",
   "ui.tool.agent": "Agent {{type}}",
+  "ui.tool.agent.default": "Agent",
 
   "ui.common.file.one": "plik",
   "ui.common.file.other": "pliki",
@@ -118,9 +133,12 @@ export const dict = {
   "ui.message.collapse": "Zwiń wiadomość",
   "ui.message.copy": "Kopiuj",
   "ui.message.copyMessage": "Kopiuj wiadomość",
+  "ui.message.forkMessage": "Rozwidlij do nowej sesji",
+  "ui.message.revertMessage": "Zresetuj do tego punktu",
   "ui.message.copyResponse": "Kopiuj odpowiedź",
   "ui.message.copied": "Skopiowano!",
   "ui.message.interrupted": "Przerwano",
+  "ui.message.queued": "W kolejce",
   "ui.message.attachment.alt": "załącznik",
 
   "ui.patch.action.deleted": "Usunięto",
@@ -134,4 +152,16 @@ export const dict = {
   "ui.question.multiHint": "Zaznacz wszystkie pasujące",
   "ui.question.singleHint": "Wybierz jedną odpowiedź",
   "ui.question.custom.placeholder": "Wpisz swoją odpowiedź...",
+
+  "ui.fileSearch.placeholder": "Szukaj",
+  "ui.fileSearch.previousMatch": "Poprzednie",
+  "ui.fileSearch.nextMatch": "Następne",
+  "ui.fileSearch.close": "Zamknij wyszukiwanie",
+  "ui.tool.task": "Zadanie",
+  "ui.tool.skill": "Umiejętność",
+  "ui.basicTool.called": "Wywołano `{{tool}}`",
+  "ui.toolErrorCard.failed": "Błąd",
+  "ui.toolErrorCard.copyError": "Kopiuj błąd",
+  "ui.message.duration.seconds": "{{count}}s",
+  "ui.message.duration.minutesSeconds": "{{minutes}}m {{seconds}}s",
 }

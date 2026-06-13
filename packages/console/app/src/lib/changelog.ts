@@ -4,10 +4,8 @@ type Release = {
   tag_name: string
   name: string
   body: string
-  published_at: string | null
+  published_at: string
   html_url: string
-  draft: boolean
-  prerelease: boolean
 }
 
 export type HighlightMedia =
@@ -41,7 +39,7 @@ export type ChangelogData = {
 }
 
 export async function loadChangelog(): Promise<ChangelogData> {
-  const response = await fetch("https://api.github.com/repos/teamslop/slopcode/releases?per_page=20", {
+  const response = await fetch("https://api.github.com/repos/anomalyco/slopcode/releases?per_page=20", {
     headers: {
       Accept: "application/vnd.github.v3+json",
       "User-Agent": "SlopCode-Console",
@@ -58,23 +56,17 @@ export async function loadChangelog(): Promise<ChangelogData> {
   const data = await response.json().catch(() => undefined)
   if (!Array.isArray(data)) return { ok: false, releases: [] }
 
-  const releases = (data as Release[])
-    .filter((release) => !release.draft)
-    .filter((release) => !release.prerelease)
-    .filter((release): release is Release & { published_at: string } => typeof release.published_at === "string")
-    .map((release) => {
-      const parsed = parseMarkdown(release.body || "")
-      return {
-        tag: release.tag_name,
-        name: release.name,
-        date: release.published_at,
-        url: release.html_url,
-        highlights: parsed.highlights,
-        sections: parsed.sections,
-      }
-    })
-    .filter((release) => release.highlights.length > 0 || release.sections.length > 0)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+  const releases = (data as Release[]).map((release) => {
+    const parsed = parseMarkdown(release.body || "")
+    return {
+      tag: release.tag_name,
+      name: release.name,
+      date: release.published_at,
+      url: release.html_url,
+      highlights: parsed.highlights,
+      sections: parsed.sections,
+    }
+  })
 
   return { ok: true, releases }
 }

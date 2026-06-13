@@ -1,5 +1,5 @@
 import { AwsClient } from "aws4fetch"
-import { lazy } from "@slopcode-ai/util/lazy"
+import { lazy } from "@slopcode-ai/core/util/lazy"
 
 export namespace Storage {
   export interface Adapter {

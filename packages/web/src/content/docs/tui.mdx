@@ -27,56 +27,6 @@ Give me a quick summary of the codebase.
 
 ---
 
-## Navigate
-
-The main TUI adds a session strip, draft tabs, an open-files sidebar, and a file explorer so you can move between active threads without leaving the terminal.
-
-Use the sidebar to jump between files, or keep drafts open while another session is still running.
-
----
-
-## Edit
-
-SlopCode includes an embedded editor with bundled Neovim support for focused edits inside the TUI.
-
-Use it when you want to inspect or patch files without switching to a separate terminal pane.
-
----
-
-## Queue
-
-Follow-up prompts are queued by default, so one run finishes before the next one starts.
-
-You can pause the active item, resume it ahead of queued work, and remove queued prompts when priorities change.
-
----
-
-## Suggest
-
-Prompt input supports model-powered autocomplete with ghost text.
-
-Suggestions stay inline, and history mode hides them when you switch to timeline navigation.
-
-Use `/models-completion` to choose a different model for prompt autocomplete. This does not change the active chat model; it only changes the fast model SlopCode uses for inline suggestions.
-
----
-
-## Trust edits
-
-The TUI can auto-accept edit permission prompts for the current session. This keeps focused patch series moving while still leaving command and external-directory approvals under your normal permission rules.
-
-Use the `permission_auto_accept_toggle` keybind when you want to turn this edit-only shortcut on or off.
-
----
-
-## Track
-
-The prompt bar shows the current phase, queue state, and token pressure while a run is active.
-
-This makes it easier to notice when a long task is still planning, executing, or nearing the context limit.
-
----
-
 ## File references
 
 You can reference files in your messages using `@`. This does a fuzzy file search in the current working directory.
@@ -91,6 +41,12 @@ How is auth handled in @packages/functions/src/api/index.ts?
 
 The content of the file is added to the conversation automatically.
 
+Configured [references](/docs/references) also appear in `@` autocomplete. Type `@alias` to add the reference root as context, or type `@alias/` to autocomplete files inside that reference.
+
+```text "@docs/README.md"
+Compare our setup with @docs/README.md
+```
+
 ---
 
 ## Bash commands
@@ -103,8 +59,6 @@ Start a message with `!` to run a shell command.
 
 The output of the command is added to the conversation as a tool result.
 
-Use `/shells` to pick the default shell SlopCode should use for `!` commands, PTY sessions, and the `bash` tool. The selected shell is saved as `shell.program` in your global config.
-
 ---
 
 ## Commands
@@ -115,7 +69,7 @@ When using the SlopCode TUI, you can type `/` followed by a command name to quic
 /help
 ```
 
-Most commands also have keybind using `ctrl+x` as the leader key, where `ctrl+x` is the default leader key. [Learn more](/docs/keybinds).
+Most commands also have keyboard shortcuts using `ctrl+x` as the default leader key. [Learn more](/docs/keybinds).
 
 Here are all available slash commands:
 
@@ -140,6 +94,16 @@ Compact the current session. _Alias_: `/summarize`
 ```
 
 **Keybind:** `ctrl+x c`
+
+---
+
+### details
+
+Toggle tool execution details.
+
+```bash frame="none"
+/details
+```
 
 ---
 
@@ -187,53 +151,27 @@ Show the help dialog.
 /help
 ```
 
-**Keybind:** `ctrl+x h`
-
----
-
-### history
-
-Toggle history mode for session navigation.
-
-```bash frame="none"
-/history
-```
-
-**Keybind:** `history_mode_toggle` defaults to `ctrl+y`
-
 ---
 
 ### init
 
-Create or update `AGENTS.md` file. [Learn more](/docs/rules).
+Guided setup for creating or updating `AGENTS.md`. [Learn more](/docs/rules).
 
 ```bash frame="none"
 /init
 ```
 
-**Keybind:** `ctrl+x i`
-
 ---
 
 ### models
 
-List available models. The model dialog lets you favorite models, jump to provider selection, and toggle between the latest filtered list and all available models.
+List available models.
 
 ```bash frame="none"
 /models
 ```
 
 **Keybind:** `ctrl+x m`
-
----
-
-### models-completion
-
-Choose model overrides for prompt autocomplete. Use this when you want chat responses on a large model but inline suggestions from a faster or cheaper model.
-
-```bash frame="none"
-/models-completion
-```
 
 ---
 
@@ -280,16 +218,6 @@ List and switch between sessions. _Aliases_: `/resume`, `/continue`
 
 ---
 
-### shells
-
-Choose the shell executable used by shell mode, PTY sessions, and the `bash` tool. _Alias_: `/shell`
-
-```bash frame="none"
-/shells
-```
-
----
-
 ### share
 
 Share current session. [Learn more](/docs/share).
@@ -297,8 +225,6 @@ Share current session. [Learn more](/docs/share).
 ```bash frame="none"
 /share
 ```
-
-**Keybind:** `ctrl+x s`
 
 ---
 
@@ -354,30 +280,6 @@ Unshare current session. [Learn more](/docs/share#un-sharing).
 ```bash frame="none"
 /unshare
 ```
-
----
-
-## History mode
-
-Use history mode when you want to navigate existing session messages and traces without moving your hands to the mouse.
-
-While history mode is active, `up` and `down` move between prompts, `left` and `right` move between traces, and `space` runs the context action.
-
-Pressing `space` expands or collapses tool output, and opens a child task session when the selected item supports it.
-
-History mode also lets you inspect prompts, traces, tool output, and visible reasoning blocks from one place.
-
-Use `history_mode_toggle` (defaults to `ctrl+y`) to exit history mode and return to normal edit mode.
-
-Unlike normal prompt input history (`history_previous` and `history_next`), history mode navigates rendered session content instead of cycling through text in the input box.
-
----
-
-## Move
-
-Workspace switching lets the TUI retarget the current session to another folder without closing the app.
-
-Warping is useful when you need the same conversation context in a nearby repo or sibling package.
 
 ---
 
@@ -455,38 +357,65 @@ You can customize TUI behavior through `tui.json` (or `tui.jsonc`).
 
 ```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/tui.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "theme": "slopcode",
+  "leader_timeout": 2000,
   "keybinds": {
-    "leader": "ctrl+x"
+    "leader": "ctrl+x",
+    "command_list": "ctrl+p"
   },
   "scroll_speed": 3,
   "scroll_acceleration": {
-    "enabled": true
+    "enabled": false
   },
   "diff_style": "auto",
-  "mouse": false
+  "mouse": true,
+  "attention": {
+    "enabled": true,
+    "notifications": true,
+    "sound": true,
+    "volume": 0.4,
+    "sound_pack": "slopcode.default",
+    "sounds": {
+      "error": "./sounds/error.mp3"
+    }
+  }
 }
 ```
 
 This is separate from `slopcode.json`, which configures server/runtime behavior.
 
+`keybinds` is merged with built-in defaults, so you only need to configure the shortcuts you want to change.
+
 ### Options
 
 - `theme` - Sets your UI theme. [Learn more](/docs/themes).
 - `keybinds` - Customizes keyboard shortcuts. [Learn more](/docs/keybinds).
+- `leader_timeout` - Controls how long SlopCode waits after the leader key. Defaults to `2000`.
 - `scroll_acceleration.enabled` - Enable macOS-style scroll acceleration for smooth, natural scrolling. When enabled, scroll speed increases with rapid scrolling gestures and stays precise for slower movements. **This setting takes precedence over `scroll_speed` and overrides it when enabled.**
 - `scroll_speed` - Controls how fast the TUI scrolls when using scroll commands (minimum: `0.001`, supports decimal values). Defaults to `3`. **Note: This is ignored if `scroll_acceleration.enabled` is set to `true`.**
 - `diff_style` - Controls diff rendering. `"auto"` adapts to terminal width, `"stacked"` always shows a single-column layout.
-- `mouse` - Enables mouse capture. Set it to `false` to preserve native terminal mouse behavior like selection and scrollback.
+- `mouse` - Enable or disable mouse capture in the TUI (default: `true`). When disabled, the terminal's native mouse selection/scrolling behavior is preserved.
+- `attention` - Configures TUI desktop notifications and sounds. Disabled by default.
 
 Use `SLOPCODE_TUI_CONFIG` to load a custom TUI config path.
+
+### Attention
+
+The TUI can request attention for questions, permissions, session errors, and completed sessions. Enable it with `attention.enabled`; built-in events play sounds when triggered, and non-subagent events request desktop notifications only when the terminal is blurred.
+
+- `enabled` - Enable all attention notifications and sounds. Defaults to `false`.
+- `notifications` - Allow terminal-mediated desktop notifications when attention is enabled. Defaults to `true`.
+- `sound` - Allow attention sounds when attention is enabled. Defaults to `true`.
+- `volume` - Default sound volume from `0` to `1`. Defaults to `0.4`.
+- `sound_pack` - Sound pack ID to use. Defaults to `slopcode.default`.
+- `sounds` - Override sound files for `default`, `question`, `permission`, `error`, `done`, or `subagent_done`. Paths can be absolute, `file://` URLs, or relative to `tui.json`.
 
 ---
 
 ## Customization
 
-You can customize various aspects of the TUI view using the command palette (`ctrl+x h` or `/help`). These settings persist across restarts.
+You can customize various aspects of the TUI view using the command palette (`ctrl+p`). These settings persist across restarts.
 
 ---
 

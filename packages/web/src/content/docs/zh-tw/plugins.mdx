@@ -32,7 +32,7 @@ description: 編寫自己的外掛來擴展 SlopCode。
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": ["slopcode-helicone-session", "slopcode-wakatime", "@my-org/custom-plugin"]
 }
 ```
@@ -307,6 +307,10 @@ export const CustomToolsPlugin: Plugin = async (ctx) => {
 
 您的自訂工具將與內建工具一起在 SlopCode 中可用。
 
+:::note
+如果外掛工具使用與內建工具相同的名稱，則外掛工具具有優先權。
+:::
+
 ---
 
 ### 日誌記錄
@@ -326,7 +330,7 @@ export const MyPlugin = async ({ client }) => {
 }
 ```
 
-日誌層級：`debug`、`info`、`warn`、`error`。詳情請參閱 [SDK 文件](https://slopcode.dev/docs/sdk)。
+日誌層級：`debug`、`info`、`warn`、`error`。詳情請參閱 [SDK 文件](https://slopcode.ai/docs/sdk)。
 
 ---
 

@@ -13,6 +13,7 @@
 @import "../components/basic-tool.css" layer(components);
 @import "../components/button.css" layer(components);
 @import "../components/card.css" layer(components);
+@import "../components/tool-error-card.css" layer(components);
 @import "../components/checkbox.css" layer(components);
 @import "../components/file.css" layer(components);
 @import "../components/collapsible.css" layer(components);
@@ -46,9 +47,12 @@
 @import "../components/scroll-view.css" layer(components);
 @import "../components/session-review.css" layer(components);
 @import "../components/session-turn.css" layer(components);
+@import "../components/shell-submessage.css" layer(components);
 @import "../components/sticky-accordion-header.css" layer(components);
 @import "../components/tabs.css" layer(components);
 @import "../components/tag.css" layer(components);
+@import "../components/text-reveal.css" layer(components);
+@import "../components/text-strikethrough.css" layer(components);
 @import "../components/text-shimmer.css" layer(components);
 @import "../components/tool-count-label.css" layer(components);
 @import "../components/tool-count-summary.css" layer(components);

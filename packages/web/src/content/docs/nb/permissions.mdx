@@ -25,7 +25,7 @@ Du kan angi tillatelser globalt (med `*`), og overstyre spesifikke verktøy.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "*": "ask",
     "bash": "allow",
@@ -38,7 +38,7 @@ Du kan også angi alle tillatelser samtidig:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": "allow"
 }
 ```
@@ -51,7 +51,7 @@ For de fleste tillatelser kan du bruke et objekt til å bruke forskjellige handl
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "bash": {
       "*": "ask",
@@ -88,7 +88,7 @@ Du kan bruke `~` eller `$HOME` i starten av et mønster for å referere til hjem
 
 ### Eksterne kataloger
 
-Bruk `external_directory` for å tillate verktøyanrop som berører stier utenfor arbeidskatalogen der SlopCode ble startet. Dette gjelder alle verktøy som tar en bane som input (for eksempel `read`, `edit`, `list`, `glob`, `grep` og mange `bash`-kommandoer).
+Bruk `external_directory` for å tillate verktøyanrop som berører stier utenfor arbeidskatalogen der SlopCode ble startet. Dette gjelder alle verktøy som tar en bane som input (for eksempel `read`, `edit`, `glob`, `grep` og mange `bash`-kommandoer).
 
 Hjemmeutvidelse (som `~/...`) påvirker bare hvordan et mønster skrives. Den gjør ikke en ekstern bane til en del av det gjeldende arbeidsområdet, så stier utenfor arbeidskatalogen må fortsatt tillates via `external_directory`.
 
@@ -96,7 +96,7 @@ For eksempel gir dette tilgang til alt under `~/projects/personal/`:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "external_directory": {
       "~/projects/personal/**": "allow"
@@ -109,7 +109,7 @@ Enhver katalog som er tillatt her, arver de samme standardinnstillingene som gje
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "external_directory": {
       "~/projects/personal/**": "allow"
@@ -130,17 +130,15 @@ Hold listen fokusert på klarerte baner, og lag ekstra tillat eller avslå regle
 SlopCode-tillatelser tastes inn etter verktøynavn, pluss et par sikkerhetsvakter:
 
 - `read` — lesing av en fil (tilsvarer filbanen)
-- `edit` — alle filendringer (dekker `edit`, `write`, `patch`, `multiedit`)
+- `edit` — alle filendringer (dekker `edit`, `write`, `patch`)
 - `glob` — fil-globing (tilsvarer glob-mønsteret)
 - `grep` — innholdssøk (samsvarer med regex-mønsteret)
-- `list` — viser filer i en katalog (tilsvarer katalogbanen)
 - `bash` — kjører skallkommandoer (matcher analyserte kommandoer som `git status --porcelain`)
 - `task` — start av subagenter (tilsvarer subagenttypen)
 - `skill` — laster en ferdighet (tilsvarer navnet på ferdigheten)
 - `lsp` — kjører LSP-spørringer (for øyeblikket ikke-granulære)
-- `todoread`, `todowrite` — lesing/oppdatering av gjøremålslisten
 - `webfetch` — henter en URL (tilsvarer URL)
-- `websearch`, `codesearch` - nett-/kodesøk (samsvarer med søket)
+- `websearch` - nettsøk (samsvarer med søket)
 - `external_directory` - utløses når et verktøy berører stier utenfor prosjektets arbeidskatalog
 - `doom_loop` — utløses når det samme verktøykallet gjentas 3 ganger med identisk inndata
 
@@ -191,7 +189,7 @@ Se avsnittet [Granular Rules (Object Syntax)](#granular-rules-object-syntax) ove
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "bash": {
       "*": "ask",

@@ -3,11 +3,11 @@ title: Tastenkombinationen
 description: Passen Sie Ihre Tastenkombinationen an.
 ---
 
-SlopCode verfügt über eine Liste von Tastenkombinationen, die Sie über die SlopCode-Konfiguration anpassen können.
+SlopCode verfügt über eine Liste von Tastenkombinationen, die Sie über `tui.json` anpassen können.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {
     "leader": "ctrl+x",
     "app_exit": "ctrl+c,ctrl+d,<leader>q",
@@ -28,6 +28,7 @@ SlopCode verfügt über eine Liste von Tastenkombinationen, die Sie über die Sl
     "session_unshare": "none",
     "session_interrupt": "escape",
     "session_compact": "<leader>c",
+    "session_child_first": "<leader>down",
     "session_child_cycle": "<leader>right",
     "session_child_cycle_reverse": "<leader>left",
     "session_parent": "<leader>up",
@@ -52,6 +53,7 @@ SlopCode verfügt über eine Liste von Tastenkombinationen, die Sie über die Sl
     "model_cycle_favorite": "none",
     "model_cycle_favorite_reverse": "none",
     "variant_cycle": "ctrl+t",
+    "variant_list": "none",
     "command_list": "ctrl+p",
     "agent_list": "<leader>a",
     "agent_cycle": "tab",
@@ -117,39 +119,16 @@ Sie müssen für Ihre Keybinds keinen Leader Key verwenden, wir empfehlen jedoch
 
 ## Keybind deaktivieren
 
-Sie können eine Keybind deaktivieren, indem Sie den Schlüssel mit dem Wert „none“ zu Ihrer Konfiguration hinzufügen.
+Sie können eine Keybind deaktivieren, indem Sie den Schlüssel mit dem Wert „none“ zu `tui.json` hinzufügen.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {
     "session_compact": "none"
   }
 }
 ```
-
----
-
-## History mode keybinds
-
-Use `history_mode_toggle` to switch between edit mode and history mode.
-
-Use `history_previous` and `history_next` to move through history-mode prompt entries.
-
-```json title="tui.json"
-{
-  "$schema": "https://slopcode.dev/tui.json",
-  "keybinds": {
-    "history_mode_toggle": "ctrl+y",
-    "history_previous": "pageup",
-    "history_next": "pagedown"
-  }
-}
-```
-
-:::tip
-By default, `history_mode_toggle` is `ctrl+y`.
-:::
 
 ---
 

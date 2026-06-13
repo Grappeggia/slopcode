@@ -57,15 +57,15 @@ Se l'app desktop va in crash all'avvio, si blocca o si comporta in modo strano, 
 
 Apri il tuo file di configurazione globale e cerca la chiave `plugin`.
 
-- **macOS/Linux**: `~/.config/slopcode/slopcode.jsonc` (or `~/.config/slopcode/slopcode.json`)
-- **macOS/Linux** (older installs): `~/.local/share/slopcode/slopcode.jsonc`
+- **macOS/Linux**: `~/.config/slopcode/slopcode.jsonc` (o `~/.config/slopcode/slopcode.json`)
+- **macOS/Linux** (installazioni vecchie): `~/.local/share/slopcode/slopcode.jsonc`
 - **Windows**: premi `WIN+R` e incolla `%USERPROFILE%\.config\slopcode\slopcode.jsonc`
 
 Se hai plugin configurati, disabilitali temporaneamente rimuovendo la chiave o impostandola a un array vuoto:
 
 ```jsonc
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": [],
 }
 ```
@@ -88,14 +88,14 @@ Se l'app ricomincia a funzionare, riabilita i plugin uno alla volta per capire q
 
 Se disabilitare i plugin non aiuta (o l'installazione di un plugin e bloccata), svuota la cache in modo che SlopCode possa ricostruirla.
 
-1. Quit SlopCode Desktop completely.
+1. Chiudi completamente SlopCode Desktop.
 2. Elimina la directory della cache:
 
 - **macOS**: Finder -> `Cmd+Shift+G` -> paste `~/.cache/slopcode`
 - **Linux**: elimina `~/.cache/slopcode` (oppure esegui `rm -rf ~/.cache/slopcode`)
 - **Windows**: premi `WIN+R` e incolla `%USERPROFILE%\.cache\slopcode`
 
-3. Restart SlopCode Desktop.
+3. Riavvia SlopCode Desktop.
 
 ---
 
@@ -155,7 +155,7 @@ SlopCode Desktop mostra le notifiche di sistema solo quando:
 
 Se l'app non si avvia e non riesci a ripulire le impostazioni dall'interfaccia, reimposta lo stato salvato dell'app desktop.
 
-1. Quit SlopCode Desktop.
+1. Chiudi SlopCode Desktop.
 2. Trova ed elimina questi file (si trovano nella directory dati dell'app SlopCode Desktop):
 
 - `slopcode.settings.dat` (desktop default server URL)
@@ -177,9 +177,15 @@ Se riscontri problemi con SlopCode:
 
    Il modo migliore per segnalare bug o richiedere funzionalita e tramite il nostro repository GitHub:
 
-   [**github.com/teamslop/slopcode/issues**](http://github.com/teamslop/slopcode/issues)
+   [**github.com/teamslop/slopcode/issues**](https://github.com/teamslop/slopcode/issues)
 
    Prima di creare una nuova issue, cerca tra quelle esistenti per vedere se il problema e gia stato segnalato.
+
+2. **Unisciti al nostro Discord**
+
+   Per supporto in tempo reale e discussioni con la community, unisciti al nostro server Discord:
+
+   [**slopcode.ai/discord**](https://slopcode.ai/discord)
 
 ---
 

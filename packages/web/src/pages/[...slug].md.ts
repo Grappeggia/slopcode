@@ -1,11 +1,6 @@
 import type { APIRoute } from "astro"
 import { getCollection } from "astro:content"
 
-export const getStaticPaths = async () =>
-  (await getCollection("docs")).map((doc) => ({
-    params: { slug: doc.id },
-  }))
-
 function notFoundText(locals: unknown) {
   if (typeof locals !== "object" || locals === null || !("t" in locals)) {
     return "share.not_found"

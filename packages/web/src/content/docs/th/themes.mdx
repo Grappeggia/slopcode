@@ -61,11 +61,11 @@ SlopCode มาพร้อมกับธีมในตัวหลายธ�
 
 ## การใช้ธีม
 
-คุณสามารถเลือกธีมได้โดยเปิดการเลือกธีมขึ้นมาด้วยคำสั่ง `/themes` หรือคุณสามารถระบุได้ใน [config](/docs/config)
+คุณสามารถเลือกธีมได้โดยเปิดการเลือกธีมขึ้นมาด้วยคำสั่ง `/theme` หรือคุณสามารถระบุได้ใน `tui.json`
 
-```json title="slopcode.json" {3}
+```json title="tui.json" {3}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "theme": "tokyonight"
 }
 ```
@@ -144,7 +144,7 @@ vim .slopcode/themes/my-theme.json
 
 ```json title="my-theme.json"
 {
-  "$schema": "https://slopcode.dev/theme.json",
+  "$schema": "https://slopcode.ai/theme.json",
   "defs": {
     "nord0": "#2E3440",
     "nord1": "#3B4252",

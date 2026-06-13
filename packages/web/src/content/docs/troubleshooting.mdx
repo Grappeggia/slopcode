@@ -37,6 +37,20 @@ This directory contains:
 
 ---
 
+## Uninstall
+
+To uninstall the SlopCode CLI and remove its related files, run:
+
+```bash
+slopcode uninstall
+```
+
+The command shows what will be removed and asks for confirmation. See the [CLI reference](/docs/cli#uninstall) for options to keep your configuration or application data.
+
+To remove SlopCode Desktop, uninstall the application through your operating system's app management tools.
+
+---
+
 ## Desktop app
 
 SlopCode Desktop runs a local SlopCode server (the `slopcode-cli` sidecar) in the background. Most issues are caused by a misbehaving plugin, a corrupted cache, or a bad server setting.
@@ -58,15 +72,14 @@ If the desktop app is crashing on launch, hanging, or behaving strangely, start 
 Open your global config file and look for a `plugin` key.
 
 - **macOS/Linux**: `~/.config/slopcode/slopcode.jsonc` (or `~/.config/slopcode/slopcode.json`)
-- **macOS/Linux** (legacy): `~/.config/opencode/opencode.jsonc` (or `~/.config/opencode/opencode.json`)
-- **macOS/Linux** (older installs): `~/.local/share/opencode/opencode.jsonc`
-- **Windows**: Press `WIN+R` and paste `%USERPROFILE%\.config\slopcode\slopcode.jsonc` (legacy path `%USERPROFILE%\.config\opencode\opencode.jsonc` is also supported)
+- **macOS/Linux** (older installs): `~/.local/share/slopcode/slopcode.jsonc`
+- **Windows**: Press `WIN+R` and paste `%USERPROFILE%\.config\slopcode\slopcode.jsonc`
 
 If you have plugins configured, temporarily disable them by removing the key or setting it to an empty array:
 
 ```jsonc
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": [],
 }
 ```
@@ -76,10 +89,10 @@ If you have plugins configured, temporarily disable them by removing the key or 
 SlopCode can also load local plugins from disk. Temporarily move these out of the way (or rename the folder) and restart the desktop app:
 
 - **Global plugins**
-  - **macOS/Linux**: `~/.config/slopcode/plugins/` (legacy `~/.config/opencode/plugins/`)
-  - **Windows**: Press `WIN+R` and paste `%USERPROFILE%\.config\slopcode\plugins` (legacy `%USERPROFILE%\.config\opencode\plugins`)
+  - **macOS/Linux**: `~/.config/slopcode/plugins/`
+  - **Windows**: Press `WIN+R` and paste `%USERPROFILE%\.config\slopcode\plugins`
 - **Project plugins** (only if you use per-project config)
-  - `<your-project>/.slopcode/plugins/` (legacy `<your-project>/.opencode/plugins/`)
+  - `<your-project>/.slopcode/plugins/`
 
 If the app starts working again, re-enable plugins one at a time to find which one is causing the issue.
 
@@ -112,7 +125,7 @@ From the Home screen, click the server name (with the status dot) to open the Se
 
 #### Remove `server.port` / `server.hostname` from your config
 
-If your `slopcode.json(c)` (or legacy `opencode.json(c)`) contains a `server` section, temporarily remove it and restart the desktop app.
+If your `slopcode.json(c)` contains a `server` section, temporarily remove it and restart the desktop app.
 
 #### Check environment variables
 
@@ -178,9 +191,15 @@ If you're experiencing issues with SlopCode:
 
    The best way to report bugs or request features is through our GitHub repository:
 
-   [**github.com/teamslop/slopcode/issues**](http://github.com/teamslop/slopcode/issues)
+   [**github.com/teamslop/slopcode/issues**](https://github.com/teamslop/slopcode/issues)
 
    Before creating a new issue, search existing issues to see if your problem has already been reported.
+
+2. **Join our Discord**
+
+   For real-time help and community discussion, join our Discord server:
+
+   [**slopcode.ai/discord**](https://slopcode.ai/discord)
 
 ---
 

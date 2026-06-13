@@ -28,7 +28,7 @@ Navedite npm pakete u vašoj konfiguracijskoj datoteci.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": ["slopcode-helicone-session", "slopcode-wakatime", "@my-org/custom-plugin"]
 }
 ```
@@ -225,7 +225,7 @@ export const NotificationPlugin = async ({ project, client, $, directory, worktr
 
 Koristimo `osascript` za pokretanje AppleScript-a na macOS-u. Ovdje ga koristimo za slanje obavještenja.
 :::note
-Ako koristite desktop aplikaciju SlopCode, ona može automatski slati sistemske obavijesti kada je odgovor spreman ili kada dođe do greške u sesiji.
+Ako alat dodatka koristi isto ime kao ugrađeni alat, alat dodatka ima prednost.
 :::
 
 ---
@@ -316,7 +316,7 @@ export const MyPlugin = async ({ client }) => {
 }
 ```
 
-Nivoi su: `debug`, `info`, `warn`, `error`. Pogledajte [SDK dokumentaciju](https://slopcode.dev/docs/sdk) za detalje.
+Nivoi su: `debug`, `info`, `warn`, `error`. Pogledajte [SDK dokumentaciju](https://slopcode.ai/docs/sdk) za detalje.
 
 ### Kuke za sažimanje
 

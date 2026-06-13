@@ -35,13 +35,13 @@ SlopCode kommer med to innebygde primære agenter, **Build** og **Plan**. Vi ser
 
 Underagenter er spesialiserte assistenter som primære agenter kan påkalle for spesifikke oppgaver. Du kan også starte dem manuelt ved å **@ nevne** dem i meldingene dine.
 
-SlopCode kommer med to innebygde underagenter, **General** og **Explore**. Vi skal se på dette nedenfor.
+SlopCode kommer med tre innebygde underagenter, **General**, **Explore** og **Scout**. Vi skal se på dette nedenfor.
 
 ---
 
 ## Innebygd
 
-SlopCode kommer med to innebygde primære agenter og to innebygde underagenter.
+SlopCode kommer med to innebygde primære agenter og tre innebygde underagenter.
 
 ---
 
@@ -80,6 +80,14 @@ En generell agent for å undersøke komplekse spørsmål og utføre flertrinnsop
 _Modus_: `subagent`
 
 En rask, skrivebeskyttet agent for å utforske kodebaser. Kan ikke endre filer. Bruk dette når du raskt trenger å finne filer etter mønstre, søke i kode etter nøkkelord eller svare på spørsmål om kodebasen.
+
+---
+
+### Bruk av Scout
+
+_Modus_: `subagent`
+
+En skrivebeskyttet agent for ekstern dokumentasjon og forskning på avhengigheter. Bruk denne når du trenger å klone et avhengighetsrepo inn i SlopCode sin administrerte cache, inspisere kildekoden til et bibliotek eller kryssjekke lokal kode mot upstream-implementasjoner uten å endre arbeidsområdet ditt.
 
 ---
 
@@ -139,7 +147,7 @@ Konfigurer agenter i konfigurasjonsfilen `slopcode.json`:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "mode": "primary",
@@ -368,7 +376,7 @@ Kontroller hvilke verktøy som er tilgjengelige i denne agenten med `tools`-konf
 
 ```json title="slopcode.json" {3-6,9-12}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "tools": {
     "write": true,
     "bash": true
@@ -392,7 +400,7 @@ Du kan også bruke jokertegn for å kontrollere flere verktøy samtidig. For eks
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "readonly": {
       "tools": {
@@ -419,7 +427,7 @@ Du kan konfigurere tillatelser for å administrere hvilke handlinger en agent ka
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "deny"
   }
@@ -430,7 +438,7 @@ Du kan overstyre disse tillatelsene per agent.
 
 ```json title="slopcode.json" {3-5,8-10}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "deny"
   },
@@ -467,7 +475,7 @@ Du kan angi tillatelser for spesifikke bash-kommandoer.
 
 ```json title="slopcode.json" {7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -485,7 +493,7 @@ Dette kan ta et globmønster.
 
 ```json title="slopcode.json" {7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -503,7 +511,7 @@ Siden den siste samsvarsregelen har forrang, setter du jokertegnet `*` først og
 
 ```json title="slopcode.json" {8}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -696,7 +704,7 @@ Her er noen vanlige bruksområder for forskjellige agenter.
 Her er noen eksempler på agenter du kan finne nyttige.
 
 :::tip
-Har du en agent du vil dele? [Send inn en PR](http://github.com/teamslop/slopcode).
+Har du en agent du vil dele? [Send inn en PR](https://github.com/teamslop/slopcode).
 :::
 
 ---

@@ -31,7 +31,7 @@ Da biste koristili SlopCode u svom terminalu, trebat će vam:
 Najlakši način za instaliranje SlopCode je putem instalacijske skripte.
 
 ```bash
-curl -fsSL https://slopcode.dev/install | bash
+curl -fsSL https://slopcode.ai/install | bash
 ```
 
 Također ga možete instalirati pomoću sljedećih naredbi:
@@ -42,28 +42,28 @@ Također ga možete instalirati pomoću sljedećih naredbi:
 
       <TabItem label="npm">
       ```bash
-      npm install -g slopcode
+      npm install -g slopcode-ai
       ```
 
           </TabItem>
 
         <TabItem label="Bun">
         ```bash
-        bun install -g slopcode
+        bun install -g slopcode-ai
         ```
 
           </TabItem>
 
         <TabItem label="pnpm">
         ```bash
-        pnpm install -g slopcode
+        pnpm install -g slopcode-ai
         ```
 
           </TabItem>
 
         <TabItem label="Yarn">
         ```bash
-        yarn global add slopcode
+        yarn global add slopcode-ai
         ```
 
       </TabItem>
@@ -73,16 +73,17 @@ Također ga možete instalirati pomoću sljedećih naredbi:
 - **Korištenje Homebrew-a na macOS-u i Linux-u**
 
 ```bash
-  brew install slopcode
+  brew install anomalyco/tap/slopcode
 ```
 
 > Preporučujemo korištenje SlopCode tap za najnovija izdanja. Službenu formulu `brew install slopcode` održava Homebrew tim i ažurira se rjeđe.
 
 - **Korištenje Parua na Arch Linuxu**
 
-```bash
-  paru -S slopcode-bin
-```
+  ```bash
+  sudo pacman -S slopcode           # Arch Linux (Stable)
+  paru -S slopcode-bin              # Arch Linux (Latest from AUR)
+  ```
 
 #### Windows
 
@@ -105,23 +106,23 @@ Za najbolje iskustvo na Windows-u preporučujemo korištenje [Windows Subsystem 
 - **Korištenje NPM-a**
 
 ```bash
-  npm install -g slopcode
+  npm install -g slopcode-ai
 ```
 
 - **Korištenje Mise**
 
 ```bash
-  mise use -g github:teamslop/slopcode
+  mise use -g github:anomalyco/slopcode
 ```
 
 - **Korištenje Dockera**
 
 ```bash
-  docker run -it --rm ghcr.io/teamslop/slopcode
+  docker run -it --rm ghcr.io/anomalyco/slopcode
 ```
 
 Podrška za instaliranje SlopCode na Windows koristeći Bun je trenutno u toku.
-Također možete preuzeti binarnu datoteku iz [Releases](http://github.com/teamslop/slopcode/releases).
+Također možete preuzeti binarnu datoteku iz [Releases](https://github.com/teamslop/slopcode/releases).
 
 ---
 
@@ -131,7 +132,7 @@ Uz SlopCode možete koristiti bilo kojeg LLM provajdera tako što ćete konfigur
 Ako ste tek počeli koristiti LLM provajdere, preporučujemo korištenje [SlopCode Zen](/docs/zen).
 To je kurirana lista modela koji su testirani i verifikovani od strane SlopCode tima.
 
-1. Pokrenite naredbu `/connect` u TUI-u, odaberite slopcode i idite na [slopcode.dev/auth](https://slopcode.dev/auth).
+1. Pokrenite naredbu `/connect` u TUI-u, odaberite slopcode i idite na [slopcode.ai/auth](https://slopcode.ai/auth).
 
 ```txt
    /connect
@@ -312,7 +313,7 @@ Ovo će kreirati vezu do trenutnog razgovora i kopirati je u međuspremnik.
 :::note
 Razgovori se ne dijele prema zadanim postavkama.
 :::
-Evo primjer razgovora `https://slopcode.dev/share/<share-id>` sa SlopCode.
+Evo [primjer razgovora](https://slopcode.ai/s/4XP1fce5) sa SlopCode.
 
 ---
 

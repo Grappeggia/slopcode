@@ -1,62 +1,43 @@
-import { Instance } from "../project/instance"
+import { LayerNode } from "@slopcode-ai/core/effect/layer-node"
+import { Context, Effect, Layer } from "effect"
+import { serviceUse } from "@slopcode-ai/core/effect/service-use"
+import { InstanceState } from "@/effect/instance-state"
 
-type Scope = {
-  sessionID?: string
+type State = Record<string, string | undefined>
+
+export interface Interface {
+  readonly get: (key: string) => Effect.Effect<string | undefined>
+  readonly all: () => Effect.Effect<State>
+  readonly set: (key: string, value: string) => Effect.Effect<void>
+  readonly remove: (key: string) => Effect.Effect<void>
 }
 
-type State = {
-  base: Record<string, string | undefined>
-  global: Record<string, string | undefined>
-  session: Record<string, Record<string, string | undefined>>
-}
+export class Service extends Context.Service<Service, Interface>()("@slopcode/Env") {}
 
-export namespace Env {
-  const state = Instance.state<State>(() => ({
-    base: { ...process.env } as Record<string, string | undefined>,
-    global: {},
-    session: {},
-  }))
+export const use = serviceUse(Service)
 
-  function local(input?: Scope) {
-    if (!input?.sessionID) return state().global
-    state().session[input.sessionID] ??= {}
-    return state().session[input.sessionID]
-  }
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const state = yield* InstanceState.make<State>(Effect.fn("Env.state")(() => Effect.succeed({ ...process.env })))
 
-  export function get(key: string, input?: Scope) {
-    const env = state()
-    if (input?.sessionID) {
-      const session = env.session[input.sessionID]
-      if (session && key in session) return session[key]
-    }
-    if (key in env.global) return env.global[key]
-    return env.base[key]
-  }
+    const get = Effect.fn("Env.get")((key: string) => InstanceState.use(state, (env) => env[key]))
+    const all = Effect.fn("Env.all")(() => InstanceState.get(state))
+    const set = Effect.fn("Env.set")(function* (key: string, value: string) {
+      const env = yield* InstanceState.get(state)
+      env[key] = value
+    })
+    const remove = Effect.fn("Env.remove")(function* (key: string) {
+      const env = yield* InstanceState.get(state)
+      delete env[key]
+    })
 
-  export function all(input?: Scope) {
-    const env = state()
-    return Object.fromEntries(
-      Object.entries({
-        ...env.base,
-        ...env.global,
-        ...(input?.sessionID ? (env.session[input.sessionID] ?? {}) : {}),
-      }).filter((entry): entry is [string, string] => entry[1] !== undefined),
-    )
-  }
+    return Service.of({ get, all, set, remove })
+  }),
+)
 
-  export function set(key: string, value: string, input?: Scope) {
-    local(input)[key] = value
-  }
+export const defaultLayer = layer
 
-  export function merge(values: Record<string, string>, input?: Scope) {
-    Object.assign(local(input), values)
-  }
+export const node = LayerNode.make(layer, [])
 
-  export function remove(key: string, input?: Scope) {
-    delete local(input)[key]
-  }
-
-  export function clear(sessionID: string) {
-    delete state().session[sessionID]
-  }
-}
+export * as Env from "."

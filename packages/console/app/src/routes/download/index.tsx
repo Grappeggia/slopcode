@@ -77,7 +77,7 @@ export default function Download() {
 
   const handleCopyClick = (command: string) => (event: Event) => {
     const button = event.currentTarget as HTMLButtonElement
-    navigator.clipboard.writeText(command)
+    void navigator.clipboard.writeText(command)
     button.setAttribute("data-copied", "")
     setTimeout(() => {
       button.removeAttribute("data-copied")
@@ -118,46 +118,28 @@ export default function Download() {
             <div data-component="section-content">
               <button
                 data-component="cli-row"
-                onClick={handleCopyClick("curl -fsSL https://slopcode.dev/install | bash")}
+                onClick={handleCopyClick("curl -fsSL https://slopcode.ai/install | bash")}
               >
                 <code>
-                  curl -fsSL https://<strong>slopcode.dev/install</strong> | bash
+                  curl -fsSL https://<strong>slopcode.ai/install</strong> | bash
                 </code>
                 <CopyStatus />
               </button>
-              <button data-component="cli-row" onClick={handleCopyClick("npm i -g slopcode")}>
+              <button data-component="cli-row" onClick={handleCopyClick("npm i -g slopcode-ai")}>
                 <code>
-                  npm i -g <strong>slopcode</strong>
+                  npm i -g <strong>slopcode-ai</strong>
                 </code>
                 <CopyStatus />
               </button>
-              <button data-component="cli-row" onClick={handleCopyClick("bun install -g slopcode")}>
+              <button data-component="cli-row" onClick={handleCopyClick("bun add -g slopcode-ai")}>
                 <code>
-                  bun install -g <strong>slopcode</strong>
+                  bun add -g <strong>slopcode-ai</strong>
                 </code>
                 <CopyStatus />
               </button>
-              <button
-                data-component="cli-row"
-                onClick={handleCopyClick("nix profile install github:teamslop/slopcode#slopcode")}
-              >
+              <button data-component="cli-row" onClick={handleCopyClick("brew install anomalyco/tap/slopcode")}>
                 <code>
-                  nix profile install <strong>github:teamslop/slopcode#slopcode</strong>
-                </code>
-                <CopyStatus />
-              </button>
-              <button
-                data-component="cli-row"
-                onClick={handleCopyClick("curl -fsSL https://teamslop.github.io/apt-slopcode/install.sh | sudo bash")}
-              >
-                <code>
-                  curl -fsSL https://<strong>teamslop.github.io/apt-slopcode/install.sh</strong> | sudo bash
-                </code>
-                <CopyStatus />
-              </button>
-              <button data-component="cli-row" onClick={handleCopyClick("brew install teamslop/slopcode/slopcode")}>
-                <code>
-                  brew install <strong>teamslop/slopcode/slopcode</strong>
+                  brew install <strong>anomalyco/tap/slopcode</strong>
                 </code>
                 <CopyStatus />
               </button>

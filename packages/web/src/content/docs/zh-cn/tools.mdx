@@ -15,7 +15,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "deny",
     "bash": "ask",
@@ -28,7 +28,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "mymcp_*": "ask"
   }
@@ -51,7 +51,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "bash": "allow"
   }
@@ -68,7 +68,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "allow"
   }
@@ -85,7 +85,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "allow"
   }
@@ -95,7 +95,7 @@ description: 管理 LLM 可以使用的工具。
 使用此工具允许 LLM 创建新文件。如果文件已存在，则会覆盖现有文件。
 
 :::note
-`write` 工具由 `edit` 权限控制，该权限涵盖所有文件修改操作（`edit`、`write`、`patch`、`multiedit`）。
+`write` 工具由 `edit` 权限控制，该权限涵盖所有文件修改操作（`edit`、`write`、`patch`）。
 :::
 
 ---
@@ -106,7 +106,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "read": "allow"
   }
@@ -123,7 +123,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "grep": "allow"
   }
@@ -140,7 +140,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "glob": "allow"
   }
@@ -148,23 +148,6 @@ description: 管理 LLM 可以使用的工具。
 ```
 
 使用 `**/*.js` 或 `src/**/*.ts` 等 glob 模式搜索文件。返回按修改时间排序的匹配文件路径。
-
----
-
-### list
-
-列出指定路径下的文件和目录。
-
-```json title="slopcode.json" {4}
-{
-  "$schema": "https://slopcode.dev/config.json",
-  "permission": {
-    "list": "allow"
-  }
-}
-```
-
-该工具用于列出目录内容。它接受 glob 模式来过滤结果。
 
 ---
 
@@ -178,7 +161,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "lsp": "allow"
   }
@@ -197,7 +180,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "allow"
   }
@@ -207,7 +190,7 @@ description: 管理 LLM 可以使用的工具。
 该工具将补丁文件应用到您的代码库中。适用于应用来自各种来源的 diff 和补丁。
 
 :::note
-`patch` 工具由 `edit` 权限控制，该权限涵盖所有文件修改操作（`edit`、`write`、`patch`、`multiedit`）。
+`patch` 工具由 `edit` 权限控制，该权限涵盖所有文件修改操作（`edit`、`write`、`patch`）。
 :::
 
 ---
@@ -218,7 +201,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "skill": "allow"
   }
@@ -233,7 +216,7 @@ description: 管理 LLM 可以使用的工具。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "todowrite": "allow"
   }
@@ -248,34 +231,13 @@ description: 管理 LLM 可以使用的工具。
 
 ---
 
-### todoread
-
-读取现有的待办事项列表。
-
-```json title="slopcode.json" {4}
-{
-  "$schema": "https://slopcode.dev/config.json",
-  "permission": {
-    "todoread": "allow"
-  }
-}
-```
-
-读取当前待办事项列表的状态。LLM 使用此工具来跟踪哪些任务待处理、哪些已完成。
-
-:::note
-该工具默认对子代理禁用，但您可以手动启用。[了解更多](/docs/agents/#permissions)
-:::
-
----
-
 ### webfetch
 
 获取网页内容。
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "webfetch": "allow"
   }
@@ -303,7 +265,7 @@ SLOPCODE_ENABLE_EXA=1 slopcode
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "websearch": "allow"
   }
@@ -326,7 +288,7 @@ SLOPCODE_ENABLE_EXA=1 slopcode
 
 ```json title="slopcode.json" {4}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "question": "allow"
   }
@@ -362,7 +324,7 @@ MCP（Model Context Protocol）服务器允许您集成外部工具和服务，�
 
 ## 内部机制
 
-在内部，`grep`、`glob` 和 `list` 等工具底层使用 [ripgrep](https://github.com/BurntSushi/ripgrep)。默认情况下，ripgrep 遵循 `.gitignore` 中的模式，这意味着 `.gitignore` 中列出的文件和目录将被排除在搜索和列表结果之外。
+在内部，`grep` 和 `glob` 等工具底层使用 [ripgrep](https://github.com/BurntSushi/ripgrep)。默认情况下，ripgrep 遵循 `.gitignore` 中的模式，这意味着 `.gitignore` 中列出的文件和目录将被排除在搜索和列表结果之外。
 
 ---
 

@@ -3,11 +3,11 @@ title: Prečice tipki
 description: Prilagodite svoje veze tipki.
 ---
 
-SlopCode ima listu veza tipki koje možete prilagoditi preko SlopCode konfiguracije.
+SlopCode ima listu veza tipki koje možete prilagoditi putem `tui.json`.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {
     "leader": "ctrl+x",
     "app_exit": "ctrl+c,ctrl+d,<leader>q",
@@ -28,6 +28,7 @@ SlopCode ima listu veza tipki koje možete prilagoditi preko SlopCode konfigurac
     "session_unshare": "none",
     "session_interrupt": "escape",
     "session_compact": "<leader>c",
+    "session_child_first": "<leader>down",
     "session_child_cycle": "<leader>right",
     "session_child_cycle_reverse": "<leader>left",
     "session_parent": "<leader>up",
@@ -52,6 +53,7 @@ SlopCode ima listu veza tipki koje možete prilagoditi preko SlopCode konfigurac
     "model_cycle_favorite": "none",
     "model_cycle_favorite_reverse": "none",
     "variant_cycle": "ctrl+t",
+    "variant_list": "none",
     "command_list": "ctrl+p",
     "agent_list": "<leader>a",
     "agent_cycle": "tab",
@@ -108,46 +110,25 @@ SlopCode ima listu veza tipki koje možete prilagoditi preko SlopCode konfigurac
 ## Leader tipka
 
 SlopCode koristi `leader` (vodeću) tipku za većinu povezivanja tipki. Ovo izbjegava sukobe u vašem terminalu.
+
 Prema zadanim postavkama, `ctrl+x` je vodeća tipka i većina radnji zahtijeva da prvo pritisnete vodeću tipku, a zatim i prečicu. Na primjer, da biste započeli novu sesiju, prvo pritisnite `ctrl+x`, a zatim pritisnite `n`.
+
 Ne morate koristiti vodeću tipku za svoje veze tipki, ali preporučujemo da to učinite.
 
 ---
 
 ## Onemogućavanje prečica tipki
 
-Možete onemogućiti spajanje tipki dodavanjem ključa u svoju konfiguraciju s vrijednošću "none".
+Možete onemogućiti spajanje tipki dodavanjem ključa u `tui.json` s vrijednošću "none".
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {
     "session_compact": "none"
   }
 }
 ```
-
----
-
-## History mode keybinds
-
-Use `history_mode_toggle` to switch between edit mode and history mode.
-
-Use `history_previous` and `history_next` to move through history-mode prompt entries.
-
-```json title="tui.json"
-{
-  "$schema": "https://slopcode.dev/tui.json",
-  "keybinds": {
-    "history_mode_toggle": "ctrl+y",
-    "history_previous": "pageup",
-    "history_next": "pagedown"
-  }
-}
-```
-
-:::tip
-By default, `history_mode_toggle` is `ctrl+y`.
-:::
 
 ---
 

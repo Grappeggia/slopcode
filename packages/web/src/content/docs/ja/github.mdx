@@ -3,7 +3,7 @@ title: GitHub
 description: GitHub の問題とプルリクエストで SlopCode を使用します。
 ---
 
-SlopCode は GitHub ワークフローと統合します。コメントで `/slopcode` または `/sc` に言及すると、SlopCode が GitHub Actions ランナー内でタスクを実行します。
+SlopCode は GitHub ワークフローと統合します。コメントで `/slopcode` または `/oc` に言及すると、SlopCode が GitHub Actions ランナー内でタスクを実行します。
 
 ---
 
@@ -51,7 +51,7 @@ slopcode github install
    jobs:
      slopcode:
        if: |
-         contains(github.event.comment.body, '/sc') ||
+         contains(github.event.comment.body, '/oc') ||
          contains(github.event.comment.body, '/slopcode')
        runs-on: ubuntu-latest
        permissions:
@@ -64,7 +64,7 @@ slopcode github install
               persist-credentials: false
 
           - name: Run SlopCode
-           uses: teamslop/slopcode/github@latest
+           uses: anomalyco/slopcode/github@latest
            env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
            with:
@@ -107,8 +107,8 @@ SlopCode は、次の GitHub イベントによってトリガーできます。
 
 | イベントの種類                | トリガー                            | 詳細                                                                                                                                                        |
 | ----------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `issue_comment`               | 問題または PR についてコメントする  | コメントで `/slopcode` または `/sc` について言及してください。 SlopCode はコンテキストを読み取り、ブランチを作成したり、PR を開いたり、返信したりできます。 |
-| `pull_request_review_comment` | PR 内の特定のコード行にコメントする | コードをレビューするときに、`/slopcode` または `/sc` について言及します。 SlopCode は、ファイルパス、行番号、および diff コンテキストを受け取ります。       |
+| `issue_comment`               | 問題または PR についてコメントする  | コメントで `/slopcode` または `/oc` について言及してください。 SlopCode はコンテキストを読み取り、ブランチを作成したり、PR を開いたり、返信したりできます。 |
+| `pull_request_review_comment` | PR 内の特定のコード行にコメントする | コードをレビューするときに、`/slopcode` または `/oc` について言及します。 SlopCode は、ファイルパス、行番号、および diff コンテキストを受け取ります。       |
 | `issues`                      | 問題がオープンまたは編集されました  | 問題が作成または変更されると、SlopCode が自動的にトリガーされます。 `prompt` 入力が必要です。                                                               |
 | `pull_request`                | PR がオープンまたは更新されました   | PR が開かれる、同期される、または再度開かれるときに、SlopCode を自動的にトリガーします。自動レビューに役立ちます。                                          |
 | `schedule`                    | Cron ベースのスケジュール           | スケジュールに従って SlopCode を実行します。 `prompt` 入力が必要です。出力はログと PR に送られます (コメントする問題はありません)。                         |
@@ -140,7 +140,7 @@ jobs:
           persist-credentials: false
 
       - name: Run SlopCode
-        uses: teamslop/slopcode/github@latest
+        uses: anomalyco/slopcode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
@@ -177,7 +177,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: teamslop/slopcode/github@latest
+      - uses: anomalyco/slopcode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -233,7 +233,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: teamslop/slopcode/github@latest
+      - uses: anomalyco/slopcode/github@latest
         if: steps.check.outputs.result == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -255,7 +255,7 @@ jobs:
 デフォルトのプロンプトをオーバーライドして、ワークフローに合わせて SlopCode の動作をカスタマイズします。
 
 ```yaml title=".github/workflows/slopcode.yml"
-- uses: teamslop/slopcode/github@latest
+- uses: anomalyco/slopcode/github@latest
   with:
     model: anthropic/claude-sonnet-4-5
     prompt: |
@@ -298,7 +298,7 @@ GitHub の問題で次のように言います。
 GitHub PR に次のコメントを残してください。
 
 ```
-  Delete the attachment from S3 when the note is removed /sc
+  Delete the attachment from S3 when the note is removed /oc
 ```
 
 SlopCode は要求された変更を実装し、同じ PR にコミットします。
@@ -309,7 +309,7 @@ PR の「ファイル」タブのコード行に直接コメントを残しま�
 
 ```
   [Comment on specific lines in Files tab]
-  /sc add error handling here
+  /oc add error handling here
 ```
 
 特定の行にコメントすると、SlopCode は以下を受け取ります。

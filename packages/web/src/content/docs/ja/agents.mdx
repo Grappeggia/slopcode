@@ -35,13 +35,13 @@ SlopCode には、**Build** と **Plan** という 2 つの組み込みプライ
 
 サブエージェントは、プライマリエージェントが特定のタスクのために呼び出すことができる特殊なアシスタントです。メッセージ内で **@ メンション**することで、手動で呼び出すこともできます。
 
-SlopCode には、**General** と **Explore** という 2 つの組み込みサブエージェントが付属しています。これについては以下で見ていきます。
+SlopCode には、**General**、**Explore**、**Scout** という 3 つの組み込みサブエージェントが付属しています。これについては以下で見ていきます。
 
 ---
 
 ## 組み込み
 
-SlopCode には、2 つの組み込みプライマリエージェントと 2 つの組み込みサブエージェントが付属しています。
+SlopCode には、2 つの組み込みプライマリエージェントと 3 つの組み込みサブエージェントが付属しています。
 
 ---
 
@@ -80,6 +80,14 @@ _モード_: `subagent`
 _モード_: `subagent`
 
 コードベースを探索するための高速な読み取り専用エージェント。ファイルを変更できません。これは、パターンでファイルをすばやく検索したり、コードでキーワードを検索したり、コードベースに関する質問に答えたりする必要がある場合に使用します。
+
+---
+
+### Scout
+
+_モード_: `subagent`
+
+外部ドキュメントや依存関係の調査を行うための読み取り専用エージェントです。依存関係のリポジトリを SlopCode の管理キャッシュにクローンしたいとき、ライブラリのソースコードを調べたいとき、あるいはワークスペースを変更せずにローカルコードを upstream の実装と突き合わせたいときに使用します。
 
 ---
 
@@ -139,7 +147,7 @@ _モード_: `primary`
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "mode": "primary",
@@ -368,7 +376,7 @@ SlopCode 設定内のモデル ID は、`provider/model-id` という形式を�
 
 ```json title="slopcode.json" {3-6,9-12}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "tools": {
     "write": true,
     "bash": true
@@ -391,7 +399,7 @@ MCP サーバーからすべてのツールを無効にするには、次のよ�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "readonly": {
       "tools": {
@@ -418,7 +426,7 @@ MCP サーバーからすべてのツールを無効にするには、次のよ�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "deny"
   }
@@ -429,7 +437,7 @@ MCP サーバーからすべてのツールを無効にするには、次のよ�
 
 ```json title="slopcode.json" {3-5,8-10}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "deny"
   },
@@ -466,7 +474,7 @@ Only analyze code and suggest changes.
 
 ```json title="slopcode.json" {7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -484,7 +492,7 @@ Only analyze code and suggest changes.
 
 ```json title="slopcode.json" {7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -502,7 +510,7 @@ Only analyze code and suggest changes.
 
 ```json title="slopcode.json" {8}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -693,7 +701,7 @@ slopcode agent create
 以下に、役立つと思われるエージェントの例をいくつか示します。
 
 :::tip
-共有したいエージェントはいますか? [PR](http://github.com/teamslop/slopcode) を送信します。
+共有したいエージェントはいますか? [PR](https://github.com/teamslop/slopcode) を送信します。
 :::
 
 ---

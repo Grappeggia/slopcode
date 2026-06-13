@@ -1,122 +1,189 @@
-import { log, spinner } from "@clack/prompts"
-import type { Argv } from "yargs"
-import { Global } from "@/global"
-import { Instance } from "@/project/instance"
-import { UI } from "../ui"
-import { cmd } from "./cmd"
-import { installPlugin, patchPluginConfig, readPluginManifest } from "@/plugin/install"
-import { isDeprecatedPlugin } from "@/plugin/shared"
+import { intro, log, outro, spinner } from "@clack/prompts"
+import { Effect } from "effect"
 
-type PlugInput = {
+import { ConfigPaths } from "@/config/paths"
+import { Global } from "@slopcode-ai/core/global"
+import { installPlugin, patchPluginConfig, readPluginManifest } from "../../plugin/install"
+import { resolvePluginTarget } from "../../plugin/shared"
+import { errorMessage } from "../../util/error"
+import { Filesystem } from "@/util/filesystem"
+import { Process } from "@/util/process"
+import { UI } from "../ui"
+import { effectCmd } from "../effect-cmd"
+import { InstanceRef } from "@/effect/instance-ref"
+
+type Spin = {
+  start: (msg: string) => void
+  stop: (msg: string, code?: number) => void
+}
+
+export type PlugDeps = {
+  spinner: () => Spin
+  log: {
+    error: (msg: string) => void
+    info: (msg: string) => void
+    success: (msg: string) => void
+  }
+  resolve: (spec: string) => Promise<string>
+  readText: (file: string) => Promise<string>
+  write: (file: string, text: string) => Promise<void>
+  exists: (file: string) => Promise<boolean>
+  files: (dir: string, name: "slopcode" | "tui") => string[]
+  global: string
+}
+
+export type PlugInput = {
   mod: string
   global?: boolean
   force?: boolean
 }
 
-type PlugCtx = {
+export type PlugCtx = {
   vcs?: string
   worktree: string
   directory: string
 }
 
+const defaultPlugDeps: PlugDeps = {
+  spinner: () => spinner(),
+  log: {
+    error: (msg) => log.error(msg),
+    info: (msg) => log.info(msg),
+    success: (msg) => log.success(msg),
+  },
+  resolve: (spec) => resolvePluginTarget(spec),
+  readText: (file) => Filesystem.readText(file),
+  write: async (file, text) => {
+    await Filesystem.write(file, text)
+  },
+  exists: (file) => Filesystem.exists(file),
+  files: (dir, name) => ConfigPaths.fileInDirectory(dir, name),
+  global: Global.Path.config,
+}
+
 function cause(err: unknown) {
   if (!err || typeof err !== "object") return
   if (!("cause" in err)) return
-  return err.cause
+  return (err as { cause?: unknown }).cause
 }
 
-function message(err: unknown) {
-  if (err instanceof Error) return err.message
-  return String(err)
-}
-
-export function createPlugTask(input: PlugInput) {
+export function createPlugTask(input: PlugInput, dep: PlugDeps = defaultPlugDeps) {
   const mod = input.mod
   const force = Boolean(input.force)
   const global = Boolean(input.global)
 
   return async (ctx: PlugCtx) => {
-    const install = spinner()
+    const install = dep.spinner()
     install.start("Installing plugin package...")
-    const target = await installPlugin(mod)
+    const target = await installPlugin(mod, dep)
     if (!target.ok) {
       install.stop("Install failed", 1)
-      log.error(`Could not install "${mod}"`)
-      log.error(message(cause(target.error) ?? target.error))
+      dep.log.error(`Could not install "${mod}"`)
+      const hit = cause(target.error) ?? target.error
+      if (hit instanceof Process.RunFailedError) {
+        const lines = hit.stderr
+          .toString()
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+        const errs = lines.filter((line) => line.startsWith("error:")).map((line) => line.replace(/^error:\s*/, ""))
+        const detail = errs[0] ?? lines.at(-1)
+        if (detail) dep.log.error(detail)
+        if (lines.some((line) => line.includes("No version matching"))) {
+          dep.log.info("This package depends on a version that is not available in your npm registry.")
+          dep.log.info("Check npm registry/auth settings and try again.")
+        }
+      }
+      if (!(hit instanceof Process.RunFailedError)) {
+        dep.log.error(errorMessage(hit))
+      }
       return false
     }
     install.stop("Plugin package ready")
 
-    const inspect = spinner()
+    const inspect = dep.spinner()
     inspect.start("Reading plugin manifest...")
     const manifest = await readPluginManifest(target.target)
     if (!manifest.ok) {
       if (manifest.code === "manifest_read_failed") {
         inspect.stop("Manifest read failed", 1)
-        log.error(`Installed "${mod}" but failed to read ${manifest.file}`)
-        log.error(message(cause(manifest.error) ?? manifest.error))
+        dep.log.error(`Installed "${mod}" but failed to read ${manifest.file}`)
+        dep.log.error(errorMessage(cause(manifest.error) ?? manifest.error))
         return false
       }
-      inspect.stop("No plugin targets found", 1)
-      log.error(`"${mod}" does not expose plugin entrypoints or themes in package.json`)
-      log.info('Expected one of: exports["./server"], exports["./tui"], package.json main, sc-themes, or oc-themes.')
+
+      if (manifest.code === "manifest_no_targets") {
+        inspect.stop("No plugin targets found", 1)
+        dep.log.error(`"${mod}" does not expose plugin entrypoints in package.json`)
+        dep.log.info(
+          'Expected one of: exports["./tui"], exports["./server"], package.json main for server, or package.json["oc-themes"] for tui themes.',
+        )
+        return false
+      }
+
+      inspect.stop("Manifest read failed", 1)
       return false
     }
-    const kinds = manifest.targets.map((item) => item.kind).join(" + ")
-    inspect.stop(`Detected ${kinds} target${manifest.targets.length === 1 ? "" : "s"}`)
 
-    const patch = spinner()
+    inspect.stop(
+      `Detected ${manifest.targets.map((item) => item.kind).join(" + ")} target${manifest.targets.length === 1 ? "" : "s"}`,
+    )
+
+    const patch = dep.spinner()
     patch.start("Updating plugin config...")
-    const out = await patchPluginConfig({
-      spec: mod,
-      targets: manifest.targets,
-      force,
-      global,
-      vcs: ctx.vcs,
-      worktree: ctx.worktree,
-      directory: ctx.directory,
-      config: Global.Path.config,
-    })
+    const out = await patchPluginConfig(
+      {
+        spec: mod,
+        targets: manifest.targets,
+        force,
+        global,
+        vcs: ctx.vcs,
+        worktree: ctx.worktree,
+        directory: ctx.directory,
+        config: dep.global,
+      },
+      dep,
+    )
     if (!out.ok) {
       if (out.code === "invalid_json") {
-        patch.stop("Failed updating config", 1)
-        log.error(`Invalid JSON in ${out.file} (${out.parse} at line ${out.line}, column ${out.col})`)
-        log.info("Fix the config file and run the command again.")
+        patch.stop(`Failed updating ${out.kind} config`, 1)
+        dep.log.error(`Invalid JSON in ${out.file} (${out.parse} at line ${out.line}, column ${out.col})`)
+        dep.log.info("Fix the config file and run the command again.")
         return false
       }
+
       patch.stop("Failed updating plugin config", 1)
-      log.error(message(out.error))
+      dep.log.error(errorMessage(out.error))
       return false
     }
     patch.stop("Plugin config updated")
-
     for (const item of out.items) {
       if (item.mode === "noop") {
-        log.info(`Already configured ${item.kind} plugin in ${item.file}`)
+        dep.log.info(`Already configured in ${item.file}`)
         continue
       }
       if (item.mode === "replace") {
-        log.info(`Replaced ${item.kind} plugin in ${item.file}`)
+        dep.log.info(`Replaced in ${item.file}`)
         continue
       }
-      log.info(`Added ${item.kind} plugin to ${item.file}`)
+      dep.log.info(`Added to ${item.file}`)
     }
 
-    log.success(`Installed ${mod}`)
-    log.info(global ? `Scope: global (${out.dir})` : `Scope: local (${out.dir})`)
+    dep.log.success(`Installed ${mod}`)
+    dep.log.info(global ? `Scope: global (${out.dir})` : `Scope: local (${out.dir})`)
     return true
   }
 }
 
-export const PluginCommand = cmd({
+export const PluginCommand = effectCmd({
   command: "plugin <module>",
   aliases: ["plug"],
   describe: "install plugin and update config",
-  builder: (yargs: Argv) =>
+  builder: (yargs) =>
     yargs
       .positional("module", {
         type: "string",
-        describe: "plugin package name",
+        describe: "npm module name",
       })
       .option("global", {
         alias: ["g"],
@@ -130,36 +197,34 @@ export const PluginCommand = cmd({
         default: false,
         describe: "replace existing plugin version",
       }),
-  handler: async (args) => {
+  handler: Effect.fn("Cli.plug")(function* (args) {
     const mod = String(args.module ?? "").trim()
     if (!mod) {
-      log.error("Plugin package name is required")
-      process.exit(1)
-    }
-
-    if (isDeprecatedPlugin(mod)) {
-      UI.empty()
-      log.info(`${mod} is built in and no longer needs to be installed as a plugin`)
+      UI.error("module is required")
+      process.exitCode = 1
       return
     }
 
-    await Instance.provide({
-      directory: process.cwd(),
-      async fn() {
-        UI.empty()
-        const run = createPlugTask({
-          mod,
-          global: Boolean(args.global),
-          force: Boolean(args.force),
-        })
-        const ok = await run({
-          vcs: Instance.project.vcs,
-          worktree: Instance.worktree,
-          directory: Instance.directory,
-        })
-        if (ok) return
-        process.exit(1)
-      },
+    UI.empty()
+    intro(`Install plugin ${mod}`)
+
+    const run = createPlugTask({
+      mod,
+      global: Boolean(args.global),
+      force: Boolean(args.force),
     })
-  },
+
+    const ctx = yield* InstanceRef
+    if (!ctx) return
+    const ok = yield* Effect.promise(() =>
+      run({
+        vcs: ctx.project.vcs,
+        worktree: ctx.worktree,
+        directory: ctx.directory,
+      }),
+    )
+
+    outro("Done")
+    if (!ok) process.exitCode = 1
+  }),
 })

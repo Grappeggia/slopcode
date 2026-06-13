@@ -1,4 +1,4 @@
-import { base64Decode } from "@slopcode-ai/util/encode"
+import { base64Decode } from "@slopcode-ai/core/util/encode"
 
 export function decode64(value: string | undefined) {
   if (value === undefined) return

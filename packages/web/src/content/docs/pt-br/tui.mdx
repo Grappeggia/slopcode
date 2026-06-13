@@ -91,6 +91,18 @@ Compacte a sessão atual. _Alias_: `/summarize`
 
 ---
 
+### details
+
+Alternar detalhes da execução da ferramenta.
+
+```bash frame="none"
+/details
+```
+
+**Atalho:** `ctrl+x d`
+
+---
+
 ### editor
 
 Abra um editor externo para compor mensagens. Usa o editor definido na sua variável de ambiente `EDITOR`. [Saiba mais](#editor-setup).
@@ -136,18 +148,6 @@ Mostre o diálogo de ajuda.
 ```
 
 **Atalho:** `ctrl+x h`
-
----
-
-### history
-
-Toggle history mode for session navigation.
-
-```bash frame="none"
-/history
-```
-
-**Atalho:** `history_mode_toggle` defaults to `ctrl+y`
 
 ---
 
@@ -283,20 +283,6 @@ Descompartilhe a sessão atual. [Saiba mais](/docs/share#un-sharing).
 
 ---
 
-## History mode
-
-Use history mode when you want to navigate existing session messages and traces without moving your hands to the mouse.
-
-While history mode is active, `up` and `down` move between prompts, `left` and `right` move between traces, and `space` runs the context action.
-
-Pressing `space` expands or collapses tool output, and opens a child task session when the selected item supports it.
-
-Use `history_mode_toggle` (defaults to `ctrl+y`) to exit history mode and return to normal edit mode.
-
-Unlike normal prompt input history (`history_previous` and `history_next`), history mode navigates rendered session content instead of cycling through text in the input box.
-
----
-
 ## Configuração do Editor
 
 Tanto os comandos `/editor` quanto `/export` usam o editor especificado na sua variável de ambiente `EDITOR`.
@@ -366,24 +352,63 @@ Alguns editores precisam de argumentos de linha de comando para rodar em modo bl
 
 ## Configuração
 
-Você pode personalizar o comportamento do TUI através do seu arquivo de configuração do slopcode.
+Você pode personalizar o comportamento do TUI através de `tui.json` (ou `tui.jsonc`).
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  "tui": {
-    "scroll_speed": 3,
-    "scroll_acceleration": {
-      "enabled": true
+  "$schema": "https://slopcode.ai/tui.json",
+  "theme": "slopcode",
+  "leader_timeout": 2000,
+  "keybinds": {
+    "leader": "ctrl+x",
+    "command_list": "ctrl+p"
+  },
+  "scroll_speed": 3,
+  "scroll_acceleration": {
+    "enabled": false
+  },
+  "diff_style": "auto",
+  "mouse": true,
+  "attention": {
+    "enabled": true,
+    "notifications": true,
+    "sound": true,
+    "volume": 0.4,
+    "sound_pack": "slopcode.default",
+    "sounds": {
+      "error": "./sounds/error.mp3"
     }
   }
 }
 ```
 
+Isso é separado do `slopcode.json`, que configura o comportamento do servidor/runtime.
+
+`keybinds` é combinado com os padrões internos, então você só precisa configurar os atalhos que deseja alterar.
+
 ### Opções
 
-- `scroll_acceleration` - Ative a aceleração de rolagem no estilo macOS para uma rolagem suave e natural. Quando ativado, a velocidade de rolagem aumenta com gestos de rolagem rápidos e permanece precisa para movimentos mais lentos. **Esta configuração tem precedência sobre `scroll_speed` e a substitui quando ativada.**
-- `scroll_speed` - Controla quão rápido o TUI rola ao usar comandos de rolagem (mínimo: `1`). O padrão é `3`. **Nota: Isso é ignorado se `scroll_acceleration.enabled` estiver definido como `true`.**
+- `theme` - Define o tema da sua interface. [Saiba mais](/docs/themes).
+- `keybinds` - Personaliza atalhos de teclado. [Saiba mais](/docs/keybinds).
+- `leader_timeout` - Controla por quanto tempo o SlopCode espera depois da leader key. O padrão é `2000`.
+- `scroll_acceleration.enabled` - Ative a aceleração de rolagem no estilo macOS para uma rolagem suave e natural. Quando ativado, a velocidade de rolagem aumenta com gestos de rolagem rápidos e permanece precisa para movimentos mais lentos. **Esta configuração tem precedência sobre `scroll_speed` e a substitui quando ativada.**
+- `scroll_speed` - Controla quão rápido o TUI rola ao usar comandos de rolagem (mínimo: `0.001`, suporta valores decimais). O padrão é `3`. **Nota: Isso é ignorado se `scroll_acceleration.enabled` estiver definido como `true`.**
+- `diff_style` - Controla a renderização de diffs. `"auto"` se adapta à largura do terminal, `"stacked"` sempre mostra um layout de coluna única.
+- `mouse` - Ativa ou desativa a captura do mouse no TUI (padrão: `true`). Quando desativado, o comportamento nativo do terminal para seleção e rolagem com o mouse é preservado.
+- `attention` - Configura notificações de desktop e sons do TUI. Desativado por padrão.
+
+Use `SLOPCODE_TUI_CONFIG` para carregar um caminho de configuração TUI personalizado.
+
+### Attention
+
+Attention permite que o TUI avise você quando o SlopCode espera uma resposta, precisa da aprovação de uma permissão, encontra um erro de sessão ou conclui uma sessão. Ative com `attention.enabled`; eventos integrados reproduzem sons quando acontecem. As notificações de desktop só são enviadas quando a janela do terminal não está em foco e não são usadas para eventos de subagent.
+
+- `enabled` - Ativa todas as notificações e sons de Attention. O padrão é `false`.
+- `notifications` - Quando Attention está ativo, permite que o TUI envie notificações de desktop pelo terminal. O padrão é `true`.
+- `sound` - Quando Attention está ativo, permite reproduzir sons de aviso. O padrão é `true`.
+- `volume` - Volume padrão dos sons, de `0` a `1`. O padrão é `0.4`.
+- `sound_pack` - ID do sound pack a ser usado. O padrão é `slopcode.default`.
+- `sounds` - Define arquivos de som personalizados para `default`, `question`, `permission`, `error`, `done` ou `subagent_done`. Os caminhos podem ser absolutos, URLs `file://` ou relativos a `tui.json`.
 
 ---
 

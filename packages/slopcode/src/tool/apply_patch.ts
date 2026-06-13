@@ -1,64 +1,59 @@
-import z from "zod"
 import * as path from "path"
-import * as fs from "fs/promises"
-import { Tool } from "./tool"
-import { Bus } from "../bus"
-import { FileWatcher } from "../file/watcher"
-import { Instance } from "../project/instance"
+import { Effect, Schema } from "effect"
+import * as Tool from "./tool"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { Watcher } from "@slopcode-ai/core/filesystem/watcher"
+import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
 import { createTwoFilesPatch, diffLines } from "diff"
-import { assertExternalDirectory } from "./external-directory"
+import { assertExternalDirectoryEffect } from "./external-directory"
 import { trimDiff } from "./edit"
-import { LSP } from "../lsp"
-import { Filesystem } from "../util/filesystem"
+import { LSP } from "@/lsp/lsp"
+import { FSUtil } from "@slopcode-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
-import { File } from "../file"
-import { FileTime } from "../file/time"
+import { FileSystem } from "@slopcode-ai/core/filesystem"
+import { Format } from "../format"
+import * as Bom from "@/util/bom"
 
-const PatchParams = z.object({
-  patchText: z.string().describe("The full patch text that describes all changes to be made"),
+export const Parameters = Schema.Struct({
+  patchText: Schema.String.annotate({ description: "The full patch text that describes all changes to be made" }),
 })
 
-async function withLocks<T>(paths: string[], fn: () => Promise<T>) {
-  const unique = Array.from(new Set(paths)).sort((a, b) => a.localeCompare(b))
-  const recurse = async (idx: number): Promise<T> => {
-    if (idx >= unique.length) return fn()
-    return FileTime.withLock(unique[idx], () => recurse(idx + 1))
-  }
-  return recurse(0)
-}
+export const ApplyPatchTool = Tool.define(
+  "apply_patch",
+  Effect.gen(function* () {
+    const lsp = yield* LSP.Service
+    const afs = yield* FSUtil.Service
+    const format = yield* Format.Service
+    const events = yield* EventV2Bridge.Service
 
-export const ApplyPatchTool = Tool.define("apply_patch", {
-  description: DESCRIPTION,
-  parameters: PatchParams,
-  async execute(params, ctx) {
-    if (!params.patchText) {
-      throw new Error("patchText is required")
-    }
-
-    // Parse the patch to get hunks
-    let hunks: Patch.Hunk[]
-    try {
-      const parseResult = Patch.parsePatch(params.patchText)
-      hunks = parseResult.hunks
-    } catch (error) {
-      throw new Error(`apply_patch verification failed: ${error}`)
-    }
-
-    if (hunks.length === 0) {
-      const normalized = params.patchText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim()
-      if (normalized === "*** Begin Patch\n*** End Patch") {
-        throw new Error("patch rejected: empty patch")
+    const run = Effect.fn("ApplyPatchTool.execute")(function* (
+      params: Schema.Schema.Type<typeof Parameters>,
+      ctx: Tool.Context,
+    ) {
+      if (!params.patchText) {
+        return yield* Effect.fail(new Error("patchText is required"))
       }
-      throw new Error("apply_patch verification failed: no hunks found")
-    }
 
-    const lockPaths = hunks.flatMap((hunk) => [
-      path.resolve(Instance.directory, hunk.path),
-      ...(hunk.type === "update" && hunk.move_path ? [path.resolve(Instance.directory, hunk.move_path)] : []),
-    ])
+      // Parse the patch to get hunks
+      let hunks: Patch.Hunk[]
+      try {
+        const parseResult = Patch.parsePatch(params.patchText)
+        hunks = parseResult.hunks
+      } catch (error) {
+        return yield* Effect.fail(new Error(`apply_patch verification failed: ${error}`))
+      }
 
-    return withLocks(lockPaths, async () => {
+      if (hunks.length === 0) {
+        const normalized = params.patchText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim()
+        if (normalized === "*** Begin Patch\n*** End Patch") {
+          return yield* Effect.fail(new Error("patch rejected: empty patch"))
+        }
+        return yield* Effect.fail(new Error("apply_patch verification failed: no hunks found"))
+      }
+
+      const instance = yield* InstanceState.context
+
       // Validate file paths and check permissions
       const fileChanges: Array<{
         filePath: string
@@ -69,29 +64,26 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
         diff: string
         additions: number
         deletions: number
+        bom: boolean
       }> = []
 
       let totalDiff = ""
 
       for (const hunk of hunks) {
-        const filePath = path.resolve(Instance.directory, hunk.path)
-        await assertExternalDirectory(ctx, filePath)
+        const filePath = path.resolve(instance.directory, hunk.path)
+        yield* assertExternalDirectoryEffect(ctx, filePath)
 
         switch (hunk.type) {
           case "add": {
-            const stats = await fs.stat(filePath).catch(() => null)
-            if (stats?.isDirectory()) {
-              throw new Error(`apply_patch verification failed: Path is a directory: ${filePath}`)
-            }
-            if (stats) await FileTime.assert(ctx.sessionID, filePath)
             const oldContent = ""
             const newContent =
               hunk.contents.length === 0 || hunk.contents.endsWith("\n") ? hunk.contents : `${hunk.contents}\n`
-            const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, newContent))
+            const next = Bom.split(newContent)
+            const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, next.text))
 
             let additions = 0
             let deletions = 0
-            for (const change of diffLines(oldContent, newContent)) {
+            for (const change of diffLines(oldContent, next.text)) {
               if (change.added) additions += change.count || 0
               if (change.removed) deletions += change.count || 0
             }
@@ -99,11 +91,12 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
             fileChanges.push({
               filePath,
               oldContent,
-              newContent,
+              newContent: next.text,
               type: "add",
               diff,
               additions,
               deletions,
+              bom: next.bom,
             })
 
             totalDiff += diff + "\n"
@@ -112,21 +105,29 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
 
           case "update": {
             // Check if file exists for update
-            const stats = await fs.stat(filePath).catch(() => null)
-            if (!stats || stats.isDirectory()) {
-              throw new Error(`apply_patch verification failed: Failed to read file to update: ${filePath}`)
+            const stats = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+            if (!stats || stats.type === "Directory") {
+              return yield* Effect.fail(
+                new Error(`apply_patch verification failed: Failed to read file to update: ${filePath}`),
+              )
             }
-            await FileTime.assert(ctx.sessionID, filePath)
 
-            const oldContent = await fs.readFile(filePath, "utf-8")
+            const source = yield* Bom.readFile(afs, filePath)
+            const oldContent = source.text
             let newContent = oldContent
+            let bom = source.bom
 
             // Apply the update chunks to get new content
             try {
-              const fileUpdate = Patch.deriveNewContentsFromChunks(filePath, hunk.chunks)
+              const fileUpdate = Patch.deriveNewContentsFromChunks(
+                filePath,
+                hunk.chunks,
+                Bom.join(source.text, source.bom),
+              )
               newContent = fileUpdate.content
+              bom = fileUpdate.bom
             } catch (error) {
-              throw new Error(`apply_patch verification failed: ${error}`)
+              return yield* Effect.fail(new Error(`apply_patch verification failed: ${error}`))
             }
 
             const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, newContent))
@@ -138,11 +139,8 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
               if (change.removed) deletions += change.count || 0
             }
 
-            const movePath = hunk.move_path ? path.resolve(Instance.directory, hunk.move_path) : undefined
-            await assertExternalDirectory(ctx, movePath)
-            if (movePath && (await fs.stat(movePath).catch(() => null))) {
-              await FileTime.assert(ctx.sessionID, movePath)
-            }
+            const movePath = hunk.move_path ? path.resolve(instance.directory, hunk.move_path) : undefined
+            yield* assertExternalDirectoryEffect(ctx, movePath)
 
             fileChanges.push({
               filePath,
@@ -153,6 +151,7 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
               diff,
               additions,
               deletions,
+              bom,
             })
 
             totalDiff += diff + "\n"
@@ -160,16 +159,16 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
           }
 
           case "delete": {
-            const stats = await fs.stat(filePath).catch((error) => {
-              throw new Error(`apply_patch verification failed: ${error}`)
-            })
-            if (stats.isDirectory()) {
-              throw new Error(`apply_patch verification failed: Path is a directory: ${filePath}`)
-            }
-            await FileTime.assert(ctx.sessionID, filePath)
-            const contentToDelete = await fs.readFile(filePath, "utf-8").catch((error) => {
-              throw new Error(`apply_patch verification failed: ${error}`)
-            })
+            const source = yield* Bom.readFile(afs, filePath).pipe(
+              Effect.catch((error) =>
+                Effect.fail(
+                  new Error(
+                    `apply_patch verification failed: ${error instanceof Error ? error.message : String(error)}`,
+                  ),
+                ),
+              ),
+            )
+            const contentToDelete = source.text
             const deleteDiff = trimDiff(createTwoFilesPatch(filePath, filePath, contentToDelete, ""))
 
             const deletions = contentToDelete.split("\n").length
@@ -182,6 +181,7 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
               diff: deleteDiff,
               additions: 0,
               deletions,
+              bom: source.bom,
             })
 
             totalDiff += deleteDiff + "\n"
@@ -193,19 +193,17 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
       // Build per-file metadata for UI rendering (used for both permission and result)
       const files = fileChanges.map((change) => ({
         filePath: change.filePath,
-        relativePath: path.relative(Instance.worktree, change.movePath ?? change.filePath).replaceAll("\\", "/"),
+        relativePath: path.relative(instance.worktree, change.movePath ?? change.filePath).replaceAll("\\", "/"),
         type: change.type,
-        diff: change.diff,
-        before: change.oldContent,
-        after: change.newContent,
+        patch: change.diff,
         additions: change.additions,
         deletions: change.deletions,
         movePath: change.movePath,
       }))
 
       // Check permissions if needed
-      const relativePaths = fileChanges.map((c) => path.relative(Instance.worktree, c.filePath).replaceAll("\\", "/"))
-      await ctx.ask({
+      const relativePaths = fileChanges.map((c) => path.relative(instance.worktree, c.filePath).replaceAll("\\", "/"))
+      yield* ctx.ask({
         permission: "edit",
         patterns: relativePaths,
         always: ["*"],
@@ -224,83 +222,74 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
         switch (change.type) {
           case "add":
             // Create parent directories (recursive: true is safe on existing/root dirs)
-            await fs.mkdir(path.dirname(change.filePath), { recursive: true })
-            await fs.writeFile(change.filePath, change.newContent, "utf-8")
-            FileTime.read(ctx.sessionID, change.filePath)
+
+            yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
             updates.push({ file: change.filePath, event: "add" })
             break
 
           case "update":
-            await fs.writeFile(change.filePath, change.newContent, "utf-8")
-            FileTime.read(ctx.sessionID, change.filePath)
+            yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
             updates.push({ file: change.filePath, event: "change" })
             break
 
           case "move":
             if (change.movePath) {
               // Create parent directories (recursive: true is safe on existing/root dirs)
-              await fs.mkdir(path.dirname(change.movePath), { recursive: true })
-              await fs.writeFile(change.movePath, change.newContent, "utf-8")
-              await fs.unlink(change.filePath)
-              FileTime.read(ctx.sessionID, change.movePath)
+
+              yield* afs.writeWithDirs(change.movePath!, Bom.join(change.newContent, change.bom))
+              yield* afs.remove(change.filePath)
               updates.push({ file: change.filePath, event: "unlink" })
               updates.push({ file: change.movePath, event: "add" })
             }
             break
 
           case "delete":
-            await fs.unlink(change.filePath)
+            yield* afs.remove(change.filePath)
             updates.push({ file: change.filePath, event: "unlink" })
             break
         }
 
         if (edited) {
-          await Bus.publish(File.Event.Edited, {
-            file: edited,
-          })
+          if (yield* format.file(edited)) {
+            yield* Bom.syncFile(afs, edited, change.bom)
+          }
+          yield* events.publish(FileSystem.Event.Edited, { file: edited })
         }
       }
 
       // Publish file change events
       for (const update of updates) {
-        await Bus.publish(FileWatcher.Event.Updated, update)
+        yield* events.publish(Watcher.Event.Updated, update)
       }
 
       // Notify LSP of file changes and collect diagnostics
       for (const change of fileChanges) {
         if (change.type === "delete") continue
         const target = change.movePath ?? change.filePath
-        await LSP.touchFile(target, true)
+        yield* lsp.touchFile(target, "document")
       }
-      const diagnostics = await LSP.diagnostics()
+      const diagnostics = yield* lsp.diagnostics()
 
       // Generate output summary
       const summaryLines = fileChanges.map((change) => {
         if (change.type === "add") {
-          return `A ${path.relative(Instance.worktree, change.filePath).replaceAll("\\", "/")}`
+          return `A ${path.relative(instance.worktree, change.filePath).replaceAll("\\", "/")}`
         }
         if (change.type === "delete") {
-          return `D ${path.relative(Instance.worktree, change.filePath).replaceAll("\\", "/")}`
+          return `D ${path.relative(instance.worktree, change.filePath).replaceAll("\\", "/")}`
         }
         const target = change.movePath ?? change.filePath
-        return `M ${path.relative(Instance.worktree, target).replaceAll("\\", "/")}`
+        return `M ${path.relative(instance.worktree, target).replaceAll("\\", "/")}`
       })
       let output = `Success. Updated the following files:\n${summaryLines.join("\n")}`
 
-      // Report LSP errors for changed files
-      const MAX_DIAGNOSTICS_PER_FILE = 20
       for (const change of fileChanges) {
         if (change.type === "delete") continue
         const target = change.movePath ?? change.filePath
-        const normalized = Filesystem.normalizePath(target)
-        const issues = diagnostics[normalized] ?? []
-        const errors = issues.filter((item) => item.severity === 1)
-        if (errors.length > 0) {
-          const limited = errors.slice(0, MAX_DIAGNOSTICS_PER_FILE)
-          const suffix =
-            errors.length > MAX_DIAGNOSTICS_PER_FILE ? `\n... and ${errors.length - MAX_DIAGNOSTICS_PER_FILE} more` : ""
-          output += `\n\nLSP errors detected in ${path.relative(Instance.worktree, target).replaceAll("\\", "/")}, please fix:\n<diagnostics file="${target}">\n${limited.map(LSP.Diagnostic.pretty).join("\n")}${suffix}\n</diagnostics>`
-        }
+        const block = LSP.Diagnostic.report(target, diagnostics[FSUtil.normalizePath(target)] ?? [])
+        if (!block) continue
+        const rel = path.relative(instance.worktree, target).replaceAll("\\", "/")
+        output += `\n\nLSP errors detected in ${rel}, please fix:\n${block}`
       }
 
       return {
@@ -313,5 +302,12 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
         output,
       }
     })
-  },
-})
+
+    return {
+      description: DESCRIPTION,
+      parameters: Parameters,
+      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
+        run(params, ctx).pipe(Effect.orDie),
+    }
+  }),
+)

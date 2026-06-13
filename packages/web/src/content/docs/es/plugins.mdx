@@ -32,7 +32,7 @@ Especifique paquetes npm en su archivo de configuración.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": ["slopcode-helicone-session", "slopcode-wakatime", "@my-org/custom-plugin"]
 }
 ```
@@ -308,6 +308,10 @@ El ayudante `tool` crea una herramienta personalizada a la que slopcode puede ll
 
 Sus herramientas personalizadas estarán disponibles para slopcode junto con las herramientas integradas.
 
+:::note
+Si una herramienta de complemento utiliza el mismo nombre que una herramienta integrada, la herramienta de complemento tiene prioridad.
+:::
+
 ---
 
 ### Registro
@@ -327,7 +331,7 @@ export const MyPlugin = async ({ client }) => {
 }
 ```
 
-Niveles: `debug`, `info`, `warn`, `error`. Consulte la [documentación del SDK](https://slopcode.dev/docs/sdk) para obtener más detalles.
+Niveles: `debug`, `info`, `warn`, `error`. Consulte la [documentación del SDK](https://slopcode.ai/docs/sdk) para obtener más detalles.
 
 ---
 

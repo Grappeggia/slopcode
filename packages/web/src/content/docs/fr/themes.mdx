@@ -61,11 +61,11 @@ Le thème système est destiné aux utilisateurs qui :
 
 ## Utiliser un thème
 
-Vous pouvez sélectionner un thème en affichant la sélection de thème avec la commande `/themes`. Ou vous pouvez le spécifier dans votre [config](/docs/config).
+Vous pouvez sélectionner un thème en affichant la sélection de thème avec la commande `/theme`. Ou vous pouvez le spécifier dans `tui.json`.
 
-```json title="slopcode.json" {3}
+```json title="tui.json" {3}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "theme": "tokyonight"
 }
 ```
@@ -144,7 +144,7 @@ Voici un exemple de thème personnalisé :
 
 ```json title="my-theme.json"
 {
-  "$schema": "https://slopcode.dev/theme.json",
+  "$schema": "https://slopcode.ai/theme.json",
   "defs": {
     "nord0": "#2E3440",
     "nord1": "#3B4252",

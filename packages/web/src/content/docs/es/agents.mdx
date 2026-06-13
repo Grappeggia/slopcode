@@ -36,13 +36,13 @@ mira estos a continuación.
 
 Los subagentes son asistentes especializados que los agentes principales pueden invocar para tareas específicas. También puedes invocarlos manualmente **@ mencionándolos** en tus mensajes.
 
-SlopCode viene con dos subagentes integrados, **General** y **Explore**. Veremos esto a continuación.
+SlopCode viene con tres subagentes integrados, **General**, **Explore** y **Scout**. Veremos esto a continuación.
 
 ---
 
 ## Integrados
 
-SlopCode viene con dos agentes primarios integrados y dos subagentes integrados.
+SlopCode viene con dos agentes primarios integrados y tres subagentes integrados.
 
 ---
 
@@ -81,6 +81,14 @@ Un agente de uso general para investigar preguntas complejas y ejecutar tareas d
 _Modo_: `subagent`
 
 Un agente rápido y de solo lectura para explorar bases de código. No se pueden modificar archivos. Úselo cuando necesite buscar rápidamente archivos por patrones, buscar palabras clave en el código o responder preguntas sobre el código base.
+
+---
+
+### Scout
+
+_Modo_: `subagent`
+
+Un agente de solo lectura para investigar documentación externa y dependencias. Úsalo cuando necesites clonar el repositorio de una dependencia en la caché administrada de SlopCode, inspeccionar el código fuente de una librería o contrastar el código local con implementaciones upstream sin modificar tu espacio de trabajo.
 
 ---
 
@@ -140,7 +148,7 @@ Configure agentes en su archivo de configuración `slopcode.json`:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "mode": "primary",
@@ -369,7 +377,7 @@ Controle qué herramientas están disponibles en este agente con la configuraci�
 
 ```json title="slopcode.json" {3-6,9-12}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "tools": {
     "write": true,
     "bash": true
@@ -393,7 +401,7 @@ También puedes utilizar comodines para controlar varias herramientas a la vez. 
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "readonly": {
       "tools": {
@@ -420,7 +428,7 @@ Puede configurar permisos para administrar qué acciones puede realizar un agent
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "deny"
   }
@@ -431,7 +439,7 @@ Puede anular estos permisos por agente.
 
 ```json title="slopcode.json" {3-5,8-10}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "deny"
   },
@@ -468,7 +476,7 @@ Puede establecer permisos para comandos bash específicos.
 
 ```json title="slopcode.json" {7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -486,7 +494,7 @@ Esto puede tomar un patrón global.
 
 ```json title="slopcode.json" {7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -504,7 +512,7 @@ Dado que la última regla de coincidencia tiene prioridad, coloque el comodín `
 
 ```json title="slopcode.json" {8}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -697,7 +705,7 @@ A continuación se muestran algunos casos de uso comunes para diferentes agentes
 A continuación se muestran algunos agentes de ejemplo que pueden resultarle útiles.
 
 :::tip
-¿Tiene un agente que le gustaría compartir? [Enviar un PR](http://github.com/teamslop/slopcode).
+¿Tiene un agente que le gustaría compartir? [Enviar un PR](https://github.com/teamslop/slopcode).
 :::
 
 ---

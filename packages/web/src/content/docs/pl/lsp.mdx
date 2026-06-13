@@ -3,7 +3,7 @@ title: Serwery LSP
 description: SlopCode integruje się z serwerami LSP.
 ---
 
-SlopCode integruje się z protokołem Language Server Protocol (LSP), aby zapewnić modelom LLM kontekst bazy kodu. Wykorzystuje diagnostykę, aby przekazywać informacje zwrotne do LLM.
+SlopCode może integrować się z serwerami Language Server Protocol (LSP), aby używać diagnostyki jako informacji zwrotnej dla agenta.
 
 ---
 
@@ -27,6 +27,7 @@ SlopCode posiada kilka wbudowanych serwerów LSP dla następujących języków:
 | gopls              | .go                                                                 | Dostępne polecenie `go`                                                  |
 | hls                | .hs, .lhs                                                           | Dostępne polecenie `haskell-language-server-wrapper`                     |
 | jdtls              | .java                                                               | Zainstalowany `Java SDK (version 21+)`                                   |
+| julials            | .jl                                                                 | Zainstalowane `julia` i `LanguageServer.jl`                              |
 | kotlin-ls          | .kt, .kts                                                           | Automatyczna instalacja dla Kotlin                                       |
 | lua-ls             | .lua                                                                | Automatyczna instalacja dla Lua                                          |
 | nixd               | .nix                                                                | Dostępne polecenie `nixd`                                                |
@@ -46,7 +47,7 @@ SlopCode posiada kilka wbudowanych serwerów LSP dla następujących języków:
 | yaml-ls            | .yaml, .yml                                                         | Automatycznie instaluje serwer języka yaml Red Hat                       |
 | zls                | .zig, .zon                                                          | Dostępne polecenie `zig`                                                 |
 
-Serwery LSP są automatycznie włączane po wykryciu jednego z obsługiwanych plików i spełnieniu wymagań.
+LSP jest domyślnie wyłączone. Gdy jest włączone, serwery uruchamiają się po wykryciu jednego z obsługiwanych rozszerzeń plików i spełnieniu wymagań.
 
 :::note
 Możesz wyłączyć automatyczne pobieranie serwerów LSP, ustawiając zmienną środowiskową `SLOPCODE_DISABLE_LSP_DOWNLOAD` na `true`.
@@ -56,20 +57,39 @@ Możesz wyłączyć automatyczne pobieranie serwerów LSP, ustawiając zmienną 
 
 ## Jak to działa
 
-Gdy SlopCode otwiera plik:
+Gdy LSP jest włączony i SlopCode otwiera plik:
 
 1. Sprawdza plik pod kątem wszystkich dostępnych serwerów LSP.
 2. Uruchamia odpowiedni serwer LSP, jeśli jeszcze nie działa.
 
 ---
 
+## Dobre praktyki
+
+LSP może pomóc agentowi znajdować i naprawiać problemy, dostarczając diagnostykę z serwerów językowych. Jest to przydatne w niektórych projektach, ale nie zawsze jest jednoznaczną korzyścią.
+
+Serwery językowe mogą wypaść z synchronizacji, zużywać dużo pamięci, różnić się między wersjami lub projektami i spowalniać workflow agenta. W wielu projektach lepiej, aby agent uruchamiał lint, typecheck lub inne diagnostyczne narzędzia CLI bezpośrednio; wtedy błędy wracają do pętli agenta bez tych kompromisów. Udokumentuj te komendy w plikach instrukcji, takich jak `AGENTS.md` lub skills, aby agent wiedział, co uruchomić. Włącz LSP, gdy Twój projekt korzysta z dodatkowej informacji zwrotnej z serwera językowego.
+
+---
+
 ## Konfiguracja
 
-Możesz dostosować serwery LSP poprzez sekcję `lsp` w konfiguracji SlopCode.
+Możesz włączać i dostosowywać serwery LSP poprzez sekcję `lsp` w konfiguracji SlopCode.
+
+Aby włączyć wszystkie wbudowane serwery LSP, ustaw `lsp` na `true`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
+  "lsp": true
+}
+```
+
+Użyj obiektu, aby pozostawić wbudowane serwery włączone i jednocześnie skonfigurować nadpisania lub serwery niestandardowe.
+
+```json title="slopcode.json"
+{
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": {}
 }
 ```
@@ -94,7 +114,7 @@ Użyj `env`, aby ustawić zmienne środowiskowe podczas uruchamiania serwera LSP
 
 ```json title="slopcode.json" {5-7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": {
     "rust": {
       "env": {
@@ -113,7 +133,7 @@ Użyj właściwości `initialization`, aby przekazać niestandardowe opcje inicj
 
 ```json title="slopcode.json" {5-9}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": {
     "typescript": {
       "initialization": {
@@ -134,11 +154,11 @@ Opcje inicjalizacji różnią się w zależności od serwera LSP. Sprawdź dokum
 
 ### Wyłączanie serwerów LSP
 
-Aby wyłączyć **wszystkie** serwery LSP globalnie, ustaw `lsp` na `false`:
+Jeśli `lsp` zostanie pominięte, wszystkie serwery LSP są wyłączone. Aby wyłączyć wszystkie serwery LSP po tym, jak inna konfiguracja je włączyła, ustaw `lsp` na `false`:
 
 ```json title="slopcode.json" {3}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": false
 }
 ```
@@ -147,7 +167,7 @@ Aby wyłączyć **określony** serwer LSP, ustaw `disabled` na `true`:
 
 ```json title="slopcode.json" {5}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": {
     "typescript": {
       "disabled": true
@@ -164,7 +184,7 @@ Możesz dodać niestandardowe serwery LSP, podając polecenie i rozszerzenia pli
 
 ```json title="slopcode.json" {4-7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "lsp": {
     "custom-lsp": {
       "command": ["custom-lsp-server", "--stdio"],

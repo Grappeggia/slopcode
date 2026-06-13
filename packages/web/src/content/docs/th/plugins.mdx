@@ -32,7 +32,7 @@ description: เขียนปลั๊กอินของคุณเอง�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": ["slopcode-helicone-session", "slopcode-wakatime", "@my-org/custom-plugin"]
 }
 ```
@@ -308,6 +308,10 @@ export const CustomToolsPlugin: Plugin = async (ctx) => {
 
 เครื่องมือที่คุณกำหนดเองจะพร้อมใช้งานสำหรับ slopcode ควบคู่ไปกับเครื่องมือในตัว
 
+:::note
+หากเครื่องมือปลั๊กอินใช้ชื่อเดียวกับเครื่องมือในตัว เครื่องมือปลั๊กอินจะมีความสำคัญเหนือกว่า
+:::
+
 ---
 
 ### การบันทึก
@@ -327,7 +331,7 @@ export const MyPlugin = async ({ client }) => {
 }
 ```
 
-ระดับ: `debug`, `info`, `warn`, `error` ดู[SDKเอกสารประกอบ](https://slopcode.dev/docs/sdk)สำหรับรายละเอียด
+ระดับ: `debug`, `info`, `warn`, `error` ดู[SDKเอกสารประกอบ](https://slopcode.ai/docs/sdk)สำหรับรายละเอียด
 
 ---
 

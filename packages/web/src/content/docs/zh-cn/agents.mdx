@@ -35,13 +35,13 @@ SlopCode 内置了两个主代理：**Build** 和 **Plan**。我们将在下面�
 
 子代理是主代理可以调用来执行特定任务的专业助手。您也可以通过在消息中 **@ 提及**它们来手动调用。
 
-SlopCode 内置了两个子代理：**General** 和 **Explore**。我们将在下面介绍它们。
+SlopCode 内置了三个子代理：**General**、**Explore** 和 **Scout**。我们将在下面介绍它们。
 
 ---
 
 ## 内置代理
 
-SlopCode 内置了两个主代理和两个子代理。
+SlopCode 内置了两个主代理和三个子代理。
 
 ---
 
@@ -80,6 +80,14 @@ _模式_：`subagent`
 _模式_：`subagent`
 
 一个用于探索代码库的快速只读代理。无法修改文件。当您需要按模式快速查找文件、搜索代码中的关键字或回答有关代码库的问题时，请使用此代理。
+
+---
+
+### 使用 Scout
+
+_模式_：`subagent`
+
+一个用于外部文档和依赖研究的只读代理。当您需要将某个依赖仓库克隆到 SlopCode 的托管缓存中、检查库的源代码，或在不修改工作区的情况下将本地代码与 upstream 实现进行交叉对照时，请使用此代理。
 
 ---
 
@@ -139,7 +147,7 @@ _模式_：`primary`
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "mode": "primary",
@@ -368,7 +376,7 @@ SlopCode 配置中的模型 ID 使用 `provider/model-id` 格式。例如，如�
 
 ```json title="slopcode.json" {3-6,9-12}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "tools": {
     "write": true,
     "bash": true
@@ -392,7 +400,7 @@ SlopCode 配置中的模型 ID 使用 `provider/model-id` 格式。例如，如�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "readonly": {
       "tools": {
@@ -419,7 +427,7 @@ SlopCode 配置中的模型 ID 使用 `provider/model-id` 格式。例如，如�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "deny"
   }
@@ -430,7 +438,7 @@ SlopCode 配置中的模型 ID 使用 `provider/model-id` 格式。例如，如�
 
 ```json title="slopcode.json" {3-5,8-10}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "deny"
   },
@@ -467,7 +475,7 @@ Only analyze code and suggest changes.
 
 ```json title="slopcode.json" {7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -485,7 +493,7 @@ Only analyze code and suggest changes.
 
 ```json title="slopcode.json" {7}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -503,7 +511,7 @@ Only analyze code and suggest changes.
 
 ```json title="slopcode.json" {8}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "build": {
       "permission": {
@@ -696,7 +704,7 @@ slopcode agent create
 以下是一些您可能会觉得有用的示例代理。
 
 :::tip
-您有想要分享的代理吗？[提交 PR](http://github.com/teamslop/slopcode)。
+您有想要分享的代理吗？[提交 PR](https://github.com/teamslop/slopcode)。
 :::
 
 ---

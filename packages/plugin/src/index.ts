@@ -8,38 +8,14 @@ import type {
   UserMessage,
   Message,
   Part,
-  Auth,
   Config as SDKConfig,
 } from "@slopcode-ai/sdk"
+import type { Provider as ProviderV2, Model as ModelV2, Auth } from "@slopcode-ai/sdk/v2"
 
-import type { BunShell } from "./shell"
-import { type ToolDefinition } from "./tool"
+import type { BunShell } from "./shell.js"
+import { type ToolDefinition } from "./tool.js"
 
-export * from "./tool"
-
-export type PluginOptions = Record<string, unknown>
-
-export type Config = Omit<SDKConfig, "plugin"> & {
-  plugin?: Array<string | [string, PluginOptions]>
-}
-
-export type PluginModule =
-  | {
-      id?: string
-      server: Plugin
-      tui?: never
-    }
-  | {
-      id?: string
-      tui: unknown
-      server?: never
-    }
-
-type Rule = {
-  key: string
-  op: "eq" | "neq"
-  value: string
-}
+export * from "./tool.js"
 
 export type ProviderContext = {
   source: "env" | "config" | "custom" | "api"
@@ -47,21 +23,34 @@ export type ProviderContext = {
   options: Record<string, any>
 }
 
-export type WorkspaceAdaptor = {
+export type WorkspaceInfo = {
+  id: string
+  type: string
+  name: string
+  branch: string | null
+  directory: string | null
+  extra: unknown | null
+  projectID: string
+}
+
+export type WorkspaceTarget =
+  | {
+      type: "local"
+      directory: string
+    }
+  | {
+      type: "remote"
+      url: string | URL
+      headers?: HeadersInit
+    }
+
+export type WorkspaceAdapter = {
   name: string
   description: string
-  create(
-    config: Record<string, unknown>,
-    branch?: string | null,
-  ): Promise<{ config: Record<string, unknown>; init: () => Promise<void> }>
-  remove(config: Record<string, unknown>): Promise<void>
-  request(
-    config: Record<string, unknown>,
-    method: string,
-    url: string,
-    data?: BodyInit,
-    signal?: AbortSignal,
-  ): Promise<Response | undefined>
+  configure(config: WorkspaceInfo): WorkspaceInfo | Promise<WorkspaceInfo>
+  create(config: WorkspaceInfo, env: Record<string, string | undefined>, from?: WorkspaceInfo): Promise<void>
+  remove(config: WorkspaceInfo): Promise<void>
+  target(config: WorkspaceInfo): WorkspaceTarget | Promise<WorkspaceTarget>
 }
 
 export type PluginInput = {
@@ -70,13 +59,31 @@ export type PluginInput = {
   directory: string
   worktree: string
   experimental_workspace: {
-    register(type: string, adaptor: WorkspaceAdaptor): void
+    register(type: string, adapter: WorkspaceAdapter): void
   }
   serverUrl: URL
   $: BunShell
 }
 
+export type PluginOptions = Record<string, unknown>
+
+export type Config = Omit<SDKConfig, "plugin"> & {
+  plugin?: Array<string | [string, PluginOptions]>
+}
+
 export type Plugin = (input: PluginInput, options?: PluginOptions) => Promise<Hooks>
+
+export type PluginModule = {
+  id?: string
+  server: Plugin
+  tui?: never
+}
+
+type Rule = {
+  key: string
+  op: "eq" | "neq"
+  value: string
+}
 
 export type AuthHook = {
   provider: string
@@ -110,7 +117,7 @@ export type AuthHook = {
               when?: Rule
             }
         >
-        authorize(inputs?: Record<string, string>): Promise<AuthOuathResult>
+        authorize(inputs?: Record<string, string>): Promise<AuthOAuthResult>
       }
     | {
         type: "api"
@@ -155,22 +162,22 @@ export type AuthHook = {
   )[]
 }
 
-export type AuthOuathResult = { url: string; instructions: string } & (
+export type AuthOAuthResult = { url: string; instructions: string } & (
   | {
       method: "auto"
       callback(): Promise<
         | ({
             type: "success"
             provider?: string
-            metadata?: Record<string, string>
           } & (
             | {
                 refresh: string
                 access: string
                 expires: number
                 accountId?: string
+                enterpriseUrl?: string
               }
-            | { key: string }
+            | { key: string; metadata?: Record<string, string> }
           ))
         | {
             type: "failed"
@@ -183,15 +190,15 @@ export type AuthOuathResult = { url: string; instructions: string } & (
         | ({
             type: "success"
             provider?: string
-            metadata?: Record<string, string>
           } & (
             | {
                 refresh: string
                 access: string
                 expires: number
                 accountId?: string
+                enterpriseUrl?: string
               }
-            | { key: string }
+            | { key: string; metadata?: Record<string, string> }
           ))
         | {
             type: "failed"
@@ -206,10 +213,14 @@ export type ProviderHookContext = {
 
 export type ProviderHook = {
   id: string
-  models?: (provider: unknown, ctx: ProviderHookContext) => Promise<Record<string, unknown>>
+  models?: (provider: ProviderV2, ctx: ProviderHookContext) => Promise<Record<string, ModelV2>>
 }
 
+/** @deprecated Use AuthOAuthResult instead. */
+export type AuthOuathResult = AuthOAuthResult
+
 export interface Hooks {
+  dispose?: () => Promise<void>
   event?: (input: { event: Event }) => Promise<void>
   config?: (input: Config) => Promise<void>
   tool?: {
@@ -235,7 +246,13 @@ export interface Hooks {
    */
   "chat.params"?: (
     input: { sessionID: string; agent: string; model: Model; provider: ProviderContext; message: UserMessage },
-    output: { temperature: number; topP: number; topK: number; options: Record<string, any> },
+    output: {
+      temperature: number
+      topP: number
+      topK: number
+      maxOutputTokens: number | undefined
+      options: Record<string, any>
+    },
   ) => Promise<void>
   "chat.headers"?: (
     input: { sessionID: string; agent: string; model: Model; provider: ProviderContext; message: UserMessage },
@@ -277,6 +294,7 @@ export interface Hooks {
       system: string[]
     },
   ) => Promise<void>
+  "experimental.provider.small_model"?: (input: { provider: ProviderV2 }, output: { model?: ModelV2 }) => Promise<void>
   /**
    * Called before session compaction starts. Allows plugins to customize
    * the compaction prompt.
@@ -287,6 +305,24 @@ export interface Hooks {
   "experimental.session.compacting"?: (
     input: { sessionID: string },
     output: { context: string[]; prompt?: string },
+  ) => Promise<void>
+  /**
+   * Called after compaction succeeds and before a synthetic user
+   * auto-continue message is added.
+   *
+   * - `enabled`: Defaults to `true`. Set to `false` to skip the synthetic
+   *   user "continue" turn.
+   */
+  "experimental.compaction.autocontinue"?: (
+    input: {
+      sessionID: string
+      agent: string
+      model: Model
+      provider: ProviderContext
+      message: UserMessage
+      overflow: boolean
+    },
+    output: { enabled: boolean },
   ) => Promise<void>
   "experimental.text.complete"?: (
     input: { sessionID: string; messageID: string; partID: string },

@@ -1,44 +1,94 @@
-import { afterEach, expect, test } from "bun:test"
-import { Server } from "../../src/server/server"
-import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
-import { Database } from "../../src/storage/db"
-import { Project } from "../../src/project/project"
-import { Identifier } from "../../src/id/id"
-import { resetDatabase } from "../fixture/db"
-import { tmpdir } from "../fixture/fixture"
+import { describe, expect, test } from "bun:test"
+import {
+  isLocalWorkspaceRoute,
+  getWorkspaceRouteSessionID,
+  workspaceProxyURL,
+} from "../../src/server/shared/workspace-routing"
+import { SessionID } from "../../src/session/schema"
 
-afterEach(async () => {
-  await resetDatabase()
+describe("isLocalWorkspaceRoute", () => {
+  test("GET /session is local", () => {
+    expect(isLocalWorkspaceRoute("GET", "/session")).toBe(true)
+  })
+
+  test("GET /session/ses_abc is local (prefix match)", () => {
+    expect(isLocalWorkspaceRoute("GET", "/session/ses_abc")).toBe(true)
+  })
+
+  test("POST /session is not local (method mismatch)", () => {
+    expect(isLocalWorkspaceRoute("POST", "/session")).toBe(false)
+  })
+
+  test("/session/status is forwarded regardless of method", () => {
+    expect(isLocalWorkspaceRoute("GET", "/session/status")).toBe(false)
+    expect(isLocalWorkspaceRoute("POST", "/session/status")).toBe(false)
+  })
+
+  test("unrecognized paths are not local", () => {
+    expect(isLocalWorkspaceRoute("GET", "/config")).toBe(false)
+    expect(isLocalWorkspaceRoute("POST", "/session/ses_abc/message")).toBe(false)
+  })
 })
 
-test("server routes honor the workspace header", async () => {
-  await using root = await tmpdir({ git: true })
-  await using worktree = await tmpdir({ git: true })
-  const { project } = await Project.fromDirectory(root.path)
-  const id = Identifier.ascending("workspace")
-
-  Database.use((db) => {
-    db.insert(WorkspaceTable)
-      .values({
-        id,
-        branch: null,
-        project_id: project.id,
-        config: {
-          type: "worktree",
-          directory: worktree.path,
-        },
-      })
-      .run()
+describe("getWorkspaceRouteSessionID", () => {
+  test("extracts session ID from path", () => {
+    const url = new URL("http://localhost/session/ses_abc123/message")
+    expect(getWorkspaceRouteSessionID(url)).toBe(SessionID.make("ses_abc123"))
   })
 
-  const app = Server.App()
-  const response = await app.request("/project/current", {
-    headers: {
-      "x-slopcode-directory": root.path,
-      "x-slopcode-workspace": id,
-    },
+  test("extracts session ID without trailing path", () => {
+    const url = new URL("http://localhost/session/ses_xyz")
+    expect(getWorkspaceRouteSessionID(url)).toBe(SessionID.make("ses_xyz"))
   })
-  expect(response.status).toBe(200)
-  const data = (await response.json()) as { worktree: string }
-  expect(data.worktree).toBe(worktree.path)
+
+  test("extracts session ID from experimental background path", () => {
+    const url = new URL("http://localhost/experimental/session/ses_bg/background")
+    expect(getWorkspaceRouteSessionID(url)).toBe(SessionID.make("ses_bg"))
+  })
+
+  test("returns null for /session/status", () => {
+    const url = new URL("http://localhost/session/status")
+    expect(getWorkspaceRouteSessionID(url)).toBeNull()
+  })
+
+  test("returns null for non-session paths", () => {
+    const url = new URL("http://localhost/config")
+    expect(getWorkspaceRouteSessionID(url)).toBeNull()
+  })
+
+  test("returns null for bare /session path", () => {
+    const url = new URL("http://localhost/session")
+    expect(getWorkspaceRouteSessionID(url)).toBeNull()
+  })
+})
+
+describe("workspaceProxyURL", () => {
+  test("appends request path to target", () => {
+    const result = workspaceProxyURL("http://remote:8080/base", new URL("http://localhost/config"))
+    expect(result.toString()).toBe("http://remote:8080/base/config")
+  })
+
+  test("strips trailing slash on target before appending", () => {
+    const result = workspaceProxyURL("http://remote:8080/base/", new URL("http://localhost/session/abc"))
+    expect(result.pathname).toBe("/base/session/abc")
+  })
+
+  test("preserves query params from request but removes workspace", () => {
+    const url = new URL("http://localhost/config?workspace=ws_123&keep=yes")
+    const result = workspaceProxyURL("http://remote:8080/base", url)
+    expect(result.searchParams.get("workspace")).toBeNull()
+    expect(result.searchParams.get("keep")).toBe("yes")
+  })
+
+  test("preserves hash from request", () => {
+    const url = new URL("http://localhost/page#section")
+    const result = workspaceProxyURL("http://remote:8080", url)
+    expect(result.hash).toBe("#section")
+  })
+
+  test("works with URL object as target", () => {
+    const target = new URL("http://remote:3000/api")
+    const result = workspaceProxyURL(target, new URL("http://localhost/users"))
+    expect(result.toString()).toBe("http://remote:3000/api/users")
+  })
 })

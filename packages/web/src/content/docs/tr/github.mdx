@@ -3,7 +3,7 @@ title: GitHub
 description: GitHub sorunlarında ve çekme isteklerinde slopcode'u kullanın.
 ---
 
-slopcode, GitHub iş akışınızla bütünleşir. Yorumunuzda `/slopcode` veya `/sc`'den bahsedin; slopcode, GitHub Actions çalıştırıcınızdaki görevleri yürütecektir.
+slopcode, GitHub iş akışınızla bütünleşir. Yorumunuzda `/slopcode` veya `/oc`'den bahsedin; slopcode, GitHub Actions çalıştırıcınızdaki görevleri yürütecektir.
 
 ---
 
@@ -51,7 +51,7 @@ Veya manuel olarak ayarlayabilirsiniz.
    jobs:
      slopcode:
        if: |
-         contains(github.event.comment.body, '/sc') ||
+         contains(github.event.comment.body, '/oc') ||
          contains(github.event.comment.body, '/slopcode')
        runs-on: ubuntu-latest
        permissions:
@@ -64,7 +64,7 @@ Veya manuel olarak ayarlayabilirsiniz.
               persist-credentials: false
 
           - name: Run SlopCode
-           uses: teamslop/slopcode/github@latest
+           uses: anomalyco/slopcode/github@latest
            env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
            with:
@@ -107,8 +107,8 @@ slopcode aşağıdaki GitHub olayları tarafından tetiklenebilir:
 
 | Olay Tipi                     | Tetikleyen                                    | Detaylar                                                                                                                                            |
 | ----------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `issue_comment`               | Bir soruna veya halkla ilişkilere yorum yapın | Yorumunuzda `/slopcode` veya `/sc`'den bahsedin. slopcode bağlamı okur ve şubeler oluşturabilir, PR'leri açabilir veya yanıt verebilir.             |
-| `pull_request_review_comment` | PR'deki belirli kod satırlarına yorum yapın   | Kodu incelerken `/slopcode` veya `/sc`'den bahsedin. slopcode dosya yolunu, satır numaralarını ve fark içeriğini alır.                              |
+| `issue_comment`               | Bir soruna veya halkla ilişkilere yorum yapın | Yorumunuzda `/slopcode` veya `/oc`'den bahsedin. slopcode bağlamı okur ve şubeler oluşturabilir, PR'leri açabilir veya yanıt verebilir.             |
+| `pull_request_review_comment` | PR'deki belirli kod satırlarına yorum yapın   | Kodu incelerken `/slopcode` veya `/oc`'den bahsedin. slopcode dosya yolunu, satır numaralarını ve fark içeriğini alır.                              |
 | `issues`                      | Sayı açıldı veya düzenlendi                   | Sorunlar oluşturulduğunda veya değiştirildiğinde slopcode'u otomatik olarak tetikleyin. `prompt` girişi gerektirir.                                 |
 | `pull_request`                | PR açıldı veya güncellendi                    | PR'ler açıldığında, senkronize edildiğinde veya yeniden açıldığında slopcode'u otomatik olarak tetikleyin. Otomatik incelemeler için kullanışlıdır. |
 | `schedule`                    | Cron tabanlı program                          | slopcode'u bir programa göre çalıştırın. `prompt` girişi gerektirir. Çıktı, günlüklere ve PR'lere gider (yorum yapılacak bir sorun yoktur).         |
@@ -140,7 +140,7 @@ jobs:
           persist-credentials: false
 
       - name: Run SlopCode
-        uses: teamslop/slopcode/github@latest
+        uses: anomalyco/slopcode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
@@ -177,7 +177,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: teamslop/slopcode/github@latest
+      - uses: anomalyco/slopcode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -233,7 +233,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: teamslop/slopcode/github@latest
+      - uses: anomalyco/slopcode/github@latest
         if: steps.check.outputs.result == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -255,7 +255,7 @@ jobs:
 slopcode'un davranışını iş akışınız için özelleştirmek için varsayılan istemi geçersiz kılın.
 
 ```yaml title=".github/workflows/slopcode.yml"
-- uses: teamslop/slopcode/github@latest
+- uses: anomalyco/slopcode/github@latest
   with:
     model: anthropic/claude-sonnet-4-5
     prompt: |
@@ -298,7 +298,7 @@ GitHub'da slopcode'u nasıl kullanabileceğinize dair bazı örnekleri burada bu
   GitHub PR'a aşağıdaki yorumu bırakın.
 
   ```
-  Delete the attachment from S3 when the note is removed /sc
+  Delete the attachment from S3 when the note is removed /oc
   ```
 
   slopcode istenen değişikliği uygulayacak ve aynı PR'ye uygulayacaktır.
@@ -309,7 +309,7 @@ GitHub'da slopcode'u nasıl kullanabileceğinize dair bazı örnekleri burada bu
 
   ```
   [Comment on specific lines in Files tab]
-  /sc add error handling here
+  /oc add error handling here
   ```
 
   Belirli satırlara yorum yaparken slopcode şunları alır:

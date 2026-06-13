@@ -25,7 +25,7 @@ Możesz zainstalować uprawnienia globalnie (za pomocą `*`) i znajdującego si�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "*": "ask",
     "bash": "allow",
@@ -38,7 +38,7 @@ Możesz także zainstalować wszystkie uprawnienia na raz:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": "allow"
 }
 ```
@@ -51,7 +51,7 @@ Można skorzystać z różnych działań, które zależą od danych użytkowych.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "bash": {
       "*": "ask",
@@ -88,7 +88,7 @@ Możesz używać `~` lub `$HOME` na początku wzorca, aby zastosować się do sw
 
 ### Katalogi zewnętrzne
 
-Użycie `external_directory`, aby zezwolić na wywołanie narzędzia, które obsługuje obsługę poza katalogiem roboczym, z uruchomieniem slopcode. Dotyczy każdego narzędzia, które jako dane wejściowe zostało przyjęte (na przykład `read`, `edit`, `list`, `glob`, `grep` i wiele założycieli `bash`).
+Użycie `external_directory`, aby zezwolić na wywołanie narzędzia, które obsługuje obsługę poza katalogiem roboczym, z uruchomieniem slopcode. Dotyczy każdego narzędzia, które jako dane wejściowe zostało przyjęte (na przykład `read`, `edit`, `glob`, `grep` i wiele założycieli `bash`).
 
 Rozszerzenie domu (jak `~/...`) wpływa tylko na sposób za zwyczajowy wzorca. Nie powoduje to, że strategie zewnętrzne stają się stosowane przez `external_directory`.
 
@@ -96,7 +96,7 @@ Na przykład umożliwia dostęp do wszystkiego pod `~/projects/personal/`:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "external_directory": {
       "~/projects/personal/**": "allow"
@@ -109,7 +109,7 @@ Każdy dopuszczony tutaj katalog jest dziedziczy tych samych ustawień, co dost�
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "external_directory": {
       "~/projects/personal/**": "allow"
@@ -130,17 +130,15 @@ Skoncentruj listę na zaufanych ścieżkach i dodaj dodatkowe zezwolenie lub odm
 Uprawnienia slopcode są określane na podstawie nazwy narzędzia i kilku zabezpieczeń:
 
 - `read` — odczyt pliku (odpowiada ścieżce pliku)
-- `edit` — wszystkie modyfikacje plików (obejmuje `edit`, `write`, `patch`, `multiedit`)
+- `edit` — wszystkie modyfikacje plików (obejmuje `edit`, `write`, `patch`)
 - `glob` — maglowanie plików (pasuje do wzorców globowania)
 - `grep` — wyszukiwanie treści (pasuje do wzorca regularnego)
-- `list` — wyświetlanie listy plików w katalogu (pasuje do katalogu)
 - `bash` — uruchamianie poleceń shell (pasuje do poleceń przeanalizowanych, takich jak `git status --porcelain`)
 - `task` — uruchamianie podagentów (odpowiada typowi podagenta)
 - `skill` — ładowanie umiejętności (pasuje do nazwy umiejętności)
 - `lsp` — uruchamianie zapytań LSP (obecnie nieszczegółowych)
-- `todoread`, `todowrite` — czytanie/aktualizacja list rzeczy do wykonania
 - `webfetch` — pobieranie adresu URL (pasuje do adresu URL)
-- `websearch`, `codesearch` — wyszukiwanie sieci/kodu (pasuje do zapytań)
+- `websearch` — wyszukiwanie sieci (pasuje do zapytań)
 - `external_directory` — wywoływacz, gdy narzędzie jest dostępne poza katalogiem roboczym projektu
 - `doom_loop` — wyzwalane, gdy samo wywołanie narzędzia zostanie powtórzone 3 razy z tymi samymi danymi podstawowymi
 
@@ -191,7 +189,7 @@ Bardziej szczegółowe przykłady dopasowywania wzorców można znaleźć w sekc
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "bash": {
       "*": "ask",

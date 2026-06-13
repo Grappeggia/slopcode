@@ -1,13 +1,13 @@
 // @refresh reload
 
-import { iife } from "@slopcode-ai/util/iife"
-import { product } from "@slopcode-ai/util/product"
+import * as Sentry from "@sentry/solid"
 import { render } from "solid-js/web"
 import { AppBaseProviders, AppInterface } from "@/app"
 import { type Platform, PlatformProvider } from "@/context/platform"
 import { dict as en } from "@/i18n/en"
 import { dict as zh } from "@/i18n/zh"
 import { handleNotificationClick } from "@/utils/notification-click"
+import { authFromToken } from "@/utils/server"
 import pkg from "../package.json"
 import { ServerConnection } from "./context/server"
 
@@ -54,78 +54,6 @@ const setStorage = (key: string, value: string | null) => {
 const readDefaultServerUrl = () => getStorage(DEFAULT_SERVER_URL_KEY)
 const writeDefaultServerUrl = (url: string | null) => setStorage(DEFAULT_SERVER_URL_KEY, url)
 
-const viewID = (() => {
-  const key = "slopcode.view-id"
-  const ttl = 5_000
-  const prefix = "slopcode.view-id.lease:"
-  const owner = crypto.randomUUID()
-  let cached = ""
-
-  const read = (name: string) => {
-    try {
-      return localStorage.getItem(name)
-    } catch {
-      return null
-    }
-  }
-
-  const write = (name: string, value: string | null) => {
-    try {
-      if (value === null) {
-        localStorage.removeItem(name)
-        return
-      }
-      localStorage.setItem(name, value)
-    } catch {
-      return
-    }
-  }
-
-  const active = (id: string) => {
-    const raw = read(prefix + id)
-    if (!raw) return false
-    try {
-      const lease = JSON.parse(raw) as { owner?: string; time?: number }
-      if (lease.owner === owner) return false
-      return typeof lease.time === "number" && Date.now() - lease.time < ttl
-    } catch {
-      return false
-    }
-  }
-
-  const claim = (id: string) => {
-    const renew = () => write(prefix + id, JSON.stringify({ owner, time: Date.now() }))
-    const release = () => {
-      const raw = read(prefix + id)
-      if (!raw) return
-      try {
-        const lease = JSON.parse(raw) as { owner?: string }
-        if (lease.owner === owner) write(prefix + id, null)
-      } catch {
-        return
-      }
-    }
-
-    renew()
-    window.setInterval(renew, Math.floor(ttl / 2))
-    window.addEventListener("pagehide", release, { once: true })
-    window.addEventListener("beforeunload", release, { once: true })
-  }
-
-  return () => {
-    if (cached) return cached
-    if (typeof sessionStorage === "undefined") {
-      cached = crypto.randomUUID()
-      return cached
-    }
-    const stored = sessionStorage.getItem(key)
-    cached = stored && !active(stored) ? stored : crypto.randomUUID()
-    sessionStorage.setItem(key, cached)
-    claim(cached)
-    return cached
-  }
-})()
-
 const notify: Platform["notify"] = async (title, description, href) => {
   if (!("Notification" in window)) return
 
@@ -141,7 +69,7 @@ const notify: Platform["notify"] = async (title, description, href) => {
 
   const notification = new Notification(title, {
     body: description ?? "",
-    icon: `${product.urls.site}/favicon-96x96-v3.png`,
+    icon: "https://slopcode.ai/favicon-96x96-v3.png",
   })
 
   notification.onclick = () => {
@@ -171,36 +99,81 @@ if (!(root instanceof HTMLElement) && import.meta.env.DEV) {
   throw new Error(getRootNotFoundError())
 }
 
+const getCurrentUrl = () => {
+  if (location.hostname.includes("slopcode.ai")) return "http://localhost:4096"
+  if (import.meta.env.DEV)
+    return `http://${import.meta.env.VITE_SLOPCODE_SERVER_HOST ?? "localhost"}:${import.meta.env.VITE_SLOPCODE_SERVER_PORT ?? "4096"}`
+  return location.origin
+}
+
+const getDefaultUrl = () => {
+  const lsDefault = readDefaultServerUrl()
+  if (lsDefault) return lsDefault
+  return getCurrentUrl()
+}
+
+const clearAuthToken = () => {
+  const params = new URLSearchParams(location.search)
+  if (!params.has("auth_token")) return
+  params.delete("auth_token")
+  history.replaceState(null, "", location.pathname + (params.size ? `?${params}` : "") + location.hash)
+}
+
 const platform: Platform = {
   platform: "web",
   version: pkg.version,
-  viewID,
   openLink,
   back,
   forward,
   restart,
   notify,
-  getDefaultServerUrl: async () => readDefaultServerUrl(),
-  setDefaultServerUrl: writeDefaultServerUrl,
+  getDefaultServer: async () => {
+    const stored = readDefaultServerUrl()
+    return stored ? ServerConnection.Key.make(stored) : null
+  },
+  setDefaultServer: writeDefaultServerUrl,
 }
 
-const defaultUrl = iife(() => {
-  const lsDefault = readDefaultServerUrl()
-  if (lsDefault) return lsDefault
-  const host = new URL(product.urls.site).hostname
-  if (location.hostname.includes(host)) return "http://localhost:4096"
-  if (import.meta.env.DEV)
-    return `http://${import.meta.env.VITE_SLOPCODE_SERVER_HOST ?? "localhost"}:${import.meta.env.VITE_SLOPCODE_SERVER_PORT ?? "4096"}`
-  return location.origin
-})
+if (import.meta.env.VITE_SENTRY_DSN) {
+  Sentry.init({
+    dsn: import.meta.env.VITE_SENTRY_DSN,
+    environment: import.meta.env.VITE_SENTRY_ENVIRONMENT ?? import.meta.env.MODE,
+    release: import.meta.env.VITE_SENTRY_RELEASE ?? `web@${pkg.version}`,
+    initialScope: {
+      tags: {
+        platform: "web",
+      },
+    },
+    integrations: (integrations) => {
+      return integrations.filter(
+        (i) =>
+          i.name !== "Breadcrumbs" && !(import.meta.env.SLOPCODE_CHANNEL === "prod" && i.name === "GlobalHandlers"),
+      )
+    },
+  })
+}
 
 if (root instanceof HTMLElement) {
-  const server: ServerConnection.Http = { type: "http", http: { url: defaultUrl } }
+  const auth = authFromToken(new URLSearchParams(location.search).get("auth_token"))
+  clearAuthToken()
+  const server: ServerConnection.Http = {
+    type: "http",
+    authToken: !!auth,
+    http: {
+      url: getCurrentUrl(),
+      ...auth,
+    },
+  }
   render(
     () => (
       <PlatformProvider value={platform}>
         <AppBaseProviders>
-          <AppInterface defaultServer={ServerConnection.key(server)} servers={[server]} />
+          <AppInterface
+            defaultServer={ServerConnection.Key.make(getDefaultUrl())}
+            canonicalLocalServer={ServerConnection.key(server)}
+            servers={[server]}
+            disableHealthCheck
+          />
         </AppBaseProviders>
       </PlatformProvider>
     ),

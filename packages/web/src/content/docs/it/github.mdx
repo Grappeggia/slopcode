@@ -3,7 +3,7 @@ title: GitHub
 description: Usa SlopCode in issue e pull request su GitHub.
 ---
 
-SlopCode si integra nel tuo workflow GitHub. Menziona `/slopcode` o `/sc` in un commento e SlopCode eseguira' i task dentro il runner di GitHub Actions.
+SlopCode si integra nel tuo workflow GitHub. Menziona `/slopcode` o `/oc` in un commento e SlopCode eseguira' i task dentro il runner di GitHub Actions.
 
 ---
 
@@ -51,7 +51,7 @@ In alternativa, puoi configurarlo manualmente.
    jobs:
      slopcode:
        if: |
-         contains(github.event.comment.body, '/sc') ||
+         contains(github.event.comment.body, '/oc') ||
          contains(github.event.comment.body, '/slopcode')
        runs-on: ubuntu-latest
        permissions:
@@ -64,7 +64,7 @@ In alternativa, puoi configurarlo manualmente.
               persist-credentials: false
 
           - name: Run SlopCode
-           uses: teamslop/slopcode/github@latest
+           uses: anomalyco/slopcode/github@latest
            env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
            with:
@@ -107,8 +107,8 @@ SlopCode puo' essere attivato dai seguenti eventi GitHub:
 
 | Tipo evento                   | Attivato da                            | Dettagli                                                                                                                  |
 | ----------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `issue_comment`               | Commento su una issue o PR             | Menziona `/slopcode` o `/sc` nel commento. SlopCode legge il contesto e puo' creare branch, aprire PR o rispondere.       |
-| `pull_request_review_comment` | Commento su specifiche righe in una PR | Menziona `/slopcode` o `/sc` durante una review. SlopCode riceve path file, numeri di riga e contesto del diff.           |
+| `issue_comment`               | Commento su una issue o PR             | Menziona `/slopcode` o `/oc` nel commento. SlopCode legge il contesto e puo' creare branch, aprire PR o rispondere.       |
+| `pull_request_review_comment` | Commento su specifiche righe in una PR | Menziona `/slopcode` o `/oc` durante una review. SlopCode riceve path file, numeri di riga e contesto del diff.           |
 | `issues`                      | Issue aperta o modificata              | Attiva automaticamente SlopCode quando le issue vengono create o modificate. Richiede l'input `prompt`.                   |
 | `pull_request`                | PR aperta o aggiornata                 | Attiva automaticamente SlopCode quando le PR vengono aperte, sincronizzate o riaperte. Utile per review automatiche.      |
 | `schedule`                    | Pianificazione basata su cron          | Esegue SlopCode a pianificazione. Richiede l'input `prompt`. Output nei log e nelle PR (nessuna issue su cui commentare). |
@@ -140,7 +140,7 @@ jobs:
           persist-credentials: false
 
       - name: Run SlopCode
-        uses: teamslop/slopcode/github@latest
+        uses: anomalyco/slopcode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
@@ -177,7 +177,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: teamslop/slopcode/github@latest
+      - uses: anomalyco/slopcode/github@latest
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -233,7 +233,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: teamslop/slopcode/github@latest
+      - uses: anomalyco/slopcode/github@latest
         if: steps.check.outputs.result == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -255,7 +255,7 @@ Per gli eventi `issues`, l'input `prompt` e' **obbligatorio** dato che non c'e' 
 Sovrascrivi il prompt di default per personalizzare il comportamento di SlopCode nel tuo workflow.
 
 ```yaml title=".github/workflows/slopcode.yml"
-- uses: teamslop/slopcode/github@latest
+- uses: anomalyco/slopcode/github@latest
   with:
     model: anthropic/claude-sonnet-4-5
     prompt: |
@@ -298,7 +298,7 @@ Ecco alcuni esempi di come puoi usare SlopCode su GitHub.
   Lascia il seguente commento su una PR GitHub.
 
   ```
-  Delete the attachment from S3 when the note is removed /sc
+  Delete the attachment from S3 when the note is removed /oc
   ```
 
   SlopCode implementera' la modifica richiesta e la committera' nella stessa PR.
@@ -309,7 +309,7 @@ Ecco alcuni esempi di come puoi usare SlopCode su GitHub.
 
   ```
   [Comment on specific lines in Files tab]
-  /sc add error handling here
+  /oc add error handling here
   ```
 
   Quando commenti su righe specifiche, SlopCode riceve:

@@ -1,15 +1,22 @@
 import { EventEmitter } from "events"
+import { Identifier } from "@/id/id"
 
-type GlobalEvent = {
+export type GlobalEvent = {
   directory?: string
-  payload: {
-    type: string
-    properties: Record<string, unknown>
+  project?: string
+  workspace?: string
+  payload: any
+}
+
+class GlobalBusEmitter extends EventEmitter<{
+  event: [GlobalEvent]
+}> {
+  override emit(eventName: "event", event: GlobalEvent): boolean {
+    if (event.payload && typeof event.payload === "object" && !("id" in event.payload)) {
+      event.payload.id = event.payload.syncEvent?.id ?? Identifier.create("evt", "ascending")
+    }
+    return super.emit(eventName, event)
   }
 }
 
-export const GlobalBus = new EventEmitter() as EventEmitter & {
-  emit(event: "event", payload: GlobalEvent): boolean
-  on(event: "event", listener: (payload: GlobalEvent) => void): EventEmitter
-  off(event: "event", listener: (payload: GlobalEvent) => void): EventEmitter
-}
+export const GlobalBus = new GlobalBusEmitter()

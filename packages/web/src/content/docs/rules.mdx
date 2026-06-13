@@ -15,9 +15,17 @@ To create a new `AGENTS.md` file, you can run the `/init` command in slopcode.
 You should commit your project's `AGENTS.md` file to Git.
 :::
 
-This will scan your project and all its contents to understand what the project is about and generate an `AGENTS.md` file with it. This helps slopcode to navigate the project better.
+`/init` scans the important files in your repo, may ask a couple of targeted questions when the codebase cannot answer them, and then creates or updates `AGENTS.md` with concise project-specific guidance.
 
-If you have an existing `AGENTS.md` file, this will try to add to it.
+It focuses on the things future agent sessions are most likely to need:
+
+- build, lint, and test commands
+- command order and focused verification steps when they matter
+- architecture and repo structure that are not obvious from filenames alone
+- project-specific conventions, setup quirks, and operational gotchas
+- references to existing instruction sources like Cursor or Copilot rules
+
+If you already have an `AGENTS.md`, `/init` will improve it in place instead of blindly replacing it.
 
 ---
 
@@ -104,7 +112,7 @@ Example:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["CONTRIBUTING.md", "docs/guidelines.md", ".cursor/rules/*.md"]
 }
 ```
@@ -113,7 +121,7 @@ You can also use remote URLs to load instructions from the web.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["https://raw.githubusercontent.com/my-org/shared-rules/main/style.md"]
 }
 ```
@@ -134,7 +142,7 @@ The recommended approach is to use the `instructions` field in `slopcode.json`:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["docs/development-standards.md", "test/testing-guidelines.md", "packages/*/AGENTS.md"]
 }
 ```

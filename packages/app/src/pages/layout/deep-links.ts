@@ -1,9 +1,7 @@
-import { product } from "@slopcode-ai/util/product"
-
-export const deepLinkEvent = `${product.id}:deep-link`
+export const deepLinkEvent = "slopcode:deep-link"
 
 const parseUrl = (input: string) => {
-  if (!product.deep_link.schemes.some((scheme) => input.startsWith(scheme))) return
+  if (!input.startsWith("slopcode://")) return
   if (typeof URL.canParse === "function" && !URL.canParse(input)) return
   try {
     return new URL(input)
@@ -38,13 +36,13 @@ export const collectOpenProjectDeepLinks = (urls: string[]) =>
 export const collectNewSessionDeepLinks = (urls: string[]) =>
   urls.map(parseNewSessionDeepLink).filter((link): link is { directory: string; prompt?: string } => !!link)
 
-type SlopcodeWindow = Window & {
+type SlopCodeWindow = Window & {
   __SLOPCODE__?: {
     deepLinks?: string[]
   }
 }
 
-export const drainPendingDeepLinks = (target: SlopcodeWindow) => {
+export const drainPendingDeepLinks = (target: SlopCodeWindow) => {
   const pending = target.__SLOPCODE__?.deepLinks ?? []
   if (pending.length === 0) return []
   if (target.__SLOPCODE__) target.__SLOPCODE__.deepLinks = []

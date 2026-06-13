@@ -1,47 +1,99 @@
-import z from "zod"
+import { Schema } from "effect"
+import type * as HttpClientError from "effect/unstable/http/HttpClientError"
 
-export type AccountID = string
-export type OrgID = string
-export type AccessToken = string
-export type RefreshToken = string
+export const AccountID = Schema.String.pipe(Schema.brand("AccountID"))
+export type AccountID = Schema.Schema.Type<typeof AccountID>
 
-export const Info = z.object({
-  id: z.string(),
-  email: z.string().email(),
-  url: z.string().url(),
-  active_org_id: z.string().nullable().default(null),
-})
-export type Info = z.infer<typeof Info>
+export const OrgID = Schema.String.pipe(Schema.brand("OrgID"))
+export type OrgID = Schema.Schema.Type<typeof OrgID>
 
-export const Org = z.object({
-  id: z.string(),
-  name: z.string(),
-})
-export type Org = z.infer<typeof Org>
+export const AccessToken = Schema.String.pipe(Schema.brand("AccessToken"))
+export type AccessToken = Schema.Schema.Type<typeof AccessToken>
 
-export type AccountOrgs = {
-  account: Info
-  orgs: readonly Org[]
+export const RefreshToken = Schema.String.pipe(Schema.brand("RefreshToken"))
+export type RefreshToken = Schema.Schema.Type<typeof RefreshToken>
+
+export const DeviceCode = Schema.String.pipe(Schema.brand("DeviceCode"))
+export type DeviceCode = Schema.Schema.Type<typeof DeviceCode>
+
+export const UserCode = Schema.String.pipe(Schema.brand("UserCode"))
+export type UserCode = Schema.Schema.Type<typeof UserCode>
+
+export class Info extends Schema.Class<Info>("Account")({
+  id: AccountID,
+  email: Schema.String,
+  url: Schema.String,
+  active_org_id: Schema.NullOr(OrgID),
+}) {}
+
+export class Org extends Schema.Class<Org>("Org")({
+  id: OrgID,
+  name: Schema.String,
+}) {}
+
+export class AccountRepoError extends Schema.TaggedErrorClass<AccountRepoError>()("AccountRepoError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect),
+}) {}
+
+export class AccountServiceError extends Schema.TaggedErrorClass<AccountServiceError>()("AccountServiceError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect),
+}) {}
+
+export class AccountTransportError extends Schema.TaggedErrorClass<AccountTransportError>()("AccountTransportError", {
+  method: Schema.String,
+  url: Schema.String,
+  description: Schema.optional(Schema.String),
+  cause: Schema.optional(Schema.Defect),
+}) {
+  static fromHttpClientError(error: HttpClientError.TransportError): AccountTransportError {
+    return new AccountTransportError({
+      method: error.request.method,
+      url: error.request.url,
+      description: error.description,
+      cause: error.cause,
+    })
+  }
+
+  override get message(): string {
+    return [
+      `Could not reach ${this.method} ${this.url}.`,
+      `This failed before the server returned an HTTP response.`,
+      this.description,
+      `Check your network, proxy, or VPN configuration and try again.`,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  }
 }
 
-export type ActiveOrg = {
-  account: Info
-  org: Org
-}
+export type AccountError = AccountRepoError | AccountServiceError | AccountTransportError
 
-export type Login = {
-  code: string
-  user: string
-  url: string
-  server: string
-  expiry: number
-  interval: number
-}
+export class Login extends Schema.Class<Login>("Login")({
+  code: DeviceCode,
+  user: UserCode,
+  url: Schema.String,
+  server: Schema.String,
+  expiry: Schema.Duration,
+  interval: Schema.Duration,
+}) {}
 
-export type PollResult =
-  | { type: "success"; email: string }
-  | { type: "pending" }
-  | { type: "slow" }
-  | { type: "expired" }
-  | { type: "denied" }
-  | { type: "error"; cause: string }
+export class PollSuccess extends Schema.TaggedClass<PollSuccess>()("PollSuccess", {
+  email: Schema.String,
+}) {}
+
+export class PollPending extends Schema.TaggedClass<PollPending>()("PollPending", {}) {}
+
+export class PollSlow extends Schema.TaggedClass<PollSlow>()("PollSlow", {}) {}
+
+export class PollExpired extends Schema.TaggedClass<PollExpired>()("PollExpired", {}) {}
+
+export class PollDenied extends Schema.TaggedClass<PollDenied>()("PollDenied", {}) {}
+
+export class PollError extends Schema.TaggedClass<PollError>()("PollError", {
+  cause: Schema.Defect,
+}) {}
+
+export const PollResult = Schema.Union([PollSuccess, PollPending, PollSlow, PollExpired, PollDenied, PollError])
+export type PollResult = Schema.Schema.Type<typeof PollResult>

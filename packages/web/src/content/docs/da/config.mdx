@@ -13,11 +13,12 @@ SlopCode understøtter både **JSON** og **JSONC** (JSON med kommentarer) format
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  // Theme configuration
-  "theme": "slopcode",
+  "$schema": "https://slopcode.ai/config.json",
   "model": "anthropic/claude-sonnet-4-5",
   "autoupdate": true,
+  "server": {
+    "port": 4096,
+  },
 }
 ```
 
@@ -34,7 +35,7 @@ Konfigurationsfiler **flettes sammen**, erstattes ikke.
 
 Konfigurationsfiler flettes sammen, erstattes ikke. Indstillinger fra følgende konfigurationssteder kombineret. Senere konfigurationer tilsidesætter kun tidligere konfigurationer for modstridende nøgler. Ikke-modstridende indstillinger fra alle konfigurationer bevares.
 
-For eksempel, hvis dine globale konfigurationssæt `theme: "slopcode"` og `autoupdate: true`, og dine projektkonfigurationssæt `model: "anthropic/claude-sonnet-4-5"`, vil den endelige konfiguration integrere alle tre indstillinger.
+For eksempel, hvis dine globale konfigurationssæt `autoupdate: true`, og dine projektkonfigurationssæt `model: "anthropic/claude-sonnet-4-5"`, vil den endelige konfiguration integrere begge indstillinger.
 
 ---
 
@@ -146,7 +147,7 @@ Den brugerdefinerede mappe indlæses efter den globale konfig og `.slopcode` map
 
 ## Skema
 
-Konfigurationsfilen har et skema, der defineres i [**`slopcode.dev/config.json`**](https://slopcode.dev/config.json).
+Konfigurationsfilen har et skema, der defineres i [**`slopcode.ai/config.json`**](https://slopcode.ai/config.json).
 
 Din editor skal være i stand til at validere og autofuldføre baseret på skemaet.
 
@@ -158,7 +159,7 @@ Du kan konfigurere TUI-specifikke indstillinger gennem indstillingen `tui`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "tui": {
     "scroll_speed": 3,
     "scroll_acceleration": {
@@ -185,7 +186,7 @@ Du kan konfigurere serverindstillinger for kommandoerne `slopcode serve` og `slo
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "server": {
     "port": 4096,
     "hostname": "0.0.0.0",
@@ -214,7 +215,7 @@ Du kan administrere de værktøjer, en LLM kan bruge, gennem indstillingen `tool
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "tools": {
     "write": false,
     "bash": false
@@ -232,7 +233,7 @@ Du kan konfigurere de udbydere og modeller, du vil bruge i din SlopCode-konfigur
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {},
   "model": "anthropic/claude-sonnet-4-5",
   "small_model": "anthropic/claude-haiku-4-5"
@@ -245,7 +246,7 @@ Udbydermuligheder kan omfatte `timeout` og `setCacheKey`:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -274,7 +275,7 @@ Amazon Bedrock understøtter AWS-specifik konfiguration:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -305,7 +306,7 @@ Du kan konfigurere det tema, du vil bruge i din SlopCode-konfiguration, gennem i
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "theme": ""
 }
 ```
@@ -320,7 +321,7 @@ Du kan konfigurere opgaver specialiserede agenter til specifikke indstillinger g
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "agent": {
     "code-reviewer": {
       "description": "Reviews code for best practices and potential issues",
@@ -346,7 +347,7 @@ Du kan indstille standardagenten ved at bruge indstillingen `default_agent`. Det
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "default_agent": "plan"
 }
 ```
@@ -363,7 +364,7 @@ Du kan konfigurere funktionen [share](/docs/share) gennem indstillingen `share`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "share": "manual"
 }
 ```
@@ -384,7 +385,7 @@ Du kan konfigurere brugerdefinerede kommandoer til gentagne opgaver gennem indst
 
 ```jsonc title="slopcode.jsonc"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "command": {
     "test": {
       "template": "Run the full test suite with coverage report and show any failures.\nFocus on the failing tests and suggest fixes.",
@@ -410,7 +411,7 @@ Du kan tilpasse dine nøglebindinger gennem indstillingen `keybinds`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "keybinds": {}
 }
 ```
@@ -425,7 +426,7 @@ SlopCode vil automatisk downloade alle nye opdateringer, når den starter op. Du
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "autoupdate": false
 }
 ```
@@ -441,7 +442,7 @@ Du kan konfigurere kodeformatere gennem indstillingen `formatter`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -469,7 +470,7 @@ For at sikre, at værktøjerne `edit` og `bash` for eksempel kræver brugergodke
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "permission": {
     "edit": "ask",
     "bash": "ask"
@@ -487,16 +488,18 @@ Du kan styre kontekstkomprimeringsadfærd gennem indstillingen `compaction`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "compaction": {
     "auto": true,
-    "prune": true
+    "prune": false,
+    "reserved": 10000
   }
 }
 ```
 
 - `auto` - Komprimer automatisk sessionen, når konteksten er fuld (standard: `true`).
-- `prune` - Fjern gamle værktøjsudgange for at gemme tokens (standard: `true`).
+- `prune` - Fjern gamle værktøjsudgange for at gemme tokens (standard: `false`).
+- `reserved` - Tokenbuffer til komprimering. Efterlader nok vindue til at undgå overløb under komprimering
 
 ---
 
@@ -506,7 +509,7 @@ Du kan konfigurere ignoreringsmønstre for filovervåger gennem indstillingen `w
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "watcher": {
     "ignore": ["node_modules/**", "dist/**", ".git/**"]
   }
@@ -523,7 +526,7 @@ Du kan konfigurere MCP-servere, som du vil bruge, gennem indstillingen `mcp`.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "mcp": {}
 }
 ```
@@ -540,7 +543,7 @@ Placer plugin-filer i `.slopcode/plugins/` eller `~/.config/slopcode/plugins/`. 
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "plugin": ["slopcode-helicone-session", "@my-org/custom-plugin"]
 }
 ```
@@ -555,7 +558,7 @@ Du kan konfigurere brugervejledningen til den model, du kan gennem indstillingen
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["CONTRIBUTING.md", "docs/guidelines.md", ".cursor/rules/*.md"]
 }
 ```
@@ -571,7 +574,7 @@ Du kan deaktivere udbydere, der indlæses automatisk gennem `disabled_providers`
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "disabled_providers": ["openai", "gemini"]
 }
 ```
@@ -582,8 +585,8 @@ Du kan deaktivere udbydere, der indlæses automatisk gennem `disabled_providers`
 
 Indstillingen `disabled_providers` accepterer en række udbyder-id'er. Når en udbyder er deaktiveret:
 
-- Det vil ikke blive indlæst, omgivelserne miljøvariabler er indstillet.
-- Den vil ikke blive indlæst, gennem API-nøgler er konfigureret kommandoen `/connect`.
+- Den vil ikke blive indlæst, selvom miljøvariabler er indstillet.
+- Den vil ikke blive indlæst, selvom API-nøgler er konfigureret via `/connect`-kommandoen.
 - Udbyderens modeller vises ikke på modelvalgslisten.
 
 ---
@@ -594,7 +597,7 @@ Du kan angive en tilladelsesliste over udbydere gennem muligheden `enabled_provi
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "enabled_providers": ["anthropic", "openai"]
 }
 ```
@@ -615,7 +618,7 @@ Nøglen `experimental` indeholder muligheder, der er under aktiv udvikling.
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "experimental": {}
 }
 ```
@@ -638,7 +641,7 @@ Brug `{env:VARIABLE_NAME}` til at erstatte miljøvariabler:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "model": "{env:SLOPCODE_MODEL}",
   "provider": {
     "anthropic": {
@@ -661,7 +664,7 @@ Brug `{file:path/to/file}` til at erstatte indholdet af en fil:
 
 ```json title="slopcode.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/config.json",
   "instructions": ["./custom-instructions.md"],
   "provider": {
     "openai": {

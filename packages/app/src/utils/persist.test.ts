@@ -1,6 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
+import { ServerScope } from "./server-scope"
 
 type PersistTestingType = typeof import("./persist").PersistTesting
+type PersistType = typeof import("./persist").Persist
+type RemovePersistedType = typeof import("./persist").removePersisted
+
 class MemoryStorage implements Storage {
   private values = new Map<string, string>()
   readonly events: string[] = []
@@ -44,6 +48,8 @@ class MemoryStorage implements Storage {
 const storage = new MemoryStorage()
 
 let persistTesting: PersistTestingType
+let Persist: PersistType
+let removePersisted: RemovePersistedType
 
 beforeAll(async () => {
   mock.module("@/context/platform", () => ({
@@ -52,6 +58,8 @@ beforeAll(async () => {
 
   const mod = await import("./persist")
   persistTesting = mod.PersistTesting
+  Persist = mod.Persist
+  removePersisted = mod.removePersisted
 })
 
 beforeEach(() => {
@@ -103,30 +111,101 @@ describe("persist localStorage resilience", () => {
     const result = persistTesting.normalize({ value: "ok" }, '{"value":"\\x"}')
     expect(result).toBeUndefined()
   })
-})
 
-describe("persisted cross-tab sync", () => {
-  test("maps storage keys for scoped storage", () => {
-    expect(persistTesting.localStorageKey({ storage: "slopcode.workspace.test", key: "session:view" })).toBe(
-      "slopcode.workspace.test:session:view",
-    )
+  test("workspace storage sanitizes Windows filename characters", () => {
+    const result = persistTesting.workspaceStorage("C:\\Users\\foo")
+
+    expect(result).toStartWith("slopcode.workspace.")
+    expect(result.endsWith(".dat")).toBeTrue()
+    expect(/[:\\/]/.test(result)).toBeFalse()
   })
 
-  test("scopes storage names and keys by view id", () => {
-    expect(persistTesting.scopedStorage({ storage: "slopcode.global.dat", scope: "view-1" })).toMatch(
-      /^slopcode\.global\.[^.]+\.dat$/,
-    )
-    expect(persistTesting.scopedKey({ key: "layout", scope: "view-1" })).toMatch(/^scope:[^:]+:layout$/)
+  test("workspace target keeps raw path storage as legacy fallback", () => {
+    const target = Persist.workspace("C:\\Users\\foo", "vcs")
+
+    expect(target.storage).toBe(persistTesting.workspaceStorage("C:/Users/foo"))
+    expect(target.legacyStorageNames).toEqual([persistTesting.workspaceStorage("C:\\Users\\foo")])
   })
 
-  test("normalizes storage event payloads into merged store values", () => {
-    expect(persistTesting.syncValue({ value: 1, nested: { ok: true } }, '{"value":2}')).toEqual({
-      value: 2,
-      nested: { ok: true },
+  test("workspace target keeps backslash storage as fallback for normalized Windows paths", () => {
+    const target = Persist.workspace("C:/Users/foo", "vcs")
+
+    expect(target.storage).toBe(persistTesting.workspaceStorage("C:/Users/foo"))
+    expect(target.legacyStorageNames).toEqual([persistTesting.workspaceStorage("C:\\Users\\foo")])
+  })
+
+  test("migrates direct legacy keys into scoped storage", () => {
+    storage.setItem("legacy.workspace", '{"value":2}')
+    const target = Persist.workspace("C:/Users/foo", "demo", ["legacy.workspace"])
+    const current = persistTesting.localStorageWithPrefix(target.storage!)
+    const legacyStore = persistTesting.localStorageDirect()
+
+    const result = persistTesting.migrateLegacy({
+      current,
+      legacyStore,
+      stores: [],
+      keys: target.legacy!,
+      key: target.key,
+      defaults: { value: 1 },
+    })
+
+    expect(result).toBe('{"value":2}')
+    expect(storage.getItem(`${target.storage}:${target.key}`)).toBe('{"value":2}')
+    expect(legacyStore.getItem("legacy.workspace")).toBeNull()
+    expect(storage.getItem("legacy.workspace")).toBeNull()
+  })
+
+  test("removes legacy workspace storage when removing persisted target", () => {
+    const target = Persist.workspace("C:\\Users\\foo", "terminal")
+    storage.setItem(`${target.storage}:${target.key}`, '{"value":1}')
+    storage.setItem(`${target.legacyStorageNames![0]}:${target.key}`, '{"value":2}')
+
+    removePersisted(target)
+
+    expect(storage.getItem(`${target.storage}:${target.key}`)).toBeNull()
+    expect(storage.getItem(`${target.legacyStorageNames![0]}:${target.key}`)).toBeNull()
+  })
+
+  test("draft target isolates storage per draft and namespaces keys", () => {
+    const a = Persist.draft("draft-a", "prompt")
+    const b = Persist.draft("draft-b", "prompt")
+
+    expect(a.key).toBe("draft:prompt")
+    expect(a.storage).not.toBe(b.storage)
+    expect(a.storage).not.toBe(Persist.workspace("/home/luke/repo", "prompt").storage)
+  })
+
+  test("removes draft storage when removing persisted target", () => {
+    const target = Persist.draft("draft-a", "prompt")
+    storage.setItem(`${target.storage}:${target.key}`, '{"value":1}')
+
+    removePersisted(target)
+
+    expect(storage.getItem(`${target.storage}:${target.key}`)).toBeNull()
+  })
+
+  test("server workspace target preserves local storage and isolates remote storage", () => {
+    const local = Persist.serverWorkspace(ServerScope.local, "/home/luke/repo", "prompt")
+    const windows = Persist.serverWorkspace("https://windows.example" as ServerScope, "/home/luke/repo", "prompt")
+    const debian = Persist.serverWorkspace("https://debian.example" as ServerScope, "/home/luke/repo", "prompt")
+
+    expect(local).toEqual(Persist.workspace("/home/luke/repo", "prompt"))
+    expect(windows.storage).not.toBe(local.storage)
+    expect(debian.storage).not.toBe(local.storage)
+    expect(debian.storage).not.toBe(windows.storage)
+    expect(windows.legacyStorageNames).toBeUndefined()
+    expect(debian.legacyStorageNames).toBeUndefined()
+  })
+
+  test("server global target preserves local key and isolates remote keys", () => {
+    expect(Persist.serverGlobal(ServerScope.local, "notification")).toEqual(Persist.global("notification"))
+    expect(Persist.serverGlobal("https://debian.example" as ServerScope, "notification")).toEqual({
+      storage: "slopcode.global.dat",
+      key: "https://debian.example\0notification",
     })
   })
 
-  test("resets to defaults when a persisted value is removed in another tab", () => {
-    expect(persistTesting.syncValue({ value: 7 }, null)).toEqual({ value: 7 })
+  test("server global target cannot collide when scope and key contain colons", () => {
+    expect(Persist.serverGlobal("a:b" as ServerScope, "c")).not.toEqual(Persist.serverGlobal("a" as ServerScope, "b:c"))
   })
 })

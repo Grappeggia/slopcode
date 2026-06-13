@@ -3,11 +3,11 @@ title: 快捷鍵
 description: 自訂您的快捷鍵。
 ---
 
-SlopCode 提供了一系列快捷鍵，您可以透過 SlopCode 設定進行自訂。
+SlopCode 提供了一系列快捷鍵，您可以透過 `tui.json` 進行自訂。
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {
     "leader": "ctrl+x",
     "app_exit": "ctrl+c,ctrl+d,<leader>q",
@@ -28,6 +28,7 @@ SlopCode 提供了一系列快捷鍵，您可以透過 SlopCode 設定進行自�
     "session_unshare": "none",
     "session_interrupt": "escape",
     "session_compact": "<leader>c",
+    "session_child_first": "<leader>down",
     "session_child_cycle": "<leader>right",
     "session_child_cycle_reverse": "<leader>left",
     "session_parent": "<leader>up",
@@ -52,6 +53,7 @@ SlopCode 提供了一系列快捷鍵，您可以透過 SlopCode 設定進行自�
     "model_cycle_favorite": "none",
     "model_cycle_favorite_reverse": "none",
     "variant_cycle": "ctrl+t",
+    "variant_list": "none",
     "command_list": "ctrl+p",
     "agent_list": "<leader>a",
     "agent_cycle": "tab",
@@ -117,39 +119,16 @@ SlopCode 的大多數快捷鍵使用 `leader`（前導鍵）。這可以避免�
 
 ## 停用快捷鍵
 
-您可以透過在設定中將對應的鍵值設定為 "none" 來停用某個快捷鍵。
+您可以透過在 `tui.json` 中將對應的鍵值設定為 "none" 來停用某個快捷鍵。
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {
     "session_compact": "none"
   }
 }
 ```
-
----
-
-## History mode keybinds
-
-Use `history_mode_toggle` to switch between edit mode and history mode.
-
-Use `history_previous` and `history_next` to move through history-mode prompt entries.
-
-```json title="tui.json"
-{
-  "$schema": "https://slopcode.dev/tui.json",
-  "keybinds": {
-    "history_mode_toggle": "ctrl+y",
-    "history_previous": "pageup",
-    "history_next": "pagedown"
-  }
-}
-```
-
-:::tip
-By default, `history_mode_toggle` is `ctrl+y`.
-:::
 
 ---
 

@@ -61,11 +61,11 @@ SlopCode 自帶多個內建主題。
 
 ## 使用主題
 
-您可以透過 `/themes` 指令調出主題選擇介面來選擇主題，也可以在[設定](/docs/config)檔案中直接指定。
+您可以透過 `/theme` 指令調出主題選擇介面來選擇主題，也可以在 `tui.json` 中直接指定。
 
-```json title="slopcode.json" {3}
+```json title="tui.json" {3}
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "theme": "tokyonight"
 }
 ```
@@ -144,7 +144,7 @@ vim .slopcode/themes/my-theme.json
 
 ```json title="my-theme.json"
 {
-  "$schema": "https://slopcode.dev/theme.json",
+  "$schema": "https://slopcode.ai/theme.json",
   "defs": {
     "nord0": "#2E3440",
     "nord1": "#3B4252",

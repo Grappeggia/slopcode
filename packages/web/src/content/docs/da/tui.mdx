@@ -91,6 +91,18 @@ Komprimer nuværende session. _Alias_: `/summarize`
 
 ---
 
+### details
+
+Skift visning af værktøjsudførelsesdetaljer.
+
+```bash frame="none"
+/details
+```
+
+**Genvejstast:** `ctrl+x d`
+
+---
+
 ### editor
 
 Åbn eksternt redigeringsprogram for at skrive beskeder. Bruger redigeringsprogrammet i miljøvariablen `EDITOR`. [Læs mere](#editor-setup).
@@ -136,18 +148,6 @@ Vis hjælpedialogen.
 ```
 
 **Genvejstast:** `ctrl+x h`
-
----
-
-### history
-
-Toggle history mode for session navigation.
-
-```bash frame="none"
-/history
-```
-
-**Genvejstast:** `history_mode_toggle` defaults to `ctrl+y`
 
 ---
 
@@ -234,7 +234,7 @@ Del nuværende session. [Læs mere](/docs/share).
 Liste over tilgængelige temaer.
 
 ```bash frame="none"
-/themes
+/theme
 ```
 
 **Genvejstast:** `ctrl+x t`
@@ -280,20 +280,6 @@ Ophæv deling af nuværende session. [Læs mere](/docs/share#un-sharing).
 ```bash frame="none"
 /unshare
 ```
-
----
-
-## History mode
-
-Use history mode when you want to navigate existing session messages and traces without moving your hands to the mouse.
-
-While history mode is active, `up` and `down` move between prompts, `left` and `right` move between traces, and `space` runs the context action.
-
-Pressing `space` expands or collapses tool output, and opens a child task session when the selected item supports it.
-
-Use `history_mode_toggle` (defaults to `ctrl+y`) to exit history mode and return to normal edit mode.
-
-Unlike normal prompt input history (`history_previous` and `history_next`), history mode navigates rendered session content instead of cycling through text in the input box.
 
 ---
 
@@ -366,24 +352,63 @@ Nogle editorer kræver kommandolinjeargumenter for at køre i blokeringstilstand
 
 ## Konfigurer
 
-Du kan tilpasse TUI-adfærden gennem SlopCode-konfigurationsfilen.
+Du kan tilpasse TUI-adfærd gennem `tui.json` (eller `tui.jsonc`).
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
-  "tui": {
-    "scroll_speed": 3,
-    "scroll_acceleration": {
-      "enabled": true
+  "$schema": "https://slopcode.ai/tui.json",
+  "theme": "slopcode",
+  "leader_timeout": 2000,
+  "keybinds": {
+    "leader": "ctrl+x",
+    "command_list": "ctrl+p"
+  },
+  "scroll_speed": 3,
+  "scroll_acceleration": {
+    "enabled": false
+  },
+  "diff_style": "auto",
+  "mouse": true,
+  "attention": {
+    "enabled": true,
+    "notifications": true,
+    "sound": true,
+    "volume": 0.4,
+    "sound_pack": "slopcode.default",
+    "sounds": {
+      "error": "./sounds/error.mp3"
     }
   }
 }
 ```
 
+Dette er adskilt fra `slopcode.json`, som konfigurerer server-/kørselstidsadfærd.
+
+`keybinds` flettes sammen med de indbyggede standarder, så du behøver kun at konfigurere de genveje, du vil ændre.
+
 ### Indstillinger
 
-- `scroll_acceleration` - Aktiver rulleacceleration i macOS-stil for jævn, naturlig rulning. Når aktiveret, øger rullehastigheden med hurtige rullebevægelser og forbliver præcis for langsommere bevægelser. **Denne indstilling har forrang over `scroll_speed` og tilsidesætter den, når den er aktiveret.**
-- `scroll_speed` - Styrer hvor hurtigt TUI ruller, når du bruger rullekommandoer (minimum: `1`). Standard er `3`. **Bemærk: Dette ignoreres hvis `scroll_acceleration.enabled` er sat til `true`.**
+- `theme` - Indstiller dit brugergrænsefladetema. [Læs mere](/docs/themes).
+- `keybinds` - Tilpasser tastaturgenveje. [Læs mere](/docs/keybinds).
+- `leader_timeout` - Styrer hvor længe SlopCode venter efter leader key. Standard er `2000`.
+- `scroll_acceleration.enabled` - Aktiver rulleacceleration i macOS-stil for jævn, naturlig rulning. Når aktiveret, øger rullehastigheden med hurtige rullebevægelser og forbliver præcis for langsommere bevægelser. **Denne indstilling har forrang over `scroll_speed` og tilsidesætter den, når den er aktiveret.**
+- `scroll_speed` - Styrer hvor hurtigt TUI ruller, når du bruger rullekommandoer (minimum: `0.001`, understøtter decimalværdier). Standard er `3`. **Bemærk: Dette ignoreres hvis `scroll_acceleration.enabled` er sat til `true`.**
+- `diff_style` - Styrer diff-gengivelse. `"auto"` tilpasser sig terminalbredde, `"stacked"` viser altid et enkeltkolonne-layout.
+- `mouse` - Aktiverer eller deaktiverer musefangst i TUI (standard: `true`). Når den er deaktiveret, bevares terminalens oprindelige musemarkering og rulning.
+- `attention` - Konfigurerer skrivebordsnotifikationer og lyde for TUI. Deaktiveret som standard.
+
+Brug `SLOPCODE_TUI_CONFIG` til at indlæse en brugerdefineret TUI-konfigurationssti.
+
+### Attention
+
+Attention lader TUI give dig besked, når SlopCode venter på et svar, kræver godkendelse af en tilladelse, rapporterer en sessionsfejl eller har afsluttet en session. Aktivér det med `attention.enabled`; indbyggede hændelser afspiller en lyd, når de sker. Skrivebordsnotifikationer sendes kun, når terminalvinduet ikke er i fokus, og bruges ikke til subagent-hændelser.
+
+- `enabled` - Aktiverer alle notifikationer og lyde for Attention. Standard er `false`.
+- `notifications` - Når Attention er aktiveret, lader dette TUI sende skrivebordsnotifikationer via terminalen. Standard er `true`.
+- `sound` - Når Attention er aktiveret, tillader dette advarselslyde. Standard er `true`.
+- `volume` - Standard lydstyrke for advarselslyde fra `0` til `1`. Standard er `0.4`.
+- `sound_pack` - Sound pack-ID der skal bruges. Standard er `slopcode.default`.
+- `sounds` - Angiver brugerdefinerede lydfiler for `default`, `question`, `permission`, `error`, `done` eller `subagent_done`. Stier kan være absolutte, `file://` URL'er eller relative til `tui.json`.
 
 ---
 

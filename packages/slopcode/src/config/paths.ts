@@ -1,219 +1,45 @@
+export * as ConfigPaths from "./paths"
+
 import path from "path"
-import os from "os"
-import z from "zod"
-import { type ParseError as JsoncParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser"
-import { NamedError } from "@slopcode-ai/util/error"
-import { configNames, product } from "@slopcode-ai/util/product"
-import { Filesystem } from "@/util/filesystem"
-import { Flag } from "@/flag/flag"
-import { Global } from "@/global"
+import { Flag } from "@slopcode-ai/core/flag/flag"
+import { Global } from "@slopcode-ai/core/global"
+import { unique } from "remeda"
+import * as Effect from "effect/Effect"
+import { FSUtil } from "@slopcode-ai/core/fs-util"
 
-export namespace ConfigPaths {
-  const configDirs = [...product.config.dirs]
+export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
+  name: string,
+  directory: string,
+  worktree?: string,
+) {
+  const afs = yield* FSUtil.Service
+  return (yield* afs.up({
+    targets: [`${name}.jsonc`, `${name}.json`],
+    start: directory,
+    stop: worktree,
+  })).toReversed()
+})
 
-  export async function projectFiles(name: string, directory: string, worktree: string) {
-    const files: string[] = []
-    for (const base of configNames(name)) {
-      for (const file of [`${base}.jsonc`, `${base}.json`]) {
-        const found = await Filesystem.findUp(file, directory, worktree)
-        for (const resolved of found.toReversed()) {
-          files.push(resolved)
-        }
-      }
-    }
-    return files
-  }
-
-  export async function directories(directory: string, worktree: string) {
-    return [
-      Global.Path.config,
-      ...(!Flag.SLOPCODE_DISABLE_PROJECT_CONFIG
-        ? await Array.fromAsync(
-            Filesystem.up({
-              targets: configDirs,
-              start: directory,
-              stop: worktree,
-            }),
-          )
-        : []),
-      ...(await Array.fromAsync(
-        Filesystem.up({
-          targets: configDirs,
-          start: Global.Path.home,
-          stop: Global.Path.home,
-        }),
-      )),
-      ...(Flag.SLOPCODE_CONFIG_DIR ? [Flag.SLOPCODE_CONFIG_DIR] : []),
-    ]
-  }
-
-  export function isConfigDirectory(dir: string) {
-    return configDirs.some((item) => dir.endsWith(item))
-  }
-
-  export function fileInDirectory(dir: string, name: string) {
-    return configNames(name).flatMap((item) => [path.join(dir, `${item}.jsonc`), path.join(dir, `${item}.json`)])
-  }
-
-  export const JsonError = NamedError.create(
-    "ConfigJsonError",
-    z.object({
-      path: z.string(),
-      message: z.string().optional(),
-    }),
-  )
-
-  export const InvalidError = NamedError.create(
-    "ConfigInvalidError",
-    z.object({
-      path: z.string(),
-      issues: z.custom<z.core.$ZodIssue[]>().optional(),
-      message: z.string().optional(),
-    }),
-  )
-
-  /** Read a config file, returning undefined for missing files and throwing JsonError for other failures. */
-  export async function readFile(filepath: string) {
-    return Filesystem.readText(filepath).catch((err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT") return
-      throw new JsonError({ path: filepath }, { cause: err })
-    })
-  }
-
-  type ParseSource = string | { source: string; dir: string }
-  type ParseOptions =
-    | "error"
-    | "empty"
-    | {
-        missing?: "error" | "empty"
-        allowFileReference?: (input: {
-          path: string
-          source: string
-          configDir: string
-          token: string
-        }) => boolean | string | Promise<boolean | string>
-      }
-
-  function source(input: ParseSource) {
-    return typeof input === "string" ? input : input.source
-  }
-
-  function dir(input: ParseSource) {
-    return typeof input === "string" ? path.dirname(input) : input.dir
-  }
-
-  function parseOptions(options: ParseOptions | undefined) {
-    if (!options || typeof options === "string") {
-      return {
-        missing: options ?? "error",
-        allowFileReference: undefined,
-      }
-    }
-    return {
-      missing: options.missing ?? "error",
-      allowFileReference: options.allowFileReference,
-    }
-  }
-
-  /** Apply {env:VAR} and {file:path} substitutions to config text. */
-  async function substitute(text: string, input: ParseSource, options?: ParseOptions) {
-    const { missing, allowFileReference } = parseOptions(options)
-    text = text.replace(/\{env:([^}]+)\}/g, (_, varName) => {
-      return process.env[varName] || ""
-    })
-
-    const fileMatches = Array.from(text.matchAll(/\{file:[^}]+\}/g))
-    if (!fileMatches.length) return text
-
-    const configDir = dir(input)
-    const configSource = source(input)
-    let out = ""
-    let cursor = 0
-
-    for (const match of fileMatches) {
-      const token = match[0]
-      const index = match.index!
-      out += text.slice(cursor, index)
-
-      const lineStart = text.lastIndexOf("\n", index - 1) + 1
-      const prefix = text.slice(lineStart, index).trimStart()
-      if (prefix.startsWith("//")) {
-        out += token
-        cursor = index + token.length
-        continue
-      }
-
-      let filePath = token.replace(/^\{file:/, "").replace(/\}$/, "")
-      if (filePath.startsWith("~/")) {
-        filePath = path.join(os.homedir(), filePath.slice(2))
-      }
-
-      const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(configDir, filePath)
-      const allowed = await allowFileReference?.({ path: resolvedPath, source: configSource, configDir, token })
-      if (typeof allowed === "string") {
-        throw new InvalidError({ path: configSource, message: allowed })
-      }
-      if (allowed === false) {
-        throw new InvalidError({
-          path: configSource,
-          message: `bad file reference: "${token}" ${resolvedPath} is outside allowed config roots`,
+export const directories = Effect.fn("ConfigPaths.directories")(function* (directory: string, worktree?: string) {
+  const afs = yield* FSUtil.Service
+  return unique([
+    Global.Path.config,
+    ...(!Flag.SLOPCODE_DISABLE_PROJECT_CONFIG
+      ? yield* afs.up({
+          targets: [".slopcode"],
+          start: directory,
+          stop: worktree,
         })
-      }
-      const fileContent = (
-        await Filesystem.readText(resolvedPath).catch((error: NodeJS.ErrnoException) => {
-          if (missing === "empty") return ""
+      : []),
+    ...(yield* afs.up({
+      targets: [".slopcode"],
+      start: Global.Path.home,
+      stop: Global.Path.home,
+    })),
+    ...(Flag.SLOPCODE_CONFIG_DIR ? [Flag.SLOPCODE_CONFIG_DIR] : []),
+  ])
+})
 
-          const errMsg = `bad file reference: "${token}"`
-          if (error.code === "ENOENT") {
-            throw new InvalidError(
-              {
-                path: configSource,
-                message: errMsg + ` ${resolvedPath} does not exist`,
-              },
-              { cause: error },
-            )
-          }
-          throw new InvalidError({ path: configSource, message: errMsg }, { cause: error })
-        })
-      ).trim()
-
-      out += JSON.stringify(fileContent).slice(1, -1)
-      cursor = index + token.length
-    }
-
-    out += text.slice(cursor)
-    return out
-  }
-
-  /** Substitute and parse JSONC text, throwing JsonError on syntax errors. */
-  export async function parseText(text: string, input: ParseSource, options?: ParseOptions) {
-    const configSource = source(input)
-    text = await substitute(text, input, options)
-
-    const errors: JsoncParseError[] = []
-    const data = parseJsonc(text, errors, { allowTrailingComma: true })
-    if (errors.length) {
-      const lines = text.split("\n")
-      const errorDetails = errors
-        .map((e) => {
-          const beforeOffset = text.substring(0, e.offset).split("\n")
-          const line = beforeOffset.length
-          const column = beforeOffset[beforeOffset.length - 1].length + 1
-          const problemLine = lines[line - 1]
-
-          const error = `${printParseErrorCode(e.error)} at line ${line}, column ${column}`
-          if (!problemLine) return error
-
-          return `${error}\n   Line ${line}: ${problemLine}\n${"".padStart(column + 9)}^`
-        })
-        .join("\n")
-
-      throw new JsonError({
-        path: configSource,
-        message: `\n--- JSONC Input ---\n${text}\n--- Errors ---\n${errorDetails}\n--- End ---`,
-      })
-    }
-
-    return data
-  }
+export function fileInDirectory(dir: string, name: string) {
+  return [path.join(dir, `${name}.json`), path.join(dir, `${name}.jsonc`)]
 }

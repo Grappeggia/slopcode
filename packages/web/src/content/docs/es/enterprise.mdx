@@ -1,26 +1,170 @@
 ---
 title: Empresa
-description: Archived page, feature outside this fork scope.
+description: Usar SlopCode de forma segura en su organización.
 ---
 
-This page is archived for this slopfork.
+import config from "../../../../config.mjs"
+export const email = `mailto:${config.email}`
 
-Enterprise and share features are not part of this fork docs scope.
+SlopCode Enterprise es para organizaciones que desean garantizar que su código y sus datos nunca abandonen su infraestructura. Puede hacerlo mediante el uso de una configuración centralizada que se integra con su SSO y su puerta de enlace AI interna.
 
----
+:::note
+SlopCode no almacena ningún código ni datos de contexto.
+:::
 
-## Use providers
+Para comenzar con SlopCode Enterprise:
 
-Set up standard providers at [/docs/providers](/docs/providers).
-
----
-
-## Configure setup
-
-Configure keys and models at [/docs/config](/docs/config).
+1. Haz una prueba interna con tu equipo.
+2. **<a href={email}>Contáctenos</a>** para analizar los precios y las opciones de implementación.
 
 ---
 
-## Troubleshoot issues
+## Prueba
 
-Check common fixes at [/docs/troubleshooting](/docs/troubleshooting).
+SlopCode es de código abierto y no almacena ningún código ni datos de contexto, por lo que sus desarrolladores pueden simplemente [comenzar](/docs/) y realizar una prueba.
+
+---
+
+### Manejo de datos
+
+**SlopCode no almacena su código ni datos de contexto.** Todo el procesamiento se realiza localmente o mediante llamadas directas API a su proveedor de IA.
+
+Esto significa que, siempre que uses un proveedor de confianza o un
+AI gateway interno, puedes usar SlopCode de forma segura.
+
+La única advertencia aquí es la característica opcional `/share`.
+
+---
+
+#### Compartir conversaciones
+
+Si un usuario habilita la función `/share`, la conversación y los datos asociados con ella se envían al servicio que utilizamos para alojar estas páginas compartidas en slopcode.ai.
+
+Actualmente, los datos se entregan a través de la red perimetral de nuestra CDN y se almacenan en caché en el perímetro cerca de sus usuarios.
+
+Le recomendamos que desactive esto para su prueba.
+
+```json title="slopcode.json"
+{
+  "$schema": "https://slopcode.ai/config.json",
+  "share": "disabled"
+}
+```
+
+[Más información sobre cómo compartir](/docs/share).
+
+---
+
+### Propiedad del código
+
+**Eres propietario de todo el código producido por SlopCode.** No existen restricciones de licencia ni reclamaciones de propiedad.
+
+---
+
+## Precios
+
+Usamos un modelo por puesto para SlopCode Enterprise. Si tiene su propia puerta de enlace LLM, no cobramos por los tokens utilizados. Para obtener más detalles sobre precios y opciones de implementación, **<a href={email}>contáctenos</a>**.
+
+---
+
+## Implementación
+
+Una vez que haya completado su prueba y esté listo para usar SlopCode en
+su organización, puede **<a href={email}>contáctenos</a>** para discutir
+opciones de fijación de precios y de implementación.
+
+---
+
+### Configuración central
+
+Podemos configurar SlopCode para usar una única configuración central para toda su organización.
+
+Esta configuración centralizada puede integrarse con su proveedor de SSO y garantiza que todos los usuarios accedan únicamente a su puerta de enlace de IA interna.
+
+---
+
+### Integración SSO
+
+A través de la configuración central, SlopCode puede integrarse con el proveedor de SSO de su organización para la autenticación.
+
+Esto permite a SlopCode obtener credenciales para su puerta de enlace interna de IA a través de su sistema de gestión de identidad existente.
+
+---
+
+### Puerta de enlace interna de IA
+
+Con la configuración central, SlopCode también se puede configurar para usar solo su puerta de enlace AI interna.
+
+También puede desactivar todos los demás proveedores de IA, asegurándose de que todas las solicitudes pasen por la infraestructura aprobada de su organización.
+
+---
+
+### Autohospedaje
+
+Si bien recomendamos desactivar las páginas para compartir para garantizar que sus datos nunca abandonen
+su organización, también podemos ayudarle a autohospedarlos en su infraestructura.
+
+Esto se encuentra actualmente en nuestra hoja de ruta. Si está interesado, **<a href={email}>háganoslo saber</a>**.
+
+---
+
+## Preguntas frecuentes
+
+<details>
+<summary>¿Qué es SlopCode Enterprise?</summary>
+
+SlopCode Enterprise es para organizaciones que desean garantizar que su código y sus datos nunca abandonen su infraestructura. Puede hacerlo mediante el uso de una configuración centralizada que se integra con su SSO y su puerta de enlace AI interna.
+
+</details>
+
+<details>
+<summary>¿Cómo empiezo con SlopCode Enterprise?</summary>
+
+Simplemente comience con una prueba interna con su equipo. SlopCode de forma predeterminada no almacena su código ni datos de contexto, lo que facilita el inicio.
+
+Luego **<a href={email}>contáctenos</a>** para analizar los precios y las opciones de implementación.
+
+</details>
+
+<details>
+<summary>¿Cómo funcionan los precios empresariales?</summary>
+
+Ofrecemos precios empresariales por asiento. Si tiene su propia puerta de enlace LLM, no cobramos por los tokens utilizados. Para obtener más detalles, **<a href={email}>contáctenos</a>** para obtener una cotización personalizada basada en las necesidades de su organización.
+
+</details>
+
+<details>
+<summary>¿Están mis datos seguros con SlopCode Enterprise?</summary>
+
+Sí. SlopCode no almacena su código ni datos de contexto. Todo el procesamiento se realiza localmente o mediante llamadas directas API a su proveedor de IA. Con la configuración central y la integración de SSO, sus datos permanecen seguros dentro de la infraestructura de su organización.
+
+</details>
+
+<details>
+<summary>¿Podemos utilizar nuestro propio registro privado de NPM?</summary>
+
+SlopCode admite registros privados npm a través del soporte de archivos `.npmrc` nativo de Bun. Si su organización utiliza un registro privado, como JFrog Artifactory, Nexus o similar, asegúrese de que los desarrolladores estén autenticados antes de ejecutar SlopCode.
+
+Para configurar la autenticación con su registro privado:
+
+```bash
+npm login --registry=https://your-company.jfrog.io/api/npm/npm-virtual/
+```
+
+Esto crea `~/.npmrc` con detalles de autenticación. SlopCode automáticamente
+recoge esto.
+
+:::caution
+Debe iniciar sesión en el registro privado antes de ejecutar SlopCode.
+:::
+
+Alternativamente, puede configurar manualmente un archivo `.npmrc`:
+
+```bash title="~/.npmrc"
+registry=https://your-company.jfrog.io/api/npm/npm-virtual/
+//your-company.jfrog.io/api/npm/npm-virtual/:_authToken=${NPM_AUTH_TOKEN}
+```
+
+Los desarrolladores deben iniciar sesión en el registro privado antes de ejecutar SlopCode para garantizar que los paquetes se puedan instalar desde su registro empresarial.
+
+</details>

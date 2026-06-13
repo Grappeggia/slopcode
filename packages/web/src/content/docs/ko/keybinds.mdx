@@ -3,11 +3,11 @@ title: 키바인드
 description: 키바인드를 커스터마이즈하세요.
 ---
 
-SlopCode에는 SlopCode config를 통해 커스터마이즈할 수 있는 keybinds 목록이 있습니다.
+SlopCode에는 `tui.json`을 통해 커스터마이즈할 수 있는 키바인드 목록이 있습니다.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {
     "leader": "ctrl+x",
     "app_exit": "ctrl+c,ctrl+d,<leader>q",
@@ -28,6 +28,7 @@ SlopCode에는 SlopCode config를 통해 커스터마이즈할 수 있는 keybin
     "session_unshare": "none",
     "session_interrupt": "escape",
     "session_compact": "<leader>c",
+    "session_child_first": "<leader>down",
     "session_child_cycle": "<leader>right",
     "session_child_cycle_reverse": "<leader>left",
     "session_parent": "<leader>up",
@@ -52,6 +53,7 @@ SlopCode에는 SlopCode config를 통해 커스터마이즈할 수 있는 keybin
     "model_cycle_favorite": "none",
     "model_cycle_favorite_reverse": "none",
     "variant_cycle": "ctrl+t",
+    "variant_list": "none",
     "command_list": "ctrl+p",
     "agent_list": "<leader>a",
     "agent_cycle": "tab",
@@ -117,39 +119,16 @@ keybinds에 리더 키를 꼭 사용할 필요는 없지만, 사용하는 것을
 
 ## 키바인드 비활성화
 
-config에 해당 키를 값 `"none"`으로 추가하면 keybind를 비활성화할 수 있습니다.
+`tui.json`에 해당 키를 값 `"none"`으로 추가하면 키바인드를 비활성화할 수 있습니다.
 
-```json title="slopcode.json"
+```json title="tui.json"
 {
-  "$schema": "https://slopcode.dev/config.json",
+  "$schema": "https://slopcode.ai/tui.json",
   "keybinds": {
     "session_compact": "none"
   }
 }
 ```
-
----
-
-## History mode keybinds
-
-Use `history_mode_toggle` to switch between edit mode and history mode.
-
-Use `history_previous` and `history_next` to move through history-mode prompt entries.
-
-```json title="tui.json"
-{
-  "$schema": "https://slopcode.dev/tui.json",
-  "keybinds": {
-    "history_mode_toggle": "ctrl+y",
-    "history_previous": "pageup",
-    "history_next": "pagedown"
-  }
-}
-```
-
-:::tip
-By default, `history_mode_toggle` is `ctrl+y`.
-:::
 
 ---
 

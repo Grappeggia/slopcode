@@ -20,6 +20,7 @@ const imageAttrs = {
 };
 
 const github = (config.social || []).filter(s => s.icon === 'github')[0];
+const discord = (config.social || []).filter(s => s.icon === 'discord')[0];
 const locale = Astro.currentLocale || 'root';
 const t = Astro.locals.t as (key: string) => string;
 const docsHref = getRelativeLocaleUrl(locale, "")
@@ -29,7 +30,7 @@ const docsGithubHref = getRelativeLocaleUrl(locale, "github")
 
 const command = "curl -fsSL"
 const protocol = "https://"
-const url = "slopcode.dev/install"
+const url = "slopcode.ai/install"
 const bash = "| bash"
 
 let darkImage: ImageMetadata | undefined;
@@ -93,9 +94,9 @@ if (image) {
     <section class="alternatives">
       <div class="col1">
         <h3>npm</h3>
-        <button class="command" data-command="npm install -g slopcode">
+        <button class="command" data-command="npm install -g slopcode-ai">
           <code>
-            <span>npm install -g</span> <span class="highlight">slopcode</span>
+            <span>npm install -g</span> <span class="highlight">slopcode-ai</span>
           </code>
           <span class="copy">
             <CopyIcon />
@@ -105,9 +106,9 @@ if (image) {
       </div>
       <div class="col2">
         <h3>Bun</h3>
-        <button class="command" data-command="bun install -g slopcode">
+        <button class="command" data-command="bun install -g slopcode-ai">
           <code>
-            <span>bun install -g</span> <span class="highlight">slopcode</span>
+            <span>bun install -g</span> <span class="highlight">slopcode-ai</span>
           </code>
           <span class="copy">
             <CopyIcon />
@@ -141,9 +142,9 @@ if (image) {
       </div>
       <div class="col4">
         <h3>Mise</h3>
-        <button class="command" data-command="mise use -g github:teamslop/slopcode">
+        <button class="command" data-command="mise use -g github:anomalyco/slopcode">
           <code>
-            <span>mise use -g</span> <span class="highlight">github:teamslop/slopcode</span>
+            <span>mise use -g</span> <span class="highlight">github:anomalyco/slopcode</span>
           </code>
           <span class="copy">
             <CopyIcon />
@@ -186,8 +187,11 @@ if (image) {
       <div class="col1">
         <a href={github.href} target="_blank" rel="noopener noreferrer">GitHub</a>
       </div>
+      <div class="col2">
+        <a href={discord.href} target="_blank" rel="noopener noreferrer">Discord</a>
+      </div>
       <div class="col3">
-      <span>&copy;2025 SlopCode contributors</span>
+      <span>&copy;2025 <a href="https://anoma.ly" target="_blank" rel="noopener noreferrer">Anomaly Innovations</a></span>
       </div>
     </section>
 </div>

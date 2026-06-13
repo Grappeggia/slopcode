@@ -27,7 +27,7 @@ export default function Home() {
       const callback = () => {
         const text = button.textContent
         if (text) {
-          navigator.clipboard.writeText(text)
+          void navigator.clipboard.writeText(text)
           button.setAttribute("data-copied", "")
           setTimeout(() => {
             button.removeAttribute("data-copied")
@@ -67,7 +67,7 @@ export default function Home() {
               <span>
                 <span>curl -fsSL </span>
                 <span data-slot="protocol">https://</span>
-                <span data-slot="highlight">slopcode.dev/install</span>
+                <span data-slot="highlight">slopcode.ai/install</span>
                 <span> | bash</span>
               </span>
               <CopyStatus />
@@ -113,7 +113,7 @@ export default function Home() {
             <h3 data-component="title">npm</h3>
             <button data-copy data-slot="button">
               <span>
-                npm install -g <strong>slopcode</strong>
+                npm install -g <strong>slopcode-ai</strong>
               </span>
               <CopyStatus />
             </button>
@@ -122,16 +122,7 @@ export default function Home() {
             <h3 data-component="title">bun</h3>
             <button data-copy data-slot="button">
               <span>
-                bun install -g <strong>slopcode</strong>
-              </span>
-              <CopyStatus />
-            </button>
-          </div>
-          <div data-component="method">
-            <h3 data-component="title">apt</h3>
-            <button data-copy data-slot="button">
-              <span>
-                curl -fsSL https://<strong>teamslop.github.io/apt-slopcode/install.sh</strong> | sudo bash
+                bun install -g <strong>slopcode-ai</strong>
               </span>
               <CopyStatus />
             </button>
@@ -170,10 +161,10 @@ export default function Home() {
             <a href="https://x.com/slopcode">{i18n.t("footer.x")}</a>
           </div>
           <div data-slot="cell">
-            <a href="http://github.com/teamslop/slopcode">{i18n.t("footer.github")}</a>
+            <a href="https://github.com/teamslop/slopcode">{i18n.t("footer.github")}</a>
           </div>
           <div data-slot="cell">
-            <a href="https://slopcode.dev/discord">{i18n.t("footer.discord")}</a>
+            <a href="https://slopcode.ai/discord">{i18n.t("footer.discord")}</a>
           </div>
         </footer>
       </div>
