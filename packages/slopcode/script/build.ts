@@ -71,7 +71,7 @@ const createEmbeddedWebUIBundle = async () => {
   })
   const entries = files.map((file, i) => `  ${JSON.stringify(file)}: file_${i},`)
   return [
-    "// Import all files as file_$i with type: \"file\"",
+    '// Import all files as file_$i with type: "file"',
     ...imports,
     "// Export with original mappings",
     "export default {",
@@ -503,7 +503,18 @@ const androidOpentui = async (arch: "arm64" | "x64") => {
     path.join(dir, "node_modules", "@opentui", `core-linux-${arch}`, "libopentui.so"),
     path.join(dir, "..", "..", "node_modules", "@opentui", `core-linux-${arch}`, "libopentui.so"),
     path.join(dir, "node_modules", ".bun", bun, "node_modules", "@opentui", `core-linux-${arch}`, "libopentui.so"),
-    path.join(dir, "..", "..", "node_modules", ".bun", bun, "node_modules", "@opentui", `core-linux-${arch}`, "libopentui.so"),
+    path.join(
+      dir,
+      "..",
+      "..",
+      "node_modules",
+      ".bun",
+      bun,
+      "node_modules",
+      "@opentui",
+      `core-linux-${arch}`,
+      "libopentui.so",
+    ),
   ].find((item) => fs.existsSync(item))
   if (!source) {
     const cache = path.join(dir, "dist", ".android-cache")
