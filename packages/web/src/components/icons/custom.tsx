@@ -50,6 +50,10 @@ export function IconOpencode(props: JSX.SvgSVGAttributes<SVGSVGElement>) {
   )
 }
 
+export function IconSlopcode(props: JSX.SvgSVGAttributes<SVGSVGElement>) {
+  return <IconOpencode {...props} />
+}
+
 // https://icones.js.org/collection/ri?s=meta&icon=ri:meta-fill
 export function IconMeta(props: JSX.SvgSVGAttributes<SVGSVGElement>) {
   return (

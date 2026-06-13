@@ -173,6 +173,7 @@ export default defineConfig({
       },
       sidebar: [
         "",
+        "changelog",
         "config",
         "providers",
         "network",
