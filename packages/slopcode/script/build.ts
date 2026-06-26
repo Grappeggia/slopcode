@@ -764,7 +764,7 @@ for (const item of targets) {
     throw new Error(`Missing built binary at ${binary}`)
   }
 
-  if (item.os === process.platform && item.arch === process.arch) {
+  if (item.os === process.platform && item.arch === process.arch && item.abi !== "musl") {
     const version = Bun.spawnSync([binary, "--version"])
     if (version.exitCode !== 0) {
       throw new Error(`Smoke test failed for ${name}: --version exited with ${version.exitCode}`)
