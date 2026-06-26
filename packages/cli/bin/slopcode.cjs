@@ -5,28 +5,25 @@ const fs = require("fs")
 const path = require("path")
 const os = require("os")
 
-const forwardedSignals = ["SIGINT", "SIGTERM", "SIGHUP"]
-
 function run(target) {
-  const child = childProcess.spawn(target, process.argv.slice(2), { stdio: "inherit" })
-  child.on("error", (error) => {
-    console.error(error.message)
-    process.exit(1)
-  })
-  const forwarders = {}
-  for (const signal of forwardedSignals) {
-    forwarders[signal] = () => {
+  const maxRetries = 3
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const child = childProcess.spawnSync(target, process.argv.slice(2), { stdio: "inherit" })
+    if (child.error) {
+      console.error(child.error.message)
+      process.exit(1)
+    }
+    if (child.signal === "SIGABRT" && attempt < maxRetries) {
+      console.error(`slopcode crashed (SIGABRT), retrying (${attempt + 1}/${maxRetries})...`)
+      continue
+    }
+    if (child.signal) {
       try {
-        child.kill(signal)
+        process.kill(process.pid, child.signal)
       } catch {}
     }
-    process.on(signal, forwarders[signal])
+    process.exit(typeof child.status === "number" ? child.status : 1)
   }
-  child.on("exit", (code, signal) => {
-    for (const forwardedSignal of forwardedSignals) process.removeListener(forwardedSignal, forwarders[forwardedSignal])
-    if (signal) return process.kill(process.pid, signal)
-    process.exit(typeof code === "number" ? code : 0)
-  })
 }
 
 const envPath = process.env.SLOPCODE_BIN_PATH

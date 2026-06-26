@@ -19,17 +19,29 @@ function startupLog(phase, extra = {}) {
 }
 
 function run(target, options = {}) {
-  startupLog("launcher.exec", { target: path.basename(target) })
-  const result = childProcess.spawnSync(target, options.args || process.argv.slice(2), {
-    stdio: "inherit",
-    env: options.env ? { ...process.env, ...options.env } : process.env,
-  })
-  if (result.error) {
-    console.error(result.error.message)
-    process.exit(1)
+  const maxRetries = 3
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    startupLog("launcher.exec", { target: path.basename(target), attempt })
+    const result = childProcess.spawnSync(target, options.args || process.argv.slice(2), {
+      stdio: "inherit",
+      env: options.env ? { ...process.env, ...options.env } : process.env,
+    })
+    if (result.error) {
+      console.error(result.error.message)
+      process.exit(1)
+    }
+    if (result.signal === "SIGABRT" && attempt < maxRetries) {
+      console.error(`slopcode crashed (SIGABRT), retrying (${attempt + 1}/${maxRetries})...`)
+      continue
+    }
+    if (result.signal) {
+      try {
+        process.kill(process.pid, result.signal)
+      } catch {}
+    }
+    const code = typeof result.status === "number" ? result.status : 1
+    process.exit(code)
   }
-  const code = typeof result.status === "number" ? result.status : 0
-  process.exit(code)
 }
 
 const envPath = process.env.SLOPCODE_BIN_PATH

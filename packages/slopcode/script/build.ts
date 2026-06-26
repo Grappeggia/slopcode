@@ -764,6 +764,18 @@ for (const item of targets) {
     throw new Error(`Missing built binary at ${binary}`)
   }
 
+  if (item.os === process.platform && item.arch === process.arch) {
+    const version = Bun.spawnSync([binary, "--version"])
+    if (version.exitCode !== 0) {
+      throw new Error(`Smoke test failed for ${name}: --version exited with ${version.exitCode}`)
+    }
+    const out = (version.stdout?.toString() ?? "").trim()
+    if (!out) {
+      throw new Error(`Smoke test failed for ${name}: --version produced no output`)
+    }
+    console.log(`smoke test: ${name} --version OK (${out})`)
+  }
+
   await $`rm -rf ./dist/${name}/bin/tui`
   await nvimBundle(item, name)
   const file = `dist/${name}/bin/neovim/bin/${nvimBinary(item.os)}`
