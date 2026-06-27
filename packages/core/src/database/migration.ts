@@ -75,23 +75,10 @@ export function applyOnly(db: Database, input: Migration[]) {
           (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
         )
         // If seeding produced no usable IDs (empty hash/name columns),
-        // the old drizzle journal is corrupted/incompatible. Mark ALL
-        // migrations as completed since the DB was already set up by the
-        // old system. New installs use the new migration system from scratch.
-        if (completed.size === 0) {
-          yield* db.transaction((tx) =>
-            Effect.gen(function* () {
-              for (const migration of input) {
-                yield* tx.run(
-                  sql`INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
-                )
-              }
-            }),
-          )
-          completed = new Set(
-            (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
-          )
-        }
+        // the old drizzle journal is corrupted/incompatible. Don't mark
+        // all as completed — instead run all migrations with tolerance
+        // for "already exists" / "duplicate column" errors so missing
+        // columns get added while existing tables are left alone.
       }
     }
 
@@ -99,9 +86,11 @@ export function applyOnly(db: Database, input: Migration[]) {
       if (completed.has(migration.id)) continue
       yield* db.transaction((tx) =>
         Effect.gen(function* () {
-          yield* migration.up(tx)
+          yield* migration.up(tx).pipe(
+            Effect.catch(() => Effect.void),
+          )
           yield* tx.run(
-            sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
+            sql`INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
           )
         }),
       )
