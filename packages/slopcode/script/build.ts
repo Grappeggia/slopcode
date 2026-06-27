@@ -738,7 +738,10 @@ const fallbackBundle = async (item: { os: string; arch: "arm64" | "x64"; abi?: "
     path.join(dir, "..", "..", "node_modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`, `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`),
     path.join(dir, "..", "..", "node_modules", ".bun", bunCache, "node_modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`, `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`),
   ].find((f) => fs.existsSync(f))
-  if (!so) throw new Error(`Missing opentui native lib for ${name}`)
+  if (!so) {
+    console.log(`fallback bundle: skipping ${name} (native lib not available on this host)`)
+    return
+  }
   const ext = item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"
   await fs.promises.copyFile(so, path.join(modulesDir, `libopentui.${ext}`))
   await Bun.write(path.join(modulesDir, "index.js"), `import { fileURLToPath } from "node:url"\nexport default fileURLToPath(new URL("./libopentui.${ext}", import.meta.url))\n`)
