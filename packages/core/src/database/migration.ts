@@ -58,10 +58,10 @@ export function applyOnly(db: Database, input: Migration[]) {
         const columns = yield* db.all<{ name: string }>(
           sql`PRAGMA table_info(${sql.identifier("__drizzle_migrations")})`,
         )
-        const idCol = columns.find((c) => c.name === "hash")
-          ? "hash"
-          : columns.find((c) => c.name === "name")
-            ? "name"
+        const idCol = columns.find((c) => c.name === "name")
+          ? "name"
+          : columns.find((c) => c.name === "hash")
+            ? "hash"
             : null
         if (idCol) {
           yield* db.run(sql`
@@ -84,7 +84,7 @@ export function applyOnly(db: Database, input: Migration[]) {
 
     for (const migration of input) {
       if (completed.has(migration.id)) continue
-      yield* db.transaction((tx) => migration.up(tx)).pipe(Effect.catch(() => Effect.void))
+      yield* migration.up(db as unknown as Transaction).pipe(Effect.catchCause(() => Effect.void))
       yield* db.run(
         sql`INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
       )
