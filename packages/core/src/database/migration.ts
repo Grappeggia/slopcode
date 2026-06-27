@@ -74,6 +74,29 @@ export function applyOnly(db: Database, input: Migration[]) {
         completed = new Set(
           (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
         )
+        // If seeding produced no usable IDs (empty hash/name columns),
+        // mark the first N migrations as completed based on row count.
+        // The old drizzle journal recorded applied migrations in order.
+        if (completed.size === 0) {
+          const count = yield* db.get<{ c: number }>(
+            sql`SELECT COUNT(*) as c FROM ${sql.identifier("__drizzle_migrations")}`,
+          )
+          const n = count?.c ?? 0
+          if (n > 0) {
+            yield* db.transaction((tx) =>
+              Effect.gen(function* () {
+                for (let i = 0; i < Math.min(n, input.length); i++) {
+                  yield* tx.run(
+                    sql`INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${input[i].id}, ${Date.now()})`,
+                  )
+                }
+              }),
+            )
+            completed = new Set(
+              (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
+            )
+          }
+        }
       }
     }
 
