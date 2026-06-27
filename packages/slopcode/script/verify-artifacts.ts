@@ -71,9 +71,7 @@ if (binaries.length === 0) {
   throw new Error("verify: missing binary packages in ./dist")
 }
 
-const deps = Object.fromEntries(
-  binaries.map((item) => [item.name, item.version]),
-)
+const deps = Object.fromEntries(binaries.map((item) => [item.name, item.version]))
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-verify-"))
 const stage = path.join(tmp, "stage")
 await fs.mkdir(stage, { recursive: true })
