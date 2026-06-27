@@ -18,6 +18,23 @@ function startupLog(phase, extra = {}) {
   console.error(JSON.stringify({ event: "android.startup", phase, ms: Date.now() - startupStart, ...extra }))
 }
 
+function cleanupTempSo() {
+  try {
+    const tmp = os.tmpdir()
+    const files = fs.readdirSync(tmp)
+    const now = Date.now()
+    for (const file of files) {
+      if (/^\.5bfff.*\.so$/.test(file)) {
+        const full = path.join(tmp, file)
+        try {
+          const stat = fs.statSync(full)
+          if (now - stat.mtimeMs > 3600000) fs.unlinkSync(full)
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
 function run(target, options = {}) {
   startupLog("launcher.exec", { target: path.basename(target) })
   const result = childProcess.spawnSync(target, options.args || process.argv.slice(2), {
@@ -29,6 +46,7 @@ function run(target, options = {}) {
     process.exit(1)
   }
   if (result.signal === "SIGABRT" && options.fallback) {
+    cleanupTempSo()
     console.error("slopcode crashed (SIGABRT), falling back to JS bundle...")
     const bun = childProcess.spawnSync("bun", ["--version"], { encoding: "utf8", timeout: 3000 })
     if (bun.status === 0 && bun.stdout.trim()) {
@@ -47,6 +65,9 @@ function run(target, options = {}) {
       }
       process.exit(typeof fb.status === "number" ? fb.status : 1)
     }
+    console.error("slopcode crashed and no bun runtime found in PATH for fallback.")
+    console.error("Install bun: curl -fsSL https://bun.sh | bash")
+    process.exit(1)
   }
   if (result.signal) {
     try {

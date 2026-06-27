@@ -51,15 +51,22 @@ export function applyOnly(db: Database, input: Migration[]) {
     if (completed.size === 0) {
       // Existing installs used Drizzle's migration journal. Seed the new
       // journal once so TypeScript migrations don't replay old SQL.
+      // Handle both old (name) and new (hash) drizzle journal schemas.
       if (
         yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${"__drizzle_migrations"}`)
       ) {
-        yield* db.run(sql`
-          INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed)
-          SELECT name, ${Date.now()}
-          FROM ${sql.identifier("__drizzle_migrations")}
-          WHERE name IS NOT NULL
-        `)
+        const columns = yield* db.all<{ name: string }>(
+          sql`PRAGMA table_info(${sql.identifier("__drizzle_migrations")})`,
+        )
+        const idCol = columns.find((c) => c.name === "hash") ? "hash" : columns.find((c) => c.name === "name") ? "name" : null
+        if (idCol) {
+          yield* db.run(sql`
+            INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed)
+            SELECT ${sql.identifier(idCol)}, ${Date.now()}
+            FROM ${sql.identifier("__drizzle_migrations")}
+            WHERE ${sql.identifier(idCol)} IS NOT NULL AND ${sql.identifier(idCol)} != ''
+          `)
+        }
         completed = new Set(
           (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
         )

@@ -5,6 +5,23 @@ const fs = require("fs")
 const path = require("path")
 const os = require("os")
 
+function cleanupTempSo() {
+  try {
+    const tmp = os.tmpdir()
+    const files = fs.readdirSync(tmp)
+    const now = Date.now()
+    for (const file of files) {
+      if (/^\.5bfff.*\.so$/.test(file)) {
+        const full = path.join(tmp, file)
+        try {
+          const stat = fs.statSync(full)
+          if (now - stat.mtimeMs > 3600000) fs.unlinkSync(full)
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
 function run(target) {
   const child = childProcess.spawnSync(target, process.argv.slice(2), { stdio: "inherit" })
   if (child.error) {
@@ -17,6 +34,7 @@ function run(target) {
     if (fs.existsSync(fallback)) {
       const bun = childProcess.spawnSync("bun", ["--version"], { encoding: "utf8", timeout: 3000 })
       if (bun.status === 0 && bun.stdout.trim()) {
+        cleanupTempSo()
         console.error("slopcode crashed (SIGABRT), falling back to JS bundle...")
         const modules = path.join(pkgDir, "fallback", "modules")
         const env = {
@@ -40,6 +58,9 @@ function run(target) {
         }
         process.exit(typeof fb.status === "number" ? fb.status : 1)
       }
+      console.error("slopcode crashed and no bun runtime found in PATH for fallback.")
+      console.error("Install bun: curl -fsSL https://bun.sh | bash")
+      process.exit(1)
     }
   }
   if (child.signal) {

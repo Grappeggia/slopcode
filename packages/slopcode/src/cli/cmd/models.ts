@@ -8,6 +8,7 @@ import { ProviderV2 } from "@slopcode-ai/core/provider"
 export const ModelsCommand = effectCmd({
   command: "models [provider]",
   describe: "list all available models",
+  instance: false,
   builder: (yargs) =>
     yargs
       .positional("provider", {
