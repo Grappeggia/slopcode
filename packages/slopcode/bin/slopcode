@@ -19,29 +19,40 @@ function startupLog(phase, extra = {}) {
 }
 
 function run(target, options = {}) {
-  const maxRetries = 3
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    startupLog("launcher.exec", { target: path.basename(target), attempt })
-    const result = childProcess.spawnSync(target, options.args || process.argv.slice(2), {
-      stdio: "inherit",
-      env: options.env ? { ...process.env, ...options.env } : process.env,
-    })
-    if (result.error) {
-      console.error(result.error.message)
-      process.exit(1)
-    }
-    if (result.signal === "SIGABRT" && attempt < maxRetries) {
-      console.error(`slopcode crashed (SIGABRT), retrying (${attempt + 1}/${maxRetries})...`)
-      continue
-    }
-    if (result.signal) {
-      try {
-        process.kill(process.pid, result.signal)
-      } catch {}
-    }
-    const code = typeof result.status === "number" ? result.status : 1
-    process.exit(code)
+  startupLog("launcher.exec", { target: path.basename(target) })
+  const result = childProcess.spawnSync(target, options.args || process.argv.slice(2), {
+    stdio: "inherit",
+    env: options.env ? { ...process.env, ...options.env } : process.env,
+  })
+  if (result.error) {
+    console.error(result.error.message)
+    process.exit(1)
   }
+  if (result.signal === "SIGABRT" && options.fallback) {
+    console.error("slopcode crashed (SIGABRT), falling back to JS bundle...")
+    const bun = childProcess.spawnSync("bun", ["--version"], { encoding: "utf8", timeout: 3000 })
+    if (bun.status === 0 && bun.stdout.trim()) {
+      const fbEnv = { ...process.env, SLOPCODE_IN_PROCESS: "1", ...(options.fallbackEnv || {}) }
+      const fb = childProcess.spawnSync("bun", ["run", options.fallback, ...(options.args || process.argv.slice(2))], {
+        stdio: "inherit",
+        env: fbEnv,
+      })
+      if (fb.error) {
+        console.error(fb.error.message)
+        process.exit(1)
+      }
+      if (fb.signal) {
+        try { process.kill(process.pid, fb.signal) } catch {}
+      }
+      process.exit(typeof fb.status === "number" ? fb.status : 1)
+    }
+  }
+  if (result.signal) {
+    try {
+      process.kill(process.pid, result.signal)
+    } catch {}
+  }
+  process.exit(typeof result.status === "number" ? result.status : 1)
 }
 
 const envPath = process.env.SLOPCODE_BIN_PATH
@@ -321,9 +332,19 @@ const useCache = libc() !== "bionic"
 
 const packageNames = names("slopcode-bin")
 const resolvedNames = Array.from(new Set([...packageNames, ...names("slopcode")]))
+
+function findFallback(binaryPath) {
+  const pkgDir = path.dirname(path.dirname(binaryPath))
+  const fallback = path.join(pkgDir, "fallback", "index.js")
+  if (!fs.existsSync(fallback)) return
+  const modules = path.join(pkgDir, "fallback", "modules")
+  return { path: fallback, env: { NODE_PATH: [modules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter) } }
+}
+
 const hit = useCache ? cacheReady(resolvedNames) : undefined
 if (hit) {
-  run(hit)
+  const resolvedPkg = resolveBinary() || findBinary(scriptDir)
+  run(hit, { fallback: resolvedPkg ? findFallback(resolvedPkg.path)?.path : undefined, fallbackEnv: resolvedPkg ? findFallback(resolvedPkg.path)?.env : undefined })
 }
 clearCache()
 
@@ -428,4 +449,8 @@ if (libc() === "bionic" && androidInteractive(args)) {
   }
 }
 
-run(resolved.path)
+const fallback = findFallback(resolved.path)
+run(resolved.path, {
+  fallback: fallback?.path,
+  fallbackEnv: fallback?.env,
+})

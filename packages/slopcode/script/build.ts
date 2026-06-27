@@ -695,6 +695,67 @@ if (targetFlag && targets.length === 0) {
   throw new Error(`Unknown build target: ${targetFlag}`)
 }
 
+const fallbackBundle = async (item: { os: string; arch: "arm64" | "x64"; abi?: "musl" }, name: string) => {
+  const out = path.join(dir, "dist", name, "fallback")
+  await fs.promises.rm(out, { recursive: true, force: true })
+  await fs.promises.mkdir(out, { recursive: true })
+
+  const platformName = item.os === "win32" ? "windows" : item.os
+  const libcSuffix = item.abi === "musl" ? "-musl" : ""
+  const nativePkg = `@opentui/core-${platformName}-${item.arch}${libcSuffix}`
+
+  const result = await Bun.build({
+    conditions: ["browser"],
+    tsconfig: "./tsconfig.json",
+    plugins: [solidPlugin],
+    sourcemap: "none",
+    target: "bun",
+    outdir: out,
+    entrypoints: ["./src/index.ts", parserWorker, workerPath],
+    naming: "[name].[ext]",
+    define: {
+      SLOPCODE_VERSION: `'${Script.version}'`,
+      SLOPCODE_NVIM_VERSION: `'${nvimVersion}'`,
+      SLOPCODE_MIGRATIONS: JSON.stringify(migrations),
+      SLOPCODE_MODELS_DEV: generated.modelsData,
+      SLOPCODE_WORKER_PATH: 'new URL("./worker.js", import.meta.url).href',
+      SLOPCODE_CHANNEL: `'${Script.channel}'`,
+      SLOPCODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
+      FFF_LIBC: JSON.stringify(item.abi === "musl" ? "musl" : "gnu"),
+      ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),
+    },
+  })
+  if (!result.success) throw new Error(`Fallback bundle failed for ${name}`)
+  if (!(await Bun.file(path.join(out, "index.js")).exists())) throw new Error(`Missing fallback bundle for ${name}`)
+
+  const modulesDir = path.join(out, "modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`)
+  await fs.promises.mkdir(modulesDir, { recursive: true })
+  const version = (await Bun.file(path.join(dir, "node_modules", "@opentui", "core", "package.json")).json()).version
+  const bunCache = `@opentui+core-${platformName}-${item.arch}${libcSuffix}@${version}`
+  let so = [
+    path.join(dir, "node_modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`, `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`),
+    path.join(dir, "node_modules", ".bun", bunCache, "node_modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`, `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`),
+    path.join(dir, "..", "..", "node_modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`, `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`),
+    path.join(dir, "..", "..", "node_modules", ".bun", bunCache, "node_modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`, `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`),
+  ].find((f) => fs.existsSync(f))
+  if (!so) throw new Error(`Missing opentui native lib for ${name}`)
+  const ext = item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"
+  await fs.promises.copyFile(so, path.join(modulesDir, `libopentui.${ext}`))
+  await Bun.write(path.join(modulesDir, "index.js"), `import { fileURLToPath } from "node:url"\nexport default fileURLToPath(new URL("./libopentui.${ext}", import.meta.url))\n`)
+  await Bun.write(path.join(modulesDir, "index.bun.js"), `const module = await import("./libopentui.${ext}", { with: { type: "file" } })\nexport default module.default\n`)
+  await Bun.write(path.join(modulesDir, "package.json"), JSON.stringify({
+    name: nativePkg,
+    version,
+    type: "module",
+    main: "index.js",
+    module: "index.js",
+    exports: { ".": { bun: "./index.bun.js", import: "./index.js" } },
+    os: [platformName],
+    cpu: [item.arch],
+  }, null, 2))
+  console.log(`fallback bundle: ${name}`)
+}
+
 await $`rm -rf dist`
 
 const binaries: Record<string, string> = {}
@@ -775,6 +836,8 @@ for (const item of targets) {
     }
     console.log(`smoke test: ${name} --version OK (${out})`)
   }
+
+  await fallbackBundle(item, name)
 
   await $`rm -rf ./dist/${name}/bin/tui`
   await nvimBundle(item, name)

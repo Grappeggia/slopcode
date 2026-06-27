@@ -6,24 +6,38 @@ const path = require("path")
 const os = require("os")
 
 function run(target) {
-  const maxRetries = 3
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const child = childProcess.spawnSync(target, process.argv.slice(2), { stdio: "inherit" })
-    if (child.error) {
-      console.error(child.error.message)
-      process.exit(1)
-    }
-    if (child.signal === "SIGABRT" && attempt < maxRetries) {
-      console.error(`slopcode crashed (SIGABRT), retrying (${attempt + 1}/${maxRetries})...`)
-      continue
-    }
-    if (child.signal) {
-      try {
-        process.kill(process.pid, child.signal)
-      } catch {}
-    }
-    process.exit(typeof child.status === "number" ? child.status : 1)
+  const child = childProcess.spawnSync(target, process.argv.slice(2), { stdio: "inherit" })
+  if (child.error) {
+    console.error(child.error.message)
+    process.exit(1)
   }
+  if (child.signal === "SIGABRT") {
+    const pkgDir = path.dirname(path.dirname(target))
+    const fallback = path.join(pkgDir, "fallback", "index.js")
+    if (fs.existsSync(fallback)) {
+      const bun = childProcess.spawnSync("bun", ["--version"], { encoding: "utf8", timeout: 3000 })
+      if (bun.status === 0 && bun.stdout.trim()) {
+        console.error("slopcode crashed (SIGABRT), falling back to JS bundle...")
+        const modules = path.join(pkgDir, "fallback", "modules")
+        const env = { ...process.env, SLOPCODE_IN_PROCESS: "1", NODE_PATH: [modules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter) }
+        const fb = childProcess.spawnSync("bun", ["run", fallback, ...process.argv.slice(2)], { stdio: "inherit", env })
+        if (fb.error) {
+          console.error(fb.error.message)
+          process.exit(1)
+        }
+        if (fb.signal) {
+          try { process.kill(process.pid, fb.signal) } catch {}
+        }
+        process.exit(typeof fb.status === "number" ? fb.status : 1)
+      }
+    }
+  }
+  if (child.signal) {
+    try {
+      process.kill(process.pid, child.signal)
+    } catch {}
+  }
+  process.exit(typeof child.status === "number" ? child.status : 1)
 }
 
 const envPath = process.env.SLOPCODE_BIN_PATH

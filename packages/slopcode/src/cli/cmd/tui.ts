@@ -1,6 +1,7 @@
 import { cmd } from "@/cli/cmd/cmd"
 import { Rpc } from "@/util/rpc"
 import { type rpc } from "../tui/worker"
+import { GlobalBus } from "@/bus/global"
 import path from "path"
 import { fileURLToPath } from "url"
 import { UI } from "@/cli/ui"
@@ -126,8 +127,85 @@ export const TuiThreadCommand = cmd({
       }
       const cwd = Filesystem.resolve(process.cwd())
 
-      const worker = new Worker(file)
-      const client = Rpc.client<typeof rpc>(worker)
+      const inProcess = process.env.SLOPCODE_IN_PROCESS === "1"
+      let worker: Worker | undefined
+      let client: RpcClient
+
+      if (inProcess) {
+        const { Server } = await import("@/server/server")
+        const { InstanceRuntime } = await import("@/project/instance-runtime")
+        const { Config } = await import("@/config/config")
+        const { AppRuntime } = await import("@/effect/app-runtime")
+        const { Effect } = await import("effect")
+        const { disposeAllInstancesAndEmitGlobalDisposed } = await import("@/server/global-lifecycle")
+        const serverApp = Server.Default().app
+        const pending = new Map<number, (result: unknown) => void>()
+        const listeners = new Map<string, Set<(data: unknown) => void>>()
+        let rpcId = 0
+        const inProcessClient = {
+          call(method: string, input: unknown) {
+            const id = rpcId++
+            return new Promise((resolve) => {
+              pending.set(id, resolve)
+              ;(async () => {
+                let result: unknown
+                if (method === "fetch") {
+                  const req = input as { url: string; method: string; headers: Record<string, string>; body?: string }
+                  const res = await serverApp.fetch(new Request(req.url, { method: req.method, headers: req.headers, body: req.body }))
+                  const responseBody = await res.text()
+                  result = { status: res.status, headers: Object.fromEntries(res.headers.entries()), body: responseBody }
+                } else if (method === "server") {
+                  const net = input as { port: number; hostname: string; mdns?: boolean }
+                  const server = await Server.listen(net)
+                  result = { url: server.url.toString() }
+                } else if (method === "snapshot") {
+                  result = writeHeapSnapshot("server.heapsnapshot")
+                } else if (method === "checkUpgrade") {
+                  const { upgrade } = await import("@/cli/upgrade")
+                  const dir = (input as { directory: string }).directory
+                  await InstanceRuntime.load({ directory: dir }).catch(() => {})
+                  await upgrade().catch(() => {})
+                  result = undefined
+                } else if (method === "reload") {
+                  await AppRuntime.runPromise(
+                    Effect.gen(function* () {
+                      const cfg = yield* Config.Service
+                      yield* cfg.invalidate()
+                      yield* disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true })
+                    }),
+                  ).catch(() => {})
+                  result = undefined
+                } else if (method === "shutdown") {
+                  await InstanceRuntime.disposeAllInstances().catch(() => {})
+                  result = undefined
+                }
+                const resolve = pending.get(id)
+                if (resolve) {
+                  pending.delete(id)
+                  resolve(result)
+                }
+              })()
+            })
+          },
+          on(event: string, handler: (data: unknown) => void) {
+            let handlers = listeners.get(event)
+            if (!handlers) {
+              handlers = new Set()
+              listeners.set(event, handlers)
+            }
+            handlers.add(handler)
+            return () => handlers!.delete(handler)
+          },
+        }
+        client = inProcessClient as unknown as RpcClient
+        GlobalBus.on("event", (event) => {
+          const handlers = listeners.get("global.event")
+          if (handlers) for (const h of handlers) h(event)
+        })
+      } else {
+        worker = new Worker(file)
+        client = Rpc.client<typeof rpc>(worker)
+      }
       const reload = () => {
         client.call("reload", undefined).catch(() => {})
       }
@@ -139,7 +217,7 @@ export const TuiThreadCommand = cmd({
         stopped = true
         process.off("SIGUSR2", reload)
         await withTimeout(client.call("shutdown", undefined), 5000).catch(() => {})
-        worker.terminate()
+        worker?.terminate()
       }
 
       const prompt = await input(args.prompt)
