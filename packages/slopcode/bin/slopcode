@@ -36,6 +36,7 @@ function run(target, options = {}) {
       const fb = childProcess.spawnSync("bun", ["run", options.fallback, ...(options.args || process.argv.slice(2))], {
         stdio: "inherit",
         env: fbEnv,
+        cwd: path.dirname(options.fallback),
       })
       if (fb.error) {
         console.error(fb.error.message)
