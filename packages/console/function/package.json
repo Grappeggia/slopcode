@@ -1,6 +1,6 @@
 {
   "name": "@slopcode-ai/console-function",
-  "version": "0.2.158",
+  "version": "0.2.159",
   "$schema": "https://json.schemastore.org/package.json",
   "private": true,
   "type": "module",
