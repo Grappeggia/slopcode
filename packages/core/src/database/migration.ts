@@ -84,13 +84,9 @@ export function applyOnly(db: Database, input: Migration[]) {
 
     for (const migration of input) {
       if (completed.has(migration.id)) continue
-      yield* db.transaction((tx) =>
-        Effect.gen(function* () {
-          yield* migration.up(tx).pipe(Effect.catch(() => Effect.void))
-          yield* tx.run(
-            sql`INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
-          )
-        }),
+      yield* db.transaction((tx) => migration.up(tx)).pipe(Effect.catch(() => Effect.void))
+      yield* db.run(
+        sql`INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
       )
     }
   })
