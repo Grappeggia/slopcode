@@ -151,9 +151,15 @@ export const TuiThreadCommand = cmd({
                 let result: unknown
                 if (method === "fetch") {
                   const req = input as { url: string; method: string; headers: Record<string, string>; body?: string }
-                  const res = await serverApp.fetch(new Request(req.url, { method: req.method, headers: req.headers, body: req.body }))
+                  const res = await serverApp.fetch(
+                    new Request(req.url, { method: req.method, headers: req.headers, body: req.body }),
+                  )
                   const responseBody = await res.text()
-                  result = { status: res.status, headers: Object.fromEntries(res.headers.entries()), body: responseBody }
+                  result = {
+                    status: res.status,
+                    headers: Object.fromEntries(res.headers.entries()),
+                    body: responseBody,
+                  }
                 } else if (method === "server") {
                   const net = input as { port: number; hostname: string; mdns?: boolean }
                   const server = await Server.listen(net)

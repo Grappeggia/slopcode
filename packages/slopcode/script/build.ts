@@ -733,10 +733,44 @@ const fallbackBundle = async (item: { os: string; arch: "arm64" | "x64"; abi?: "
   const version = (await Bun.file(path.join(dir, "node_modules", "@opentui", "core", "package.json")).json()).version
   const bunCache = `@opentui+core-${platformName}-${item.arch}${libcSuffix}@${version}`
   let so = [
-    path.join(dir, "node_modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`, `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`),
-    path.join(dir, "node_modules", ".bun", bunCache, "node_modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`, `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`),
-    path.join(dir, "..", "..", "node_modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`, `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`),
-    path.join(dir, "..", "..", "node_modules", ".bun", bunCache, "node_modules", "@opentui", `core-${platformName}-${item.arch}${libcSuffix}`, `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`),
+    path.join(
+      dir,
+      "node_modules",
+      "@opentui",
+      `core-${platformName}-${item.arch}${libcSuffix}`,
+      `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`,
+    ),
+    path.join(
+      dir,
+      "node_modules",
+      ".bun",
+      bunCache,
+      "node_modules",
+      "@opentui",
+      `core-${platformName}-${item.arch}${libcSuffix}`,
+      `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`,
+    ),
+    path.join(
+      dir,
+      "..",
+      "..",
+      "node_modules",
+      "@opentui",
+      `core-${platformName}-${item.arch}${libcSuffix}`,
+      `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`,
+    ),
+    path.join(
+      dir,
+      "..",
+      "..",
+      "node_modules",
+      ".bun",
+      bunCache,
+      "node_modules",
+      "@opentui",
+      `core-${platformName}-${item.arch}${libcSuffix}`,
+      `libopentui.${item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"}`,
+    ),
   ].find((f) => fs.existsSync(f))
   if (!so) {
     console.log(`fallback bundle: skipping ${name} (native lib not available on this host)`)
@@ -744,18 +778,31 @@ const fallbackBundle = async (item: { os: string; arch: "arm64" | "x64"; abi?: "
   }
   const ext = item.os === "win32" ? "dll" : item.os === "darwin" ? "dylib" : "so"
   await fs.promises.copyFile(so, path.join(modulesDir, `libopentui.${ext}`))
-  await Bun.write(path.join(modulesDir, "index.js"), `import { fileURLToPath } from "node:url"\nexport default fileURLToPath(new URL("./libopentui.${ext}", import.meta.url))\n`)
-  await Bun.write(path.join(modulesDir, "index.bun.js"), `const module = await import("./libopentui.${ext}", { with: { type: "file" } })\nexport default module.default\n`)
-  await Bun.write(path.join(modulesDir, "package.json"), JSON.stringify({
-    name: nativePkg,
-    version,
-    type: "module",
-    main: "index.js",
-    module: "index.js",
-    exports: { ".": { bun: "./index.bun.js", import: "./index.js" } },
-    os: [platformName],
-    cpu: [item.arch],
-  }, null, 2))
+  await Bun.write(
+    path.join(modulesDir, "index.js"),
+    `import { fileURLToPath } from "node:url"\nexport default fileURLToPath(new URL("./libopentui.${ext}", import.meta.url))\n`,
+  )
+  await Bun.write(
+    path.join(modulesDir, "index.bun.js"),
+    `const module = await import("./libopentui.${ext}", { with: { type: "file" } })\nexport default module.default\n`,
+  )
+  await Bun.write(
+    path.join(modulesDir, "package.json"),
+    JSON.stringify(
+      {
+        name: nativePkg,
+        version,
+        type: "module",
+        main: "index.js",
+        module: "index.js",
+        exports: { ".": { bun: "./index.bun.js", import: "./index.js" } },
+        os: [platformName],
+        cpu: [item.arch],
+      },
+      null,
+      2,
+    ),
+  )
   console.log(`fallback bundle: ${name}`)
 }
 

@@ -19,14 +19,20 @@ function run(target) {
       if (bun.status === 0 && bun.stdout.trim()) {
         console.error("slopcode crashed (SIGABRT), falling back to JS bundle...")
         const modules = path.join(pkgDir, "fallback", "modules")
-        const env = { ...process.env, SLOPCODE_IN_PROCESS: "1", NODE_PATH: [modules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter) }
+        const env = {
+          ...process.env,
+          SLOPCODE_IN_PROCESS: "1",
+          NODE_PATH: [modules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
+        }
         const fb = childProcess.spawnSync("bun", ["run", fallback, ...process.argv.slice(2)], { stdio: "inherit", env })
         if (fb.error) {
           console.error(fb.error.message)
           process.exit(1)
         }
         if (fb.signal) {
-          try { process.kill(process.pid, fb.signal) } catch {}
+          try {
+            process.kill(process.pid, fb.signal)
+          } catch {}
         }
         process.exit(typeof fb.status === "number" ? fb.status : 1)
       }
