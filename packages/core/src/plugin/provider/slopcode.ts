@@ -15,7 +15,9 @@ export const SlopcodePlugin = PluginV2.define({
             process.env.SLOPCODE_API_KEY ||
               item.provider.env.some((env) => process.env[env]) ||
               (item.provider.request.body as Record<string, unknown>)?.apiKey ||
-              (item.provider.enabled && typeof item.provider.enabled === "object" && (item.provider.enabled as Record<string, unknown>)?.via === "credential"),
+              (item.provider.enabled &&
+                typeof item.provider.enabled === "object" &&
+                (item.provider.enabled as Record<string, unknown>)?.via === "credential"),
           )
           evt.provider.update(item.provider.id, (provider) => {
             if (!hasKey) provider.request.body.apiKey = "public"
