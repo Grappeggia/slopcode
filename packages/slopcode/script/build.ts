@@ -341,267 +341,12 @@ const nvimBundle = async (item: { os: string; arch: "arm64" | "x64"; abi?: "musl
   await fs.promises.rm(tmp, { recursive: true, force: true })
 }
 
-const androidRust = (arch: "arm64" | "x64") =>
-  arch === "arm64"
-    ? {
-        target: "aarch64-linux-android",
-        env: "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER",
-        linker: "aarch64-linux-android24-clang",
-      }
-    : {
-        target: "x86_64-linux-android",
-        env: "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER",
-        linker: "x86_64-linux-android24-clang",
-      }
-
-const androidNdk = () => {
-  const roots = [
-    process.env.ANDROID_NDK_HOME,
-    process.env.NDK_HOME,
-    process.env.ANDROID_HOME && path.join(process.env.ANDROID_HOME, "ndk", "27.1.12297006"),
-    process.env.ANDROID_SDK_ROOT && path.join(process.env.ANDROID_SDK_ROOT, "ndk", "27.1.12297006"),
-    path.join(process.env.HOME ?? "", "Library", "Android", "sdk", "ndk", "27.1.12297006"),
-    path.join(process.env.HOME ?? "", ".android-sdk-macosx", "ndk", "27.1.12297006"),
-    path.join(process.env.HOME ?? "", "android-sdk", "ndk", "27.1.12297006"),
-  ].filter((item): item is string => !!item)
-  const found = roots.find((item) => fs.existsSync(path.join(item, "toolchains", "llvm")))
-  if (!found) throw new Error("Android NDK not found; set ANDROID_NDK_HOME")
-  return found
-}
-
-const androidLinker = (ndk: string, linker: string) => {
-  const prebuilt = path.join(ndk, "toolchains", "llvm", "prebuilt")
-  const executable = process.platform === "win32" ? `${linker}.cmd` : linker
-  const preferred =
-    process.platform === "darwin"
-      ? ["darwin-arm64", "darwin-x86_64"]
-      : process.platform === "win32"
-        ? ["windows-x86_64"]
-        : ["linux-x86_64"]
-  const dirs = fs.existsSync(prebuilt) ? fs.readdirSync(prebuilt) : []
-  for (const host of [...preferred, ...dirs]) {
-    const candidate = path.join(prebuilt, host, "bin", executable)
-    if (fs.existsSync(candidate)) return candidate
-  }
-  throw new Error(`Missing Android linker ${linker} under ${prebuilt}`)
-}
-
-const rustupTool = (tool: "rustc" | "rustdoc") => {
-  const result = Bun.spawnSync(["rustup", "which", tool], {
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  if (result.exitCode !== 0) return
-  const value = result.stdout.toString().trim()
-  return value || undefined
-}
-
-const macosSdkEnv = () => {
-  if (process.platform !== "darwin") return {}
-  if (process.env.SDKROOT) return {}
-  const roots = [
-    "/Library/Developer/CommandLineTools/SDKs",
-    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs",
-  ]
-  for (const root of roots) {
-    if (!fs.existsSync(root)) continue
-    const sdks = fs
-      .readdirSync(root)
-      .filter((item) => item.startsWith("MacOSX") && item.endsWith(".sdk"))
-      .sort()
-    const sdk = sdks.at(-1)
-    if (sdk) {
-      const developer = root.includes("CommandLineTools")
-        ? "/Library/Developer/CommandLineTools"
-        : "/Applications/Xcode.app/Contents/Developer"
-      return {
-        DEVELOPER_DIR: process.env.DEVELOPER_DIR ?? developer,
-        SDKROOT: path.join(root, sdk),
-      }
-    }
-  }
-  return {}
-}
-
-const commandExists = (command: string) => {
-  const extensions = process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""]
-  return (process.env.PATH ?? "")
-    .split(path.delimiter)
-    .some((dir) =>
-      extensions.some((extension) => fs.existsSync(path.join(dir, `${command}${extension.toLowerCase()}`))),
-    )
-}
-
-const androidHost = async (name: string, arch: "arm64" | "x64") => {
-  const rust = androidRust(arch)
-  const bin = path.join(dir, "dist", name, "bin", "slopcode-android-host")
-  const cli = path.join(dir, "dist", name, "bin", "slopcode")
-  const linker = androidLinker(androidNdk(), rust.linker)
-  const rustup = commandExists("rustup")
-  if (rustup) await $`rustup target add ${rust.target}`
-  const build = rustup
-    ? $`rustup run stable cargo build --manifest-path native/android-tui/Cargo.toml --release --target ${rust.target}`
-    : $`cargo build --manifest-path native/android-tui/Cargo.toml --release --target ${rust.target}`
-  await build.env({
-    ...process.env,
-    ...macosSdkEnv(),
-    ...(rustup
-      ? {
-          RUSTC: rustupTool("rustc"),
-          RUSTDOC: rustupTool("rustdoc"),
-        }
-      : {}),
-    [rust.env]: linker,
-    SLOPCODE_BUILD_VERSION: Script.version,
-  })
-  await fs.promises.copyFile(
-    path.join(dir, "native", "android-tui", "target", rust.target, "release", "slopcode-android-tui"),
-    bin,
-  )
-  await $`chmod 755 ${bin}`
-  await fs.promises.copyFile(bin, cli)
-  await $`chmod 755 ${cli}`
-}
-
-const androidBundle = async (parserWorker: string, workerPath: string) => {
-  await fs.promises.rm(path.join(dir, "dist", "android-bundle"), { recursive: true, force: true })
-  await fs.promises.mkdir(path.join(dir, "dist", "android-bundle"), { recursive: true })
-  const result = await Bun.build({
-    conditions: ["node"],
-    tsconfig: "./tsconfig.json",
-    plugins: [solidPlugin],
-    sourcemap: "none",
-    target: "bun",
-    outdir: "dist/android-bundle",
-    entrypoints: ["./src/index.ts", parserWorker, workerPath],
-    naming: "[name].[ext]",
-    define: {
-      SLOPCODE_VERSION: `'${Script.version}'`,
-      SLOPCODE_NVIM_VERSION: `'${nvimVersion}'`,
-      SLOPCODE_MIGRATIONS: JSON.stringify(migrations),
-      SLOPCODE_MODELS_DEV: generated.modelsData,
-      OTUI_TREE_SITTER_WORKER_PATH: 'new URL("./parser.worker.js", import.meta.url).href',
-      SLOPCODE_WORKER_PATH: 'new URL("./worker.js", import.meta.url).href',
-      SLOPCODE_CHANNEL: `'${Script.channel}'`,
-      SLOPCODE_LIBC: "'bionic'",
-      FFF_LIBC: JSON.stringify("gnu"),
-    },
-  })
-  if (!result.success) {
-    throw new Error("Build failed for Android bundle")
-  }
-  if (!(await Bun.file("dist/android-bundle/index.js").exists())) {
-    throw new Error("Missing Android bundle at dist/android-bundle/index.js")
-  }
-}
-
-const androidOpentui = async (arch: "arm64" | "x64") => {
-  const linux = `@opentui/core-linux-${arch}`
-  const version = (await Bun.file(path.join(dir, "node_modules", "@opentui", "core", "package.json")).json()).version
-  const bun = `@opentui+core-linux-${arch}@${version}`
-  let source = [
-    path.join(dir, "node_modules", "@opentui", `core-linux-${arch}`, "libopentui.so"),
-    path.join(dir, "..", "..", "node_modules", "@opentui", `core-linux-${arch}`, "libopentui.so"),
-    path.join(dir, "node_modules", ".bun", bun, "node_modules", "@opentui", `core-linux-${arch}`, "libopentui.so"),
-    path.join(
-      dir,
-      "..",
-      "..",
-      "node_modules",
-      ".bun",
-      bun,
-      "node_modules",
-      "@opentui",
-      `core-linux-${arch}`,
-      "libopentui.so",
-    ),
-  ].find((item) => fs.existsSync(item))
-  if (!source) {
-    const cache = path.join(dir, "dist", ".android-cache")
-    await fs.promises.mkdir(cache, { recursive: true })
-    const meta = await fetch(`https://registry.npmjs.org/${encodeURIComponent(linux)}/${version}`).then((res) => {
-      if (!res.ok) throw new Error(`Failed to resolve ${linux}: ${res.status} ${res.statusText}`)
-      return res.json() as Promise<{ dist: { tarball: string } }>
-    })
-    const archive = path.join(cache, `opentui-core-linux-${arch}-${version}.tgz`)
-    if (!(await Bun.file(archive).exists())) {
-      const res = await fetch(meta.dist.tarball)
-      if (!res.ok) throw new Error(`Failed to download ${meta.dist.tarball}: ${res.status} ${res.statusText}`)
-      await Bun.write(archive, await res.arrayBuffer())
-    }
-    const extract = path.join(cache, `opentui-core-linux-${arch}`)
-    await fs.promises.rm(extract, { recursive: true, force: true })
-    await fs.promises.mkdir(extract, { recursive: true })
-    await $`tar -xzf ${archive} -C ${extract}`
-    source = path.join(extract, "package", "libopentui.so")
-  }
-
-  const root = path.join(dir, "dist", "android-modules", "@opentui", `core-android-${arch}`)
-  await fs.promises.mkdir(root, { recursive: true })
-  await fs.promises.copyFile(source, path.join(root, "libopentui.so"))
-  await Bun.write(path.join(root, "index.ts"), 'export default new URL("./libopentui.so", import.meta.url).pathname\n')
-  await Bun.write(
-    path.join(root, "package.json"),
-    JSON.stringify(
-      {
-        name: `@opentui/core-android-${arch}`,
-        type: "module",
-        main: "index.ts",
-        module: "index.ts",
-        files: ["index.ts", "libopentui.so", "package.json"],
-      },
-      null,
-      2,
-    ),
-  )
-}
-
-const androidModules = async () => {
-  const root = path.join(dir, "dist", "android-modules")
-  await fs.promises.rm(root, { recursive: true, force: true })
-  await Promise.all((["arm64", "x64"] as const).map(androidOpentui))
-}
-
-const androidRuntime = async (name: string, arch: "arm64" | "x64") => {
-  await fs.promises.mkdir(path.join(dir, "dist", name, "bin"), { recursive: true })
-  await androidHost(name, arch)
-  await Bun.write(
-    `dist/${name}/package.json`,
-    JSON.stringify(
-      {
-        name: `slopcode-bin-android-${arch}`,
-        version: Script.version,
-        repository: {
-          type: "git",
-          url: "https://github.com/teamslop/slopcode",
-        },
-        os: ["android"],
-        cpu: [arch],
-        bin: {
-          slopcode: "./bin/slopcode",
-        },
-        files: ["bin", "package.json"],
-      },
-      null,
-      2,
-    ),
-  )
-}
-
 const allTargets: {
   os: string
   arch: "arm64" | "x64"
   abi?: "musl"
   avx2?: false
 }[] = [
-  {
-    os: "android",
-    arch: "arm64",
-  },
-  {
-    os: "android",
-    arch: "x64",
-  },
   {
     os: "linux",
     arch: "arm64",
@@ -663,11 +408,7 @@ const targetKey = (item: (typeof allTargets)[number]) =>
 const targetName = (item: (typeof allTargets)[number]) => `${pkg.name}-${targetKey(item)}`
 
 const targets = targetFlag
-  ? allTargets.filter((item) =>
-      targetFlag === "android"
-        ? item.os === "android"
-        : targetKey(item) === targetFlag || targetName(item) === targetFlag,
-    )
+  ? allTargets.filter((item) => targetKey(item) === targetFlag || targetName(item) === targetFlag)
   : singleFlag
     ? allTargets.filter((item) => {
         if (item.os !== process.platform || item.arch !== process.arch) {
@@ -689,7 +430,7 @@ const targets = targetFlag
       })
     : releaseFlag
       ? allTargets
-      : allTargets.filter((item) => item.os !== "android")
+      : allTargets
 
 if (targetFlag && targets.length === 0) {
   throw new Error(`Unknown build target: ${targetFlag}`)
@@ -816,21 +557,10 @@ if (!skipInstall && needsOpenTui) {
 }
 const parserWorker = fs.realpathSync(path.resolve(dir, "./node_modules/@opentui/core/parser.worker.js"))
 const workerPath = "./src/cli/tui/worker.ts"
-const needsAndroidBundle = targets.some((item) => item.os === "android")
-if (needsAndroidBundle) {
-  await androidBundle(parserWorker, workerPath)
-  await androidModules()
-}
 for (const item of targets) {
   const name = targetName(item)
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
-
-  if (item.os === "android") {
-    await androidRuntime(name, item.arch)
-    binaries[name] = Script.version
-    continue
-  }
 
   // Use platform-specific bunfs root path based on target OS
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
@@ -972,16 +702,6 @@ const debBuild = async (src: string, arch: "amd64" | "arm64") => {
   await fs.promises.rm(root, { recursive: true, force: true })
 }
 
-const archiveAndroidTargets = async () => {
-  for (const key of Object.keys(binaries).filter((key) => key.includes("android"))) {
-    await $`tar -czf ../${key}.tar.gz *`.cwd(`dist/${key}`)
-  }
-}
-
-if (!Script.release && targets.some((item) => item.os === "android")) {
-  await archiveAndroidTargets()
-}
-
 if (Script.release) {
   const winget = `${pkg.name}-windows-x64-baseline`
   const exe = path.join(dir, "dist", winget, "bin", "slopcode.exe")
@@ -989,11 +709,7 @@ if (Script.release) {
     throw new Error(`Missing Winget executable at ${exe}`)
   }
 
-  await archiveAndroidTargets()
   for (const key of Object.keys(binaries)) {
-    if (key.includes("android")) {
-      continue
-    }
     if (key.includes("linux")) {
       await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
       continue
@@ -1002,10 +718,7 @@ if (Script.release) {
     await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
   }
 
-  const dist = Object.keys(binaries)
-  if (fs.existsSync(path.join(dir, "dist", "android-bundle"))) dist.push("android-bundle")
-  if (fs.existsSync(path.join(dir, "dist", "android-modules"))) dist.push("android-modules")
-  await $`tar -czf slopcode-cli-dist.tar.gz ${dist}`.cwd("dist")
+  await $`tar -czf slopcode-cli-dist.tar.gz ${Object.keys(binaries)}`.cwd("dist")
 
   if (process.platform === "linux") {
     const dpkgDeb = (await $`bash -lc "command -v dpkg-deb"`.quiet().nothrow().text()).trim()

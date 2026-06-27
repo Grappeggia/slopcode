@@ -7,36 +7,7 @@ const path = require("path")
 const os = require("os")
 const pkg = require("../package.json")
 
-const startupStart = Date.now()
-function startupTraceEnabled() {
-  const value = (process.env.SLOPCODE_ANDROID_STARTUP_LOG || "").toLowerCase()
-  return value === "1" || value === "true" || value === "on"
-}
-
-function startupLog(phase, extra = {}) {
-  if (!startupTraceEnabled()) return
-  console.error(JSON.stringify({ event: "android.startup", phase, ms: Date.now() - startupStart, ...extra }))
-}
-
-function cleanupTempSo() {
-  try {
-    const tmp = os.tmpdir()
-    const files = fs.readdirSync(tmp)
-    const now = Date.now()
-    for (const file of files) {
-      if (/^\.5bfff.*\.so$/.test(file)) {
-        const full = path.join(tmp, file)
-        try {
-          const stat = fs.statSync(full)
-          if (now - stat.mtimeMs > 3600000) fs.unlinkSync(full)
-        } catch {}
-      }
-    }
-  } catch {}
-}
-
 function run(target, options = {}) {
-  startupLog("launcher.exec", { target: path.basename(target) })
   const result = childProcess.spawnSync(target, options.args || process.argv.slice(2), {
     stdio: "inherit",
     env: options.env ? { ...process.env, ...options.env } : process.env,
@@ -46,7 +17,6 @@ function run(target, options = {}) {
     process.exit(1)
   }
   if (result.signal === "SIGABRT" && options.fallback) {
-    cleanupTempSo()
     console.error("slopcode crashed (SIGABRT), falling back to JS bundle...")
     const bun = childProcess.spawnSync("bun", ["--version"], { encoding: "utf8", timeout: 3000 })
     if (bun.status === 0 && bun.stdout.trim()) {
@@ -88,7 +58,7 @@ const rootDir = path.dirname(scriptDir)
 const cached = path.join(scriptDir, ".slopcode")
 const meta = path.join(scriptDir, ".slopcode.json")
 const sidecar = path.join(scriptDir, "neovim")
-const androidBundle = path.join(rootDir, "bundle", "index.js")
+
 const platformMap = {
   darwin: "darwin",
   linux: "linux",
@@ -100,7 +70,6 @@ const archMap = {
   arm: "arm",
 }
 const supported = {
-  android: ["arm64", "x64"],
   darwin: ["arm64", "x64"],
   linux: ["arm64", "x64"],
   windows: ["x64"],
@@ -108,7 +77,6 @@ const supported = {
 
 const rawPlatform = process.env.SLOPCODE_TEST_PLATFORM || os.platform()
 const rawArch = process.env.SLOPCODE_TEST_ARCH || os.arch()
-startupLog("launcher.start", { platform: rawPlatform, arch: rawArch })
 let platform = platformMap[rawPlatform]
 if (!platform) {
   platform = rawPlatform
@@ -130,12 +98,7 @@ function clearCache() {
   remove(sidecar)
 }
 
-function termuxEnv() {
-  return Boolean(process.env.TERMUX_VERSION || (process.env.PREFIX || "").includes("/com.termux/"))
-}
-
 function libc() {
-  if (platform === "android" || termuxEnv()) return "bionic"
   if (platform !== "linux") return
   const report = process.report?.getReport?.()
   if (typeof report?.header?.glibcVersionRuntime === "string" && report.header.glibcVersionRuntime) {
@@ -155,7 +118,6 @@ function libc() {
   const text = ((result.stdout || "") + (result.stderr || "")).toLowerCase()
   if (text.includes("musl")) return "musl"
   if (text.includes("glibc") || text.includes("gnu libc")) return "glibc"
-  if (text.includes("bionic")) return "bionic"
   const loader = arch === "arm64" ? "/lib/ld-musl-aarch64.so.1" : arch === "x64" ? "/lib/ld-musl-x86_64.so.1" : ""
   if (loader && fs.existsSync(loader)) return "musl"
 }
@@ -198,8 +160,7 @@ function supportsAvx2() {
 
 function names(prefix) {
   const kind = libc()
-  const base = kind === "bionic" ? `${prefix}-android-${arch}` : `${prefix}-${platform}-${arch}`
-  if (kind === "bionic") return [base, `@slopcode-ai/slopcode-android-${arch}`, `slopcode-android-${arch}`]
+  const base = `${prefix}-${platform}-${arch}`
   const avx2 = supportsAvx2()
   const baseline = arch === "x64" && !avx2
 
@@ -265,92 +226,7 @@ function supportedMessage() {
     .join(" ")
 }
 
-function termuxMessage() {
-  return [
-    "SlopCode native Termux support could not find the Android runtime.",
-    "Reinstall from Termux with:",
-    "  pkg update",
-    "  pkg install nodejs git ripgrep neovim tar",
-    "  npm install -g slopcode@latest --include=optional",
-    "If postinstall could not download the runtime, install the matching GitHub release asset manually.",
-  ].join("\n")
-}
-
-function androidDoctor(args) {
-  return args[0] === "doctor" && args[1] === "android"
-}
-
-function androidInteractive(args) {
-  return !androidDoctor(args) && args[0] !== "--version" && !args.includes("--self-test")
-}
-
-function findNodeModuleFile(startDir, parts) {
-  let current = startDir
-  for (;;) {
-    const candidate = path.join(current, "node_modules", ...parts)
-    if (fs.existsSync(candidate)) return candidate
-    const parent = path.dirname(current)
-    if (parent === current) return
-    current = parent
-  }
-}
-
-function androidBun(arch) {
-  const name = arch === "arm64" ? "bun-linux-aarch64-android" : "bun-linux-x64-android"
-  return [
-    process.env.SLOPCODE_BUN_PATH,
-    path.join(rootDir, "node_modules", "@oven", name, "bin", "bun"),
-    findNodeModuleFile(scriptDir, ["@oven", name, "bin", "bun"]),
-    path.join(rootDir, "node_modules", ".bin", process.platform === "win32" ? "bun.cmd" : "bun"),
-    findNodeModuleFile(scriptDir, [".bin", process.platform === "win32" ? "bun.cmd" : "bun"]),
-  ].find((item) => item && fs.existsSync(item))
-}
-
-function androidRuntimeArgs(args) {
-  const out = []
-  let project
-  let skip = false
-  const valueOptions = new Set(["--cwd", "--session", "--model", "--agent", "--prompt", "--view-id", "--log-level"])
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i]
-    if (skip) {
-      skip = false
-      continue
-    }
-    if (arg === "--print-logs" || arg === "--pure") continue
-    if (arg.startsWith("--log-level=")) continue
-    if (valueOptions.has(arg)) {
-      if (arg !== "--log-level") {
-        out.push(arg, args[i + 1])
-      }
-      skip = true
-      continue
-    }
-    if (!project && arg && !arg.startsWith("-")) {
-      project = arg
-      continue
-    }
-    out.push(arg)
-  }
-  if (project && !out.includes("--cwd")) {
-    out.unshift("--cwd", path.resolve(process.env.PWD || process.cwd(), project))
-  }
-  return out.filter((item) => item !== undefined)
-}
-
-function androidRuntimeEnv(runtimeRoot, extra = {}) {
-  return {
-    SLOPCODE_BIONIC: "1",
-    SLOPCODE_VERSION: pkg.version,
-    SLOPCODE_ANDROID_ROOT: runtimeRoot,
-    SLOPCODE_ANDROID_HOST_PATH: path.join(runtimeRoot, "bin", "slopcode-android-host"),
-    SLOPCODE_ANDROID_HOST: process.env.SLOPCODE_ANDROID_HOST || "sidecar",
-    NODE_PATH: [path.join(rootDir, "android-modules"), process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
-    ...extra,
-  }
-}
-
-const useCache = libc() !== "bionic"
+const useCache = true
 
 const packageNames = names("slopcode-bin")
 const resolvedNames = Array.from(new Set([...packageNames, ...names("slopcode")]))
@@ -388,12 +264,6 @@ function resolveBinary() {
   }
 }
 
-function embeddedAndroidBinary() {
-  if (libc() !== "bionic") return
-  const candidate = path.join(rootDir, "android-runtime", arch, "bin", binary)
-  if (fs.existsSync(candidate)) return { path: candidate, package: `slopcode-embedded-android-${arch}` }
-}
-
 function findBinary(startDir) {
   let current = startDir
   for (;;) {
@@ -412,63 +282,14 @@ function findBinary(startDir) {
   }
 }
 
-const resolved =
-  libc() === "bionic"
-    ? embeddedAndroidBinary() || resolveBinary() || findBinary(scriptDir)
-    : resolveBinary() || findBinary(scriptDir)
+const resolved = resolveBinary() || findBinary(scriptDir)
 if (!resolved) {
-  if (libc() === "bionic") {
-    console.error(termuxMessage())
-    process.exit(1)
-  }
   console.error(
     "It seems that your package manager failed to install the right version of the slopcode CLI for your platform. You can try manually installing " +
       packageNames.map((n) => `\"${n}\"`).join(" or ") +
       " package",
   )
   process.exit(1)
-}
-
-const args = process.argv.slice(2)
-if (libc() === "bionic" && androidInteractive(args)) {
-  const bun = androidBun(arch)
-  const runtimeRoot = path.dirname(path.dirname(resolved.path))
-  const daemonURL = process.env.SLOPCODE_DAEMON_URL || process.env.SLOPCODE_SERVER_URL
-  const daemonToken = process.env.SLOPCODE_DAEMON_TOKEN || process.env.SLOPCODE_TOKEN
-  startupLog("launcher.android.interactive", {
-    runtime: path.basename(resolved.path),
-    bun: bun ? path.basename(bun) : undefined,
-    rustFirst: true,
-  })
-  if (daemonURL && daemonToken) {
-    startupLog("launcher.android.rust_tui", { mode: "attached" })
-    run(resolved.path, {
-      args: androidRuntimeArgs(args),
-      env: androidRuntimeEnv(runtimeRoot),
-    })
-  }
-  if (!fs.existsSync(androidBundle)) {
-    console.error(
-      "SlopCode Android daemon bootstrap bundle is missing. Reinstall from Termux with: npm install -g slopcode@latest --include=optional",
-    )
-    process.exit(1)
-  }
-  if (bun && fs.existsSync(androidBundle)) {
-    startupLog("launcher.android.rust_tui", { mode: "bootstrap", bundle: androidBundle })
-    run(resolved.path, {
-      args: androidRuntimeArgs(args),
-      env: androidRuntimeEnv(runtimeRoot, {
-        SLOPCODE_ENTRYPOINT: androidBundle,
-        SLOPCODE_ANDROID_BOOTSTRAP_RUNNER: bun,
-      }),
-    })
-  }
-  if (!bun) {
-    console.error(
-      "SlopCode Android daemon bootstrap is missing. Run npm rebuild slopcode or reinstall from Termux with: npm install -g slopcode@latest --include=optional",
-    )
-    process.exit(1)
-  }
 }
 
 const fallback = findFallback(resolved.path)

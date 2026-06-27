@@ -49,16 +49,9 @@ const binaries = await Array.fromAsync(new Bun.Glob("*/package.json").scan({ cwd
     }),
   ).then((arr) => arr.flatMap((item) => (item ? [item] : []))),
 )
-const android = (item: { name: string }) => item.name.startsWith(`${pkg.name}-bin-android-`)
-const npmBinaries = binaries.filter((item) => !android(item))
-const androidBootstrapDeps = {
-  "@oven/bun-linux-aarch64-android": "1.3.14",
-  "@oven/bun-linux-x64-android": "1.3.14",
-}
-const deps = {
-  ...Object.fromEntries(npmBinaries.map((item) => [item.name, item.version])),
-  ...androidBootstrapDeps,
-}
+const deps = Object.fromEntries(
+  binaries.filter((item) => !item.name.includes("-android-")).map((item) => [item.name, item.version]),
+)
 console.log("binaries", deps)
 const version = Script.version
 if (binaries.length === 0) {
@@ -292,33 +285,9 @@ const aliases = [
 ] as const
 
 const stage = async (input: { name: string; bin: string; description: string }) => {
-  const bundle = "./dist/android-bundle"
-  const modules = "./dist/android-modules"
-  if (!(await Bun.file(`${bundle}/index.js`).exists())) {
-    throw new Error("Missing Android bundle at ./dist/android-bundle/index.js")
-  }
-  if (
-    !(await Bun.file(`${modules}/@opentui/core-android-arm64/index.ts`).exists()) ||
-    !(await Bun.file(`${modules}/@opentui/core-android-x64/index.ts`).exists())
-  ) {
-    throw new Error("Missing Android bootstrap modules at ./dist/android-modules")
-  }
   await $`rm -rf ./dist/${input.name}`
   await $`mkdir -p ./dist/${input.name}`
   await $`cp -r ./bin ./dist/${input.name}/bin`
-  await $`cp -r ${bundle} ./dist/${input.name}/bundle`
-  await $`cp -r ${modules} ./dist/${input.name}/android-modules`
-  for (const arch of ["arm64", "x64"]) {
-    const source = `./dist/${pkg.name}-android-${arch}/bin`
-    if (!(await Bun.file(`${source}/${pkg.name}`).exists())) {
-      throw new Error(`Missing embedded Android ${arch} runtime at ${source}/${pkg.name}`)
-    }
-    if (!(await Bun.file(`${source}/${pkg.name}-android-host`).exists())) {
-      throw new Error(`Missing embedded Android ${arch} host at ${source}/${pkg.name}-android-host`)
-    }
-    await $`mkdir -p ./dist/${input.name}/android-runtime/${arch}`
-    await $`cp -r ${source} ./dist/${input.name}/android-runtime/${arch}/bin`
-  }
   await $`cp ./script/postinstall.mjs ./dist/${input.name}/postinstall.mjs`
   await Bun.file(`./dist/${input.name}/LICENSE`).write(await Bun.file("../../LICENSE").text())
   await Bun.file(`./dist/${input.name}/README.md`).write(readme + "\n")
@@ -335,7 +304,7 @@ const stage = async (input: { name: string; bin: string; description: string }) 
         bin: {
           [input.bin]: `./bin/${pkg.name}`,
         },
-        files: ["bin", "bundle", "android-modules", "android-runtime", "postinstall.mjs", "README.md", "LICENSE"],
+        files: ["bin", "postinstall.mjs", "README.md", "LICENSE"],
         scripts: {
           postinstall: "bun ./postinstall.mjs || node ./postinstall.mjs",
         },
@@ -429,10 +398,10 @@ const publishPackage = async (name: string) => {
   await publish.cwd(`./dist/${name}`)
 }
 
-for (const binary of npmBinaries) {
+for (const binary of binaries) {
   await publishBinary(binary)
 }
-await verifyNpmTargets(npmBinaries)
+await verifyNpmTargets(binaries)
 await publishPackage(pkg.name)
 await verifyNpmTargets([{ name: pkg.name, version }])
 for (const item of aliases) {

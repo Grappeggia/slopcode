@@ -65,19 +65,6 @@ nix profile install github:teamslop/slopcode#slopcode # Any OS (persistent insta
 nix run github:teamslop/slopcode#slopcode             # One-off run
 ```
 
-#### Termux on Android
-
-SlopCode supports native Termux on Android arm64/x64 for CLI, server commands, and the Rust-native Android TUI through the npm package. Install the Termux runtime dependencies first:
-
-```bash
-pkg update
-pkg install nodejs git ripgrep neovim tar
-npm install -g slopcode@latest --include=optional
-slopcode --help
-```
-
-The Android TUI uses the bundled Rust runtime by default. Set `SLOPCODE_ANDROID_HOST=portable` for the JavaScript fallback or `SLOPCODE_ANDROID_TUI=1` only when testing a Bun/OpenTUI experiment.
-
 > [!TIP]
 > Remove versions older than 0.1.x before installing.
 

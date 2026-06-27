@@ -10,7 +10,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const require = createRequire(import.meta.url)
 const pkg = require("./package.json")
 const supported = {
-  android: ["arm64", "x64"],
   darwin: ["arm64", "x64"],
   linux: ["arm64", "x64"],
   windows: ["x64"],
@@ -34,12 +33,7 @@ function detectPlatformAndArch() {
   return { platform, arch }
 }
 
-function termuxEnv() {
-  return Boolean(process.env.TERMUX_VERSION || (process.env.PREFIX || "").includes("/com.termux/"))
-}
-
 function detectLibc(platform, arch) {
-  if (platform === "android" || termuxEnv()) return "bionic"
   if (platform !== "linux") return
   const report = process.report?.getReport?.()
   if (typeof report?.header?.glibcVersionRuntime === "string" && report.header.glibcVersionRuntime) {
@@ -59,7 +53,6 @@ function detectLibc(platform, arch) {
   const text = ((result.stdout || "") + (result.stderr || "")).toLowerCase()
   if (text.includes("musl")) return "musl"
   if (text.includes("glibc") || text.includes("gnu libc")) return "glibc"
-  if (text.includes("bionic")) return "bionic"
   const loader = arch === "arm64" ? "/lib/ld-musl-aarch64.so.1" : arch === "x64" ? "/lib/ld-musl-x86_64.so.1" : ""
   if (loader && fs.existsSync(loader)) return "musl"
 }
@@ -93,8 +86,7 @@ function supportsAvx2(platform, arch) {
 
 function names(platform, arch) {
   const libc = detectLibc(platform, arch)
-  const base = `slopcode-bin-${libc === "bionic" ? "android" : platform}-${arch}`
-  if (libc === "bionic") return [base, `@slopcode-ai/slopcode-android-${arch}`, `slopcode-android-${arch}`]
+  const base = `slopcode-bin-${platform}-${arch}`
   const avx2 = supportsAvx2(platform, arch)
   const baseline = arch === "x64" && !avx2
 
@@ -140,130 +132,6 @@ function supportedMessage() {
     .join(" ")
 }
 
-function termuxMessage() {
-  return [
-    "SlopCode native Termux support could not install the Android runtime/bootstrap.",
-    "Install from Termux with:",
-    "  pkg update",
-    "  pkg install nodejs git ripgrep neovim tar",
-    "  npm install -g slopcode@latest --include=optional",
-    "If that still fails, install the matching GitHub release asset manually.",
-  ].join("\n")
-}
-
-function androidPackage(arch) {
-  return `slopcode-bin-android-${arch}`
-}
-
-function androidTarget(arch) {
-  return path.join(__dirname, "node_modules", androidPackage(arch))
-}
-
-function androidUrl(arch) {
-  return `https://github.com/teamslop/slopcode/releases/download/v${pkg.version}/slopcode-android-${arch}.tar.gz`
-}
-
-const androidBunVersion = "1.3.14"
-
-function androidBunPackage(arch) {
-  return arch === "arm64" ? "bun-linux-aarch64-android" : "bun-linux-x64-android"
-}
-
-function androidBunTarget(arch) {
-  return path.join(__dirname, "node_modules", "@oven", androidBunPackage(arch))
-}
-
-function androidBunUrl(arch) {
-  const name = androidBunPackage(arch)
-  return `https://registry.npmjs.org/@oven/${name}/-/${name}-${androidBunVersion}.tgz`
-}
-
-async function androidAsset(arch, tmp) {
-  if (process.env.SLOPCODE_ANDROID_ASSET_PATH) return process.env.SLOPCODE_ANDROID_ASSET_PATH
-  const out = path.join(tmp, `slopcode-android-${arch}.tar.gz`)
-  const res = await fetch(process.env.SLOPCODE_ANDROID_ASSET_URL || androidUrl(arch))
-  if (!res.ok) throw new Error(`Failed to download Android runtime: ${res.status} ${res.statusText}`)
-  await fs.promises.writeFile(out, Buffer.from(await res.arrayBuffer()))
-  return out
-}
-
-async function installAndroid(arch) {
-  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "slopcode-android-"))
-  const target = androidTarget(arch)
-  try {
-    const archive = await androidAsset(arch, tmp)
-    const extract = path.join(tmp, "package")
-    await fs.promises.mkdir(extract, { recursive: true })
-    const result = require("child_process").spawnSync("tar", ["-xzf", path.basename(archive), "-C", extract], {
-      cwd: path.dirname(archive),
-      encoding: "utf8",
-      timeout: 120000,
-    })
-    if (result.status !== 0) {
-      throw new Error((result.stderr || result.stdout || "tar failed").trim())
-    }
-    const binary = path.join(extract, "bin", "slopcode")
-    if (!fs.existsSync(binary)) throw new Error("Downloaded Android runtime is missing bin/slopcode")
-    await fs.promises.rm(target, { recursive: true, force: true })
-    await fs.promises.mkdir(path.dirname(target), { recursive: true })
-    await fs.promises.rename(extract, target)
-    fs.chmodSync(path.join(target, "bin", "slopcode"), 0o755)
-    return {
-      binaryPath: path.join(target, "bin", "slopcode"),
-      binaryName: "slopcode",
-      packageName: androidPackage(arch),
-      platform: "android",
-      arch,
-      libc: "bionic",
-    }
-  } finally {
-    await fs.promises.rm(tmp, { recursive: true, force: true })
-  }
-}
-
-async function androidBunAsset(arch, tmp) {
-  if (process.env.SLOPCODE_ANDROID_BUN_ASSET_PATH) return process.env.SLOPCODE_ANDROID_BUN_ASSET_PATH
-  const out = path.join(tmp, `${androidBunPackage(arch)}.tgz`)
-  const res = await fetch(process.env.SLOPCODE_ANDROID_BUN_ASSET_URL || androidBunUrl(arch))
-  if (!res.ok) throw new Error(`Failed to download Android Bun bootstrap: ${res.status} ${res.statusText}`)
-  await fs.promises.writeFile(out, Buffer.from(await res.arrayBuffer()))
-  return out
-}
-
-async function installAndroidBun(arch) {
-  const target = androidBunTarget(arch)
-  const existing = path.join(target, "bin", "bun")
-  if (fs.existsSync(existing)) {
-    fs.chmodSync(existing, 0o755)
-    return "detected"
-  }
-
-  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "slopcode-android-bun-"))
-  try {
-    const archive = await androidBunAsset(arch, tmp)
-    const extract = path.join(tmp, "extract")
-    await fs.promises.mkdir(extract, { recursive: true })
-    const result = require("child_process").spawnSync("tar", ["-xzf", path.basename(archive), "-C", extract], {
-      cwd: path.dirname(archive),
-      encoding: "utf8",
-      timeout: 120000,
-    })
-    if (result.status !== 0) {
-      throw new Error((result.stderr || result.stdout || "tar failed").trim())
-    }
-    const source = fs.existsSync(path.join(extract, "package", "bin", "bun")) ? path.join(extract, "package") : extract
-    const binary = path.join(source, "bin", "bun")
-    if (!fs.existsSync(binary)) throw new Error("Downloaded Android Bun bootstrap is missing bin/bun")
-    await fs.promises.rm(target, { recursive: true, force: true })
-    await fs.promises.mkdir(path.dirname(target), { recursive: true })
-    await fs.promises.rename(source, target)
-    fs.chmodSync(path.join(target, "bin", "bun"), 0o755)
-    return "installed"
-  } finally {
-    await fs.promises.rm(tmp, { recursive: true, force: true })
-  }
-}
-
 function findBinary() {
   const { platform, arch } = detectPlatformAndArch()
   const binaryName = platform === "windows" ? "slopcode.exe" : "slopcode"
@@ -278,20 +146,6 @@ function findBinary() {
       }
     } catch {
       continue
-    }
-  }
-
-  if (detectLibc(platform, arch) === "bionic") {
-    const binaryPath = path.join(__dirname, "android-runtime", arch, "bin", binaryName)
-    if (fs.existsSync(binaryPath)) {
-      return {
-        binaryPath,
-        binaryName,
-        packageName: `slopcode-embedded-android-${arch}`,
-        platform,
-        arch,
-        libc: "bionic",
-      }
     }
   }
 }
@@ -358,30 +212,7 @@ async function main() {
     const found = findBinary()
     if (!found) {
       clearCache()
-      if (detectLibc(platform, arch) === "bionic") {
-        try {
-          await installAndroid(arch)
-          await installAndroidBun(arch)
-          console.log("Android/Termux runtime and bootstrap installed from release assets")
-        } catch (error) {
-          console.log(termuxMessage())
-          console.error(error.message)
-        }
-        return
-      }
       console.log("No platform binary package detected during postinstall; runtime resolver will handle it")
-      return
-    }
-
-    if (found.libc === "bionic") {
-      clearCache()
-      try {
-        await installAndroidBun(arch)
-        console.log("Android/Termux runtime package detected; runtime resolver will launch it")
-      } catch (error) {
-        console.log(termuxMessage())
-        console.error(error.message)
-      }
       return
     }
     clearCache()
