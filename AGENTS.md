@@ -118,3 +118,24 @@ const table = sqliteTable("session", {
 - Avoid mocks as much as possible
 - Test actual implementation, do not duplicate logic into tests
 - Tests cannot run from repo root (guard: `do-not-run-tests-from-root`); run from package dirs like `packages/slopcode`.
+
+## OpenCode Go & Free Models
+
+The codebase supports two OpenCode model tiers:
+
+| Tier | Provider ID | API Endpoint | Needs Auth? |
+|------|-------------|--------------|-------------|
+| **Free** | `slopcode` | `https://slopcode.ai/zen/v1` | No (auto-injects `apiKey: "public"`) |
+| **Go** | `slopcode-go` | `https://slopcode.ai/zen/go/v1` | Yes (`SLOPCODE_API_KEY`) |
+
+**Free models** (`big-pickle`, `glm-4.7-free`, etc.) appear automatically without any key. The `SlopcodePlugin` (`packages/core/src/plugin/provider/slopcode.ts`) strips paid models and sets `apiKey: "public"` when no key is present.
+
+**Go models** appear as a separate provider in the model catalog. Without a key, models are visible but require `SLOPCODE_API_KEY` to use. The upsell flow is handled by the retry logic in `packages/slopcode/src/session/retry.ts`.
+
+**Local dev env vars:**
+- `SLOPCODE_API_KEY` - enables Go tier + paid Zen models
+- `SLOPCODE_MODELS_PATH` - point to a local `models.json` snapshot
+- `SLOPCODE_MODELS_URL` - custom models.dev API URL
+- `SLOPCODE_DISABLE_MODELS_FETCH=true` - skip remote fetch (uses bundled fallback)
+
+The bundled fallback at `packages/core/src/models-dev-fallback.ts` contains `slopcode` and `slopcode-go` provider data for offline development.

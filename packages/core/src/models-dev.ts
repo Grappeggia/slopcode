@@ -10,6 +10,7 @@ import { InstallationChannel, InstallationVersion } from "./installation/version
 import { EventV2 } from "./event"
 import { LayerNode } from "./effect/layer-node"
 import { httpClient } from "./effect/layer-node-platform"
+import { fallback as bundledFallback } from "./models-dev-fallback"
 
 export const CatalogModelStatus = Schema.Literals(["alpha", "beta", "deprecated"])
 export type CatalogModelStatus = typeof CatalogModelStatus.Type
@@ -201,6 +202,7 @@ export const layer = Layer.effect(
       if (fromDisk) return fromDisk
       const snapshot = yield* loadSnapshot
       if (snapshot) return snapshot
+      if (bundledFallback && Object.keys(bundledFallback).length > 0) return bundledFallback as Record<string, Provider>
       if (Flag.SLOPCODE_DISABLE_MODELS_FETCH) return {}
       // Flock is cross-process: concurrent slopcode CLIs can race on this cache file.
       const text = yield* Effect.scoped(

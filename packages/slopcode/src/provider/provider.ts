@@ -199,6 +199,22 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         options: ok ? {} : { apiKey: "public" },
       }
     }),
+    "slopcode-go": Effect.fnUntraced(function* (input: Info) {
+      const env = yield* dep.env()
+      const hasKey = iife(() => {
+        if (input.env.some((item) => env[item])) return true
+        return false
+      })
+      const ok =
+        hasKey ||
+        Boolean(yield* dep.auth(input.id)) ||
+        Boolean((yield* dep.config()).provider?.["slopcode-go"]?.options?.apiKey)
+
+      return {
+        autoload: Object.keys(input.models).length > 0,
+        options: ok ? {} : { apiKey: "public" },
+      }
+    }),
     openai: () =>
       Effect.succeed({
         autoload: false,
