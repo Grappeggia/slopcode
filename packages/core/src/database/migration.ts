@@ -75,27 +75,22 @@ export function applyOnly(db: Database, input: Migration[]) {
           (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
         )
         // If seeding produced no usable IDs (empty hash/name columns),
-        // mark the first N migrations as completed based on row count.
-        // The old drizzle journal recorded applied migrations in order.
+        // the old drizzle journal is corrupted/incompatible. Mark ALL
+        // migrations as completed since the DB was already set up by the
+        // old system. New installs use the new migration system from scratch.
         if (completed.size === 0) {
-          const count = yield* db.get<{ c: number }>(
-            sql`SELECT COUNT(*) as c FROM ${sql.identifier("__drizzle_migrations")}`,
+          yield* db.transaction((tx) =>
+            Effect.gen(function* () {
+              for (const migration of input) {
+                yield* tx.run(
+                  sql`INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
+                )
+              }
+            }),
           )
-          const n = count?.c ?? 0
-          if (n > 0) {
-            yield* db.transaction((tx) =>
-              Effect.gen(function* () {
-                for (let i = 0; i < Math.min(n, input.length); i++) {
-                  yield* tx.run(
-                    sql`INSERT OR IGNORE INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${input[i].id}, ${Date.now()})`,
-                  )
-                }
-              }),
-            )
-            completed = new Set(
-              (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
-            )
-          }
+          completed = new Set(
+            (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
+          )
         }
       }
     }
