@@ -212,7 +212,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 204800,
           output: 131072,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
@@ -319,7 +318,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 262144,
           output: 262144,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
@@ -939,7 +937,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 131072,
           output: 131072,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
@@ -1030,7 +1027,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 204800,
           output: 131072,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
@@ -1087,7 +1083,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 204800,
           output: 131072,
         },
-        status: "deprecated",
         provider: {
           npm: "@ai-sdk/anthropic",
         },
@@ -1120,7 +1115,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 1048576,
           output: 64000,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
@@ -1174,7 +1168,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 262100,
           output: 32800,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
@@ -1306,7 +1299,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 256000,
           output: 256000,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
@@ -1337,7 +1329,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 262144,
           output: 65536,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
@@ -1395,7 +1386,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 256000,
           output: 64000,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
@@ -1617,7 +1607,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 1048576,
           output: 64000,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
@@ -1768,7 +1757,6 @@ export const fallback: Record<string, Record<string, unknown>> = {
           context: 262144,
           output: 64000,
         },
-        status: "deprecated",
         cost: {
           input: 0,
           output: 0,
