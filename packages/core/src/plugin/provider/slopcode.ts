@@ -20,7 +20,10 @@ export const SlopcodePlugin = PluginV2.define({
                 (item.provider.enabled as Record<string, unknown>)?.via === "credential"),
           )
           evt.provider.update(item.provider.id, (provider) => {
-            if (!hasKey) provider.request.body.apiKey = "public"
+            if (!hasKey) {
+              provider.request.body.apiKey = "public"
+              if (id === ProviderV2.ID.slopcode) provider.enabled = { via: "custom", data: {} }
+            }
           })
           if (hasKey) continue
           if (id === ProviderV2.ID.slopcode) {
