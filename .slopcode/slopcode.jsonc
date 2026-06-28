@@ -1,5 +1,6 @@
 {
   "$schema": "https://slopcode.dev/config.json",
+  "model": "slopcode/deepseek-v4-flash-free",
   "provider": {
     "slopcode": {
       "options": {},
