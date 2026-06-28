@@ -13,7 +13,7 @@ export const Plugin = PluginV2.define({
   effect: Effect.gen(function* () {
     const catalog = yield* Catalog.Service
     const config = yield* Config.Service
-    
+
     const entries = yield* config.entries()
     const files = entries.filter((entry): entry is Config.Document => entry.type === "document")
 
