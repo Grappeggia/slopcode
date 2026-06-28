@@ -14,10 +14,9 @@ export const Plugin = PluginV2.define({
   id: PluginV2.ID.make("skill"),
   effect: Effect.gen(function* () {
     const skill = yield* SkillV2.Service
-    const transform = yield* skill.transform()
 
-    yield* transform((editor) => {
-      editor.source(
+    yield* skill.transform((draft) => {
+      draft.source(
         new SkillV2.EmbeddedSource({
           type: "embedded",
           skill: new SkillV2.Info({

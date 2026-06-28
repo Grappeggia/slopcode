@@ -74,7 +74,7 @@ export type Editor = {
 }
 
 export interface Interface {
-  readonly transform: State.Interface<Data, Editor>["transform"]
+  readonly transform: State.Transform<Editor>
   readonly sources: () => Effect.Effect<Source[]>
   readonly list: () => Effect.Effect<Info[]>
 }
@@ -89,7 +89,7 @@ export const layer = Layer.effect(
 
     const state = State.create<Data, Editor>({
       initial: () => ({ sources: [] }),
-      editor: (draft) => ({
+      draft: (draft) => ({
         source: (source) => {
           if (draft.sources.some((item) => Source.equals(item, source))) return
           draft.sources.push(castDraft(source))

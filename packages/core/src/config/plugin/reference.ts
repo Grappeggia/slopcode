@@ -17,7 +17,6 @@ export const Plugin = {
     const global = yield* Global.Service
     const location = yield* Location.Service
     const references = yield* Reference.Service
-    const update = yield* references.transform()
     const entries = new Map<string, Reference.Source>()
     for (const doc of (yield* config.entries()).filter(
       (entry): entry is Config.Document => entry.type === "document",
@@ -47,8 +46,8 @@ export const Plugin = {
       }
     }
 
-    yield* update((editor) => {
-      for (const [name, source] of entries) editor.add(name, source)
+    yield* references.transform((draft) => {
+      for (const [name, source] of entries) draft.add(name, source)
     })
   }),
 }

@@ -26,8 +26,8 @@ export type Editor = {
 }
 
 export interface Interface {
-  readonly transform: State.Interface<Data, Editor>["transform"]
-  readonly update: State.Interface<Data, Editor>["update"]
+  readonly transform: State.Transform<Editor>
+  readonly reload: State.Reload
   readonly get: (name: string) => Effect.Effect<Info | undefined>
   readonly list: () => Effect.Effect<Info[]>
 }
@@ -39,7 +39,7 @@ export const layer = Layer.effect(
   Effect.sync(() => {
     const state = State.create<Data, Editor>({
       initial: () => ({ commands: new Map() }),
-      editor: (draft) => ({
+      draft: (draft) => ({
         list: () => Array.from(draft.commands.values()) as Info[],
         get: (name) => draft.commands.get(name),
         update: (name, update) => {
@@ -55,7 +55,7 @@ export const layer = Layer.effect(
     })
 
     return Service.of({
-      update: state.update,
+      reload: state.reload,
       transform: state.transform,
       get: Effect.fn("CommandV2.get")(function* (name) {
         return state.get().commands.get(name)

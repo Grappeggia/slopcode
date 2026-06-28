@@ -67,7 +67,7 @@ export type Editor = {
 }
 
 export interface Interface {
-  readonly transform: State.Interface<Data, Editor>["transform"]
+  readonly transform: State.Transform<Editor>
   readonly provider: {
     readonly get: (providerID: ProviderV2.ID) => Effect.Effect<ProviderV2.Info, ProviderNotFoundError>
     readonly all: () => Effect.Effect<ProviderV2.Info[]>
@@ -149,7 +149,7 @@ export const layer = Layer.effect(
 
     const state = State.create<Data, Editor>({
       initial: () => ({ providers: new Map() }),
-      editor: (draft) => {
+      draft: (draft) => {
         const result: Editor = {
           provider: {
             list: () => Array.fromIterable(draft.providers.values()) as ProviderRecord[],

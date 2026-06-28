@@ -9,9 +9,9 @@ export const OpenAIPlugin = PluginV2.define({
   id: PluginV2.ID.make("openai"),
   effect: Effect.gen(function* () {
     const integrations = yield* Integration.Service
-    yield* integrations.update((editor) => {
-      editor.method.update(browser)
-      editor.method.update(headless)
+    yield* integrations.transform((draft) => {
+      draft.method.update(browser)
+      draft.method.update(headless)
     })
     return {
       "aisdk.sdk": Effect.fn(function* (evt) {

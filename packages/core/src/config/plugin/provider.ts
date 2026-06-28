@@ -13,20 +13,20 @@ export const Plugin = PluginV2.define({
   effect: Effect.gen(function* () {
     const catalog = yield* Catalog.Service
     const config = yield* Config.Service
-    const transform = yield* catalog.transform()
+    
     const entries = yield* config.entries()
     const files = entries.filter((entry): entry is Config.Document => entry.type === "document")
 
-    yield* transform((catalog) => {
+    yield* catalog.transform((draft) => {
       const configuredDefault = Config.latest(entries, "model")
       if (configuredDefault !== undefined) {
         const model = ModelV2.parse(configuredDefault)
-        catalog.model.default.set(model.providerID, model.modelID)
+        draft.model.default.set(model.providerID, model.modelID)
       }
       for (const file of files) {
         for (const [id, item] of Object.entries(file.info.providers ?? {})) {
           const providerID = ProviderV2.ID.make(id)
-          catalog.provider.update(providerID, (provider) => {
+          draft.provider.update(providerID, (provider) => {
             if (item.name !== undefined) provider.name = item.name
             if (item.env !== undefined) provider.env = [...item.env]
             provider.enabled = { via: "custom", data: {} }
@@ -36,11 +36,11 @@ export const Plugin = PluginV2.define({
               Object.assign(provider.request.body, item.request.body)
             }
           })
-          const providerApi = catalog.provider.get(providerID)?.provider.api
+          const providerApi = draft.provider.get(providerID)?.provider.api
           const providerPackage = providerApi?.type === "aisdk" ? providerApi.package : undefined
 
           for (const [id, config] of Object.entries(item.models ?? {})) {
-            catalog.model.update(providerID, ModelV2.ID.make(id), (model) => {
+            draft.model.update(providerID, ModelV2.ID.make(id), (model) => {
               if (config.family !== undefined) model.family = config.family
               if (config.name !== undefined) model.name = config.name
               if (config.api !== undefined) model.api = { ...model.api, ...config.api }

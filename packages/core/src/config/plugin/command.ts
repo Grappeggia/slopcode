@@ -18,7 +18,7 @@ export const Plugin = PluginV2.define({
     const command = yield* CommandV2.Service
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
-    const transform = yield* command.transform()
+    
     const documents = yield* Effect.forEach(yield* config.entries(), (entry) => {
       if (entry.type === "document") return Effect.succeed([{ commands: entry.info.commands }])
       return loadDirectory(fs, entry.path).pipe(
@@ -28,10 +28,10 @@ export const Plugin = PluginV2.define({
       )
     }).pipe(Effect.map((documents) => documents.flat()))
 
-    yield* transform((editor) => {
+    yield* command.transform((draft) => {
       for (const document of documents) {
         for (const [name, command] of Object.entries(document.commands ?? {})) {
-          editor.update(name, (item) => {
+          draft.update(name, (item) => {
             item.template = command.template
             if (command.description !== undefined) item.description = command.description
             if (command.agent !== undefined) item.agent = command.agent

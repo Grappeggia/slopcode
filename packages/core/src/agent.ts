@@ -62,8 +62,8 @@ export type Editor = {
 }
 
 export interface Interface {
-  readonly transform: State.Interface<Data, Editor>["transform"]
-  readonly update: State.Interface<Data, Editor>["update"]
+  readonly transform: State.Transform<Editor>
+  readonly reload: State.Reload
   readonly get: (id: ID) => Effect.Effect<Info | undefined>
   readonly default: () => Effect.Effect<Info | undefined>
   readonly resolve: (id?: ID | string) => Effect.Effect<Info | undefined>
@@ -80,7 +80,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const state = State.create<Data, Editor>({
       initial: () => ({ agents: new Map() }),
-      editor: (draft) => ({
+      draft: (draft) => ({
         list: () => Array.fromIterable(draft.agents.values()) as Info[],
         get: (id) => draft.agents.get(id),
         default: (id) => {
@@ -113,7 +113,7 @@ export const layer = Layer.effect(
 
     return Service.of({
       transform: state.transform,
-      update: state.update,
+      reload: state.reload,
       get: Effect.fn("AgentV2.get")(function* (id) {
         return state.get().agents.get(id)
       }),

@@ -56,24 +56,24 @@ export const Plugin = PluginV2.define({
       })
     }).pipe(Effect.map((documents) => documents.flat()))
 
-    yield* agent.update((editor) => {
+    yield* agent.transform((draft) => {
       const global = documents.flatMap((document) => document.info.permissions ?? [])
       const configuredDefault = Config.latest(documents, "default_agent")
-      if (configuredDefault !== undefined) editor.default(AgentV2.ID.make(configuredDefault))
-      for (const current of editor.list()) {
-        editor.update(current.id, (agent) => agent.permissions.push(...global))
+      if (configuredDefault !== undefined) draft.default(AgentV2.ID.make(configuredDefault))
+      for (const current of draft.list()) {
+        draft.update(current.id, (agent) => agent.permissions.push(...global))
       }
 
       for (const document of documents) {
         for (const [id, item] of Object.entries(document.info.agents ?? {})) {
           const agentID = AgentV2.ID.make(id)
           if (item.disabled) {
-            editor.remove(agentID)
+            draft.remove(agentID)
             continue
           }
 
-          const exists = editor.get(agentID) !== undefined
-          editor.update(agentID, (agent) => {
+          const exists = draft.get(agentID) !== undefined
+          draft.update(agentID, (agent) => {
             if (!exists) agent.permissions.push(...global)
             if (item.model !== undefined) {
               const model = ModelV2.parse(item.model)

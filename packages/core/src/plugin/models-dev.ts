@@ -59,11 +59,9 @@ export const ModelsDevPlugin = PluginV2.define({
     const modelsDev = yield* ModelsDev.Service
     const events = yield* EventV2.Service
     const scope = yield* Scope.Scope
-    const transform = yield* catalog.transform()
-    const integrationTransform = yield* integrations.transform()
     const refresh = Effect.fn("ModelsDevPlugin.refresh")(function* () {
       const data = yield* modelsDev.get()
-      yield* integrationTransform((integrations) => {
+      yield* integrations.transform((integrations) => {
         for (const item of Object.values(data)) {
           if (item.env.length === 0) continue
           const integrationID = Integration.ID.make(item.id)
@@ -83,7 +81,7 @@ export const ModelsDevPlugin = PluginV2.define({
           })
         }
       })
-      yield* transform((catalog) => {
+      yield* catalog.transform((catalog) => {
         for (const item of Object.values(data)) {
           const providerID = ProviderV2.ID.make(item.id)
           catalog.provider.update(providerID, (provider) => {
@@ -101,7 +99,6 @@ export const ModelsDevPlugin = PluginV2.define({
                   settings: {},
                 }
           })
-
           for (const model of Object.values(item.models)) {
             const modelID = ModelV2.ID.make(model.id)
             catalog.model.update(providerID, modelID, (draft) => {

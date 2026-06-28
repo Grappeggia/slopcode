@@ -149,7 +149,7 @@ export class CodeRequiredError extends Schema.TaggedErrorClass<CodeRequiredError
 }) {}
 
 export class AuthorizationError extends Schema.TaggedErrorClass<AuthorizationError>()("Integration.Authorization", {
-  cause: Schema.Defect,
+  cause: Schema.Defect(),
 }) {}
 
 export type Error = CodeRequiredError | AuthorizationError
@@ -190,9 +190,9 @@ export type Editor = {
 
 export interface Interface {
   /** Registers a scoped transform over the integration registry. */
-  readonly transform: State.Interface<Data, Editor>["transform"]
+  readonly transform: State.Transform<Editor>
   /** Registers and immediately applies a scoped integration registry update. */
-  readonly update: State.Interface<Data, Editor>["update"]
+  readonly reload: State.Reload
   /** Returns one integration with its methods and current connections. */
   readonly get: (id: ID) => Effect.Effect<Info | undefined>
   /** Returns all integrations with their methods and current connections. */
@@ -270,7 +270,7 @@ export const locationLayer = Layer.effect(
     const attempts = SynchronizedRef.makeUnsafe(new Map<AttemptID, AttemptEntry>())
     const state = State.create<Data, Editor>({
       initial: () => ({ integrations: new Map<ID, Entry>() }),
-      editor: (draft) => ({
+      draft: (draft) => ({
         list: () => Array.from(draft.integrations.values(), (entry) => entry.ref) as Ref[],
         get: (id) => draft.integrations.get(id)?.ref as Ref | undefined,
         update: (id, update) => {
@@ -408,7 +408,7 @@ export const locationLayer = Layer.effect(
 
     return Service.of({
       transform: state.transform,
-      update: state.update,
+      reload: state.reload,
       get: Effect.fn("Integration.get")(function* (id) {
         const entry = state.get().integrations.get(id)
         if (!entry) return undefined
