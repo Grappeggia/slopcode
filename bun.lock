@@ -714,7 +714,7 @@
     },
     "packages/stats/app": {
       "name": "@slopcode-ai/stats-app",
-      "version": "1.17.11",
+      "version": "0.2.163",
       "dependencies": {
         "@ibm/plex": "6.4.1",
         "@slopcode-ai/stats-core": "workspace:*",
