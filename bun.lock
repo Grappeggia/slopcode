@@ -726,7 +726,7 @@
     },
     "packages/stats/app": {
       "name": "@slopcode-ai/stats-app",
-      "version": "0.2.163",
+      "version": "0.2.164",
       "dependencies": {
         "@ibm/plex": "6.4.1",
         "@slopcode-ai/stats-core": "workspace:*",
@@ -759,7 +759,7 @@
     },
     "packages/stats/core": {
       "name": "@slopcode-ai/stats-core",
-      "version": "0.2.163",
+      "version": "0.2.164",
       "dependencies": {
         "@aws-sdk/client-athena": "3.933.0",
         "@planetscale/database": "1.19.0",
@@ -778,7 +778,7 @@
     },
     "packages/stats/server": {
       "name": "@slopcode-ai/stats-server",
-      "version": "0.2.163",
+      "version": "0.2.164",
       "dependencies": {
         "@aws-sdk/client-firehose": "3.933.0",
         "@effect/platform-node": "catalog:",
