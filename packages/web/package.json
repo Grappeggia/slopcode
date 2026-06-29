@@ -2,7 +2,7 @@
   "name": "@slopcode-ai/web",
   "type": "module",
   "license": "MIT",
-  "version": "0.2.167",
+  "version": "0.2.168",
   "scripts": {
     "dev": "astro dev",
     "dev:remote": "VITE_API_URL=https://api.slopcode.ai astro dev",
