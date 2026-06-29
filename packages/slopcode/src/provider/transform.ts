@@ -678,13 +678,13 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   const adaptiveThinkingOmitted = anthropicOmitsThinking(model.api.id)
   const adaptiveEfforts = anthropicAdaptiveEfforts(model.api.id)
   if (
-    id.includes("deepseek-chat") ||
+    (id.includes("deepseek-chat") && !id.includes("deepseek-chat-v4")) ||
     id.includes("deepseek-reasoner") ||
     id.includes("deepseek-r1") ||
-    id.includes("deepseek-v3") ||
+    (id.includes("deepseek-v3") && !id.includes("deepseek-v3.")) ||
     id.includes("minimax") ||
     id.includes("glm") ||
-    id.includes("kimi") ||
+    (id.includes("kimi") && !id.includes("kimi-k2.") && !id.includes("kimi-k2p")) ||
     id.includes("k2p") ||
     id.includes("qwen") ||
     id.includes("big-pickle")
@@ -707,13 +707,18 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   if (id.includes("grok")) return {}
 
   switch (model.api.npm) {
-    case "@openrouter/ai-sdk-provider":
-      return Object.fromEntries(
-        (model.api.id.startsWith("openai/") || id.includes("gpt")
-          ? openaiCompatibleReasoningEfforts(model.api.id)
-          : WIDELY_SUPPORTED_EFFORTS
-        ).map((effort) => [effort, { reasoning: { effort } }]),
-      )
+    case "@openrouter/ai-sdk-provider": {
+      const apiId = model.api.id.toLowerCase()
+      if (apiId.startsWith("openai/") || id.includes("gpt")) {
+        return Object.fromEntries(
+          openaiCompatibleReasoningEfforts(model.api.id).map((effort) => [effort, { reasoning: { effort } }]),
+        )
+      }
+      const efforts = [...WIDELY_SUPPORTED_EFFORTS]
+      if (id.includes("deepseek-v4")) efforts.push("max")
+      if (apiId.includes("claude")) efforts.push("xhigh")
+      return Object.fromEntries(efforts.map((effort) => [effort, { reasoning: { effort } }]))
+    }
 
     case "ai-gateway-provider": {
       // Cloudflare AI Gateway routes every upstream through its OpenAI-compatible
@@ -1075,7 +1080,9 @@ export function options(input: {
     result["usage"] = {
       include: true,
     }
-    if (input.model.api.id.includes("gemini-3")) {
+    const apiId = input.model.api.id.toLowerCase()
+    const reasoningCapable = apiId.includes("gemini-3") || apiId.includes("claude") || apiId.includes("deepseek-v4")
+    if (reasoningCapable && input.model.capabilities.reasoning) {
       result["reasoning"] = { effort: "high" }
     }
   }
@@ -1108,6 +1115,9 @@ export function options(input: {
       }
       if (input.model.api.id.includes("gemini-3")) {
         result["thinkingConfig"]["thinkingLevel"] = "high"
+      }
+      if (input.model.api.id.includes("gemini-2.5") && !input.model.api.id.includes("gemini-3")) {
+        result["thinkingConfig"]["thinkingBudget"] = 16000
       }
     }
   }
@@ -1196,6 +1206,13 @@ export function options(input: {
     }
   }
 
+  if (input.model.api.npm === "@ai-sdk/amazon-bedrock" && input.model.capabilities.reasoning) {
+    result["reasoningConfig"] = {
+      type: "enabled",
+      budgetTokens: 16000,
+    }
+  }
+
   return result
 }
 
@@ -1211,7 +1228,9 @@ export function smallOptions(model: Provider.Model) {
   }
   if (model.providerID === "openrouter" || model.providerID === "llmgateway") {
     if (model.providerID === "openrouter" && small.reasoning?.effort === "low") {
-      return { reasoning: { effort: "none" } }
+      return model.api.id.includes("google")
+        ? { thinking: { enabled: false } }
+        : { reasoning: { effort: "none" } }
     }
     if (Object.keys(small).length === 0 && model.api.id.includes("google")) {
       return { reasoning: { enabled: false } }

@@ -85,6 +85,16 @@ const profiles = new Map<string, Profile>([
     },
   ],
   ["@ai-sdk/anthropic", { namespace: "anthropic", semantics: new Map([["thinking", "thinking"]]) }],
+  [
+    "@openrouter/ai-sdk-provider",
+    {
+      namespace: "openrouter",
+      semantics: new Map([
+        ["reasoning", "reasoning"],
+        ["usage", "usage"],
+      ]),
+    },
+  ],
 ])
 
 export const namespace = (packageName: string) => profiles.get(packageName)?.namespace
