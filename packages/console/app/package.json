@@ -1,6 +1,6 @@
 {
   "name": "@slopcode-ai/console-app",
-  "version": "0.2.169",
+  "version": "0.2.170",
   "type": "module",
   "license": "MIT",
   "scripts": {
