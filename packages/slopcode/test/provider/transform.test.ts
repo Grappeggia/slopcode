@@ -2680,7 +2680,7 @@ describe("ProviderTransform.variants", () => {
     })
   })
 
-  test("glm returns empty object", () => {
+  test("glm-4 returns variants through openai-compatible", () => {
     const model = createMockModel({
       id: "glm/glm-4",
       providerID: "glm",
@@ -2691,7 +2691,30 @@ describe("ProviderTransform.variants", () => {
       },
     })
     const result = ProviderTransform.variants(model)
-    expect(result).toEqual({})
+    expect(result).toEqual({
+      low: { reasoningEffort: "low" },
+      medium: { reasoningEffort: "medium" },
+      high: { reasoningEffort: "high" },
+    })
+  })
+
+  test("glm-5 on slopcode-go returns variants", () => {
+    const model = createMockModel({
+      id: "slopcode-go/glm-5",
+      providerID: "slopcode-go",
+      api: {
+        id: "glm-5",
+        url: "https://slopcode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+      capabilities: { reasoning: true },
+    })
+    const result = ProviderTransform.variants(model)
+    expect(result).toEqual({
+      low: { reasoningEffort: "low" },
+      medium: { reasoningEffort: "medium" },
+      high: { reasoningEffort: "high" },
+    })
   })
 
   test("mistral models with reasoning support return variants", () => {
