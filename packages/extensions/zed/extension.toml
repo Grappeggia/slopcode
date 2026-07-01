@@ -1,7 +1,7 @@
 id = "slopcode"
 name = "SlopCode"
 description = "The open source coding agent."
-version = "0.2.173"
+version = "0.2.174"
 schema_version = 1
 authors = ["Anomaly"]
 repository = "http://github.com/teamslop/slopcode"
@@ -11,26 +11,26 @@ name = "SlopCode"
 icon = "./icons/slopcode.svg"
 
 [agent_servers.slopcode.targets.darwin-aarch64]
-archive = "http://github.com/teamslop/slopcode/releases/download/v0.2.173/slopcode-darwin-arm64.zip"
+archive = "http://github.com/teamslop/slopcode/releases/download/v0.2.174/slopcode-darwin-arm64.zip"
 cmd = "./slopcode"
 args = ["acp"]
 
 [agent_servers.slopcode.targets.darwin-x86_64]
-archive = "http://github.com/teamslop/slopcode/releases/download/v0.2.173/slopcode-darwin-x64.zip"
+archive = "http://github.com/teamslop/slopcode/releases/download/v0.2.174/slopcode-darwin-x64.zip"
 cmd = "./slopcode"
 args = ["acp"]
 
 [agent_servers.slopcode.targets.linux-aarch64]
-archive = "http://github.com/teamslop/slopcode/releases/download/v0.2.173/slopcode-linux-arm64.tar.gz"
+archive = "http://github.com/teamslop/slopcode/releases/download/v0.2.174/slopcode-linux-arm64.tar.gz"
 cmd = "./slopcode"
 args = ["acp"]
 
 [agent_servers.slopcode.targets.linux-x86_64]
-archive = "http://github.com/teamslop/slopcode/releases/download/v0.2.173/slopcode-linux-x64.tar.gz"
+archive = "http://github.com/teamslop/slopcode/releases/download/v0.2.174/slopcode-linux-x64.tar.gz"
 cmd = "./slopcode"
 args = ["acp"]
 
 [agent_servers.slopcode.targets.windows-x86_64]
-archive = "http://github.com/teamslop/slopcode/releases/download/v0.2.173/slopcode-windows-x64.zip"
+archive = "http://github.com/teamslop/slopcode/releases/download/v0.2.174/slopcode-windows-x64.zip"
 cmd = "./slopcode.exe"
 args = ["acp"]
