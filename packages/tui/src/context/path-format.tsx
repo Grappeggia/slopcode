@@ -1,6 +1,8 @@
 import path from "path"
+import type { LocationRef } from "@slopcode-ai/sdk/v2"
 import { createContext, useContext, type ParentProps } from "solid-js"
 import { abbreviateHome } from "../runtime"
+import { LocationProvider } from "./location"
 import { useTuiPaths } from "./runtime"
 
 const context = createContext<{
@@ -8,17 +10,20 @@ const context = createContext<{
   format: (input?: string) => string
 }>()
 
-export function PathFormatterProvider(props: ParentProps<{ path: string | undefined }>) {
+export function PathFormatterProvider(props: ParentProps<{ location: LocationRef | undefined }>) {
   const paths = useTuiPaths()
+  const base = () => props.location?.directory || paths.cwd
   return (
-    <context.Provider
-      value={{
-        path: () => props.path || paths.cwd,
-        format: (input) => formatPath(input, props.path || paths.cwd, paths.home),
-      }}
-    >
-      {props.children}
-    </context.Provider>
+    <LocationProvider location={props.location}>
+      <context.Provider
+        value={{
+          path: base,
+          format: (input) => formatPath(input, base(), paths.home),
+        }}
+      >
+        {props.children}
+      </context.Provider>
+    </LocationProvider>
   )
 }
 

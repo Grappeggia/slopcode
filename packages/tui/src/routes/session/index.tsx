@@ -192,6 +192,10 @@ export function Session() {
   const { theme } = useTheme()
   const promptRef = usePromptRef()
   const session = createMemo(() => sync.session.get(route.sessionID))
+  const location = createMemo(() => {
+    const current = session()
+    return current ? { directory: current.directory, workspaceID: current.workspaceID } : undefined
+  })
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
@@ -1143,7 +1147,7 @@ export function Session() {
   createEffect(on(() => route.sessionID, toBottom))
 
   return (
-    <PathFormatterProvider path={session()?.directory}>
+    <PathFormatterProvider location={location()}>
       <context.Provider
         value={{
           get width() {

@@ -213,6 +213,11 @@ export const RunCommand = effectCmd({
         type: "boolean",
         describe: "show thinking blocks",
       })
+      .option("mini", {
+        type: "boolean",
+        hidden: true,
+        default: false,
+      })
       .option("replay", {
         type: "boolean",
         default: true,
@@ -228,9 +233,19 @@ export const RunCommand = effectCmd({
         describe: "run in direct interactive split-footer mode",
         default: false,
       })
-      .option("dangerously-skip-permissions", {
+      .option("auto", {
         type: "boolean",
         describe: "auto-approve permissions that are not explicitly denied (dangerous!)",
+        default: false,
+      })
+      .option("yolo", {
+        type: "boolean",
+        hidden: true,
+        default: false,
+      })
+      .option("dangerously-skip-permissions", {
+        type: "boolean",
+        hidden: true,
         default: false,
       })
       .option("demo", {
@@ -248,7 +263,10 @@ export const RunCommand = effectCmd({
     const localInstance = yield* InstanceRef
     yield* Effect.promise(async () => {
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
-      const thinking = args.interactive ? (args.thinking ?? true) : (args.thinking ?? false)
+      const interactive = args.interactive || args.mini
+      const interactiveName = args.mini ? "--mini" : "--interactive"
+      const auto = args.auto || args.yolo || args["dangerously-skip-permissions"]
+      const thinking = interactive ? (args.thinking ?? true) : (args.thinking ?? false)
       const die = (message: string): never => {
         UI.error(message)
         process.exit(1)
@@ -265,20 +283,20 @@ export const RunCommand = effectCmd({
         .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
         .join(" ")
 
-      if (args.interactive && args.command) {
-        die("--interactive cannot be used with --command")
+      if (interactive && args.command) {
+        die(`${interactiveName} cannot be used with --command`)
       }
 
-      if (args.demo && !args.interactive) {
-        die("--demo requires --interactive")
+      if (args.demo && !interactive) {
+        die(`--demo requires ${interactiveName}`)
       }
 
-      if (args.interactive && args.format === "json") {
-        die("--interactive cannot be used with --format json")
+      if (interactive && args.format === "json") {
+        die(`${interactiveName} cannot be used with --format json`)
       }
 
-      if (args["replay-limit"] !== undefined && !args.interactive) {
-        die("--replay-limit requires --interactive")
+      if (args["replay-limit"] !== undefined && !interactive) {
+        die(`--replay-limit requires ${interactiveName}`)
       }
 
       if (
@@ -288,11 +306,11 @@ export const RunCommand = effectCmd({
         die("--replay-limit must be a positive integer")
       }
 
-      if (args.interactive && !process.stdout.isTTY) {
-        die("--interactive requires a TTY stdout")
+      if (interactive && !process.stdout.isTTY) {
+        die(`${interactiveName} requires a TTY stdout`)
       }
 
-      if (args.interactive) {
+      if (interactive) {
         try {
           resolveInteractiveStdin().cleanup?.()
         } catch (error) {
@@ -300,7 +318,7 @@ export const RunCommand = effectCmd({
         }
       }
 
-      const replay = args.replay || args["replay-limit"] !== undefined
+      const replay = args.replay === false ? false : args.replay || args["replay-limit"] !== undefined
 
       const root = Filesystem.resolve(process.env.PWD ?? process.cwd())
       const directory = (() => {
@@ -352,7 +370,7 @@ export const RunCommand = effectCmd({
       message = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
 
-      if (message.trim().length === 0 && !args.command && !args.interactive) {
+      if (message.trim().length === 0 && !args.command && !interactive) {
         UI.error("You must provide a message or a command")
         process.exit(1)
       }
@@ -362,7 +380,7 @@ export const RunCommand = effectCmd({
         process.exit(1)
       }
 
-      const rules: PermissionV1.Ruleset = args.interactive
+      const rules: PermissionV1.Ruleset = interactive
         ? []
         : [
             {
@@ -732,7 +750,7 @@ export const RunCommand = effectCmd({
               const permission = event.properties
               if (permission.sessionID !== sessionID) continue
 
-              if (args["dangerously-skip-permissions"]) {
+              if (auto) {
                 await client.permission.reply({
                   requestID: permission.id,
                   reply: "once",
@@ -760,7 +778,7 @@ export const RunCommand = effectCmd({
 
         await share(client, sessionID)
 
-        if (!args.interactive) {
+        if (!interactive) {
           const events = await client.event.subscribe()
           const completed = loop(client, events).catch((e) => {
             console.error(e)
@@ -834,7 +852,7 @@ export const RunCommand = effectCmd({
         return
       }
 
-      if (args.interactive && !args.attach && !args.session && !args.continue) {
+      if (interactive && !args.attach && !args.session && !args.continue) {
         const model = pick(args.model)
         const { runInteractiveLocalMode } = await import("./run/runtime")
         const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -886,3 +904,55 @@ export const RunCommand = effectCmd({
     })
   }),
 })
+
+type MiniCommandInput = {
+  directory?: string
+  attach?: string
+  password?: string
+  username?: string
+  continue?: boolean
+  session?: string
+  fork?: boolean
+  model?: string
+  agent?: string
+  prompt?: string
+  replay?: boolean
+  replayLimit?: number
+  demo?: boolean
+}
+
+export async function runMini(input: MiniCommandInput) {
+  if (!RunCommand.handler) throw new Error("Mini command handler is unavailable")
+  await RunCommand.handler({
+    $0: "slopcode",
+    _: ["mini"],
+    message: input.prompt ? [input.prompt] : [],
+    command: undefined,
+    continue: input.continue,
+    session: input.session,
+    fork: input.fork,
+    share: undefined,
+    model: input.model,
+    agent: input.agent,
+    format: "default",
+    file: undefined,
+    title: undefined,
+    attach: input.attach,
+    password: input.password,
+    username: input.username,
+    dir: input.directory,
+    port: undefined,
+    variant: undefined,
+    thinking: undefined,
+    mini: true,
+    interactive: false,
+    replay: input.replay ?? true,
+    "replay-limit": input.replayLimit,
+    replayLimit: input.replayLimit,
+    auto: false,
+    yolo: false,
+    "dangerously-skip-permissions": false,
+    dangerouslySkipPermissions: false,
+    demo: input.demo ?? false,
+  })
+}
