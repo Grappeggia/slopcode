@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "0.2.172",
+  "version": "0.2.173",
   "name": "@slopcode-ai/effect-sqlite-node",
   "type": "module",
   "license": "MIT",
