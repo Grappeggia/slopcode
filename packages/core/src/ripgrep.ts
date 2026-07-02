@@ -91,6 +91,22 @@ const failure = (message: string, cause?: unknown) => new Error({ message, cause
 const isInvalidPattern = (stderr: string) =>
   stderr.includes("regex parse error") || stderr.includes("error parsing regex")
 
+function value(input: unknown, key: string) {
+  if (!input || typeof input !== "object") return undefined
+  return (input as Record<string, unknown>)[key]
+}
+
+function busy(input: unknown): boolean {
+  const code = value(input, "code")
+  const message = value(input, "message")
+  if (code === "ETXTBSY" || code === "EBUSY" || code === "EPERM") return true
+  if (typeof message === "string" && (message.includes("ETXTBSY") || message.includes("text file is busy"))) return true
+
+  const reason = value(input, "reason")
+  if (value(reason, "_tag") === "Busy") return true
+  return busy(value(reason, "cause")) || busy(value(input, "cause"))
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -108,9 +124,23 @@ export const layer = Layer.effect(
     }) => {
       const program = Effect.scoped(
         Effect.gen(function* () {
-          const handle = yield* process.spawn(
-            ChildProcess.make(yield* binary.filepath, input.args, { cwd: input.cwd, extendEnv: true, stdin: "ignore" }),
-          )
+          const command = ChildProcess.make(yield* binary.filepath, input.args, {
+            cwd: input.cwd,
+            extendEnv: true,
+            stdin: "ignore",
+          })
+          const spawn: (attempt: number) => ReturnType<typeof process.spawn> = (attempt) => {
+            const retry = (): ReturnType<typeof process.spawn> =>
+              Effect.sleep("50 millis").pipe(Effect.andThen(spawn(attempt + 1)))
+            return process.spawn(command).pipe(
+              Effect.catchIf(
+                (cause) => attempt < 5 && busy(cause),
+                retry,
+              ),
+              Effect.catchDefect((defect) => (attempt < 5 && busy(defect) ? retry() : Effect.die(defect))),
+            )
+          }
+          const handle = yield* spawn(0)
           const stderrFiber = yield* collectStream(handle.stderr, ERROR_BYTES).pipe(
             Effect.map((output) => output.buffer.toString("utf8")),
             Effect.forkScoped,

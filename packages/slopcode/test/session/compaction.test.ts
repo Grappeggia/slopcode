@@ -27,7 +27,7 @@ import type { Provider } from "@/provider/provider"
 import * as SessionProcessorModule from "../../src/session/processor"
 import { Snapshot } from "../../src/snapshot"
 import { ProviderTest } from "../fake/provider"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import { TestConfig } from "../fixture/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -1206,40 +1206,25 @@ describe("session.compaction.process", () => {
     () => {
       const stub = llm()
       stub.push(
-        Stream.fromAsyncIterable(
-          {
-            async *[Symbol.asyncIterator]() {
-              yield LLMEvent.stepStart({ index: 0 })
-              throw new APICallError({
-                message: "boom",
-                url: "https://example.com/v1/chat/completions",
-                requestBodyValues: {},
-                statusCode: 503,
-                responseHeaders: { "retry-after-ms": "10000" },
-                responseBody: '{"error":"boom"}',
-                isRetryable: true,
-              })
-            },
-          },
-          (err) => err,
+        Stream.fail(
+          new APICallError({
+            message: "boom",
+            url: "https://example.com/v1/chat/completions",
+            requestBodyValues: {},
+            statusCode: 503,
+            responseHeaders: { "retry-after-ms": "10000" },
+            responseBody: '{"error":"boom"}',
+            isRetryable: true,
+          }),
         ),
       )
 
       return Effect.gen(function* () {
         const ssn = yield* SessionNs.Service
-        const events = yield* EventV2Bridge.Service
-        const ready = yield* Deferred.make<void>()
+        const status = yield* SessionStatus.Service
         const session = yield* ssn.create({})
         const msg = yield* createUserMessage(session.id, "hello")
         const msgs = yield* ssn.messages({ sessionID: session.id })
-        const off = yield* events.listen((evt) => {
-          if (evt.type !== SessionStatus.Event.Status.type) return Effect.void
-          const data = evt.data as typeof SessionStatus.Event.Status.data.Type
-          if (data.sessionID !== session.id || data.status.type !== "retry") return Effect.void
-          Deferred.doneUnsafe(ready, Effect.void)
-          return Effect.void
-        })
-        yield* Effect.addFinalizer(() => off)
 
         const fiber = yield* SessionCompaction.use
           .process({
@@ -1250,7 +1235,13 @@ describe("session.compaction.process", () => {
           })
           .pipe(Effect.forkChild)
 
-        yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            return (yield* status.get(session.id)).type === "retry" ? true : undefined
+          }),
+          "timed out waiting for compaction retry backoff",
+          "5 seconds",
+        )
         const start = Date.now()
         yield* Fiber.interrupt(fiber)
         const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
