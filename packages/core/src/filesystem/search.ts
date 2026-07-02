@@ -1,7 +1,7 @@
 export * as FileSystemSearch from "./search"
 
 import path from "path"
-import { Context, Effect, Layer, Scope } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { Fff } from "#fff"
 import fuzzysort from "fuzzysort"
 import { FileSystem } from "../filesystem"
@@ -23,26 +23,28 @@ const makeRipgrep = Effect.gen(function* () {
   const fs = yield* FSUtil.Service
   const location = yield* Location.Service
   const ripgrep = yield* Ripgrep.Service
-  const scope = yield* Scope.Scope
-  const state = {
-    files: [] as string[],
-    directories: [] as string[],
-  }
-  const directories = new Set<string>()
-  yield* ripgrep
-    .find({
-      cwd: location.directory,
-      pattern: "*",
-      limit: location.vcs ? Number.MAX_SAFE_INTEGER : 100_000,
-      onEntry: (entry) =>
-        Effect.sync(() => {
-          state.files.push(entry.path)
-          const parts = entry.path.split("/")
-          parts.slice(0, -1).forEach((_, index) => directories.add(parts.slice(0, index + 1).join("/") + path.sep))
-          state.directories = Array.from(directories)
+  const index = yield* Effect.cached(
+    ripgrep
+      .find({
+        cwd: location.directory,
+        pattern: "*",
+        limit: location.vcs ? Number.MAX_SAFE_INTEGER : 100_000,
+      })
+      .pipe(
+        Effect.map((entries) => {
+          const directories = new Set<string>()
+          return {
+            files: entries.map((entry) => {
+              const parts = entry.path.split("/")
+              parts.slice(0, -1).forEach((_, index) => directories.add(parts.slice(0, index + 1).join("/") + path.sep))
+              return entry.path
+            }),
+            directories: Array.from(directories),
+          }
         }),
-    })
-    .pipe(Effect.orDie, Effect.asVoid, Effect.forkIn(scope))
+        Effect.orDie,
+      ),
+  )
   return {
     glob: (input: FileSystem.GlobInput) =>
       Effect.gen(function* () {
@@ -99,6 +101,7 @@ const makeRipgrep = Effect.gen(function* () {
       }),
     find: (input: FileSystem.FindInput) =>
       Effect.gen(function* () {
+        const state = yield* index
         const items =
           input.type === "file"
             ? state.files
