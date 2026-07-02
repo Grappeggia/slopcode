@@ -625,7 +625,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "Agent",
         slashName: "models",
         // Bias /mo toward /models over /move without changing global fuzzy scoring.
-        slashAliases: ["mo"],
+        slashAliases: ["model", "mo"],
         run: () => {
           dialog.replace(() => <DialogModel />)
         },
@@ -680,6 +680,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         title: "Toggle MCPs",
         category: "Agent",
         slashName: "mcps",
+        slashAliases: ["mcp"],
         run: () => {
           dialog.replace(() => <DialogMcp />)
         },

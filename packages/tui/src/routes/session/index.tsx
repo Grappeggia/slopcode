@@ -91,6 +91,10 @@ const GO_UPSELL_ACCOUNT_RATE_LIMIT_LAST_SEEN_AT = "go_upsell_account_rate_limit_
 const GO_UPSELL_ACCOUNT_RATE_LIMIT_DONT_SHOW = "go_upsell_account_rate_limit_dont_show"
 const GO_UPSELL_WINDOW = 86_400_000 // 24 hrs
 const GO_UPSELL_PROVIDERS = new Set(["slopcode", "slopcode-go"])
+const money = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+})
 
 type RetryAction = Extract<SessionStatus, { type: "retry" }>["action"]
 
@@ -282,6 +286,29 @@ export function Session() {
   const sidebarWidth = createMemo(() => (sidebarVisible() && wide() ? 42 : 0))
   const contentWidth = createMemo(() => Math.max(1, dimensions().width - sidebarWidth() - panePadding() * 2))
   const providers = createMemo(() => Model.index(sync.data.provider))
+  const usage = createMemo(() => {
+    const last = messages().findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
+    if (!last) return
+
+    const input = last.tokens.input
+    const output = last.tokens.output
+    const reasoning = last.tokens.reasoning
+    const cache = last.tokens.cache.read + last.tokens.cache.write
+    const tokens = last.tokens.total || input + output + reasoning + cache
+    const provider = sync.data.provider.find((item) => item.id === last.providerID)
+    const model = provider?.models[last.modelID]
+    const pct = model?.limit.context ? Math.round((tokens / model.limit.context) * 100) : undefined
+
+    return {
+      cost: money.format(session()?.cost ?? 0),
+      context: pct === undefined ? Locale.number(tokens) : `${Locale.number(tokens)} (${pct}%)`,
+      model: `${provider?.name ?? last.providerID} / ${model?.name ?? last.modelID}`,
+      input: Locale.number(input),
+      output: Locale.number(output),
+      reasoning: Locale.number(reasoning),
+      cache: Locale.number(cache),
+    }
+  })
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
@@ -883,6 +910,9 @@ export function Session() {
       title: "Copy last assistant message",
       value: "messages.copy",
       category: "Session",
+      slash: {
+        name: "copy",
+      },
       run: () => {
         const revertID = session()?.revert?.messageID
         const lastAssistantMessage = messages().findLast(
@@ -927,7 +957,8 @@ export function Session() {
       value: "session.copy",
       category: "Session",
       slash: {
-        name: "copy",
+        name: "copy-session",
+        aliases: ["transcript"],
       },
       run: async () => {
         try {
@@ -950,6 +981,48 @@ export function Session() {
           toast.show({ message: "Failed to copy session transcript", variant: "error" })
         }
         dialog.clear()
+      },
+    },
+    {
+      title: "Usage",
+      value: "session.usage",
+      category: "Session",
+      slash: {
+        name: "usage",
+        aliases: ["cost", "stats"],
+      },
+      run: () => {
+        dialog.replace(() => (
+          <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
+            <box flexDirection="row" justifyContent="space-between">
+              <text fg={theme.text} attributes={TextAttributes.BOLD}>
+                Usage
+              </text>
+              <text fg={theme.textMuted} onMouseUp={() => dialog.clear()}>
+                esc
+              </text>
+            </box>
+            <Show when={usage()} fallback={<text fg={theme.textMuted}>No usage data yet</text>}>
+              {(item) => (
+                <box gap={1}>
+                  <box>
+                    <text fg={theme.text}>Session</text>
+                    <text fg={theme.textMuted}>Cost {item().cost}</text>
+                    <text fg={theme.textMuted}>Context {item().context}</text>
+                    <text fg={theme.textMuted}>Model {item().model}</text>
+                  </box>
+                  <box>
+                    <text fg={theme.text}>Last assistant turn</text>
+                    <text fg={theme.textMuted}>Input {item().input}</text>
+                    <text fg={theme.textMuted}>Output {item().output}</text>
+                    <text fg={theme.textMuted}>Reasoning {item().reasoning}</text>
+                    <text fg={theme.textMuted}>Cache {item().cache}</text>
+                  </box>
+                </box>
+              )}
+            </Show>
+          </box>
+        ))
       },
     },
     {
