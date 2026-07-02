@@ -8,7 +8,7 @@ export default {
   github: "https://github.com/teamslop/slopcode",
   discord: "https://slopcode.ai/discord",
   headerLinks: [
-    { name: "app.header.home", url: "/" },
+    { name: "app.header.home", url: "/docs/" },
     { name: "app.header.docs", url: "/docs/" },
   ],
 }

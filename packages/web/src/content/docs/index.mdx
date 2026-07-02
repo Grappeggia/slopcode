@@ -34,7 +34,7 @@ To use SlopCode in your terminal, you'll need:
 The easiest way to install SlopCode is through the install script.
 
 ```bash
-curl -fsSL https://slopcode.ai/install | bash
+curl -fsSL https://slopcode.dev/install | bash
 ```
 
 You can also install it with the following commands:
@@ -45,28 +45,28 @@ You can also install it with the following commands:
 
       <TabItem label="npm">
       ```bash
-      npm install -g slopcode-ai
+      npm install -g slopcode
       ```
 
           </TabItem>
 
         <TabItem label="Bun">
         ```bash
-        bun install -g slopcode-ai
+        bun install -g slopcode
         ```
 
           </TabItem>
 
         <TabItem label="pnpm">
         ```bash
-        pnpm install -g slopcode-ai
+        pnpm add -g slopcode
         ```
 
           </TabItem>
 
         <TabItem label="Yarn">
         ```bash
-        yarn global add slopcode-ai
+        yarn global add slopcode
         ```
 
       </TabItem>
@@ -76,7 +76,7 @@ You can also install it with the following commands:
 - **Using Homebrew on macOS and Linux**
 
   ```bash
-  brew install anomalyco/tap/slopcode
+  brew install teamslop/slopcode/slopcode
   ```
 
   > We recommend using the SlopCode tap for the most up to date releases. The official `brew install slopcode` formula is maintained by the Homebrew team and is updated less frequently.
@@ -109,19 +109,13 @@ For the best experience on Windows, we recommend using [Windows Subsystem for Li
 - **Using NPM**
 
   ```bash
-  npm install -g slopcode-ai
+  npm install -g slopcode
   ```
 
 - **Using Mise**
 
   ```bash
-  mise use -g github:anomalyco/slopcode
-  ```
-
-- **Using Docker**
-
-  ```bash
-  docker run -it --rm ghcr.io/anomalyco/slopcode
+  mise use -g slopcode
   ```
 
 Support for installing SlopCode on Windows using Bun is currently in progress.

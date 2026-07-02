@@ -170,6 +170,7 @@ export const TuiThreadCommand = cmd({
         prompt: args.prompt,
         replay: noReplay ? false : undefined,
         replayLimit: args.replayLimit,
+        auto: args.auto || args.yolo || args["dangerously-skip-permissions"],
         demo: args.demo,
       })
       return

@@ -20,6 +20,8 @@ refs
 Session.vim
 slopcode.json
 !packages/slopcode/src/cli/cmd/tui/context/theme/slopcode.json
+!packages/tui/src/theme/assets/slopcode.json
+!packages/ui/src/theme/themes/slopcode.json
 a.out
 target
 .scripts

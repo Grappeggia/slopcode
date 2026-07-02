@@ -24,14 +24,21 @@ jobs:
       - name: Check required secrets
         id: guard
         env:
+          STAGE: ${{ github.ref_name }}
           HAVE_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && 'true' || 'false' }}
           HAVE_PLANETSCALE_NAME: ${{ secrets.PLANETSCALE_SERVICE_TOKEN_NAME != '' && 'true' || 'false' }}
           HAVE_PLANETSCALE_TOKEN: ${{ secrets.PLANETSCALE_SERVICE_TOKEN != '' && 'true' || 'false' }}
           HAVE_STRIPE_DEV: ${{ secrets.STRIPE_SECRET_KEY_DEV != '' && 'true' || 'false' }}
           HAVE_STRIPE_PROD: ${{ secrets.STRIPE_SECRET_KEY_PROD != '' && 'true' || 'false' }}
         run: |
-          if [ "$HAVE_CLOUDFLARE" != "true" ] || [ "$HAVE_PLANETSCALE_NAME" != "true" ] || [ "$HAVE_PLANETSCALE_TOKEN" != "true" ] || [ "$HAVE_STRIPE_DEV" != "true" ] || [ "$HAVE_STRIPE_PROD" != "true" ]; then
+          if [ "$STAGE" = "production" ]; then
+            have_stripe="$HAVE_STRIPE_PROD"
+          else
+            have_stripe="$HAVE_STRIPE_DEV"
+          fi
+          if [ "$HAVE_CLOUDFLARE" != "true" ] || [ "$HAVE_PLANETSCALE_NAME" != "true" ] || [ "$HAVE_PLANETSCALE_TOKEN" != "true" ] || [ "$have_stripe" != "true" ]; then
             echo "Skipping deploy: required deploy secrets are not configured"
+            echo "Deploy skipped because required secrets are not configured for $STAGE." >> "$GITHUB_STEP_SUMMARY"
             echo "ready=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi

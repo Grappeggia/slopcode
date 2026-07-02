@@ -37,6 +37,11 @@ slopcode [project]
 | <nobr><code>{"--prompt"}</code></nobr>      |       | Prompt to use                                                           |
 | <nobr><code>{"--model"}</code></nobr>       | `-m`  | Model to use in the form of provider/model                              |
 | <nobr><code>{"--agent"}</code></nobr>       |       | Agent to use                                                            |
+| <nobr><code>{"--auto"}</code></nobr>        |       | Auto-approve permissions that are not explicitly denied (dangerous!)    |
+| <nobr><code>{"--yolo"}</code></nobr>        |       | Alias for `--auto`                                                       |
+| <nobr><code>{"--mini"}</code></nobr>        |       | Start the minimal interactive interface                                 |
+| <nobr><code>{"--no-replay"}</code></nobr>   |       | Disable mini session history replay                                     |
+| <nobr><code>{"--replay-limit"}</code></nobr> |       | Cap visible mini replay to the newest N messages                       |
 | <nobr><code>{"--port"}</code></nobr>        |       | Port to listen on                                                       |
 | <nobr><code>{"--hostname"}</code></nobr>    |       | Hostname to listen on                                                   |
 | <nobr><code>{"--mdns"}</code></nobr>        |       | Enable mDNS discovery                                                   |
@@ -123,6 +128,9 @@ slopcode attach http://10.20.30.40:4096
 | <nobr><code>{"--fork"}</code></nobr>     |       | Fork the session when continuing (use with `--continue` or `--session`)    |
 | <nobr><code>{"--password"}</code></nobr> | `-p`  | Basic auth password (defaults to `SLOPCODE_SERVER_PASSWORD`)               |
 | <nobr><code>{"--username"}</code></nobr> | `-u`  | Basic auth username (defaults to `SLOPCODE_SERVER_USERNAME` or `slopcode`) |
+| <nobr><code>{"--mini"}</code></nobr>     |       | Start the minimal interactive interface                                    |
+| <nobr><code>{"--no-replay"}</code></nobr> |       | Disable mini session history replay                                        |
+| <nobr><code>{"--replay-limit"}</code></nobr> |     | Cap visible mini replay to the newest N messages                          |
 
 ---
 
@@ -380,6 +388,12 @@ slopcode run --attach http://localhost:4096 "Explain async/await in JavaScript"
 | <nobr><code>{"--port"}</code></nobr>                         |       | Port for the local server (defaults to random port)                        |
 | <nobr><code>{"--variant"}</code></nobr>                      |       | Model variant (provider-specific reasoning effort)                         |
 | <nobr><code>{"--thinking"}</code></nobr>                     |       | Show thinking blocks                                                       |
+| <nobr><code>{"--interactive"}</code></nobr>                  | `-i`  | Run in direct interactive split-footer mode                                |
+| <nobr><code>{"--mini"}</code></nobr>                         |       | Alias for the direct interactive interface                                 |
+| <nobr><code>{"--auto"}</code></nobr>                         |       | Auto-approve permissions that are not explicitly denied (dangerous!)       |
+| <nobr><code>{"--yolo"}</code></nobr>                         |       | Alias for `--auto`                                                         |
+| <nobr><code>{"--no-replay"}</code></nobr>                    |       | Disable interactive session history replay                                 |
+| <nobr><code>{"--replay-limit"}</code></nobr>                 |       | Cap visible interactive replay to the newest N messages                    |
 | <nobr><code>{"--dangerously-skip-permissions"}</code></nobr> |       | Auto-approve permissions that are not explicitly denied (dangerous!)       |
 
 ---
