@@ -360,19 +360,20 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const instance = yield* InstanceState.context
       const workspaceID = yield* InstanceState.workspaceID
       return HttpServerResponse.stream(
-        sideSvc
-          .ask({ ...ctx.payload, sessionID: ctx.params.sessionID })
-          .pipe(
-            Stream.provideService(InstanceRef, instance),
-            Stream.provideService(WorkspaceRef, workspaceID),
-            Stream.catchCause((cause) =>
-              Stream.make({ type: "error", message: errorMessage(Cause.squash(cause)) } satisfies SessionSideQuestion.Event),
-            ),
-            Stream.concat(Stream.make({ type: "done" } satisfies SessionSideQuestion.Event)),
-            Stream.map(sideEvent),
-            Stream.pipeThroughChannel(Sse.encode()),
-            Stream.encodeText,
+        sideSvc.ask({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
+          Stream.provideService(InstanceRef, instance),
+          Stream.provideService(WorkspaceRef, workspaceID),
+          Stream.catchCause((cause) =>
+            Stream.make({
+              type: "error",
+              message: errorMessage(Cause.squash(cause)),
+            } satisfies SessionSideQuestion.Event),
           ),
+          Stream.concat(Stream.make({ type: "done" } satisfies SessionSideQuestion.Event)),
+          Stream.map(sideEvent),
+          Stream.pipeThroughChannel(Sse.encode()),
+          Stream.encodeText,
+        ),
         {
           contentType: "text/event-stream",
           headers: {

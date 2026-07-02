@@ -9,10 +9,7 @@ import { errorMessage } from "../util/error"
 import { useDialog } from "../ui/dialog"
 import { useToast } from "../ui/toast"
 
-type SideEvent =
-  | { type: "text"; text: string }
-  | { type: "error"; message: string }
-  | { type: "done" }
+type SideEvent = { type: "text"; text: string } | { type: "error"; message: string } | { type: "done" }
 
 export function DialogSideQuestion(props: {
   sessionID: string
