@@ -287,7 +287,9 @@ export function Session() {
   const contentWidth = createMemo(() => Math.max(1, dimensions().width - sidebarWidth() - panePadding() * 2))
   const providers = createMemo(() => Model.index(sync.data.provider))
   const usage = createMemo(() => {
-    const last = messages().findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
+    const last = messages().findLast(
+      (item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0,
+    )
     if (!last) return
 
     const input = last.tokens.input
