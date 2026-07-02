@@ -134,10 +134,7 @@ export const layer = Layer.effect(
             const retry = (): ReturnType<typeof process.spawn> =>
               Effect.sleep("100 millis").pipe(Effect.andThen(spawn(attempt + 1)))
             return process.spawn(command).pipe(
-              Effect.catchIf(
-                (cause) => attempt < 40 && busy(cause),
-                retry,
-              ),
+              Effect.catchIf((cause) => attempt < 40 && busy(cause), retry),
               Effect.catchDefect((defect) => (attempt < 40 && busy(defect) ? retry() : Effect.die(defect))),
             )
           }
