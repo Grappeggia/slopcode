@@ -19,6 +19,7 @@ import { Locale } from "../util/locale"
 import { getScrollAcceleration } from "../util/scroll"
 import { useTuiConfig } from "../config"
 import { formatKeyBindings, useBindings, useKeymapSelector } from "../keymap"
+import { density, isCompact, isDense } from "../util/density"
 
 export interface DialogSelectProps<T> {
   title: string
@@ -204,7 +205,24 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   })
 
   const dimensions = useTerminalDimensions()
-  const height = createMemo(() => Math.min(rows(), Math.floor(dimensions().height / 2) - 6))
+  const mode = createMemo(() => density(dimensions()))
+  const compact = createMemo(() => isCompact(mode()))
+  const dense = createMemo(() => isDense(mode()))
+  const pad = createMemo(() => (dense() ? 1 : compact() ? 2 : 4))
+  const itemPad = createMemo(() => (compact() ? 1 : 3))
+  const height = createMemo(() =>
+    Math.max(
+      1,
+      Math.min(
+        rows(),
+        dense()
+          ? dimensions().height - 4
+          : compact()
+            ? dimensions().height - 6
+            : Math.floor(dimensions().height / 2) - 6,
+      ),
+    ),
+  )
 
   const selected = createMemo(() => flat()[store.selected])
 
@@ -483,8 +501,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   }
 
   return (
-    <box gap={1} paddingBottom={1} flexGrow={1}>
-      <box paddingLeft={4} paddingRight={4}>
+    <box gap={dense() ? 0 : 1} paddingBottom={compact() ? 0 : 1} flexGrow={1}>
+      <box paddingLeft={pad()} paddingRight={pad()}>
         <box flexDirection="row" justifyContent="space-between">
           {props.titleView ?? (
             <text fg={theme.text} attributes={TextAttributes.BOLD}>
@@ -496,7 +514,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           </text>
         </box>
         <Show when={props.renderFilter !== false}>
-          <box paddingTop={1}>
+          <box paddingTop={dense() ? 0 : 1}>
             <input
               onInput={(e) => {
                 if (props.locked) return
@@ -527,14 +545,14 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         <Show
           when={grouped().length > 0}
           fallback={
-            <box paddingLeft={4} paddingRight={4} paddingTop={1}>
+            <box paddingLeft={pad()} paddingRight={pad()} paddingTop={dense() ? 0 : 1}>
               <text fg={theme.textMuted}>No results found</text>
             </box>
           }
         >
           <scrollbox
-            paddingLeft={1}
-            paddingRight={1}
+            paddingLeft={compact() ? 0 : 1}
+            paddingRight={compact() ? 0 : 1}
             scrollbarOptions={{ visible: false }}
             scrollAcceleration={scrollAcceleration()}
             ref={(r: ScrollBoxRenderable) => (scroll = r)}
@@ -544,7 +562,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               {([category, options], index) => (
                 <>
                   <Show when={category}>
-                    <box paddingTop={index() > 0 ? 1 : 0} paddingLeft={3}>
+                    <box paddingTop={index() > 0 && !dense() ? 1 : 0} paddingLeft={itemPad()}>
                       <Show
                         when={options[0]?.categoryView}
                         fallback={
@@ -591,8 +609,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                         >
                           <box
                             flexDirection="row"
-                            paddingLeft={current() || option.gutter ? 1 : 3}
-                            paddingRight={3}
+                            paddingLeft={current() || option.gutter ? 1 : itemPad()}
+                            paddingRight={itemPad()}
                             gap={1}
                             backgroundColor={
                               active()
@@ -622,7 +640,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                           </box>
                           <For each={option.details}>
                             {(detail) => (
-                              <box paddingLeft={3} paddingRight={3}>
+                              <box paddingLeft={itemPad()} paddingRight={itemPad()}>
                                 <text fg={theme.textMuted} wrapMode="none">
                                   {Locale.truncateMiddle(detail, Math.max(1, Math.min(76, dimensions().width - 12)))}
                                 </text>

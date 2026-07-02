@@ -18,6 +18,7 @@ import { DiffViewerFileTree } from "./diff-viewer-file-tree"
 import { Panel, PanelGroup, Separator } from "./diff-viewer-ui"
 import { DialogSelect } from "../../ui/dialog-select"
 import { getScrollAcceleration } from "../../util/scroll"
+import { density, isCompact, isDense } from "../../util/density"
 import {
   allExpandedFileTreeDirectories,
   buildFileTree,
@@ -84,6 +85,9 @@ function storedView(value: unknown): DiffView | undefined {
 
 function DiffViewer(props: { api: TuiPluginApi }) {
   const dimensions = useTerminalDimensions()
+  const densityMode = createMemo(() => density(dimensions()))
+  const compact = createMemo(() => isCompact(densityMode()))
+  const dense = createMemo(() => isDense(densityMode()))
   const themeState = useTheme()
   const theme = () => props.api.theme.current
   const params = () =>
@@ -127,9 +131,14 @@ function DiffViewer(props: { api: TuiPluginApi }) {
   const [fileTreeEnabled, setFileTreeEnabled] = createSignal(
     props.api.kv.get<boolean>(KV_SHOW_FILE_TREE, true) !== false,
   )
-  const showFileTree = createMemo(() => showDiffViewerFileTree(fileTreeEnabled(), files().length))
+  const [fileTreeTouched, setFileTreeTouched] = createSignal(false)
+  const showFileTree = createMemo(() =>
+    showDiffViewerFileTree(fileTreeEnabled() && (!compact() || fileTreeTouched()), files().length),
+  )
   const [singlePatch, setSinglePatch] = createSignal(props.api.kv.get<boolean>(KV_SINGLE_PATCH, false) === true)
-  const patchPaneWidth = createMemo(() => dimensions().width - (showFileTree() ? 33 : 0) - 4)
+  const patchPaneWidth = createMemo(
+    () => dimensions().width - (showFileTree() ? FILE_TREE_WIDTH + 1 : 0) - (compact() ? 0 : 4),
+  )
   const patchLeftBorder = createMemo<BorderSides[]>(() => (showFileTree() ? ["left"] : []))
   const splitAvailable = createMemo(() => patchPaneWidth() >= MIN_SPLIT_WIDTH)
   const defaultView = createMemo(() => {
@@ -612,7 +621,8 @@ function DiffViewer(props: { api: TuiPluginApi }) {
       title: "Toggle diff viewer file tree",
       category: "VCS",
       run() {
-        const next = !fileTreeEnabled()
+        const next = !showFileTree()
+        setFileTreeTouched(true)
         if (!next) setFocus("patches")
         setFileTreeEnabled(next)
         props.api.kv.set(KV_SHOW_FILE_TREE, next)
@@ -734,7 +744,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
   return (
     <box position="absolute" zIndex={2500} left={0} top={0} width={dimensions().width} height={dimensions().height}>
       <PanelGroup axis="y" width="100%" height="100%">
-        <Panel border="none" flexShrink={0} padding={0} paddingLeft={1}>
+        <Panel border="none" flexShrink={0} padding={0} paddingLeft={compact() ? 0 : 1}>
           <text fg={theme().text}>Diff </text>
           <text fg={theme().textMuted}>{mode() === "last-turn" ? "last turn" : "working tree"}</text>
           <box flexGrow={1} />
@@ -801,8 +811,8 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                               flexDirection="row"
                               gap={1}
                               flexShrink={0}
-                              paddingLeft={1}
-                              paddingRight={1}
+                              paddingLeft={compact() ? 0 : 1}
+                              paddingRight={compact() ? 0 : 1}
                               border={patchLeftBorder()}
                               borderColor={theme().border}
                             >
@@ -862,8 +872,8 @@ function DiffViewer(props: { api: TuiPluginApi }) {
           </Switch>
         </box>
 
-        <Panel flexShrink={0} gap={2} paddingLeft={1} border="none">
-          <Show when={switchFocusShortcut()}>
+        <Panel flexShrink={0} gap={compact() ? 1 : 2} paddingLeft={compact() ? 0 : 1} border="none">
+          <Show when={!compact() && switchFocusShortcut()}>
             {(shortcut) => (
               <text fg={theme().text}>
                 {shortcut()} <span style={{ fg: theme().textMuted }}>focus file tree</span>
@@ -884,28 +894,28 @@ function DiffViewer(props: { api: TuiPluginApi }) {
               </text>
             )}
           </Show>
-          <Show when={previousHunkShortcut()}>
+          <Show when={!dense() && previousHunkShortcut()}>
             {(shortcut) => (
               <text fg={theme().text}>
                 {shortcut()} <span style={{ fg: theme().textMuted }}>previous hunk</span>
               </text>
             )}
           </Show>
-          <Show when={previousFileShortcut()}>
+          <Show when={!dense() && previousFileShortcut()}>
             {(shortcut) => (
               <text fg={theme().text}>
                 {shortcut()} <span style={{ fg: theme().textMuted }}>previous file</span>
               </text>
             )}
           </Show>
-          <Show when={switchSourceShortcut()}>
+          <Show when={!compact() && switchSourceShortcut()}>
             {(shortcut) => (
               <text fg={theme().text}>
                 {shortcut()} <span style={{ fg: theme().textMuted }}>switch source</span>
               </text>
             )}
           </Show>
-          <Show when={markReviewedShortcut()}>
+          <Show when={!dense() && markReviewedShortcut()}>
             {(shortcut) => (
               <text fg={theme().text}>
                 {shortcut()} <span style={{ fg: theme().textMuted }}>mark reviewed</span>

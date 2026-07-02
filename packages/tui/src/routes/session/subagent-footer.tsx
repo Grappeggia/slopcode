@@ -7,6 +7,7 @@ import type { AssistantMessage } from "@slopcode-ai/sdk/v2"
 import { Locale } from "../../util/locale"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useCommandShortcut, useSlopcodeKeymap } from "../../keymap"
+import { density, isCompact, isDense } from "../../util/density"
 
 export function SubagentFooter() {
   const route = useRouteData("session")
@@ -60,14 +61,17 @@ export function SubagentFooter() {
   const previousShortcut = useCommandShortcut("session.child.previous")
   const nextShortcut = useCommandShortcut("session.child.next")
   const [hover, setHover] = createSignal<"parent" | "prev" | "next" | null>(null)
-  useTerminalDimensions()
+  const dimensions = useTerminalDimensions()
+  const mode = createMemo(() => density(dimensions()))
+  const compact = createMemo(() => isCompact(mode()))
+  const dense = createMemo(() => isDense(mode()))
 
   return (
     <box flexShrink={0}>
       <box
-        paddingTop={1}
-        paddingBottom={1}
-        paddingLeft={2}
+        paddingTop={compact() ? 0 : 1}
+        paddingBottom={compact() ? 0 : 1}
+        paddingLeft={compact() ? 1 : 2}
         paddingRight={1}
         {...SplitBorder}
         border={["left"]}
@@ -93,7 +97,7 @@ export function SubagentFooter() {
               )}
             </Show>
           </box>
-          <box flexDirection="row" gap={2}>
+          <box flexDirection="row" gap={compact() ? 1 : 2}>
             <box
               onMouseOver={() => setHover("parent")}
               onMouseOut={() => setHover(null)}
@@ -101,7 +105,7 @@ export function SubagentFooter() {
               backgroundColor={hover() === "parent" ? theme.backgroundElement : theme.backgroundPanel}
             >
               <text fg={theme.text}>
-                Parent <span style={{ fg: theme.textMuted }}>{parentShortcut()}</span>
+                {dense() ? "Up" : "Parent"} <span style={{ fg: theme.textMuted }}>{parentShortcut()}</span>
               </text>
             </box>
             <box

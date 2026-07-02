@@ -8,6 +8,8 @@ import { usePluginRuntime } from "../../plugin/runtime"
 
 import { getScrollAcceleration } from "../../util/scroll"
 import { WorkspaceLabel } from "../../component/workspace-label"
+import { useTerminalDimensions } from "@opentui/solid"
+import { density, isCompact, isDense } from "../../util/density"
 
 export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const pluginRuntime = usePluginRuntime()
@@ -15,6 +17,11 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const sync = useSync()
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
+  const dimensions = useTerminalDimensions()
+  const mode = createMemo(() => density(dimensions()))
+  const compact = createMemo(() => isCompact(mode()))
+  const dense = createMemo(() => isDense(mode()))
+  const width = createMemo(() => Math.max(1, Math.min(42, dimensions().width - (props.overlay ? 2 : 0))))
   const session = createMemo(() => sync.session.get(props.sessionID))
   const workspace = () => {
     const workspaceID = session()?.workspaceID
@@ -27,12 +34,12 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
     <Show when={session()}>
       <box
         backgroundColor={theme.backgroundPanel}
-        width={42}
+        width={width()}
         height="100%"
-        paddingTop={1}
-        paddingBottom={1}
-        paddingLeft={2}
-        paddingRight={2}
+        paddingTop={compact() ? 0 : 1}
+        paddingBottom={compact() ? 0 : 1}
+        paddingLeft={compact() ? 1 : 2}
+        paddingRight={compact() ? 1 : 2}
         position={props.overlay ? "absolute" : "relative"}
       >
         <scrollbox
@@ -45,7 +52,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
             },
           }}
         >
-          <box flexShrink={0} gap={1} paddingRight={1}>
+          <box flexShrink={0} gap={dense() ? 0 : 1} paddingRight={compact() ? 0 : 1}>
             <pluginRuntime.Slot
               name="sidebar_title"
               mode="single_winner"
@@ -86,7 +93,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
           </box>
         </scrollbox>
 
-        <box flexShrink={0} gap={1} paddingTop={1}>
+        <box flexShrink={0} gap={dense() ? 0 : 1} paddingTop={compact() ? 0 : 1}>
           <pluginRuntime.Slot name="sidebar_footer" mode="single_winner" session_id={props.sessionID}>
             <text fg={theme.textMuted}>
               <span style={{ fg: theme.success }}>•</span> <b>Open</b>

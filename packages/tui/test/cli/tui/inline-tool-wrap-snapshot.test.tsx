@@ -227,6 +227,18 @@ describe("TUI inline tool wrapping", () => {
     expect(frame).not.toContain("Read failed")
   })
 
+  test("dense rows start at the first column", async () => {
+    const frame = await renderFrame(
+      () => (
+        <InlineToolRow icon="→" complete={true} pending="" dense>
+          Read src/index.ts
+        </InlineToolRow>
+      ),
+      { width: 40, height: 3 },
+    )
+    expect(frame.split("\n")[0]?.startsWith("→")).toBe(true)
+  })
+
   test("filters malformed nested tool wire data", () => {
     expect(
       parseApplyPatchFiles([

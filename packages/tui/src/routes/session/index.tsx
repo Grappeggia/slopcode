@@ -81,6 +81,7 @@ import { DialogRetryAction } from "../../component/dialog-retry-action"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { SLOPCODE_BASE_MODE, useBindings, useCommandShortcut, useSlopcodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
+import { density, isCompact, isDense } from "../../util/density"
 
 addDefaultParsers(parsers.parsers)
 
@@ -165,6 +166,8 @@ const context = createContext<{
   providers: () => ReadonlyMap<string, Provider>
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
+  compact: () => boolean
+  dense: () => boolean
 }>()
 
 function use() {
@@ -264,6 +267,10 @@ export function Session() {
   const [_animationsEnabled, _setAnimationsEnabled] = kv.signal("animations_enabled", true)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
 
+  const densityMode = createMemo(() => density(dimensions()))
+  const compact = createMemo(() => isCompact(densityMode()))
+  const dense = createMemo(() => isDense(densityMode()))
+  const panePadding = createMemo(() => (dense() ? 0 : compact() ? 1 : 2))
   const wide = createMemo(() => dimensions().width > 120)
   const sidebarVisible = createMemo(() => {
     if (session()?.parentID) return false
@@ -272,7 +279,8 @@ export function Session() {
     return false
   })
   const showTimestamps = createMemo(() => timestamps() === "show")
-  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
+  const sidebarWidth = createMemo(() => (sidebarVisible() && wide() ? 42 : 0))
+  const contentWidth = createMemo(() => Math.max(1, dimensions().width - sidebarWidth() - panePadding() * 2))
   const providers = createMemo(() => Model.index(sync.data.provider))
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
@@ -1165,10 +1173,19 @@ export function Session() {
           providers,
           sync,
           tui: tuiConfig,
+          compact,
+          dense,
         }}
       >
         <box flexDirection="row" flexGrow={1} minHeight={0}>
-          <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
+          <box
+            flexGrow={1}
+            minHeight={0}
+            paddingBottom={compact() ? 0 : 1}
+            paddingLeft={panePadding()}
+            paddingRight={panePadding()}
+            gap={compact() ? 0 : 1}
+          >
             <Show when={session()}>
               <scrollbox
                 ref={(r) => (scroll = r)}
@@ -1188,7 +1205,9 @@ export function Session() {
                 flexGrow={1}
                 scrollAcceleration={scrollAcceleration()}
               >
-                <box height={1} />
+                <Show when={!compact()}>
+                  <box height={1} />
+                </Show>
                 <For each={messages()}>
                   {(message, index) => (
                     <Switch>
@@ -1214,16 +1233,16 @@ export function Session() {
                               onMouseOver={() => setHover(true)}
                               onMouseOut={() => setHover(false)}
                               onMouseUp={handleUnrevert}
-                              marginTop={1}
+                              marginTop={compact() ? 0 : 1}
                               flexShrink={0}
                               border={["left"]}
                               customBorderChars={SplitBorder.customBorderChars}
                               borderColor={theme.backgroundPanel}
                             >
                               <box
-                                paddingTop={1}
-                                paddingBottom={1}
-                                paddingLeft={2}
+                                paddingTop={dense() ? 0 : 1}
+                                paddingBottom={dense() ? 0 : 1}
+                                paddingLeft={dense() ? 1 : 2}
                                 backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
                               >
                                 <text fg={theme.textMuted}>{revert()!.reverted.length} message reverted</text>
@@ -1231,7 +1250,7 @@ export function Session() {
                                   <span style={{ fg: theme.text }}>{redoShortcut()}</span> or /redo to restore
                                 </text>
                                 <Show when={revert()!.diffFiles?.length}>
-                                  <box marginTop={1}>
+                                  <box marginTop={dense() ? 0 : 1}>
                                     <For each={revert()!.diffFiles}>
                                       {(file) => (
                                         <text fg={theme.text}>
@@ -1341,7 +1360,7 @@ export function Session() {
                   alignItems="flex-end"
                   backgroundColor={RGBA.fromInts(0, 0, 0, 70)}
                 >
-                  <Sidebar sessionID={route.sessionID} />
+                  <Sidebar sessionID={route.sessionID} overlay />
                 </box>
               </Match>
             </Switch>
@@ -1400,7 +1419,7 @@ function UserMessage(props: {
           border={["left"]}
           borderColor={color()}
           customBorderChars={SplitBorder.customBorderChars}
-          marginTop={props.index === 0 ? 0 : 1}
+          marginTop={props.index === 0 || ctx.dense() ? 0 : 1}
         >
           <box
             onMouseOver={() => {
@@ -1410,15 +1429,21 @@ function UserMessage(props: {
               setHover(false)
             }}
             onMouseUp={props.onMouseUp}
-            paddingTop={1}
-            paddingBottom={1}
-            paddingLeft={2}
+            paddingTop={ctx.dense() ? 0 : 1}
+            paddingBottom={ctx.dense() ? 0 : 1}
+            paddingLeft={ctx.dense() ? 1 : 2}
             backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
             flexShrink={0}
           >
             <text fg={theme.text}>{text()}</text>
             <Show when={files().length}>
-              <box flexDirection="row" paddingBottom={metadataVisible() ? 1 : 0} paddingTop={1} gap={1} flexWrap="wrap">
+              <box
+                flexDirection="row"
+                paddingBottom={metadataVisible() && !ctx.dense() ? 1 : 0}
+                paddingTop={ctx.dense() ? 0 : 1}
+                gap={1}
+                flexWrap="wrap"
+              >
                 <For each={files()}>
                   {(file) => {
                     const bg = createMemo(() => {
@@ -1457,7 +1482,7 @@ function UserMessage(props: {
       </Show>
       <Show when={compaction()}>
         <box
-          marginTop={1}
+          marginTop={ctx.compact() ? 0 : 1}
           border={["top"]}
           title=" Compaction "
           titleAlignment="center"
@@ -1508,8 +1533,8 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           )
         }}
       </For>
-      <Show when={props.parts.some((x) => x.type === "tool" && x.tool === "task")}>
-        <box paddingTop={1} paddingLeft={3}>
+      <Show when={!ctx.dense() && props.parts.some((x) => x.type === "tool" && x.tool === "task")}>
+        <box paddingTop={ctx.compact() ? 0 : 1} paddingLeft={ctx.compact() ? 1 : 3}>
           <text fg={theme.text}>
             {childShortcut()}
             <span style={{ fg: theme.textMuted }}> view subagents</span>
@@ -1533,10 +1558,10 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
         <box
           id={`assistant-error-${props.message.id}`}
           border={["left"]}
-          paddingTop={1}
-          paddingBottom={1}
-          paddingLeft={2}
-          marginTop={1}
+          paddingTop={ctx.dense() ? 0 : 1}
+          paddingBottom={ctx.dense() ? 0 : 1}
+          paddingLeft={ctx.dense() ? 1 : 2}
+          marginTop={ctx.dense() ? 0 : 1}
           backgroundColor={theme.backgroundPanel}
           customBorderChars={SplitBorder.customBorderChars}
           borderColor={theme.error}
@@ -1546,8 +1571,8 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
       </Show>
       <Switch>
         <Match when={props.last || final() || props.message.error?.name === "MessageAbortedError"}>
-          <box id={`assistant-summary-${props.message.id}`} paddingLeft={3}>
-            <text marginTop={1}>
+          <box id={`assistant-summary-${props.message.id}`} paddingLeft={ctx.dense() ? 1 : ctx.compact() ? 2 : 3}>
+            <text marginTop={ctx.dense() ? 0 : 1}>
               <span
                 style={{
                   fg:
@@ -1613,8 +1638,8 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
     <Show when={content()}>
       <box
         id={`text-${props.part.messageID}-${props.part.id}`}
-        paddingLeft={3}
-        marginTop={1}
+        paddingLeft={ctx.dense() ? 0 : ctx.compact() ? 1 : 3}
+        marginTop={ctx.dense() ? 0 : 1}
         flexDirection="column"
         flexShrink={0}
       >
@@ -1628,7 +1653,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
           />
         </box>
         <Show when={(!inMinimal() || expanded()) && summary().body}>
-          <box paddingLeft={inMinimal() ? 2 : 0} marginTop={1}>
+          <box paddingLeft={inMinimal() ? (ctx.dense() ? 1 : 2) : 0} marginTop={ctx.dense() ? 0 : 1}>
             <code
               filetype="markdown"
               drawUnstyledText={false}
@@ -1694,7 +1719,12 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const { theme, syntax } = useTheme()
   return (
     <Show when={props.part.text.trim()}>
-      <box id={`text-${props.part.messageID}-${props.part.id}`} paddingLeft={3} marginTop={1} flexShrink={0}>
+      <box
+        id={`text-${props.part.messageID}-${props.part.id}`}
+        paddingLeft={ctx.dense() ? 0 : ctx.compact() ? 1 : 3}
+        marginTop={ctx.dense() ? 0 : 1}
+        flexShrink={0}
+      >
         <markdown
           syntaxStyle={syntax()}
           streaming={true}
@@ -1825,7 +1855,7 @@ function GenericTool(props: ToolProps) {
         part={props.part}
         onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
       >
-        <box gap={1}>
+        <box gap={ctx.dense() ? 0 : 1}>
           <text fg={theme.text}>{limited()}</text>
           <Show when={collapsed().overflow}>
             <text fg={theme.textMuted}>{expanded() ? "Click to collapse" : "Click to expand"}</text>
@@ -1899,6 +1929,8 @@ function InlineTool(props: {
       failure={props.failure}
       spinner={props.spinner}
       subagent={props.subagent}
+      compact={ctx.compact()}
+      dense={ctx.dense()}
       separateAfter={(id) => id !== undefined && ctx.userMessageIDs().has(id)}
       onMouseOver={() => clickable() && setHover(true)}
       onMouseOut={() => setHover(false)}
@@ -1931,6 +1963,8 @@ export function InlineToolRow(props: {
   failure?: string
   spinner?: boolean
   subagent?: boolean
+  compact?: boolean
+  dense?: boolean
   children: JSX.Element
   separateAfter?: (id: string | undefined) => boolean
   onMouseOver?: () => void
@@ -1940,7 +1974,7 @@ export function InlineToolRow(props: {
   return (
     <box
       id={props.id}
-      paddingLeft={3}
+      paddingLeft={props.dense ? 0 : props.compact ? 1 : 3}
       onMouseOver={props.onMouseOver}
       onMouseOut={props.onMouseOut}
       onMouseUp={props.onMouseUp}
@@ -1954,7 +1988,9 @@ export function InlineToolRow(props: {
             previous?.id.startsWith("assistant-summary-") ||
             (previousInline && previousSubagent !== Boolean(props.subagent)) ||
             props.separateAfter?.(previous?.id)
-            ? 1
+            ? props.dense
+              ? 0
+              : 1
             : 0
         })
       }}
@@ -1967,7 +2003,7 @@ export function InlineToolRow(props: {
           <Show
             fallback={
               <text
-                paddingLeft={3}
+                paddingLeft={props.dense ? 0 : props.compact ? 1 : 3}
                 fg={props.color}
                 attributes={props.denied ? TextAttributes.STRIKETHROUGH : undefined}
               >
@@ -2012,6 +2048,7 @@ function BlockTool(props: {
   spinner?: boolean
 }) {
   const { theme } = useTheme()
+  const ctx = use()
   const renderer = useRenderer()
   const [hover, setHover] = createSignal(false)
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
@@ -2019,11 +2056,11 @@ function BlockTool(props: {
     <box
       id={props.part ? `tool-block-${props.part.messageID}-${props.part.id}` : undefined}
       border={["left"]}
-      paddingTop={1}
-      paddingBottom={1}
-      paddingLeft={2}
-      marginTop={1}
-      gap={1}
+      paddingTop={ctx.dense() ? 0 : 1}
+      paddingBottom={ctx.dense() ? 0 : 1}
+      paddingLeft={ctx.dense() ? 1 : 2}
+      marginTop={ctx.dense() ? 0 : 1}
+      gap={ctx.dense() ? 0 : 1}
       backgroundColor={hover() ? theme.backgroundMenu : theme.backgroundPanel}
       customBorderChars={SplitBorder.customBorderChars}
       borderColor={theme.background}
@@ -2037,7 +2074,7 @@ function BlockTool(props: {
       <Show
         when={props.spinner}
         fallback={
-          <text paddingLeft={3} fg={theme.textMuted}>
+          <text paddingLeft={ctx.dense() ? 0 : ctx.compact() ? 1 : 3} fg={theme.textMuted}>
             {props.title}
           </text>
         }
@@ -2090,7 +2127,7 @@ function Shell(props: ToolProps) {
           spinner={isRunning()}
           onClick={collapsed().overflow ? () => setExpanded((prev) => !prev) : undefined}
         >
-          <box gap={1}>
+          <box gap={ctx.dense() ? 0 : 1}>
             <text fg={theme.text}>$ {stringValue(props.input.command)}</text>
             <Show when={output()}>
               <text fg={theme.text}>{limited()}</text>
@@ -2162,6 +2199,7 @@ function Glob(props: ToolProps) {
 
 function Read(props: ToolProps) {
   const { theme } = useTheme()
+  const ctx = use()
   const pathFormatter = usePathFormatter()
   const isRunning = createMemo(() => props.part.state.status === "running")
   const loaded = createMemo(() => {
@@ -2184,8 +2222,11 @@ function Read(props: ToolProps) {
       </InlineTool>
       <For each={loaded()}>
         {(filepath, index) => (
-          <box id={`tool-inline-loaded-${props.part.messageID}-${props.part.id}-${index()}`} paddingLeft={3}>
-            <text paddingLeft={3} fg={theme.textMuted}>
+          <box
+            id={`tool-inline-loaded-${props.part.messageID}-${props.part.id}-${index()}`}
+            paddingLeft={ctx.dense() ? 0 : ctx.compact() ? 1 : 3}
+          >
+            <text paddingLeft={ctx.dense() ? 1 : ctx.compact() ? 1 : 3} fg={theme.textMuted}>
               ↳ Loaded {pathFormatter.format(filepath)}
             </text>
           </box>
@@ -2497,6 +2538,7 @@ function TodoWrite(props: ToolProps) {
 
 function Question(props: ToolProps) {
   const { theme } = useTheme()
+  const ctx = use()
   const questions = createMemo(() => parseQuestions(props.input.questions))
   const answers = createMemo(() => parseQuestionAnswers(props.metadata.answers))
   const count = createMemo(() => questions().length)
@@ -2510,7 +2552,7 @@ function Question(props: ToolProps) {
     <Switch>
       <Match when={answers()}>
         <BlockTool title="# Questions" part={props.part}>
-          <box gap={1}>
+          <box gap={ctx.dense() ? 0 : 1}>
             <For each={questions()}>
               {(q, i) => (
                 <box flexDirection="column">

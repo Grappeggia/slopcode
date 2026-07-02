@@ -3,12 +3,18 @@ import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo, Show } from "solid-js"
 import { abbreviateHome } from "../../runtime"
 import { useTuiPaths } from "../../context/runtime"
+import { useTerminalDimensions } from "@opentui/solid"
+import { density, isCompact, isDense } from "../../util/density"
 
 const id = "internal:sidebar-footer"
 
 function View(props: { api: TuiPluginApi; sessionID: string }) {
   const paths = useTuiPaths()
+  const dimensions = useTerminalDimensions()
   const theme = () => props.api.theme.current
+  const mode = createMemo(() => density(dimensions()))
+  const compact = createMemo(() => isCompact(mode()))
+  const dense = createMemo(() => isDense(mode()))
   const has = createMemo(() =>
     props.api.state.provider.some(
       (item) => item.id !== "slopcode" || Object.values(item.models).some((model) => model.cost?.input !== 0),
@@ -31,20 +37,20 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
 
   return (
     <box gap={1}>
-      <Show when={show()}>
+      <Show when={show() && !dense()}>
         <box
           backgroundColor={theme().backgroundElement}
-          paddingTop={1}
-          paddingBottom={1}
-          paddingLeft={2}
-          paddingRight={2}
+          paddingTop={compact() ? 0 : 1}
+          paddingBottom={compact() ? 0 : 1}
+          paddingLeft={compact() ? 1 : 2}
+          paddingRight={compact() ? 1 : 2}
           flexDirection="row"
           gap={1}
         >
           <text flexShrink={0} fg={theme().text}>
             ⬖
           </text>
-          <box flexGrow={1} gap={1}>
+          <box flexGrow={1} gap={compact() ? 0 : 1}>
             <box flexDirection="row" justifyContent="space-between">
               <text fg={theme().text}>
                 <b>Getting started</b>
