@@ -101,6 +101,7 @@ function busy(input: unknown): boolean {
   const message = value(input, "message")
   if (code === "ETXTBSY" || code === "EBUSY" || code === "EPERM") return true
   if (typeof message === "string" && (message.includes("ETXTBSY") || message.includes("text file is busy"))) return true
+  if (String(input).includes("ETXTBSY") || String(input).includes("text file is busy")) return true
 
   const reason = value(input, "reason")
   if (value(reason, "_tag") === "Busy") return true
@@ -131,10 +132,13 @@ export const layer = Layer.effect(
           })
           const spawn: (attempt: number) => ReturnType<typeof process.spawn> = (attempt) => {
             const retry = (): ReturnType<typeof process.spawn> =>
-              Effect.sleep("50 millis").pipe(Effect.andThen(spawn(attempt + 1)))
+              Effect.sleep("100 millis").pipe(Effect.andThen(spawn(attempt + 1)))
             return process.spawn(command).pipe(
-              Effect.catchIf((cause) => attempt < 5 && busy(cause), retry),
-              Effect.catchDefect((defect) => (attempt < 5 && busy(defect) ? retry() : Effect.die(defect))),
+              Effect.catchIf(
+                (cause) => attempt < 40 && busy(cause),
+                retry,
+              ),
+              Effect.catchDefect((defect) => (attempt < 40 && busy(defect) ? retry() : Effect.die(defect))),
             )
           }
           const handle = yield* spawn(0)
