@@ -1359,6 +1359,40 @@ const scenarios: Scenario[] = [
       "status",
     ),
   http.protected
+    .post("/session/{sessionID}/side-question", "session.side_question")
+    .withLlm()
+    .stream()
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Side question session" })
+        yield* ctx.message(session.id, { text: "Relevant context for side question." })
+        yield* ctx.llmText("side answer")
+        return session
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/side-question", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {
+        question: "What is the relevant context?",
+        agent: "build",
+        model: { providerID: "test", modelID: "test-model" },
+      },
+    }))
+    .status(
+      200,
+      (ctx, result) =>
+        Effect.gen(function* () {
+          check(result.contentType.includes("text/event-stream"), "side question should return an SSE stream")
+          check(result.text.includes('"type":"text"'), `side question should stream text events: ${result.text}`)
+          check(result.text.includes("side answer"), "side question should stream fake LLM answer")
+          yield* ctx.llmWait(1)
+          const messages = yield* ctx.messages(ctx.state.id)
+          check(messages.length === 1, "side question should not write messages to session history")
+        }),
+      "status",
+    ),
+  http.protected
     .post("/session/{sessionID}/shell", "session.shell")
     .preserveDatabase()
     .mutating()
@@ -1592,6 +1626,7 @@ const llmScenarios = new Set([
   "session.prompt",
   "session.prompt_async",
   "session.command",
+  "session.side_question",
   "session.summarize",
 ])
 

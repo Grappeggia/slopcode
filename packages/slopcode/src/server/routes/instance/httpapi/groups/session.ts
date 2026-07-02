@@ -6,6 +6,7 @@ import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
+import { SessionSideQuestion } from "@/session/side-question"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
@@ -70,6 +71,7 @@ export const SummarizePayload = Schema.Struct({
 export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
 export const CommandPayload = Schema.Struct(Struct.omit(SessionPrompt.CommandInput.fields, ["sessionID"]))
 export const ShellPayload = Schema.Struct(Struct.omit(SessionPrompt.ShellInput.fields, ["sessionID"]))
+export const SideQuestionPayload = Schema.Struct(Struct.omit(SessionSideQuestion.Input.fields, ["sessionID"]))
 export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID"]))
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
@@ -95,6 +97,7 @@ export const SessionPaths = {
   prompt: `${root}/:sessionID/message`,
   promptAsync: `${root}/:sessionID/prompt_async`,
   command: `${root}/:sessionID/command`,
+  sideQuestion: `${root}/:sessionID/side-question`,
   shell: `${root}/:sessionID/shell`,
   revert: `${root}/:sessionID/revert`,
   unrevert: `${root}/:sessionID/unrevert`,
@@ -351,6 +354,19 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.command",
             summary: "Send command",
             description: "Send a new command to a session for execution by the AI assistant.",
+          }),
+        ),
+        HttpApiEndpoint.post("sideQuestion", SessionPaths.sideQuestion, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SideQuestionPayload,
+          success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.side_question",
+            summary: "Ask side question",
+            description: "Ask an ephemeral side question against the current session context without writing history.",
           }),
         ),
         HttpApiEndpoint.post("shell", SessionPaths.shell, {

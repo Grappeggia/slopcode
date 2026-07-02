@@ -8382,6 +8382,48 @@ export type SessionCommandResponses = {
 
 export type SessionCommandResponse = SessionCommandResponses[keyof SessionCommandResponses]
 
+export type SessionSideQuestionData = {
+  body?: {
+    question: string
+    agent: string
+    model: {
+      providerID: string
+      modelID: string
+    }
+    variant?: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/side-question"
+}
+
+export type SessionSideQuestionErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionSideQuestionError = SessionSideQuestionErrors[keyof SessionSideQuestionErrors]
+
+export type SessionSideQuestionResponses = {
+  /**
+   * Success
+   */
+  200: string
+}
+
+export type SessionSideQuestionResponse = SessionSideQuestionResponses[keyof SessionSideQuestionResponses]
+
 export type SessionShellData = {
   body?: {
     messageID?: string

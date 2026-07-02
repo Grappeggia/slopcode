@@ -10,16 +10,20 @@ import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
+import { SessionSideQuestion } from "@/session/side-question"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
+import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@slopcode-ai/core/util/error"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError, HttpApiSchema } from "effect/unstable/httpapi"
+import * as Sse from "effect/unstable/encoding/Sse"
 import { InstanceHttpApi } from "../api"
 import {
   CommandPayload,
@@ -32,11 +36,13 @@ import {
   PromptPayload,
   RevertPayload,
   ShellPayload,
+  SideQuestionPayload,
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
+import { errorMessage } from "@/util/error"
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -44,11 +50,21 @@ const tryParseJson = (text: string) =>
     catch: () => new HttpApiError.BadRequest({}),
   })
 
+function sideEvent(data: SessionSideQuestion.Event): Sse.Event {
+  return {
+    _tag: "Event",
+    event: data.type,
+    id: undefined,
+    data: JSON.stringify(data),
+  }
+}
+
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
     const shareSvc = yield* SessionShare.Service
     const promptSvc = yield* SessionPrompt.Service
+    const sideSvc = yield* SessionSideQuestion.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
     const runState = yield* SessionRunState.Service
@@ -336,6 +352,38 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
+    const sideQuestion = Effect.fn("SessionHttpApi.sideQuestion")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof SideQuestionPayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const instance = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      return HttpServerResponse.stream(
+        sideSvc
+          .ask({ ...ctx.payload, sessionID: ctx.params.sessionID })
+          .pipe(
+            Stream.provideService(InstanceRef, instance),
+            Stream.provideService(WorkspaceRef, workspaceID),
+            Stream.catchCause((cause) =>
+              Stream.make({ type: "error", message: errorMessage(Cause.squash(cause)) } satisfies SessionSideQuestion.Event),
+            ),
+            Stream.concat(Stream.make({ type: "done" } satisfies SessionSideQuestion.Event)),
+            Stream.map(sideEvent),
+            Stream.pipeThroughChannel(Sse.encode()),
+            Stream.encodeText,
+          ),
+        {
+          contentType: "text/event-stream",
+          headers: {
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+          },
+        },
+      )
+    })
+
     const shell = Effect.fn("SessionHttpApi.shell")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof ShellPayload.Type
@@ -429,6 +477,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("prompt", prompt)
       .handle("promptAsync", promptAsync)
       .handle("command", command)
+      .handle("sideQuestion", sideQuestion)
       .handle("shell", shell)
       .handle("revert", revert)
       .handle("unrevert", unrevert)

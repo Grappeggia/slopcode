@@ -49,6 +49,7 @@ import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
+import { DialogSideQuestion } from "../dialog-side-question"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
 import { useArgs } from "../../context/args"
 import { SLOPCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, useSlopcodeKeymap } from "../../keymap"
@@ -506,6 +507,22 @@ export function Prompt(props: PromptProps) {
           })
           restoreExtmarksFromParts(updatedNonTextParts)
           input.cursorOffset = Bun.stringWidth(normalized)
+        },
+      },
+      {
+        title: "Side question",
+        desc: "Ask without adding to session history",
+        name: "prompt.side_question",
+        category: "Prompt",
+        slashName: "btw",
+        run: () => {
+          const text = "/btw "
+          input.setText(text)
+          setStore("prompt", {
+            input: text,
+            parts: [],
+          })
+          input.cursorOffset = Bun.stringWidth(text)
         },
       },
       {
@@ -982,6 +999,36 @@ export function Prompt(props: PromptProps) {
     }
 
     const variant = local.model.variant.current()
+
+    const side = trimmed.match(/^\/btw(?:\s+([\s\S]+))?$/)
+    if (side) {
+      const question = side[1]?.trim()
+      if (!question) {
+        toast.show({ message: "Ask a side question with /btw <question>", variant: "warning" })
+        return false
+      }
+      if (!props.sessionID) {
+        toast.show({ message: "Start a session before using /btw", variant: "warning" })
+        return false
+      }
+
+      input.extmarks.clear()
+      setStore("prompt", { input: "", parts: [] })
+      setStore("extmarkToPartIndex", new Map())
+      input.clear()
+      dialog.setSize("large")
+      dialog.replace(() => (
+        <DialogSideQuestion
+          sessionID={props.sessionID!}
+          question={question}
+          agent={agent.name}
+          model={{ providerID: selectedModel.providerID, modelID: selectedModel.modelID }}
+          variant={variant}
+        />
+      ))
+      return true
+    }
+
     let sessionID = props.sessionID
     let finishMoveProgress = false
     if (sessionID == null) {
