@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@slopcode-ai/stats-server",
-  "version": "0.2.178",
+  "version": "0.2.179",
   "private": true,
   "type": "module",
   "license": "MIT",
