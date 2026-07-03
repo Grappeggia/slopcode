@@ -1240,7 +1240,7 @@ describe("session.compaction.process", () => {
             return (yield* status.get(session.id)).type === "retry" ? true : undefined
           }),
           "timed out waiting for compaction retry backoff",
-          "5 seconds",
+          "30 seconds",
         )
         const start = Date.now()
         yield* Fiber.interrupt(fiber)

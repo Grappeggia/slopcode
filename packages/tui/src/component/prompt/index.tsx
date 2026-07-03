@@ -34,6 +34,7 @@ import { usePromptHistory, type PromptInfo } from "../../prompt/history"
 import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
+import { action as goalAction, goal, metadata as goalMetadata } from "../../prompt/goal"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
@@ -101,35 +102,6 @@ const money = new Intl.NumberFormat("en-US", {
 })
 
 const DRAFT_RETENTION_MIN_CHARS = 20
-
-type Goal = {
-  text: string
-  status: "active" | "paused"
-  updatedAt: number
-}
-
-function goal(input: unknown) {
-  if (!input || typeof input !== "object") return
-  const item = input as Record<string, unknown>
-  if (typeof item.text !== "string" || item.text.trim() === "") return
-  return {
-    text: item.text,
-    status: item.status === "paused" ? "paused" : "active",
-    updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : 0,
-  } satisfies Goal
-}
-
-function goalMessage(item: Goal | undefined) {
-  if (!item) return "No goal is set."
-  return `${item.status === "paused" ? "Paused" : "Active"}: ${item.text}`
-}
-
-function goalMetadata(metadata: Record<string, unknown> | undefined, item: Goal | undefined) {
-  const next = { ...(metadata ?? {}) }
-  if (!item) delete next.goal
-  else next.goal = item
-  return next
-}
 
 function randomIndex(count: number) {
   if (count <= 0) return 0
@@ -1118,39 +1090,29 @@ export function Prompt(props: PromptProps) {
     if (agent.name === "goal") {
       const current = sync.session.get(sessionID)?.metadata
       const existing = goal(current?.goal)
-      const action = inputText.trim().toLowerCase()
-      const next =
-        action === "" || action === "show" || action === "status"
-          ? existing
-          : action === "clear"
-            ? undefined
-            : action === "pause"
-              ? existing && { ...existing, status: "paused" as const, updatedAt: Date.now() }
-              : action === "resume"
-                ? existing && { ...existing, status: "active" as const, updatedAt: Date.now() }
-                : { text: inputText.trim(), status: "active" as const, updatedAt: Date.now() }
+      const result = goalAction(inputText, existing)
 
-      if (action === "" || action === "show" || action === "status") {
-        await DialogAlert.show(dialog, "Goal", goalMessage(existing))
+      if (result.type === "show") {
+        await DialogAlert.show(dialog, "Goal", result.message)
         resetPrompt()
         return true
       }
 
-      if ((action === "pause" || action === "resume") && !existing) {
-        toast.show({ message: "No goal is set", variant: "warning" })
+      if (result.type === "missing") {
+        toast.show({ message: result.message, variant: "warning" })
         resetPrompt()
         return true
       }
 
-      const result = await sdk.client.session.update({
+      const updated = await sdk.client.session.update({
         sessionID,
-        metadata: goalMetadata(current, next),
+        metadata: goalMetadata(current, result.next),
       })
-      if (result.error) {
-        toast.show({ message: errorMessage(result.error), variant: "error" })
+      if (updated.error) {
+        toast.show({ message: errorMessage(updated.error), variant: "error" })
         return false
       }
-      toast.show({ message: next ? goalMessage(next) : "Goal cleared", variant: "success" })
+      toast.show({ message: result.message, variant: "success" })
       resetPrompt()
       dialog.clear()
       return true

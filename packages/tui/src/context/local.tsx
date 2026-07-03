@@ -48,6 +48,10 @@ export function recentModels(
     .map((item) => ({ providerID: item.providerID, modelID: item.modelID }))
 }
 
+export function primaryAgents<T extends { mode: string; hidden?: boolean }>(agents: readonly T[]) {
+  return agents.filter((agent) => agent.mode !== "subagent" && !agent.hidden)
+}
+
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
   init: () => {
@@ -73,7 +77,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     function createAgent() {
-      const agents = createMemo(() => sync.data.agent.filter((agent) => agent.mode !== "subagent" && !agent.hidden))
+      const agents = createMemo(() => primaryAgents(sync.data.agent))
       const visibleAgents = createMemo(() => sync.data.agent.filter((agent) => !agent.hidden))
       const [agentStore, setAgentStore] = createStore({
         current: undefined as string | undefined,

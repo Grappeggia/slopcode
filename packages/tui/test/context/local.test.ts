@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test"
-import { parseModel, recentModels } from "../../src/context/local"
+import { describe, expect, test } from "bun:test"
+import { parseModel, primaryAgents, recentModels } from "../../src/context/local"
 
 test("parses model IDs containing slashes", () => {
   expect(parseModel("provider/family/model")).toEqual({
@@ -19,4 +19,17 @@ test("moves a model to the front, deduplicates, and limits recents", () => {
     ...recent.slice(0, 5),
     ...recent.slice(6, 10),
   ])
+})
+
+describe("local agent selection", () => {
+  test("keeps subagents and hidden agents out of primary tab rotation", () => {
+    expect(
+      primaryAgents([
+        { name: "build", mode: "primary" },
+        { name: "goal", mode: "primary" },
+        { name: "docs", mode: "subagent" },
+        { name: "compaction", mode: "primary", hidden: true },
+      ]).map((agent) => agent.name),
+    ).toEqual(["build", "goal"])
+  })
 })
