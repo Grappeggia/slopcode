@@ -102,6 +102,35 @@ const money = new Intl.NumberFormat("en-US", {
 
 const DRAFT_RETENTION_MIN_CHARS = 20
 
+type Goal = {
+  text: string
+  status: "active" | "paused"
+  updatedAt: number
+}
+
+function goal(input: unknown) {
+  if (!input || typeof input !== "object") return
+  const item = input as Record<string, unknown>
+  if (typeof item.text !== "string" || item.text.trim() === "") return
+  return {
+    text: item.text,
+    status: item.status === "paused" ? "paused" : "active",
+    updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : 0,
+  } satisfies Goal
+}
+
+function goalMessage(item: Goal | undefined) {
+  if (!item) return "No goal is set."
+  return `${item.status === "paused" ? "Paused" : "Active"}: ${item.text}`
+}
+
+function goalMetadata(metadata: Record<string, unknown> | undefined, item: Goal | undefined) {
+  const next = { ...(metadata ?? {}) }
+  if (!item) delete next.goal
+  else next.goal = item
+  return next
+}
+
 function randomIndex(count: number) {
   if (count <= 0) return 0
   return Math.floor(Math.random() * count)
@@ -968,17 +997,17 @@ export function Prompt(props: PromptProps) {
     }
     if (props.disabled) return false
     if (workspace.creating() || move.creating()) return false
-    if (auto()?.visible) return false
-    if (!store.prompt.input) return false
     const agent = local.agent.current()
     if (!agent) return false
+    if (auto()?.visible) return false
+    if (!store.prompt.input && agent.name !== "goal") return false
     const trimmed = store.prompt.input.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       void exit()
       return true
     }
     const selectedModel = local.model.current()
-    if (!selectedModel) {
+    if (!selectedModel && agent.name !== "goal") {
       void promptModelWarning()
       return false
     }
@@ -1011,6 +1040,10 @@ export function Prompt(props: PromptProps) {
         toast.show({ message: "Start a session before using /btw", variant: "warning" })
         return false
       }
+      if (!selectedModel) {
+        void promptModelWarning()
+        return false
+      }
 
       input.extmarks.clear()
       setStore("prompt", { input: "", parts: [] })
@@ -1032,6 +1065,10 @@ export function Prompt(props: PromptProps) {
     let sessionID = props.sessionID
     let finishMoveProgress = false
     if (sessionID == null) {
+      if (!selectedModel) {
+        void promptModelWarning()
+        return false
+      }
       const selectedWorkspace = workspace.selection()
       const workspaceID = selectedWorkspace?.type === "existing" ? selectedWorkspace.workspaceID : undefined
 
@@ -1077,6 +1114,52 @@ export function Prompt(props: PromptProps) {
 
     // Filter out text parts (pasted content) since they're now expanded inline
     const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
+
+    if (agent.name === "goal") {
+      const current = sync.session.get(sessionID)?.metadata
+      const existing = goal(current?.goal)
+      const action = inputText.trim().toLowerCase()
+      const next =
+        action === "" || action === "show" || action === "status"
+          ? existing
+          : action === "clear"
+            ? undefined
+            : action === "pause"
+              ? existing && { ...existing, status: "paused" as const, updatedAt: Date.now() }
+              : action === "resume"
+                ? existing && { ...existing, status: "active" as const, updatedAt: Date.now() }
+                : { text: inputText.trim(), status: "active" as const, updatedAt: Date.now() }
+
+      if (action === "" || action === "show" || action === "status") {
+        await DialogAlert.show(dialog, "Goal", goalMessage(existing))
+        resetPrompt()
+        return true
+      }
+
+      if ((action === "pause" || action === "resume") && !existing) {
+        toast.show({ message: "No goal is set", variant: "warning" })
+        resetPrompt()
+        return true
+      }
+
+      const result = await sdk.client.session.update({
+        sessionID,
+        metadata: goalMetadata(current, next),
+      })
+      if (result.error) {
+        toast.show({ message: errorMessage(result.error), variant: "error" })
+        return false
+      }
+      toast.show({ message: next ? goalMessage(next) : "Goal cleared", variant: "success" })
+      resetPrompt()
+      dialog.clear()
+      return true
+    }
+
+    if (!selectedModel) {
+      void promptModelWarning()
+      return false
+    }
 
     // Capture mode before it gets reset
     const currentMode = store.mode
@@ -1318,6 +1401,10 @@ export function Prompt(props: PromptProps) {
         mode: store.mode,
       })
     }
+    resetPrompt()
+  }
+
+  function resetPrompt() {
     input.clear()
     input.extmarks.clear()
     setStore("prompt", {

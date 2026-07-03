@@ -10,7 +10,28 @@ import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import PROMPT_PLAN from "./prompt/plan.txt"
 import BUILD_SWITCH from "./prompt/build-switch.txt"
+import GOAL_MODE from "./prompt/goal-mode.txt"
 import PLAN_MODE from "./prompt/plan-mode.txt"
+
+type Goal = {
+  text: string
+  status: "active" | "paused"
+}
+
+function goal(input: unknown) {
+  if (!input || typeof input !== "object") return
+  const item = input as Record<string, unknown>
+  if (typeof item.text !== "string" || item.text.trim() === "") return
+  return {
+    text: item.text,
+    status: item.status === "paused" ? "paused" : "active",
+  } satisfies Goal
+}
+
+function goalInfo(item: Goal | undefined) {
+  if (!item) return "No goal is set."
+  return `${item.status === "paused" ? "Paused" : "Active"}: ${item.text}`
+}
 
 export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
   messages: SessionV1.WithParts[]
@@ -22,6 +43,32 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
   const sessions = yield* Session.Service
   const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
   if (!userMessage) return input.messages
+  const currentGoal = goal(input.session.metadata?.goal)
+
+  if (input.agent.name === "goal") {
+    const part = yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: userMessage.info.id,
+      sessionID: userMessage.info.sessionID,
+      type: "text",
+      text: GOAL_MODE.replace("${goalInfo}", () => goalInfo(currentGoal)),
+      synthetic: true,
+    })
+    userMessage.parts.push(part)
+    return input.messages
+  }
+
+  if (currentGoal?.status === "active") {
+    const part = yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: userMessage.info.id,
+      sessionID: userMessage.info.sessionID,
+      type: "text",
+      text: `<system-reminder>\nCurrent session goal: ${currentGoal.text}\nUse this as the north star unless the user explicitly changes it.\n</system-reminder>`,
+      synthetic: true,
+    })
+    userMessage.parts.push(part)
+  }
 
   if (!flags.experimentalPlanMode) {
     if (input.agent.name === "plan") {

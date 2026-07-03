@@ -1,5 +1,6 @@
 ---
 description: ALWAYS use this when writing docs
+mode: subagent
 color: "#38A3EE"
 ---
 

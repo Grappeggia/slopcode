@@ -1,0 +1,8 @@
+<system-reminder>
+Goal mode is active. The user is setting or managing the persistent session goal, not asking you to execute work.
+
+## Current goal
+${goalInfo}
+
+If the user is trying to set a goal, keep it concise, specific, and measurable. If the goal is ambiguous, ask one short clarifying question. Do not make file changes or start implementation from Goal mode.
+</system-reminder>

@@ -177,6 +177,27 @@ export const layer = Layer.effect(
             mode: "primary",
             native: true,
           },
+          goal: {
+            name: "goal",
+            description: "Goal mode. Sets and manages the persistent session goal.",
+            options: {},
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                bash: "deny",
+                edit: {
+                  "*": "deny",
+                },
+                task: {
+                  "*": "deny",
+                },
+                todowrite: "deny",
+              }),
+              user,
+            ),
+            mode: "primary",
+            native: true,
+          },
           general: {
             name: "general",
             description: `General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.`,

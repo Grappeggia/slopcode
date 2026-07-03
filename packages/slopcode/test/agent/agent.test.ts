@@ -55,6 +55,7 @@ it.instance("returns default native agents when no config", () =>
     const names = agents.map((a) => a.name)
     expect(names).toContain("build")
     expect(names).toContain("plan")
+    expect(names).toContain("goal")
     expect(names).toContain("general")
     expect(names).toContain("explore")
     expect(names).toContain("compaction")
@@ -82,6 +83,19 @@ it.instance("plan agent denies edits except .slopcode/plans/*", () =>
     expect(evalPerm(plan, "edit")).toBe("deny")
     // But specific path is allowed
     expect(Permission.evaluate("edit", ".slopcode/plans/foo.md", plan!.permission).action).toBe("allow")
+  }),
+)
+
+it.instance("goal agent has correct default properties", () =>
+  Effect.gen(function* () {
+    const goal = yield* load((svc) => svc.get("goal"))
+    expect(goal).toBeDefined()
+    expect(goal?.mode).toBe("primary")
+    expect(goal?.native).toBe(true)
+    expect(evalPerm(goal, "bash")).toBe("deny")
+    expect(evalPerm(goal, "edit")).toBe("deny")
+    expect(evalPerm(goal, "task")).toBe("deny")
+    expect(evalPerm(goal, "todowrite")).toBe("deny")
   }),
 )
 
@@ -754,6 +768,7 @@ it.instance(
       agent: {
         build: { disable: true },
         plan: { disable: true },
+        goal: { disable: true },
       },
     },
   },
