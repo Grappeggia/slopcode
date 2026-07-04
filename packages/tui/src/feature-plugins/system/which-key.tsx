@@ -6,6 +6,7 @@ import { useBindings, useKeymapSelector } from "../../keymap"
 import type { ActiveKey } from "@opentui/keymap"
 import type { TuiPlugin, TuiPluginApi } from "@slopcode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
+import { density, isCompact } from "../../util/density"
 
 const command = {
   toggle: "which-key.toggle",
@@ -189,6 +190,7 @@ function WhichKeyPanel(props: {
   pinned: () => boolean
 }) {
   const dimensions = useTerminalDimensions()
+  const compact = createMemo(() => isCompact(density(dimensions())))
   const [offset, setOffset] = createSignal(0)
   const [activeGroup, setActiveGroup] = createSignal<string | undefined>()
   const pending = useKeymapSelector((keymap) => keymap.getPendingSequence())
@@ -200,11 +202,15 @@ function WhichKeyPanel(props: {
   const left = 0
   const width = createMemo(() => Math.max(1, dimensions().width))
   const panelHeight = createMemo(() =>
-    Math.max(MIN_PANEL_HEIGHT, Math.min(MAX_PANEL_HEIGHT, Math.floor(dimensions().height * PANEL_HEIGHT_RATIO))),
+    Math.max(
+      compact() ? 5 : MIN_PANEL_HEIGHT,
+      Math.min(MAX_PANEL_HEIGHT, Math.floor(dimensions().height * PANEL_HEIGHT_RATIO)),
+    ),
   )
-  const contentWidth = createMemo(() => Math.max(1, width() - 2))
+  const contentWidth = createMemo(() => Math.max(1, width() - (compact() ? 0 : 2)))
+  const columnGap = createMemo(() => (compact() ? 2 : COLUMN_GAP))
   const columns = createMemo(() =>
-    Math.max(1, Math.min(3, Math.floor((contentWidth() + COLUMN_GAP) / (MAX_COLUMN_WIDTH + COLUMN_GAP)) || 1)),
+    Math.max(1, Math.min(3, Math.floor((contentWidth() + columnGap()) / (MAX_COLUMN_WIDTH + columnGap())) || 1)),
   )
   const entries = createMemo(() => active().map((item) => activeKeyEntry(props.api, item)))
   const groups = createMemo(() => grouped(entries()))
@@ -215,10 +221,10 @@ function WhichKeyPanel(props: {
     Math.max(
       1,
       panelHeight() -
-        PANEL_TOP_PADDING -
+        (compact() ? 0 : PANEL_TOP_PADDING) -
         (headerVisible() ? 1 : 0) -
-        (tabsVisible() ? TAB_CONTENT_GAP : 0) -
-        (footerVisible() ? FOOTER_MARGIN + FOOTER_HEIGHT : 0),
+        (tabsVisible() ? (compact() ? 0 : TAB_CONTENT_GAP) : 0) -
+        (footerVisible() ? (compact() ? 0 : FOOTER_MARGIN) + FOOTER_HEIGHT : 0),
     ),
   )
   const pageSize = createMemo(() => rows() * columns())
@@ -267,7 +273,7 @@ function WhichKeyPanel(props: {
   const nextMode = createMemo(() => (props.mode() === "dock" ? "overlay" : "dock"))
   const look = createMemo(() => skin(props.api))
   const columnWidth = createMemo(() =>
-    Math.max(1, Math.min(MAX_COLUMN_WIDTH, Math.floor((contentWidth() - (columns() - 1) * COLUMN_GAP) / columns()))),
+    Math.max(1, Math.min(MAX_COLUMN_WIDTH, Math.floor((contentWidth() - (columns() - 1) * columnGap()) / columns()))),
   )
   const clamp = (value: number) => Math.max(0, Math.min(maxOffset(), value))
   const scroll = (delta: number) => setOffset((value) => clamp(value + delta))
@@ -401,9 +407,9 @@ function WhichKeyPanel(props: {
         width={dimensions().width}
         height={panelHeight()}
         backgroundColor={look().panel}
-        paddingLeft={1}
-        paddingRight={1}
-        paddingTop={1}
+        paddingLeft={compact() ? 0 : 1}
+        paddingRight={compact() ? 0 : 1}
+        paddingTop={compact() ? 0 : 1}
         flexShrink={0}
         flexDirection="column"
       >
@@ -452,13 +458,13 @@ function WhichKeyPanel(props: {
           </box>
         </Show>
         <Show when={tabsVisible()}>
-          <box height={TAB_CONTENT_GAP} flexShrink={0} />
+          <box height={compact() ? 0 : TAB_CONTENT_GAP} flexShrink={0} />
         </Show>
         <box height={rows()} flexShrink={0} flexDirection="column">
           <Show when={shown().length > 0} fallback={<text fg={look().muted}>No reachable bindings</text>}>
             <For each={rowIndexes()}>
               {(row) => (
-                <box width="100%" flexDirection="row" justifyContent="center" gap={COLUMN_GAP}>
+                <box width="100%" flexDirection="row" justifyContent="center" gap={columnGap()}>
                   <For each={shown()}>
                     {(column) => {
                       const item = createMemo(() => column[row])
@@ -510,7 +516,7 @@ function WhichKeyPanel(props: {
           </Show>
         </box>
         <Show when={footerVisible()}>
-          <box height={FOOTER_MARGIN} flexShrink={0} />
+          <box height={compact() ? 0 : FOOTER_MARGIN} flexShrink={0} />
           <box width="100%" flexDirection="row" justifyContent="space-between" flexShrink={0}>
             <box>
               <text fg={look().text} wrapMode="none">

@@ -208,8 +208,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   const mode = createMemo(() => density(dimensions()))
   const compact = createMemo(() => isCompact(mode()))
   const dense = createMemo(() => isDense(mode()))
-  const pad = createMemo(() => (dense() ? 1 : compact() ? 2 : 4))
-  const itemPad = createMemo(() => (compact() ? 1 : 3))
+  const pad = createMemo(() => (compact() ? 1 : 4))
+  const itemPad = createMemo(() => (compact() ? 0 : 3))
   const height = createMemo(() =>
     Math.max(
       1,
@@ -218,7 +218,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         dense()
           ? dimensions().height - 4
           : compact()
-            ? dimensions().height - 6
+            ? dimensions().height - 4
             : Math.floor(dimensions().height / 2) - 6,
       ),
     ),
@@ -501,7 +501,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   }
 
   return (
-    <box gap={dense() ? 0 : 1} paddingBottom={compact() ? 0 : 1} flexGrow={1}>
+    <box gap={compact() ? 0 : 1} paddingBottom={compact() ? 0 : 1} flexGrow={1}>
       <box paddingLeft={pad()} paddingRight={pad()}>
         <box flexDirection="row" justifyContent="space-between">
           {props.titleView ?? (
@@ -514,7 +514,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           </text>
         </box>
         <Show when={props.renderFilter !== false}>
-          <box paddingTop={dense() ? 0 : 1}>
+          <box paddingTop={compact() ? 0 : 1}>
             <input
               onInput={(e) => {
                 if (props.locked) return
@@ -636,6 +636,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                               current={current()}
                               muted={actionFocused()}
                               gutter={option.gutter}
+                              compact={compact()}
                             />
                           </box>
                           <For each={option.details}>
@@ -657,13 +658,19 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           </scrollbox>
         </Show>
       </box>
-      <Show when={props.footer || visibleActions().length} fallback={<box flexShrink={0} />}>
-        <box paddingRight={2} paddingLeft={4} flexDirection="row" justifyContent="space-between" flexShrink={0}>
-          <box flexDirection="row" gap={2}>
+      <Show when={props.footer || visibleActions().length} fallback={compact() ? null : <box flexShrink={0} />}>
+        <box
+          paddingRight={compact() ? 1 : 2}
+          paddingLeft={compact() ? 1 : 4}
+          flexDirection="row"
+          justifyContent="space-between"
+          flexShrink={0}
+        >
+          <box flexDirection="row" gap={compact() ? 1 : 2}>
             {props.footer}
             <For each={left()}>{(item) => <FooterAction item={item} />}</For>
           </box>
-          <box flexDirection="row" gap={2}>
+          <box flexDirection="row" gap={compact() ? 1 : 2}>
             <For each={right()}>{(item) => <FooterAction item={item} />}</For>
           </box>
         </box>
@@ -684,6 +691,7 @@ function Option(props: {
   truncateTitle?: boolean | "left"
   gutter?: () => JSX.Element
   onMouseOver?: () => void
+  compact?: boolean
 }) {
   const { theme } = useTheme()
   const fg = selectedForeground(theme)
@@ -712,7 +720,7 @@ function Option(props: {
         attributes={props.active && !props.muted ? TextAttributes.BOLD : undefined}
         overflow="hidden"
         wrapMode="none"
-        paddingLeft={3}
+        paddingLeft={props.compact ? 0 : 3}
       >
         {props.titleView ??
           (props.truncateTitle === false

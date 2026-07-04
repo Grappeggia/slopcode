@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store"
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { useRenderer } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { selectedForeground, tint, useTheme } from "../../context/theme"
 import type { QuestionAnswer, QuestionRequest } from "@slopcode-ai/sdk/v2"
@@ -8,6 +8,7 @@ import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useTuiConfig } from "../../config"
 import { useBindings, useSlopcodeModeStack } from "../../keymap"
+import { density, isCompact } from "../../util/density"
 
 const QUESTION_MODE = "question"
 
@@ -15,8 +16,10 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   const sdk = useSDK()
   const { theme } = useTheme()
   const renderer = useRenderer()
+  const dimensions = useTerminalDimensions()
   const tuiConfig = useTuiConfig()
   const modeStack = useSlopcodeModeStack()
+  const compact = createMemo(() => isCompact(density(dimensions())))
 
   const questions = createMemo(() => props.request.questions)
   const single = createMemo(() => questions().length === 1 && questions()[0]?.multiple !== true)
@@ -288,13 +291,19 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
   return (
     <box
       backgroundColor={theme.backgroundPanel}
-      border={["left"]}
+      border={compact() ? undefined : ["left"]}
       borderColor={theme.accent}
       customBorderChars={SplitBorder.customBorderChars}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
+      <box
+        gap={compact() ? 0 : 1}
+        paddingLeft={compact() ? 0 : 1}
+        paddingRight={compact() ? 1 : 3}
+        paddingTop={compact() ? 0 : 1}
+        paddingBottom={compact() ? 0 : 1}
+      >
         <Show when={!single()}>
-          <box flexDirection="row" gap={1} paddingLeft={1}>
+          <box flexDirection="row" gap={compact() ? 0 : 1} paddingLeft={compact() ? 0 : 1}>
             <For each={questions()}>
               {(q, index) => {
                 const isActive = () => index() === store.tab
@@ -353,7 +362,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
         </Show>
 
         <Show when={!confirm()}>
-          <box paddingLeft={1} gap={1}>
+          <box paddingLeft={compact() ? 0 : 1} gap={compact() ? 0 : 1}>
             <box>
               <text fg={theme.text}>
                 {question()?.question}
@@ -390,9 +399,11 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
                         </Show>
                       </box>
 
-                      <box paddingLeft={3}>
-                        <text fg={theme.textMuted}>{opt.description}</text>
-                      </box>
+                      <Show when={!compact() || active()}>
+                        <box paddingLeft={compact() ? 2 : 3}>
+                          <text fg={theme.textMuted}>{opt.description}</text>
+                        </box>
+                      </Show>
                     </box>
                   )
                 }}
@@ -423,7 +434,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
                     </Show>
                   </box>
                   <Show when={store.editing}>
-                    <box paddingLeft={3}>
+                    <box paddingLeft={compact() ? 2 : 3}>
                       <textarea
                         ref={(val: TextareaRenderable) => {
                           textarea = val
@@ -445,7 +456,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
                     </box>
                   </Show>
                   <Show when={!store.editing && input()}>
-                    <box paddingLeft={3}>
+                    <box paddingLeft={compact() ? 2 : 3}>
                       <text fg={theme.textMuted}>{input()}</text>
                     </box>
                   </Show>
@@ -456,7 +467,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
         </Show>
 
         <Show when={confirm() && !single()}>
-          <box paddingLeft={1}>
+          <box paddingLeft={compact() ? 0 : 1}>
             <text fg={theme.text}>Review</text>
           </box>
           <For each={questions()}>
@@ -464,7 +475,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
               const value = () => store.answers[index()]?.join(", ") ?? ""
               const answered = () => Boolean(value())
               return (
-                <box paddingLeft={1}>
+                <box paddingLeft={compact() ? 0 : 1}>
                   <text>
                     <span style={{ fg: theme.textMuted }}>{q.header}:</span>{" "}
                     <span style={{ fg: answered() ? theme.text : theme.error }}>
@@ -477,38 +488,40 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
           </For>
         </Show>
       </box>
-      <box
-        flexDirection="row"
-        flexShrink={0}
-        gap={1}
-        paddingLeft={2}
-        paddingRight={3}
-        paddingBottom={1}
-        justifyContent="space-between"
-      >
-        <box flexDirection="row" gap={2}>
-          <Show when={!single()}>
+      <Show when={!compact()}>
+        <box
+          flexDirection="row"
+          flexShrink={0}
+          gap={1}
+          paddingLeft={2}
+          paddingRight={3}
+          paddingBottom={1}
+          justifyContent="space-between"
+        >
+          <box flexDirection="row" gap={2}>
+            <Show when={!single()}>
+              <text fg={theme.text}>
+                {"⇆"} <span style={{ fg: theme.textMuted }}>tab</span>
+              </text>
+            </Show>
+            <Show when={!confirm()}>
+              <text fg={theme.text}>
+                {"↑↓"} <span style={{ fg: theme.textMuted }}>select</span>
+              </text>
+            </Show>
             <text fg={theme.text}>
-              {"⇆"} <span style={{ fg: theme.textMuted }}>tab</span>
+              enter{" "}
+              <span style={{ fg: theme.textMuted }}>
+                {confirm() ? "submit" : multi() ? "toggle" : single() ? "submit" : "confirm"}
+              </span>
             </text>
-          </Show>
-          <Show when={!confirm()}>
-            <text fg={theme.text}>
-              {"↑↓"} <span style={{ fg: theme.textMuted }}>select</span>
-            </text>
-          </Show>
-          <text fg={theme.text}>
-            enter{" "}
-            <span style={{ fg: theme.textMuted }}>
-              {confirm() ? "submit" : multi() ? "toggle" : single() ? "submit" : "confirm"}
-            </span>
-          </text>
 
-          <text fg={theme.text}>
-            esc <span style={{ fg: theme.textMuted }}>dismiss</span>
-          </text>
+            <text fg={theme.text}>
+              esc <span style={{ fg: theme.textMuted }}>dismiss</span>
+            </text>
+          </box>
         </box>
-      </box>
+      </Show>
     </box>
   )
 }

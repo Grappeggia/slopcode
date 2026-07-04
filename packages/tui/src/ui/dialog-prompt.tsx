@@ -5,6 +5,8 @@ import { Show, createEffect, createSignal, onMount, type JSX } from "solid-js"
 import { Spinner } from "../component/spinner"
 import { useTuiConfig } from "../config"
 import { useBindings, useCommandShortcut } from "../keymap"
+import { useTerminalDimensions } from "@opentui/solid"
+import { density, isCompact } from "../util/density"
 
 export type DialogPromptProps = {
   title: string
@@ -21,6 +23,8 @@ export function DialogPrompt(props: DialogPromptProps) {
   const dialog = useDialog()
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
+  const dimensions = useTerminalDimensions()
+  const compact = () => isCompact(density(dimensions()))
   const submitShortcut = useCommandShortcut("dialog.prompt.submit")
   const [textareaTarget, setTextareaTarget] = createSignal<TextareaRenderable>()
   let textarea: TextareaRenderable
@@ -73,7 +77,7 @@ export function DialogPrompt(props: DialogPromptProps) {
   })
 
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
+    <box paddingLeft={compact() ? 1 : 2} paddingRight={compact() ? 1 : 2} gap={compact() ? 0 : 1}>
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           {props.title}
@@ -82,10 +86,10 @@ export function DialogPrompt(props: DialogPromptProps) {
           esc
         </text>
       </box>
-      <box gap={1}>
+      <box gap={compact() ? 0 : 1}>
         {props.description}
         <textarea
-          height={3}
+          height={compact() ? 2 : 3}
           ref={(val: TextareaRenderable) => {
             textarea = val
             setTextareaTarget(val)
@@ -101,7 +105,7 @@ export function DialogPrompt(props: DialogPromptProps) {
           <Spinner color={theme.textMuted}>{props.busyText ?? "Working..."}</Spinner>
         </Show>
       </box>
-      <box paddingBottom={1} gap={1} flexDirection="row">
+      <box paddingBottom={compact() ? 0 : 1} gap={1} flexDirection="row">
         <Show when={!props.busy} fallback={<text fg={theme.textMuted}>processing...</text>}>
           <Show when={submitShortcut()}>
             <text fg={theme.text}>

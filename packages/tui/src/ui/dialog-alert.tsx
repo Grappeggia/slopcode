@@ -2,6 +2,8 @@ import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
 import { useDialog, type DialogContext } from "./dialog"
 import { useBindings } from "../keymap"
+import { useTerminalDimensions } from "@opentui/solid"
+import { density, isCompact } from "../util/density"
 
 export type DialogAlertProps = {
   title: string
@@ -12,6 +14,8 @@ export type DialogAlertProps = {
 export function DialogAlert(props: DialogAlertProps) {
   const dialog = useDialog()
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const compact = () => isCompact(density(dimensions()))
 
   useBindings(() => ({
     bindings: [
@@ -27,7 +31,7 @@ export function DialogAlert(props: DialogAlertProps) {
     ],
   }))
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
+    <box paddingLeft={compact() ? 1 : 2} paddingRight={compact() ? 1 : 2} gap={compact() ? 0 : 1}>
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           {props.title}
@@ -36,10 +40,10 @@ export function DialogAlert(props: DialogAlertProps) {
           esc
         </text>
       </box>
-      <box paddingBottom={1}>
+      <box paddingBottom={compact() ? 0 : 1}>
         <text fg={theme.textMuted}>{props.message}</text>
       </box>
-      <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
+      <box flexDirection="row" justifyContent="flex-end" paddingBottom={compact() ? 0 : 1}>
         <box
           paddingLeft={3}
           paddingRight={3}

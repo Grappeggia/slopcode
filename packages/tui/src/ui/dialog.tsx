@@ -7,7 +7,7 @@ import { useToast } from "./toast"
 import { Flag } from "@slopcode-ai/core/flag/flag"
 import { useBindings, useSlopcodeModeStack } from "../keymap"
 import { useClipboard } from "../context/clipboard"
-import { density, isCompact, isDense } from "../util/density"
+import { density, isCompact } from "../util/density"
 
 export function Dialog(
   props: ParentProps<{
@@ -18,9 +18,7 @@ export function Dialog(
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const renderer = useRenderer()
-  const mode = () => density(dimensions())
-  const compact = () => isCompact(mode())
-  const dense = () => isDense(mode())
+  const compact = () => isCompact(density(dimensions()))
 
   let dismiss = false
   const width = () => {
@@ -46,7 +44,7 @@ export function Dialog(
       alignItems="center"
       position="absolute"
       zIndex={3000}
-      paddingTop={dense() ? 0 : compact() ? 1 : dimensions().height / 4}
+      paddingTop={compact() ? 0 : dimensions().height / 4}
       left={0}
       top={0}
       backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
@@ -59,7 +57,7 @@ export function Dialog(
         width={width()}
         maxWidth={Math.max(1, dimensions().width - (compact() ? 0 : 2))}
         backgroundColor={theme.backgroundPanel}
-        paddingTop={dense() ? 0 : 1}
+        paddingTop={compact() ? 0 : 1}
       >
         {props.children}
       </box>

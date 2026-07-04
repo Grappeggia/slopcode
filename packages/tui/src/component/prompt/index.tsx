@@ -69,6 +69,7 @@ export type PromptProps = {
   hint?: JSX.Element
   right?: JSX.Element
   showPlaceholder?: boolean
+  compactChrome?: boolean
   placeholders?: {
     normal?: string[]
     shell?: string[]
@@ -1436,6 +1437,7 @@ export function Prompt(props: PromptProps) {
   const densityMode = createMemo(() => density(dimensions()))
   const compact = createMemo(() => isCompact(densityMode()))
   const dense = createMemo(() => isDense(densityMode()))
+  const chromeCompact = createMemo(() => props.compactChrome === true && compact())
   const maxHeight = createMemo(() => {
     if (tuiConfig.prompt?.max_height) return tuiConfig.prompt.max_height
     if (dense()) return Math.max(2, Math.floor(dimensions().height / 4))
@@ -1449,7 +1451,7 @@ export function Prompt(props: PromptProps) {
       <box ref={(r: BoxRenderable) => (anchor = r)} visible={props.visible !== false} width="100%">
         <box
           width="100%"
-          border={["left"]}
+          border={chromeCompact() ? undefined : ["left"]}
           borderColor={borderHighlight()}
           customBorderChars={{
             ...SplitBorder.customBorderChars,
@@ -1457,9 +1459,9 @@ export function Prompt(props: PromptProps) {
           }}
         >
           <box
-            paddingLeft={compact() ? 1 : 2}
-            paddingRight={compact() ? 1 : 2}
-            paddingTop={dense() ? 0 : 1}
+            paddingLeft={chromeCompact() ? 0 : compact() ? 1 : 2}
+            paddingRight={chromeCompact() ? 0 : compact() ? 1 : 2}
+            paddingTop={chromeCompact() ? 0 : dense() ? 0 : 1}
             flexShrink={0}
             backgroundColor={theme.backgroundElement}
             flexGrow={1}
@@ -1538,7 +1540,13 @@ export function Prompt(props: PromptProps) {
               cursorColor={props.disabled ? theme.backgroundElement : theme.text}
               syntaxStyle={syntax()}
             />
-            <box flexDirection="row" flexShrink={0} paddingTop={dense() ? 0 : 1} gap={1} justifyContent="space-between">
+            <box
+              flexDirection="row"
+              flexShrink={0}
+              paddingTop={chromeCompact() ? 0 : dense() ? 0 : 1}
+              gap={1}
+              justifyContent="space-between"
+            >
               <box flexDirection="row" gap={1}>
                 <Show when={local.agent.current()} fallback={<box height={1} />}>
                   {(agent) => (
@@ -1608,7 +1616,7 @@ export function Prompt(props: PromptProps) {
         </Show>
         <Show
           when={
-            !dense() ||
+            (!chromeCompact() && !dense()) ||
             status().type !== "idle" ||
             workspace.notice() ||
             workspace.label() ||
@@ -1626,7 +1634,7 @@ export function Prompt(props: PromptProps) {
                   justifyContent={status().type === "retry" ? "space-between" : "flex-start"}
                 >
                   <box flexShrink={0} flexDirection="row" gap={1}>
-                    <box marginLeft={1}>
+                    <box marginLeft={chromeCompact() ? 0 : 1}>
                       <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
                         <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
                       </Show>
@@ -1700,14 +1708,14 @@ export function Prompt(props: PromptProps) {
               </Match>
               <Match when={workspace.notice()}>
                 {(notice) => (
-                  <box paddingLeft={3}>
+                  <box paddingLeft={chromeCompact() ? 1 : 3}>
                     <text fg={theme.accent}>{notice()}</text>
                   </box>
                 )}
               </Match>
               <Match when={workspace.label()}>
                 {(label) => (
-                  <box paddingLeft={3} flexDirection="row" gap={1}>
+                  <box paddingLeft={chromeCompact() ? 1 : 3} flexDirection="row" gap={1}>
                     <Show when={workspace.creating()}>
                       <Spinner color={theme.accent} />
                     </Show>
@@ -1735,7 +1743,7 @@ export function Prompt(props: PromptProps) {
               </Match>
               <Match when={move.progress()}>
                 {(progress) => (
-                  <box paddingLeft={3}>
+                  <box paddingLeft={chromeCompact() ? 1 : 3}>
                     <Spinner color={theme.accent}>
                       {progress()}
                       <span style={{ fg: theme.textMuted }}>{".".repeat(move.creatingDots())}</span>
@@ -1744,13 +1752,13 @@ export function Prompt(props: PromptProps) {
                 )}
               </Match>
               <Match when={move.pendingNew()}>
-                <box paddingLeft={3}>
+                <box paddingLeft={chromeCompact() ? 1 : 3}>
                   <text fg={theme.accent}>(new working copy)</text>
                 </box>
               </Match>
               <Match when={true}>{props.hint ?? <text />}</Match>
             </Switch>
-            <Show when={status().type !== "retry" && !dense()}>
+            <Show when={status().type !== "retry" && !dense() && !chromeCompact()}>
               <box gap={2} flexDirection="row">
                 <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
                   {(file) => (

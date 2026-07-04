@@ -16,6 +16,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { SLOPCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
+import { density, isCompact } from "../../util/density"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -448,6 +449,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
   const tuiConfig = useTuiConfig()
   const dimensions = useTerminalDimensions()
   const narrow = createMemo(() => dimensions().width < 80)
+  const compact = createMemo(() => isCompact(density(dimensions())))
   useBindings(() => ({
     mode: SLOPCODE_BASE_MODE,
     commands: [
@@ -475,26 +477,32 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
   return (
     <box
       backgroundColor={theme.backgroundPanel}
-      border={["left"]}
+      border={compact() ? undefined : ["left"]}
       borderColor={theme.error}
       customBorderChars={SplitBorder.customBorderChars}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
-        <box flexDirection="row" gap={1} paddingLeft={1}>
+      <box
+        gap={compact() ? 0 : 1}
+        paddingLeft={compact() ? 0 : 1}
+        paddingRight={compact() ? 1 : 3}
+        paddingTop={compact() ? 0 : 1}
+        paddingBottom={compact() ? 0 : 1}
+      >
+        <box flexDirection="row" gap={1} paddingLeft={compact() ? 0 : 1}>
           <text fg={theme.error}>{"△"}</text>
           <text fg={theme.text}>Reject permission</text>
         </box>
-        <box paddingLeft={1}>
+        <box paddingLeft={compact() ? 0 : 1}>
           <text fg={theme.textMuted}>Tell SlopCode what to do differently</text>
         </box>
       </box>
       <box
         flexDirection={narrow() ? "column" : "row"}
         flexShrink={0}
-        paddingTop={1}
-        paddingLeft={2}
-        paddingRight={3}
-        paddingBottom={1}
+        paddingTop={compact() ? 0 : 1}
+        paddingLeft={compact() ? 1 : 2}
+        paddingRight={compact() ? 1 : 3}
+        paddingBottom={compact() ? 0 : 1}
         backgroundColor={theme.backgroundElement}
         justifyContent={narrow() ? "flex-start" : "space-between"}
         alignItems={narrow() ? "flex-start" : "center"}
@@ -510,14 +518,16 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
           focusedTextColor={theme.text}
           cursorColor={theme.primary}
         />
-        <box flexDirection="row" gap={2} flexShrink={0}>
-          <text fg={theme.text}>
-            enter <span style={{ fg: theme.textMuted }}>confirm</span>
-          </text>
-          <text fg={theme.text}>
-            esc <span style={{ fg: theme.textMuted }}>cancel</span>
-          </text>
-        </box>
+        <Show when={!compact()}>
+          <box flexDirection="row" gap={2} flexShrink={0}>
+            <text fg={theme.text}>
+              enter <span style={{ fg: theme.textMuted }}>confirm</span>
+            </text>
+            <text fg={theme.text}>
+              esc <span style={{ fg: theme.textMuted }}>cancel</span>
+            </text>
+          </box>
+        </Show>
       </box>
     </box>
   )
@@ -541,6 +551,7 @@ function Prompt<const T extends Record<string, string>>(props: {
     expanded: false,
   })
   const narrow = createMemo(() => dimensions().width < 80)
+  const compact = createMemo(() => isCompact(density(dimensions())))
   const fullscreenHint = useCommandShortcut("permission.prompt.fullscreen")
 
   useBindings(() => ({
@@ -633,31 +644,44 @@ function Prompt<const T extends Record<string, string>>(props: {
   const content = () => (
     <box
       backgroundColor={theme.backgroundPanel}
-      border={["left"]}
+      border={compact() ? undefined : ["left"]}
       borderColor={theme.warning}
       customBorderChars={SplitBorder.customBorderChars}
       {...(store.expanded
-        ? { top: dimensions().height * -1 + 1, bottom: 1, left: 2, right: 2, position: "absolute" }
+        ? {
+            top: dimensions().height * -1 + 1,
+            bottom: 1,
+            left: compact() ? 0 : 2,
+            right: compact() ? 0 : 2,
+            position: "absolute",
+          }
         : {
             top: 0,
-            maxHeight: 15,
+            maxHeight: compact() ? 10 : 15,
             bottom: 0,
             left: 0,
             right: 0,
             position: "relative",
           })}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1} flexGrow={1}>
+      <box
+        gap={compact() ? 0 : 1}
+        paddingLeft={compact() ? 0 : 1}
+        paddingRight={compact() ? 1 : 3}
+        paddingTop={compact() ? 0 : 1}
+        paddingBottom={compact() ? 0 : 1}
+        flexGrow={1}
+      >
         <Show
           when={props.header}
           fallback={
-            <box flexDirection="row" gap={1} paddingLeft={1} flexShrink={0}>
+            <box flexDirection="row" gap={1} paddingLeft={compact() ? 0 : 1} flexShrink={0}>
               <text fg={theme.warning}>{"△"}</text>
               <text fg={theme.text}>{props.title}</text>
             </box>
           }
         >
-          <box paddingLeft={1} flexShrink={0}>
+          <box paddingLeft={compact() ? 0 : 1} flexShrink={0}>
             {props.header}
           </box>
         </Show>
@@ -667,10 +691,10 @@ function Prompt<const T extends Record<string, string>>(props: {
         flexDirection={narrow() ? "column" : "row"}
         flexShrink={0}
         gap={1}
-        paddingTop={1}
-        paddingLeft={2}
-        paddingRight={3}
-        paddingBottom={1}
+        paddingTop={compact() ? 0 : 1}
+        paddingLeft={compact() ? 1 : 2}
+        paddingRight={compact() ? 1 : 3}
+        paddingBottom={compact() ? 0 : 1}
         backgroundColor={theme.backgroundElement}
         justifyContent={narrow() ? "flex-start" : "space-between"}
         alignItems={narrow() ? "flex-start" : "center"}
@@ -695,19 +719,21 @@ function Prompt<const T extends Record<string, string>>(props: {
             )}
           </For>
         </box>
-        <box flexDirection="row" gap={2} flexShrink={0}>
-          <Show when={props.fullscreen}>
+        <Show when={!compact()}>
+          <box flexDirection="row" gap={2} flexShrink={0}>
+            <Show when={props.fullscreen}>
+              <text fg={theme.text}>
+                {fullscreenHint()} <span style={{ fg: theme.textMuted }}>{hint()}</span>
+              </text>
+            </Show>
             <text fg={theme.text}>
-              {fullscreenHint()} <span style={{ fg: theme.textMuted }}>{hint()}</span>
+              {"⇆"} <span style={{ fg: theme.textMuted }}>select</span>
             </text>
-          </Show>
-          <text fg={theme.text}>
-            {"⇆"} <span style={{ fg: theme.textMuted }}>select</span>
-          </text>
-          <text fg={theme.text}>
-            enter <span style={{ fg: theme.textMuted }}>confirm</span>
-          </text>
-        </box>
+            <text fg={theme.text}>
+              enter <span style={{ fg: theme.textMuted }}>confirm</span>
+            </text>
+          </box>
+        </Show>
       </box>
     </box>
   )

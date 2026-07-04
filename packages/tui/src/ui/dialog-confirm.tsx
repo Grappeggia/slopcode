@@ -5,6 +5,8 @@ import { createStore } from "solid-js/store"
 import { For } from "solid-js"
 import { Locale } from "../util/locale"
 import { useBindings } from "../keymap"
+import { useTerminalDimensions } from "@opentui/solid"
+import { density, isCompact } from "../util/density"
 
 export type DialogConfirmProps = {
   title: string
@@ -19,6 +21,8 @@ export type DialogConfirmResult = boolean | undefined
 export function DialogConfirm(props: DialogConfirmProps) {
   const dialog = useDialog()
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const compact = () => isCompact(density(dimensions()))
   const [store, setStore] = createStore({
     active: "confirm" as "confirm" | "cancel",
   })
@@ -54,7 +58,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
     ],
   }))
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
+    <box paddingLeft={compact() ? 1 : 2} paddingRight={compact() ? 1 : 2} gap={compact() ? 0 : 1}>
       <box flexDirection="row" justifyContent="space-between">
         <text attributes={TextAttributes.BOLD} fg={theme.text}>
           {props.title}
@@ -63,10 +67,10 @@ export function DialogConfirm(props: DialogConfirmProps) {
           esc
         </text>
       </box>
-      <box paddingBottom={1}>
+      <box paddingBottom={compact() ? 0 : 1}>
         <text fg={theme.textMuted}>{props.message}</text>
       </box>
-      <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
+      <box flexDirection="row" justifyContent="flex-end" paddingBottom={compact() ? 0 : 1}>
         <For each={["cancel", "confirm"] as const}>
           {(key) => (
             <box

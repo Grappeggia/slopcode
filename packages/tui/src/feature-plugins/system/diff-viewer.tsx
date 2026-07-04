@@ -792,7 +792,9 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                 </Show>
 
                 <Panel flexGrow={1} minHeight={0} border="none">
-                  <Separator axis="x" start={showFileTree() ? "edge-out" : undefined} />
+                  <Show when={!compact() || dense()}>
+                    <Separator axis="x" start={showFileTree() ? "edge-out" : undefined} />
+                  </Show>
                   <scrollbox
                     ref={(element: ScrollBoxRenderable) => (scroll = element)}
                     flexGrow={1}
@@ -806,7 +808,9 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                         const reviewed = () => reviewedFileNames().has(entry.file.file)
                         return (
                           <box ref={(element: BoxRenderable) => registerPatchNode(entry.fileIndex, element)}>
-                            {index() !== 0 ? <Separator axis="x" start={showFileTree() ? "edge" : undefined} /> : null}
+                            {index() !== 0 && (!compact() || dense()) ? (
+                              <Separator axis="x" start={showFileTree() ? "edge" : undefined} />
+                            ) : null}
                             <box
                               flexDirection="row"
                               gap={1}
@@ -838,7 +842,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                                     view={view()}
                                     filetype={reviewed() ? PLAIN_TEXT_FILETYPE : filetype(entry.file.file)}
                                     syntaxStyle={themeState.syntax()}
-                                    showLineNumbers={true}
+                            showLineNumbers={!compact() || dense()}
                                     width="100%"
                                     wrapMode="char"
                                     fg={reviewed() ? theme().textMuted : theme().text}
@@ -865,7 +869,9 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                       <box height={patchFillerHeight()} border={patchLeftBorder()} borderColor={theme().border} />
                     </Show>
                   </scrollbox>
-                  <Separator axis="x" start={showFileTree() ? "edge-in" : undefined} />
+                  <Show when={!compact() || dense()}>
+                    <Separator axis="x" start={showFileTree() ? "edge-in" : undefined} />
+                  </Show>
                 </Panel>
               </PanelGroup>
             </Match>
