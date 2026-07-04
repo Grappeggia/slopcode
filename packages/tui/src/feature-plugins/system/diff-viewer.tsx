@@ -842,7 +842,7 @@ function DiffViewer(props: { api: TuiPluginApi }) {
                                     view={view()}
                                     filetype={reviewed() ? PLAIN_TEXT_FILETYPE : filetype(entry.file.file)}
                                     syntaxStyle={themeState.syntax()}
-                            showLineNumbers={!compact() || dense()}
+                                    showLineNumbers={!compact() || dense()}
                                     width="100%"
                                     wrapMode="char"
                                     fg={reviewed() ? theme().textMuted : theme().text}
