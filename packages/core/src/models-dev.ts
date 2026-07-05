@@ -164,23 +164,39 @@ export const layer = Layer.effect(
       )
     })
 
-    const loadFromDisk = fs.readJson(Flag.SLOPCODE_MODELS_PATH ?? filepath).pipe(
-      Effect.catch((error) => {
-        if (
-          Flag.SLOPCODE_MODELS_PATH === undefined &&
-          error._tag === "FileSystemError" &&
-          error.method === "readJson"
-        ) {
-          return fs.remove(filepath, { force: true }).pipe(Effect.ignore, Effect.as(undefined))
-        }
-        return Effect.succeed(undefined)
-      }),
-      Effect.map((v) => v as Record<string, Provider> | undefined),
-    )
+    const loadFromDisk = Effect.gen(function* () {
+      const file = Flag.SLOPCODE_MODELS_PATH ?? filepath
+      const exists = yield* fs.stat(file).pipe(
+        Effect.as(true),
+        Effect.catch(() => Effect.succeed(false)),
+      )
+      if (!exists) return { data: undefined, exists }
+      const data = yield* fs.readJson(file).pipe(
+        Effect.catch((error) => {
+          if (
+            Flag.SLOPCODE_MODELS_PATH === undefined &&
+            error._tag === "FileSystemError" &&
+            error.method === "readJson"
+          ) {
+            return fs.remove(filepath, { force: true }).pipe(Effect.ignore, Effect.as(undefined))
+          }
+          return Effect.succeed(undefined)
+        }),
+        Effect.map((v) => v as Record<string, Provider> | undefined),
+      )
+      return { data, exists }
+    })
 
     const loadSnapshot = Effect.sync(() =>
       typeof SLOPCODE_MODELS_DEV === "undefined" ? undefined : SLOPCODE_MODELS_DEV,
     )
+
+    const fallback = bundledFallback as Record<string, Provider>
+    const mergeFallback = (data?: Record<string, Provider>) => {
+      if (Flag.SLOPCODE_MODELS_PATH !== undefined) return data
+      if (Object.keys(fallback).length === 0) return data
+      return { ...fallback, ...(data ?? {}) }
+    }
 
     const fetchAndWrite = Effect.fn("ModelsDev.fetchAndWrite")(function* () {
       const text = yield* fetchApi()
@@ -199,11 +215,14 @@ export const layer = Layer.effect(
 
     const populate = Effect.gen(function* () {
       const fromDisk = yield* loadFromDisk
-      if (fromDisk) return fromDisk
-      const snapshot = yield* loadSnapshot
-      if (snapshot) return snapshot
-      if (bundledFallback && Object.keys(bundledFallback).length > 0) return bundledFallback as Record<string, Provider>
-      if (Flag.SLOPCODE_DISABLE_MODELS_FETCH) return {}
+      if (fromDisk.data) return mergeFallback(fromDisk.data)!
+      const snapshot = mergeFallback(yield* loadSnapshot)
+      if (snapshot && (!fromDisk.exists || Flag.SLOPCODE_DISABLE_MODELS_FETCH)) return snapshot
+      if (!fromDisk.exists) {
+        const fallbackOnly = mergeFallback()
+        if (fallbackOnly) return fallbackOnly
+      }
+      if (Flag.SLOPCODE_DISABLE_MODELS_FETCH) return mergeFallback() ?? {}
       // Flock is cross-process: concurrent slopcode CLIs can race on this cache file.
       const text = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -211,7 +230,7 @@ export const layer = Layer.effect(
           return yield* fetchAndWrite()
         }),
       )
-      return JSON.parse(text) as Record<string, Provider>
+      return mergeFallback(JSON.parse(text) as Record<string, Provider>) ?? {}
     }).pipe(Effect.withSpan("ModelsDev.populate"), Effect.orDie)
 
     const [cachedGet, invalidate] = yield* Effect.cachedInvalidateWithTTL(populate, Duration.infinity)

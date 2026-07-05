@@ -111,6 +111,11 @@ const writeCache = (data: object, mtimeMs?: number) => writeCacheText(JSON.strin
 const provided = <A, E>(state: Ref.Ref<MockState>, eff: Effect.Effect<A, E, ModelsDev.Service>) =>
   eff.pipe(Effect.provide(buildLayer(state)))
 
+function expectCatalog(result: Record<string, ModelsDev.Provider>, expected: Record<string, ModelsDev.Provider>) {
+  for (const [id, provider] of Object.entries(expected)) expect(result[id]).toEqual(provider)
+  expect(result.slopcode?.models["big-pickle"]).toBeDefined()
+}
+
 beforeEach(async () => {
   await rm(cacheFile, { force: true })
 })
@@ -134,20 +139,21 @@ describe("ModelsDev Service", () => {
         state,
         ModelsDev.Service.use((s) => s.get()),
       )
-      expect(result).toEqual(fixture)
+      expectCatalog(result, fixture)
       const final = yield* Ref.get(state)
       expect(final.calls).toEqual([])
     }),
   )
 
-  it.live("get() returns empty catalog when disk empty, fetch disabled, and no bundled snapshot is injected", () =>
+  it.live("get() returns bundled fallback when disk empty and fetch disabled", () =>
     Effect.gen(function* () {
       const state = yield* Ref.make(initialState)
       const result = yield* provided(
         state,
         ModelsDev.Service.use((s) => s.get()),
       )
-      expect(result).toEqual({})
+      expect(result.slopcode?.models["big-pickle"]).toBeDefined()
+      expect(result["slopcode-go"]?.models).toBeDefined()
       const final = yield* Ref.get(state)
       expect(final.calls).toEqual([])
     }),
@@ -171,7 +177,7 @@ describe("ModelsDev Service", () => {
             Flag.SLOPCODE_DISABLE_MODELS_FETCH = true
           }),
       )
-      expect(result).toEqual(fixture2)
+      expectCatalog(result, fixture2)
       expect(yield* Effect.promise(() => readFile(cacheFile, "utf8"))).toBe(JSON.stringify(fixture2))
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
@@ -191,7 +197,7 @@ describe("ModelsDev Service", () => {
           })
         }),
       )
-      for (const result of results) expect(result).toEqual(fixture)
+      for (const result of results) expectCatalog(result, fixture)
     }),
   )
 
@@ -210,8 +216,8 @@ describe("ModelsDev Service", () => {
           return { a, b }
         }),
       )
-      expect(first.a).toEqual(fixture)
-      expect(first.b).toEqual(fixture)
+      expectCatalog(first.a, fixture)
+      expectCatalog(first.b, fixture)
     }),
   )
 
@@ -229,8 +235,8 @@ describe("ModelsDev Service", () => {
           return { before, after }
         }),
       )
-      expect(result.before).toEqual(fixture)
-      expect(result.after).toEqual(fixture2)
+      expectCatalog(result.before, fixture)
+      expectCatalog(result.after, fixture2)
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
       expect(final.calls[0].url).toContain("/api.json")
@@ -267,7 +273,7 @@ describe("ModelsDev Service", () => {
       )
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
-      expect(after).toEqual(fixture2)
+      expectCatalog(after, fixture2)
     }),
   )
 
@@ -283,7 +289,7 @@ describe("ModelsDev Service", () => {
           return yield* svc.get()
         }),
       )
-      expect(result).toEqual(fixture)
+      expectCatalog(result, fixture)
       // retryTransient retries 5xx, so calls may be > 1.
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBeGreaterThanOrEqual(1)
