@@ -107,18 +107,19 @@ export const layer = Layer.effect(
         const root = yield* filesystem.resolveRoot(input)
         if (root.type !== "directory") return yield* Effect.die(new Error("Files search path must be a directory"))
         const limit = cap(input.limit)
-        const found = input.reference || path.isAbsolute(input.path ?? "")
-          ? yield* ripgrep.glob({
-              cwd: root.real,
-              pattern: input.pattern,
-              limit: limit + 1,
-              signal: input.signal,
-            })
-          : yield* filesystem.glob({
-              pattern: input.pattern,
-              path: input.path === undefined ? undefined : RelativePath.make(input.path),
-              limit: limit + 1,
-            })
+        const found =
+          input.reference || path.isAbsolute(input.path ?? "")
+            ? yield* ripgrep.glob({
+                cwd: root.real,
+                pattern: input.pattern,
+                limit: limit + 1,
+                signal: input.signal,
+              })
+            : yield* filesystem.glob({
+                pattern: input.pattern,
+                path: input.path === undefined ? undefined : RelativePath.make(input.path),
+                limit: limit + 1,
+              })
         const selected = found.slice(0, limit)
         const mapped = yield* Effect.forEach(selected, (item) => candidate(root, root.root, item.path), {
           concurrency: 16,
@@ -134,21 +135,22 @@ export const layer = Layer.effect(
         const root = yield* filesystem.resolveRoot(input)
         const cwd = root.type === "directory" ? root.real : path.dirname(root.real)
         const limit = cap(input.limit)
-        const results = input.reference || path.isAbsolute(input.path ?? "")
-          ? yield* ripgrep.grep({
-              cwd,
-              pattern: input.pattern,
-              include: input.include,
-              file: root.type === "file" ? path.basename(root.real) : undefined,
-              limit: limit + 1,
-              signal: input.signal,
-            })
-          : yield* filesystem.grep({
-              pattern: input.pattern,
-              path: input.path === undefined ? undefined : RelativePath.make(input.path),
-              include: input.include,
-              limit: limit + 1,
-            })
+        const results =
+          input.reference || path.isAbsolute(input.path ?? "")
+            ? yield* ripgrep.grep({
+                cwd,
+                pattern: input.pattern,
+                include: input.include,
+                file: root.type === "file" ? path.basename(root.real) : undefined,
+                limit: limit + 1,
+                signal: input.signal,
+              })
+            : yield* filesystem.grep({
+                pattern: input.pattern,
+                path: input.path === undefined ? undefined : RelativePath.make(input.path),
+                include: input.include,
+                limit: limit + 1,
+              })
         const selected = results.slice(0, limit)
         const mapped = yield* Effect.forEach(
           selected,

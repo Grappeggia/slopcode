@@ -94,13 +94,14 @@ export const layer = Layer.effectDiscard(
               })
               return yield* search.grep(input)
             }).pipe(
-              Effect.mapError((error) =>
-                new ToolFailure({
-                  message:
-                    error instanceof Ripgrep.InvalidPatternError
-                      ? `Invalid grep pattern ${JSON.stringify(input.pattern)}: ${error.message}`
-                      : `Unable to grep for ${input.pattern}`,
-                }),
+              Effect.mapError(
+                (error) =>
+                  new ToolFailure({
+                    message:
+                      error instanceof Ripgrep.InvalidPatternError
+                        ? `Invalid grep pattern ${JSON.stringify(input.pattern)}: ${error.message}`
+                        : `Unable to grep for ${input.pattern}`,
+                  }),
               ),
             ),
         }),
