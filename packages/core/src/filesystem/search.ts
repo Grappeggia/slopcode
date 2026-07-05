@@ -13,8 +13,10 @@ import { Flag } from "../flag/flag"
 
 export interface Interface {
   readonly find: (input: FileSystem.FindInput) => Effect.Effect<FileSystem.Entry[]>
-  readonly glob: (input: FileSystem.GlobInput) => Effect.Effect<readonly FileSystem.Entry[]>
-  readonly grep: (input: FileSystem.GrepInput) => Effect.Effect<readonly FileSystem.Match[]>
+  readonly glob: (input: FileSystem.GlobInput) => Effect.Effect<readonly FileSystem.Entry[], Ripgrep.Error>
+  readonly grep: (
+    input: FileSystem.GrepInput,
+  ) => Effect.Effect<readonly FileSystem.Match[], Ripgrep.Error | Ripgrep.InvalidPatternError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/FileSystem/Search") {}
@@ -67,7 +69,6 @@ const makeRipgrep = Effect.gen(function* () {
                   }),
               ),
             ),
-            Effect.orDie,
           )
       }),
     grep: (input: FileSystem.GrepInput) =>
@@ -96,7 +97,6 @@ const makeRipgrep = Effect.gen(function* () {
                   }),
               ),
             ),
-            Effect.orDie,
           )
       }),
     find: (input: FileSystem.FindInput) =>
@@ -143,50 +143,56 @@ export const fffLayer = Layer.effect(
     yield* Effect.addFinalizer(() => Effect.sync(() => result.value.destroy()).pipe(Effect.ignore))
     return Service.of({
       glob: (input) =>
-        Effect.sync(() => {
-          const prefix = input.path?.replaceAll("\\", "/").replace(/\/$/, "")
-          const found = result.value.glob(prefix ? `${prefix}/${input.pattern}` : input.pattern, {
-            pageIndex: 0,
-            pageSize: input.limit,
-          })
-          if (!found.ok) throw found.error
-          return found.value.items.map((item) => {
-            const absolute = path.resolve(location.directory, item.relativePath)
-            return new FileSystem.Entry({
-              path: RelativePath.make(item.relativePath.replaceAll("\\", "/")),
-              type: "file",
-              mime: FSUtil.mimeType(absolute),
+        Effect.try({
+          try: () => {
+            const prefix = input.path?.replaceAll("\\", "/").replace(/\/$/, "")
+            const found = result.value.glob(prefix ? `${prefix}/${input.pattern}` : input.pattern, {
+              pageIndex: 0,
+              pageSize: input.limit,
             })
-          })
+            if (!found.ok) throw found.error
+            return found.value.items.map((item) => {
+              const absolute = path.resolve(location.directory, item.relativePath)
+              return new FileSystem.Entry({
+                path: RelativePath.make(item.relativePath.replaceAll("\\", "/")),
+                type: "file",
+                mime: FSUtil.mimeType(absolute),
+              })
+            })
+          },
+          catch: (cause) => new Ripgrep.Error({ message: "fff glob failed", cause }),
         }),
       grep: (input) =>
-        Effect.sync(() => {
-          const prefix = input.path?.replaceAll("\\", "/").replace(/\/$/, "")
-          const found = result.value.grep(
-            [prefix ? `${prefix}/**` : undefined, input.include, input.pattern]
-              .filter((value) => value !== undefined)
-              .join(" "),
-            { mode: "regex", pageSize: input.limit, timeBudgetMs: 1_500 },
-          )
-          if (!found.ok) throw found.error
-          return found.value.items.map((match) => {
-            const bytes = Buffer.from(match.lineContent)
-            return new FileSystem.Match({
-              entry: new FileSystem.Entry({
-                path: RelativePath.make(match.relativePath.replaceAll("\\", "/")),
-                type: "file",
-                mime: FSUtil.mimeType(match.relativePath),
-              }),
-              line: match.lineNumber,
-              offset: match.byteOffset,
-              text: match.lineContent.length > 2_000 ? match.lineContent.slice(0, 2_000) + "..." : match.lineContent,
-              submatches: match.matchRanges.map(([start, end]) => ({
-                text: bytes.subarray(start, end).toString("utf8"),
-                start,
-                end,
-              })),
+        Effect.try({
+          try: () => {
+            const prefix = input.path?.replaceAll("\\", "/").replace(/\/$/, "")
+            const found = result.value.grep(
+              [prefix ? `${prefix}/**` : undefined, input.include, input.pattern]
+                .filter((value) => value !== undefined)
+                .join(" "),
+              { mode: "regex", pageSize: input.limit, timeBudgetMs: 1_500 },
+            )
+            if (!found.ok) throw found.error
+            return found.value.items.map((match) => {
+              const bytes = Buffer.from(match.lineContent)
+              return new FileSystem.Match({
+                entry: new FileSystem.Entry({
+                  path: RelativePath.make(match.relativePath.replaceAll("\\", "/")),
+                  type: "file",
+                  mime: FSUtil.mimeType(match.relativePath),
+                }),
+                line: match.lineNumber,
+                offset: match.byteOffset,
+                text: match.lineContent.length > 2_000 ? match.lineContent.slice(0, 2_000) + "..." : match.lineContent,
+                submatches: match.matchRanges.map(([start, end]) => ({
+                  text: bytes.subarray(start, end).toString("utf8"),
+                  start,
+                  end,
+                })),
+              })
             })
-          })
+          },
+          catch: (cause) => new Ripgrep.Error({ message: "fff grep failed", cause }),
         }),
       find: (input) =>
         Effect.sync(() => {

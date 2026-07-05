@@ -22,6 +22,7 @@ import { Database } from "./database/database"
 import { PermissionV2 } from "./permission"
 import { PermissionSaved } from "./permission/saved"
 import { FileSystem } from "./filesystem"
+import { LocationSearch } from "./location-search"
 import { Ripgrep } from "./ripgrep"
 import { Watcher } from "./filesystem/watcher"
 import { LocationMutation } from "./location-mutation"
@@ -68,6 +69,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       PluginBoot.locationLayer,
       ProjectCopy.locationLayer,
       FileSystem.locationLayer,
+      LocationSearch.locationLayer,
       Watcher.locationLayer,
       Pty.locationLayer,
       SkillV2.locationLayer,

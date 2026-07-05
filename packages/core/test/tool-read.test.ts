@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect } from "bun:test"
+import path from "path"
 import { Effect, Exit, Layer } from "effect"
 import { Config } from "@slopcode-ai/core/config"
 import { ConfigAttachments } from "@slopcode-ai/core/config/attachments"
@@ -68,6 +69,27 @@ const permission = Layer.succeed(
 const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(permission))
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed(configEntries) }))
 const image = Image.layer.pipe(Layer.provide(config))
+const filesystem = Layer.succeed(
+  FileSystem.Service,
+  FileSystem.Service.of({
+    read: () => Effect.die("unused"),
+    resolveReadPath: (input) =>
+      resolveFailure === undefined
+        ? Effect.succeed(
+            new FileSystem.ReadPath({
+              path: AbsolutePath.make(path.resolve(process.cwd(), input.path)),
+              type: resolvedType,
+              resource: input.reference === undefined ? input.path : `${input.reference}:${input.path}`,
+            }),
+          )
+        : Effect.die(resolveFailure),
+    resolveRoot: () => Effect.die("unused"),
+    list: () => Effect.die("unused"),
+    find: () => Effect.die("unused"),
+    glob: () => Effect.die("unused"),
+    grep: () => Effect.die("unused"),
+  }),
+)
 const testFileSystem = Layer.effect(
   FSUtil.Service,
   FSUtil.Service.use((fs) => Effect.succeed(FSUtil.Service.of({ ...fs, realPath: (path) => Effect.succeed(path) }))),
@@ -76,6 +98,7 @@ const infrastructure = Layer.mergeAll(
   testFileSystem,
   Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(process.cwd()) }))),
   Global.layerWith({ data: Global.Path.data }),
+  filesystem,
 )
 const unavailableImage = Layer.succeed(
   Image.Service,
