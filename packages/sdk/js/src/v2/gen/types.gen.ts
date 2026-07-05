@@ -51,11 +51,11 @@ export type Event =
   | EventSessionError
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
+  | EventReferenceUpdated
   | EventFileEdited
   | EventIntegrationUpdated
   | EventPermissionV2Asked
   | EventPermissionV2Replied
-  | EventReferenceUpdated
   | EventProjectDirectoriesUpdated
   | EventFileWatcherUpdated
   | EventPtyCreated
@@ -1251,6 +1251,13 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "reference.updated"
+        properties: {
+          [key: string]: unknown
+        }
+      }
+    | {
+        id: string
         type: "file.edited"
         properties: {
           file: string
@@ -1285,13 +1292,6 @@ export type GlobalEvent = {
           sessionID: string
           requestID: string
           reply: PermissionV2Reply
-        }
-      }
-    | {
-        id: string
-        type: "reference.updated"
-        properties: {
-          [key: string]: unknown
         }
       }
     | {
@@ -4888,6 +4888,14 @@ export type EventInstallationUpdateAvailable = {
   }
 }
 
+export type EventReferenceUpdated = {
+  id: string
+  type: "reference.updated"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
 export type EventFileEdited = {
   id: string
   type: "file.edited"
@@ -4927,14 +4935,6 @@ export type EventPermissionV2Replied = {
     sessionID: string
     requestID: string
     reply: PermissionV2Reply
-  }
-}
-
-export type EventReferenceUpdated = {
-  id: string
-  type: "reference.updated"
-  properties: {
-    [key: string]: unknown
   }
 }
 

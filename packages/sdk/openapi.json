@@ -13924,6 +13924,9 @@
             "$ref": "#/components/schemas/EventInstallationUpdate-available"
           },
           {
+            "$ref": "#/components/schemas/EventReferenceUpdated"
+          },
+          {
             "$ref": "#/components/schemas/EventFileEdited"
           },
           {
@@ -13934,9 +13937,6 @@
           },
           {
             "$ref": "#/components/schemas/EventPermissionV2Replied"
-          },
-          {
-            "$ref": "#/components/schemas/EventReferenceUpdated"
           },
           {
             "$ref": "#/components/schemas/EventProjectDirectoriesUpdated"
@@ -17727,6 +17727,25 @@
                   },
                   "type": {
                     "type": "string",
+                    "enum": ["reference.updated"]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "properties": {}
+                  }
+                },
+                "required": ["id", "type", "properties"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^evt_"
+                  },
+                  "type": {
+                    "type": "string",
                     "enum": ["file.edited"]
                   },
                   "properties": {
@@ -17841,25 +17860,6 @@
                     },
                     "required": ["sessionID", "requestID", "reply"],
                     "additionalProperties": false
-                  }
-                },
-                "required": ["id", "type", "properties"],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string",
-                    "pattern": "^evt_"
-                  },
-                  "type": {
-                    "type": "string",
-                    "enum": ["reference.updated"]
-                  },
-                  "properties": {
-                    "type": "object",
-                    "properties": {}
                   }
                 },
                 "required": ["id", "type", "properties"],
@@ -29273,6 +29273,25 @@
         "required": ["id", "type", "properties"],
         "additionalProperties": false
       },
+      "EventReferenceUpdated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["reference.updated"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
       "EventFileEdited": {
         "type": "object",
         "properties": {
@@ -29396,25 +29415,6 @@
             },
             "required": ["sessionID", "requestID", "reply"],
             "additionalProperties": false
-          }
-        },
-        "required": ["id", "type", "properties"],
-        "additionalProperties": false
-      },
-      "EventReferenceUpdated": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^evt_"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["reference.updated"]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {}
           }
         },
         "required": ["id", "type", "properties"],
