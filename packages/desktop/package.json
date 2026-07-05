@@ -1,7 +1,7 @@
 {
   "name": "@slopcode-ai/desktop",
   "private": true,
-  "version": "0.2.186",
+  "version": "0.2.187",
   "type": "module",
   "license": "MIT",
   "homepage": "https://slopcode.ai",
