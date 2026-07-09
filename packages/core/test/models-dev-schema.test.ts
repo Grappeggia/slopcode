@@ -15,9 +15,11 @@ const model = {
 }
 
 describe("ModelsDev.Model", () => {
-  test("decodes and preserves reasoning options", () => {
+  test("decodes and preserves reasoning option kinds from the models feed", () => {
     const reasoning_options = [
-      { type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] },
+      { type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max", null] },
+      { type: "budget_tokens", min: 1, max: 128_000 },
+      { type: "toggle" },
     ]
 
     expect(decode({ ...model, reasoning_options }).reasoning_options).toEqual(reasoning_options)

@@ -157,6 +157,56 @@ describe("SessionRunnerModel", () => {
     }),
   )
 
+  it.effect("composes a Fast catalog model with its selected max effort", () =>
+    Effect.gen(function* () {
+      const base = model({ type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" })
+      const catalog = new ModelV2.Info({
+        ...base,
+        id: ModelV2.ID.make("gpt-5.6-fast"),
+        name: "GPT-5.6 Fast",
+        api: { ...base.api, id: ModelV2.ID.make("gpt-5.6") },
+        request: {
+          ...base.request,
+          options: { ...base.request.options, serviceTier: "priority" },
+        },
+        variants: [
+          {
+            id: ModelV2.VariantID.make("max"),
+            headers: {},
+            body: {},
+            generation: {},
+            options: { reasoningEffort: "max" },
+          },
+        ],
+      })
+      const session = SessionV2.Info.make({
+        id: SessionV2.ID.make("ses_fast_max"),
+        projectID: ProjectV2.ID.global,
+        title: "test",
+        model: {
+          id: catalog.id,
+          providerID: catalog.providerID,
+          variant: ModelV2.VariantID.make("max"),
+        },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+        location: { directory: AbsolutePath.make("/project") },
+      })
+
+      const resolved = yield* SessionRunnerModel.resolve(session, catalog)
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }))
+
+      expect(prepared.body).toMatchObject({
+        model: "gpt-5.6",
+        store: false,
+        service_tier: "priority",
+        temperature: 0.7,
+        reasoning: { effort: "max" },
+      })
+    }),
+  )
+
   it.effect("lowers selected OpenAI-compatible Session variants into Chat options", () =>
     Effect.gen(function* () {
       const catalog = model(

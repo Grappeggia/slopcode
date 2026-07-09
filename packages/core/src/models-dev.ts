@@ -53,10 +53,20 @@ export const Model = Schema.Struct({
   reasoning: Schema.Boolean,
   reasoning_options: Schema.optional(
     Schema.Array(
-      Schema.Struct({
-        type: Schema.Literal("effort"),
-        values: Schema.Array(Schema.String),
-      }),
+      Schema.Union([
+        Schema.Struct({
+          type: Schema.Literal("effort"),
+          values: Schema.Array(Schema.NullOr(Schema.String)),
+        }),
+        Schema.Struct({
+          type: Schema.Literal("budget_tokens"),
+          min: Schema.optional(Schema.Finite),
+          max: Schema.optional(Schema.Finite),
+        }),
+        Schema.Struct({
+          type: Schema.Literal("toggle"),
+        }),
+      ]),
     ),
   ),
   temperature: Schema.Boolean,

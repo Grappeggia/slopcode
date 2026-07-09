@@ -41,6 +41,15 @@ function cost(input: ModelsDev.Model["cost"]) {
 }
 
 function variants(model: ModelsDev.Model, packageName?: string) {
+  const effort = model.reasoning_options?.find((item) => item.type === "effort")
+  if (effort)
+    return effort.values
+      .filter((id): id is string => typeof id === "string")
+      .map((id) => ({
+        id: ModelV2.VariantID.make(id),
+        headers: {},
+        ...ModelRequest.normalizeAiSdkOptions(packageName, { reasoningEffort: id }),
+      }))
   return Object.entries(model.experimental?.modes ?? {}).map(([id, item]) => {
     const request = ModelRequest.normalizeAiSdkOptions(packageName, item.provider?.body ?? {})
     return {
@@ -101,6 +110,7 @@ export const ModelsDevPlugin = PluginV2.define({
           })
           for (const model of Object.values(item.models)) {
             const modelID = ModelV2.ID.make(model.id)
+            const packageName = model.provider?.npm ?? item.npm
             catalog.model.update(providerID, modelID, (draft) => {
               draft.name = model.name
               draft.family = model.family ? ModelV2.Family.make(model.family) : undefined
@@ -108,7 +118,7 @@ export const ModelsDevPlugin = PluginV2.define({
                 ? {
                     id: draft.api.id,
                     type: "aisdk",
-                    package: model.provider?.npm,
+                    package: model.provider.npm,
                     url: model.provider.api,
                   }
                 : {
@@ -122,9 +132,51 @@ export const ModelsDevPlugin = PluginV2.define({
                 input: [...(model.modalities?.input ?? [])],
                 output: [...(model.modalities?.output ?? [])],
               }
-              draft.variants = variants(model, model.provider?.npm ?? item.npm)
+              draft.variants = variants(model, packageName)
               draft.time.released = released(model.release_date)
               draft.cost = cost(model.cost)
+              draft.status = model.status ?? "active"
+              draft.enabled = true
+              draft.limit = {
+                context: model.limit.context,
+                input: model.limit.input,
+                output: model.limit.output,
+              }
+            })
+
+            const fast = model.reasoning_options?.some((item) => item.type === "effort")
+              ? model.experimental?.modes?.fast
+              : undefined
+            if (!fast) continue
+            const request = ModelRequest.normalizeAiSdkOptions(packageName, fast.provider?.body ?? {})
+            catalog.model.update(providerID, ModelV2.ID.make(`${model.id}-fast`), (draft) => {
+              draft.name = `${model.name} Fast`
+              draft.family = model.family ? ModelV2.Family.make(model.family) : undefined
+              draft.api = model.provider?.npm
+                ? {
+                    id: modelID,
+                    type: "aisdk",
+                    package: model.provider.npm,
+                    url: model.provider.api,
+                  }
+                : {
+                    id: modelID,
+                    type: "native",
+                    url: model.provider?.api,
+                    settings: {},
+                  }
+              draft.capabilities = {
+                tools: model.tool_call,
+                input: [...(model.modalities?.input ?? [])],
+                output: [...(model.modalities?.output ?? [])],
+              }
+              draft.request = {
+                headers: { ...(fast.provider?.headers ?? {}) },
+                ...request,
+              }
+              draft.variants = variants(model, packageName)
+              draft.time.released = released(model.release_date)
+              draft.cost = cost(fast.cost ?? model.cost)
               draft.status = model.status ?? "active"
               draft.enabled = true
               draft.limit = {
