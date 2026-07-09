@@ -107,6 +107,20 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("maps max reasoning effort for GPT-5.6", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model: Model.update(model, { id: "gpt-5.6" }),
+          prompt: "think",
+          providerOptions: { openai: { reasoningEffort: "max" } },
+        }),
+      )
+
+      expect(prepared.body.reasoning_effort).toBe("max")
+    }),
+  )
+
   it.effect("adds native query params to the Chat Completions URL", () =>
     LLMClient.generate(
       LLM.updateRequest(request, {
