@@ -18,13 +18,12 @@ describe("ConfigSkillPlugin.Plugin", () => {
     Effect.gen(function* () {
       const directory = AbsolutePath.make("/repo/packages/app")
       const sources: SkillV2.Source[] = []
-      const transform = Effect.fnUntraced(function* () {
-        return Effect.fnUntraced(function* (update: (editor: SkillV2.Editor) => void) {
-          update({
-            source: (source) => sources.push(source),
-            list: () => sources,
-          })
+      const transform = Effect.fnUntraced(function* (update: (editor: SkillV2.Editor) => void) {
+        update({
+          source: (source) => sources.push(source),
+          list: () => sources,
         })
+        return { dispose: Effect.void }
       })
 
       yield* ConfigSkillPlugin.Plugin.effect.pipe(

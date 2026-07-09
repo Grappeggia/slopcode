@@ -86,8 +86,7 @@ describe("LocationServiceMap", () => {
               yield* PluginBoot.Service.use((boot) => boot.wait())
               yield* Reference.Service
               const catalog = yield* Catalog.Service
-              const transform = yield* catalog.transform()
-              yield* transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
+              yield* catalog.transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
               return {
                 providers: yield* catalog.provider.all(),
                 tools: yield* toolDefinitions(yield* ToolRegistry.Service),
