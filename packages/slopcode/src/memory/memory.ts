@@ -73,8 +73,10 @@ export function redact(input: string) {
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, "Bearer [redacted]")
     .replace(/\b(?:sk|pk|rk|ghp|gho|ghu|ghs|glpat|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b/g, "[redacted]")
     .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[redacted]")
+    .replace(/\bnpm_[A-Za-z0-9]{20,}\b/g, "[redacted]")
+    .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[redacted]")
     .replace(
-      /\b((?:api[_-]?key|token|secret|password|passwd|pwd|private[_-]?key)\s*[:=]\s*["']?)[^\s"',;]+/gi,
+      /\b(_*(?:[a-z0-9]+[_-])*(?:api[_-]?key|auth[_-]?token|token|secret|password|passwd|pwd|private[_-]?key|access[_-]?key(?:[_-]?id)?)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s"',;]+)/gi,
       "$1[redacted]",
     )
 }
@@ -254,22 +256,23 @@ export const layer = Layer.effect(
       limit?: number
     }) {
       const visible = input.includeDisabled ? undefined : eq(MemoryTable.enabled, true)
-      const projectRows = yield* db
+      const projectQuery = db
         .select()
         .from(MemoryTable)
         .where(and(eq(MemoryTable.scope, "project"), eq(MemoryTable.project_id, input.projectID), visible))
         .orderBy(desc(MemoryTable.time_updated))
-        .limit(input.limit ?? 100)
-        .all()
-        .pipe(Effect.orDie)
-      const globalRows = yield* db
+      const projectRows = yield* (input.limit === undefined
+        ? projectQuery.all()
+        : projectQuery.limit(input.limit).all()
+      ).pipe(Effect.orDie)
+      const globalQuery = db
         .select()
         .from(MemoryTable)
         .where(and(eq(MemoryTable.scope, "global"), isNull(MemoryTable.project_id), visible))
         .orderBy(desc(MemoryTable.time_updated))
-        .limit(input.limit ?? 100)
-        .all()
-        .pipe(Effect.orDie)
+      const globalRows = yield* (input.limit === undefined ? globalQuery.all() : globalQuery.limit(input.limit).all()).pipe(
+        Effect.orDie,
+      )
       return [...projectRows, ...globalRows].slice(0, input.limit).map(fromRow)
     })
 

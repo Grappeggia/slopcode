@@ -73,3 +73,67 @@ it.instance("redacts secrets before storing", () =>
     expect(list[0]?.content).not.toContain("sk-abcdefghijklmnopqrstuv")
   }),
 )
+
+it.instance("redacts namespaced and structured credentials before storing", () =>
+  Effect.gen(function* () {
+    yield* project()
+    const memory = yield* Memory.Service
+    const npm = "npm_abcdefghijklmnopqrstuvwxyz0123456789"
+    const aws = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    const access = "AKIAIOSFODNN7EXAMPLE"
+    const normal = "Keep project memories concise and actionable"
+    const created = yield* Effect.forEach(
+      [
+        "Database credential: DATABASE_PASSWORD=correct-horse-battery-staple",
+        `AWS credential: AWS_SECRET_ACCESS_KEY=${aws}`,
+        `Registry credential: NPM_TOKEN=${npm}`,
+        `The npm credential is ${npm}`,
+        `The AWS access key is ${access}`,
+        normal,
+      ],
+      (content) => memory.create({ content }),
+      { concurrency: 1 },
+    )
+    const list = yield* memory.list({ includeDisabled: true })
+    const contents = [...created.flatMap((item) => (item ? [item.content] : [])), ...list.map((item) => item.content)]
+
+    expect(
+      contents.some((content) =>
+        ["correct-horse-battery-staple", aws, npm, access].some((value) => content.includes(value)),
+      ),
+    ).toBe(false)
+    expect(contents).toContain("Database credential: DATABASE_PASSWORD=[redacted]")
+    expect(contents).toContain("AWS credential: AWS_SECRET_ACCESS_KEY=[redacted]")
+    expect(contents).toContain("Registry credential: NPM_TOKEN=[redacted]")
+    expect(contents).toContain(normal)
+  }),
+)
+
+it.instance("lists and manages more than 100 memories", () =>
+  Effect.gen(function* () {
+    yield* project()
+    const memory = yield* Memory.Service
+    const ids = (
+      yield* Effect.forEach(
+        Array.from({ length: 102 }, (_, index) => `Project memory fixture number ${index.toString().padStart(3, "0")}`),
+        (content) => memory.create({ content }),
+        { concurrency: 1 },
+      )
+    ).flatMap((item) => (item ? [item.id] : []))
+    const first = ids[0]!
+    const last = ids.at(-1)!
+    const listed = yield* memory.list({ includeDisabled: true })
+
+    expect(ids).toHaveLength(102)
+    expect(listed).toHaveLength(102)
+    expect(listed.some((item) => item.id === first)).toBe(true)
+    expect(listed.some((item) => item.id === last)).toBe(true)
+
+    yield* memory.update(first, { enabled: false })
+    expect((yield* memory.list()).some((item) => item.id === first)).toBe(false)
+    expect((yield* memory.list({ includeDisabled: true })).some((item) => item.id === first)).toBe(true)
+
+    yield* memory.remove(last)
+    expect((yield* memory.list({ includeDisabled: true })).some((item) => item.id === last)).toBe(false)
+  }),
+)
