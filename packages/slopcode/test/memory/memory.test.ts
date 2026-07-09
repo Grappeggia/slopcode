@@ -109,6 +109,53 @@ it.instance("redacts namespaced and structured credentials before storing", () =
   }),
 )
 
+it.instance("redacts JSON and SDK credentials before prompt reuse", () =>
+  Effect.gen(function* () {
+    const projectID = yield* project()
+    const memory = yield* Memory.Service
+    const npm = "npm_abcdefghijklmnopqrstuvwxyz0123456789"
+    const secrets = [
+      "fake-json-secret-value",
+      "fake-sdk-secret-value",
+      "fake-session-token-value",
+      npm,
+      "fake-api-key-value",
+    ]
+    const normal = '{"region":"us-west-2","retries":3}'
+    const created = yield* Effect.forEach(
+      [
+        '{"AWS_SECRET_ACCESS_KEY":"fake-json-secret-value"}',
+        '{"secretAccessKey":"fake-sdk-secret-value"}',
+        '{"sessionToken":"fake-session-token-value"}',
+        `{"NPM_TOKEN":"${npm}"}`,
+        '{"apiKey":"fake-api-key-value"}',
+        normal,
+      ],
+      (content) => memory.create({ content }),
+      { concurrency: 1 },
+    )
+    const list = yield* memory.list({ includeDisabled: true })
+    const selected = yield* memory.select({
+      session: session({ projectID, metadata: { memory: { status: "enabled" } } }),
+      limit: 10,
+    })
+    const contents = [
+      ...created.flatMap((item) => (item ? [item.content] : [])),
+      ...list.map((item) => item.content),
+      ...selected.map((item) => item.content),
+    ]
+
+    expect(contents.some((content) => secrets.some((value) => content.includes(value)))).toBe(false)
+    expect(contents).toContain('{"AWS_SECRET_ACCESS_KEY":"[redacted]"}')
+    expect(contents).toContain('{"secretAccessKey":"[redacted]"}')
+    expect(contents).toContain('{"sessionToken":"[redacted]"}')
+    expect(contents).toContain('{"NPM_TOKEN":"[redacted]"}')
+    expect(contents).toContain('{"apiKey":"[redacted]"}')
+    expect(list.map((item) => item.content)).toContain(normal)
+    expect(selected.map((item) => item.content)).toContain(normal)
+  }),
+)
+
 it.instance("lists and manages more than 100 memories", () =>
   Effect.gen(function* () {
     yield* project()

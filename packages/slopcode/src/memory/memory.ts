@@ -70,15 +70,16 @@ export function isEnabled(cfg: { memory?: { enabled?: boolean } }, session: Sess
 
 export function redact(input: string) {
   return input
+    .replace(
+      /((["']?)\b(?:_*(?:[a-z0-9]+[_-])*(?:api[_-]?key|auth[_-]?token|token|secret|password|passwd|pwd|private[_-]?key|access[_-]?key(?:[_-]?id)?)|[a-z0-9]*(?:secretAccessKey|accessKey(?:Id)?|sessionToken|accessToken|refreshToken|idToken|apiKey|authToken|privateKey|clientSecret|clientToken))\2\s*[:=]\s*)(?:"([^"]*)"|'([^']*)'|[^\s"',;}\]]+)/gi,
+      (_match: string, prefix: string, _quote: string, double: string | undefined, single: string | undefined) =>
+        prefix + (double !== undefined ? '"[redacted]"' : single !== undefined ? "'[redacted]'" : "[redacted]"),
+    )
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, "Bearer [redacted]")
     .replace(/\b(?:sk|pk|rk|ghp|gho|ghu|ghs|glpat|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b/g, "[redacted]")
     .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[redacted]")
     .replace(/\bnpm_[A-Za-z0-9]{20,}\b/g, "[redacted]")
     .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[redacted]")
-    .replace(
-      /\b(_*(?:[a-z0-9]+[_-])*(?:api[_-]?key|auth[_-]?token|token|secret|password|passwd|pwd|private[_-]?key|access[_-]?key(?:[_-]?id)?)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s"',;]+)/gi,
-      "$1[redacted]",
-    )
 }
 
 function normalize(input: string) {
