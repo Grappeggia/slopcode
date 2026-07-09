@@ -52,6 +52,35 @@ const openAIConfig = (model: ModelsDev.Provider["models"][string], baseURL: stri
   }
 }
 
+const openAI56Config = (baseURL: string): Partial<ConfigV1.Info> => {
+  const model = {
+    ...loadFixture("openai", "gpt-5.2").model,
+    id: "gpt-5.6",
+    name: "GPT-5.6",
+    release_date: "2026-07-09",
+    reasoning_options: [{ type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] }],
+    experimental: {
+      modes: {
+        fast: { provider: { body: { service_tier: "priority" } } },
+      },
+    },
+  } satisfies ModelsDev.Provider["models"][string]
+  const models = Provider.fromModelsDevProvider({
+    ...loadFixture("openai", "gpt-5.2").provider,
+    models: { [model.id]: model },
+  }).models
+  const config = openAIConfig(model, baseURL)
+  config.provider!.openai!.models![model.id].variants = models[model.id].variants
+  config.provider!.openai!.models!["gpt-5.6-fast"] = {
+    ...config.provider!.openai!.models![model.id],
+    id: models["gpt-5.6-fast"].api.id,
+    name: models["gpt-5.6-fast"].name,
+    options: models["gpt-5.6-fast"].options,
+    variants: models["gpt-5.6-fast"].variants,
+  }
+  return config
+}
+
 const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer))
 
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
@@ -1055,6 +1084,108 @@ describe("session.llm.stream", () => {
         expect(maxTokens).toBe(undefined) // match codex cli behavior
       }),
     { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
+  )
+
+  it.instance(
+    "sends GPT-5.6 max variants through the OpenAI Responses API",
+    () =>
+      Effect.gen(function* () {
+        const captures = yield* Effect.forEach(["gpt-5.6", "gpt-5.6-fast"], (modelID, index) =>
+          Effect.gen(function* () {
+            const request = waitRequest(
+              "/responses",
+              createEventResponse(
+                [
+                  {
+                    type: "response.created",
+                    response: {
+                      id: `resp-5-6-${index}`,
+                      created_at: Math.floor(Date.now() / 1000),
+                      model: "gpt-5.6",
+                      service_tier: null,
+                    },
+                  },
+                  {
+                    type: "response.output_item.added",
+                    output_index: 0,
+                    item: {
+                      type: "message",
+                      id: `item-5-6-${index}`,
+                      status: "in_progress",
+                      role: "assistant",
+                      content: [],
+                    },
+                  },
+                  {
+                    type: "response.content_part.added",
+                    item_id: `item-5-6-${index}`,
+                    output_index: 0,
+                    content_index: 0,
+                    part: { type: "output_text", text: "", annotations: [] },
+                  },
+                  {
+                    type: "response.output_text.delta",
+                    item_id: `item-5-6-${index}`,
+                    delta: "Hello",
+                    logprobs: null,
+                  },
+                  {
+                    type: "response.completed",
+                    response: {
+                      incomplete_details: null,
+                      usage: {
+                        input_tokens: 1,
+                        input_tokens_details: null,
+                        output_tokens: 1,
+                        output_tokens_details: null,
+                      },
+                      service_tier: null,
+                    },
+                  },
+                ],
+                true,
+              ),
+            )
+            const model = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(modelID))
+            const sessionID = SessionID.make(`session-test-5-6-${index}`)
+            const agent = {
+              name: "test",
+              mode: "primary",
+              options: {},
+              permission: [{ permission: "*", pattern: "*", action: "allow" }],
+            } satisfies Agent.Info
+            const user = {
+              id: MessageID.make(`msg_user-5-6-${index}`),
+              sessionID,
+              role: "user",
+              time: { created: Date.now() },
+              agent: agent.name,
+              model: { providerID: ProviderV2.ID.openai, modelID: model.id, variant: "max" },
+            } satisfies SessionV1.User
+
+            yield* drain({
+              user,
+              sessionID,
+              model,
+              agent,
+              system: ["You are a helpful assistant."],
+              messages: [{ role: "user", content: "Hello" }],
+              tools: {},
+            })
+            return yield* Effect.promise(() => request)
+          }),
+        )
+
+        captures.forEach((capture) => {
+          expect(capture.url.pathname.endsWith("/responses")).toBe(true)
+          expect(capture.body.model).toBe("gpt-5.6")
+          expect(capture.body.reasoning).toEqual({ effort: "max", summary: "auto" })
+          expect(capture.body.include).toEqual(["reasoning.encrypted_content"])
+          expect(capture.body.store).toBe(false)
+        })
+        expect(captures[1].body.service_tier).toBe("priority")
+      }),
+    { config: () => openAI56Config(`${state.server!.url.origin}/v1`) },
   )
 
   it.instance(

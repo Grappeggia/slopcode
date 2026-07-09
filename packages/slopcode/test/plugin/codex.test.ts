@@ -14,6 +14,29 @@ function createTestJwt(payload: object): string {
 }
 
 describe("plugin.codex", () => {
+  test("keeps GPT-5.6 models in the OAuth catalog", async () => {
+    const ids = ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+    const hooks = await CodexAuthPlugin({} as never)
+    const models = await hooks.provider!.models!(
+      {
+        models: Object.fromEntries(
+          [...ids, "gpt-5.4-nano"].map((id) => [
+            id,
+            {
+              id,
+              api: { id },
+              cost: { input: 1, output: 1, cache: { read: 1, write: 1 } },
+              limit: { context: 1, output: 1 },
+            },
+          ]),
+        ),
+      } as never,
+      { auth: { type: "oauth" } } as never,
+    )
+
+    expect(Object.keys(models)).toEqual(ids)
+  })
+
   describe("parseJwtClaims", () => {
     test("parses valid JWT with claims", () => {
       const payload = { email: "test@example.com", chatgpt_account_id: "acc-123" }
