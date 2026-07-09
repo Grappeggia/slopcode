@@ -150,14 +150,16 @@ SlopCode ships with default variants for many providers:
 
 **OpenAI**:
 
-Varies by model but roughly:
+GPT-5.6 has exactly these effort variants, in catalog order:
 
 - `none` - No reasoning
-- `minimal` - Minimal reasoning effort
 - `low` - Low reasoning effort
-- `medium` - Medium reasoning effort
+- `medium` - Medium reasoning effort (default)
 - `high` - High reasoning effort
 - `xhigh` - Extra high reasoning effort
+- `max` - Maximum reasoning effort
+
+The `minimal` effort belongs to older GPT-5 variants and is not part of GPT-5.6. Other OpenAI models may expose different effort sets.
 
 **Google**:
 

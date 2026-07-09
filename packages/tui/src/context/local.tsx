@@ -13,6 +13,7 @@ import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { usePermission } from "./permission"
+import * as Variant from "./variant"
 
 export type LocalTheme = {
   secondary: RGBA
@@ -380,8 +381,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             if (!m) return []
             const provider = sync.data.provider.find((item) => item.id === m.providerID)
             const info = provider?.models[m.modelID]
-            if (!info?.variants) return []
-            return Object.keys(info.variants)
+            return Variant.list(info?.variants)
           },
           set(value: string | undefined) {
             const m = currentModel()
@@ -393,17 +393,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           cycle() {
             const variants = this.list()
             if (variants.length === 0) return
-            const current = this.current()
-            if (!current) {
-              this.set(variants[0])
-              return
-            }
-            const index = variants.indexOf(current)
-            if (index === -1 || index === variants.length - 1) {
-              this.set(undefined)
-              return
-            }
-            this.set(variants[index + 1])
+            this.set(Variant.cycle(variants, this.current()))
           },
         },
       }
