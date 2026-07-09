@@ -270,6 +270,16 @@ describe("ConfigProviderPlugin.Plugin", () => {
                         baseURL: server.url,
                       },
                     },
+                    models: {
+                      "glm-5.2-q8:latest": {
+                        name: "GLM 5.2 Q8",
+                        capabilities: { tools: true, input: ["text"], output: ["text"] },
+                        variants: [
+                          { id: "camel", body: { reasoningEffort: "high" } },
+                          { id: "snake", body: { reasoning_effort: "low" } },
+                        ],
+                      },
+                    },
                   },
                 },
               }),
@@ -303,6 +313,10 @@ describe("ConfigProviderPlugin.Plugin", () => {
         settings: { apiKey: "test-key" },
       })
       expect(model.capabilities).toEqual({ tools: true, input: ["text"], output: ["text"] })
+      expect(model.variants).toMatchObject([
+        { id: "camel", body: {}, options: { reasoningEffort: "high" } },
+        { id: "snake", body: {}, options: { reasoningEffort: "low" } },
+      ])
       expect(server.requests).toContain("Bearer test-key")
     }),
   )

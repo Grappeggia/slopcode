@@ -150,7 +150,8 @@ export const Plugin = PluginV2.define({
             }
           })
           const providerApi = draft.provider.get(providerID)?.provider.api
-          const providerPackage = providerApi?.type === "aisdk" ? providerApi.package : undefined
+          const found = discovered.get(providerID)
+          const providerPackage = providerApi?.type === "aisdk" ? providerApi.package : found?.npm
 
           for (const [id, config] of Object.entries(item.models ?? {})) {
             draft.model.update(providerID, ModelV2.ID.make(id), (model) => {
@@ -202,11 +203,10 @@ export const Plugin = PluginV2.define({
                   },
                 }))
               }
-                if (config.disabled !== undefined) model.enabled = !config.disabled
+              if (config.disabled !== undefined) model.enabled = !config.disabled
               if (config.limit !== undefined) model.limit = { ...model.limit, ...config.limit }
             })
           }
-          const found = discovered.get(providerID)
           if (found) {
             draft.provider.update(providerID, (provider) => {
               provider.api = { type: "aisdk", package: found.npm, url: found.baseURL, settings: found.settings }

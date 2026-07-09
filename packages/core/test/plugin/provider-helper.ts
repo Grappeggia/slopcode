@@ -33,6 +33,7 @@ export const catalogLayer = Layer.succeed(
   Catalog.Service,
   Catalog.Service.of({
     transform: () => Effect.die("unexpected catalog.transform"),
+    reload: () => Effect.die("unexpected catalog.reload"),
     provider: {
       get: () => Effect.die("unexpected provider.get"),
       all: () => Effect.succeed([]),

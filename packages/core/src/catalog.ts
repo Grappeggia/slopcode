@@ -68,6 +68,7 @@ export type Editor = {
 
 export interface Interface {
   readonly transform: State.Transform<Editor>
+  readonly reload: State.Reload
   readonly provider: {
     readonly get: (providerID: ProviderV2.ID) => Effect.Effect<ProviderV2.Info, ProviderNotFoundError>
     readonly all: () => Effect.Effect<ProviderV2.Info[]>
@@ -229,6 +230,7 @@ export const layer = Layer.effect(
 
     const result: Interface = {
       transform: state.transform,
+      reload: state.reload,
 
       provider: {
         get: Effect.fn("CatalogV2.provider.get")(function* (providerID) {
