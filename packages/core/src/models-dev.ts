@@ -51,6 +51,14 @@ export const Model = Schema.Struct({
   release_date: Schema.String,
   attachment: Schema.Boolean,
   reasoning: Schema.Boolean,
+  reasoning_options: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        type: Schema.Literal("effort"),
+        values: Schema.Array(Schema.String),
+      }),
+    ),
+  ),
   temperature: Schema.Boolean,
   tool_call: Schema.Boolean,
   interleaved: Schema.optional(
