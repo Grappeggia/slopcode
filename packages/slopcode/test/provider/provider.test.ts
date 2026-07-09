@@ -1287,6 +1287,102 @@ test("mode cost preserves over-200k pricing from base model", () => {
   })
 })
 
+test("models.dev uses the first effort option in feed order and removes nulls", () => {
+  const provider = {
+    id: "openai",
+    name: "OpenAI",
+    env: [],
+    npm: "@ai-sdk/openai",
+    models: {
+      fixture: {
+        id: "fixture",
+        name: "Fixture",
+        release_date: "2026-07-09",
+        reasoning: true,
+        reasoning_options: [
+          { type: "budget_tokens", min: 1, max: 128_000 },
+          { type: "effort", values: ["high", null, "low"] },
+          { type: "effort", values: ["max"] },
+        ],
+        limit: { context: 128_000, output: 32_000 },
+      },
+    },
+  } as unknown as ModelsDev.Provider
+
+  expect(Provider.fromModelsDevProvider(provider).models.fixture.variants).toEqual({
+    high: {
+      reasoningEffort: "high",
+      reasoningSummary: "auto",
+      include: ["reasoning.encrypted_content"],
+    },
+    low: {
+      reasoningEffort: "low",
+      reasoningSummary: "auto",
+      include: ["reasoning.encrypted_content"],
+    },
+  })
+})
+
+test("models.dev GPT-5.6 effort metadata drives base and Fast variants", () => {
+  const ids = ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+  const efforts = ["none", "low", "medium", "high", "xhigh", "max"]
+  const provider = {
+    id: "openai",
+    name: "OpenAI",
+    env: [],
+    npm: "@ai-sdk/openai",
+    api: "https://api.openai.com/v1",
+    models: Object.fromEntries(
+      ids.map((id) => [
+        id,
+        {
+          id,
+          name: id,
+          family: "gpt",
+          release_date: "2026-07-09",
+          attachment: true,
+          reasoning: true,
+          reasoning_options: [
+            { type: "budget_tokens", min: 1, max: 128_000 },
+            { type: "effort", values: ["none", "low", null, "medium", "high", "xhigh", "max"] },
+            { type: "effort", values: ["low"] },
+          ],
+          temperature: false,
+          tool_call: true,
+          modalities: { input: ["text", "image"], output: ["text"] },
+          cost: { input: 5, output: 30 },
+          limit: { context: 1_050_000, input: 922_000, output: 128_000 },
+          experimental: {
+            modes: {
+              fast: { provider: { body: { service_tier: "priority" } } },
+              pro: { provider: { body: { reasoning: { mode: "pro" } } } },
+            },
+          },
+        },
+      ]),
+    ),
+  } as unknown as ModelsDev.Provider
+
+  const models = Provider.fromModelsDevProvider(provider).models
+  ids.forEach((id) => {
+    const base = models[id]
+    const fast = models[`${id}-fast`]
+    expect(Object.keys(base.variants ?? {})).toEqual(efforts)
+    expect(Object.keys(fast.variants ?? {})).toEqual(efforts)
+    efforts.forEach((effort) => {
+      expect(base.variants?.[effort]).toEqual({
+        reasoningEffort: effort,
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+      })
+      expect(fast.variants?.[effort]).toEqual(base.variants?.[effort])
+    })
+    expect(fast.api.id).toBe(id)
+    expect(fast.options).toEqual({ serviceTier: "priority" })
+    expect(models[`${id}-pro`]).toBeUndefined()
+  })
+})
+
 test("models.dev normalization fills required response fields", () => {
   const provider = {
     id: "gateway",

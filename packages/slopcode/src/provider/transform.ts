@@ -518,6 +518,8 @@ const WIDELY_SUPPORTED_EFFORTS = ["low", "medium", "high"]
 const OPENAI_EFFORTS = ["none", "minimal", ...WIDELY_SUPPORTED_EFFORTS, "xhigh"]
 const OPENAI_GPT5_1_EFFORTS = ["none", ...WIDELY_SUPPORTED_EFFORTS]
 const OPENAI_GPT5_2_PLUS_EFFORTS = [...OPENAI_GPT5_1_EFFORTS, "xhigh"]
+const OPENAI_GPT5_6_EFFORTS = [...OPENAI_GPT5_2_PLUS_EFFORTS, "max"]
+const OPENAI_GPT5_6_IDS = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
 const OPENAI_GPT5_PRO_EFFORTS = ["high"]
 const OPENAI_GPT5_PRO_2_PLUS_EFFORTS = ["medium", "high", "xhigh"]
 const OPENAI_GPT5_CHAT_EFFORTS = ["medium"]
@@ -662,7 +664,7 @@ function googleThinkingVariants(model: Provider.Model): Record<string, Record<st
   )
 }
 
-export function variants(model: Provider.Model): Record<string, Record<string, any>> {
+export function variants(model: Provider.Model, reasoningEfforts?: string[]): Record<string, Record<string, any>> {
   if (!model.capabilities.reasoning) return {}
 
   const id = model.id.toLowerCase()
@@ -860,9 +862,14 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
     case "@ai-sdk/amazon-bedrock/mantle":
     case "@ai-sdk/openai": {
       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/openai
-      const efforts = openaiReasoningEfforts(model.api.id, model.release_date)
+      const levels =
+        model.api.npm === "@ai-sdk/openai"
+          ? (reasoningEfforts ??
+            (OPENAI_GPT5_6_IDS.has(model.api.id.toLowerCase()) ? OPENAI_GPT5_6_EFFORTS : undefined) ??
+            openaiReasoningEfforts(model.api.id, model.release_date))
+          : openaiReasoningEfforts(model.api.id, model.release_date)
       return Object.fromEntries(
-        efforts.map((effort) => [
+        levels.map((effort) => [
           effort,
           {
             reasoningEffort: effort,

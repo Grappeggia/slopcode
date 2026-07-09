@@ -3416,6 +3416,49 @@ describe("ProviderTransform.variants", () => {
   })
 
   describe("@ai-sdk/openai", () => {
+    ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].forEach((id) => {
+      test(`${id} falls back to the exact GPT-5.6 effort variants`, () => {
+        const result = ProviderTransform.variants(
+          createMockModel({
+            id,
+            providerID: "openai",
+            api: {
+              id,
+              url: "https://api.openai.com",
+              npm: "@ai-sdk/openai",
+            },
+            release_date: "2026-07-09",
+          }),
+        )
+
+        expect(Object.keys(result)).toEqual(["none", "low", "medium", "high", "xhigh", "max"])
+        expect(result.max).toEqual({
+          reasoningEffort: "max",
+          reasoningSummary: "auto",
+          include: ["reasoning.encrypted_content"],
+        })
+      })
+    })
+
+    test("does not infer max for generic GPT-5.2+ models", () => {
+      ["gpt-5.2", "gpt-5.7"].forEach((id) => {
+        const result = ProviderTransform.variants(
+          createMockModel({
+            id,
+            providerID: "openai",
+            api: {
+              id,
+              url: "https://api.openai.com",
+              npm: "@ai-sdk/openai",
+            },
+            release_date: "2026-07-09",
+          }),
+        )
+
+        expect(Object.keys(result)).toEqual(["none", "low", "medium", "high", "xhigh"])
+      })
+    })
+
     test("gpt-5-pro returns only high effort", () => {
       const model = createMockModel({
         id: "gpt-5-pro",

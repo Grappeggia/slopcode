@@ -1326,7 +1326,12 @@ function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
   return result
 }
 
+const GPT5_6_IDS = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+
 function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model): Model {
+  const efforts = model.reasoning_options
+    ?.find((item) => item.type === "effort")
+    ?.values.filter((value): value is string => typeof value === "string")
   const base: Model = {
     id: ModelV2.ID.make(model.id),
     providerID: ProviderV2.ID.make(provider.id),
@@ -1373,7 +1378,7 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
 
   return {
     ...base,
-    variants: mapValues(ProviderTransform.variants(base), (v) => v),
+    variants: mapValues(ProviderTransform.variants(base, efforts), (v) => v),
   }
 }
 
@@ -1382,6 +1387,7 @@ export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
   for (const [key, model] of Object.entries(provider.models)) {
     models[key] = fromModelsDevModel(provider, model)
     for (const [mode, opts] of Object.entries(model.experimental?.modes ?? {})) {
+      if (mode === "pro" && GPT5_6_IDS.has(model.id)) continue
       const id = `${model.id}-${mode}`
       const base = fromModelsDevModel(provider, model)
       models[id] = {
