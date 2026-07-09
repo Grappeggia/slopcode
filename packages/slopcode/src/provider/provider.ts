@@ -151,6 +151,8 @@ type CustomDep = {
   get: (key: string) => Effect.Effect<string | undefined>
 }
 
+type ConfigProviderInfo = NonNullable<ConfigV1.Info["provider"]>[string]
+
 function selectAzureLanguageModel(sdk: any, modelID: string, useChat: boolean) {
   if (useChat && sdk.chat) return sdk.chat(modelID)
   if (sdk.responses) return sdk.responses(modelID)
@@ -1046,6 +1048,159 @@ export const Info = Schema.Struct({
 }).annotate({ identifier: "Provider" })
 export type Info = Types.DeepMutable<Schema.Schema.Type<typeof Info>>
 
+type DiscoveredModel = { id: string; name: string }
+
+function nonEmptyString(value: unknown) {
+  if (typeof value !== "string") return
+  const trimmed = value.trim()
+  return trimmed === "" ? undefined : trimmed
+}
+
+function normalizeBaseURL(value: string) {
+  try {
+    const url = new URL(value)
+    url.hash = ""
+    url.search = ""
+    return url.toString().replace(/\/+$/, "")
+  } catch {
+    return value.replace(/\/+$/, "")
+  }
+}
+
+function modelDiscoveryBaseURL(provider: Info, config: ConfigProviderInfo) {
+  return nonEmptyString(config.options?.baseURL) ?? nonEmptyString(config.api) ?? nonEmptyString(provider.options.baseURL)
+}
+
+function modelDiscoveryCandidates(value: string) {
+  const base = normalizeBaseURL(value)
+  const candidates = [base]
+  if (base.endsWith("/api")) candidates.push(`${base}/v1`)
+  if (!base.endsWith("/api") && !base.endsWith("/api/v1") && !base.endsWith("/v1")) {
+    candidates.push(`${base}/api`, `${base}/api/v1`, `${base}/v1`)
+  }
+  return [...new Set(candidates)].map((baseURL) => ({ baseURL, url: `${baseURL}/models` }))
+}
+
+function isOpenAICompatiblePackage(value: string | undefined) {
+  return value === "@ai-sdk/openai-compatible" || value?.includes("openai-compatible") === true
+}
+
+function shouldDiscoverModels(provider: Info, config: ConfigProviderInfo, source: ModelsDev.Provider | undefined, npm: string) {
+  if (!isOpenAICompatiblePackage(npm)) return false
+  if (!source) return true
+  if (config.npm) return true
+  return provider.id === "lmstudio" || provider.id === "ollama" || provider.id === "openwebui"
+}
+
+function discoveryHeaders(provider: Info) {
+  const headers: Record<string, string> = { Accept: "application/json" }
+  if (isRecord(provider.options.headers)) {
+    for (const [key, value] of Object.entries(provider.options.headers)) {
+      if (typeof value === "string") headers[key] = value
+    }
+  }
+  const key = nonEmptyString(provider.key) ?? nonEmptyString(provider.options.apiKey)
+  if (key && !Object.keys(headers).some((item) => item.toLowerCase() === "authorization")) {
+    headers.Authorization = key.toLowerCase().startsWith("bearer ") ? key : `Bearer ${key}`
+  }
+  return headers
+}
+
+function parseDiscoveredModels(input: unknown): DiscoveredModel[] {
+  const list = Array.isArray(input)
+    ? input
+    : isRecord(input) && Array.isArray(input.data)
+      ? input.data
+      : isRecord(input) && Array.isArray(input.models)
+        ? input.models
+        : []
+  return list.flatMap((item) => {
+    if (typeof item === "string") return [{ id: item, name: item }]
+    if (!isRecord(item)) return []
+    const id = nonEmptyString(item.id) ?? nonEmptyString(item.model) ?? nonEmptyString(item.name)
+    if (!id) return []
+    return [{ id, name: nonEmptyString(item.name) ?? id }]
+  })
+}
+
+function discoveredModel(provider: Info, item: DiscoveredModel, npm: string, baseURL: string): Model {
+  return {
+    id: ModelV2.ID.make(item.id),
+    providerID: provider.id,
+    name: item.name,
+    family: undefined,
+    api: {
+      id: item.id,
+      npm,
+      url: baseURL,
+    },
+    status: "active",
+    headers: {},
+    options: {},
+    cost: {
+      input: 0,
+      output: 0,
+      cache: {
+        read: 0,
+        write: 0,
+      },
+    },
+    limit: {
+      context: 0,
+      output: 0,
+    },
+    capabilities: {
+      temperature: true,
+      reasoning: false,
+      attachment: false,
+      toolcall: true,
+      input: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        pdf: false,
+      },
+      output: {
+        text: true,
+        audio: false,
+        image: false,
+        video: false,
+        pdf: false,
+      },
+      interleaved: false,
+    },
+    release_date: "",
+    variants: {},
+  }
+}
+
+async function discoverOpenAICompatibleModels(
+  provider: Info,
+  config: ConfigProviderInfo,
+  source: ModelsDev.Provider | undefined,
+) {
+  const baseURL = modelDiscoveryBaseURL(provider, config)
+  const npm = config.npm ?? source?.npm ?? Object.values(provider.models)[0]?.api.npm ?? "@ai-sdk/openai-compatible"
+  if (!baseURL || !shouldDiscoverModels(provider, config, source, npm)) return
+
+  for (const item of modelDiscoveryCandidates(baseURL)) {
+    try {
+      const response = await fetch(item.url, {
+        headers: discoveryHeaders(provider),
+        signal: AbortSignal.timeout(2_000),
+      })
+      if (!response.ok) continue
+      const models = parseDiscoveredModels(await response.json())
+      if (models.length === 0) continue
+      return {
+        baseURL: item.baseURL,
+        models: Object.fromEntries(models.map((model) => [model.id, discoveredModel(provider, model, npm, item.baseURL)])),
+      }
+    } catch {}
+  }
+}
+
 const DefaultModelIDs = Schema.Record(Schema.String, Schema.String)
 
 export const ListResult = Schema.Struct({
@@ -1546,6 +1701,21 @@ export const layer = Layer.effect(
           mergeProvider(providerID, partial)
         }
 
+        for (const [id, provider] of Object.entries(providers)) {
+          const providerID = ProviderV2.ID.make(id)
+          if (!isProviderAllowed(providerID)) continue
+          const configProvider = cfg.provider?.[providerID]
+          if (!configProvider) continue
+          const discovered = yield* Effect.promise(() =>
+            discoverOpenAICompatibleModels(provider, configProvider, modelsDev[providerID]),
+          )
+          if (!discovered) continue
+          provider.options.baseURL = discovered.baseURL
+          for (const [modelID, model] of Object.entries(discovered.models)) {
+            if (!provider.models[modelID]) provider.models[modelID] = model
+          }
+        }
+
         const gitlab = ProviderV2.ID.make("gitlab")
         if (discoveryLoaders[gitlab] && providers[gitlab] && isProviderAllowed(gitlab)) {
           yield* Effect.promise(async () => {
@@ -1947,11 +2117,17 @@ export const defaultLayer = Layer.suspend(() =>
   ),
 )
 
-const priority = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro"]
+const priority = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro", "gpt-5.5-fast"]
 export function sort<T extends { id: string }>(models: T[]) {
   return sortBy(
     models,
-    [(model) => priority.findIndex((filter) => model.id.includes(filter)), "desc"],
+    [
+      (model) =>
+        model.id.includes("gpt-5.5-fast")
+          ? priority.length
+          : priority.findIndex((filter) => model.id.includes(filter)),
+      "desc",
+    ],
     [(model) => (model.id.includes("latest") ? 0 : 1), "asc"],
     [(model) => model.id, "desc"],
   )

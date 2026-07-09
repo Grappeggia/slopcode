@@ -53,6 +53,16 @@ export const Info = Schema.Struct({
     description:
       "Enable or disable snapshot tracking. When false, filesystem snapshots are not recorded and undoing or reverting will not undo/redo file changes. Defaults to true.",
   }),
+  memory: Schema.optional(
+    Schema.Struct({
+      enabled: Schema.optional(Schema.Boolean).annotate({
+        description: "Enable persistent memory extraction and prompt injection. Defaults to false.",
+      }),
+      limit: Schema.optional(PositiveInt).annotate({
+        description: "Maximum number of memory entries to inject into a prompt. Defaults to 8.",
+      }),
+    }),
+  ).annotate({ description: "Persistent memory configuration" }),
   plugin: Schema.optional(Schema.mutable(Schema.Array(ConfigPluginV1.Spec))),
   share: Schema.optional(Schema.Literals(["manual", "auto", "disabled"])).annotate({
     description:
@@ -97,6 +107,7 @@ export const Info = Schema.Struct({
         build: Schema.optional(ConfigAgentV1.Info),
         general: Schema.optional(ConfigAgentV1.Info),
         explore: Schema.optional(ConfigAgentV1.Info),
+        memory: Schema.optional(ConfigAgentV1.Info),
         title: Schema.optional(ConfigAgentV1.Info),
         summary: Schema.optional(ConfigAgentV1.Info),
         compaction: Schema.optional(ConfigAgentV1.Info),

@@ -22,6 +22,7 @@ import { Provider as ProviderSvc } from "@/provider/provider"
 import { Env } from "../../src/env"
 import { Git } from "../../src/git"
 import { Image } from "../../src/image/image"
+import { Memory } from "../../src/memory/memory"
 
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
@@ -179,6 +180,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     mcp,
     FSUtil.defaultLayer,
     BackgroundJob.defaultLayer,
+    Memory.defaultLayer,
     status,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,

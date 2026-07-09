@@ -7,6 +7,7 @@ const prefixes = {
   message: "msg",
   permission: "per",
   question: "que",
+  memory: "mem",
   part: "prt",
   pty: "pty",
   tool: "tool",

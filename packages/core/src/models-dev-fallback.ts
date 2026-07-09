@@ -1809,6 +1809,27 @@ export const fallback: Record<string, Record<string, unknown>> = {
             },
           ],
         },
+        experimental: {
+          modes: {
+            fast: {
+              cost: {
+                input: 10,
+                output: 60,
+                cache_read: 1,
+                context_over_200k: {
+                  input: 20,
+                  output: 90,
+                  cache_read: 2,
+                },
+              },
+              provider: {
+                body: {
+                  service_tier: "priority",
+                },
+              },
+            },
+          },
+        },
       },
       "gpt-5.4": {
         id: "gpt-5.4",

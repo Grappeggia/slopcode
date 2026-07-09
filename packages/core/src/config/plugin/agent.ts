@@ -77,7 +77,11 @@ export const Plugin = PluginV2.define({
             if (!exists) agent.permissions.push(...global)
             if (item.model !== undefined) {
               const model = ModelV2.parse(item.model)
-              agent.model = { id: model.modelID, providerID: model.providerID, variant: agent.model?.variant }
+              const variant =
+                agent.model?.providerID === model.providerID && agent.model.id === model.modelID
+                  ? agent.model.variant
+                  : undefined
+              agent.model = { id: model.modelID, providerID: model.providerID, variant }
             }
             if (item.variant !== undefined && agent.model !== undefined) {
               agent.model.variant = ModelV2.VariantID.make(item.variant)

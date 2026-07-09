@@ -1,0 +1,66 @@
+---
+title: "Memory"
+description: "Persist useful context across local sessions"
+---
+
+Memory lets SlopCode remember durable preferences and project facts across sessions.
+
+It is off by default, so nothing is learned or reused until you opt in.
+
+---
+
+## Enable it
+
+Turn it on in your SlopCode config with `memory.enabled`.
+
+```json title="slopcode.json"
+{
+  "$schema": "https://slopcode.ai/config.json",
+  "memory": {
+    "enabled": true
+  }
+}
+```
+
+Set it in global config for all projects, or in project config for one repo.
+
+---
+
+## Limit context
+
+Use `memory.limit` to choose how many relevant entries can be injected into a prompt.
+
+```json title="slopcode.json"
+{
+  "memory": {
+    "enabled": true,
+    "limit": 8
+  }
+}
+```
+
+The default is `8`.
+
+---
+
+## Keep private
+
+Entries are stored in SlopCode's local SQLite database and stay private on your machine.
+
+SlopCode redacts common secrets before persistence, including tokens, API keys, and passwords.
+
+---
+
+## Inject briefly
+
+Relevant entries are added as temporary prompt context when a session uses them.
+
+The entries themselves are not written to the transcript, shared with `/share`, included in `/export`, or copied by transcript commands.
+
+---
+
+## Manage entries
+
+Open the TUI and run `/memories` or `/memory`.
+
+From there, add project or global entries, toggle entries, delete them, and opt the current session in or out.

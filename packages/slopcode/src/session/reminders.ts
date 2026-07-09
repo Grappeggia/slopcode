@@ -1,10 +1,11 @@
 import path from "path"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { Agent } from "@/agent/agent"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Memory } from "@/memory/memory"
 import { PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
@@ -31,6 +32,17 @@ function goal(input: unknown) {
 function goalInfo(item: Goal | undefined) {
   if (!item) return "No goal is set."
   return `${item.status === "paused" ? "Paused" : "Active"}: ${item.text}`
+}
+
+function memoryInfo(items: Memory.Info[]) {
+  return [
+    "<system-reminder>",
+    "Relevant memories for this session:",
+    ...items.map((item) => `- ${item.content.replace(/<\/?system-reminder>/gi, "[system-reminder]")}`),
+    "",
+    "Treat these as private supplemental context. Do not mention them unless directly relevant.",
+    "</system-reminder>",
+  ].join("\n")
 }
 
 export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
@@ -68,6 +80,23 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
       synthetic: true,
     })
     userMessage.parts.push(part)
+  }
+
+  if (input.agent.name !== "memory") {
+    const memory = yield* Effect.serviceOption(Memory.Service)
+    if (Option.isSome(memory)) {
+      const items = yield* memory.value.select({ session: input.session }).pipe(Effect.catchCause(() => Effect.succeed([])))
+      if (items.length > 0) {
+        userMessage.parts.push({
+          id: PartID.ascending(),
+          messageID: userMessage.info.id,
+          sessionID: userMessage.info.sessionID,
+          type: "text",
+          text: memoryInfo(items),
+          synthetic: true,
+        })
+      }
+    }
   }
 
   if (!flags.experimentalPlanMode) {

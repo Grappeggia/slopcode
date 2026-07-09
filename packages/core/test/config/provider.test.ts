@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { createServer, type Server } from "node:http"
 import { Effect, Option, Schema } from "effect"
 import { Catalog } from "@slopcode-ai/core/catalog"
 import { Config } from "@slopcode-ai/core/config"
@@ -245,4 +246,96 @@ describe("ConfigProviderPlugin.Plugin", () => {
       expect(model.variants[1]?.headers).toEqual({ slow: "slow" })
     }),
   )
+
+  it.live("discovers OpenWebUI models for catalog-backed clients", () =>
+    Effect.gen(function* () {
+      const server = yield* Effect.acquireRelease(
+        Effect.promise(() => modelsServer()),
+        (server) => Effect.sync(() => server.server.close()),
+      )
+      const catalog = yield* Catalog.Service
+      const plugin = yield* PluginV2.Service
+      const config = Config.Service.of({
+        entries: () =>
+          Effect.succeed([
+            new Config.Document({
+              type: "document",
+              info: decode({
+                providers: {
+                  openwebui: {
+                    name: "OpenWebUI",
+                    request: {
+                      body: {
+                        apiKey: "test-key",
+                        baseURL: server.url,
+                      },
+                    },
+                  },
+                },
+              }),
+            }),
+          ]),
+      })
+
+      yield* plugin.add({
+        ...ConfigProviderPlugin.Plugin,
+        effect: ConfigProviderPlugin.Plugin.effect.pipe(
+          Effect.provideService(Config.Service, config),
+          Effect.provideService(Catalog.Service, catalog),
+        ),
+      })
+
+      const provider = yield* catalog.provider.get(ProviderV2.ID.make("openwebui"))
+      const model = yield* catalog.model.get(ProviderV2.ID.make("openwebui"), ModelV2.ID.make("glm-5.2-q8:latest"))
+
+      expect(provider.api).toEqual({
+        type: "aisdk",
+        package: "@ai-sdk/openai-compatible",
+        url: `${server.url}/api`,
+        settings: { apiKey: "test-key" },
+      })
+      expect(model.name).toBe("GLM 5.2 Q8")
+      expect(model.api).toEqual({
+        id: ModelV2.ID.make("glm-5.2-q8:latest"),
+        type: "aisdk",
+        package: "@ai-sdk/openai-compatible",
+        url: `${server.url}/api`,
+        settings: { apiKey: "test-key" },
+      })
+      expect(model.capabilities).toEqual({ tools: true, input: ["text"], output: ["text"] })
+      expect(server.requests).toContain("Bearer test-key")
+    }),
+  )
 })
+
+async function modelsServer(): Promise<{ server: Server; url: string; requests: string[] }> {
+  const requests: string[] = []
+  const server = createServer((req, res) => {
+    requests.push(String(req.headers.authorization ?? ""))
+    const url = new URL(req.url ?? "/", "http://localhost")
+    if (url.pathname !== "/api/models") {
+      res.writeHead(404)
+      res.end()
+      return
+    }
+
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(
+      JSON.stringify({
+        data: [{ id: "glm-5.2-q8:latest", name: "GLM 5.2 Q8" }],
+      }),
+    )
+  })
+
+  return await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      if (!address || typeof address === "string") {
+        reject(new Error("missing test server address"))
+        return
+      }
+      resolve({ server, url: `http://127.0.0.1:${address.port}`, requests })
+    })
+  })
+}

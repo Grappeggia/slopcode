@@ -12,6 +12,7 @@ import { ProviderTransform } from "@/provider/transform"
 import PROMPT_GENERATE from "./generate.txt"
 import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
+import PROMPT_MEMORY from "./prompt/memory.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { Permission } from "@/permission"
@@ -54,6 +55,11 @@ export const Info = Schema.Struct({
   steps: Schema.optional(Schema.Finite),
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
+
+const slopcodeModeModel = () => ({
+  providerID: ProviderV2.ID.slopcode,
+  modelID: ModelV2.ID.make("gpt-5.5-fast"),
+})
 
 const GeneratedAgent = Schema.Struct({
   identifier: Schema.String,
@@ -134,6 +140,11 @@ export const layer = Layer.effect(
         })
 
         const user = Permission.fromConfig(cfg.permission ?? {})
+        const modeModel = Option.isSome(
+          yield* provider.getModel(ProviderV2.ID.slopcode, ModelV2.ID.make("gpt-5.5-fast")).pipe(Effect.option),
+        )
+          ? slopcodeModeModel
+          : undefined
 
         const agents: Record<string, Info> = {
           build: {
@@ -150,6 +161,7 @@ export const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
+            ...(modeModel ? { model: modeModel() } : {}),
           },
           plan: {
             name: "plan",
@@ -176,6 +188,7 @@ export const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
+            ...(modeModel ? { model: modeModel() } : {}),
           },
           goal: {
             name: "goal",
@@ -197,6 +210,7 @@ export const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
+            ...(modeModel ? { model: modeModel() } : {}),
           },
           general: {
             name: "general",
@@ -280,6 +294,22 @@ export const layer = Layer.effect(
               user,
             ),
             prompt: PROMPT_SUMMARY,
+          },
+          memory: {
+            name: "memory",
+            mode: "primary",
+            options: {},
+            native: true,
+            hidden: true,
+            temperature: 0,
+            permission: Permission.merge(
+              defaults,
+              Permission.fromConfig({
+                "*": "deny",
+              }),
+              user,
+            ),
+            prompt: PROMPT_MEMORY,
           },
         }
 

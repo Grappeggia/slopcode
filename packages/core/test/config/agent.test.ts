@@ -6,7 +6,9 @@ import { AgentV2 } from "@slopcode-ai/core/agent"
 import { Config } from "@slopcode-ai/core/config"
 import { ConfigAgentPlugin } from "@slopcode-ai/core/config/plugin/agent"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
+import { ModelV2 } from "@slopcode-ai/core/model"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
+import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { tmpdir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
@@ -19,9 +21,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
     Effect.gen(function* () {
       const agents = yield* AgentV2.Service
       const build = AgentV2.ID.make("build")
-      const defaults = yield* agents.transform()
-
-      yield* defaults((editor) =>
+      yield* agents.transform((editor) =>
         editor.update(build, (agent) => {
           agent.mode = "primary"
           agent.permissions.push({ action: "bash", resource: "*", effect: "allow" })
@@ -173,12 +173,48 @@ describe("ConfigAgentPlugin.Plugin", () => {
     }),
   )
 
+  it.effect("does not keep a default variant when config changes the model", () =>
+    Effect.gen(function* () {
+      const agents = yield* AgentV2.Service
+      const build = AgentV2.ID.make("build")
+      yield* agents.transform((editor) =>
+        editor.update(build, (agent) => {
+          agent.model = {
+            providerID: ProviderV2.ID.slopcode,
+            id: ModelV2.ID.make("gpt-5.5"),
+            variant: ModelV2.VariantID.make("fast"),
+          }
+        }),
+      )
+
+      const config = Config.Service.of({
+        entries: () =>
+          Effect.succeed([
+            new Config.Document({
+              type: "document",
+              info: decode({ agents: { build: { model: "anthropic/claude-sonnet" } } }),
+            }),
+          ]),
+      })
+
+      yield* ConfigAgentPlugin.Plugin.effect.pipe(
+        Effect.provideService(Config.Service, config),
+        Effect.provideService(AgentV2.Service, agents),
+      )
+
+      expect((yield* agents.get(build))?.model).toEqual({
+        providerID: "anthropic",
+        id: "claude-sonnet",
+        variant: undefined,
+      })
+    }),
+  )
+
   it.effect("removes a built-in agent disabled by configuration", () =>
     Effect.gen(function* () {
       const agents = yield* AgentV2.Service
       const build = AgentV2.ID.make("build")
-      const defaults = yield* agents.transform()
-      yield* defaults((editor) => editor.update(build, () => {}))
+      yield* agents.transform((editor) => editor.update(build, () => {}))
 
       const config = Config.Service.of({
         entries: () =>

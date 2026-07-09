@@ -23,9 +23,8 @@ describe("AgentV2", () => {
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
       const id = AgentV2.ID.make("reviewer")
-      const transform = yield* agent.transform()
 
-      yield* transform((editor) =>
+      yield* agent.transform((editor) =>
         editor.update(id, (info) => {
           info.description = "Reviews code"
           info.mode = "subagent"
@@ -37,19 +36,19 @@ describe("AgentV2", () => {
     }),
   )
 
-  it.effect("rebuilds state when a transform is replaced", () =>
+  it.effect("rebuilds state when a transform is disposed", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
       const id = AgentV2.ID.make("reviewer")
-      const transform = yield* agent.transform()
 
-      yield* transform((editor) =>
+      const old = yield* agent.transform((editor) =>
         editor.update(id, (info) => {
           info.description = "Old description"
           info.hidden = true
         }),
       )
-      yield* transform((editor) =>
+      yield* old.dispose
+      yield* agent.transform((editor) =>
         editor.update(id, (info) => {
           info.description = "New description"
         }),
@@ -64,9 +63,8 @@ describe("AgentV2", () => {
       const agent = yield* AgentV2.Service
       const id = AgentV2.ID.make("scoped")
       const scope = yield* Scope.make()
-      const transform = yield* agent.transform().pipe(Scope.provide(scope))
 
-      yield* transform((editor) => editor.update(id, () => {}))
+      yield* agent.transform((editor) => editor.update(id, () => {})).pipe(Scope.provide(scope))
       expect(yield* agent.get(id)).toBeDefined()
 
       yield* Scope.close(scope, Exit.void)
@@ -74,12 +72,12 @@ describe("AgentV2", () => {
     }),
   )
 
-  it.effect("applies direct agent updates", () =>
+  it.effect("applies agent transforms", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
       const id = AgentV2.ID.make("build")
 
-      yield* agent.update((editor) =>
+      yield* agent.transform((editor) =>
         editor.update(id, (info) => {
           info.mode = "primary"
           info.hidden = true
@@ -90,15 +88,15 @@ describe("AgentV2", () => {
     }),
   )
 
-  it.effect("creates agents with runtime defaults and supports direct removal", () =>
+  it.effect("creates agents with runtime defaults and supports removal transforms", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
       const id = AgentV2.ID.make("custom")
 
-      yield* agent.update((editor) => editor.update(id, () => {}))
+      yield* agent.transform((editor) => editor.update(id, () => {}))
       expect(yield* agent.get(id)).toEqual(AgentV2.Info.empty(id))
 
-      yield* agent.update((editor) => editor.remove(id))
+      yield* agent.transform((editor) => editor.remove(id))
       expect(yield* agent.get(id)).toBeUndefined()
     }),
   )
@@ -126,6 +124,16 @@ describe("AgentV2", () => {
       for (const item of agents) {
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
       }
+      expect((yield* agent.get(AgentV2.ID.make("build")))?.model).toEqual({
+        providerID: "slopcode",
+        id: "gpt-5.5",
+        variant: "fast",
+      })
+      expect((yield* agent.get(AgentV2.ID.make("plan")))?.model).toEqual({
+        providerID: "slopcode",
+        id: "gpt-5.5",
+        variant: "fast",
+      })
     }),
   )
 })

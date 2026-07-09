@@ -6,12 +6,32 @@ import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Effect, Layer } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
+import { Memory } from "../../src/memory/memory"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session/session"
 import { SessionReminders } from "../../src/session/reminders"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.mergeAll(Session.defaultLayer, FSUtil.defaultLayer, RuntimeFlags.layer({})))
+const memoryIt = testEffect(
+  Layer.mergeAll(
+    Session.defaultLayer,
+    FSUtil.defaultLayer,
+    RuntimeFlags.layer({}),
+    Layer.mock(Memory.Service, {
+      select: () =>
+        Effect.succeed([
+          {
+            id: Memory.ID.create(),
+            scope: "project" as const,
+            content: "Prefer small focused changes in this project",
+            enabled: true,
+            time: { created: 1, updated: 1 },
+          },
+        ]),
+    }),
+  ),
+)
 
 const model = {
   providerID: ProviderV2.ID.make("test"),
@@ -123,5 +143,21 @@ it.instance("shows Goal mode prompt with current goal status", () =>
     expect(all.some((text) => text.includes("Goal mode is active"))).toBe(true)
     expect(all.some((text) => text.includes("Paused: Keep scope tight"))).toBe(true)
     expect(all.some((text) => text.includes("Current session goal:"))).toBe(false)
+  }),
+)
+
+memoryIt.instance("injects memories without persisting them", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    yield* user(session.id, "next")
+    const messages = yield* sessions.messages({ sessionID: session.id })
+
+    const all = texts(yield* SessionReminders.apply({ messages, agent: build, session }))
+    const stored = texts(yield* sessions.messages({ sessionID: session.id }))
+
+    expect(all.some((text) => text.includes("Relevant memories for this session"))).toBe(true)
+    expect(all.some((text) => text.includes("Prefer small focused changes in this project"))).toBe(true)
+    expect(stored.some((text) => text.includes("Relevant memories for this session"))).toBe(false)
   }),
 )

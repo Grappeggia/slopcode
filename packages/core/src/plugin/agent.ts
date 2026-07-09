@@ -5,12 +5,20 @@ import { Effect } from "effect"
 import { AgentV2 } from "../agent"
 import { Global } from "../global"
 import { Location } from "../location"
+import { ModelV2 } from "../model"
 import { PermissionV2 } from "../permission"
 import { PluginV2 } from "../plugin"
+import { ProviderV2 } from "../provider"
 
 const TRUNCATION_GLOB = path.join(Global.Path.data, "tool-output", "*")
 const BUILD_SYSTEM =
   "You are an AI coding agent. Help the user accomplish software engineering tasks by inspecting the workspace, making targeted changes, and using tools according to the configured permissions."
+
+const slopcodeModeModel = () => ({
+  providerID: ProviderV2.ID.slopcode,
+  id: ModelV2.ID.make("gpt-5.5"),
+  variant: ModelV2.VariantID.make("fast"),
+})
 
 const PROMPT_EXPLORE = `You are a file search specialist. You excel at thoroughly navigating and exploring codebases.
 
@@ -127,6 +135,7 @@ export const Plugin = PluginV2.define({
         item.description = "The default agent. Executes tools based on configured permissions."
         item.system ??= BUILD_SYSTEM
         item.mode = "primary"
+        item.model ??= slopcodeModeModel()
         item.permissions.push(
           ...PermissionV2.merge(defaults, [
             { action: "question", resource: "*", effect: "allow" },
@@ -138,6 +147,7 @@ export const Plugin = PluginV2.define({
       draft.update(AgentV2.ID.make("plan"), (item) => {
         item.description = "Plan mode. Disallows all edit tools."
         item.mode = "primary"
+        item.model ??= slopcodeModeModel()
         item.permissions.push(
           ...PermissionV2.merge(defaults, [
             { action: "question", resource: "*", effect: "allow" },

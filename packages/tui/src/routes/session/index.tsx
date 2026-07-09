@@ -78,6 +78,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
+import { DialogMemories } from "../../component/dialog-memories"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { SLOPCODE_BASE_MODE, useBindings, useCommandShortcut, useSlopcodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
@@ -118,6 +119,7 @@ function goUpsellKeys(action: RetryAction) {
 const sessionBindingCommands = [
   "session.share",
   "session.rename",
+  "session.memories",
   "session.timeline",
   "session.fork",
   "session.compact",
@@ -546,6 +548,18 @@ export function Session() {
       },
       run: () => {
         dialog.replace(() => <DialogSessionRename session={route.sessionID} />)
+      },
+    },
+    {
+      title: "Memories",
+      value: "session.memories",
+      category: "Session",
+      slash: {
+        name: "memories",
+        aliases: ["memory"],
+      },
+      run: () => {
+        dialog.replace(() => <DialogMemories sessionID={route.sessionID} />)
       },
     },
     {

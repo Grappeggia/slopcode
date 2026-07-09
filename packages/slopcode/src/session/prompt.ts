@@ -20,6 +20,7 @@ import MAX_STEPS from "../session/prompt/max-steps.txt"
 import { ToolRegistry } from "@/tool/registry"
 import { MCP } from "../mcp"
 import { LSP } from "@/lsp/lsp"
+import { Memory } from "@/memory/memory"
 import { ulid } from "ulid"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
@@ -121,6 +122,7 @@ export const layer = Layer.effect(
     const summary = yield* SessionSummary.Service
     const sys = yield* SystemPrompt.Service
     const llm = yield* LLM.Service
+    const memory = yield* Memory.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
@@ -1234,6 +1236,7 @@ export const layer = Layer.effect(
             Effect.provideService(RuntimeFlags.Service, flags),
             Effect.provideService(FSUtil.Service, fsys),
             Effect.provideService(Session.Service, sessions),
+            Effect.provideService(Memory.Service, memory),
           )
 
           const msg: SessionV1.Assistant = {
@@ -1397,7 +1400,11 @@ export const layer = Layer.effect(
         }
 
         yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
-        return yield* lastAssistant(sessionID)
+        const result = yield* lastAssistant(sessionID)
+        yield* memory
+          .extract({ session, messages: yield* sessions.messages({ sessionID }).pipe(Effect.orDie) })
+          .pipe(Effect.ignore, Effect.forkIn(scope))
+        return result
       },
     )
 
@@ -1579,6 +1586,7 @@ export const defaultLayer = Layer.suspend(() =>
         Database.defaultLayer,
         SystemPrompt.defaultLayer,
         LLM.defaultLayer,
+        Memory.defaultLayer,
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
@@ -1712,6 +1720,7 @@ export const node = LayerNode.make(layer, [
   SessionRunState.node,
   SessionRevert.node,
   SessionSummary.node,
+  Memory.node,
   SystemPrompt.node,
   LLM.node,
   EventV2Bridge.node,

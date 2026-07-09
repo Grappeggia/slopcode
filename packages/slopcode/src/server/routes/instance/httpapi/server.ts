@@ -17,6 +17,7 @@ import { Format } from "@/format"
 import { Git } from "@/git"
 import { Installation } from "@/installation"
 import { LSP } from "@/lsp/lsp"
+import { Memory } from "@/memory/memory"
 import { MCP } from "@/mcp"
 import { McpAuth } from "@/mcp/auth"
 import { Permission } from "@/permission"
@@ -84,6 +85,7 @@ import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
 import { globalHandlers } from "./handlers/global"
 import { instanceHandlers } from "./handlers/instance"
+import { memoryHandlers } from "./handlers/memory"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
 import { projectHandlers } from "./handlers/project"
@@ -148,6 +150,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     experimentalHandlers,
     fileHandlers,
     instanceHandlers,
+    memoryHandlers,
     mcpHandlers,
     projectHandlers,
     projectCopyHandlers,
@@ -240,6 +243,7 @@ const app = LayerNode.group([
   Instruction.node,
   LLM.node,
   LSP.node,
+  Memory.node,
   MCP.node,
   McpAuth.node,
   Command.node,

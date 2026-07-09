@@ -109,6 +109,16 @@ import type {
   McpRemoteConfig,
   McpStatusErrors,
   McpStatusResponses,
+  MemoryCreateErrors,
+  MemoryCreateInput,
+  MemoryCreateResponses,
+  MemoryDeleteErrors,
+  MemoryDeleteResponses,
+  MemoryListErrors,
+  MemoryListResponses,
+  MemoryUpdateErrors,
+  MemoryUpdateInput,
+  MemoryUpdateResponses,
   MoveSessionDestination,
   OutputFormat,
   Part as Part2,
@@ -2165,6 +2175,148 @@ export class Formatter extends HeyApiClient {
       url: "/formatter",
       ...options,
       ...params,
+    })
+  }
+}
+
+export class Memory extends HeyApiClient {
+  /**
+   * List memories
+   *
+   * List local memories available to the current project.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      includeDisabled?: boolean | "true" | "false"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "includeDisabled" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<MemoryListResponses, MemoryListErrors, ThrowOnError>({
+      url: "/memory",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create memory
+   *
+   * Create a local memory for the current project or globally.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      memoryCreateInput?: MemoryCreateInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "memoryCreateInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<MemoryCreateResponses, MemoryCreateErrors, ThrowOnError>({
+      url: "/memory",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Delete memory
+   *
+   * Delete a local memory.
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters: {
+      memoryID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "memoryID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<MemoryDeleteResponses, MemoryDeleteErrors, ThrowOnError>({
+      url: "/memory/{memoryID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update memory
+   *
+   * Update the contents or enabled state of a local memory.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      memoryID: string
+      directory?: string
+      workspace?: string
+      memoryUpdateInput?: MemoryUpdateInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "memoryID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "memoryUpdateInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<MemoryUpdateResponses, MemoryUpdateErrors, ThrowOnError>({
+      url: "/memory/{memoryID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }
@@ -6498,6 +6650,11 @@ export class SlopcodeClient extends HeyApiClient {
   private _formatter?: Formatter
   get formatter(): Formatter {
     return (this._formatter ??= new Formatter({ client: this.client }))
+  }
+
+  private _memory?: Memory
+  get memory(): Memory {
+    return (this._memory ??= new Memory({ client: this.client }))
   }
 
   private _mcp?: Mcp

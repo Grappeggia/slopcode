@@ -25,8 +25,7 @@ describe("SlopcodePlugin", () => {
         const plugin = yield* PluginV2.Service
         const catalog = yield* Catalog.Service
         yield* plugin.add(SlopcodePlugin)
-        const transform = yield* catalog.transform()
-        yield* transform((catalog) => {
+        yield* catalog.transform((catalog) => {
           const item = provider("slopcode")
           catalog.provider.update(item.id, () => {})
           const paid = model("slopcode", "paid", { cost: cost(1) })
@@ -46,8 +45,7 @@ describe("SlopcodePlugin", () => {
         const plugin = yield* PluginV2.Service
         const catalog = yield* Catalog.Service
         yield* plugin.add(SlopcodePlugin)
-        const transform = yield* catalog.transform()
-        yield* transform((catalog) => {
+        yield* catalog.transform((catalog) => {
           const item = provider("slopcode")
           catalog.provider.update(item.id, () => {})
           const free = model("slopcode", "free", { cost: cost(0) })
@@ -67,8 +65,7 @@ describe("SlopcodePlugin", () => {
         const plugin = yield* PluginV2.Service
         const catalog = yield* Catalog.Service
         yield* plugin.add(SlopcodePlugin)
-        const transform = yield* catalog.transform()
-        yield* transform((catalog) => {
+        yield* catalog.transform((catalog) => {
           const item = provider("slopcode")
           catalog.provider.update(item.id, () => {})
           const outputOnly = model("slopcode", "output-only", { cost: cost(0, 1) })
@@ -88,8 +85,7 @@ describe("SlopcodePlugin", () => {
         const plugin = yield* PluginV2.Service
         const catalog = yield* Catalog.Service
         yield* plugin.add(SlopcodePlugin)
-        const transform = yield* catalog.transform()
-        yield* transform((catalog) => {
+        yield* catalog.transform((catalog) => {
           const item = provider("slopcode")
           catalog.provider.update(item.id, () => {})
           const paid = model("slopcode", "paid", { cost: cost(1) })
@@ -109,8 +105,7 @@ describe("SlopcodePlugin", () => {
         const plugin = yield* PluginV2.Service
         const catalog = yield* Catalog.Service
         yield* plugin.add(SlopcodePlugin)
-        const transform = yield* catalog.transform()
-        yield* transform((catalog) => {
+        yield* catalog.transform((catalog) => {
           const item = provider("slopcode", { env: ["CUSTOM_SLOPCODE_API_KEY"] })
           catalog.provider.update(item.id, (draft) => {
             draft.env = [...item.env]
@@ -132,8 +127,7 @@ describe("SlopcodePlugin", () => {
         const plugin = yield* PluginV2.Service
         const catalog = yield* Catalog.Service
         yield* plugin.add(SlopcodePlugin)
-        const transform = yield* catalog.transform()
-        yield* transform((catalog) => {
+        yield* catalog.transform((catalog) => {
           const item = provider("slopcode", {
             request: {
               headers: {},
@@ -160,8 +154,7 @@ describe("SlopcodePlugin", () => {
         const plugin = yield* PluginV2.Service
         const catalog = yield* Catalog.Service
         yield* plugin.add(SlopcodePlugin)
-        const transform = yield* catalog.transform()
-        yield* transform((catalog) => {
+        yield* catalog.transform((catalog) => {
           const item = provider("slopcode", {
             enabled: { via: "credential", credentialID: Credential.ID.make("credential") },
           })
@@ -185,8 +178,7 @@ describe("SlopcodePlugin", () => {
         const plugin = yield* PluginV2.Service
         const catalog = yield* Catalog.Service
         yield* plugin.add(SlopcodePlugin)
-        const transform = yield* catalog.transform()
-        yield* transform((catalog) => {
+        yield* catalog.transform((catalog) => {
           const item = provider("openai")
           catalog.provider.update(item.id, () => {})
           const paid = model("openai", "paid", { cost: cost(1) })
@@ -200,13 +192,47 @@ describe("SlopcodePlugin", () => {
     ),
   )
 
+  it.effect("defaults SlopCode to gpt-5.5 fast when available", () =>
+    withEnv({ SLOPCODE_API_KEY: "secret" }, () =>
+      Effect.gen(function* () {
+        const plugin = yield* PluginV2.Service
+        const catalog = yield* Catalog.Service
+        yield* plugin.add(SlopcodePlugin)
+        yield* catalog.transform((catalog) => {
+          const item = provider("slopcode", {
+            enabled: { via: "env", name: "SLOPCODE_API_KEY" },
+            env: ["SLOPCODE_API_KEY"],
+          })
+          catalog.provider.update(item.id, (draft) => {
+            draft.enabled = item.enabled
+            draft.env = [...item.env]
+          })
+          catalog.model.update(item.id, ModelV2.ID.make("gpt-5.5"), (draft) => {
+            draft.variants = [
+              {
+                id: ModelV2.VariantID.make("fast"),
+                headers: {},
+                body: {},
+                generation: {},
+                options: { serviceTier: "priority" },
+              },
+            ]
+          })
+        })
+
+        const selected = Option.getOrUndefined(yield* catalog.model.default())
+        expect(selected?.id).toBe(ModelV2.ID.make("gpt-5.5"))
+        expect(selected?.request.variant).toBe(ModelV2.VariantID.make("fast"))
+      }),
+    ),
+  )
+
   it.effect("prefers gpt-5-nano as the slopcode small model", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
       const providerID = ProviderV2.ID.slopcode
 
-      const transform = yield* catalog.transform()
-      yield* transform((catalog) => {
+      yield* catalog.transform((catalog) => {
         catalog.provider.update(providerID, () => {})
         catalog.model.update(providerID, ModelV2.ID.make("cheap-mini"), (model) => {
           model.capabilities.input = ["text"]

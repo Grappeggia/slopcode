@@ -1930,6 +1930,10 @@ export type Config = {
     ignore?: Array<string>
   }
   snapshot?: boolean
+  memory?: {
+    enabled?: boolean
+    limit?: number
+  }
   plugin?: Array<
     | string
     | [
@@ -1961,6 +1965,7 @@ export type Config = {
     build?: AgentConfig
     general?: AgentConfig
     explore?: AgentConfig
+    memory?: AgentConfig
     title?: AgentConfig
     summary?: AgentConfig
     compaction?: AgentConfig
@@ -2393,6 +2398,21 @@ export type FormatterStatus = {
   name: string
   extensions: Array<string>
   enabled: boolean
+}
+
+export type Memory = {
+  id: string
+  scope: MemoryScope
+  projectID?: string
+  content: string
+  enabled: boolean
+  sourceSessionID?: string
+  sourceMessageID?: string
+  time: {
+    created: number
+    updated: number
+    accessed?: number
+  }
 }
 
 export type McpStatusConnected = {
@@ -3695,6 +3715,19 @@ export type ConfigV2ExperimentalPolicy = {
   action: "provider.use"
   effect: PolicyEffect
   resource: string
+}
+
+export type MemoryScope = "project" | "global"
+
+export type MemoryCreateInput = {
+  content: string
+  scope?: MemoryScope
+  enabled?: boolean
+}
+
+export type MemoryUpdateInput = {
+  content?: string
+  enabled?: boolean
 }
 
 export type ProjectDirectories = Array<{
@@ -6558,6 +6591,123 @@ export type FormatterStatusResponses = {
 }
 
 export type FormatterStatusResponse = FormatterStatusResponses[keyof FormatterStatusResponses]
+
+export type MemoryListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    includeDisabled?: boolean | "true" | "false"
+  }
+  url: "/memory"
+}
+
+export type MemoryListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type MemoryListError = MemoryListErrors[keyof MemoryListErrors]
+
+export type MemoryListResponses = {
+  /**
+   * Stored memories
+   */
+  200: Array<Memory>
+}
+
+export type MemoryListResponse = MemoryListResponses[keyof MemoryListResponses]
+
+export type MemoryCreateData = {
+  body?: MemoryCreateInput
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory"
+}
+
+export type MemoryCreateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type MemoryCreateError = MemoryCreateErrors[keyof MemoryCreateErrors]
+
+export type MemoryCreateResponses = {
+  /**
+   * Created memory
+   */
+  200: Memory
+}
+
+export type MemoryCreateResponse = MemoryCreateResponses[keyof MemoryCreateResponses]
+
+export type MemoryDeleteData = {
+  body?: never
+  path: {
+    memoryID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/{memoryID}"
+}
+
+export type MemoryDeleteErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type MemoryDeleteError = MemoryDeleteErrors[keyof MemoryDeleteErrors]
+
+export type MemoryDeleteResponses = {
+  /**
+   * Deleted memory
+   */
+  200: boolean
+}
+
+export type MemoryDeleteResponse = MemoryDeleteResponses[keyof MemoryDeleteResponses]
+
+export type MemoryUpdateData = {
+  body?: MemoryUpdateInput
+  path: {
+    memoryID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/{memoryID}"
+}
+
+export type MemoryUpdateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type MemoryUpdateError = MemoryUpdateErrors[keyof MemoryUpdateErrors]
+
+export type MemoryUpdateResponses = {
+  /**
+   * Updated memory
+   */
+  200: Memory
+}
+
+export type MemoryUpdateResponse = MemoryUpdateResponses[keyof MemoryUpdateResponses]
 
 export type McpStatusData = {
   body?: never

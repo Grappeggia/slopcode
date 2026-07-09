@@ -7,6 +7,7 @@ import * as OpenAIResponses from "@slopcode-ai/llm/protocols/openai-responses"
 import { Auth, type AnyRoute } from "@slopcode-ai/llm/route"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { produce } from "immer"
+import { AgentV2 } from "../../agent"
 import { Catalog } from "../../catalog"
 import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
@@ -116,8 +117,12 @@ export const fromCatalogModel = (
   )
 }
 
-export const resolve = (session: SessionSchema.Info, model: ModelV2.Info, provider?: ProviderV2.Info) =>
-  fromCatalogModel(withVariant(model, session.model?.variant), provider)
+export const resolve = (
+  session: SessionSchema.Info,
+  model: ModelV2.Info,
+  provider?: ProviderV2.Info,
+  variant = session.model?.variant,
+) => fromCatalogModel(withVariant(model, variant), provider)
 
 export const supported = (model: ModelV2.Info) =>
   model.api.type === "aisdk" &&
@@ -130,17 +135,39 @@ export const locationLayer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const catalog = yield* Catalog.Service
+    const agents = yield* AgentV2.Service
     const boot = yield* PluginBoot.Service
     return Service.of({
       resolve: Effect.fn("SessionRunnerModel.resolve")(function* (session) {
         // Location plugins populate and filter the catalog asynchronously during layer startup.
         yield* boot.wait()
-        const selected = session.model
-          ? yield* catalog.model.get(session.model.providerID, session.model.id)
-          : (Option.getOrUndefined((yield* catalog.model.default()).pipe(Option.filter(supported))) ??
-            (yield* catalog.model.available()).find(supported))
+        const agent = yield* agents.select(session.agent)
+        const agentModel = agent.info?.model
+        const preferred = session.model
+          ? {
+              model: yield* catalog.model.get(session.model.providerID, session.model.id),
+              variant: session.model.variant,
+            }
+          : agentModel
+            ? Option.getOrUndefined(
+                (yield* catalog.model.get(agentModel.providerID, agentModel.id).pipe(Effect.option)).pipe(
+                  Option.filter((model) => model.enabled),
+                  Option.map((model) => ({ model, variant: agentModel.variant })),
+                ),
+              )
+            : undefined
+        const fallback = Option.getOrUndefined(
+          (yield* catalog.model.default()).pipe(
+            Option.filter(supported),
+            Option.map((model) => ({ model, variant: undefined })),
+          ),
+        )
+        const available = (yield* catalog.model.available())
+          .filter(supported)
+          .map((model) => ({ model, variant: undefined }))[0]
+        const selected = preferred ?? fallback ?? available
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
-        return yield* resolve(session, selected, yield* catalog.provider.get(selected.providerID))
+        return yield* resolve(session, selected.model, yield* catalog.provider.get(selected.model.providerID), selected.variant)
       }),
     })
   }),
