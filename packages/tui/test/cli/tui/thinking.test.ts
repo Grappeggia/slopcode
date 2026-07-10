@@ -16,6 +16,21 @@ describe("reasoningSummary", () => {
     })
   })
 
+  test("hides empty OpenAI reasoning comment placeholders", () => {
+    expect(reasoningSummary("**Continuing Quality Review**\n\n<!-- -->")).toEqual({
+      title: "Continuing Quality Review",
+      body: "",
+    })
+    expect(reasoningSummary("<!---->")).toEqual({ title: null, body: "" })
+  })
+
+  test("removes empty comment lines without consuming reasoning content", () => {
+    expect(reasoningSummary("**Continuing Quality Review**\n\n<!-- -->\n\nDetails.\n\n<!-- keep -->")).toEqual({
+      title: "Continuing Quality Review",
+      body: "Details.\n\n<!-- keep -->",
+    })
+  })
+
   test("preserves markdown-significant indentation in the extracted body", () => {
     expect(reasoningSummary("**Continuing Quality Review**\n\n    const value = true\n")).toEqual({
       title: "Continuing Quality Review",

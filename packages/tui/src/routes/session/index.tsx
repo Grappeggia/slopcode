@@ -1725,7 +1725,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   }
 
   return (
-    <Show when={content()}>
+    <Show when={summary().title || summary().body}>
       <box
         id={`text-${props.part.messageID}-${props.part.id}`}
         paddingLeft={ctx.compact() ? 0 : 3}
