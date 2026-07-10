@@ -231,12 +231,14 @@ describe("SessionV2.create", () => {
 
       expect(assigned).toMatchObject({ owner: "v2", epoch: 1, state: "migrating" })
       expect(
-        yield* runtime.assign({
-          sessionID: created.id,
-          owner: "v1",
-          expectedOwner: "v1",
-          expectedEpoch: 0,
-        }).pipe(Effect.flip),
+        yield* runtime
+          .assign({
+            sessionID: created.id,
+            owner: "v1",
+            expectedOwner: "v1",
+            expectedEpoch: 0,
+          })
+          .pipe(Effect.flip),
       ).toMatchObject({
         _tag: "SessionRuntime.Mismatch",
         expectedOwner: "v1",
