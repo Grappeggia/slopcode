@@ -107,8 +107,17 @@ export const PaymentTable = mysqlTable(
         }
     >(),
   },
-  (table) => [...workspaceIndexes(table)],
+  (table) => [
+    ...workspaceIndexes(table),
+    uniqueIndex("payment_invoice_id").on(table.invoiceID),
+    uniqueIndex("payment_payment_id").on(table.paymentID),
+  ],
 )
+
+export const StripeWebhookEventTable = mysqlTable("stripe_webhook_event", {
+  id: varchar("id", { length: 255 }).notNull().primaryKey(),
+  timeCreated: utc("time_created").notNull().defaultNow(),
+})
 
 export const UsageTable = mysqlTable(
   "usage",

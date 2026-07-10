@@ -1,8 +1,13 @@
 import type { Stripe } from "stripe"
 import { Billing } from "@slopcode-ai/console-core/billing.js"
 import type { APIEvent } from "@solidjs/start/server"
-import { and, Database, eq, sql } from "@slopcode-ai/console-core/drizzle/index.js"
-import { BillingTable, LiteTable, PaymentTable } from "@slopcode-ai/console-core/schema/billing.sql.js"
+import { and, Database, eq, isNull, sql } from "@slopcode-ai/console-core/drizzle/index.js"
+import {
+  BillingTable,
+  LiteTable,
+  PaymentTable,
+  StripeWebhookEventTable,
+} from "@slopcode-ai/console-core/schema/billing.sql.js"
 import { Identifier } from "@slopcode-ai/console-core/identifier.js"
 import { centsToMicroCents } from "@slopcode-ai/console-core/util/price.js"
 import { Actor } from "@slopcode-ai/console-core/actor.js"
@@ -11,27 +16,60 @@ import { LiteData } from "@slopcode-ai/console-core/lite.js"
 import { BlackData } from "@slopcode-ai/console-core/black.js"
 import { Referral } from "@slopcode-ai/console-core/referral.js"
 
-export async function POST(input: APIEvent) {
-  const body = await Billing.stripe().webhooks.constructEventAsync(
-    await input.request.text(),
-    input.request.headers.get("stripe-signature")!,
-    Resource.STRIPE_WEBHOOK_SECRET.value,
-  )
-  console.log(body.type, JSON.stringify(body, null, 2))
+function recognized(body: Stripe.Event) {
+  if (body.type === "customer.updated") {
+    return "default_payment_method" in (body.data.previous_attributes?.invoice_settings ?? {})
+  }
+  if (body.type === "checkout.session.completed") return body.data.object.mode === "payment"
+  if (body.type === "customer.subscription.created") return body.data.object.metadata?.type === "lite"
+  if (body.type === "customer.subscription.updated") {
+    if (body.data.object.status !== "incomplete_expired") return false
+    const productID = body.data.object.items.data[0]?.price.product
+    if (typeof productID !== "string") return false
+    return productID === LiteData.productID() || productID === BlackData.productID()
+  }
+  if (body.type === "customer.subscription.deleted") {
+    const productID = body.data.object.items.data[0]?.price.product
+    if (typeof productID !== "string") return false
+    return productID === LiteData.productID() || productID === BlackData.productID()
+  }
+  if (body.type === "invoice.payment_succeeded") {
+    return ["subscription_create", "subscription_cycle", "manual"].includes(body.data.object.billing_reason ?? "")
+  }
+  if (body.type === "invoice.payment_failed" || body.type === "invoice.payment_action_required") {
+    return body.data.object.billing_reason === "manual"
+  }
+  return body.type === "charge.refunded"
+}
 
-  return (async () => {
+function affected(result: unknown) {
+  const value = Array.isArray(result) ? result[0] : result
+  if (!value || typeof value !== "object") throw new Error("Database mutation result not found")
+  if ("rowsAffected" in value && typeof value.rowsAffected === "number") return value.rowsAffected
+  if ("affectedRows" in value && typeof value.affectedRows === "number") return value.affectedRows
+  throw new Error("Database mutation count not found")
+}
+
+export async function processStripeEvent<T>(id: string, callback: () => Promise<T>) {
+  return Database.transaction(async (tx) => {
+    const claim = await tx.insert(StripeWebhookEventTable).ignore().values({ id })
+    if (affected(claim) === 0) return "duplicate" as const
+    return callback()
+  })
+}
+
+export async function processStripeWebhook(body: Stripe.Event, stripe = Billing.stripe()) {
+  if (!recognized(body)) return body.type === "customer.updated" ? "ignored" : undefined
+
+  return processStripeEvent(body.id, async () => {
     if (body.type === "customer.updated") {
-      // check default payment method changed
-      const prevInvoiceSettings = body.data.previous_attributes?.invoice_settings ?? {}
-      if (!("default_payment_method" in prevInvoiceSettings)) return "ignored"
-
       const customerID = body.data.object.id
       const paymentMethodID = body.data.object.invoice_settings.default_payment_method as string
 
       if (!customerID) throw new Error("Customer ID not found")
       if (!paymentMethodID) throw new Error("Payment method ID not found")
 
-      const paymentMethod = await Billing.stripe().paymentMethods.retrieve(paymentMethodID)
+      const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodID)
       await Database.use(async (tx) => {
         await tx
           .update(BillingTable)
@@ -62,7 +100,7 @@ export async function POST(input: APIEvent) {
 
         // set customer metadata
         if (!customer?.customerID) {
-          await Billing.stripe().customers.update(customerID, {
+          await stripe.customers.update(customerID, {
             metadata: {
               workspaceID,
             },
@@ -70,7 +108,7 @@ export async function POST(input: APIEvent) {
         }
 
         // get payment method for the payment intent
-        const paymentIntent = await Billing.stripe().paymentIntents.retrieve(paymentID, {
+        const paymentIntent = await stripe.paymentIntents.retrieve(paymentID, {
           expand: ["payment_method"],
         })
         const paymentMethod = paymentIntent.payment_method
@@ -125,7 +163,7 @@ export async function POST(input: APIEvent) {
         if (!paymentMethodID) throw new Error("Payment method ID not found")
 
         // get payment method for the payment intent
-        const paymentMethod = await Billing.stripe().paymentMethods.retrieve(paymentMethodID)
+        const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodID)
         await Actor.provide("system", { workspaceID }, async () => {
           // look up current billing
           const billing = await Billing.get()
@@ -134,7 +172,7 @@ export async function POST(input: APIEvent) {
 
           // set customer metadata
           if (!billing?.customerID) {
-            await Billing.stripe().customers.update(customerID, {
+            await stripe.customers.update(customerID, {
               metadata: {
                 workspaceID,
               },
@@ -175,10 +213,12 @@ export async function POST(input: APIEvent) {
             }
           })
 
-          await Referral.completeFromLiteSubscription({
-            workspaceID,
-            userID,
-          }).catch((error) => {
+          await Database.use(() =>
+            Referral.completeFromLiteSubscription({
+              workspaceID,
+              userID,
+            }),
+          ).catch((error) => {
             console.error("Referral sync failed", error)
           })
         })
@@ -222,7 +262,7 @@ export async function POST(input: APIEvent) {
         if (!subscriptionID) throw new Error("Subscription ID not found")
 
         // get coupon id from subscription
-        const invoice = await Billing.stripe().invoices.retrieve(invoiceID, {
+        const invoice = await stripe.invoices.retrieve(invoiceID, {
           expand: ["discounts", "payments"],
         })
         const paymentID = invoice.payments?.data[0]?.payment.payment_intent as string
@@ -269,7 +309,7 @@ export async function POST(input: APIEvent) {
 
         await Actor.provide("system", { workspaceID }, async () => {
           // get payment id from invoice
-          const invoice = await Billing.stripe().invoices.retrieve(invoiceID, {
+          const invoice = await stripe.invoices.retrieve(invoiceID, {
             expand: ["payments"],
           })
           await Database.transaction(async (tx) => {
@@ -301,7 +341,7 @@ export async function POST(input: APIEvent) {
         if (!workspaceID) throw new Error("Workspace ID not found")
         if (!invoiceID) throw new Error("Invoice ID not found")
 
-        const paymentIntent = await Billing.stripe().paymentIntents.retrieve(invoiceID)
+        const paymentIntent = await stripe.paymentIntents.retrieve(invoiceID)
         console.log(JSON.stringify(paymentIntent))
         const errorMessage =
           typeof paymentIntent === "object" && paymentIntent !== null
@@ -352,12 +392,20 @@ export async function POST(input: APIEvent) {
       if (!payment) throw new Error("Payment not found")
 
       await Database.transaction(async (tx) => {
-        await tx
+        const refund = await tx
           .update(PaymentTable)
           .set({
             timeRefunded: new Date(body.created * 1000),
           })
-          .where(and(eq(PaymentTable.paymentID, paymentIntentID), eq(PaymentTable.workspaceID, workspaceID)))
+          .where(
+            and(
+              eq(PaymentTable.paymentID, paymentIntentID),
+              eq(PaymentTable.workspaceID, workspaceID),
+              isNull(PaymentTable.timeRefunded),
+            ),
+          )
+
+        if (affected(refund) === 0) return undefined
 
         // deduct balance only for top up
         if (!payment.enrichment?.type) {
@@ -370,7 +418,19 @@ export async function POST(input: APIEvent) {
         }
       })
     }
-  })()
+    return undefined
+  })
+}
+
+export async function POST(input: APIEvent) {
+  const body = await Billing.stripe().webhooks.constructEventAsync(
+    await input.request.text(),
+    input.request.headers.get("stripe-signature")!,
+    Resource.STRIPE_WEBHOOK_SECRET.value,
+  )
+  console.log(body.type, JSON.stringify(body, null, 2))
+
+  return processStripeWebhook(body)
     .then((message) => {
       return Response.json({ message: message ?? "done" }, { status: 200 })
     })

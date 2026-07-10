@@ -5,6 +5,7 @@ import { BillingTable } from "@slopcode-ai/console-core/schema/billing.sql.js"
 import { WorkspaceTable } from "@slopcode-ai/console-core/schema/workspace.sql.js"
 import { reloadBilling, setBillingReload } from "../src/routes/workspace/[id]/billing/server"
 import { testDatabase, useTestDatabase } from "../../core/test/database"
+import { stripeWebhookTests } from "./stripeWebhook.cases"
 
 const workspaceID = "workspace_billing"
 const admin = {
@@ -109,3 +110,5 @@ describe("billing server operations", () => {
     expect(other.reload).toBe(false)
   })
 })
+
+stripeWebhookTests({ testDatabase, useTestDatabase })
