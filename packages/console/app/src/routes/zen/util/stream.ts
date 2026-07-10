@@ -14,8 +14,10 @@ export function forwardProviderStream(input: {
   let output!: ReadableStreamDefaultController<Uint8Array>
   let timer: ReturnType<typeof setTimeout> | undefined
   let resolve!: () => void
-  const completed = new Promise<void>((done) => {
+  let reject!: (error: unknown) => void
+  const completed = new Promise<void>((done, fail) => {
     resolve = done
+    reject = fail
   })
   const drained = () => {
     try {
@@ -39,10 +41,17 @@ export function forwardProviderStream(input: {
         if (final) controller.enqueue(final)
         controller.close()
       })
-      .catch((failure) => {
-        if (!canceled) controller.error(failure)
-      })
-      .finally(resolve)
+      .then(
+        () => resolve(),
+        (failure) => {
+          if (!canceled) {
+            try {
+              controller.error(failure)
+            } catch {}
+          }
+          reject(failure)
+        },
+      )
     return finalizing
   }
   const stream = new ReadableStream<Uint8Array>({

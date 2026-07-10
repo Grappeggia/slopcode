@@ -217,13 +217,17 @@ export function createResponseConverter(from: ZenData.Format, to: ZenData.Format
   return (response: any): any => {
     if (from === to) return response
 
-    let raw: CommonResponse
-    if (from === "anthropic") raw = fromAnthropicResponse(response)
-    else if (from === "openai") raw = fromOpenaiResponse(response)
-    else raw = fromOaCompatibleResponse(response)
-
-    if (to === "anthropic") return toAnthropicResponse(raw)
-    if (to === "openai") return toOpenaiResponse(raw)
-    if (to === "oa-compat") return toOaCompatibleResponse(raw)
+    const raw = (() => {
+      if (from === "anthropic") return fromAnthropicResponse(response)
+      if (from === "openai") return fromOpenaiResponse(response)
+      return fromOaCompatibleResponse(response)
+    })()
+    const converted = (() => {
+      if (to === "anthropic") return toAnthropicResponse(raw)
+      if (to === "openai") return toOpenaiResponse(raw)
+      if (to === "oa-compat") return toOaCompatibleResponse(raw)
+    })()
+    if (response?.cost === undefined || !converted || typeof converted !== "object") return converted
+    return { ...converted, cost: response.cost }
   }
 }

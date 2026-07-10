@@ -157,8 +157,12 @@ describe("Zen usage reservations", () => {
     await seed(100)
     await reserve("rsv_success", 75)
 
-    expect(await usage("rsv_success", 30)).toBe(true)
-    expect(await usage("rsv_success", 30)).toBe(false)
+    expect(await usage("rsv_success", 30)).toMatchObject({
+      status: "settled",
+      amount: 30,
+      usage: { inputTokens: 10, outputTokens: 5, cost: 30 },
+    })
+    expect(await usage("rsv_success", 30)).toMatchObject({ status: "settled", amount: 30 })
 
     const billing = await testDatabase()
       .select()
@@ -188,7 +192,7 @@ describe("Zen usage reservations", () => {
     await seed(100)
     await reserve("rsv_overage", 75)
 
-    expect(await usage("rsv_overage", 125)).toBe(true)
+    expect(await usage("rsv_overage", 125)).toMatchObject({ status: "settled", amount: 125 })
 
     const billing = await testDatabase()
       .select()
@@ -223,8 +227,17 @@ describe("Zen usage reservations", () => {
     )
 
     expect(await useTestDatabase(() => releaseUsage("rsv_unknown"))).toBe(false)
-    expect(await useTestDatabase(() => failUsage("rsv_unknown"))).toBe(true)
-    expect(await useTestDatabase(() => failUsage("rsv_unknown"))).toBe(false)
+    expect(await useTestDatabase(() => failUsage("rsv_unknown"))).toMatchObject({
+      status: "settled",
+      amount: 75,
+      usage: {
+        inputTokens: 40,
+        outputTokens: 20,
+        cost: 75,
+        enrichment: { estimated: true, unknown: true },
+      },
+    })
+    expect(await useTestDatabase(() => failUsage("rsv_unknown"))).toMatchObject({ status: "settled", amount: 75 })
 
     const reservation = await testDatabase()
       .select()
@@ -246,7 +259,11 @@ describe("Zen usage reservations", () => {
     await seed(100)
     await reserve("rsv_not_dispatched", 75)
 
-    expect(await useTestDatabase(() => failUsage("rsv_not_dispatched"))).toBe(true)
+    expect(await useTestDatabase(() => failUsage("rsv_not_dispatched"))).toEqual({
+      status: "released",
+      amount: 0,
+      usage: undefined,
+    })
 
     const billing = await testDatabase()
       .select()
@@ -281,7 +298,7 @@ describe("Zen usage reservations", () => {
     expect(pending.status).toBe("pending")
     await testDatabase().execute(sql.raw("DROP TRIGGER fail_usage_insert"))
 
-    expect(await usage("rsv_retry", 30)).toBe(true)
+    expect(await usage("rsv_retry", 30)).toMatchObject({ status: "settled", amount: 30 })
     expect(await testDatabase().select().from(UsageTable)).toHaveLength(1)
   })
 
@@ -291,8 +308,8 @@ describe("Zen usage reservations", () => {
 
     const results = await Promise.all([usage("rsv_race", 30), useTestDatabase(() => releaseUsage("rsv_race"))])
 
-    expect(results.filter(Boolean)).toHaveLength(1)
-    expect(await testDatabase().select().from(UsageTable)).toHaveLength(results[0] ? 1 : 0)
+    expect(results[0].status).toBe(results[1] ? "released" : "settled")
+    expect(await testDatabase().select().from(UsageTable)).toHaveLength(results[0].status === "settled" ? 1 : 0)
   })
 
   test("recovers stale dispatched and undispatched holds conservatively", async () => {
@@ -358,7 +375,7 @@ describe("Zen usage reservations", () => {
       released: 0,
       settled: 0,
     })
-    expect(await usage("rsv_live_lease", 30)).toBe(true)
+    expect(await usage("rsv_live_lease", 30)).toMatchObject({ status: "settled", amount: 30 })
     expect(await useTestDatabase(() => heartbeatUsage("rsv_live_lease", 60))).toBe(false)
 
     const reservation = await testDatabase()
@@ -368,6 +385,45 @@ describe("Zen usage reservations", () => {
       .then((rows) => rows[0])
     expect(reservation.status).toBe("settled")
     expect(reservation.amountActual).toBe(30)
+  })
+
+  test("returns stale recovery's durable hold and usage to a losing live finalizer", async () => {
+    await seed(100)
+    await reserve("rsv_recovery_wins", 75)
+    await useTestDatabase(() =>
+      markUsageDispatched({
+        id: "rsv_recovery_wins",
+        leaseSeconds: 60,
+        usage: {
+          model: "test-model",
+          provider: "test-provider",
+          inputTokens: 40,
+          outputTokens: 20,
+        },
+      }),
+    )
+    const stale = new Date(Date.now() - 1_000)
+    await testDatabase()
+      .update(UsageReservationTable)
+      .set({ timeLeaseExpires: stale })
+      .where(eq(UsageReservationTable.id, "rsv_recovery_wins"))
+
+    expect(await useTestDatabase(() => recoverUsage({ workspaceID, before: new Date(), now: new Date() }))).toEqual({
+      released: 0,
+      settled: 1,
+    })
+    expect(await usage("rsv_recovery_wins", 30)).toMatchObject({
+      status: "settled",
+      amount: 75,
+      usage: {
+        model: "test-model",
+        provider: "test-provider",
+        inputTokens: 40,
+        outputTokens: 20,
+        cost: 75,
+        enrichment: { estimated: true, unknown: true },
+      },
+    })
   })
 
   test("reports the exact subscription quota dimension", async () => {

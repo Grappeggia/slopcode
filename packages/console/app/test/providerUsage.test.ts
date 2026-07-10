@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { ZenData } from "@slopcode-ai/console-core/model.js"
-import type { ProviderHelper } from "../src/routes/zen/util/provider/provider"
+import { createResponseConverter, type ProviderHelper } from "../src/routes/zen/util/provider/provider"
 import { anthropicHelper } from "../src/routes/zen/util/provider/anthropic"
 import { googleHelper } from "../src/routes/zen/util/provider/google"
 import { fromOaCompatibleRequest, oaCompatHelper } from "../src/routes/zen/util/provider/openai-compatible"
@@ -97,5 +97,40 @@ describe("provider usage extraction", () => {
 
   test("preserves max_completion_tokens during provider conversion", () => {
     expect(fromOaCompatibleRequest({ messages: [], max_completion_tokens: 4_000 }).max_tokens).toBe(4_000)
+  })
+
+  test("preserves cost across non-stream response formats", () => {
+    const anthropic = createResponseConverter(
+      "anthropic",
+      "oa-compat",
+    )({
+      id: "msg_cost",
+      type: "message",
+      model: "claude-haiku-4-5",
+      content: [{ type: "text", text: "hello" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 10, output_tokens: 5 },
+      cost: "0.00002000",
+    })
+    const compatible = createResponseConverter(
+      "oa-compat",
+      "anthropic",
+    )({
+      id: "chatcmpl_cost",
+      object: "chat.completion",
+      model: "gpt-5-nano",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "hello" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      cost: "0.00003000",
+    })
+
+    expect(anthropic.cost).toBe("0.00002000")
+    expect(compatible.cost).toBe("0.00003000")
   })
 })

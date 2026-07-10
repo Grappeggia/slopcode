@@ -107,6 +107,7 @@ export async function handler(
     "wrk_01KKZDKDWCS1VTJF8QTX62DD50", // contributors
   ]
   let abort: (() => Promise<unknown>) | undefined
+  let ownershipLost = false
   const retrySettlement = <T>(callback: () => Promise<T>, attempts = 3): Promise<T> =>
     callback().catch((error) => {
       if (attempts === 1) throw error
@@ -181,7 +182,10 @@ export async function handler(
         work = work
           .then(async () => {
             if (stopped) return
-            if (!(await Billing.heartbeatUsage(internalRequestId, runtime.leaseSeconds))) stopped = true
+            if (!(await Billing.heartbeatUsage(internalRequestId, runtime.leaseSeconds))) {
+              ownershipLost = true
+              stopped = true
+            }
           })
           .catch((error) => {
             logger.metric({ "heartbeat.error": error instanceof Error ? error.message : String(error) })
@@ -193,7 +197,8 @@ export async function handler(
           stopped = true
           clearInterval(timer)
           await work
-          await retrySettlement(() => Billing.heartbeatUsage(internalRequestId, runtime.leaseSeconds))
+          if (!(await retrySettlement(() => Billing.heartbeatUsage(internalRequestId, runtime.leaseSeconds))))
+            ownershipLost = true
         },
       }
     }
@@ -213,17 +218,23 @@ export async function handler(
       const pending = (async () => {
         await stopHeartbeat()
         if (!providerInfo || !usageInfo) {
-          if (authInfo) await retrySettlement(() => Billing.failUsage(internalRequestId))
+          const result = authInfo
+            ? await retrySettlement(() =>
+                ownershipLost ? Billing.getUsageSettlement(internalRequestId) : Billing.failUsage(internalRequestId),
+              )
+            : undefined
+          if (result?.status === "released" && providerInfo)
+            throw new Error("Dispatched usage reservation was released")
           if (providerInfo && providerSucceeded)
             await stickyTracker?.set(providerInfo.id).catch((error) => {
               logger.metric({ "sticky.error": error instanceof Error ? error.message : String(error) })
             })
           if (billingSource !== "balance" || !providerInfo) return
-          return (reservation.amount / 100_000_000).toFixed(8)
+          return ((result?.amount ?? reservation.amount) / 100_000_000).toFixed(8)
         }
 
         const costInfo = calculateCost(modelInfo, usageInfo)
-        const amount = await trackUsage(
+        const tracked = await trackUsage(
           sessionId,
           billingSource!,
           authInfo,
@@ -237,8 +248,8 @@ export async function handler(
         )
         const tracking = await Promise.allSettled(
           [
-            trialLimiter?.track(usageInfo),
-            modelTpmLimiter?.track(providerInfo.id, providerInfo.model, usageInfo),
+            trialLimiter?.track(tracked.usage),
+            modelTpmLimiter?.track(providerInfo.id, providerInfo.model, tracked.usage),
             providerSucceeded ? stickyTracker?.set(providerInfo.id) : undefined,
             timing
               ? modelTpsLimiter?.track(
@@ -247,7 +258,7 @@ export async function handler(
                   providerInfo.tpsGoal,
                   timing.first,
                   timing.last,
-                  usageInfo,
+                  tracked.usage,
                 )
               : undefined,
           ].filter((promise): promise is Promise<void> => !!promise),
@@ -260,7 +271,7 @@ export async function handler(
             logger.metric({ "reload.error": error instanceof Error ? error.message : String(error) })
           })
         if (billingSource !== "balance") return "0"
-        return (amount / 100_000_000).toFixed(8)
+        return (tracked.amount / 100_000_000).toFixed(8)
       })()
       settlement = pending
       void pending.catch(() => {
@@ -1177,63 +1188,79 @@ export async function handler(
     const { totalCostInCent, inputCost, outputCost, cacheReadCost, cacheWrite5mCost, cacheWrite1hCost } = costInfo
 
     const cost = centsToMicroCents(totalCostInCent)
-    if (billingSource !== "anonymous") {
-      const info = authInfo!
-      await retrySettlement(() =>
-        Billing.finalizeUsage({
-          id: requestID,
-          amount: cost,
-          usage: {
-            model: modelInfo.id,
-            provider: providerInfo.id,
-            inputTokens,
-            outputTokens,
-            reasoningTokens,
-            cacheReadTokens,
-            cacheWrite5mTokens,
-            cacheWrite1hTokens,
-            cost,
-            keyID: info.apiKeyId,
-            sessionID: sessionId,
-            enrichment: (() => {
-              if (billingSource === "subscription") return { plan: "sub" as const, estimated: estimated || undefined }
-              if (billingSource === "byok") return { plan: "byok" as const, estimated: estimated || undefined }
-              if (billingSource === "lite") return { plan: "lite" as const, estimated: estimated || undefined }
-              return undefined
-            })(),
-          },
-        }),
-      )
-    }
+    const result =
+      billingSource === "anonymous"
+        ? undefined
+        : await retrySettlement(() =>
+            ownershipLost
+              ? Billing.getUsageSettlement(requestID)
+              : Billing.finalizeUsage({
+                  id: requestID,
+                  amount: cost,
+                  usage: {
+                    model: modelInfo.id,
+                    provider: providerInfo.id,
+                    inputTokens,
+                    outputTokens,
+                    reasoningTokens,
+                    cacheReadTokens,
+                    cacheWrite5mTokens,
+                    cacheWrite1hTokens,
+                    cost,
+                    keyID: authInfo!.apiKeyId,
+                    sessionID: sessionId,
+                    enrichment: (() => {
+                      if (billingSource === "subscription")
+                        return { plan: "sub" as const, estimated: estimated || undefined }
+                      if (billingSource === "byok") return { plan: "byok" as const, estimated: estimated || undefined }
+                      if (billingSource === "lite") return { plan: "lite" as const, estimated: estimated || undefined }
+                      return undefined
+                    })(),
+                  },
+                }),
+          )
+    if (result?.status === "released" || (result && !result.usage))
+      throw new Error("Dispatched usage reservation has no durable usage")
+    const tracked = result?.usage
+      ? {
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          reasoningTokens: result.usage.reasoningTokens,
+          cacheReadTokens: result.usage.cacheReadTokens,
+          cacheWrite5mTokens: result.usage.cacheWrite5mTokens,
+          cacheWrite1hTokens: result.usage.cacheWrite1hTokens,
+        }
+      : usageInfo
+    const amount = result?.amount ?? cost
 
     logger.metric({
-      "tokens.input": inputTokens,
-      "tokens.output": outputTokens,
-      "tokens.reasoning": reasoningTokens,
-      "tokens.cache_read": cacheReadTokens,
-      "tokens.cache_write_5m": cacheWrite5mTokens,
-      "tokens.cache_write_1h": cacheWrite1hTokens,
+      "tokens.input": tracked.inputTokens,
+      "tokens.output": tracked.outputTokens,
+      "tokens.reasoning": tracked.reasoningTokens,
+      "tokens.cache_read": tracked.cacheReadTokens,
+      "tokens.cache_write_5m": tracked.cacheWrite5mTokens,
+      "tokens.cache_write_1h": tracked.cacheWrite1hTokens,
       "cost.input.microcents": centsToMicroCents(inputCost),
       "cost.output.microcents": centsToMicroCents(outputCost),
       "cost.cache_read.microcents": cacheReadCost ? centsToMicroCents(cacheReadCost) : undefined,
       "cost.cache_write.microcents": cacheWrite5mCost ? centsToMicroCents(cacheWrite5mCost) : undefined,
-      "cost.total.microcents": centsToMicroCents(totalCostInCent),
+      "cost.total.microcents": amount,
       // deprecated - remove after May 20, 2026
       "cost.input": Math.round(inputCost),
       "cost.output": Math.round(outputCost),
       "cost.cache_read": cacheReadCost ? Math.round(cacheReadCost) : undefined,
       "cost.cache_write_5m": cacheWrite5mCost ? Math.round(cacheWrite5mCost) : undefined,
       "cost.cache_write_1h": cacheWrite1hCost ? Math.round(cacheWrite1hCost) : undefined,
-      "cost.total": Math.round(totalCostInCent),
-      "usage.estimated": estimated,
+      "cost.total": Math.round(amount / 1_000_000),
+      "usage.estimated": result?.usage?.enrichment?.estimated ?? estimated,
     })
-    if (cost > reserved)
+    if (amount > reserved)
       logger.metric({
         "reservation.exceeded": true,
         "reservation.microcents": reserved,
-        "cost.unbounded.microcents": cost,
+        "cost.unbounded.microcents": amount,
       })
-    return cost
+    return { amount, usage: tracked }
   }
 
   async function reload(billingSource: BillingSource, authInfo: AuthInfo) {

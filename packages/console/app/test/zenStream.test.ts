@@ -147,4 +147,65 @@ describe("Zen provider stream accounting", () => {
     await result.completed
     expect(finalized).toBe(1)
   })
+
+  test("rejects the waitUntil lifetime when canceled-stream finalization fails", async () => {
+    let release = () => {}
+    let lifetime: Promise<void> | undefined
+    let usage = 0
+    const failure = new Error("settlement exhausted")
+    const result = forwardProviderStream({
+      source: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode("content"))
+          release = () => controller.enqueue(encoder.encode("usage"))
+        },
+        cancel() {},
+      }),
+      chunk(value, emit) {
+        if (decoder.decode(value) === "usage") usage++
+        emit(value)
+      },
+      async finalize() {
+        throw failure
+      },
+      waitUntil(promise) {
+        lifetime = promise
+      },
+      drained() {
+        return usage > 0
+      },
+      drainTimeout: 100,
+      abort() {},
+    })
+    const reader = result.stream.getReader()
+    await reader.read()
+    const rejected = result.completed.then(
+      () => undefined,
+      (error) => error,
+    )
+    await reader.cancel("client disconnected")
+    release()
+
+    expect(lifetime).toBe(result.completed)
+    expect(await rejected).toBe(failure)
+  })
+
+  test("errors a connected stream and rejects completion when finalization fails", async () => {
+    const result = forwardProviderStream({
+      source: new ReadableStream({
+        start(controller) {
+          controller.close()
+        },
+      }),
+      chunk() {},
+      async finalize() {
+        throw new Error("settlement failed")
+      },
+      waitUntil() {},
+    })
+
+    const completed = result.completed.catch((error) => error)
+    await expect(new Response(result.stream).text()).rejects.toThrow("settlement failed")
+    expect(await completed).toBeInstanceOf(Error)
+  })
 })

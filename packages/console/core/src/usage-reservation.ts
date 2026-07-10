@@ -48,6 +48,11 @@ export type UsageFinalization = {
     enrichment?: { plan?: "sub" | "byok" | "lite"; estimated?: boolean; unknown?: boolean }
   }
 }
+export type UsageSettlement = {
+  status: "settled" | "released"
+  amount: number
+  usage?: UsageFinalization["usage"]
+}
 
 export class UsageReservationError extends Error {
   reason: "balance" | "workspace" | "user" | "fixed" | "rolling" | "weekly" | "monthly"
@@ -57,6 +62,12 @@ export class UsageReservationError extends Error {
     super(`Usage reservation rejected: ${reason}`)
     this.reason = reason
     this.retryAfter = retryAfter
+  }
+}
+
+export class UsageReservationPendingError extends Error {
+  constructor(id: string) {
+    super(`Usage reservation is still pending: ${id}`)
   }
 }
 
@@ -431,8 +442,8 @@ export function heartbeatUsage(id: string, seconds = USAGE_LEASE_SECONDS) {
 }
 
 export async function failUsage(id: string) {
-  if (await releaseUsage(id)) return true
-  return settleUnknownUsage(id)
+  if (!(await releaseUsage(id))) await settleUnknownUsage(id)
+  return getUsageSettlement(id)
 }
 
 async function settleUnknownUsage(id: string, claim?: { lease: { now: Date; legacyBefore: Date } }) {
@@ -519,8 +530,56 @@ export function releaseUsage(id: string) {
   return settleUsage(id, 0, "released", undefined, { undispatched: true })
 }
 
-export function finalizeUsage(input: UsageFinalization) {
-  return settleUsage(input.id, input.amount, "settled", input.usage)
+export async function getUsageSettlement(id: string): Promise<UsageSettlement> {
+  return Database.use(async (tx) => {
+    const reservation = await tx
+      .select({ status: UsageReservationTable.status, amount: UsageReservationTable.amountActual })
+      .from(UsageReservationTable)
+      .where(eq(UsageReservationTable.id, id))
+      .then((rows) => rows[0])
+    if (!reservation) throw new Error("Usage reservation not found")
+    if (reservation.status === "pending") throw new UsageReservationPendingError(id)
+    if (reservation.amount === null) throw new Error("Terminal usage reservation amount not found")
+    const usage = await tx
+      .select({
+        model: UsageTable.model,
+        provider: UsageTable.provider,
+        inputTokens: UsageTable.inputTokens,
+        outputTokens: UsageTable.outputTokens,
+        reasoningTokens: UsageTable.reasoningTokens,
+        cacheReadTokens: UsageTable.cacheReadTokens,
+        cacheWrite5mTokens: UsageTable.cacheWrite5mTokens,
+        cacheWrite1hTokens: UsageTable.cacheWrite1hTokens,
+        cost: UsageTable.cost,
+        keyID: UsageTable.keyID,
+        sessionID: UsageTable.sessionID,
+        enrichment: UsageTable.enrichment,
+      })
+      .from(UsageTable)
+      .where(eq(UsageTable.reservationID, id))
+      .then((rows) => rows[0])
+    return {
+      status: reservation.status,
+      amount: reservation.amount,
+      usage: usage
+        ? {
+            ...usage,
+            reasoningTokens: usage.reasoningTokens ?? undefined,
+            cacheReadTokens: usage.cacheReadTokens ?? undefined,
+            cacheWrite5mTokens: usage.cacheWrite5mTokens ?? undefined,
+            cacheWrite1hTokens: usage.cacheWrite1hTokens ?? undefined,
+            keyID: usage.keyID ?? undefined,
+            sessionID: usage.sessionID ?? undefined,
+            enrichment: usage.enrichment ?? undefined,
+          }
+        : undefined,
+    }
+  })
+}
+
+export async function finalizeUsage(input: UsageFinalization) {
+  await settleUsage(input.id, input.amount, "settled", input.usage)
+  return getUsageSettlement(input.id)
 }
 
 async function settleUsage(
