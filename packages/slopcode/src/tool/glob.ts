@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { Ripgrep } from "@slopcode-ai/core/ripgrep"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryWithFsEffect, resolvePathEffect } from "./external-directory"
 import DESCRIPTION from "./glob.txt"
 import * as Tool from "./tool"
 
@@ -35,13 +35,17 @@ export const GlobTool = Tool.define(
             },
           })
 
-          let search = params.path ?? ins.directory
-          search = path.isAbsolute(search) ? search : path.resolve(ins.directory, search)
+          const requested = path.isAbsolute(params.path ?? ins.directory)
+            ? (params.path ?? ins.directory)
+            : path.resolve(ins.directory, params.path ?? ins.directory)
+          const target = yield* resolvePathEffect(fs, requested, ins.directory)
+          const search = target.canonical
+          const shown = process.platform === "win32" ? search : target.original
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           if (info?.type === "File") {
-            throw new Error(`glob path must be a directory: ${search}`)
+            throw new Error(`glob path must be a directory: ${shown}`)
           }
-          yield* assertExternalDirectoryEffect(ctx, search, {
+          yield* assertExternalDirectoryWithFsEffect(fs, ctx, target, {
             bypass: false,
             kind: "directory",
           })
@@ -63,7 +67,7 @@ export const GlobTool = Tool.define(
           }
 
           return {
-            title: path.relative(ins.worktree, search),
+            title: path.relative(ins.worktree, shown),
             metadata: {
               count: files.length,
               truncated,

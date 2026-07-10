@@ -15,7 +15,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Format } from "../format"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryWithFsEffect, resolvePathEffect } from "./external-directory"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
 
@@ -77,10 +77,13 @@ export const EditTool = Tool.define(
           }
 
           const instance = yield* InstanceState.context
-          const filePath = path.isAbsolute(params.filePath)
+          const requested = path.isAbsolute(params.filePath)
             ? params.filePath
             : path.join(instance.directory, params.filePath)
-          yield* assertExternalDirectoryEffect(ctx, filePath)
+          const target = yield* resolvePathEffect(afs, requested, instance.directory).pipe(Effect.orDie)
+          const filePath = target.canonical
+          const shown = process.platform === "win32" ? filePath : target.original
+          yield* assertExternalDirectoryWithFsEffect(afs, ctx, target).pipe(Effect.orDie)
 
           let diff = ""
           let contentOld = ""
@@ -98,13 +101,13 @@ export const EditTool = Tool.define(
                 const desiredBom = next.bom
                 contentOld = ""
                 contentNew = next.text
-                diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
+                diff = trimDiff(createTwoFilesPatch(shown, shown, contentOld, contentNew))
                 yield* ctx.ask({
                   permission: "edit",
-                  patterns: [path.relative(instance.worktree, filePath)],
+                  patterns: [path.relative(instance.worktree, shown)],
                   always: ["*"],
                   metadata: {
-                    filepath: filePath,
+                    filepath: shown,
                     diff,
                   },
                 })
@@ -135,19 +138,14 @@ export const EditTool = Tool.define(
               contentNew = next.text
 
               diff = trimDiff(
-                createTwoFilesPatch(
-                  filePath,
-                  filePath,
-                  normalizeLineEndings(contentOld),
-                  normalizeLineEndings(contentNew),
-                ),
+                createTwoFilesPatch(shown, shown, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)),
               )
               yield* ctx.ask({
                 permission: "edit",
-                patterns: [path.relative(instance.worktree, filePath)],
+                patterns: [path.relative(instance.worktree, shown)],
                 always: ["*"],
                 metadata: {
-                  filepath: filePath,
+                  filepath: shown,
                   diff,
                 },
               })
@@ -162,12 +160,7 @@ export const EditTool = Tool.define(
                 event: "change",
               })
               diff = trimDiff(
-                createTwoFilesPatch(
-                  filePath,
-                  filePath,
-                  normalizeLineEndings(contentOld),
-                  normalizeLineEndings(contentNew),
-                ),
+                createTwoFilesPatch(shown, shown, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)),
               )
             }).pipe(Effect.orDie),
           )
@@ -179,7 +172,7 @@ export const EditTool = Tool.define(
             if (change.removed) deletions += change.count || 0
           }
           const filediff: Snapshot.FileDiff = {
-            file: filePath,
+            file: shown,
             patch: diff,
             additions,
             deletions,
@@ -197,7 +190,7 @@ export const EditTool = Tool.define(
           yield* lsp.touchFile(filePath, "document")
           const diagnostics = yield* lsp.diagnostics()
           const normalizedFilePath = FSUtil.normalizePath(filePath)
-          const block = LSP.Diagnostic.report(filePath, diagnostics[normalizedFilePath] ?? [])
+          const block = LSP.Diagnostic.report(shown, diagnostics[normalizedFilePath] ?? [])
           if (block) output += `\n\nLSP errors detected in this file, please fix:\n${block}`
 
           return {
@@ -206,7 +199,7 @@ export const EditTool = Tool.define(
               diff,
               filediff,
             },
-            title: `${path.relative(instance.worktree, filePath)}`,
+            title: `${path.relative(instance.worktree, shown)}`,
             output,
           }
         }),

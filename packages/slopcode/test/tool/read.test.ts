@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { Cause, Effect, Exit, Layer, Stream } from "effect"
+import fs from "fs/promises"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
@@ -180,6 +181,54 @@ describe("tool.read external_directory permission", () => {
       expect(ext!.patterns).toContain(glob(path.join(outer, "*")))
     }),
   )
+
+  if (process.platform !== "win32") {
+    it.live("keeps an approved symlink read pinned to its canonical target", () =>
+      Effect.gen(function* () {
+        const dir = yield* tmpdirScoped({ git: true })
+        const first = yield* tmpdirScoped()
+        const second = yield* tmpdirScoped()
+        const original = path.join(first, "secret.txt")
+        const replacement = path.join(second, "secret.txt")
+        const link = path.join(dir, "secret.txt")
+        yield* Effect.promise(async () => {
+          await fs.writeFile(original, "approved target")
+          await fs.writeFile(replacement, "swapped target")
+          await fs.symlink(original, link)
+        })
+        const items: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+        const state = { swapped: false }
+        const next: Tool.Context = {
+          ...ctx,
+          ask: (req) =>
+            Effect.gen(function* () {
+              items.push(req)
+              if (req.permission !== "external_directory" || state.swapped) return
+              state.swapped = true
+              yield* Effect.promise(async () => {
+                await fs.unlink(link)
+                await fs.symlink(replacement, link)
+              })
+            }),
+        }
+
+        const result = yield* exec(dir, { filePath: link }, next)
+
+        const canonical = yield* Effect.promise(() => fs.realpath(original))
+        const parent = yield* Effect.promise(() => fs.realpath(first))
+        expect(items.find((item) => item.permission === "external_directory")).toMatchObject({
+          patterns: [glob(path.join(parent, "*"))],
+          metadata: { filepath: link, canonicalPath: canonical, parentDir: parent },
+        })
+        expect(state.swapped).toBe(true)
+        expect(yield* Effect.promise(() => fs.realpath(link))).toBe(
+          yield* Effect.promise(() => fs.realpath(replacement)),
+        )
+        expect(result.output).toContain("approved target")
+        expect(result.output).not.toContain("swapped target")
+      }),
+    )
+  }
 
   if (process.platform === "win32") {
     it.live("normalizes read permission paths on Windows", () =>

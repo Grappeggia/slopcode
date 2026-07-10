@@ -6,7 +6,7 @@ import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryWithFsEffect, resolvePathEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 
@@ -231,14 +231,18 @@ export const ReadTool = Tool.define<
       ctx: Tool.Context<Metadata>,
     ) {
       const instance = yield* InstanceState.context
-      let filepath = params.filePath
-      if (!path.isAbsolute(filepath)) {
-        filepath = path.resolve(instance.directory, filepath)
-      }
-      if (process.platform === "win32") {
-        filepath = FSUtil.normalizePath(filepath)
-      }
-      const title = path.relative(instance.worktree, filepath)
+      const requested = path.isAbsolute(params.filePath)
+        ? params.filePath
+        : path.resolve(instance.directory, params.filePath)
+      const target = yield* resolvePathEffect(fs, requested, instance.directory)
+      const filepath = target.canonical
+      const shown = process.platform === "win32" ? filepath : target.original
+      const title = path.relative(instance.worktree, shown)
+
+      yield* assertExternalDirectoryWithFsEffect(fs, ctx, target, {
+        bypass: Boolean(ctx.extra?.["bypassCwdCheck"]),
+        kind: target.directory ? "directory" : "file",
+      })
 
       const stat = yield* fs.stat(filepath).pipe(
         Effect.catchIf(
@@ -247,14 +251,9 @@ export const ReadTool = Tool.define<
         ),
       )
 
-      yield* assertExternalDirectoryEffect(ctx, filepath, {
-        bypass: Boolean(ctx.extra?.["bypassCwdCheck"]),
-        kind: stat?.type === "Directory" ? "directory" : "file",
-      })
-
       yield* ctx.ask({
         permission: "read",
-        patterns: [path.relative(instance.worktree, filepath)],
+        patterns: [path.relative(instance.worktree, shown)],
         always: ["*"],
         metadata: {},
       })
@@ -272,7 +271,7 @@ export const ReadTool = Tool.define<
         return {
           title,
           output: [
-            `<path>${filepath}</path>`,
+            `<path>${shown}</path>`,
             `<type>directory</type>`,
             `<entries>`,
             sliced.join("\n"),
@@ -287,7 +286,7 @@ export const ReadTool = Tool.define<
             loaded: [] as string[],
             display: {
               type: "directory" as const,
-              path: filepath,
+              path: shown,
               entries: sliced,
               offset,
               totalEntries: items.length,
@@ -335,7 +334,7 @@ export const ReadTool = Tool.define<
         )
       }
 
-      let output = [`<path>${filepath}</path>`, `<type>file</type>`, "<content>\n"].join("\n")
+      let output = [`<path>${shown}</path>`, `<type>file</type>`, "<content>\n"].join("\n")
       output += file.raw.map((line, i) => `${i + file.offset}: ${line}`).join("\n")
 
       const last = file.offset + file.raw.length - 1
@@ -365,7 +364,7 @@ export const ReadTool = Tool.define<
           loaded: loaded.map((item) => item.filepath),
           display: {
             type: "file" as const,
-            path: filepath,
+            path: shown,
             text: file.raw.join("\n"),
             lineStart: file.offset,
             lineEnd: last,

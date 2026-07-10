@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { Ripgrep } from "@slopcode-ai/core/ripgrep"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryWithFsEffect, resolvePathEffect } from "./external-directory"
 import DESCRIPTION from "./grep.txt"
 import * as Tool from "./tool"
 
@@ -51,13 +51,13 @@ export const GrepTool = Tool.define(
           const requested = path.isAbsolute(params.path ?? ins.directory)
             ? (params.path ?? ins.directory)
             : path.join(ins.directory, params.path ?? ".")
-          const requestedInfo = yield* fs.stat(requested).pipe(Effect.catch(() => Effect.succeed(undefined)))
-          yield* assertExternalDirectoryEffect(ctx, requested, {
+          const target = yield* resolvePathEffect(fs, requested, ins.directory)
+          yield* assertExternalDirectoryWithFsEffect(fs, ctx, target, {
             bypass: false,
-            kind: requestedInfo?.type === "Directory" ? "directory" : "file",
+            kind: target.directory ? "directory" : "file",
           })
 
-          const search = FSUtil.resolve(requested)
+          const search = target.canonical
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           const cwd = info?.type === "Directory" ? search : path.dirname(search)
           const result = yield* ripgrep.grep({

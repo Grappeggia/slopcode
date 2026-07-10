@@ -12,7 +12,7 @@ import { Format } from "../format"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryWithFsEffect, resolvePathEffect } from "./external-directory"
 import * as Bom from "@/util/bom"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -38,10 +38,13 @@ export const WriteTool = Tool.define(
       execute: (params: { content: string; filePath: string }, ctx: Tool.Context) =>
         Effect.gen(function* () {
           const instance = yield* InstanceState.context
-          const filepath = path.isAbsolute(params.filePath)
+          const requested = path.isAbsolute(params.filePath)
             ? params.filePath
             : path.join(instance.directory, params.filePath)
-          yield* assertExternalDirectoryEffect(ctx, filepath)
+          const target = yield* resolvePathEffect(fs, requested, instance.directory)
+          const filepath = target.canonical
+          const shown = process.platform === "win32" ? filepath : target.original
+          yield* assertExternalDirectoryWithFsEffect(fs, ctx, target)
 
           const exists = yield* fs.existsSafe(filepath)
           const source = exists ? yield* Bom.readFile(fs, filepath) : { bom: false, text: "" }
@@ -50,13 +53,13 @@ export const WriteTool = Tool.define(
           const contentOld = source.text
           const contentNew = next.text
 
-          const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
+          const diff = trimDiff(createTwoFilesPatch(shown, shown, contentOld, contentNew))
           yield* ctx.ask({
             permission: "edit",
-            patterns: [path.relative(instance.worktree, filepath)],
+            patterns: [path.relative(instance.worktree, shown)],
             always: ["*"],
             metadata: {
-              filepath,
+              filepath: shown,
               diff,
             },
           })
@@ -90,10 +93,10 @@ export const WriteTool = Tool.define(
           }
 
           return {
-            title: path.relative(instance.worktree, filepath),
+            title: path.relative(instance.worktree, shown),
             metadata: {
               diagnostics,
-              filepath,
+              filepath: shown,
               exists: exists,
             },
             output,

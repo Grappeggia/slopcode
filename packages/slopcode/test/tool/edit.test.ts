@@ -1,9 +1,10 @@
 import { afterEach, describe, expect } from "bun:test"
+import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import path from "path"
 import fs from "fs/promises"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { EditTool } from "../../src/tool/edit"
-import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { disposeAllInstances, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { Format } from "../../src/format"
@@ -14,6 +15,7 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import * as Tool from "../../src/tool/tool"
 import { testEffect } from "../lib/effect"
 import { Watcher } from "@slopcode-ai/core/filesystem/watcher"
+import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 
 const ctx = {
   sessionID: SessionID.make("ses_test-edit-session"),
@@ -37,6 +39,7 @@ const layer = Layer.mergeAll(
   EventV2Bridge.defaultLayer,
   Truncate.defaultLayer,
   Agent.defaultLayer,
+  CrossSpawnSpawner.defaultLayer,
 )
 
 const it = testEffect(layer)
@@ -158,6 +161,54 @@ describe("tool.edit", () => {
         expect(yield* load(filepath)).toBe("new content here")
       }),
     )
+
+    if (process.platform !== "win32") {
+      it.instance("keeps an approved symlink edit pinned to its canonical target", () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const first = yield* tmpdirScoped()
+          const second = yield* tmpdirScoped()
+          const original = path.join(first, "target.txt")
+          const replacement = path.join(second, "target.txt")
+          const link = path.join(test.directory, "target.txt")
+          yield* Effect.promise(async () => {
+            await fs.writeFile(original, "old approved")
+            await fs.writeFile(replacement, "old swapped")
+            await fs.symlink(original, link)
+          })
+          const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+          const state = { swapped: false }
+          const next: Tool.Context = {
+            ...ctx,
+            ask: (req) =>
+              Effect.gen(function* () {
+                requests.push(req)
+                if (req.permission !== "external_directory" || state.swapped) return
+                state.swapped = true
+                yield* Effect.promise(async () => {
+                  await fs.unlink(link)
+                  await fs.symlink(replacement, link)
+                })
+              }),
+          }
+
+          yield* run({ filePath: link, oldString: "old", newString: "new" }, next)
+
+          const parent = yield* Effect.promise(() => fs.realpath(first))
+          expect(requests.find((item) => item.permission === "external_directory")).toMatchObject({
+            patterns: [path.join(parent, "*").replaceAll("\\", "/")],
+            metadata: {
+              filepath: link,
+              canonicalPath: yield* Effect.promise(() => fs.realpath(original)),
+              parentDir: parent,
+            },
+          })
+          expect(state.swapped).toBe(true)
+          expect(yield* Effect.promise(() => fs.readFile(original, "utf-8"))).toBe("new approved")
+          expect(yield* Effect.promise(() => fs.readFile(replacement, "utf-8"))).toBe("old swapped")
+        }),
+      )
+    }
 
     it.instance("replaces the first visible line in BOM files", () =>
       Effect.gen(function* () {

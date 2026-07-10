@@ -2,6 +2,7 @@ import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { describe, expect } from "bun:test"
 import { Cause, Effect, Exit, Layer } from "effect"
 import type * as Scope from "effect/Scope"
+import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { Config } from "@/config/config"
@@ -930,6 +931,69 @@ describe("tool.shell permissions", () => {
       )
     }),
   )
+
+  if (process.platform !== "win32") {
+    it.live("asks for the canonical external directory of a project symlink argument", () =>
+      Effect.gen(function* () {
+        const outside = yield* tmpdirScoped()
+        const tmp = yield* tmpdirScoped()
+        const target = path.join(outside, "outside.txt")
+        const link = path.join(tmp, "inside.txt")
+        yield* Effect.promise(async () => {
+          await fs.writeFile(target, "outside")
+          await fs.symlink(target, link)
+        })
+        yield* runIn(
+          tmp,
+          Effect.gen(function* () {
+            const stop = new Error("stop after canonical permission")
+            const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+
+            expect(
+              yield* fail(
+                { command: `cat ${quote(link)}`, description: "Read project symlink" },
+                capture(requests, stop),
+              ),
+            ).toMatchObject({ message: stop.message })
+
+            const parent = yield* Effect.promise(() => fs.realpath(outside))
+            expect(requests[0]).toMatchObject({
+              permission: "external_directory",
+              patterns: [path.join(parent, "*")],
+              always: [path.join(parent, "*")],
+              metadata: {
+                directories: [parent],
+                patterns: [path.join(parent, "*")],
+              },
+            })
+          }),
+        )
+      }),
+    )
+
+    it.live("fails closed before shell approval for a symlink loop argument", () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const first = path.join(tmp, "first")
+        const second = path.join(tmp, "second")
+        yield* Effect.promise(async () => {
+          await fs.symlink(second, first)
+          await fs.symlink(first, second)
+        })
+        yield* runIn(
+          tmp,
+          Effect.gen(function* () {
+            const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+
+            expect(
+              yield* fail({ command: `cat ${quote(first)}`, description: "Read symlink loop" }, capture(requests)),
+            ).toMatchObject({ _tag: "PathResolutionError", reason: "symlink_loop", path: first })
+            expect(requests).toEqual([])
+          }),
+        )
+      }),
+    )
+  }
 
   each("does not ask for external_directory permission when rm inside project", () =>
     Effect.gen(function* () {

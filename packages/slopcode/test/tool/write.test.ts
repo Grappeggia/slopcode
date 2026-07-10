@@ -1,4 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
+import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { Effect, Layer } from "effect"
 import path from "path"
 import fs from "fs/promises"
@@ -12,7 +13,7 @@ import { Tool } from "@/tool/tool"
 import { Agent } from "../../src/agent/agent"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
-import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { disposeAllInstances, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const ctx = {
@@ -108,6 +109,54 @@ describe("tool.write", () => {
         expect(content).toBe("new content")
       }),
     )
+
+    if (process.platform !== "win32") {
+      it.instance("keeps an approved symlink write pinned to its canonical target", () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const first = yield* tmpdirScoped()
+          const second = yield* tmpdirScoped()
+          const original = path.join(first, "target.txt")
+          const replacement = path.join(second, "target.txt")
+          const link = path.join(test.directory, "target.txt")
+          yield* Effect.promise(async () => {
+            await fs.writeFile(original, "original")
+            await fs.writeFile(replacement, "replacement")
+            await fs.symlink(original, link)
+          })
+          const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+          const state = { swapped: false }
+          const next: Tool.Context = {
+            ...ctx,
+            ask: (req) =>
+              Effect.gen(function* () {
+                requests.push(req)
+                if (req.permission !== "external_directory" || state.swapped) return
+                state.swapped = true
+                yield* Effect.promise(async () => {
+                  await fs.unlink(link)
+                  await fs.symlink(replacement, link)
+                })
+              }),
+          }
+
+          yield* run({ filePath: link, content: "approved" }, next)
+
+          const parent = yield* Effect.promise(() => fs.realpath(first))
+          expect(requests.find((item) => item.permission === "external_directory")).toMatchObject({
+            patterns: [path.join(parent, "*").replaceAll("\\", "/")],
+            metadata: {
+              filepath: link,
+              canonicalPath: yield* Effect.promise(() => fs.realpath(original)),
+              parentDir: parent,
+            },
+          })
+          expect(state.swapped).toBe(true)
+          expect(yield* Effect.promise(() => fs.readFile(original, "utf-8"))).toBe("approved")
+          expect(yield* Effect.promise(() => fs.readFile(replacement, "utf-8"))).toBe("replacement")
+        }),
+      )
+    }
 
     it.instance("preserves BOM when overwriting existing files", () =>
       Effect.gen(function* () {
@@ -259,6 +308,46 @@ describe("tool.write", () => {
         expect(exit._tag).toBe("Failure")
       }),
     )
+
+    if (process.platform !== "win32") {
+      it.instance("does not write a missing child through a denied external directory symlink", () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const outside = yield* tmpdirScoped()
+          const link = path.join(test.directory, "linked")
+          const target = path.join(link, "new.txt")
+          yield* Effect.promise(() => fs.symlink(outside, link))
+          const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+          const denied = new Error("external directory denied")
+          const next: Tool.Context = {
+            ...ctx,
+            ask: (req) =>
+              Effect.sync(() => {
+                requests.push(req)
+                if (req.permission === "external_directory") throw denied
+              }),
+          }
+
+          const exit = yield* Effect.exit(run({ filePath: target, content: "escaped" }, next))
+
+          expect(exit._tag).toBe("Failure")
+          const parent = yield* Effect.promise(() => fs.realpath(outside))
+          expect(requests[0]).toMatchObject({
+            permission: "external_directory",
+            patterns: [path.join(parent, "*").replaceAll("\\", "/")],
+            metadata: { canonicalPath: path.join(parent, "new.txt"), parentDir: parent },
+          })
+          expect(
+            yield* Effect.promise(() =>
+              fs.stat(path.join(outside, "new.txt")).then(
+                () => true,
+                () => false,
+              ),
+            ),
+          ).toBe(false)
+        }),
+      )
+    }
   })
 
   describe("title generation", () => {

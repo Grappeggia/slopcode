@@ -1,7 +1,8 @@
 import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { describe, expect } from "bun:test"
+import fs from "fs/promises"
 import path from "path"
-import { Effect } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import type { Tool } from "@/tool/tool"
 import { assertExternalDirectoryEffect } from "../../src/tool/external-directory"
@@ -10,8 +11,9 @@ import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import type { Permission } from "../../src/permission"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
+import { FSUtil } from "@slopcode-ai/core/fs-util"
 
-const it = testEffect(CrossSpawnSpawner.defaultLayer)
+const it = testEffect(Layer.mergeAll(CrossSpawnSpawner.defaultLayer, FSUtil.defaultLayer))
 
 const baseCtx: Omit<Tool.Context, "ask"> = {
   sessionID: SessionID.make("ses_test"),
@@ -103,6 +105,85 @@ describe("tool.assertExternalDirectory", () => {
       expect(requests.length).toBe(0)
     }),
   )
+
+  if (process.platform !== "win32") {
+    it.instance("asks for the canonical target of an internal symlink", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const outside = yield* tmpdirScoped()
+        const target = path.join(outside, "secret.txt")
+        const link = path.join(test.directory, "secret.txt")
+        yield* Effect.promise(async () => {
+          await fs.writeFile(target, "secret")
+          await fs.symlink(target, link)
+        })
+        const { requests, ctx } = makeCtx()
+
+        yield* assertExternalDirectoryEffect(ctx, link)
+
+        const req = requests.find((item) => item.permission === "external_directory")
+        const canonical = yield* Effect.promise(() => fs.realpath(target))
+        const parent = yield* Effect.promise(() => fs.realpath(outside))
+        expect(req).toMatchObject({
+          patterns: [glob(path.join(parent, "*"))],
+          always: [glob(path.join(parent, "*"))],
+          metadata: {
+            filepath: link,
+            canonicalPath: canonical,
+            parentDir: parent,
+            resource: glob(path.join(parent, "*")),
+          },
+        })
+      }),
+    )
+
+    it.instance("fails closed for a broken internal symlink", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const outside = yield* tmpdirScoped()
+        const link = path.join(test.directory, "broken.txt")
+        yield* Effect.promise(() => fs.symlink(path.join(outside, "missing.txt"), link))
+        const { requests, ctx } = makeCtx()
+
+        const exit = yield* Effect.exit(assertExternalDirectoryEffect(ctx, link))
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.squash(exit.cause)).toMatchObject({
+            _tag: "PathResolutionError",
+            path: link,
+            reason: "broken_symlink",
+          })
+        }
+        expect(requests).toEqual([])
+      }),
+    )
+
+    it.instance("fails closed for an internal symlink loop", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const first = path.join(test.directory, "first")
+        const second = path.join(test.directory, "second")
+        yield* Effect.promise(async () => {
+          await fs.symlink(second, first)
+          await fs.symlink(first, second)
+        })
+        const { requests, ctx } = makeCtx()
+
+        const exit = yield* Effect.exit(assertExternalDirectoryEffect(ctx, first))
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.squash(exit.cause)).toMatchObject({
+            _tag: "PathResolutionError",
+            path: first,
+            reason: "symlink_loop",
+          })
+        }
+        expect(requests).toEqual([])
+      }),
+    )
+  }
 
   if (process.platform === "win32") {
     it.instance(

@@ -21,6 +21,7 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
+import { resolveBoundaryEffect, resolvePathEffect } from "./external-directory"
 
 export { Parameters } from "./shell/prompt"
 
@@ -402,10 +403,12 @@ export const ShellTool = Tool.define(
 
         if (cmd && (FILES.has(cmd) || (shellKind === "cmd" && CMD_FILES.has(cmd)))) {
           for (const arg of pathArgs(command, ps, shellKind === "cmd")) {
-            const resolved = yield* argPath(arg, cwd, ps, shell)
-            yield* Effect.logInfo("resolved path", { arg, resolved })
-            if (!resolved || containsPath(resolved, instance)) continue
-            const dir = (yield* fs.isDir(resolved)) ? resolved : path.dirname(resolved)
+            const candidate = yield* argPath(arg, cwd, ps, shell)
+            if (!candidate) continue
+            const resolved = yield* resolvePathEffect(fs, candidate, cwd).pipe(Effect.orDie)
+            yield* Effect.logInfo("resolved path", { arg, resolved: resolved.canonical })
+            if (containsPath(resolved.canonical, instance)) continue
+            const dir = resolved.directory ? resolved.canonical : path.dirname(resolved.canonical)
             scan.dirs.add(dir)
           }
         }
@@ -620,9 +623,12 @@ export const ShellTool = Tool.define(
           execute: (params: Parameters, ctx: Tool.Context) =>
             Effect.gen(function* () {
               const instanceCtx = yield* InstanceState.context
-              const cwd = params.workdir
+              const requestedCwd = params.workdir
                 ? yield* resolvePath(params.workdir, instanceCtx.directory, shell)
                 : instanceCtx.directory
+              const cwd = (yield* resolvePathEffect(fs, requestedCwd, instanceCtx.directory).pipe(Effect.orDie))
+                .canonical
+              const boundary = yield* resolveBoundaryEffect(fs, instanceCtx).pipe(Effect.orDie)
               if (params.timeout !== undefined && params.timeout < 0) {
                 throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
               }
@@ -633,8 +639,8 @@ export const ShellTool = Tool.define(
                   const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
                     Effect.sync(() => tree.delete()),
                   )
-                  const scan = yield* collect(tree.rootNode, cwd, ps, shell, instanceCtx)
-                  if (!containsPath(cwd, instanceCtx)) scan.dirs.add(cwd)
+                  const scan = yield* collect(tree.rootNode, cwd, ps, shell, boundary)
+                  if (!containsPath(cwd, boundary)) scan.dirs.add(cwd)
                   yield* ask(ctx, scan, params)
                 }),
               )

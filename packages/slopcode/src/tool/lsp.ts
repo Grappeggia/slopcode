@@ -5,7 +5,7 @@ import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./lsp.txt"
 import { InstanceState } from "@/effect/instance-state"
 import { pathToFileURL } from "url"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryWithFsEffect, resolvePathEffect } from "./external-directory"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 
 const operations = [
@@ -45,14 +45,25 @@ export const LspTool = Tool.define(
       execute: (args: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
         Effect.gen(function* () {
           const instance = yield* InstanceState.context
-          const file = path.isAbsolute(args.filePath) ? args.filePath : path.join(instance.directory, args.filePath)
-          yield* assertExternalDirectoryEffect(ctx, file)
+          const target = yield* resolvePathEffect(
+            fs,
+            path.isAbsolute(args.filePath) ? args.filePath : path.join(instance.directory, args.filePath),
+            instance.directory,
+          )
+          const file = target.canonical
+          const shown = process.platform === "win32" ? file : target.original
+          yield* assertExternalDirectoryWithFsEffect(fs, ctx, target)
           const meta =
             args.operation === "workspaceSymbol"
               ? { operation: args.operation }
               : args.operation === "documentSymbol"
-                ? { operation: args.operation, filePath: file }
-                : { operation: args.operation, filePath: file, line: args.line, character: args.character }
+                ? { operation: args.operation, filePath: shown }
+                : {
+                    operation: args.operation,
+                    filePath: shown,
+                    line: args.line,
+                    character: args.character,
+                  }
           yield* ctx.ask({
             permission: "lsp",
             patterns: ["*"],
@@ -62,7 +73,7 @@ export const LspTool = Tool.define(
 
           const uri = pathToFileURL(file).href
           const position = { file, line: args.line - 1, character: args.character - 1 }
-          const relPath = path.relative(instance.worktree, file)
+          const relPath = path.relative(instance.worktree, shown)
           const detail =
             args.operation === "workspaceSymbol"
               ? ""

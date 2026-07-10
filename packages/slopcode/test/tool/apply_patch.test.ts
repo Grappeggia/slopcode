@@ -39,9 +39,9 @@ type AskInput = {
   patterns: string[]
   always: string[]
   metadata: {
-    diff: string
+    diff?: string
     filepath: string
-    files: Array<{
+    files?: Array<{
       filePath: string
       relativePath: string
       type: "add" | "update" | "delete" | "move"
@@ -50,6 +50,9 @@ type AskInput = {
       deletions: number
       movePath?: string
     }>
+    canonicalPath?: string
+    parentDir?: string
+    resource?: string
   }
 }
 
@@ -63,14 +66,14 @@ const execute = Effect.fn("ApplyPatchToolTest.execute")(function* (params: { pat
   return yield* tool.execute(params, ctx)
 })
 
-const makeCtx = () => {
+const makeCtx = (onAsk?: (input: AskInput) => Effect.Effect<void>) => {
   const calls: AskInput[] = []
   const ctx: ToolCtx = {
     ...baseCtx,
     ask: (input) =>
       Effect.sync(() => {
         calls.push(input)
-      }),
+      }).pipe(Effect.andThen(onAsk?.(input) ?? Effect.void)),
   }
 
   return { ctx, calls }
@@ -141,14 +144,15 @@ describe("tool.apply_patch freeform", () => {
 
         // Verify permission metadata includes files array for UI rendering
         const permissionCall = calls[0]
-        expect(permissionCall.metadata.files).toHaveLength(3)
-        expect(permissionCall.metadata.files.map((f) => f.type).sort()).toEqual(["add", "delete", "update"])
+        const files = permissionCall.metadata.files ?? []
+        expect(files).toHaveLength(3)
+        expect(files.map((f) => f.type).sort()).toEqual(["add", "delete", "update"])
 
-        const addFile = permissionCall.metadata.files.find((f) => f.type === "add")
+        const addFile = files.find((f) => f.type === "add")
         expect(addFile?.relativePath).toBe("nested/new.txt")
         expect(addFile?.patch).toContain("+created")
 
-        const updateFile = permissionCall.metadata.files.find((f) => f.type === "update")
+        const updateFile = files.find((f) => f.type === "update")
         expect(updateFile?.patch).toContain("-line2")
         expect(updateFile?.patch).toContain("+changed")
 
@@ -178,7 +182,9 @@ describe("tool.apply_patch freeform", () => {
         const permissionCall = calls[0]
         expect(permissionCall.metadata.files).toHaveLength(1)
 
-        const moveFile = permissionCall.metadata.files[0]
+        const moveFile = permissionCall.metadata.files?.[0]
+        expect(moveFile).toBeDefined()
+        if (!moveFile) return
         expect(moveFile.type).toBe("move")
         expect(moveFile.relativePath).toBe("renamed/dir/name.txt")
         expect(moveFile.movePath).toBe(path.join(test.directory, "renamed/dir/name.txt"))
@@ -218,7 +224,7 @@ describe("tool.apply_patch freeform", () => {
       yield* execute({ patchText }, ctx)
 
       expect(calls.length).toBe(1)
-      const shown = calls[0].metadata.files[0]?.patch ?? ""
+      const shown = calls[0].metadata.files?.[0]?.patch ?? ""
       expect(shown).not.toContain(bom)
       expect(shown).not.toContain("-using System;")
       expect(shown).not.toContain("+using System;")
@@ -301,6 +307,104 @@ describe("tool.apply_patch freeform", () => {
       expect(yield* readText(destination)).toBe("new\n")
     }),
   )
+
+  if (process.platform !== "win32") {
+    it.instance("does not add a missing child through a denied external directory symlink", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const outside = path.join(path.dirname(test.directory), `${path.basename(test.directory)}-outside`)
+        const link = path.join(test.directory, "linked")
+        yield* makeDir(outside)
+        yield* Effect.promise(() => fs.symlink(outside, link))
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(outside, { recursive: true, force: true })))
+        const denied = new Error("external directory denied")
+        const { ctx, calls } = makeCtx((input) =>
+          input.permission === "external_directory" ? Effect.die(denied) : Effect.void,
+        )
+
+        yield* expectFailure(
+          execute({ patchText: "*** Begin Patch\n*** Add File: linked/new.txt\n+escaped\n*** End Patch" }, ctx),
+          denied.message,
+        )
+
+        const parent = yield* Effect.promise(() => fs.realpath(outside))
+        expect(calls[0]).toMatchObject({
+          permission: "external_directory",
+          patterns: [path.join(parent, "*").replaceAll("\\", "/")],
+          metadata: { canonicalPath: path.join(parent, "new.txt"), parentDir: parent },
+        })
+        yield* expectReadFailure(path.join(outside, "new.txt"))
+      }),
+    )
+
+    it.instance("pins apply_patch move source and destination to their approved canonical targets", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const root = path.join(path.dirname(test.directory), `${path.basename(test.directory)}-move`)
+        const firstSource = path.join(root, "source-first")
+        const secondSource = path.join(root, "source-second")
+        const firstDestination = path.join(root, "destination-first")
+        const secondDestination = path.join(root, "destination-second")
+        const original = path.join(firstSource, "source.txt")
+        const replacement = path.join(secondSource, "source.txt")
+        const source = path.join(test.directory, "source.txt")
+        const destination = path.join(test.directory, "destination")
+        yield* Effect.promise(async () => {
+          await Promise.all(
+            [firstSource, secondSource, firstDestination, secondDestination].map((dir) =>
+              fs.mkdir(dir, { recursive: true }),
+            ),
+          )
+          await fs.writeFile(original, "old approved\n")
+          await fs.writeFile(replacement, "old swapped\n")
+          await fs.symlink(original, source)
+          await fs.symlink(firstDestination, destination)
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
+        const canonicalSource = yield* Effect.promise(() => fs.realpath(original))
+        const canonicalDestination = path.join(yield* Effect.promise(() => fs.realpath(firstDestination)), "moved.txt")
+        const state = { source: false, destination: false }
+        const { ctx, calls } = makeCtx((input) => {
+          if (input.permission !== "external_directory") return Effect.void
+          if (input.metadata.canonicalPath === canonicalSource && !state.source) {
+            state.source = true
+            return Effect.promise(async () => {
+              await fs.unlink(source)
+              await fs.symlink(replacement, source)
+            }).pipe(Effect.orDie)
+          }
+          if (input.metadata.canonicalPath === canonicalDestination && !state.destination) {
+            state.destination = true
+            return Effect.promise(async () => {
+              await fs.unlink(destination)
+              await fs.symlink(secondDestination, destination)
+            }).pipe(Effect.orDie)
+          }
+          return Effect.void
+        })
+
+        yield* execute(
+          {
+            patchText:
+              "*** Begin Patch\n*** Update File: source.txt\n*** Move to: destination/moved.txt\n@@\n-old approved\n+new approved\n*** End Patch",
+          },
+          ctx,
+        )
+
+        const external = calls.filter((input) => input.permission === "external_directory")
+        expect(external.map((input) => input.metadata.canonicalPath)).toEqual([canonicalSource, canonicalDestination])
+        expect(external.map((input) => input.metadata.parentDir)).toEqual([
+          yield* Effect.promise(() => fs.realpath(firstSource)),
+          yield* Effect.promise(() => fs.realpath(firstDestination)),
+        ])
+        expect(state).toEqual({ source: true, destination: true })
+        yield* expectReadFailure(original)
+        expect(yield* readText(replacement)).toBe("old swapped\n")
+        expect(yield* readText(canonicalDestination)).toBe("new approved\n")
+        yield* expectReadFailure(path.join(secondDestination, "moved.txt"))
+      }),
+    )
+  }
 
   it.instance("adds file overwriting existing file", () =>
     Effect.gen(function* () {

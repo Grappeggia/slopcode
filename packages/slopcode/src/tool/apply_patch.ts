@@ -6,7 +6,7 @@ import { Watcher } from "@slopcode-ai/core/filesystem/watcher"
 import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
 import { createTwoFilesPatch, diffLines } from "diff"
-import { assertExternalDirectoryEffect } from "./external-directory"
+import { assertExternalDirectoryWithFsEffect, resolvePathEffect } from "./external-directory"
 import { trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
@@ -57,10 +57,12 @@ export const ApplyPatchTool = Tool.define(
       // Validate file paths and check permissions
       const fileChanges: Array<{
         filePath: string
+        displayPath: string
         oldContent: string
         newContent: string
         type: "add" | "update" | "delete" | "move"
         movePath?: string
+        displayMovePath?: string
         diff: string
         additions: number
         deletions: number
@@ -70,8 +72,10 @@ export const ApplyPatchTool = Tool.define(
       let totalDiff = ""
 
       for (const hunk of hunks) {
-        const filePath = path.resolve(instance.directory, hunk.path)
-        yield* assertExternalDirectoryEffect(ctx, filePath)
+        const source = yield* resolvePathEffect(afs, path.resolve(instance.directory, hunk.path), instance.directory)
+        const filePath = source.canonical
+        const displayPath = process.platform === "win32" ? filePath : source.original
+        yield* assertExternalDirectoryWithFsEffect(afs, ctx, source)
 
         switch (hunk.type) {
           case "add": {
@@ -79,7 +83,7 @@ export const ApplyPatchTool = Tool.define(
             const newContent =
               hunk.contents.length === 0 || hunk.contents.endsWith("\n") ? hunk.contents : `${hunk.contents}\n`
             const next = Bom.split(newContent)
-            const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, next.text))
+            const diff = trimDiff(createTwoFilesPatch(displayPath, displayPath, oldContent, next.text))
 
             let additions = 0
             let deletions = 0
@@ -90,6 +94,7 @@ export const ApplyPatchTool = Tool.define(
 
             fileChanges.push({
               filePath,
+              displayPath,
               oldContent,
               newContent: next.text,
               type: "add",
@@ -130,7 +135,7 @@ export const ApplyPatchTool = Tool.define(
               return yield* Effect.fail(new Error(`apply_patch verification failed: ${error}`))
             }
 
-            const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, newContent))
+            const diff = trimDiff(createTwoFilesPatch(displayPath, displayPath, oldContent, newContent))
 
             let additions = 0
             let deletions = 0
@@ -139,15 +144,25 @@ export const ApplyPatchTool = Tool.define(
               if (change.removed) deletions += change.count || 0
             }
 
-            const movePath = hunk.move_path ? path.resolve(instance.directory, hunk.move_path) : undefined
-            yield* assertExternalDirectoryEffect(ctx, movePath)
+            const destination = hunk.move_path
+              ? yield* resolvePathEffect(afs, path.resolve(instance.directory, hunk.move_path), instance.directory)
+              : undefined
+            yield* assertExternalDirectoryWithFsEffect(afs, ctx, destination)
+            const movePath = destination?.canonical
+            const displayMovePath = destination
+              ? process.platform === "win32"
+                ? destination.canonical
+                : destination.original
+              : undefined
 
             fileChanges.push({
               filePath,
+              displayPath,
               oldContent,
               newContent,
               type: hunk.move_path ? "move" : "update",
               movePath,
+              displayMovePath,
               diff,
               additions,
               deletions,
@@ -169,12 +184,13 @@ export const ApplyPatchTool = Tool.define(
               ),
             )
             const contentToDelete = source.text
-            const deleteDiff = trimDiff(createTwoFilesPatch(filePath, filePath, contentToDelete, ""))
+            const deleteDiff = trimDiff(createTwoFilesPatch(displayPath, displayPath, contentToDelete, ""))
 
             const deletions = contentToDelete.split("\n").length
 
             fileChanges.push({
               filePath,
+              displayPath,
               oldContent: contentToDelete,
               newContent: "",
               type: "delete",
@@ -192,17 +208,23 @@ export const ApplyPatchTool = Tool.define(
 
       // Build per-file metadata for UI rendering (used for both permission and result)
       const files = fileChanges.map((change) => ({
-        filePath: change.filePath,
-        relativePath: path.relative(instance.worktree, change.movePath ?? change.filePath).replaceAll("\\", "/"),
+        filePath: change.displayPath,
+        canonicalPath: change.filePath,
+        relativePath: path
+          .relative(instance.worktree, change.displayMovePath ?? change.displayPath)
+          .replaceAll("\\", "/"),
         type: change.type,
         patch: change.diff,
         additions: change.additions,
         deletions: change.deletions,
-        movePath: change.movePath,
+        movePath: change.displayMovePath,
+        canonicalMovePath: change.movePath,
       }))
 
       // Check permissions if needed
-      const relativePaths = fileChanges.map((c) => path.relative(instance.worktree, c.filePath).replaceAll("\\", "/"))
+      const relativePaths = fileChanges.map((change) =>
+        path.relative(instance.worktree, change.displayPath).replaceAll("\\", "/"),
+      )
       yield* ctx.ask({
         permission: "edit",
         patterns: relativePaths,
@@ -273,12 +295,12 @@ export const ApplyPatchTool = Tool.define(
       // Generate output summary
       const summaryLines = fileChanges.map((change) => {
         if (change.type === "add") {
-          return `A ${path.relative(instance.worktree, change.filePath).replaceAll("\\", "/")}`
+          return `A ${path.relative(instance.worktree, change.displayPath).replaceAll("\\", "/")}`
         }
         if (change.type === "delete") {
-          return `D ${path.relative(instance.worktree, change.filePath).replaceAll("\\", "/")}`
+          return `D ${path.relative(instance.worktree, change.displayPath).replaceAll("\\", "/")}`
         }
-        const target = change.movePath ?? change.filePath
+        const target = change.displayMovePath ?? change.displayPath
         return `M ${path.relative(instance.worktree, target).replaceAll("\\", "/")}`
       })
       let output = `Success. Updated the following files:\n${summaryLines.join("\n")}`
@@ -288,7 +310,7 @@ export const ApplyPatchTool = Tool.define(
         const target = change.movePath ?? change.filePath
         const block = LSP.Diagnostic.report(target, diagnostics[FSUtil.normalizePath(target)] ?? [])
         if (!block) continue
-        const rel = path.relative(instance.worktree, target).replaceAll("\\", "/")
+        const rel = path.relative(instance.worktree, change.displayMovePath ?? change.displayPath).replaceAll("\\", "/")
         output += `\n\nLSP errors detected in ${rel}, please fix:\n${block}`
       }
 
