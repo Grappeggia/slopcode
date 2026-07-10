@@ -25,6 +25,7 @@ import { initI18n, t } from "./i18n"
 import { initializationData, initializationReady } from "./initialization"
 import { resetZoom, setPinchZoomEnabled, webviewZoom, zoomIn, zoomOut } from "./webview-zoom"
 import { availableStartupServer, readyWslConnections } from "./wsl/connections"
+import { handleLinkClick } from "./links"
 import "./styles.css"
 import { Splash } from "@slopcode-ai/ui/logo"
 import { useTheme } from "@slopcode-ai/ui/theme/context"
@@ -298,11 +299,7 @@ render(() => {
   const [locale] = createResource(loadLocale)
 
   function handleClick(e: MouseEvent) {
-    const link = (e.target as HTMLElement).closest("a.external-link") as HTMLAnchorElement | null
-    if (link?.href) {
-      e.preventDefault()
-      platform.openLink(link.href)
-    }
+    handleLinkClick(e, window.location.href, platform.openLink)
   }
 
   function Inner() {

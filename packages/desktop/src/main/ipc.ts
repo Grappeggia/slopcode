@@ -6,8 +6,10 @@ import type { IpcMainEvent, IpcMainInvokeEvent } from "electron"
 import type { DesktopMenuAction } from "@slopcode-ai/app/desktop-menu"
 
 import type { FatalRendererError, ServerReadyData, TitlebarTheme } from "../preload/types"
+import { safeExternalUrl } from "../security"
 import { runDesktopMenuAction } from "./desktop-menu-actions"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
+import { guardIpc } from "./security"
 import { getStore } from "./store"
 import { getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
 import type { UpdaterController } from "./updater-controller"
@@ -19,6 +21,7 @@ const pickerFilters = (ext?: string[]) => {
 }
 
 const pickedFiles = createPickedFileAuthorizations()
+const ipc = guardIpc(ipcMain)
 
 type Deps = {
   killSidecar: () => Promise<void> | void
@@ -43,21 +46,21 @@ export function registerIpcHandlers(deps: Deps) {
   const updaterSubscriptions = createUpdaterSubscriptions()
   app.once("will-quit", updaterSubscriptions.clear)
 
-  ipcMain.handle("kill-sidecar", () => deps.killSidecar())
-  ipcMain.handle("await-initialization", () => deps.awaitInitialization())
-  ipcMain.handle("consume-initial-deep-links", () => deps.consumeInitialDeepLinks())
-  ipcMain.handle("get-default-server-url", () => deps.getDefaultServerUrl())
-  ipcMain.handle("set-default-server-url", (_event: IpcMainInvokeEvent, url: string | null) =>
+  ipc.handle("kill-sidecar", () => deps.killSidecar())
+  ipc.handle("await-initialization", () => deps.awaitInitialization())
+  ipc.handle("consume-initial-deep-links", () => deps.consumeInitialDeepLinks())
+  ipc.handle("get-default-server-url", () => deps.getDefaultServerUrl())
+  ipc.handle("set-default-server-url", (_event: IpcMainInvokeEvent, url: string | null) =>
     deps.setDefaultServerUrl(url),
   )
-  ipcMain.handle("get-display-backend", () => deps.getDisplayBackend())
-  ipcMain.handle("set-display-backend", (_event: IpcMainInvokeEvent, backend: string | null) =>
+  ipc.handle("get-display-backend", () => deps.getDisplayBackend())
+  ipc.handle("set-display-backend", (_event: IpcMainInvokeEvent, backend: string | null) =>
     deps.setDisplayBackend(backend),
   )
-  ipcMain.handle("parse-markdown", (_event: IpcMainInvokeEvent, markdown: string) => deps.parseMarkdown(markdown))
-  ipcMain.handle("check-app-exists", (_event: IpcMainInvokeEvent, appName: string) => deps.checkAppExists(appName))
-  ipcMain.handle("resolve-app-path", (_event: IpcMainInvokeEvent, appName: string) => deps.resolveAppPath(appName))
-  ipcMain.handle("updater-subscribe", (event) => {
+  ipc.handle("parse-markdown", (_event: IpcMainInvokeEvent, markdown: string) => deps.parseMarkdown(markdown))
+  ipc.handle("check-app-exists", (_event: IpcMainInvokeEvent, appName: string) => deps.checkAppExists(appName))
+  ipc.handle("resolve-app-path", (_event: IpcMainInvokeEvent, appName: string) => deps.resolveAppPath(appName))
+  ipc.handle("updater-subscribe", (event) => {
     const id = event.sender.id
     updaterSubscriptions.set(
       id,
@@ -68,15 +71,15 @@ export function registerIpcHandlers(deps: Deps) {
     )
     event.sender.once("destroyed", () => updaterSubscriptions.delete(id))
   })
-  ipcMain.handle("updater-unsubscribe", (event) => updaterSubscriptions.delete(event.sender.id))
-  ipcMain.handle("updater-check", () => deps.updater.check())
-  ipcMain.handle("updater-install", () => deps.updater.install())
-  ipcMain.handle("set-background-color", (_event: IpcMainInvokeEvent, color: string) => deps.setBackgroundColor(color))
-  ipcMain.handle("export-debug-logs", () => deps.exportDebugLogs())
-  ipcMain.handle("record-fatal-renderer-error", (_event: IpcMainInvokeEvent, error: FatalRendererError) =>
+  ipc.handle("updater-unsubscribe", (event) => updaterSubscriptions.delete(event.sender.id))
+  ipc.handle("updater-check", () => deps.updater.check())
+  ipc.handle("updater-install", () => deps.updater.install())
+  ipc.handle("set-background-color", (_event: IpcMainInvokeEvent, color: string) => deps.setBackgroundColor(color))
+  ipc.handle("export-debug-logs", () => deps.exportDebugLogs())
+  ipc.handle("record-fatal-renderer-error", (_event: IpcMainInvokeEvent, error: FatalRendererError) =>
     deps.recordFatalRendererError(error),
   )
-  ipcMain.handle("store-get", (_event: IpcMainInvokeEvent, name: string, key: string) => {
+  ipc.handle("store-get", (_event: IpcMainInvokeEvent, name: string, key: string) => {
     try {
       const store = getStore(name)
       const value = store.get(key)
@@ -86,25 +89,25 @@ export function registerIpcHandlers(deps: Deps) {
       return null
     }
   })
-  ipcMain.handle("store-set", (_event: IpcMainInvokeEvent, name: string, key: string, value: string) => {
+  ipc.handle("store-set", (_event: IpcMainInvokeEvent, name: string, key: string, value: string) => {
     getStore(name).set(key, value)
   })
-  ipcMain.handle("store-delete", (_event: IpcMainInvokeEvent, name: string, key: string) => {
+  ipc.handle("store-delete", (_event: IpcMainInvokeEvent, name: string, key: string) => {
     getStore(name).delete(key)
   })
-  ipcMain.handle("store-clear", (_event: IpcMainInvokeEvent, name: string) => {
+  ipc.handle("store-clear", (_event: IpcMainInvokeEvent, name: string) => {
     getStore(name).clear()
   })
-  ipcMain.handle("store-keys", (_event: IpcMainInvokeEvent, name: string) => {
+  ipc.handle("store-keys", (_event: IpcMainInvokeEvent, name: string) => {
     const store = getStore(name)
     return Object.keys(store.store)
   })
-  ipcMain.handle("store-length", (_event: IpcMainInvokeEvent, name: string) => {
+  ipc.handle("store-length", (_event: IpcMainInvokeEvent, name: string) => {
     const store = getStore(name)
     return Object.keys(store.store).length
   })
 
-  ipcMain.handle(
+  ipc.handle(
     "open-directory-picker",
     async (_event: IpcMainInvokeEvent, opts?: { multiple?: boolean; title?: string; defaultPath?: string }) => {
       const result = await dialog.showOpenDialog({
@@ -117,7 +120,7 @@ export function registerIpcHandlers(deps: Deps) {
     },
   )
 
-  ipcMain.handle(
+  ipc.handle(
     "open-file-picker",
     async (
       event: IpcMainInvokeEvent,
@@ -143,15 +146,15 @@ export function registerIpcHandlers(deps: Deps) {
     },
   )
 
-  ipcMain.handle("read-picked-file", async (event: IpcMainInvokeEvent, token: string, filePath: string) => {
+  ipc.handle("read-picked-file", async (event: IpcMainInvokeEvent, token: string, filePath: string) => {
     return pickedFiles.read(event.sender.id, token, filePath)
   })
 
-  ipcMain.handle("release-picked-files", (event: IpcMainInvokeEvent, token: string) => {
+  ipc.handle("release-picked-files", (event: IpcMainInvokeEvent, token: string) => {
     pickedFiles.release(event.sender.id, token)
   })
 
-  ipcMain.handle(
+  ipc.handle(
     "save-file-picker",
     async (_event: IpcMainInvokeEvent, opts?: { title?: string; defaultPath?: string }) => {
       const result = await dialog.showSaveDialog({
@@ -163,11 +166,12 @@ export function registerIpcHandlers(deps: Deps) {
     },
   )
 
-  ipcMain.on("open-link", (_event: IpcMainEvent, url: string) => {
-    void shell.openExternal(url)
+  ipc.on("open-link", (_event: IpcMainEvent, value: unknown) => {
+    const url = safeExternalUrl(value)
+    if (url) void shell.openExternal(url)
   })
 
-  ipcMain.handle("open-path", async (_event: IpcMainInvokeEvent, path: string, app?: string) => {
+  ipc.handle("open-path", async (_event: IpcMainInvokeEvent, path: string, app?: string) => {
     if (!app) return shell.openPath(path)
     await new Promise<void>((resolve, reject) => {
       const [cmd, args] =
@@ -176,7 +180,7 @@ export function registerIpcHandlers(deps: Deps) {
     })
   })
 
-  ipcMain.handle("read-clipboard-image", () => {
+  ipc.handle("read-clipboard-image", () => {
     const image = clipboard.readImage()
     if (image.isEmpty()) return null
     const buffer = image.toPNG().buffer
@@ -184,48 +188,48 @@ export function registerIpcHandlers(deps: Deps) {
     return { buffer, width: size.width, height: size.height }
   })
 
-  ipcMain.on("show-notification", (_event: IpcMainEvent, title: string, body?: string) => {
+  ipc.on("show-notification", (_event: IpcMainEvent, title: string, body?: string) => {
     new Notification({ title, body }).show()
   })
 
-  ipcMain.handle("get-window-count", () => BrowserWindow.getAllWindows().length)
+  ipc.handle("get-window-count", () => BrowserWindow.getAllWindows().length)
 
-  ipcMain.handle("get-window-focused", (event: IpcMainInvokeEvent) => {
+  ipc.handle("get-window-focused", (event: IpcMainInvokeEvent) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     return win?.isFocused() ?? false
   })
 
-  ipcMain.handle("set-window-focus", (event: IpcMainInvokeEvent) => {
+  ipc.handle("set-window-focus", (event: IpcMainInvokeEvent) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     win?.focus()
   })
 
-  ipcMain.handle("show-window", (event: IpcMainInvokeEvent) => {
+  ipc.handle("show-window", (event: IpcMainInvokeEvent) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     win?.show()
   })
 
-  ipcMain.on("relaunch", () => {
+  ipc.on("relaunch", () => {
     deps.relaunch()
   })
 
-  ipcMain.handle("get-zoom-factor", (event: IpcMainInvokeEvent) => event.sender.getZoomFactor())
-  ipcMain.handle("set-zoom-factor", (event: IpcMainInvokeEvent, factor: number) => {
+  ipc.handle("get-zoom-factor", (event: IpcMainInvokeEvent) => event.sender.getZoomFactor())
+  ipc.handle("set-zoom-factor", (event: IpcMainInvokeEvent, factor: number) => {
     event.sender.setZoomFactor(factor)
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return
     updateTitlebar(win)
   })
-  ipcMain.handle("get-pinch-zoom-enabled", () => getPinchZoomEnabled())
-  ipcMain.handle("set-pinch-zoom-enabled", (_event: IpcMainInvokeEvent, enabled: boolean) => {
+  ipc.handle("get-pinch-zoom-enabled", () => getPinchZoomEnabled())
+  ipc.handle("set-pinch-zoom-enabled", (_event: IpcMainInvokeEvent, enabled: boolean) => {
     setPinchZoomEnabled(enabled)
   })
-  ipcMain.handle("set-titlebar", (event: IpcMainInvokeEvent, theme: TitlebarTheme) => {
+  ipc.handle("set-titlebar", (event: IpcMainInvokeEvent, theme: TitlebarTheme) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return
     setTitlebar(win, theme)
   })
-  ipcMain.handle("run-desktop-menu-action", (event: IpcMainInvokeEvent, action: DesktopMenuAction) => {
+  ipc.handle("run-desktop-menu-action", (event: IpcMainInvokeEvent, action: DesktopMenuAction) => {
     runDesktopMenuAction(BrowserWindow.fromWebContents(event.sender), action, {
       checkForUpdates: () => void deps.showUpdater(),
       relaunch: deps.relaunch,

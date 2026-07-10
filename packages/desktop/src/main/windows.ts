@@ -2,7 +2,7 @@ import windowState from "electron-window-state"
 import { resolveThemeVariant } from "@slopcode-ai/ui/theme/resolve"
 import type { DesktopTheme } from "@slopcode-ai/ui/theme/types"
 import oc2ThemeJson from "../../../ui/src/theme/themes/oc-2.json"
-import { app, BrowserWindow, dialog, net, nativeImage, nativeTheme, protocol } from "electron"
+import { app, BrowserWindow, dialog, net, nativeImage, nativeTheme, protocol, shell } from "electron"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { TitlebarTheme } from "../preload/types"
@@ -10,6 +10,7 @@ import { exportDebugLogs, write as writeLog } from "./logging"
 import { getStore } from "./store"
 import { PINCH_ZOOM_ENABLED_KEY } from "./store-keys"
 import { createUnresponsiveSampler } from "./unresponsive"
+import { ipcAuthorization, isTrustedRendererUrl, protectWindow } from "./security"
 
 const root = dirname(fileURLToPath(import.meta.url))
 const rendererRoot = join(root, "../renderer")
@@ -124,6 +125,8 @@ export function createMainWindow() {
   })
 
   const mode = tone()
+  const configured = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL
+  const dev = isTrustedRendererUrl(configured, configured) ? configured : undefined
   const win = new BrowserWindow({
     x: state.x,
     y: state.y,
@@ -155,14 +158,9 @@ export function createMainWindow() {
     },
   })
 
+  protectWindow(win, (url) => shell.openExternal(url), dev)
   allowRendererPermissions(win)
   wireWindowRecovery(win, "main")
-
-  win.webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
-    const { requestHeaders } = details
-    upsertKeyValue(requestHeaders, "Access-Control-Allow-Origin", ["*"])
-    callback({ requestHeaders })
-  })
 
   win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     const { responseHeaders = {} } = details
@@ -171,7 +169,7 @@ export function createMainWindow() {
   })
 
   state.manage(win)
-  loadWindow(win, "index.html")
+  loadWindow(win, "index.html", dev)
   wireZoom(win)
 
   win.once("ready-to-show", () => {
@@ -221,10 +219,9 @@ export function registerRendererProtocol() {
   })
 }
 
-function loadWindow(win: BrowserWindow, html: string) {
-  const devUrl = process.env.ELECTRON_RENDERER_URL
-  if (devUrl) {
-    const url = new URL(html, devUrl)
+function loadWindow(win: BrowserWindow, html: string, dev?: string) {
+  if (dev) {
+    const url = new URL(html, dev)
     void win.loadURL(url.toString())
     return
   }
@@ -354,40 +351,23 @@ function addDocumentPolicy(response: Response, file: string) {
 }
 
 function allowRendererPermissions(win: BrowserWindow) {
-  const webContentsId = win.webContents.id
-
   win.webContents.session.setPermissionRequestHandler((webContents, permission, callback, details) => {
     callback(
       rendererPermissions.has(permission) &&
         isTrustedRendererUrl(details.requestingUrl) &&
-        webContents.id === webContentsId,
+        ipcAuthorization.has(webContents),
     )
   })
   win.webContents.session.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
     if (!rendererPermissions.has(permission)) return false
-    if (webContents && webContents.id !== webContentsId) return false
+    if (webContents && !ipcAuthorization.has(webContents)) return false
     return isTrustedRendererUrl(details.requestingUrl) || isTrustedRendererUrl(requestingOrigin)
   })
 }
 
-function isTrustedRendererUrl(value?: string) {
-  return isRendererUrl(value)
-}
-
 function addRendererHeaders(value: string, headers: Record<string, any>) {
-  upsertKeyValue(headers, "Access-Control-Allow-Origin", ["*"])
-  upsertKeyValue(headers, "Access-Control-Allow-Headers", ["*"])
-  if (isRendererUrl(value, true)) upsertKeyValue(headers, documentPolicyHeader, [jsCallStacksDocumentPolicy])
-}
-
-function isRendererUrl(value?: string, html = false) {
-  if (!value || !URL.canParse(value)) return false
-  const url = new URL(value)
-  if (html && !url.pathname.endsWith(".html")) return false
-  if (url.protocol === `${rendererProtocol}:` && url.host === rendererHost) return true
-  const devUrl = process.env.ELECTRON_RENDERER_URL
-  if (!devUrl || !URL.canParse(devUrl)) return false
-  return url.origin === new URL(devUrl).origin
+  if (!isTrustedRendererUrl(value) || !new URL(value).pathname.endsWith(".html")) return
+  upsertKeyValue(headers, documentPolicyHeader, [jsCallStacksDocumentPolicy])
 }
 
 function wireZoom(win: BrowserWindow) {
