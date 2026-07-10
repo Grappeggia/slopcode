@@ -11,7 +11,14 @@ import { reloadBilling, setBillingReload } from "../src/routes/workspace/[id]/bi
 import { testDatabase, useTestDatabase } from "../../core/test/database"
 import { stripeWebhookTests } from "./stripeWebhook.cases"
 import { handler, type HandlerRuntime } from "../src/routes/zen/util/handler"
-import "./usageBatcher.cases"
+import {
+  acquireUsageCutover,
+  incrementUsage,
+  REFRESH_USAGE_CUTOVER,
+  releaseUsageCutover,
+} from "../src/routes/zen/util/usageBatcher"
+import { UsageRedis } from "./usageBatcher.cases"
+import "./usageBatcherRedis.cases"
 
 const workspaceID = "workspace_billing"
 const admin = {
@@ -341,6 +348,184 @@ test("handler emits stale recovery's durable hold and usage when lease ownership
     cost: pending.amount,
     enrichment: { estimated: true, unknown: true },
   })
+})
+
+test("hot-workspace handler fences concurrent admission and drains writes around settlement", async () => {
+  await seedZen()
+  const encoder = new TextEncoder()
+  const redis = new UsageRedis()
+  const workspace = `test:usage:wrk:${workspaceID}`
+  const user = `test:usage:usr:${workspaceID}:${admin.userID}`
+  const firstLifetimes: Promise<void>[] = []
+  let releaseFirst = () => {}
+  const first = await zenRequest({
+    usageCutover: {
+      redis,
+      stage: "test",
+      hotWorkspaces: new Set([workspaceID]),
+      owner: "handler_first",
+      graceMs: 1_000,
+      leaseMs: 1_000,
+      heartbeatInterval: 10,
+    },
+    waitUntil(promise) {
+      firstLifetimes.push(promise)
+    },
+    async fetch() {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"hello"}}]}\n\n'))
+            releaseFirst = () => {
+              controller.enqueue(
+                encoder.encode('data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}\n\n'),
+              )
+              controller.close()
+            }
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )
+    },
+  })
+  const firstBody = new Response(first.body).text()
+  let blockedFetch = false
+  const blocked = await zenRequest({
+    usageCutover: {
+      redis,
+      stage: "test",
+      hotWorkspaces: new Set([workspaceID]),
+      owner: "handler_blocked",
+      graceMs: 1_000,
+      leaseMs: 1_000,
+    },
+    async fetch() {
+      blockedFetch = true
+      throw new Error("blocked request reached provider")
+    },
+  })
+  expect(blocked.status).toBe(429)
+  expect(blocked.headers.get("retry-after")).toBe("1")
+  expect(blockedFetch).toBe(false)
+  expect(redis.calls.some((call) => call.script === REFRESH_USAGE_CUTOVER)).toBe(true)
+
+  await incrementUsage(redis, workspace, user, 30, 10)
+  releaseFirst()
+  await firstBody
+  await Promise.all(firstLifetimes)
+  const firstBilling = await testDatabase()
+    .select()
+    .from(BillingTable)
+    .then((rows) => rows[0])
+  const firstUser = await testDatabase()
+    .select()
+    .from(UserTable)
+    .then((rows) => rows[0])
+  expect(firstBilling.monthlyUsage).toBe(2_030)
+  expect(firstUser.monthlyUsage).toBe(2_010)
+  expect(redis.leases.size).toBe(0)
+
+  await incrementUsage(redis, workspace, user, 5, 5)
+  const secondLifetimes: Promise<void>[] = []
+  let releaseSecond = () => {}
+  const second = await zenRequest({
+    usageCutover: {
+      redis,
+      stage: "test",
+      hotWorkspaces: new Set([workspaceID]),
+      owner: "handler_second",
+      graceMs: 1_000,
+      leaseMs: 1_000,
+      heartbeatInterval: 100,
+    },
+    waitUntil(promise) {
+      secondLifetimes.push(promise)
+    },
+    async fetch() {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"again"}}]}\n\n'))
+            releaseSecond = () => {
+              controller.enqueue(
+                encoder.encode('data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}\n\n'),
+              )
+              controller.close()
+            }
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )
+    },
+  })
+  const secondBody = new Response(second.body).text()
+  const pending = await testDatabase()
+    .select()
+    .from(UsageReservationTable)
+    .then((rows) => rows.find((row) => row.status === "pending")!)
+  const interimBilling = await testDatabase()
+    .select()
+    .from(BillingTable)
+    .then((rows) => rows[0])
+  const interimUser = await testDatabase()
+    .select()
+    .from(UserTable)
+    .then((rows) => rows[0])
+  expect(interimBilling.monthlyUsage).toBe(firstBilling.monthlyUsage! + 5 + pending.amount)
+  expect(interimUser.monthlyUsage).toBe(firstUser.monthlyUsage! + 5 + pending.amount)
+  releaseSecond()
+  await secondBody
+  await Promise.all(secondLifetimes)
+})
+
+test("failed hot-workspace handler releases its cutover fence without completing grace", async () => {
+  await seedZen()
+  const redis = new UsageRedis()
+  const workspace = `test:usage:wrk:${workspaceID}`
+  const user = `test:usage:usr:${workspaceID}:${admin.userID}`
+  const response = await zenRequest({
+    usageCutover: {
+      redis,
+      stage: "test",
+      hotWorkspaces: new Set([workspaceID]),
+      owner: "handler_failed",
+      graceMs: 1_000,
+      leaseMs: 1_000,
+      heartbeatInterval: 100,
+    },
+    async fetch() {
+      await incrementUsage(redis, workspace, user, 30, 10)
+      throw new Error("provider unavailable")
+    },
+  })
+
+  expect(response.status).toBe(500)
+  expect(redis.leases.size).toBe(0)
+  expect(redis.values.get(workspace)).toBe(0)
+  expect(redis.values.get(user)).toBe(0)
+  const reservation = await testDatabase()
+    .select()
+    .from(UsageReservationTable)
+    .then((rows) => rows[0])
+  const billing = await testDatabase()
+    .select()
+    .from(BillingTable)
+    .then((rows) => rows[0])
+  const member = await testDatabase()
+    .select()
+    .from(UserTable)
+    .then((rows) => rows[0])
+  expect(billing.monthlyUsage).toBe(reservation.amount + 30)
+  expect(member.monthlyUsage).toBe(reservation.amount + 10)
+  const next = await acquireUsageCutover(workspaceID, {
+    redis,
+    stage: "test",
+    owner: "handler_retry",
+    graceMs: 1_000,
+    leaseMs: 1_000,
+  })
+  expect(next?.phase).toBe("grace")
+  expect(await releaseUsageCutover(next!)).toBe(true)
 })
 
 test("canceled handler retries rejected finalization and rejects waitUntil while remaining recoverable", async () => {

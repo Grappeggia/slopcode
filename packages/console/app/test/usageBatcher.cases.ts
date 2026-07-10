@@ -5,24 +5,33 @@ import { UserTable } from "@slopcode-ai/console-core/schema/user.sql.js"
 import { WorkspaceTable } from "@slopcode-ai/console-core/schema/workspace.sql.js"
 import { testDatabase, useTestDatabase } from "../../core/test/database"
 import {
+  ACQUIRE_USAGE_CUTOVER,
   ACK_USAGE,
+  acquireUsageCutover,
   CLAIM_USAGE,
   drainUsage,
   INCREMENT_USAGE,
   incrementUsage,
+  REFRESH_USAGE_CUTOVER,
+  refreshUsageCutover,
+  RELEASE_USAGE_CUTOVER,
+  releaseUsageCutover,
 } from "../src/routes/zen/util/usageBatcher"
 
 const workspaceID = "workspace_legacy_usage"
 const userA = "user_legacy_a"
 const userB = "user_legacy_b"
 
-class Redis {
+export class UsageRedis {
   calls: { script: string; keys: string[]; args: unknown[]; result?: unknown }[] = []
   queues = new Map<string, string[]>()
   claims = new Map<string, Map<string, number>>()
+  states = new Map<string, string>()
+  leases = new Map<string, { owner: string; expires: number }>()
   failClaim = false
   failAck = false
   onEmpty: ((key: string) => void) | undefined
+  now = 0
 
   constructor(readonly values = new Map<string, number>()) {}
 
@@ -89,6 +98,52 @@ class Redis {
       }
       return result as T
     }
+    if (script === ACQUIRE_USAGE_CUTOVER) {
+      if (keys.length !== 2 || args.length !== 3) throw new Error("Invalid cutover acquisition contract")
+      const owner = String(args[0])
+      const ttl = Number(args[1])
+      const grace = Number(args[2])
+      const expired = this.leases.get(keys[1])
+      if (expired && expired.expires <= this.now) this.leases.delete(keys[1])
+      const current = this.leases.get(keys[1])
+      const state = this.states.get(keys[0]) ?? String(this.now)
+      this.states.set(keys[0], state)
+      const result = (() => {
+        if (state === "done") return [0, "done", 0, String(this.now)]
+        if (current?.owner !== owner) {
+          if (current) return [0, "busy", current.expires - this.now, state]
+          this.leases.set(keys[1], { owner, expires: this.now + ttl })
+        } else {
+          current.expires = this.now + ttl
+        }
+        return [1, this.now - Number(state) >= grace ? "finalize" : "grace", ttl, state]
+      })()
+      call.result = result
+      return result as T
+    }
+    if (script === REFRESH_USAGE_CUTOVER) {
+      if (keys.length !== 1 || args.length !== 2) throw new Error("Invalid cutover refresh contract")
+      const current = this.leases.get(keys[0])
+      if (current && current.expires <= this.now) this.leases.delete(keys[0])
+      const active = this.leases.get(keys[0])
+      const result = active?.owner === String(args[0]) ? 1 : 0
+      if (result) active!.expires = this.now + Number(args[1])
+      call.result = result
+      return result as T
+    }
+    if (script === RELEASE_USAGE_CUTOVER) {
+      if (keys.length !== 2 || args.length !== 2) throw new Error("Invalid cutover release contract")
+      const current = this.leases.get(keys[1])
+      if (current && current.expires <= this.now) this.leases.delete(keys[1])
+      const active = this.leases.get(keys[1])
+      const result = !active ? 2 : active.owner !== String(args[0]) ? 0 : 1
+      if (result === 1) {
+        if (Number(args[1]) === 1) this.states.set(keys[0], "done")
+        this.leases.delete(keys[1])
+      }
+      call.result = result
+      return result as T
+    }
     throw new Error("Unexpected Redis script")
   }
 }
@@ -120,19 +175,17 @@ function ids(prefix = "") {
   return () => `${prefix}claim_${value++}`
 }
 
-test("applies unequal workspace and user legacy counters independently", async () => {
+test("applies unequal workspace and user counters with the default production timer", async () => {
   await seed()
   const keys = key(userA)
-  const redis = new Redis(
+  const redis = new UsageRedis(
     new Map([
       [keys.workspace, 30],
       [keys.user, 40],
     ]),
   )
 
-  const result = await useTestDatabase(() =>
-    drainUsage(workspaceID, userA, redis, "test", ids(), () => Promise.resolve()),
-  )
+  const result = await useTestDatabase(() => drainUsage(workspaceID, userA, redis, "test", ids()))
   const billing = await testDatabase()
     .select()
     .from(BillingTable)
@@ -169,7 +222,7 @@ test("applies one shared workspace aggregate and each user aggregate exactly onc
   await seed()
   const a = key(userA)
   const b = key(userB)
-  const redis = new Redis()
+  const redis = new UsageRedis()
   await incrementUsage(redis, a.workspace, a.user, 30, 10)
   await incrementUsage(redis, b.workspace, b.user, 40, 20)
 
@@ -190,7 +243,7 @@ test("applies one shared workspace aggregate and each user aggregate exactly onc
 test("admits a straddled old-producer user write without debiting workspace twice", async () => {
   await seed()
   const keys = key(userA)
-  const redis = new Redis(new Map([[keys.workspace, 50]]))
+  const redis = new UsageRedis(new Map([[keys.workspace, 50]]))
   let empty = 0
   redis.onEmpty = (name) => {
     if (name !== keys.user) return
@@ -228,7 +281,7 @@ test("retries each staged dimension independently after a partial database failu
     `),
   )
   const keys = key(userA)
-  const redis = new Redis(
+  const redis = new UsageRedis(
     new Map([
       [keys.workspace, 30],
       [keys.user, 40],
@@ -261,7 +314,7 @@ test("retries each staged dimension independently after a partial database failu
 test("replays independently staged claims after claim and acknowledgement responses are lost", async () => {
   await seed()
   const keys = key(userA)
-  const redis = new Redis(
+  const redis = new UsageRedis(
     new Map([
       [keys.workspace, 30],
       [keys.user, 40],
@@ -295,7 +348,7 @@ test("replays independently staged claims after claim and acknowledgement respon
 test("applies independently claimed dimensions once under concurrent drainers", async () => {
   await seed()
   const keys = key(userA)
-  const redis = new Redis(
+  const redis = new UsageRedis(
     new Map([
       [keys.workspace, 30],
       [keys.user, 40],
@@ -321,7 +374,7 @@ test("applies independently claimed dimensions once under concurrent drainers", 
 })
 
 test("increments both producer counters in one exact script", async () => {
-  const redis = new Redis()
+  const redis = new UsageRedis()
 
   expect(await incrementUsage(redis, "workspace", "user", 30, 40)).toEqual({ workspaceCost: 30, userCost: 40 })
   expect(redis.values).toEqual(
@@ -332,4 +385,135 @@ test("increments both producer counters in one exact script", async () => {
   )
   expect(redis.calls[0]).toMatchObject({ script: INCREMENT_USAGE, keys: ["workspace", "user"], args: [30, 40] })
   await expect(redis.eval("return 1", [], [])).rejects.toThrow("Unexpected Redis script")
+})
+
+test("serializes cutover admissions and renews only the owning lease", async () => {
+  const redis = new UsageRedis()
+  const first = await acquireUsageCutover(workspaceID, {
+    redis,
+    stage: "test",
+    owner: "owner_a",
+    graceMs: 1_000,
+    leaseMs: 100,
+  })
+  expect(first?.phase).toBe("grace")
+  await expect(
+    acquireUsageCutover(workspaceID, {
+      redis,
+      stage: "test",
+      owner: "owner_b",
+      graceMs: 1_000,
+      leaseMs: 100,
+    }),
+  ).rejects.toMatchObject({ retryAfter: 1 })
+
+  redis.now = 50
+  expect(await refreshUsageCutover(first!)).toBe(true)
+  redis.now = 120
+  await expect(
+    acquireUsageCutover(workspaceID, {
+      redis,
+      stage: "test",
+      owner: "owner_b",
+      graceMs: 1_000,
+      leaseMs: 100,
+    }),
+  ).rejects.toMatchObject({ retryAfter: 1 })
+  redis.now = 151
+  const second = await acquireUsageCutover(workspaceID, {
+    redis,
+    stage: "test",
+    owner: "owner_b",
+    graceMs: 1_000,
+    leaseMs: 100,
+  })
+  expect(second?.phase).toBe("grace")
+  expect(await refreshUsageCutover(first!)).toBe(false)
+  expect(await releaseUsageCutover(first!)).toBe(false)
+  expect(await releaseUsageCutover(second!)).toBe(true)
+})
+
+test("drains late old writes around settlement with independent multi-user attribution", async () => {
+  await seed()
+  const a = key(userA)
+  const b = key(userB)
+  const redis = new UsageRedis()
+  const first = await acquireUsageCutover(workspaceID, {
+    redis,
+    stage: "test",
+    owner: "owner_a",
+    graceMs: 1_000,
+    leaseMs: 100,
+  })
+  await incrementUsage(redis, a.workspace, a.user, 30, 10)
+  await incrementUsage(redis, b.workspace, b.user, 40, 20)
+  await useTestDatabase(() => drainUsage(workspaceID, userA, redis, "test", ids("before_"), () => Promise.resolve()))
+
+  await incrementUsage(redis, a.workspace, a.user, 7, 7)
+  await incrementUsage(redis, b.workspace, b.user, 5, 5)
+  await useTestDatabase(() => drainUsage(workspaceID, userA, redis, "test", ids("after_"), () => Promise.resolve()))
+  expect(await releaseUsageCutover(first!)).toBe(true)
+
+  const second = await acquireUsageCutover(workspaceID, {
+    redis,
+    stage: "test",
+    owner: "owner_b",
+    graceMs: 1_000,
+    leaseMs: 100,
+  })
+  await useTestDatabase(() => drainUsage(workspaceID, userB, redis, "test", ids("next_"), () => Promise.resolve()))
+  expect(await releaseUsageCutover(second!)).toBe(true)
+
+  const billing = await testDatabase()
+    .select()
+    .from(BillingTable)
+    .then((rows) => rows[0])
+  const users = await testDatabase().select().from(UserTable)
+  expect(billing.monthlyUsage).toBe(82)
+  expect(users.find((user) => user.id === userA)?.monthlyUsage).toBe(17)
+  expect(users.find((user) => user.id === userB)?.monthlyUsage).toBe(25)
+})
+
+test("marks cutover done only after a post-grace owner completes", async () => {
+  const redis = new UsageRedis()
+  const grace = await acquireUsageCutover(workspaceID, {
+    redis,
+    stage: "test",
+    owner: "owner_grace",
+    graceMs: 1_000,
+    leaseMs: 100,
+  })
+  expect(await releaseUsageCutover(grace!)).toBe(true)
+  redis.now = 1_000
+  const final = await acquireUsageCutover(workspaceID, {
+    redis,
+    stage: "test",
+    owner: "owner_final",
+    graceMs: 1_000,
+    leaseMs: 100,
+  })
+  expect(final?.phase).toBe("finalize")
+  expect(await releaseUsageCutover(final!)).toBe(true)
+  const retry = await acquireUsageCutover(workspaceID, {
+    redis,
+    stage: "test",
+    owner: "owner_retry",
+    graceMs: 1_000,
+    leaseMs: 100,
+  })
+  expect(retry?.phase).toBe("finalize")
+  expect(await releaseUsageCutover(retry!, true)).toBe(true)
+  expect(
+    await Promise.all(
+      ["owner_normal_a", "owner_normal_b"].map((owner) =>
+        acquireUsageCutover(workspaceID, {
+          redis,
+          stage: "test",
+          owner,
+          graceMs: 1_000,
+          leaseMs: 100,
+        }),
+      ),
+    ),
+  ).toEqual([undefined, undefined])
 })

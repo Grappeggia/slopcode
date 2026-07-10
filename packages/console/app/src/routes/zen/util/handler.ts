@@ -51,7 +51,16 @@ import { createModelTpmLimiter } from "./modelTpmLimiter"
 import { createModelTpsLimiter } from "./modelTpsLimiter"
 import { forwardProviderStream } from "./stream"
 import { prepareReservation } from "./reservation"
-import { drainUsage, HOT_WORKSPACES } from "./usageBatcher"
+import {
+  acquireUsageCutover,
+  drainUsage,
+  HOT_WORKSPACES,
+  type Redis,
+  refreshUsageCutover,
+  releaseUsageCutover,
+  USAGE_CUTOVER_REFRESH_MS,
+  type UsageCutover,
+} from "./usageBatcher"
 import { calculateUsageCost } from "./cost"
 
 type ZenData = Awaited<ReturnType<typeof ZenData.list>>
@@ -64,6 +73,17 @@ export type HandlerRuntime = {
   leaseSeconds?: number
   heartbeatInterval?: number
   drainTimeout?: number
+  usageCutover?: {
+    redis?: Redis
+    stage?: string
+    hotWorkspaces?: ReadonlySet<string>
+    graceMs?: number
+    leaseMs?: number
+    heartbeatInterval?: number
+    owner?: string
+    create?: () => string
+    pause?: () => Promise<unknown>
+  }
 }
 type RetryOptions = {
   excludeProviders: string[]
@@ -108,6 +128,12 @@ export async function handler(
   ]
   let abort: (() => Promise<unknown>) | undefined
   let ownershipLost = false
+  let usageCutover: UsageCutover | undefined
+  let usageUser: string | undefined
+  let usageLost = false
+  let usageAbort: (() => void) | undefined
+  let usageTimer: ReturnType<typeof setInterval> | undefined
+  let usageWork = Promise.resolve()
   const retrySettlement = <T>(callback: () => Promise<T>, attempts = 3): Promise<T> =>
     callback().catch((error) => {
       if (attempts === 1) throw error
@@ -115,6 +141,88 @@ export async function handler(
         retrySettlement(callback, attempts - 1),
       )
     })
+  const loseUsageCutover = (error?: unknown) => {
+    usageLost = true
+    usageAbort?.()
+    if (error) logger.metric({ "usage_cutover.error": error instanceof Error ? error.message : String(error) })
+  }
+  const startUsageCutover = () => {
+    if (!usageCutover || usageTimer) return
+    const interval =
+      runtime.usageCutover?.heartbeatInterval ??
+      Math.min(USAGE_CUTOVER_REFRESH_MS, Math.max(1, Math.floor(usageCutover.leaseMs / 3)))
+    if (!Number.isSafeInteger(interval) || interval <= 0 || interval >= usageCutover.leaseMs)
+      throw new Error("Invalid usage cutover heartbeat interval")
+    const pulse = () => {
+      usageWork = usageWork
+        .then(async () => {
+          if (!usageCutover || usageLost) return
+          if (!(await retrySettlement(() => refreshUsageCutover(usageCutover!)))) loseUsageCutover()
+        })
+        .catch(loseUsageCutover)
+    }
+    usageTimer = setInterval(pulse, interval)
+  }
+  const stopUsageCutover = async () => {
+    if (usageTimer) clearInterval(usageTimer)
+    usageTimer = undefined
+    await usageWork
+  }
+  const drainCutoverUsage = () => {
+    if (!usageCutover || !usageUser) return Promise.resolve()
+    return drainUsage(
+      usageCutover.workspaceID,
+      usageUser,
+      usageCutover.redis,
+      runtime.usageCutover?.stage,
+      runtime.usageCutover?.create,
+      runtime.usageCutover?.pause,
+    ).then(() => undefined)
+  }
+  const abandonUsageCutover = async () => {
+    const active = usageCutover
+    if (!active) return
+    const failure = !usageLost
+      ? await drainCutoverUsage().then(
+          () => undefined,
+          (error) => error,
+        )
+      : undefined
+    await stopUsageCutover()
+    const release = !usageLost
+      ? await retrySettlement(() => releaseUsageCutover(active)).then(
+          (released) => {
+            if (!released) loseUsageCutover()
+            return undefined
+          },
+          (error) => error,
+        )
+      : undefined
+    usageCutover = undefined
+    if (failure) throw failure
+    if (release) throw release
+  }
+  const finishUsageCutover = async () => {
+    const active = usageCutover
+    if (!active) return
+    if (usageLost) {
+      await stopUsageCutover()
+      usageCutover = undefined
+      throw new RateLimitError("Usage accounting cutover ownership was lost", 1)
+    }
+    await drainCutoverUsage().catch(async (error) => {
+      await abandonUsageCutover().catch(() => undefined)
+      throw error
+    })
+    await stopUsageCutover()
+    if (usageLost) {
+      usageCutover = undefined
+      throw new RateLimitError("Usage accounting cutover ownership was lost", 1)
+    }
+    const released = await retrySettlement(() => releaseUsageCutover(active, active.phase === "finalize"))
+    usageCutover = undefined
+    if (!released) throw new RateLimitError("Usage accounting cutover ownership was lost", 1)
+  }
 
   try {
     const url = input.request.url
@@ -218,11 +326,13 @@ export async function handler(
       const pending = (async () => {
         await stopHeartbeat()
         if (!providerInfo || !usageInfo) {
-          const result = authInfo
-            ? await retrySettlement(() =>
-                ownershipLost ? Billing.getUsageSettlement(internalRequestId) : Billing.failUsage(internalRequestId),
-              )
-            : undefined
+          const result =
+            authInfo && billingSource !== undefined
+              ? await retrySettlement(() =>
+                  ownershipLost ? Billing.getUsageSettlement(internalRequestId) : Billing.failUsage(internalRequestId),
+                )
+              : undefined
+          if (billingSource !== undefined) await finishUsageCutover()
           if (result?.status === "released" && providerInfo)
             throw new Error("Dispatched usage reservation was released")
           if (providerInfo && providerSucceeded)
@@ -246,6 +356,7 @@ export async function handler(
           reservation.amount,
           estimated,
         )
+        await finishUsageCutover()
         const tracking = await Promise.allSettled(
           [
             trialLimiter?.track(tracked.usage),
@@ -272,7 +383,14 @@ export async function handler(
           })
         if (billingSource !== "balance") return "0"
         return (tracked.amount / 100_000_000).toFixed(8)
-      })()
+      })().catch(async (error) => {
+        await abandonUsageCutover().catch((failure) => {
+          logger.metric({
+            "usage_cutover.release_error": failure instanceof Error ? failure.message : String(failure),
+          })
+        })
+        throw error
+      })
       settlement = pending
       void pending.catch(() => {
         if (settlement === pending) settlement = undefined
@@ -355,6 +473,8 @@ export async function handler(
         return headers
       })()
       const upstream = new AbortController()
+      usageAbort = () => upstream.abort(new RateLimitError("Usage accounting cutover ownership was lost", 1))
+      if (usageLost) throw new RateLimitError("Usage accounting cutover ownership was lost", 1)
       if (authInfo) {
         const marked = await retrySettlement(() =>
           Billing.markUsageDispatched({
@@ -528,6 +648,11 @@ export async function handler(
     await abort?.().catch((settlementError) => {
       logger.metric({
         "settlement.error": settlementError instanceof Error ? settlementError.message : String(settlementError),
+      })
+    })
+    await abandonUsageCutover().catch((cutoverError) => {
+      logger.metric({
+        "usage_cutover.release_error": cutoverError instanceof Error ? cutoverError.message : String(cutoverError),
       })
     })
     logger.metric({
@@ -861,9 +986,29 @@ export async function handler(
   }
 
   async function reserveBilling(authInfo: AuthInfo, modelInfo: ModelInfo, id: string, amount: number) {
+    if (!authInfo) return validateBilling(authInfo, modelInfo)
+    if ((runtime.usageCutover?.hotWorkspaces ?? HOT_WORKSPACES).has(authInfo.workspaceID)) {
+      usageUser = authInfo.user.id
+      usageCutover = await acquireUsageCutover(authInfo.workspaceID, {
+        redis: runtime.usageCutover?.redis,
+        stage: runtime.usageCutover?.stage,
+        owner: runtime.usageCutover?.owner,
+        graceMs: runtime.usageCutover?.graceMs,
+        leaseMs: runtime.usageCutover?.leaseMs,
+      })
+      startUsageCutover()
+      await drainUsage(
+        authInfo.workspaceID,
+        authInfo.user.id,
+        runtime.usageCutover?.redis,
+        runtime.usageCutover?.stage,
+        runtime.usageCutover?.create,
+        runtime.usageCutover?.pause,
+      )
+      if (usageLost) throw new RateLimitError("Usage accounting cutover ownership was lost", 1)
+    }
     const source = validateBilling(authInfo, modelInfo)
-    if (!authInfo || source === "anonymous") return source
-    if (HOT_WORKSPACES.has(authInfo.workspaceID)) await drainUsage(authInfo.workspaceID, authInfo.user.id)
+    if (source === "anonymous") return source
 
     const limits = (next: Exclude<BillingSource, "anonymous">) => {
       if (next === "balance")

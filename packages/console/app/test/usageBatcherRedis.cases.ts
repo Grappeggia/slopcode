@@ -1,5 +1,18 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { ACK_USAGE, CLAIM_USAGE, incrementUsage } from "../src/routes/zen/util/usageBatcher"
+import { eq } from "@slopcode-ai/console-core/drizzle/index.js"
+import { BillingTable } from "@slopcode-ai/console-core/schema/billing.sql.js"
+import { UserTable } from "@slopcode-ai/console-core/schema/user.sql.js"
+import { WorkspaceTable } from "@slopcode-ai/console-core/schema/workspace.sql.js"
+import { testDatabase, useTestDatabase } from "../../core/test/database"
+import {
+  ACK_USAGE,
+  acquireUsageCutover,
+  CLAIM_USAGE,
+  drainUsage,
+  incrementUsage,
+  refreshUsageCutover,
+  releaseUsageCutover,
+} from "../src/routes/zen/util/usageBatcher"
 
 let container = ""
 
@@ -114,4 +127,64 @@ test("runs independent multi-user claims and old split writes against Redis Lua"
     "user:split",
     "20",
   ])
+})
+
+test("runs the production drain and cutover path against Redis Lua", async () => {
+  const workspaceID = "workspace_redis_cutover"
+  const userA = "user_redis_cutover_a"
+  const userB = "user_redis_cutover_b"
+  const workspace = `redis-test:usage:wrk:${workspaceID}`
+  const a = `redis-test:usage:usr:${workspaceID}:${userA}`
+  const b = `redis-test:usage:usr:${workspaceID}:${userB}`
+  await testDatabase().insert(WorkspaceTable).values({ id: workspaceID, name: "Redis cutover" })
+  await testDatabase().insert(BillingTable).values({ id: "billing_redis_cutover", workspaceID, balance: 0 })
+  await testDatabase()
+    .insert(UserTable)
+    .values([
+      { id: userA, workspaceID, name: "Redis A", role: "admin" },
+      { id: userB, workspaceID, name: "Redis B", role: "member" },
+    ])
+  await incrementUsage(redis, workspace, a, 30, 10)
+  await incrementUsage(redis, workspace, b, 40, 20)
+  const cutover = await acquireUsageCutover(workspaceID, {
+    redis,
+    stage: "redis-test",
+    owner: "redis-owner",
+    graceMs: 0,
+    leaseMs: 5_000,
+  })
+  expect(cutover?.phase).toBe("finalize")
+  expect(await command(["PTTL", cutover!.lease])).toBeGreaterThan(0)
+  expect(await refreshUsageCutover({ ...cutover!, owner: "redis-intruder" })).toBe(false)
+  expect(await releaseUsageCutover({ ...cutover!, owner: "redis-intruder" }, true)).toBe(false)
+  expect(await refreshUsageCutover(cutover!)).toBe(true)
+
+  await useTestDatabase(() => drainUsage(workspaceID, userA, redis, "redis-test"))
+  await incrementUsage(redis, workspace, a, 7, 7)
+  await incrementUsage(redis, workspace, b, 5, 5)
+  await useTestDatabase(() => drainUsage(workspaceID, userA, redis, "redis-test"))
+  expect(await releaseUsageCutover(cutover!, true)).toBe(true)
+  expect(
+    await acquireUsageCutover(workspaceID, {
+      redis,
+      stage: "redis-test",
+      owner: "redis-normal",
+      graceMs: 0,
+      leaseMs: 5_000,
+    }),
+  ).toBeUndefined()
+  await useTestDatabase(() => drainUsage(workspaceID, userB, redis, "redis-test"))
+
+  const billing = await testDatabase()
+    .select()
+    .from(BillingTable)
+    .then((rows) => rows[0])
+  const users = await testDatabase().select().from(UserTable)
+  expect(billing.monthlyUsage).toBe(82)
+  expect(users.find((user) => user.id === userA)?.monthlyUsage).toBe(17)
+  expect(users.find((user) => user.id === userB)?.monthlyUsage).toBe(25)
+  expect(await command(["GET", workspace])).toBe("0")
+  expect(await command(["GET", a])).toBe("0")
+  expect(await command(["GET", b])).toBe("0")
+  expect(await testDatabase().select().from(UserTable).where(eq(UserTable.workspaceID, workspaceID))).toHaveLength(2)
 })

@@ -2,11 +2,17 @@ import { Resource } from "@slopcode-ai/console-resource"
 import { and, Database, eq, sql } from "@slopcode-ai/console-core/drizzle/index.js"
 import { BillingTable, LegacyUsageClaimTable } from "@slopcode-ai/console-core/schema/billing.sql.js"
 import { UserTable } from "@slopcode-ai/console-core/schema/user.sql.js"
+import { RateLimitError } from "./error"
 import { getRedis } from "./redis"
 
-type Redis = {
+export type Redis = {
   eval<T>(script: string, keys: string[], args: unknown[]): Promise<T>
 }
+
+export const USAGE_CUTOVER_GRACE_MS = 24 * 60 * 60 * 1_000
+export const USAGE_CUTOVER_LEASE_MS = 60_000
+export const USAGE_CUTOVER_REFRESH_MS = 10_000
+const USAGE_CUTOVER_VERSION = "v1"
 
 export const INCREMENT_USAGE = `
 local workspace = redis.call("GET", KEYS[1])
@@ -70,6 +76,70 @@ end
 return 1
 `
 
+export const ACQUIRE_USAGE_CUTOVER = `
+local time = redis.call("TIME")
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+local ttl = tonumber(ARGV[2])
+local grace = tonumber(ARGV[3])
+if not ttl or ttl <= 0 then
+  return redis.error_reply("cutover lease TTL is invalid")
+end
+if not grace or grace < 0 then
+  return redis.error_reply("cutover grace is invalid")
+end
+
+local state = redis.call("GET", KEYS[1])
+if state == "done" then
+  return {0, "done", 0, tostring(now)}
+end
+if state and not tonumber(state) then
+  return redis.error_reply("cutover state is invalid")
+end
+if not state then
+  state = tostring(now)
+  redis.call("SET", KEYS[1], state)
+end
+
+local owner = redis.call("GET", KEYS[2])
+if owner and owner ~= ARGV[1] then
+  return {0, "busy", redis.call("PTTL", KEYS[2]), state}
+end
+redis.call("PSETEX", KEYS[2], ttl, ARGV[1])
+local phase = now - tonumber(state) >= grace and "finalize" or "grace"
+return {1, phase, ttl, state}
+`
+
+export const REFRESH_USAGE_CUTOVER = `
+local ttl = tonumber(ARGV[2])
+if not ttl or ttl <= 0 then
+  return redis.error_reply("cutover lease TTL is invalid")
+end
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+  return 0
+end
+redis.call("PEXPIRE", KEYS[1], ttl)
+return 1
+`
+
+export const RELEASE_USAGE_CUTOVER = `
+local state = redis.call("GET", KEYS[1])
+if state == "done" then
+  return 2
+end
+local owner = redis.call("GET", KEYS[2])
+if not owner then
+  return 2
+end
+if owner ~= ARGV[1] then
+  return 0
+end
+if tonumber(ARGV[2]) == 1 then
+  redis.call("SET", KEYS[1], "done")
+end
+redis.call("DEL", KEYS[2])
+return 1
+`
+
 function affected(result: unknown) {
   const value = Array.isArray(result) ? result[0] : result
   if (!value || typeof value !== "object") throw new Error("Database mutation result not found")
@@ -92,6 +162,91 @@ function keys(stage: string, workspaceID: string, userID: string) {
       claims: `${root}:claims:usr:${workspaceID}:${userID}:data`,
     },
   }
+}
+
+function cutover(stage: string, workspaceID: string) {
+  const root = `${stage}:usage:cutover:${USAGE_CUTOVER_VERSION}:${workspaceID}`
+  return { state: `${root}:state`, lease: `${root}:lease` }
+}
+
+function duration(value: number, name: string, zero = false) {
+  if (!Number.isSafeInteger(value) || value < (zero ? 0 : 1)) throw new Error(`Invalid ${name}`)
+  return value
+}
+
+const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
+
+export type UsageCutover = {
+  workspaceID: string
+  phase: "grace" | "finalize"
+  owner: string
+  leaseMs: number
+  redis: Redis
+  state: string
+  lease: string
+}
+
+export async function acquireUsageCutover(
+  workspaceID: string,
+  input: {
+    redis?: Redis
+    stage?: string
+    owner?: string
+    graceMs?: number
+    leaseMs?: number
+  } = {},
+) {
+  const redis = input.redis ?? getRedis()
+  const owner = input.owner ?? crypto.randomUUID()
+  if (!owner) throw new Error("Invalid usage cutover owner")
+  const grace = duration(input.graceMs ?? USAGE_CUTOVER_GRACE_MS, "usage cutover grace", true)
+  const leaseMs = duration(input.leaseMs ?? USAGE_CUTOVER_LEASE_MS, "usage cutover lease")
+  const key = cutover(input.stage ?? Resource.App.stage, workspaceID)
+  const result = await redis.eval<[number | string, string, number | string, number | string]>(
+    ACQUIRE_USAGE_CUTOVER,
+    [key.state, key.lease],
+    [owner, leaseMs, grace],
+  )
+  const acquired = Number(result[0])
+  if (acquired === 0 && result[1] === "done") return
+  if (acquired === 0 && result[1] === "busy") {
+    const ttl = Number(result[2])
+    throw new RateLimitError(
+      "Usage accounting cutover is busy",
+      Number.isFinite(ttl) && ttl > 0 ? Math.ceil(ttl / 1_000) : 1,
+    )
+  }
+  if (acquired !== 1 || !["grace", "finalize"].includes(result[1]))
+    throw new Error("Invalid usage cutover acquisition response")
+  return {
+    workspaceID,
+    phase: result[1] as UsageCutover["phase"],
+    owner,
+    leaseMs,
+    redis,
+    state: key.state,
+    lease: key.lease,
+  } satisfies UsageCutover
+}
+
+export async function refreshUsageCutover(input: UsageCutover) {
+  const result = Number(
+    await input.redis.eval<number | string>(REFRESH_USAGE_CUTOVER, [input.lease], [input.owner, input.leaseMs]),
+  )
+  if (![0, 1].includes(result)) throw new Error("Invalid usage cutover refresh response")
+  return result === 1
+}
+
+export async function releaseUsageCutover(input: UsageCutover, complete = false) {
+  const result = Number(
+    await input.redis.eval<number | string>(
+      RELEASE_USAGE_CUTOVER,
+      [input.state, input.lease],
+      [input.owner, complete ? 1 : 0],
+    ),
+  )
+  if (![0, 1, 2].includes(result)) throw new Error("Invalid usage cutover release response")
+  return result !== 0
 }
 
 export async function incrementUsage(
@@ -152,7 +307,7 @@ export async function drainUsage(
   redis: Redis = getRedis(),
   stage = Resource.App.stage,
   create: () => string = () => crypto.randomUUID(),
-  pause: () => Promise<unknown> = () => Bun.sleep(10),
+  pause: () => Promise<unknown> = () => delay(10),
 ) {
   const key = keys(stage, workspaceID, userID)
   const total = { workspaceCost: 0, userCost: 0 }
