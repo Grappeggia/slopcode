@@ -128,7 +128,18 @@ export type UsageReservationLimits = {
   fixed?: { amount: number; start: number }
   rolling?: { amount: number; seconds: number; start?: number }
   weekly?: { amount: number; start: number }
-  monthly?: { amount: number; start: number }
+  monthly?: { amount: number; start: number; anchor: number }
+}
+export type UsageReservationUsage = {
+  model: string
+  provider: string
+  inputTokens: number
+  outputTokens: number
+  keyID?: string
+  sessionID?: string
+  enrichment?: {
+    plan?: "sub" | "byok" | "lite"
+  }
 }
 
 export const UsageReservationTable = mysqlTable(
@@ -142,6 +153,8 @@ export const UsageReservationTable = mysqlTable(
     amount: bigint("amount", { mode: "number" }).notNull(),
     amountActual: bigint("amount_actual", { mode: "number" }),
     limits: json("limits").$type<UsageReservationLimits>(),
+    usage: json("usage").$type<UsageReservationUsage>(),
+    timeDispatched: utc("time_dispatched"),
     timeCreated: utc("time_created").notNull().defaultNow(),
   },
   (table) => [index("usage_reservation_workspace_status").on(table.workspaceID, table.status)],
@@ -161,14 +174,20 @@ export const UsageTable = mysqlTable(
     cacheWrite5mTokens: int("cache_write_5m_tokens"),
     cacheWrite1hTokens: int("cache_write_1h_tokens"),
     cost: bigint("cost", { mode: "number" }).notNull(),
+    reservationID: varchar("reservation_id", { length: 64 }).collate("utf8mb4_bin"),
     keyID: ulid("key_id"),
     sessionID: varchar("session_id", { length: 30 }),
     enrichment: json("enrichment").$type<{
-      plan: "sub" | "byok" | "lite"
+      plan?: "sub" | "byok" | "lite"
       estimated?: boolean
+      unknown?: boolean
     }>(),
   },
-  (table) => [...workspaceIndexes(table), index("usage_time_created").on(table.workspaceID, table.timeCreated)],
+  (table) => [
+    ...workspaceIndexes(table),
+    index("usage_time_created").on(table.workspaceID, table.timeCreated),
+    uniqueIndex("usage_reservation_id").on(table.reservationID),
+  ],
 )
 
 export const CouponType = [

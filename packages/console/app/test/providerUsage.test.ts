@@ -3,8 +3,9 @@ import type { ZenData } from "@slopcode-ai/console-core/model.js"
 import type { ProviderHelper } from "../src/routes/zen/util/provider/provider"
 import { anthropicHelper } from "../src/routes/zen/util/provider/anthropic"
 import { googleHelper } from "../src/routes/zen/util/provider/google"
-import { oaCompatHelper } from "../src/routes/zen/util/provider/openai-compatible"
+import { fromOaCompatibleRequest, oaCompatHelper } from "../src/routes/zen/util/provider/openai-compatible"
 import { openaiHelper } from "../src/routes/zen/util/provider/openai"
+import { calculateUsageCost } from "../src/routes/zen/util/cost"
 
 const providers = {
   anthropic: anthropicHelper({ reqModel: "claude-haiku-4-5", providerModel: "claude-haiku-4-5" }),
@@ -64,5 +65,37 @@ describe("provider usage extraction", () => {
       input_tokens: 5,
       output_tokens: 7,
     })
+  })
+
+  test("charges Gemini thinking tokens at the output rate", () => {
+    const result = calculateUsageCost({ input: 0.000001, output: 0.000004 }, undefined, {
+      inputTokens: 10,
+      outputTokens: 3,
+      reasoningTokens: 2,
+    })
+
+    expect(result.outputCost).toBe(0.002)
+    expect(result.totalCostInCent).toBe(0.003)
+  })
+
+  test("normalizes OpenAI reasoning as a subset of provider output", () => {
+    expect(
+      providers.openai.normalizeUsage({
+        input_tokens: 5,
+        output_tokens: 7,
+        output_tokens_details: { reasoning_tokens: 2 },
+      }),
+    ).toMatchObject({ outputTokens: 5, reasoningTokens: 2 })
+    expect(
+      providers["oa-compat"].normalizeUsage({
+        prompt_tokens: 5,
+        completion_tokens: 7,
+        completion_tokens_details: { reasoning_tokens: 2 },
+      }),
+    ).toMatchObject({ outputTokens: 5, reasoningTokens: 2 })
+  })
+
+  test("preserves max_completion_tokens during provider conversion", () => {
+    expect(fromOaCompatibleRequest({ messages: [], max_completion_tokens: 4_000 }).max_tokens).toBe(4_000)
   })
 })

@@ -7,7 +7,7 @@ type Redis = {
   eval<T>(script: string, keys: string[], args: unknown[]): Promise<T>
 }
 
-const ADMIT = `
+export const KEY_ADMIT = `
 local count = tonumber(redis.call("GET", KEYS[1]) or "0")
 local limit = tonumber(ARGV[1])
 local ttl = tonumber(ARGV[2])
@@ -25,7 +25,7 @@ return {1, count}
 `
 
 export async function admitKeyRequest(redis: Redis, key: string, limit: number, ttl: number) {
-  const result = await redis.eval<[number, number]>(ADMIT, [key], [limit, ttl])
+  const result = await redis.eval<[number, number]>(KEY_ADMIT, [key], [limit, ttl])
   return Number(result[0]) === 1
 }
 

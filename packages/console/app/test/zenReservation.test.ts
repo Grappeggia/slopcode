@@ -64,4 +64,44 @@ describe("Zen reservation bound", () => {
 
     expect(image.inputTokens - text.inputTokens).toBeGreaterThan(64_000)
   })
+
+  test("recognizes completion and model-specific output limits", () => {
+    const body: Record<string, unknown> = { messages: [], max_completion_tokens: 4_000 }
+    expect(prepareReservation(body, "oa-compat", cost, undefined, { limit: { output: 8_000 } }).outputTokens).toBe(
+      4_000,
+    )
+    expect(body.max_tokens).toBeUndefined()
+    expect(() =>
+      prepareReservation({ messages: [], max_completion_tokens: 8_001 }, "oa-compat", cost, undefined, {
+        limit: { output: 8_000 },
+      }),
+    ).toThrow("max output tokens must be at most 8000")
+  })
+
+  test("bounds both original and provider-converted payload bytes", () => {
+    const body = { messages: [{ role: "user", content: "small" }], max_tokens: 100 }
+    const converted = { input: [{ role: "user", content: "x".repeat(20_000) }], max_output_tokens: 100 }
+    const result = prepareReservation(body, "oa-compat", cost, undefined, { payloads: [converted] })
+
+    expect(result.inputTokens).toBeGreaterThan(20_000)
+  })
+
+  test("holds the available context when prior response state hides input", () => {
+    const result = prepareReservation(
+      { previous_response_id: "resp_123", input: "continue", max_output_tokens: 1_000 },
+      "openai",
+      cost,
+      undefined,
+      { limit: { context: 200_000, output: 16_000 } },
+    )
+
+    expect(result.inputTokens).toBe(199_000)
+  })
+
+  test("uses UTF-8 byte length rather than JavaScript character count", () => {
+    const ascii = prepareReservation({ messages: [{ content: "a" }], max_tokens: 100 }, "oa-compat", cost)
+    const unicode = prepareReservation({ messages: [{ content: "é" }], max_tokens: 100 }, "oa-compat", cost)
+
+    expect(unicode.inputTokens - ascii.inputTokens).toBe(1)
+  })
 })

@@ -61,8 +61,8 @@ export const oaCompatHelper: ProviderHelper = ({ adjustCacheUsage }) => ({
   extractUsage: (response: any) => response.usage,
   normalizeUsage: (usage: Usage) => {
     let inputTokens = usage.prompt_tokens ?? 0
-    const outputTokens = usage.completion_tokens ?? 0
     const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens ?? undefined
+    const outputTokens = Math.max(0, (usage.completion_tokens ?? 0) - (reasoningTokens ?? 0))
     let cacheReadTokens = usage.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? undefined
     const cacheWriteTokens = usage.prompt_tokens_details?.cache_creation_input_tokens ?? undefined
 
@@ -127,7 +127,7 @@ export function fromOaCompatibleRequest(body: any): CommonRequest {
 
   return {
     model: body.model,
-    max_tokens: body.max_tokens,
+    max_tokens: body.max_completion_tokens ?? body.max_tokens,
     temperature: body.temperature,
     top_p: body.top_p,
     stop: body.stop,

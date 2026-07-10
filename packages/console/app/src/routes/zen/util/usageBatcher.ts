@@ -5,8 +5,27 @@ import { UserTable } from "@slopcode-ai/console-core/schema/user.sql.js"
 import { getRedis } from "./redis"
 
 type Redis = {
-  getdel<T>(key: string): Promise<T | null | undefined>
+  eval<T>(script: string, keys: string[], args: unknown[]): Promise<T>
   incrby(key: string, amount: number): Promise<unknown>
+}
+
+export const CLAIM_USAGE = `
+local workspace = redis.call("GETDEL", KEYS[1]) or "0"
+local user = redis.call("GETDEL", KEYS[2]) or "0"
+return {workspace, user}
+`
+
+export const RESTORE_USAGE = `
+redis.call("INCRBY", KEYS[1], ARGV[1])
+redis.call("INCRBY", KEYS[2], ARGV[2])
+return 1
+`
+
+async function claim(redis: Redis, workspace: string, user: string) {
+  return redis.eval<[number | string, number | string]>(CLAIM_USAGE, [workspace, user], []).then((values) => ({
+    workspaceCost: Number(values[0] ?? 0),
+    userCost: Number(values[1] ?? 0),
+  }))
 }
 
 // Workspaces whose balance/usage updates should be batched in Redis to avoid
@@ -29,13 +48,9 @@ export async function accumulateUsage(workspaceID: string, userID: string, works
   if (Math.random() > FLUSH_PROBABILITY) return null
 
   // Atomically take the current totals and reset to 0
-  const [workspaceTotal, userTotal] = await Promise.all([redis.getdel<number>(wKey), redis.getdel<number>(uKey)])
-
-  const workspaceFlush = Number(workspaceTotal ?? 0)
-  const userFlush = Number(userTotal ?? 0)
-  if (workspaceFlush === 0 && userFlush === 0) return null
-
-  return { workspaceCost: workspaceFlush, userCost: userFlush }
+  const total = await claim(redis, wKey, uKey)
+  if (total.workspaceCost === 0 && total.userCost === 0) return null
+  return total
 }
 
 export async function drainUsage(
@@ -46,9 +61,7 @@ export async function drainUsage(
 ) {
   const wKey = `${stage}:usage:wrk:${workspaceID}`
   const uKey = `${stage}:usage:usr:${workspaceID}:${userID}`
-  const [workspaceCost, userCost] = await Promise.all([redis.getdel<number>(wKey), redis.getdel<number>(uKey)]).then(
-    (values) => values.map((value) => Number(value ?? 0)),
-  )
+  const { workspaceCost, userCost } = await claim(redis, wKey, uKey)
   if (workspaceCost === 0 && userCost === 0) return
 
   await Database.transaction(async (tx) => {
@@ -78,7 +91,7 @@ export async function drainUsage(
       })
       .where(and(eq(UserTable.workspaceID, workspaceID), eq(UserTable.id, userID)))
   }).catch(async (error) => {
-    await Promise.all([redis.incrby(wKey, workspaceCost), redis.incrby(uKey, userCost)])
+    await redis.eval(RESTORE_USAGE, [wKey, uKey], [workspaceCost, userCost])
     throw error
   })
 }

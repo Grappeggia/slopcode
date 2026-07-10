@@ -23,6 +23,12 @@ export namespace ZenData {
     name: z.string(),
     cost: ModelCostSchema,
     cost200K: ModelCostSchema.optional(),
+    limit: z
+      .object({
+        context: z.number().int().positive().optional(),
+        output: z.number().int().positive().optional(),
+      })
+      .optional(),
     allowAnonymous: z.boolean().optional(),
     byokProvider: z.enum(["openai", "anthropic", "google"]).optional(),
     stickyProvider: z.enum(["strict", "prefer"]).optional(),

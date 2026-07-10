@@ -99,6 +99,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await pool.query("DROP TRIGGER IF EXISTS fail_key_update")
   await pool.query("DROP TRIGGER IF EXISTS fail_billing_update")
+  await pool.query("DROP TRIGGER IF EXISTS fail_usage_insert")
   await db.delete(UsageTable)
   await db.delete(UsageReservationTable)
   await db.delete(SubscriptionTable)

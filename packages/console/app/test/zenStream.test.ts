@@ -5,21 +5,21 @@ const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
 describe("Zen provider stream accounting", () => {
-  test("drains usage and finalizes exactly once after downstream cancellation", async () => {
-    let release = () => {}
+  test("aborts upstream and finalizes immediately after downstream cancellation", async () => {
+    let canceled: unknown
     const source = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoder.encode("content"))
-        release = () => {
-          controller.enqueue(encoder.encode("usage"))
-          controller.close()
-        }
+      },
+      cancel(reason) {
+        canceled = reason
       },
     })
     const chunks: string[] = []
     const errors: unknown[] = []
     let usage = 0
     let finalized = 0
+    let aborted = 0
     let lifetime: Promise<void> | undefined
     const result = forwardProviderStream({
       source,
@@ -37,21 +37,24 @@ describe("Zen provider stream accounting", () => {
       waitUntil(promise) {
         lifetime = promise
       },
+      abort() {
+        aborted++
+      },
     })
     const reader = result.stream.getReader()
     expect(lifetime).toBe(result.completed)
 
     expect(decoder.decode((await reader.read()).value)).toBe("content")
-    const canceled = reader.cancel("client disconnected")
-    release()
-    await canceled
+    await reader.cancel("client disconnected")
     await result.completed
     await lifetime
 
-    expect(chunks).toEqual(["content", "usage"])
-    expect(usage).toBe(1)
+    expect(chunks).toEqual(["content"])
+    expect(usage).toBe(0)
+    expect(aborted).toBe(1)
+    expect(canceled).toBe("client disconnected")
     expect(finalized).toBe(1)
-    expect(errors).toEqual([undefined])
+    expect(errors[0]).toBeInstanceOf(Error)
   })
 
   test("settles once when the provider stream fails", async () => {
@@ -77,6 +80,32 @@ describe("Zen provider stream accounting", () => {
 
     expect(finalized).toBe(1)
     expect(settled).toBe(failure)
+  })
+
+  test("does not wait for a provider cancellation that never resolves", async () => {
+    let finalized = 0
+    const result = forwardProviderStream({
+      source: new ReadableStream({
+        cancel() {
+          return new Promise(() => {})
+        },
+      }),
+      chunk() {},
+      async finalize() {
+        finalized++
+      },
+      waitUntil() {},
+      abort() {},
+    })
+
+    await result.stream.cancel("disconnected")
+    await Promise.race([
+      result.completed,
+      Bun.sleep(100).then(() => {
+        throw new Error("settlement remained coupled to provider cancellation")
+      }),
+    ])
+    expect(finalized).toBe(1)
   })
 
   test("preserves the final cost chunk for connected clients", async () => {

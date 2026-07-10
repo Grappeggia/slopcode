@@ -3,11 +3,12 @@ import { RequestError } from "./error"
 
 export const DEFAULT_OUTPUT_TOKENS = 32_000
 export const MAX_OUTPUT_TOKENS = 128_000
+export const DEFAULT_CONTEXT_TOKENS = 2_000_000
 const PROVIDER_OVERHEAD_TOKENS = 4_096
 const MEDIA_INPUT_TOKENS = 64_000
 const MAX_MEDIA_PARTS = 16
 
-type Cost = {
+export type Cost = {
   input: number
   output: number
   cacheRead?: number
@@ -15,11 +16,16 @@ type Cost = {
   cacheWrite1h?: number
 }
 
-export function prepareReservation(body: Record<string, unknown>, format: ZenData.Format, cost: Cost, cost200K?: Cost) {
-  const field = (() => {
-    if (format === "openai") return "max_output_tokens"
-    return "max_tokens"
-  })()
+export function prepareReservation(
+  body: Record<string, unknown>,
+  format: ZenData.Format,
+  cost: Cost,
+  cost200K?: Cost,
+  options?: {
+    payloads?: unknown[]
+    limit?: { context?: number; output?: number }
+  },
+) {
   const config = (() => {
     if (format !== "google") return body
     const value = body.generationConfig
@@ -28,12 +34,21 @@ export function prepareReservation(body: Record<string, unknown>, format: ZenDat
     body.generationConfig = result
     return result
   })()
-  const key = format === "google" ? "maxOutputTokens" : field
+  const key = (() => {
+    if (format === "google") return "maxOutputTokens"
+    if (body.max_completion_tokens !== undefined) return "max_completion_tokens"
+    if (body.max_output_tokens !== undefined) return "max_output_tokens"
+    if (body.maxCompletionTokens !== undefined) return "maxCompletionTokens"
+    if (body.maxOutputTokens !== undefined) return "maxOutputTokens"
+    if (body.maxTokens !== undefined) return "maxTokens"
+    if (format === "openai") return "max_output_tokens"
+    return "max_tokens"
+  })()
   const outputTokens = config[key] ?? DEFAULT_OUTPUT_TOKENS
+  const outputLimit = Math.min(MAX_OUTPUT_TOKENS, options?.limit?.output ?? MAX_OUTPUT_TOKENS)
   if (!Number.isSafeInteger(outputTokens) || Number(outputTokens) <= 0)
     throw new RequestError("max output tokens must be a positive integer")
-  if (Number(outputTokens) > MAX_OUTPUT_TOKENS)
-    throw new RequestError(`max output tokens must be at most ${MAX_OUTPUT_TOKENS}`)
+  if (Number(outputTokens) > outputLimit) throw new RequestError(`max output tokens must be at most ${outputLimit}`)
   config[key] = outputTokens
 
   const media = (value: unknown): number => {
@@ -48,10 +63,28 @@ export function prepareReservation(body: Record<string, unknown>, format: ZenDat
       return 1
     return Object.values(record).reduce<number>((total, item) => total + media(item), 0)
   }
-  const inputTokens =
-    new TextEncoder().encode(JSON.stringify(body)).length +
-    PROVIDER_OVERHEAD_TOKENS +
-    Math.min(MAX_MEDIA_PARTS, media(body)) * MEDIA_INPUT_TOKENS
+  const hidden = (value: unknown): boolean => {
+    if (Array.isArray(value)) return value.some(hidden)
+    if (typeof value !== "object" || !value) return false
+    const record = value as Record<string, unknown>
+    if (["previous_response_id", "cached_content", "cachedContent"].some((field) => record[field] !== undefined))
+      return true
+    return Object.values(record).some(hidden)
+  }
+  const estimate = (value: unknown) => {
+    const json = JSON.stringify(value) ?? ""
+    return (
+      new TextEncoder().encode(json).length +
+      PROVIDER_OVERHEAD_TOKENS +
+      Math.min(MAX_MEDIA_PARTS, media(value)) * MEDIA_INPUT_TOKENS
+    )
+  }
+  const context = options?.limit?.context ?? DEFAULT_CONTEXT_TOKENS
+  if (!Number.isSafeInteger(context) || context <= Number(outputTokens))
+    throw new RequestError("model context limit must exceed max output tokens")
+  const inputLimit = context - Number(outputTokens)
+  const payloads = [body, ...(options?.payloads ?? [])]
+  const inputTokens = hidden(body) ? inputLimit : Math.min(inputLimit, Math.max(...payloads.map(estimate)))
   const prices = cost200K ? [cost, cost200K] : [cost]
   const input = Math.max(
     ...prices.flatMap((price) => [price.input, price.cacheRead ?? 0, price.cacheWrite5m ?? 0, price.cacheWrite1h ?? 0]),

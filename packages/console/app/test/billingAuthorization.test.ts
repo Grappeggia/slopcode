@@ -23,6 +23,44 @@ const member = {
   role: "member" as const,
 }
 
+const CLAIM_USAGE = `
+local workspace = redis.call("GETDEL", KEYS[1]) or "0"
+local user = redis.call("GETDEL", KEYS[2]) or "0"
+return {workspace, user}
+`
+
+const RESTORE_USAGE = `
+redis.call("INCRBY", KEYS[1], ARGV[1])
+redis.call("INCRBY", KEYS[2], ARGV[2])
+return 1
+`
+
+class Redis {
+  scripts: string[] = []
+
+  constructor(
+    readonly values: Map<string, number>,
+    readonly claimed?: (keys: string[]) => void,
+  ) {}
+
+  async eval<T>(script: string, keys: string[], args: unknown[]) {
+    this.scripts.push(script)
+    if (script === CLAIM_USAGE) {
+      const values = keys.map((key) => this.values.get(key) ?? 0)
+      keys.forEach((key) => this.values.delete(key))
+      this.claimed?.(keys)
+      return values as T
+    }
+    if (script !== RESTORE_USAGE) throw new Error("Unexpected Redis script")
+    keys.forEach((key, index) => this.values.set(key, (this.values.get(key) ?? 0) + Number(args[index])))
+    return 1 as T
+  }
+
+  async incrby(key: string, amount: number) {
+    this.values.set(key, (this.values.get(key) ?? 0) + amount)
+  }
+}
+
 async function seed() {
   await testDatabase()
     .insert(WorkspaceTable)
@@ -120,14 +158,7 @@ test("drains legacy hot-workspace usage before reservation admission", async () 
     [`test:usage:wrk:${workspaceID}`, 30],
     [`test:usage:usr:${workspaceID}:${admin.userID}`, 40],
   ])
-  const redis = {
-    getdel: async <T>(key: string) => {
-      const value = values.get(key)
-      values.delete(key)
-      return value as T | undefined
-    },
-    incrby: async (key: string, amount: number) => values.set(key, (values.get(key) ?? 0) + amount),
-  }
+  const redis = new Redis(values)
 
   await useTestDatabase(() => drainUsage(workspaceID, admin.userID, redis, "test"))
 
@@ -144,6 +175,7 @@ test("drains legacy hot-workspace usage before reservation admission", async () 
   expect(billing.balance).toBe(-30)
   expect(billing.monthlyUsage).toBe(30)
   expect(user.monthlyUsage).toBe(40)
+  expect(redis.scripts).toEqual([CLAIM_USAGE])
 })
 
 test("restores claimed legacy usage when its database flush fails", async () => {
@@ -161,18 +193,15 @@ test("restores claimed legacy usage when its database flush fails", async () => 
     [wKey, 30],
     [uKey, 40],
   ])
-  const redis = {
-    getdel: async <T>(key: string) => {
-      const value = values.get(key)
-      values.delete(key)
-      return value as T | undefined
-    },
-    incrby: async (key: string, amount: number) => values.set(key, (values.get(key) ?? 0) + amount),
-  }
+  const redis = new Redis(values, (keys) => {
+    values.set(keys[0], 5)
+    values.set(keys[1], 7)
+  })
 
   await expect(useTestDatabase(() => drainUsage(workspaceID, admin.userID, redis, "test"))).rejects.toThrow()
-  expect(values.get(wKey)).toBe(30)
-  expect(values.get(uKey)).toBe(40)
+  expect(values.get(wKey)).toBe(35)
+  expect(values.get(uKey)).toBe(47)
+  expect(redis.scripts).toEqual([CLAIM_USAGE, RESTORE_USAGE])
 })
 
 stripeWebhookTests({ testDatabase, useTestDatabase })

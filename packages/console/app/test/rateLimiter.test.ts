@@ -2,15 +2,57 @@ import { describe, expect, test } from "bun:test"
 import { admitIpRequest, getRetryAfterDay } from "../src/routes/zen/util/ipRateLimiter"
 import { admitKeyRequest } from "../src/routes/zen/util/keyRateLimiter"
 
+const KEY_ADMIT = `
+local count = tonumber(redis.call("GET", KEYS[1]) or "0")
+local limit = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+if redis.call("TTL", KEYS[1]) < 0 and count > 0 then
+  redis.call("EXPIRE", KEYS[1], ttl)
+end
+if count >= limit then
+  return {0, count}
+end
+count = redis.call("INCR", KEYS[1])
+if count == 1 then
+  redis.call("EXPIRE", KEYS[1], ttl)
+end
+return {1, count}
+`
+
+const IP_ADMIT = `
+local limit = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+local is_default = tonumber(ARGV[3]) == 1
+local lifetime = tonumber(redis.call("GET", KEYS[2]) or "0")
+local daily = tonumber(redis.call("GET", KEYS[1]) or "0")
+local is_new = is_default and lifetime < limit * 7
+local allowed = is_new and limit * 2 or limit
+if redis.call("TTL", KEYS[1]) < 0 and daily > 0 then
+  redis.call("EXPIRE", KEYS[1], ttl)
+end
+if daily >= allowed then
+  return {0, daily, is_new and 1 or 0}
+end
+daily = redis.call("INCR", KEYS[1])
+if daily == 1 then
+  redis.call("EXPIRE", KEYS[1], ttl)
+end
+if is_new then
+  redis.call("INCR", KEYS[2])
+end
+return {1, daily, is_new and 1 or 0}
+`
+
 class Redis {
   counts = new Map<string, number>()
   expires = new Map<string, number>()
   calls = 0
 
-  async eval<T>(_script: string, keys: string[], args: unknown[]) {
+  async eval<T>(script: string, keys: string[], args: unknown[]) {
     this.calls++
 
-    if (keys.length === 1) {
+    if (script === KEY_ADMIT) {
+      if (keys.length !== 1 || args.length !== 2) throw new Error("Invalid key admission contract")
       const limit = Number(args[0])
       const count = this.counts.get(keys[0]) ?? 0
       if (count >= limit) return [0, count] as T
@@ -19,6 +61,8 @@ class Redis {
       return [1, count + 1] as T
     }
 
+    if (script !== IP_ADMIT) throw new Error("Unexpected Redis script")
+    if (keys.length !== 2 || args.length !== 3) throw new Error("Invalid IP admission contract")
     const limit = Number(args[0])
     const retryAfter = Number(args[1])
     const isDefault = Number(args[2]) === 1

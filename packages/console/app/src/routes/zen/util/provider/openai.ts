@@ -12,7 +12,7 @@ type Usage = {
   total_tokens?: number
 }
 
-export const openaiHelper: ProviderHelper = ({ workspaceID }) => ({
+export const openaiHelper: ProviderHelper = () => ({
   format: "openai",
   modifyUrl: (providerApi: string) => providerApi + "/responses",
   modifyHeaders: (headers: Headers, apiKey: string, _stickyId: string) => {
@@ -46,8 +46,8 @@ export const openaiHelper: ProviderHelper = ({ workspaceID }) => ({
   extractUsage: (response: any) => response.usage ?? response.response?.usage,
   normalizeUsage: (usage: Usage) => {
     const inputTokens = usage.input_tokens ?? 0
-    const outputTokens = usage.output_tokens ?? 0
     const reasoningTokens = usage.output_tokens_details?.reasoning_tokens ?? undefined
+    const outputTokens = Math.max(0, (usage.output_tokens ?? 0) - (reasoningTokens ?? 0))
     const cacheReadTokens = usage.input_tokens_details?.cached_tokens ?? undefined
     return {
       inputTokens: inputTokens - (cacheReadTokens ?? 0),

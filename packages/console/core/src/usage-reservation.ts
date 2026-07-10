@@ -1,4 +1,4 @@
-import { and, Database, eq, isNull, sql } from "./drizzle"
+import { and, Database, eq, isNotNull, isNull, lte, or, sql } from "./drizzle"
 import { Identifier } from "./identifier"
 import {
   BillingTable,
@@ -7,6 +7,7 @@ import {
   UsageReservationLimits,
   UsageReservationSources,
   UsageReservationTable,
+  UsageReservationUsage,
   UsageTable,
 } from "./schema/billing.sql"
 import { UserTable } from "./schema/user.sql"
@@ -25,7 +26,7 @@ export type UsageReservationInput = {
     fixed?: { amount: number; start: Date }
     rolling?: { amount: number; seconds: number }
     weekly?: { amount: number; start: Date }
-    monthly?: { amount: number; start: Date }
+    monthly?: { amount: number; start: Date; anchor: Date }
   }
 }
 export type UsageFinalization = {
@@ -43,17 +44,23 @@ export type UsageFinalization = {
     cost: number
     keyID?: string
     sessionID?: string
-    enrichment?: { plan: "sub" | "byok" | "lite"; estimated?: boolean }
+    enrichment?: { plan?: "sub" | "byok" | "lite"; estimated?: boolean; unknown?: boolean }
   }
 }
 
 export class UsageReservationError extends Error {
-  reason: "balance" | "workspace" | "user" | "quota"
+  reason: "balance" | "workspace" | "user" | "fixed" | "rolling" | "weekly" | "monthly"
+  retryAfter?: number
 
-  constructor(reason: UsageReservationError["reason"]) {
+  constructor(reason: UsageReservationError["reason"], retryAfter?: number) {
     super(`Usage reservation rejected: ${reason}`)
     this.reason = reason
+    this.retryAfter = retryAfter
   }
+}
+
+function retryAfter(time: Date | number) {
+  return Math.max(1, Math.ceil((new Date(time).getTime() - Date.now()) / 1000))
 }
 
 function affected(result: unknown) {
@@ -84,7 +91,11 @@ export async function reserveUsage(input: UsageReservationInput) {
       ? { amount: input.limits.weekly.amount, start: input.limits.weekly.start.getTime() }
       : undefined,
     monthly: input.limits?.monthly
-      ? { amount: input.limits.monthly.amount, start: input.limits.monthly.start.getTime() }
+      ? {
+          amount: input.limits.monthly.amount,
+          start: input.limits.monthly.start.getTime(),
+          anchor: input.limits.monthly.anchor.getTime(),
+        }
       : undefined,
   } satisfies UsageReservationLimits
 
@@ -211,7 +222,39 @@ export async function reserveUsage(input: UsageReservationInput) {
             `,
           ),
         )
-      if (affected(subscription) === 0) throw new UsageReservationError("quota")
+      if (affected(subscription) === 0) {
+        const row = await tx
+          .select({
+            fixed: SubscriptionTable.fixedUsage,
+            rolling: SubscriptionTable.rollingUsage,
+            timeFixed: SubscriptionTable.timeFixedUpdated,
+            timeRolling: SubscriptionTable.timeRollingUpdated,
+          })
+          .from(SubscriptionTable)
+          .where(
+            and(
+              eq(SubscriptionTable.workspaceID, input.workspaceID),
+              eq(SubscriptionTable.userID, input.userID),
+              isNull(SubscriptionTable.timeDeleted),
+            ),
+          )
+          .then((rows) => rows[0])
+        if (!row) throw new Error("Subscription reservation target not found")
+        if ((row.timeFixed && row.timeFixed >= fixed ? (row.fixed ?? 0) : 0) + input.amount > limits.fixed.amount)
+          throw new UsageReservationError("fixed", retryAfter(fixed.getTime() + 7 * 24 * 60 * 60 * 1000))
+        if (
+          (row.timeRolling && row.timeRolling.getTime() >= Date.now() - limits.rolling.seconds * 1000
+            ? (row.rolling ?? 0)
+            : 0) +
+            input.amount >
+          limits.rolling.amount
+        )
+          throw new UsageReservationError(
+            "rolling",
+            retryAfter((row.timeRolling?.getTime() ?? Date.now()) + limits.rolling.seconds * 1000),
+          )
+        throw new Error("Subscription reservation update failed")
+      }
       const anchor = await tx
         .select({ time: SubscriptionTable.timeRollingUpdated })
         .from(SubscriptionTable)
@@ -287,7 +330,49 @@ export async function reserveUsage(input: UsageReservationInput) {
           `,
         ),
       )
-    if (affected(lite) === 0) throw new UsageReservationError("quota")
+    if (affected(lite) === 0) {
+      const row = await tx
+        .select({
+          weekly: LiteTable.weeklyUsage,
+          monthly: LiteTable.monthlyUsage,
+          rolling: LiteTable.rollingUsage,
+          timeWeekly: LiteTable.timeWeeklyUpdated,
+          timeMonthly: LiteTable.timeMonthlyUpdated,
+          timeRolling: LiteTable.timeRollingUpdated,
+        })
+        .from(LiteTable)
+        .where(
+          and(
+            eq(LiteTable.workspaceID, input.workspaceID),
+            eq(LiteTable.userID, input.userID),
+            isNull(LiteTable.timeDeleted),
+          ),
+        )
+        .then((rows) => rows[0])
+      if (!row) throw new Error("Lite reservation target not found")
+      if ((row.timeWeekly && row.timeWeekly >= weekly ? (row.weekly ?? 0) : 0) + input.amount > limits.weekly.amount)
+        throw new UsageReservationError("weekly", retryAfter(weekly.getTime() + 7 * 24 * 60 * 60 * 1000))
+      if (
+        (row.timeMonthly && row.timeMonthly >= monthly ? (row.monthly ?? 0) : 0) + input.amount >
+        limits.monthly.amount
+      )
+        throw new UsageReservationError(
+          "monthly",
+          retryAfter(getMonthlyBounds(new Date(), new Date(limits.monthly.anchor)).end),
+        )
+      if (
+        (row.timeRolling && row.timeRolling.getTime() >= Date.now() - limits.rolling.seconds * 1000
+          ? (row.rolling ?? 0)
+          : 0) +
+          input.amount >
+        limits.rolling.amount
+      )
+        throw new UsageReservationError(
+          "rolling",
+          retryAfter((row.timeRolling?.getTime() ?? Date.now()) + limits.rolling.seconds * 1000),
+        )
+      throw new Error("Lite reservation update failed")
+    }
     const anchor = await tx
       .select({ time: LiteTable.timeRollingUpdated })
       .from(LiteTable)
@@ -305,8 +390,82 @@ export async function reserveUsage(input: UsageReservationInput) {
   })
 }
 
+export function markUsageDispatched(input: { id: string; usage: UsageReservationUsage }) {
+  return Database.use(
+    async (tx) =>
+      affected(
+        await tx
+          .update(UsageReservationTable)
+          .set({
+            usage: input.usage,
+            timeDispatched: sql`COALESCE(${UsageReservationTable.timeDispatched}, now())`,
+          })
+          .where(and(eq(UsageReservationTable.id, input.id), eq(UsageReservationTable.status, "pending"))),
+      ) > 0,
+  )
+}
+
+export async function failUsage(id: string) {
+  if (await releaseUsage(id)) return true
+  const reservation = await Database.use((tx) =>
+    tx
+      .select()
+      .from(UsageReservationTable)
+      .where(and(eq(UsageReservationTable.id, id), eq(UsageReservationTable.status, "pending")))
+      .then((rows) => rows[0]),
+  )
+  if (!reservation?.timeDispatched) return false
+  const usage = reservation.usage ?? {
+    model: "unknown",
+    provider: "unknown",
+    inputTokens: 0,
+    outputTokens: 0,
+  }
+  return settleUsage(id, reservation.amount, "settled", {
+    ...usage,
+    cost: reservation.amount,
+    enrichment: {
+      ...usage.enrichment,
+      estimated: true,
+      unknown: true,
+    },
+  })
+}
+
+export async function recoverUsage(input: { workspaceID: string; before: Date; limit?: number }) {
+  const rows = await Database.use((tx) =>
+    tx
+      .select({
+        id: UsageReservationTable.id,
+        timeCreated: UsageReservationTable.timeCreated,
+        timeDispatched: UsageReservationTable.timeDispatched,
+      })
+      .from(UsageReservationTable)
+      .where(
+        and(
+          eq(UsageReservationTable.workspaceID, input.workspaceID),
+          eq(UsageReservationTable.status, "pending"),
+          or(
+            and(isNull(UsageReservationTable.timeDispatched), lte(UsageReservationTable.timeCreated, input.before)),
+            and(
+              isNotNull(UsageReservationTable.timeDispatched),
+              lte(UsageReservationTable.timeDispatched, input.before),
+            ),
+          ),
+        ),
+      )
+      .orderBy(UsageReservationTable.timeCreated)
+      .limit(input.limit ?? 100),
+  )
+  const results = await Promise.all(rows.map((row) => failUsage(row.id)))
+  return {
+    released: rows.filter((row, index) => !row.timeDispatched && results[index]).length,
+    settled: rows.filter((row, index) => row.timeDispatched && results[index]).length,
+  }
+}
+
 export function releaseUsage(id: string) {
-  return settleUsage(id, 0, "released")
+  return settleUsage(id, 0, "released", undefined, true)
 }
 
 export function finalizeUsage(input: UsageFinalization) {
@@ -318,6 +477,7 @@ async function settleUsage(
   amount: number,
   status: "settled" | "released",
   usage?: UsageFinalization["usage"],
+  undispatched = false,
 ) {
   if (!Number.isSafeInteger(amount) || amount < 0) throw new Error("Invalid finalized usage amount")
 
@@ -325,7 +485,13 @@ async function settleUsage(
     const claimed = await tx
       .update(UsageReservationTable)
       .set({ status, amountActual: amount })
-      .where(and(eq(UsageReservationTable.id, id), eq(UsageReservationTable.status, "pending")))
+      .where(
+        and(
+          eq(UsageReservationTable.id, id),
+          eq(UsageReservationTable.status, "pending"),
+          undispatched ? isNull(UsageReservationTable.timeDispatched) : undefined,
+        ),
+      )
     if (affected(claimed) === 0) return false
 
     const reservation = await tx
@@ -334,7 +500,6 @@ async function settleUsage(
       .where(eq(UsageReservationTable.id, id))
       .then((rows) => rows[0])
     if (!reservation) throw new Error("Usage reservation not found")
-    if (amount > reservation.amount) throw new Error("Finalized usage exceeds its reservation")
     const delta = amount - reservation.amount
 
     if (reservation.source === "balance") {
@@ -447,10 +612,15 @@ async function settleUsage(
 
     if (reservation.source === "lite") {
       const week = getWeekBounds(new Date())
-      const month = getMonthlyBounds(
-        new Date(),
-        new Date(reservation.limits?.monthly?.start ?? reservation.timeCreated),
-      )
+      const monthly =
+        reservation.limits?.monthly?.anchor ??
+        (await tx
+          .select({ time: LiteTable.timeCreated })
+          .from(LiteTable)
+          .where(and(eq(LiteTable.workspaceID, reservation.workspaceID), eq(LiteTable.userID, reservation.userID)))
+          .then((rows) => rows[0]?.time.getTime()))
+      if (!monthly) throw new Error("Lite monthly anchor was not found")
+      const month = getMonthlyBounds(new Date(), new Date(monthly))
       const currentWeek = reservation.limits?.weekly?.start === week.start.getTime()
       const currentMonth = reservation.limits?.monthly?.start === month.start.getTime()
       const seconds = reservation.limits?.rolling?.seconds ?? 0
@@ -509,6 +679,7 @@ async function settleUsage(
         cacheWrite5mTokens: usage.cacheWrite5mTokens,
         cacheWrite1hTokens: usage.cacheWrite1hTokens,
         cost: usage.cost,
+        reservationID: reservation.id,
         keyID: usage.keyID,
         sessionID: usage.sessionID?.substring(0, 30),
         enrichment: usage.enrichment,

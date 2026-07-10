@@ -73,4 +73,18 @@ describe("util.date.getMonthlyBounds", () => {
     expect(bounds.start.toISOString()).toBe("2026-01-30T06:00:00.000Z")
     expect(bounds.end.toISOString()).toBe("2026-02-28T06:00:00.000Z")
   })
+
+  test("keeps a day 30 anchor after February", () => {
+    const bounds = getMonthlyBounds(new Date("2026-03-29T06:00:00Z"), new Date("2026-01-30T06:00:00Z"))
+
+    expect(bounds.start.toISOString()).toBe("2026-02-28T06:00:00.000Z")
+    expect(bounds.end.toISOString()).toBe("2026-03-30T06:00:00.000Z")
+  })
+
+  test("keeps a day 31 anchor after February", () => {
+    const bounds = getMonthlyBounds(new Date("2026-03-30T06:00:00Z"), new Date("2026-01-31T06:00:00Z"))
+
+    expect(bounds.start.toISOString()).toBe("2026-02-28T06:00:00.000Z")
+    expect(bounds.end.toISOString()).toBe("2026-03-31T06:00:00.000Z")
+  })
 })

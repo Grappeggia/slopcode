@@ -9,7 +9,7 @@ type Redis = {
   eval<T>(script: string, keys: string[], args: unknown[]): Promise<T>
 }
 
-const ADMIT = `
+export const IP_ADMIT = `
 local limit = tonumber(ARGV[1])
 local ttl = tonumber(ARGV[2])
 local is_default = tonumber(ARGV[3]) == 1
@@ -42,7 +42,7 @@ export async function admitIpRequest(
   isDefault: boolean,
 ) {
   const result = await redis.eval<[number, number, number]>(
-    ADMIT,
+    IP_ADMIT,
     [dailyKey, lifetimeKey],
     [limit, ttl, isDefault ? 1 : 0],
   )

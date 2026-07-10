@@ -19,7 +19,10 @@ import { User } from "./user"
 import { BlackData } from "./black"
 import { LiteData } from "./lite"
 import {
+  failUsage as failReservation,
   finalizeUsage as finalizeReservation,
+  markUsageDispatched as markReservationDispatched,
+  recoverUsage as recoverReservations,
   releaseUsage as releaseReservation,
   reserveUsage as reserveReservation,
   UsageReservationError as ReservationError,
@@ -34,6 +37,9 @@ export namespace Billing {
   export const RELOAD_TRIGGER_MIN = 5
   export const reserveUsage = reserveReservation
   export const finalizeUsage = finalizeReservation
+  export const failUsage = failReservation
+  export const markUsageDispatched = markReservationDispatched
+  export const recoverUsage = recoverReservations
   export const releaseUsage = releaseReservation
   export const UsageReservationError = ReservationError
   export const stripe = () =>
