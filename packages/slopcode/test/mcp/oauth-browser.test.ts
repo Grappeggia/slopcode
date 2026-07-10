@@ -2,6 +2,7 @@ import { expect, mock, beforeEach } from "bun:test"
 import { EventEmitter } from "events"
 import { Deferred, Effect, Layer, Option } from "effect"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
+import { provideInstance, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import type { MCP as MCPNS } from "../../src/mcp/index"
 
 // Track open() calls and control failure behavior
@@ -40,6 +41,7 @@ const transportCalls: Array<{
   url: string
   options: { authProvider?: unknown; requestInit?: RequestInit }
 }> = []
+const finished: Array<{ url: string; code: string }> = []
 
 // Mock the transport constructors
 void mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
@@ -65,8 +67,8 @@ void mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
       }
       throw new MockUnauthorizedError()
     }
-    async finishAuth(_code: string) {
-      // Mock successful auth completion
+    async finishAuth(code: string) {
+      finished.push({ url: this.url, code })
     }
   },
 }))
@@ -109,6 +111,7 @@ beforeEach(() => {
   openCalledWith = undefined
   openDeferred = undefined
   transportCalls.length = 0
+  finished.length = 0
 })
 
 // Import modules after mocking
@@ -130,11 +133,11 @@ const mcpTest = testEffect(
 )
 const service = MCP.Service as unknown as Effect.Effect<MCPNS.Interface, never, never>
 
-const config = (name: string, headers?: Record<string, string>) => ({
+const config = (name: string, headers?: Record<string, string>, url = "https://example.com/mcp") => ({
   mcp: {
     [name]: {
       type: "remote" as const,
-      url: "https://example.com/mcp",
+      url,
       headers,
     },
   },
@@ -234,4 +237,45 @@ mcpTest.instance(
       expect(transportCalls.at(-1)?.options.requestInit?.headers).toEqual({ "X-Custom-Header": "custom-value" })
     }),
   { config: config("test-oauth-server-3", { "X-Custom-Header": "custom-value" }) },
+)
+
+mcpTest.instance(
+  "finishes concurrent same-name OAuth transports in their originating instances",
+  () =>
+    Effect.gen(function* () {
+      yield* withCallbackStop
+      const mcp = yield* service
+      const first = (yield* TestInstance).directory
+      const second = yield* tmpdirScoped({
+        config: config("shared-oauth", undefined, "https://b.example.com/mcp"),
+      }).pipe(Effect.provide(CrossSpawnSpawner.defaultLayer))
+
+      const started = yield* Effect.all(
+        [
+          mcp.startAuth("shared-oauth").pipe(provideInstance(first)),
+          mcp.startAuth("shared-oauth").pipe(provideInstance(second)),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(started.map((result) => Object.keys(result).sort())).toEqual([
+        ["authorizationUrl", "oauthState"],
+        ["authorizationUrl", "oauthState"],
+      ])
+
+      yield* Effect.all(
+        [
+          mcp.finishAuth("shared-oauth", "code-a").pipe(provideInstance(first)),
+          mcp.finishAuth("shared-oauth", "code-b").pipe(provideInstance(second)),
+        ],
+        { concurrency: "unbounded" },
+      )
+
+      expect(finished).toEqual(
+        expect.arrayContaining([
+          { url: "https://a.example.com/mcp", code: "code-a" },
+          { url: "https://b.example.com/mcp", code: "code-b" },
+        ]),
+      )
+    }),
+  { config: config("shared-oauth", undefined, "https://a.example.com/mcp") },
 )

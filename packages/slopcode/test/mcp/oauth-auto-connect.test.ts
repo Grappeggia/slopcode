@@ -129,6 +129,7 @@ const { EventV2Bridge } = await import("../../src/event-v2-bridge")
 const { Config } = await import("../../src/config/config")
 const { McpAuth } = await import("../../src/mcp/auth")
 const { McpOAuthProvider } = await import("../../src/mcp/oauth-provider")
+const { InstanceState } = await import("../../src/effect/instance-state")
 const { FSUtil } = await import("@slopcode-ai/core/fs-util")
 const { CrossSpawnSpawner } = await import("@slopcode-ai/core/cross-spawn-spawner")
 
@@ -180,15 +181,10 @@ mcpTest.instance(
 mcpTest.instance("state() generates a new state when none is saved", () =>
   Effect.gen(function* () {
     const auth = yield* McpAuth.Service
-    const provider = new McpOAuthProvider(
-      "test-state-gen",
-      "https://example.com/mcp",
-      {},
-      { onRedirect: async () => {} },
-      auth,
-    )
+    const identity = { instance: yield* InstanceState.directory, name: "test-state-gen" }
+    const provider = new McpOAuthProvider(identity, "https://example.com/mcp", {}, { onRedirect: async () => {} }, auth)
 
-    const entryBefore = yield* McpAuth.use.get("test-state-gen")
+    const entryBefore = yield* McpAuth.use.get(identity, "https://example.com/mcp")
     expect(entryBefore?.oauthState).toBeUndefined()
 
     // state() should generate and return a new state, not throw
@@ -197,7 +193,7 @@ mcpTest.instance("state() generates a new state when none is saved", () =>
     expect(state.length).toBe(64) // 32 bytes as hex
 
     // The generated state should be persisted
-    const entryAfter = yield* McpAuth.use.get("test-state-gen")
+    const entryAfter = yield* McpAuth.use.get(identity, "https://example.com/mcp")
     expect(entryAfter?.oauthState).toBe(state)
   }),
 )
@@ -205,17 +201,12 @@ mcpTest.instance("state() generates a new state when none is saved", () =>
 mcpTest.instance("state() returns existing state when one is saved", () =>
   Effect.gen(function* () {
     const auth = yield* McpAuth.Service
-    const provider = new McpOAuthProvider(
-      "test-state-existing",
-      "https://example.com/mcp",
-      {},
-      { onRedirect: async () => {} },
-      auth,
-    )
+    const identity = { instance: yield* InstanceState.directory, name: "test-state-existing" }
+    const provider = new McpOAuthProvider(identity, "https://example.com/mcp", {}, { onRedirect: async () => {} }, auth)
 
     // Pre-save a state
     const existingState = "pre-saved-state-value"
-    yield* McpAuth.use.updateOAuthState("test-state-existing", existingState)
+    yield* McpAuth.use.updateOAuthState(identity, "https://example.com/mcp", existingState)
 
     // state() should return the existing state
     const state = yield* Effect.promise(() => provider.state())

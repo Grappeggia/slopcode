@@ -66,6 +66,27 @@ function oauthServers(config: ConfigV1.Info) {
   )
 }
 
+function validRemoteUrl(value: string) {
+  try {
+    McpAuth.normalizeServerUrl(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function displayUrl(value: string) {
+  try {
+    const url = new URL(value)
+    if (url.username) url.username = "redacted"
+    if (url.password) url.password = "redacted"
+    for (const name of new Set(url.searchParams.keys())) url.searchParams.set(name, "redacted")
+    return url.toString()
+  } catch {
+    return "[invalid URL]"
+  }
+}
+
 function listState() {
   return Effect.gen(function* () {
     const cfg = yield* Config.Service
@@ -334,7 +355,7 @@ export const McpAuthListCommand = effectCmd({
       const authStatus = auth[name]
       const icon = getAuthStatusIcon(authStatus)
       const statusText = getAuthStatusText(authStatus)
-      const url = serverConfig.url
+      const url = displayUrl(serverConfig.url)
 
       prompts.log.info(`${icon} ${name} ${UI.Style.TEXT_DIM}${statusText}\n    ${UI.Style.TEXT_DIM}${url}`)
     }
@@ -355,11 +376,12 @@ export const McpLogoutCommand = effectCmd({
     UI.empty()
     prompts.intro("MCP OAuth Logout")
 
-    const credentials = yield* McpAuth.Service.use((auth) => auth.all())
-    const serverNames = Object.keys(credentials)
+    const config = yield* Config.Service.use((cfg) => cfg.get())
+    const servers = oauthServers(config)
+    const serverNames = servers.map(([name]) => name)
 
     if (serverNames.length === 0) {
-      prompts.log.warn("No MCP OAuth credentials stored")
+      prompts.log.warn("No OAuth-capable MCP servers configured")
       prompts.outro("Done")
       return
     }
@@ -369,28 +391,15 @@ export const McpLogoutCommand = effectCmd({
       const selected = yield* Effect.promise(() =>
         prompts.select({
           message: "Select MCP server to logout",
-          options: serverNames.map((name) => {
-            const entry = credentials[name]
-            const hasTokens = !!entry.tokens
-            const hasClient = !!entry.clientInfo
-            let hint = ""
-            if (hasTokens && hasClient) hint = "tokens + client"
-            else if (hasTokens) hint = "tokens"
-            else if (hasClient) hint = "client registration"
-            return {
-              label: name,
-              value: name,
-              hint,
-            }
-          }),
+          options: servers.map(([name, server]) => ({ label: name, value: name, hint: displayUrl(server.url) })),
         }),
       )
       if (prompts.isCancel(selected)) throw new UI.CancelledError()
       serverName = selected
     }
 
-    if (!credentials[serverName]) {
-      prompts.log.error(`No credentials found for: ${serverName}`)
+    if (!serverNames.includes(serverName)) {
+      prompts.log.error(`No OAuth-capable MCP server found for: ${serverName}`)
       prompts.outro("Done")
       return
     }
@@ -472,8 +481,8 @@ export const McpAddCommand = effectCmd({
         if (!!args.url === !!command.length) {
           throw new Error("Provide either --url <url> or a command after --")
         }
-        if (args.url && !URL.canParse(args.url)) {
-          throw new Error(`Invalid URL: ${args.url}`)
+        if (args.url && !validRemoteUrl(args.url)) {
+          throw new Error("Invalid MCP URL: expected HTTP(S)")
         }
         if (args.url && args.env?.length) {
           throw new Error("--env is only valid for local MCP servers")
@@ -592,8 +601,7 @@ export const McpAddCommand = effectCmd({
           validate: (x) => {
             if (!x) return "Required"
             if (x.length === 0) return "Required"
-            const isValid = URL.canParse(x)
-            return isValid ? undefined : "Invalid URL"
+            return validRemoteUrl(x) ? undefined : "Invalid MCP URL: expected HTTP(S)"
           },
         })
         if (prompts.isCancel(url)) throw new UI.CancelledError()
@@ -679,6 +687,8 @@ export const McpDebugCommand = effectCmd({
     const config = yield* Config.Service.use((cfg) => cfg.get())
     const mcp = yield* MCP.Service
     const auth = yield* McpAuth.Service
+    const ctx = yield* InstanceRef
+    if (!ctx) return yield* Effect.die(new Error("InstanceRef not provided"))
     yield* Effect.promise(async () => {
       UI.empty()
       prompts.intro("MCP OAuth Debug")
@@ -705,20 +715,32 @@ export const McpDebugCommand = effectCmd({
         return
       }
 
-      prompts.log.info(`Server: ${serverName}`)
-      prompts.log.info(`URL: ${serverConfig.url}`)
-
       // Check stored auth status — services already in hand, run inline.
       const { authStatus, entry } = await Effect.runPromise(
         Effect.all({
           authStatus: mcp.getAuthStatus(serverName),
-          entry: auth.get(serverName),
+          entry: auth.get({ instance: ctx.directory, name: serverName }, serverConfig.url),
         }),
       )
+      const oauthConfig = typeof serverConfig.oauth === "object" ? serverConfig.oauth : undefined
+      const url = new URL(serverConfig.url)
+      const secrets = [
+        oauthConfig?.clientSecret,
+        entry?.tokens?.accessToken,
+        entry?.tokens?.refreshToken,
+        entry?.clientInfo?.clientSecret,
+        url.username,
+        url.password,
+        ...url.searchParams.values(),
+      ].filter((value): value is string => !!value)
+      const safe = (value: string) => secrets.reduce((result, secret) => result.replaceAll(secret, "[redacted]"), value)
+
+      prompts.log.info(`Server: ${serverName}`)
+      prompts.log.info(`URL: ${displayUrl(serverConfig.url)}`)
       prompts.log.info(`Auth status: ${getAuthStatusIcon(authStatus)} ${getAuthStatusText(authStatus)}`)
 
       if (entry?.tokens) {
-        prompts.log.info(`  Access token: ${entry.tokens.accessToken.substring(0, 20)}...`)
+        prompts.log.info("  Access token: present")
         if (entry.tokens.expiresAt) {
           const expiresDate = new Date(entry.tokens.expiresAt * 1000)
           const isExpired = entry.tokens.expiresAt < Date.now() / 1000
@@ -765,16 +787,15 @@ export const McpDebugCommand = effectCmd({
         // Check for WWW-Authenticate header
         const wwwAuth = response.headers.get("www-authenticate")
         if (wwwAuth) {
-          prompts.log.info(`WWW-Authenticate: ${wwwAuth}`)
+          prompts.log.info(`WWW-Authenticate: ${safe(wwwAuth)}`)
         }
 
         if (response.status === 401) {
           prompts.log.warn("Server returned 401 Unauthorized")
 
           // Try to discover OAuth metadata
-          const oauthConfig = typeof serverConfig.oauth === "object" ? serverConfig.oauth : undefined
           const authProvider = new McpOAuthProvider(
-            serverName,
+            { instance: ctx.directory, name: serverName },
             serverConfig.url,
             {
               clientId: oauthConfig?.clientId,
@@ -806,7 +827,7 @@ export const McpDebugCommand = effectCmd({
             await client.close()
           } catch (error) {
             if (error instanceof UnauthorizedError) {
-              prompts.log.info(`OAuth flow triggered: ${error.message}`)
+              prompts.log.info(`OAuth flow triggered: ${safe(error.message)}`)
 
               // Check if dynamic registration would be attempted
               const clientInfo = await authProvider.clientInformation()
@@ -816,7 +837,7 @@ export const McpDebugCommand = effectCmd({
                 prompts.log.info("No client ID - dynamic registration will be attempted")
               }
             } else {
-              prompts.log.error(`Connection error: ${error instanceof Error ? error.message : String(error)}`)
+              prompts.log.error(`Connection error: ${safe(error instanceof Error ? error.message : String(error))}`)
             }
           }
         } else if (response.status >= 200 && response.status < 300) {
@@ -825,7 +846,7 @@ export const McpDebugCommand = effectCmd({
           try {
             const json = JSON.parse(body)
             if (json.result?.serverInfo) {
-              prompts.log.info(`Server info: ${JSON.stringify(json.result.serverInfo)}`)
+              prompts.log.info(`Server info: ${safe(JSON.stringify(json.result.serverInfo))}`)
             }
           } catch {
             // Not JSON, ignore
@@ -834,12 +855,12 @@ export const McpDebugCommand = effectCmd({
           prompts.log.warn(`Unexpected status: ${response.status}`)
           const body = await response.text().catch(() => "")
           if (body) {
-            prompts.log.info(`Response body: ${body.substring(0, 500)}`)
+            prompts.log.info(`Response body: ${safe(body).substring(0, 500)}`)
           }
         }
       } catch (error) {
         spinner.stop("Connection failed", 1)
-        prompts.log.error(`Error: ${error instanceof Error ? error.message : String(error)}`)
+        prompts.log.error(`Error: ${safe(error instanceof Error ? error.message : String(error))}`)
       }
 
       prompts.outro("Debug complete")

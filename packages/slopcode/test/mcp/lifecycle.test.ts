@@ -1,10 +1,10 @@
 import path from "node:path"
 import { expect, mock, beforeEach } from "bun:test"
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import type { MCP as MCPNS } from "../../src/mcp/index"
 import { testEffect } from "../lib/effect"
-import { TestInstance } from "../fixture/fixture"
+import { provideInstance, TestInstance, tmpdirScoped } from "../fixture/fixture"
 
 // --- Mock infrastructure ---
 
@@ -242,14 +242,44 @@ beforeEach(() => {
 
 // Import after mocks
 const { MCP } = await import("../../src/mcp/index")
+const { McpAuth } = await import("../../src/mcp/auth")
 const { McpOAuthCallback } = await import("../../src/mcp/oauth-callback")
+const { CrossSpawnSpawner } = await import("@slopcode-ai/core/cross-spawn-spawner")
 
-const it = testEffect(MCP.defaultLayer)
+const it = testEffect(Layer.mergeAll(MCP.defaultLayer, McpAuth.defaultLayer))
 
 function statusName(status: Record<string, MCPNS.Status> | MCPNS.Status, server: string) {
   if ("status" in status) return status.status
   return status[server]?.status
 }
+
+it.instance(
+  "scopes same-name auth status and removal to each project URL",
+  () =>
+    Effect.gen(function* () {
+      const mcp = yield* MCP.Service
+      const auth = yield* McpAuth.Service
+      const first = (yield* TestInstance).directory
+      const second = yield* tmpdirScoped({
+        config: { mcp: { shared: { type: "remote", url: "https://b.example.com/mcp" } } },
+      }).pipe(Effect.provide(CrossSpawnSpawner.defaultLayer))
+
+      yield* auth.updateTokens({ instance: first, name: "shared" }, "https://a.example.com/mcp", {
+        accessToken: "first-access",
+      })
+      yield* auth.updateTokens({ instance: second, name: "shared" }, "https://b.example.com/mcp", {
+        accessToken: "second-access",
+      })
+
+      expect(yield* mcp.getAuthStatus("shared").pipe(provideInstance(first))).toBe("authenticated")
+      expect(yield* mcp.getAuthStatus("shared").pipe(provideInstance(second))).toBe("authenticated")
+
+      yield* mcp.removeAuth("shared").pipe(provideInstance(first))
+      expect(yield* mcp.getAuthStatus("shared").pipe(provideInstance(first))).toBe("not_authenticated")
+      expect(yield* mcp.getAuthStatus("shared").pipe(provideInstance(second))).toBe("authenticated")
+    }),
+  { config: { mcp: { shared: { type: "remote", url: "https://a.example.com/mcp" } } } },
+)
 
 it.instance(
   "local mcp cwd resolves relative paths against instance directory",
@@ -1025,7 +1055,7 @@ it.instance(
 // Bug #5: McpOAuthCallback.cancelPending uses wrong key
 // ========================================================================
 
-it.live("McpOAuthCallback.cancelPending is keyed by mcpName but pendingAuths uses oauthState", () =>
+it.live("McpOAuthCallback.cancelPending uses a reverse key while state remains primary", () =>
   Effect.acquireUseRelease(
     Effect.sync(() => McpOAuthCallback.waitForCallback("abc123hexstate", "my-mcp-server")),
     (callback) =>
