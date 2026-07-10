@@ -216,6 +216,17 @@ const clearSessionPath = (sessionID: SessionIDType) =>
     yield* db.update(SessionTable).set({ path: null }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
   })
 
+const assignV2Runtime = (sessionID: SessionIDType) =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db
+      .update(SessionTable)
+      .set({ runtime: "v2", runtime_epoch: 1, time_updated: Date.now() })
+      .where(eq(SessionTable.id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
+  })
+
 function request(path: string, init?: RequestInit) {
   const url = new URL(path, "http://localhost")
   return HttpClientRequest.fromWeb(new Request(url, init)).pipe(
@@ -577,6 +588,7 @@ describe("session HttpApi", () => {
         const test = yield* TestInstance
         const headers = { "x-slopcode-directory": test.directory }
         const session = yield* createSession({ title: "v2 prompt recording" })
+        yield* assignV2Runtime(session.id)
 
         const recordPrompt = () =>
           request(`/api/session/${session.id}/prompt`, {
@@ -636,6 +648,7 @@ describe("session HttpApi", () => {
         const test = yield* TestInstance
         const headers = { "x-slopcode-directory": test.directory }
         const session = yield* createSession({ title: "v2 unavailable" })
+        yield* assignV2Runtime(session.id)
 
         const compact = yield* request(`/api/session/${session.id}/compact`, { method: "POST", headers })
         expect(compact.status).toBe(503)
