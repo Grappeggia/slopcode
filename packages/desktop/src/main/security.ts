@@ -25,6 +25,10 @@ export function protectNavigation(contents: WebContents, openExternal: (url: str
     event.preventDefault()
   })
   contents.setWindowOpenHandler((details) => {
+    if (isTrusted(details.url, dev)) {
+      void contents.loadURL(details.url)
+      return { action: "deny" }
+    }
     open(details.url)
     return { action: "deny" }
   })

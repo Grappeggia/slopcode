@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { isAllowedCorsOrigin } from "slopcode/server/cors"
+import { rendererCorsOrigins } from "../security"
 import { createIpcAuthorization, guardIpc, isTrustedRendererUrl, protectNavigation } from "./security"
 
 type NavigationEvent = {
@@ -10,6 +12,7 @@ type NavigationEvent = {
 function navigation(dev?: string) {
   const listeners = new Map<string, (event: NavigationEvent) => void>()
   const opened: string[] = []
+  const navigated: string[] = []
   let popup: ((details: { url: string }) => { action: "deny" }) | undefined
   const contents = {
     on(event: string, listener: (event: NavigationEvent) => void) {
@@ -19,12 +22,17 @@ function navigation(dev?: string) {
     setWindowOpenHandler(handler: (details: { url: string }) => { action: "deny" }) {
       popup = handler
     },
+    loadURL(url: string) {
+      navigated.push(url)
+      return Promise.resolve()
+    },
   }
 
   protectNavigation(contents as never, (url) => opened.push(url), dev)
 
   return {
     opened,
+    navigated,
     navigate(event: "will-frame-navigate" | "will-redirect", url: string, isMainFrame = true) {
       let prevented = false
       listeners.get(event)?.({
@@ -158,6 +166,23 @@ describe("privileged window navigation", () => {
 
     expect(boundary.popup("https://example.com/docs")).toEqual({ action: "deny" })
     expect(boundary.opened).toEqual(["https://example.com/docs"])
+    expect(boundary.navigated).toEqual([])
+  })
+
+  test("routes a trusted production target-blank popup through the existing window", () => {
+    const boundary = navigation()
+
+    expect(boundary.popup("oc://renderer/settings")).toEqual({ action: "deny" })
+    expect(boundary.navigated).toEqual(["oc://renderer/settings"])
+    expect(boundary.opened).toEqual([])
+  })
+
+  test("routes a trusted development target-blank popup through the existing window", () => {
+    const boundary = navigation("http://localhost:5173")
+
+    expect(boundary.popup("http://localhost:5173/settings")).toEqual({ action: "deny" })
+    expect(boundary.navigated).toEqual(["http://localhost:5173/settings"])
+    expect(boundary.opened).toEqual([])
   })
 
   test("rejects file, script, data, and custom scheme navigation", () => {
@@ -172,7 +197,23 @@ describe("privileged window navigation", () => {
       expect(boundary.navigate("will-frame-navigate", url)).toBe(true)
       expect(boundary.popup(url)).toEqual({ action: "deny" })
       expect(boundary.opened).toEqual([])
+      expect(boundary.navigated).toEqual([])
     }
+  })
+})
+
+describe("desktop sidecar CORS", () => {
+  test("configures exact production and development renderer origins", () => {
+    const cors = { cors: rendererCorsOrigins("https://desktop-dev.example/app/") }
+
+    expect(rendererCorsOrigins()).toEqual(["oc://renderer"])
+    expect(rendererCorsOrigins("file:///tmp/renderer")).toEqual(["oc://renderer"])
+    expect(cors.cors).toEqual(["oc://renderer", "https://desktop-dev.example"])
+    expect(isAllowedCorsOrigin("oc://renderer", cors)).toBe(true)
+    expect(isAllowedCorsOrigin("https://desktop-dev.example", cors)).toBe(true)
+    expect(isAllowedCorsOrigin("oc://renderer.attacker", cors)).toBe(false)
+    expect(isAllowedCorsOrigin("https://attacker.example", cors)).toBe(false)
+    expect(cors.cors).not.toContain("*")
   })
 })
 

@@ -119,4 +119,41 @@ describe("HttpApi CORS", () => {
       expect(rejected.headers.get("access-control-allow-origin")).not.toBe("https://evil.example")
     }),
   )
+
+  it.live("enforces desktop sidecar origins without wildcard response rewriting", () =>
+    Effect.gen(function* () {
+      const listener = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          Server.listen({
+            hostname: "127.0.0.1",
+            port: 0,
+            cors: ["oc://renderer", "https://desktop-dev.example"],
+          }),
+        ),
+        (listener) => Effect.promise(() => listener.stop(true)),
+      )
+      const preflight = (origin: string) =>
+        Effect.promise(() =>
+          fetch(new URL(InstancePaths.path, listener.url), {
+            method: "OPTIONS",
+            headers: {
+              origin,
+              "access-control-request-method": "GET",
+              "access-control-request-headers": "authorization",
+            },
+          }),
+        )
+
+      for (const origin of ["oc://renderer", "https://desktop-dev.example"]) {
+        const response = yield* preflight(origin)
+        expect(response.status).toBe(204)
+        expect(response.headers.get("access-control-allow-origin")).toBe(origin)
+        expect(response.headers.get("access-control-allow-origin")).not.toBe("*")
+      }
+
+      const rejected = yield* preflight("oc://renderer.attacker")
+      expect(rejected.status).toBe(204)
+      expect(rejected.headers.get("access-control-allow-origin")).toBeNull()
+    }),
+  )
 })

@@ -1,4 +1,5 @@
 const control = /[\u0000-\u001f\u007f]/
+const rendererOrigin = "oc://renderer"
 
 function parse(value?: string) {
   if (!value || !URL.canParse(value)) return
@@ -24,4 +25,10 @@ export function isTrustedRendererUrl(value?: string, dev?: string) {
   const configured = parse(dev)
   if (!configured || !web(configured) || !web(url)) return false
   return url.origin === configured.origin
+}
+
+export function rendererCorsOrigins(dev?: string) {
+  const configured = parse(dev)
+  if (!configured || !web(configured)) return [rendererOrigin]
+  return [rendererOrigin, configured.origin]
 }

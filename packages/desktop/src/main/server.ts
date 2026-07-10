@@ -213,6 +213,7 @@ function createSidecarEnv(): Record<string, string> {
   )
   delete env.DEBUG
   if (process.platform === "linux") delete env.LD_PRELOAD
+  if (app.isPackaged) delete env.ELECTRON_RENDERER_URL
   if (!app.isPackaged) env.SLOPCODE_DISABLE_CHANNEL_DB = "1"
   return env
 }

@@ -1,5 +1,6 @@
 import * as http from "node:http"
 import * as tls from "node:tls"
+import { rendererCorsOrigins } from "../security"
 
 type NodeHttpWithEnvProxy = typeof http & {
   setGlobalProxyFromEnv: () => void
@@ -61,7 +62,7 @@ async function start(command: StartCommand) {
       hostname: command.hostname,
       username: "slopcode",
       password: command.password,
-      cors: ["oc://renderer"],
+      cors: rendererCorsOrigins(process.env.ELECTRON_RENDERER_URL),
     })
     parentPort.postMessage({ type: "ready" })
   } catch (error) {
