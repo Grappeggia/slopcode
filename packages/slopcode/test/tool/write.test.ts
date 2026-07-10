@@ -15,6 +15,7 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import { disposeAllInstances, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { Watcher } from "@slopcode-ai/core/filesystem/watcher"
 
 const ctx = {
   sessionID: SessionID.make("ses_test-write-session"),
@@ -55,6 +56,12 @@ const run = Effect.fn("WriteToolTest.run")(function* (
   const tool = yield* init()
   return yield* tool.execute(args, next)
 })
+
+const diagnostic = {
+  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+  message: "symlink diagnostic",
+  severity: 1 as const,
+}
 
 describe("tool.write", () => {
   describe("new file creation", () => {
@@ -124,6 +131,7 @@ describe("tool.write", () => {
             await fs.writeFile(replacement, "replacement")
             await fs.symlink(original, link)
           })
+          const canonical = yield* Effect.promise(() => fs.realpath(original))
           const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
           const state = { swapped: false }
           const next: Tool.Context = {
@@ -139,21 +147,43 @@ describe("tool.write", () => {
                 })
               }),
           }
+          const base = yield* LSP.Service
+          const touched: string[] = []
+          const events = yield* EventV2Bridge.Service
+          const updated: string[] = []
+          const unsubscribe = yield* events.listen((event) => {
+            if (event.type !== Watcher.Event.Updated.type) return Effect.void
+            return Effect.sync(() => updated.push((event.data as { file: string }).file))
+          })
+          yield* Effect.addFinalizer(() => unsubscribe)
 
-          yield* run({ filePath: link, content: "approved" }, next)
+          const result = yield* run({ filePath: link, content: "approved" }, next).pipe(
+            Effect.provideService(
+              LSP.Service,
+              LSP.Service.of({
+                ...base,
+                touchFile: (file) => Effect.sync(() => touched.push(file)),
+                diagnostics: () => Effect.succeed({ [canonical]: [diagnostic] }),
+              }),
+            ),
+          )
 
           const parent = yield* Effect.promise(() => fs.realpath(first))
           expect(requests.find((item) => item.permission === "external_directory")).toMatchObject({
             patterns: [path.join(parent, "*").replaceAll("\\", "/")],
             metadata: {
               filepath: link,
-              canonicalPath: yield* Effect.promise(() => fs.realpath(original)),
+              canonicalPath: canonical,
               parentDir: parent,
             },
           })
           expect(state.swapped).toBe(true)
           expect(yield* Effect.promise(() => fs.readFile(original, "utf-8"))).toBe("approved")
           expect(yield* Effect.promise(() => fs.readFile(replacement, "utf-8"))).toBe("replacement")
+          expect(result.metadata.diagnostics).toEqual({ [link]: [diagnostic] })
+          expect(result.output).toContain(`<diagnostics file="${link}">`)
+          expect(touched).toEqual([canonical])
+          expect(updated).toContain(canonical)
         }),
       )
     }

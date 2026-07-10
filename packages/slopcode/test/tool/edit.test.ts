@@ -85,6 +85,12 @@ const makeDirectory = Effect.fn("EditToolTest.makeDirectory")(function* (p: stri
   yield* fs.makeDirectory(p)
 })
 
+const diagnostic = {
+  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+  message: "symlink diagnostic",
+  severity: 1 as const,
+}
+
 const onceBus = Effect.fn("EditToolTest.onceBus")(function* (def: typeof Watcher.Event.Updated) {
   const events = yield* EventV2Bridge.Service
   const deferred = yield* Deferred.make<void>()
@@ -176,6 +182,7 @@ describe("tool.edit", () => {
             await fs.writeFile(replacement, "old swapped")
             await fs.symlink(original, link)
           })
+          const canonical = yield* Effect.promise(() => fs.realpath(original))
           const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
           const state = { swapped: false }
           const next: Tool.Context = {
@@ -191,21 +198,43 @@ describe("tool.edit", () => {
                 })
               }),
           }
+          const base = yield* LSP.Service
+          const touched: string[] = []
+          const events = yield* EventV2Bridge.Service
+          const updated: string[] = []
+          const unsubscribe = yield* events.listen((event) => {
+            if (event.type !== Watcher.Event.Updated.type) return Effect.void
+            return Effect.sync(() => updated.push((event.data as { file: string }).file))
+          })
+          yield* Effect.addFinalizer(() => unsubscribe)
 
-          yield* run({ filePath: link, oldString: "old", newString: "new" }, next)
+          const result = yield* run({ filePath: link, oldString: "old", newString: "new" }, next).pipe(
+            Effect.provideService(
+              LSP.Service,
+              LSP.Service.of({
+                ...base,
+                touchFile: (file) => Effect.sync(() => touched.push(file)),
+                diagnostics: () => Effect.succeed({ [canonical]: [diagnostic] }),
+              }),
+            ),
+          )
 
           const parent = yield* Effect.promise(() => fs.realpath(first))
           expect(requests.find((item) => item.permission === "external_directory")).toMatchObject({
             patterns: [path.join(parent, "*").replaceAll("\\", "/")],
             metadata: {
               filepath: link,
-              canonicalPath: yield* Effect.promise(() => fs.realpath(original)),
+              canonicalPath: canonical,
               parentDir: parent,
             },
           })
           expect(state.swapped).toBe(true)
           expect(yield* Effect.promise(() => fs.readFile(original, "utf-8"))).toBe("new approved")
           expect(yield* Effect.promise(() => fs.readFile(replacement, "utf-8"))).toBe("old swapped")
+          expect(result.metadata.diagnostics).toEqual({ [link]: [diagnostic] })
+          expect(result.output).toContain(`<diagnostics file="${link}">`)
+          expect(touched).toEqual([canonical])
+          expect(updated).toContain(canonical)
         }),
       )
     }

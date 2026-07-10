@@ -12,6 +12,7 @@ import { Truncate } from "@/tool/truncate"
 import { TestInstance } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
+import { Watcher } from "@slopcode-ai/core/filesystem/watcher"
 
 const it = testEffect(
   Layer.mergeAll(
@@ -91,6 +92,11 @@ const expectFailure = <A, E, R>(effect: Effect.Effect<A, E, R>, message?: string
   })
 
 const expectReadFailure = (filepath: string) => expectFailure(readText(filepath))
+const diagnostic = {
+  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
+  message: "symlink diagnostic",
+  severity: 1 as const,
+}
 
 describe("tool.apply_patch freeform", () => {
   it.live("requires patchText", () =>
@@ -337,42 +343,31 @@ describe("tool.apply_patch freeform", () => {
       }),
     )
 
-    it.instance("pins apply_patch move source and destination to their approved canonical targets", () =>
+    it.instance("moves from a symlink without deleting its canonical target", () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const root = path.join(path.dirname(test.directory), `${path.basename(test.directory)}-move`)
         const firstSource = path.join(root, "source-first")
-        const secondSource = path.join(root, "source-second")
         const firstDestination = path.join(root, "destination-first")
         const secondDestination = path.join(root, "destination-second")
         const original = path.join(firstSource, "source.txt")
-        const replacement = path.join(secondSource, "source.txt")
         const source = path.join(test.directory, "source.txt")
         const destination = path.join(test.directory, "destination")
         yield* Effect.promise(async () => {
           await Promise.all(
-            [firstSource, secondSource, firstDestination, secondDestination].map((dir) =>
-              fs.mkdir(dir, { recursive: true }),
-            ),
+            [firstSource, firstDestination, secondDestination].map((dir) => fs.mkdir(dir, { recursive: true })),
           )
           await fs.writeFile(original, "old approved\n")
-          await fs.writeFile(replacement, "old swapped\n")
           await fs.symlink(original, source)
           await fs.symlink(firstDestination, destination)
         })
         yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
         const canonicalSource = yield* Effect.promise(() => fs.realpath(original))
         const canonicalDestination = path.join(yield* Effect.promise(() => fs.realpath(firstDestination)), "moved.txt")
-        const state = { source: false, destination: false }
+        const shownDestination = path.join(destination, "moved.txt")
+        const state = { destination: false }
         const { ctx, calls } = makeCtx((input) => {
           if (input.permission !== "external_directory") return Effect.void
-          if (input.metadata.canonicalPath === canonicalSource && !state.source) {
-            state.source = true
-            return Effect.promise(async () => {
-              await fs.unlink(source)
-              await fs.symlink(replacement, source)
-            }).pipe(Effect.orDie)
-          }
           if (input.metadata.canonicalPath === canonicalDestination && !state.destination) {
             state.destination = true
             return Effect.promise(async () => {
@@ -382,13 +377,31 @@ describe("tool.apply_patch freeform", () => {
           }
           return Effect.void
         })
+        const base = yield* LSP.Service
+        const touched: string[] = []
+        const events = yield* EventV2Bridge.Service
+        const updated: string[] = []
+        const unsubscribe = yield* events.listen((event) => {
+          if (event.type !== Watcher.Event.Updated.type) return Effect.void
+          return Effect.sync(() => updated.push((event.data as { file: string }).file))
+        })
+        yield* Effect.addFinalizer(() => unsubscribe)
 
-        yield* execute(
+        const result = yield* execute(
           {
             patchText:
               "*** Begin Patch\n*** Update File: source.txt\n*** Move to: destination/moved.txt\n@@\n-old approved\n+new approved\n*** End Patch",
           },
           ctx,
+        ).pipe(
+          Effect.provideService(
+            LSP.Service,
+            LSP.Service.of({
+              ...base,
+              touchFile: (file) => Effect.sync(() => touched.push(file)),
+              diagnostics: () => Effect.succeed({ [canonicalDestination]: [diagnostic] }),
+            }),
+          ),
         )
 
         const external = calls.filter((input) => input.permission === "external_directory")
@@ -397,11 +410,109 @@ describe("tool.apply_patch freeform", () => {
           yield* Effect.promise(() => fs.realpath(firstSource)),
           yield* Effect.promise(() => fs.realpath(firstDestination)),
         ])
-        expect(state).toEqual({ source: true, destination: true })
-        yield* expectReadFailure(original)
-        expect(yield* readText(replacement)).toBe("old swapped\n")
+        expect(state).toEqual({ destination: true })
+        yield* expectReadFailure(source)
+        expect(yield* readText(original)).toBe("old approved\n")
         expect(yield* readText(canonicalDestination)).toBe("new approved\n")
         yield* expectReadFailure(path.join(secondDestination, "moved.txt"))
+        expect(result.metadata.diagnostics).toEqual({ [shownDestination]: [diagnostic] })
+        expect(result.output).toContain(`<diagnostics file="${shownDestination}">`)
+        expect(touched).toEqual([canonicalDestination])
+        expect(updated).toContain(canonicalSource)
+        expect(updated).toContain(canonicalDestination)
+      }),
+    )
+
+    it.instance("rejects move aliases that resolve to the same canonical file without data loss", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const { ctx } = makeCtx()
+        const source = path.join(test.directory, "source.txt")
+        const alias = path.join(test.directory, "alias.txt")
+        yield* writeText(source, "original\n")
+        yield* Effect.promise(() => fs.symlink(source, alias))
+
+        yield* expectFailure(
+          execute(
+            {
+              patchText:
+                "*** Begin Patch\n*** Update File: source.txt\n*** Move to: alias.txt\n@@\n-original\n+changed\n*** End Patch",
+            },
+            ctx,
+          ),
+          "same canonical target",
+        )
+
+        expect(yield* readText(source)).toBe("original\n")
+        expect(yield* Effect.promise(() => fs.realpath(alias))).toBe(yield* Effect.promise(() => fs.realpath(source)))
+      }),
+    )
+
+    it.instance("rejects a self move without changing the source", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const { ctx } = makeCtx()
+        const source = path.join(test.directory, "source.txt")
+        yield* writeText(source, "original\n")
+
+        yield* expectFailure(
+          execute(
+            {
+              patchText:
+                "*** Begin Patch\n*** Update File: source.txt\n*** Move to: source.txt\n@@\n-original\n+changed\n*** End Patch",
+            },
+            ctx,
+          ),
+          "same canonical target",
+        )
+
+        expect(yield* readText(source)).toBe("original\n")
+      }),
+    )
+
+    it.instance("rejects a swapped move source symlink before writing or removing data", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const root = path.join(path.dirname(test.directory), `${path.basename(test.directory)}-swap`)
+        const original = path.join(root, "original.txt")
+        const replacement = path.join(root, "replacement.txt")
+        const source = path.join(test.directory, "source.txt")
+        const destination = path.join(test.directory, "moved.txt")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(root)
+          await fs.writeFile(original, "original\n")
+          await fs.writeFile(replacement, "replacement\n")
+          await fs.symlink(original, source)
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
+        const state = { swapped: false }
+        const { ctx } = makeCtx((input) => {
+          if (input.permission !== "edit" || state.swapped) return Effect.void
+          state.swapped = true
+          return Effect.promise(async () => {
+            await fs.unlink(source)
+            await fs.symlink(replacement, source)
+          }).pipe(Effect.orDie)
+        })
+
+        yield* expectFailure(
+          execute(
+            {
+              patchText:
+                "*** Begin Patch\n*** Update File: source.txt\n*** Move to: moved.txt\n@@\n-original\n+changed\n*** End Patch",
+            },
+            ctx,
+          ),
+          "move source changed",
+        )
+
+        expect(state.swapped).toBe(true)
+        expect(yield* readText(original)).toBe("original\n")
+        expect(yield* readText(replacement)).toBe("replacement\n")
+        expect(yield* Effect.promise(() => fs.realpath(source))).toBe(
+          yield* Effect.promise(() => fs.realpath(replacement)),
+        )
+        yield* expectReadFailure(destination)
       }),
     )
   }

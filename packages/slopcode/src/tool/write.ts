@@ -11,7 +11,7 @@ import { Watcher } from "@slopcode-ai/core/filesystem/watcher"
 import { Format } from "../format"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { trimDiff } from "./edit"
+import { remapDiagnostics, trimDiff } from "./edit"
 import { assertExternalDirectoryWithFsEffect, resolvePathEffect } from "./external-directory"
 import * as Bom from "@/util/bom"
 
@@ -76,13 +76,13 @@ export const WriteTool = Tool.define(
 
           let output = "Wrote file successfully."
           yield* lsp.touchFile(filepath, "document")
-          const diagnostics = yield* lsp.diagnostics()
           const normalizedFilepath = FSUtil.normalizePath(filepath)
+          const diagnostics = remapDiagnostics(yield* lsp.diagnostics(), normalizedFilepath, shown)
           let projectDiagnosticsCount = 0
           for (const [file, issues] of Object.entries(diagnostics)) {
-            const current = file === normalizedFilepath
+            const current = file === shown
             if (!current && projectDiagnosticsCount >= MAX_PROJECT_DIAGNOSTICS_FILES) continue
-            const block = LSP.Diagnostic.report(current ? filepath : file, issues)
+            const block = LSP.Diagnostic.report(file, issues)
             if (!block) continue
             if (current) {
               output += `\n\nLSP errors detected in this file, please fix:\n${block}`

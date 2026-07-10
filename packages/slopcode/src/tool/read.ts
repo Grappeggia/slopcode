@@ -100,18 +100,9 @@ export const ReadTool = Tool.define<
 
     const list = Effect.fn("ReadTool.list")(function* (filepath: string) {
       const items = yield* fs.readDirectoryEntries(filepath)
-      return yield* Effect.forEach(
-        items,
-        Effect.fnUntraced(function* (item) {
-          if (item.type === "directory") return item.name + "/"
-          if (item.type !== "symlink") return item.name
-
-          const target = yield* fs.stat(path.join(filepath, item.name)).pipe(Effect.catch(() => Effect.void))
-          if (target?.type === "Directory") return item.name + "/"
-          return item.name
-        }),
-        { concurrency: "unbounded" },
-      ).pipe(Effect.map((items: string[]) => items.sort((a, b) => a.localeCompare(b))))
+      return items
+        .map((item) => (item.type === "directory" ? item.name + "/" : item.name))
+        .sort((a, b) => a.localeCompare(b))
     })
 
     const warm = Effect.fn("ReadTool.warm")(function* (filepath: string) {

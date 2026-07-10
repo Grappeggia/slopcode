@@ -1,5 +1,6 @@
 import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { describe, expect } from "bun:test"
+import fs from "fs/promises"
 import path from "path"
 import { Cause, Effect, Exit, Layer } from "effect"
 import { GlobTool } from "../../src/tool/glob"
@@ -133,4 +134,35 @@ describe("tool.glob", () => {
       }
     }),
   )
+
+  if (process.platform !== "win32") {
+    it.instance(
+      "renders symlink search results under the requested lexical directory",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const outside = yield* tmpdirScoped()
+          const linked = path.join(test.directory, "linked")
+          yield* Effect.promise(async () => {
+            await fs.writeFile(path.join(outside, "external.ts"), "export const external = true\n")
+            await fs.symlink(outside, linked)
+          })
+          const { items, next } = asks()
+          const info = yield* GlobTool
+          const glob = yield* info.init()
+
+          const result = yield* glob.execute({ pattern: "*.ts", path: linked }, next)
+
+          const canonical = yield* Effect.promise(() => fs.realpath(outside))
+          expect(result.title).toBe("linked")
+          expect(result.output).toBe(path.join(linked, "external.ts"))
+          expect(result.output).not.toContain(canonical)
+          expect(items.find((item) => item.permission === "external_directory")).toMatchObject({
+            patterns: [path.join(canonical, "*").replaceAll("\\", "/")],
+            metadata: { filepath: linked, canonicalPath: canonical },
+          })
+        }),
+      { git: true },
+    )
+  }
 })

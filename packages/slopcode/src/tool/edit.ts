@@ -32,6 +32,13 @@ function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
   return text.replaceAll("\n", "\r\n")
 }
 
+export function remapDiagnostics<T>(diagnostics: Record<string, T>, canonical: string, shown: string) {
+  if (canonical === shown || !Object.hasOwn(diagnostics, canonical)) return diagnostics
+  const result = { ...diagnostics, [shown]: diagnostics[canonical] }
+  delete result[canonical]
+  return result
+}
+
 const locks = new Map<string, Semaphore.Semaphore>()
 
 function lock(filePath: string) {
@@ -188,9 +195,9 @@ export const EditTool = Tool.define(
 
           let output = "Edit applied successfully."
           yield* lsp.touchFile(filePath, "document")
-          const diagnostics = yield* lsp.diagnostics()
           const normalizedFilePath = FSUtil.normalizePath(filePath)
-          const block = LSP.Diagnostic.report(shown, diagnostics[normalizedFilePath] ?? [])
+          const diagnostics = remapDiagnostics(yield* lsp.diagnostics(), normalizedFilePath, shown)
+          const block = LSP.Diagnostic.report(shown, diagnostics[shown] ?? [])
           if (block) output += `\n\nLSP errors detected in this file, please fix:\n${block}`
 
           return {

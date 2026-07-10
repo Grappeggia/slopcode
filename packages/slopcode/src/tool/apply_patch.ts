@@ -1,4 +1,5 @@
 import * as path from "path"
+import { lstat, readlink } from "node:fs/promises"
 import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -7,13 +8,47 @@ import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryWithFsEffect, resolvePathEffect } from "./external-directory"
-import { trimDiff } from "./edit"
+import { remapDiagnostics, trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
 import { FileSystem } from "@slopcode-ai/core/filesystem"
 import { Format } from "../format"
 import * as Bom from "@/util/bom"
+
+type LinkIdentity = {
+  path: string
+  dev: number
+  ino: number
+  target: string
+}
+
+const inspectLink = Effect.fnUntraced(function* (filepath: string) {
+  const info = yield* Effect.tryPromise({
+    try: () => lstat(filepath),
+    catch: (cause) =>
+      new Error(`apply_patch verification failed: Failed to inspect move source: ${filepath}`, { cause }),
+  })
+  if (!info.isSymbolicLink()) return
+  return {
+    path: filepath,
+    dev: info.dev,
+    ino: info.ino,
+    target: yield* Effect.tryPromise({
+      try: () => readlink(filepath),
+      catch: (cause) =>
+        new Error(`apply_patch verification failed: Failed to inspect move source: ${filepath}`, { cause }),
+    }),
+  } satisfies LinkIdentity
+})
+
+const validateLink = Effect.fnUntraced(function* (expected: LinkIdentity) {
+  const current = yield* inspectLink(expected.path)
+  if (current && current.dev === expected.dev && current.ino === expected.ino && current.target === expected.target) {
+    return
+  }
+  return yield* Effect.fail(new Error(`apply_patch verification failed: move source changed: ${expected.path}`))
+})
 
 export const Parameters = Schema.Struct({
   patchText: Schema.String.annotate({ description: "The full patch text that describes all changes to be made" }),
@@ -63,6 +98,7 @@ export const ApplyPatchTool = Tool.define(
         type: "add" | "update" | "delete" | "move"
         movePath?: string
         displayMovePath?: string
+        link?: LinkIdentity
         diff: string
         additions: number
         deletions: number
@@ -75,6 +111,7 @@ export const ApplyPatchTool = Tool.define(
         const source = yield* resolvePathEffect(afs, path.resolve(instance.directory, hunk.path), instance.directory)
         const filePath = source.canonical
         const displayPath = process.platform === "win32" ? filePath : source.original
+        const link = hunk.type === "update" && hunk.move_path ? yield* inspectLink(source.original) : undefined
         yield* assertExternalDirectoryWithFsEffect(afs, ctx, source)
 
         switch (hunk.type) {
@@ -147,6 +184,13 @@ export const ApplyPatchTool = Tool.define(
             const destination = hunk.move_path
               ? yield* resolvePathEffect(afs, path.resolve(instance.directory, hunk.move_path), instance.directory)
               : undefined
+            if (destination && path.relative(filePath, destination.canonical) === "") {
+              return yield* Effect.fail(
+                new Error(
+                  `apply_patch verification failed: move source and destination resolve to the same canonical target: ${displayPath}`,
+                ),
+              )
+            }
             yield* assertExternalDirectoryWithFsEffect(afs, ctx, destination)
             const movePath = destination?.canonical
             const displayMovePath = destination
@@ -163,6 +207,7 @@ export const ApplyPatchTool = Tool.define(
               type: hunk.move_path ? "move" : "update",
               movePath,
               displayMovePath,
+              link,
               diff,
               additions,
               deletions,
@@ -257,9 +302,10 @@ export const ApplyPatchTool = Tool.define(
           case "move":
             if (change.movePath) {
               // Create parent directories (recursive: true is safe on existing/root dirs)
-
-              yield* afs.writeWithDirs(change.movePath!, Bom.join(change.newContent, change.bom))
-              yield* afs.remove(change.filePath)
+              if (change.link) yield* validateLink(change.link)
+              yield* afs.writeWithDirs(change.movePath, Bom.join(change.newContent, change.bom))
+              if (change.link) yield* validateLink(change.link)
+              yield* afs.remove(change.link?.path ?? change.filePath)
               updates.push({ file: change.filePath, event: "unlink" })
               updates.push({ file: change.movePath, event: "add" })
             }
@@ -290,7 +336,18 @@ export const ApplyPatchTool = Tool.define(
         const target = change.movePath ?? change.filePath
         yield* lsp.touchFile(target, "document")
       }
-      const diagnostics = yield* lsp.diagnostics()
+      const rawDiagnostics = yield* lsp.diagnostics()
+      const diagnostics = fileChanges.reduce(
+        (result, change) => {
+          if (change.type === "delete") return result
+          const canonical = change.movePath ?? change.filePath
+          const shown = change.displayMovePath ?? change.displayPath
+          const key = FSUtil.normalizePath(canonical)
+          if (!Object.hasOwn(rawDiagnostics, key)) return result
+          return remapDiagnostics({ ...result, [key]: rawDiagnostics[key] }, key, shown)
+        },
+        rawDiagnostics,
+      )
 
       // Generate output summary
       const summaryLines = fileChanges.map((change) => {
@@ -307,8 +364,8 @@ export const ApplyPatchTool = Tool.define(
 
       for (const change of fileChanges) {
         if (change.type === "delete") continue
-        const target = change.movePath ?? change.filePath
-        const block = LSP.Diagnostic.report(target, diagnostics[FSUtil.normalizePath(target)] ?? [])
+        const shown = change.displayMovePath ?? change.displayPath
+        const block = LSP.Diagnostic.report(shown, diagnostics[shown] ?? [])
         if (!block) continue
         const rel = path.relative(instance.worktree, change.displayMovePath ?? change.displayPath).replaceAll("\\", "/")
         output += `\n\nLSP errors detected in ${rel}, please fix:\n${block}`

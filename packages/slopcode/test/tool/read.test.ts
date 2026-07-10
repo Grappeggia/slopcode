@@ -167,6 +167,45 @@ describe("tool.read external_directory permission", () => {
     }),
   )
 
+  if (process.platform !== "win32") {
+    it.live("lists child symlinks without following their external targets", () =>
+      Effect.gen(function* () {
+        const dir = yield* tmpdirScoped()
+        const outside = yield* tmpdirScoped()
+        const link = path.join(dir, "external")
+        yield* Effect.promise(async () => {
+          await fs.writeFile(path.join(dir, "file.txt"), "internal")
+          await fs.mkdir(path.join(dir, "subdir"))
+          await fs.writeFile(path.join(outside, "secret.txt"), "secret")
+          await fs.symlink(outside, link)
+        })
+        const service = yield* FSUtil.Service
+        const stats: string[] = []
+        const { items, next } = asks()
+
+        const result = yield* exec(dir, { filePath: dir }, next).pipe(
+          Effect.provideService(
+            FSUtil.Service,
+            FSUtil.Service.of({
+              ...service,
+              stat: (file) => Effect.sync(() => stats.push(file)).pipe(Effect.andThen(service.stat(file))),
+            }),
+          ),
+        )
+
+        expect(result.metadata.display).toMatchObject({
+          type: "directory",
+          entries: ["external", "file.txt", "subdir/"],
+        })
+        expect(result.output).not.toContain("external/")
+        expect(result.output).not.toContain("secret.txt")
+        expect(stats).not.toContain(link)
+        expect(stats).not.toContain(yield* Effect.promise(() => fs.realpath(outside)))
+        expect(items.find((item) => item.permission === "external_directory")).toBeUndefined()
+      }),
+    )
+  }
+
   it.live("asks for external_directory permission when reading absolute path outside project", () =>
     Effect.gen(function* () {
       const outer = yield* tmpdirScoped()
