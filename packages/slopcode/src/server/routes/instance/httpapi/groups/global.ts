@@ -53,7 +53,16 @@ const GlobalEventSchema = Schema.Struct({
 export const GlobalUpgradeInput = Schema.Struct({
   target: Schema.optional(
     Schema.String.pipe(
-      Schema.check(Schema.makeFilter((target) => semver.valid(target) === target, { expected: "a semantic version" })),
+      Schema.check(
+        Schema.makeFilter(
+          (target) => {
+            const version = semver.parse(target)
+            if (!version) return false
+            return `${version.version}${version.build.length ? `+${version.build.join(".")}` : ""}` === target
+          },
+          { expected: "a semantic version" },
+        ),
+      ),
     ),
   ),
 })

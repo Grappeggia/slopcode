@@ -64,6 +64,18 @@ describe("global HttpApi", () => {
     }),
   )
 
+  it.live("accepts an upgrade target with build metadata", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(GlobalPaths.upgrade).pipe(
+        HttpClientRequest.setBody(HttpBody.jsonUnsafe({ target: "1.2.3-beta.1+sha.abc" })),
+        HttpClient.execute,
+      )
+
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({ success: true, version: "1.2.3-beta.1+sha.abc" })
+    }),
+  )
+
   it.live("rejects npm alias upgrade targets", () =>
     Effect.gen(function* () {
       const response = yield* HttpClientRequest.post(GlobalPaths.upgrade).pipe(
