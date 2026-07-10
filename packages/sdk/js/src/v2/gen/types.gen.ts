@@ -9816,6 +9816,10 @@ export type V2SessionPromptErrors = {
    * ConflictError
    */
   409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type V2SessionPromptError = V2SessionPromptErrors[keyof V2SessionPromptErrors]
