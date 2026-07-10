@@ -76,29 +76,11 @@ export function kind(shell: string): Kind {
   return "unsupported"
 }
 
-// Saved resources are wildcard patterns, so opaque payloads cannot contain wildcard or path-normalized characters.
-const encode = (value: string) =>
-  Array.from({ length: value.length }, (_, index) => {
-    const code = value.charCodeAt(index)
-    const char = value[index]
-    if (
-      code > 0x1f &&
-      code !== 0x7f &&
-      (code < 0xd800 || code > 0xdfff) &&
-      char !== "%" &&
-      char !== "*" &&
-      char !== "?" &&
-      char !== "\\" &&
-      char !== "/"
-    )
-      return char
-    return code > 0xff
-      ? `%u${code.toString(16).toUpperCase().padStart(4, "0")}`
-      : `%${code.toString(16).toUpperCase().padStart(2, "0")}`
-  }).join("")
+// Hex stays byte-exact even when saved wildcard patterns are matched case-insensitively.
+const encode = (value: string) => Buffer.from(value, "utf8").toString("hex")
 
 export function opaque(shell: string, command: string) {
-  return `[opaque shell statement] shell=${encode(shell)} source=${encode(command)}`
+  return `[opaque shell statement] shell-utf8=${encode(shell)} source-utf8=${encode(command)}`
 }
 
 export async function parse(command: string, language: Language) {
@@ -169,9 +151,12 @@ const scriptBlock = (node: Node) => {
   return descendants(name, ["script_block_expression"]).length > 0
 }
 
+const redirected = (node: Node) =>
+  node.childForFieldName("command_elements")?.namedChildren.some((child) => child?.type === "redirection") ?? false
+
 const powershellResources = (tree: Tree) => {
   const commands = descendants(tree.rootNode, ["command", "data_command"])
-    .filter((node) => node.type !== "command" || !scriptBlock(node))
+    .filter((node) => node.type !== "command" || !scriptBlock(node) || redirected(node))
     .map((node) => item(node))
   const expressions = descendants(tree.rootNode, ["pipeline_chain"]).flatMap((node) => {
     const children = node.namedChildren.filter((child): child is Node => child !== null)

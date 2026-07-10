@@ -155,6 +155,11 @@ export const layer = Layer.effectDiscard(
                 action: name,
                 resources,
                 save: resources,
+                metadata: {
+                  command: input.command,
+                  shell,
+                  ...(input.description ? { description: input.description } : {}),
+                },
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source,

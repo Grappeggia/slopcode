@@ -332,7 +332,7 @@ describe("PermissionV2", () => {
   it.effect("scopes saved opaque shell approvals to one exact shell statement", () =>
     Effect.gen(function* () {
       yield* setup()
-      const resource = ShellParser.opaque("/bin/sh", "git *.ts; rm target")
+      const resource = ShellParser.opaque("cmd.exe", "curl https://example.test/Auth/Path?token=TokenABC")
       const input = assertion({ action: "bash", resources: [resource], save: [resource] })
       const { service, fiber, request } = yield* waitForRequest(input)
       yield* service.reply({ requestID: request.id, reply: "always" })
@@ -346,7 +346,7 @@ describe("PermissionV2", () => {
           assertion({
             id: PermissionV2.ID.create("per_opaque_other"),
             action: "bash",
-            resources: [ShellParser.opaque("/bin/sh", "git index.ts; rm target")],
+            resources: [ShellParser.opaque("cmd.exe", "curl https://example.test/auth/path?token=tokenabc")],
           }),
         ),
       ).toMatchObject({ effect: "ask" })
@@ -355,7 +355,7 @@ describe("PermissionV2", () => {
           assertion({
             id: PermissionV2.ID.create("per_opaque_shell"),
             action: "bash",
-            resources: [ShellParser.opaque("/bin/dash", "git *.ts; rm target")],
+            resources: [ShellParser.opaque("CMD.EXE", "curl https://example.test/Auth/Path?token=TokenABC")],
           }),
         ),
       ).toMatchObject({ effect: "ask" })

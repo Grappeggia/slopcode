@@ -124,6 +124,17 @@ describe("ShellParser PowerShell resources", () => {
     expect(await powershell("& { Write-Host one; Remove-Item two }")).toEqual(["Write-Host one", "Remove-Item two"])
   })
 
+  test.each(["& { git status } > target", "& { git status } >> target", "& { git status } < target"])(
+    "keeps redirected script-block wrapper effects: %s",
+    async (command) => {
+      expect(await powershell(command)).toEqual([command, "git status"])
+    },
+  )
+
+  test("does not add an outer resource for a safe script-block wrapper", async () => {
+    expect(await powershell("& { git status }")).toEqual(["git status"])
+  })
+
   test("keeps executable expressions and their redirects opaque", async () => {
     expect(await powershell('"hi" > target')).toEqual(['"hi" > target'])
     expect(await powershell('[IO.File]::Delete("target")')).toEqual(['[IO.File]::Delete("target")'])
@@ -193,14 +204,26 @@ describe("ShellParser cmd resources", () => {
 })
 
 describe("ShellParser opaque resources", () => {
-  test("are stable, meaningful, and wildcard-safe", () => {
+  test("encode exact bytes into stable wildcard-safe resources", () => {
     const resource = ShellParser.opaque("/bin/sh", "git * ? / \\ \n")
-    expect(resource).toBe("[opaque shell statement] shell=%2Fbin%2Fsh source=git %2A %3F %2F %5C %0A")
+    expect(resource).toBe("[opaque shell statement] shell-utf8=2f62696e2f7368 source-utf8=676974202a203f202f205c200a")
     expect(Wildcard.match(resource, "*")).toBeTrue()
     expect(Wildcard.match(resource, "git *")).toBeFalse()
     expect(Wildcard.match(ShellParser.opaque("/bin/sh", "git value"), resource)).toBeFalse()
     expect(
       Wildcard.match(ShellParser.opaque("/bin/sh", "read \\tmp"), ShellParser.opaque("/bin/sh", "read /tmp")),
     ).toBeFalse()
+  })
+
+  test("remain distinct after Windows-style case folding", () => {
+    const upper = ShellParser.opaque("cmd.exe", "curl https://example.test/Auth/Path?token=TokenABC")
+    const lower = ShellParser.opaque("cmd.exe", "curl https://example.test/auth/path?token=tokenabc")
+    const shell = ShellParser.opaque("CMD.EXE", "curl https://example.test/Auth/Path?token=TokenABC")
+    expect(upper).toMatch(/^\[opaque shell statement\] shell-utf8=[0-9a-f]+ source-utf8=[0-9a-f]+$/)
+    expect(upper.toLowerCase()).not.toBe(lower.toLowerCase())
+    expect(upper.toLowerCase()).not.toBe(shell.toLowerCase())
+    expect(Wildcard.match(lower, upper)).toBeFalse()
+    expect(Wildcard.match(upper, "*")).toBeTrue()
+    expect(Wildcard.match(upper, "git *")).toBeFalse()
   })
 })

@@ -282,6 +282,7 @@ describe("BashTool", () => {
                   Effect.promise(async () => {
                     expect(settled.result).toMatchObject({ type: "error" })
                     expect(assertions[0]?.resources).toEqual([ShellParser.opaque(shell, command)])
+                    expect(assertions[0]?.metadata).toEqual({ command, shell })
                     expect(await Bun.file(marker).exists()).toBeFalse()
                   }),
                 ),
@@ -454,6 +455,32 @@ describe("BashTool", () => {
             Effect.sync(() => {
               expect(settled.result).toMatchObject({ type: "error" })
               expect(assertions[0]?.resources).toEqual(['"payload" > target', "git status"])
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("requires authorization for redirected PowerShell script-block wrappers", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        configuredShell = "pwsh.exe"
+        rules = [
+          { action: "bash", resource: "*", effect: "ask" },
+          { action: "bash", resource: "git *", effect: "allow" },
+        ]
+        const command = "& { git status } > target"
+        return withTool(tmp.path, (registry) => settleTool(registry, call({ command }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toMatchObject({ type: "error" })
+              expect(assertions[0]?.resources).toEqual([command, "git status"])
+              expect(assertions[0]?.metadata).toEqual({ command, shell: "pwsh.exe" })
               expect(runs).toEqual([])
             }),
           ),
