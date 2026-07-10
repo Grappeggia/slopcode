@@ -202,6 +202,24 @@ export const layer = Layer.effect(
       const scope = input.scope ?? "project"
       const projectID = scope === "project" ? input.projectID : undefined
       const fingerprint = hash(value)
+      const id = CoreMemory.ID.create()
+      const inserted = yield* db
+        .insert(MemoryTable)
+        .values({
+          id,
+          scope,
+          project_id: projectID,
+          content: value,
+          hash: fingerprint,
+          enabled: input.enabled ?? true,
+          source_session_id: input.sourceSessionID,
+          source_message_id: input.sourceMessageID,
+        })
+        .onConflictDoNothing()
+        .returning()
+        .get()
+        .pipe(Effect.orDie)
+      if (inserted) return fromRow(inserted)
       const existing = yield* db
         .select()
         .from(MemoryTable)
@@ -214,41 +232,7 @@ export const layer = Layer.effect(
         )
         .get()
         .pipe(Effect.orDie)
-
-      if (existing) {
-        yield* db
-          .update(MemoryTable)
-          .set({
-            content: value,
-            enabled: input.enabled ?? existing.enabled,
-            source_session_id: input.sourceSessionID ?? existing.source_session_id,
-            source_message_id: input.sourceMessageID ?? existing.source_message_id,
-          })
-          .where(eq(MemoryTable.id, existing.id))
-          .run()
-          .pipe(Effect.orDie)
-        const updated = yield* db.select().from(MemoryTable).where(eq(MemoryTable.id, existing.id)).get().pipe(Effect.orDie)
-        if (updated) return fromRow(updated)
-        return fromRow(existing)
-      }
-
-      const id = CoreMemory.ID.create()
-      yield* db
-        .insert(MemoryTable)
-        .values({
-          id,
-          scope,
-          project_id: projectID,
-          content: value,
-          hash: fingerprint,
-          enabled: input.enabled ?? true,
-          source_session_id: input.sourceSessionID,
-          source_message_id: input.sourceMessageID,
-        })
-        .run()
-        .pipe(Effect.orDie)
-      const row = yield* db.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get().pipe(Effect.orDie)
-      if (row) return fromRow(row)
+      if (existing) return fromRow(existing)
     })
 
     const listForProject = Effect.fn("Memory.listForProject")(function* (input: {

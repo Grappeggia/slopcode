@@ -1,7 +1,7 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "14c68456-4029-44ae-a3ac-acf6a60e46b0",
+  "id": "24b5a4f2-8775-49a0-b812-bd1c064d1dfa",
   "prevIds": [
     "169a0f0f-d58f-479f-b024-fa1c7b9a09db"
   ],
@@ -2088,6 +2088,24 @@
           "isExpression": false
         },
         {
+          "value": "hash",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"memory\".\"project_id\" IS NULL",
+      "origin": "manual",
+      "name": "memory_global_scope_hash_idx",
+      "entityType": "indexes",
+      "table": "memory"
+    },
+    {
+      "columns": [
+        {
+          "value": "scope",
+          "isExpression": false
+        },
+        {
           "value": "project_id",
           "isExpression": false
         },
@@ -2096,10 +2114,10 @@
           "isExpression": false
         }
       ],
-      "isUnique": false,
-      "where": null,
+      "isUnique": true,
+      "where": "\"memory\".\"project_id\" IS NOT NULL",
       "origin": "manual",
-      "name": "memory_scope_hash_idx",
+      "name": "memory_project_scope_hash_idx",
       "entityType": "indexes",
       "table": "memory"
     },

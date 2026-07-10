@@ -93,6 +93,39 @@ describe("DatabaseMigration", () => {
     )
   })
 
+  test("declares scope-aware memory unique indexes", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+
+        expect(
+          yield* db.all(
+            sql`SELECT name, "unique" AS is_unique, partial FROM pragma_index_list('memory') WHERE name IN ('memory_global_scope_hash_idx', 'memory_project_scope_hash_idx') ORDER BY name`,
+          ),
+        ).toEqual([
+          { name: "memory_global_scope_hash_idx", is_unique: 1, partial: 1 },
+          { name: "memory_project_scope_hash_idx", is_unique: 1, partial: 1 },
+        ])
+        expect(
+          (yield* db.all<{ name: string }>(sql`PRAGMA index_info('memory_global_scope_hash_idx')`)).map(
+            (column) => column.name,
+          ),
+        ).toEqual(["scope", "hash"])
+        expect(
+          (yield* db.all<{ name: string }>(sql`PRAGMA index_info('memory_project_scope_hash_idx')`)).map(
+            (column) => column.name,
+          ),
+        ).toEqual(["scope", "project_id", "hash"])
+        const definitions = yield* db.all<{ name: string; sql: string }>(
+          sql`SELECT name, sql FROM sqlite_master WHERE name IN ('memory_global_scope_hash_idx', 'memory_project_scope_hash_idx') ORDER BY name`,
+        )
+        expect(definitions[0]?.sql).toContain('WHERE "memory"."project_id" IS NULL')
+        expect(definitions[1]?.sql).toContain('WHERE "memory"."project_id" IS NOT NULL')
+      }),
+    )
+  })
+
   test("rejects a non-empty database without a session table", async () => {
     await expect(
       run(

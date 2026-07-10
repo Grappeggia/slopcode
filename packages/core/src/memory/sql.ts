@@ -1,4 +1,5 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
+import { sql } from "drizzle-orm"
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 import { Timestamps } from "../database/schema.sql"
 import { ProjectTable } from "../project/sql"
 import type { Memory } from "../memory"
@@ -24,6 +25,11 @@ export const MemoryTable = sqliteTable(
   },
   (table) => [
     index("memory_project_enabled_time_idx").on(table.project_id, table.enabled, table.time_updated),
-    index("memory_scope_hash_idx").on(table.scope, table.project_id, table.hash),
+    uniqueIndex("memory_global_scope_hash_idx")
+      .on(table.scope, table.hash)
+      .where(sql`${table.project_id} IS NULL`),
+    uniqueIndex("memory_project_scope_hash_idx")
+      .on(table.scope, table.project_id, table.hash)
+      .where(sql`${table.project_id} IS NOT NULL`),
   ],
 )

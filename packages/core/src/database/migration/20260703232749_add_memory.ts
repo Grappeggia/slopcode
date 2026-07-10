@@ -22,7 +22,12 @@ export default {
         );
       `)
       yield* tx.run(`CREATE INDEX \`memory_project_enabled_time_idx\` ON \`memory\` (\`project_id\`,\`enabled\`,\`time_updated\`);`)
-      yield* tx.run(`CREATE INDEX \`memory_scope_hash_idx\` ON \`memory\` (\`scope\`,\`project_id\`,\`hash\`);`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`memory_global_scope_hash_idx\` ON \`memory\` (\`scope\`,\`hash\`) WHERE "memory"."project_id" IS NULL;`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`memory_project_scope_hash_idx\` ON \`memory\` (\`scope\`,\`project_id\`,\`hash\`) WHERE "memory"."project_id" IS NOT NULL;`,
+      )
     })
   },
 } satisfies DatabaseMigration.Migration

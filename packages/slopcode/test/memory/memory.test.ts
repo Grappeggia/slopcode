@@ -1,6 +1,7 @@
 import { expect } from "bun:test"
 import { Database } from "@slopcode-ai/core/database/database"
-import { Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
+import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { Config } from "../../src/config/config"
 import { InstanceState } from "../../src/effect/instance-state"
@@ -8,20 +9,22 @@ import { Memory } from "../../src/memory/memory"
 import { LLM } from "../../src/session/llm"
 import type { Info as SessionInfo } from "../../src/session/session"
 import { Provider } from "../../src/provider/provider"
+import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const configLayer = Layer.mock(Config.Service, {
   get: () => Effect.succeed({ memory: { enabled: false } }),
 })
-const it = testEffect(
-  Memory.layer.pipe(
-    Layer.provide(Database.defaultLayer),
+function memoryLayer(database = Database.defaultLayer) {
+  return Memory.layer.pipe(
+    Layer.provide(database),
     Layer.provide(configLayer),
     Layer.provide(Layer.mock(Agent.Service, {})),
     Layer.provide(Layer.mock(Provider.Service, {})),
     Layer.provide(Layer.mock(LLM.Service, {})),
-  ),
-)
+  )
+}
+const it = testEffect(memoryLayer())
 
 function session(input: { projectID: string; metadata?: Record<string, unknown> }) {
   return {
@@ -46,6 +49,66 @@ it.instance("dedupes project memories", () =>
 
     expect(first?.id).toBe(second?.id)
     expect(list).toHaveLength(1)
+  }),
+)
+
+it.instance("atomically dedupes concurrent global memories", () =>
+  Effect.gen(function* () {
+    const test = yield* TestInstance
+    const filename = path.join(test.directory, "concurrent-memory.sqlite")
+    const contexts = yield* Effect.forEach(
+      Array.from({ length: 8 }),
+      () => Layer.build(memoryLayer(Database.layerFromPath(filename))),
+      { concurrency: 1 },
+    )
+    const memories = contexts.map((context) => Context.get(context, Memory.Service))
+    const created = yield* Effect.all(
+      memories.map((memory) =>
+        memory.create({ content: "Keep concurrent memory extraction deterministic", scope: "global" }),
+      ),
+      { concurrency: "unbounded" },
+    )
+    const rows = yield* memories[0].list({ includeDisabled: true })
+
+    expect(created.every((item) => item !== undefined)).toBe(true)
+    expect(new Set(created.map((item) => item?.id)).size).toBe(1)
+    expect(rows.filter((item) => item.enabled)).toHaveLength(1)
+    expect(created).toEqual(created.map(() => created[0]))
+    expect(rows).toEqual(created[0] ? [created[0]] : [])
+  }),
+)
+
+it.instance("dedupes a disabled memory", () =>
+  Effect.gen(function* () {
+    yield* project()
+    const memory = yield* Memory.Service
+    const first = yield* memory.create({ content: "Keep this disabled memory deduplicated", scope: "project" })
+    if (!first) return
+    yield* memory.update(first.id, { enabled: false })
+
+    const duplicate = yield* memory.create({ content: "Keep this disabled memory deduplicated", scope: "project" })
+    const rows = yield* memory.list({ includeDisabled: true })
+
+    expect(duplicate?.id).toBe(first.id)
+    expect(duplicate?.enabled).toBe(false)
+    expect(rows.map((item) => item.id)).toEqual([first.id])
+  }),
+)
+
+it.instance("recreates a hard-deleted memory as a new active row", () =>
+  Effect.gen(function* () {
+    yield* project()
+    const memory = yield* Memory.Service
+    const first = yield* memory.create({ content: "Recreate this memory after deleting it", scope: "project" })
+    if (!first) return
+    yield* memory.remove(first.id)
+
+    const recreated = yield* memory.create({ content: "Recreate this memory after deleting it", scope: "project" })
+    const rows = yield* memory.list({ includeDisabled: true })
+
+    expect(recreated?.id).not.toBe(first.id)
+    expect(recreated?.enabled).toBe(true)
+    expect(rows).toEqual(recreated ? [recreated] : [])
   }),
 )
 
