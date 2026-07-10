@@ -38,5 +38,6 @@ export const migrations = (
     import("./migration/20260611192811_lush_chimera"),
     import("./migration/20260612174303_project_dir_strategy"),
     import("./migration/20260703232749_add_memory"),
+    import("./migration/20260710133403_add_session_runtime"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

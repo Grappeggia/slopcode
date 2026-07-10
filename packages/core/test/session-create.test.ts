@@ -21,6 +21,7 @@ import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { WorkspaceV2 } from "@slopcode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
@@ -37,6 +38,7 @@ const projects = Layer.succeed(
 )
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
+const runtime = SessionRuntime.layer.pipe(Layer.provide(database))
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
@@ -45,7 +47,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(SessionExecution.noopLayer),
 )
 const it = testEffect(
-  Layer.mergeAll(database, events, projects, projector, store, SessionExecution.noopLayer, sessions),
+  Layer.mergeAll(database, events, projects, projector, store, runtime, SessionExecution.noopLayer, sessions),
 )
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const id = SessionV2.ID.create()
@@ -191,6 +193,62 @@ describe("SessionV2.create", () => {
       expect(
         yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
       ).toMatchObject([{ type: EventV2.versionedType(SessionV1.Event.Created.type, 1) }])
+    }),
+  )
+
+  it.effect("defaults new sessions to V1 runtime ownership", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const created = yield* session.create({ location })
+
+      expect(yield* runtime.get(created.id)).toMatchObject({
+        sessionID: created.id,
+        owner: "v1",
+        epoch: 0,
+        state: "ready",
+      })
+      expect(yield* runtime.assert({ sessionID: created.id, owner: "v1", epoch: 0 })).toMatchObject({
+        owner: "v1",
+        epoch: 0,
+      })
+    }),
+  )
+
+  it.effect("assigns runtime ownership with epoch fencing", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const created = yield* session.create({ location })
+
+      const assigned = yield* runtime.assign({
+        sessionID: created.id,
+        owner: "v2",
+        state: "migrating",
+        expectedOwner: "v1",
+        expectedEpoch: 0,
+      })
+
+      expect(assigned).toMatchObject({ owner: "v2", epoch: 1, state: "migrating" })
+      expect(
+        yield* runtime.assign({
+          sessionID: created.id,
+          owner: "v1",
+          expectedOwner: "v1",
+          expectedEpoch: 0,
+        }).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "SessionRuntime.Mismatch",
+        expectedOwner: "v1",
+        actualOwner: "v2",
+        expectedEpoch: 0,
+        actualEpoch: 1,
+      })
+      expect(yield* runtime.assert({ sessionID: created.id, owner: "v2", epoch: 1 })).toMatchObject({
+        owner: "v2",
+        epoch: 1,
+        state: "migrating",
+      })
     }),
   )
 

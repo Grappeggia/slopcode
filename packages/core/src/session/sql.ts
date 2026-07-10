@@ -53,6 +53,9 @@ export const SessionTable = sqliteTable(
       providerID: string
       variant?: string
     }>(),
+    runtime: text().$type<"v1" | "v2">().notNull().default("v1"),
+    runtime_epoch: integer().notNull().default(0),
+    runtime_state: text().$type<"ready" | "draining" | "migrating" | "paused">().notNull().default("ready"),
     ...Timestamps,
     time_compacting: integer(),
     time_archived: integer(),

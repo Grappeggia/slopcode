@@ -74,6 +74,15 @@ describe("DatabaseMigration", () => {
             sql`SELECT name, dflt_value FROM pragma_table_info('session_context_epoch') WHERE name = 'agent'`,
           ),
         ).toEqual({ name: "agent", dflt_value: "'build'" })
+        expect(
+          yield* db.all(
+            sql`SELECT name, dflt_value, "notnull" AS not_null FROM pragma_table_info('session') WHERE name IN ('runtime', 'runtime_epoch', 'runtime_state') ORDER BY name`,
+          ),
+        ).toEqual([
+          { name: "runtime", dflt_value: "'v1'", not_null: 1 },
+          { name: "runtime_epoch", dflt_value: "0", not_null: 1 },
+          { name: "runtime_state", dflt_value: "'ready'", not_null: 1 },
+        ])
         expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual({ count: migrations.length })
         expect(
           yield* db.all(
