@@ -112,7 +112,9 @@ export namespace User {
           const key = await tx
             .select()
             .from(KeyTable)
-            .where(and(eq(KeyTable.workspaceID, workspaceID), eq(KeyTable.userID, user.id)))
+            .where(
+              and(eq(KeyTable.workspaceID, workspaceID), eq(KeyTable.userID, user.id), isNull(KeyTable.timeDeleted)),
+            )
             .then((rows) => rows[0])
 
           if (key) return

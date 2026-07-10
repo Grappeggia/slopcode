@@ -26,7 +26,7 @@ export async function GET(input: APIEvent) {
         .innerJoin(WorkspaceTable, eq(WorkspaceTable.id, KeyTable.workspaceID))
         .innerJoin(UserTable, and(eq(UserTable.workspaceID, KeyTable.workspaceID), eq(UserTable.id, KeyTable.userID)))
         .innerJoin(ModelTable, and(eq(ModelTable.workspaceID, KeyTable.workspaceID), isNull(ModelTable.timeDeleted)))
-        .where(and(eq(KeyTable.key, apiKey), Key.active()))
+        .where(and(eq(KeyTable.key, apiKey), Key.activePrincipal()))
         .then((rows) => rows.map((row) => row.model)),
     )
   })()

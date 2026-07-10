@@ -9,7 +9,7 @@ import { AuthTable } from "./schema/auth.sql"
 import { WorkspaceTable } from "./schema/workspace.sql"
 
 export namespace Key {
-  export const active = () =>
+  export const activePrincipal = () =>
     and(isNull(KeyTable.timeDeleted), isNull(UserTable.timeDeleted), isNull(WorkspaceTable.timeDeleted))
 
   export const list = fn(z.void(), async () => {

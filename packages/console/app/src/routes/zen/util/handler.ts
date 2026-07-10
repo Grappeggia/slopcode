@@ -662,7 +662,7 @@ export async function handler(
             isNull(LiteTable.timeDeleted),
           ),
         )
-        .where(and(eq(KeyTable.key, zenApiKey), ApiKey.active()))
+        .where(and(eq(KeyTable.key, zenApiKey), ApiKey.activePrincipal()))
         .then((rows) => rows[0]),
     )
 

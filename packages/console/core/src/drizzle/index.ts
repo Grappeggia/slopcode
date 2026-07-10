@@ -32,6 +32,20 @@ export namespace Database {
     tx: TxOrDb
     effects: (() => void | Promise<void>)[]
   }>()
+  const ClientContext = Context.create<TxOrDb>()
+
+  function current() {
+    try {
+      return ClientContext.use()
+    } catch (err) {
+      if (err instanceof Context.NotFound) return client()
+      throw err
+    }
+  }
+
+  export function provide<T>(tx: TxOrDb, callback: () => T) {
+    return ClientContext.provide(tx, callback)
+  }
 
   export async function use<T>(callback: (trx: TxOrDb) => Promise<T>) {
     try {
@@ -40,12 +54,13 @@ export namespace Database {
     } catch (err) {
       if (err instanceof Context.NotFound) {
         const effects: (() => void | Promise<void>)[] = []
+        const db = current()
         const result = await TransactionContext.provide(
           {
             effects,
-            tx: client(),
+            tx: db,
           },
-          () => callback(client()),
+          () => callback(db),
         )
         await Promise.all(effects.map((x) => x()))
         return result
@@ -73,7 +88,7 @@ export namespace Database {
     } catch (err) {
       if (err instanceof Context.NotFound) {
         const effects: (() => void | Promise<void>)[] = []
-        const result = await client().transaction(async (tx) => {
+        const result = await current().transaction(async (tx) => {
           return TransactionContext.provide({ tx, effects }, () => callback(tx))
         }, config)
         await Promise.all(effects.map((x) => x()))

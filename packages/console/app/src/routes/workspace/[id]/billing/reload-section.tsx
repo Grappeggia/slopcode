@@ -2,20 +2,19 @@ import { json, action, useParams, createAsync, useSubmission } from "@solidjs/ro
 import { createEffect, Show, createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import { withActor } from "~/context/auth.withActor"
+import { Actor } from "@slopcode-ai/console-core/actor.js"
 import { Billing } from "@slopcode-ai/console-core/billing.js"
-import { Database, eq } from "@slopcode-ai/console-core/drizzle/index.js"
-import { BillingTable } from "@slopcode-ai/console-core/schema/billing.sql.js"
 import styles from "./reload-section.module.css"
 import { queryBillingInfo } from "../../common"
 import { useI18n } from "~/context/i18n"
 import { formError, formErrorReloadAmountMin, formErrorReloadTriggerMin, localizeError } from "~/lib/form-error"
-import { asBillingAdmin } from "./authorize"
+import { reloadBilling, setBillingReload } from "./server"
 
 const reload = action(async (form: FormData) => {
   "use server"
   const workspaceID = form.get("workspaceID") as string | null
   if (!workspaceID) return { error: formError.workspaceRequired }
-  return json(await withActor(() => asBillingAdmin(() => Billing.reload()), workspaceID), {
+  return json(await withActor(() => reloadBilling(() => Billing.reload()), workspaceID), {
     revalidate: queryBillingInfo.key,
   })
 }, "billing.reload")
@@ -24,45 +23,26 @@ const setReload = action(async (form: FormData) => {
   "use server"
   const workspaceID = form.get("workspaceID") as string | null
   if (!workspaceID) return { error: formError.workspaceRequired }
-  return withActor(
-    () =>
-      asBillingAdmin(async (workspaceID) => {
-        const reloadValue = (form.get("reload") as string | null) === "true"
-        const amountStr = form.get("reloadAmount") as string | null
-        const triggerStr = form.get("reloadTrigger") as string | null
+  return withActor(async () => {
+    Actor.assertAdmin()
+    const reloadValue = (form.get("reload") as string | null) === "true"
+    const amountStr = form.get("reloadAmount") as string | null
+    const triggerStr = form.get("reloadTrigger") as string | null
 
-        const reloadAmount = amountStr && amountStr.trim() !== "" ? parseInt(amountStr) : null
-        const reloadTrigger = triggerStr && triggerStr.trim() !== "" ? parseInt(triggerStr) : null
+    const reloadAmount = amountStr && amountStr.trim() !== "" ? parseInt(amountStr) : null
+    const reloadTrigger = triggerStr && triggerStr.trim() !== "" ? parseInt(triggerStr) : null
 
-        if (reloadValue) {
-          if (reloadAmount === null || reloadAmount < Billing.RELOAD_AMOUNT_MIN)
-            return { error: formErrorReloadAmountMin(Billing.RELOAD_AMOUNT_MIN) }
-          if (reloadTrigger === null || reloadTrigger < Billing.RELOAD_TRIGGER_MIN)
-            return { error: formErrorReloadTriggerMin(Billing.RELOAD_TRIGGER_MIN) }
-        }
+    if (reloadValue) {
+      if (reloadAmount === null || reloadAmount < Billing.RELOAD_AMOUNT_MIN)
+        return { error: formErrorReloadAmountMin(Billing.RELOAD_AMOUNT_MIN) }
+      if (reloadTrigger === null || reloadTrigger < Billing.RELOAD_TRIGGER_MIN)
+        return { error: formErrorReloadTriggerMin(Billing.RELOAD_TRIGGER_MIN) }
+    }
 
-        return json(
-          await Database.use((tx) =>
-            tx
-              .update(BillingTable)
-              .set({
-                reload: reloadValue,
-                ...(reloadAmount !== null ? { reloadAmount } : {}),
-                ...(reloadTrigger !== null ? { reloadTrigger } : {}),
-                ...(reloadValue
-                  ? {
-                      reloadError: null,
-                      timeReloadError: null,
-                    }
-                  : {}),
-              })
-              .where(eq(BillingTable.workspaceID, workspaceID)),
-          ),
-          { revalidate: queryBillingInfo.key },
-        )
-      }),
-    workspaceID,
-  )
+    return json(await setBillingReload({ reload: reloadValue, reloadAmount, reloadTrigger }), {
+      revalidate: queryBillingInfo.key,
+    })
+  }, workspaceID)
 }, "billing.setReload")
 
 export function ReloadSection() {
