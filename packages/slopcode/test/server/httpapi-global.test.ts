@@ -52,6 +52,53 @@ describe("global HttpApi", () => {
     }),
   )
 
+  it.live("accepts a prerelease upgrade target", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(GlobalPaths.upgrade).pipe(
+        HttpClientRequest.setBody(HttpBody.jsonUnsafe({ target: "1.2.3-beta.1" })),
+        HttpClient.execute,
+      )
+
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({ success: true, version: "1.2.3-beta.1" })
+    }),
+  )
+
+  it.live("rejects npm alias upgrade targets", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(GlobalPaths.upgrade).pipe(
+        HttpClientRequest.setBody(HttpBody.jsonUnsafe({ target: "npm:attacker-package@1.0.0" })),
+        HttpClient.execute,
+      )
+
+      expect(response.status).toBe(400)
+      expect(yield* response.json).toEqual({ success: false, error: "Invalid request body" })
+    }),
+  )
+
+  it.live("rejects disallowed cross-origin upgrade requests", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(GlobalPaths.upgrade).pipe(
+        HttpClientRequest.setHeader("origin", "https://evil.example"),
+        HttpClientRequest.setBody(HttpBody.jsonUnsafe({ target: "1.2.3" })),
+        HttpClient.execute,
+      )
+
+      expect(response.status).toBe(403)
+    }),
+  )
+
+  it.live("requires JSON for non-empty upgrade bodies", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post(GlobalPaths.upgrade).pipe(
+        HttpClientRequest.setBody(HttpBody.text('{"target":"1.2.3"}', "text/plain")),
+        HttpClient.execute,
+      )
+
+      expect(response.status).toBe(415)
+    }),
+  )
+
   it.live("rejects malformed upgrade payloads", () =>
     Effect.gen(function* () {
       const response = yield* HttpClientRequest.post(GlobalPaths.upgrade).pipe(

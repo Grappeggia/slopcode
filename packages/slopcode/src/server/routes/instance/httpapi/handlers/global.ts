@@ -3,6 +3,7 @@ import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { Installation } from "@/installation"
+import { CorsConfig, isAllowedRequestOrigin } from "@/server/cors"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstallationVersion } from "@slopcode-ai/core/installation/version"
 import { Effect, Queue, Schema } from "effect"
@@ -69,6 +70,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
   Effect.gen(function* () {
     const config = yield* Config.Service
     const installation = yield* Installation.Service
+    const cors = yield* CorsConfig
     const bridge = yield* EffectBridge.make()
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
@@ -129,7 +131,12 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const upgradeRaw = Effect.fn("GlobalHttpApi.upgradeRaw")(function* (ctx: {
       request: HttpServerRequest.HttpServerRequest
     }) {
+      if (!isAllowedRequestOrigin(ctx.request.headers.origin, ctx.request.headers.host, cors)) {
+        return HttpServerResponse.empty({ status: 403 })
+      }
       const body = yield* Effect.orDie(ctx.request.text)
+      const contentType = ctx.request.headers["content-type"]?.split(";", 1)[0].trim().toLowerCase()
+      if (body && contentType !== "application/json") return HttpServerResponse.empty({ status: 415 })
       const json = parseBody(body)
       if (json === undefined) {
         return HttpServerResponse.jsonUnsafe({ success: false, error: "Invalid request body" }, { status: 400 })

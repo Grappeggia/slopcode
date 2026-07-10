@@ -6,6 +6,7 @@ import "@slopcode-ai/core/account"
 import "@/server/event"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import semver from "semver"
 import { described } from "./metadata"
 
 const GlobalHealth = Schema.Struct({
@@ -50,7 +51,11 @@ const GlobalEventSchema = Schema.Struct({
 }).annotate({ identifier: "GlobalEvent" })
 
 export const GlobalUpgradeInput = Schema.Struct({
-  target: Schema.optional(Schema.String),
+  target: Schema.optional(
+    Schema.String.pipe(
+      Schema.check(Schema.makeFilter((target) => semver.valid(target) === target, { expected: "a semantic version" })),
+    ),
+  ),
 })
 
 const GlobalUpgradeResult = Schema.Union([
