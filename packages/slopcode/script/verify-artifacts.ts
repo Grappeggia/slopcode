@@ -101,7 +101,9 @@ const tarball = (name: string) => `${name.replaceAll("/", "-")}.tgz`
 
 const pack = async (cwd: string, file: string) => {
   await $`bash -lc "rm -f ./*.tgz"`.cwd(cwd)
-  await $`bun pm pack --filename ${file}`.cwd(cwd).quiet()
+  const name = (await $`npm pack --silent`.cwd(cwd).text()).trim().split("\n").at(-1)
+  if (!name) throw new Error(`verify: npm pack produced no tarball for ${cwd}`)
+  await fs.rename(path.join(cwd, name), path.join(cwd, file))
   return path.join(cwd, file)
 }
 
@@ -160,7 +162,11 @@ const stageRoot = async (input: { name: string; bin: string; description: string
   }
 }
 
-const packed = await Promise.all(binaries.map(stageBinary))
+const chunks = Array.from({ length: Math.ceil(binaries.length / 3) }, (_, i) => binaries.slice(i * 3, i * 3 + 3))
+const packed = await chunks.reduce(
+  async (all, items) => [...(await all), ...(await Promise.all(items.map(stageBinary)))],
+  Promise.resolve([] as Awaited<ReturnType<typeof stageBinary>>[]),
+)
 const root = await stageRoot({
   name: pkg.name,
   bin: pkg.name,
