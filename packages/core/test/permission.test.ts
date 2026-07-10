@@ -92,7 +92,7 @@ function assertion(input: Partial<PermissionV2.AssertInput> = {}) {
   } satisfies PermissionV2.AssertInput
 }
 
-function waitForRequest() {
+function waitForRequest(input: PermissionV2.AssertInput = assertion()) {
   return Effect.gen(function* () {
     const service = yield* PermissionV2.Service
     const events = yield* EventV2.Service
@@ -103,7 +103,7 @@ function waitForRequest() {
         : Effect.void,
     )
     yield* Effect.addFinalizer(() => unsubscribe)
-    const fiber = yield* service.assert(assertion()).pipe(Effect.forkScoped)
+    const fiber = yield* service.assert(input).pipe(Effect.forkScoped)
     const request = yield* Deferred.await(asked)
     return { service, fiber, request }
   })
@@ -252,6 +252,77 @@ describe("PermissionV2", () => {
       yield* setRules([{ action: "bash", resource: "*", effect: "deny" }])
       expect(yield* service.ask(assertion({ action: "bash", resources: ["pwd"] }))).toEqual({
         id: PermissionV2.ID.create("per_test"),
+        effect: "deny",
+      })
+    }),
+  )
+
+  it.effect("denies any granular bash resource before prompting", () =>
+    Effect.gen(function* () {
+      yield* setup([
+        { action: "bash", resource: "*", effect: "ask" },
+        { action: "bash", resource: "git *", effect: "allow" },
+        { action: "bash", resource: "rm *", effect: "deny" },
+      ])
+      const service = yield* PermissionV2.Service
+      const denied = yield* service
+        .assert(assertion({ action: "bash", resources: ["git status", "rm -rf target"] }))
+        .pipe(Effect.flip)
+      expect(denied).toBeInstanceOf(PermissionV2.DeniedError)
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
+  it.effect("keeps granular bash once decisions ephemeral", () =>
+    Effect.gen(function* () {
+      yield* setup([
+        { action: "bash", resource: "*", effect: "ask" },
+        { action: "bash", resource: "git *", effect: "allow" },
+      ])
+      const input = assertion({
+        action: "bash",
+        resources: ["git status", "rm -rf target"],
+        save: ["git status", "rm -rf target"],
+      })
+      const { service, fiber, request } = yield* waitForRequest(input)
+      expect(request.resources).toEqual(["git status", "rm -rf target"])
+      yield* service.reply({ requestID: request.id, reply: "once" })
+      yield* Fiber.join(fiber)
+      expect(yield* (yield* PermissionSaved.Service).list()).toEqual([])
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_again") })).toMatchObject({
+        effect: "ask",
+      })
+    }),
+  )
+
+  it.effect("saves every granular bash resource while configured deny still wins", () =>
+    Effect.gen(function* () {
+      yield* setup([
+        { action: "bash", resource: "*", effect: "ask" },
+        { action: "bash", resource: "git *", effect: "allow" },
+      ])
+      const input = assertion({
+        action: "bash",
+        resources: ["git status", "rm -rf target"],
+        save: ["git status", "rm -rf target"],
+      })
+      const { service, fiber, request } = yield* waitForRequest(input)
+      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* Fiber.join(fiber)
+      expect(yield* (yield* PermissionSaved.Service).list()).toMatchObject([
+        { action: "bash", resource: "git status" },
+        { action: "bash", resource: "rm -rf target" },
+      ])
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_saved") })).toMatchObject({
+        effect: "allow",
+      })
+
+      yield* setRules([
+        { action: "bash", resource: "*", effect: "ask" },
+        { action: "bash", resource: "git *", effect: "allow" },
+        { action: "bash", resource: "rm *", effect: "deny" },
+      ])
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_denied") })).toMatchObject({
         effect: "deny",
       })
     }),

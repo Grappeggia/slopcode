@@ -28,6 +28,8 @@ const runs: Array<{
   readonly options?: AppProcess.RunOptions
 }> = []
 let denyAction: string | undefined
+let rules: PermissionV2.Ruleset | undefined
+let configuredShell: string | undefined
 let result: AppProcess.RunResult = {
   command: "mock",
   exitCode: 0,
@@ -46,7 +48,17 @@ const permission = Layer.succeed(
       Effect.sync(() => assertions.push(input)).pipe(
         Effect.andThen(Effect.suspend(() => afterPermission(input))),
         Effect.andThen(
-          input.action === denyAction ? Effect.fail(new PermissionV2.DeniedError({ rules: [] })) : Effect.void,
+          Effect.suspend(() => {
+            if (input.action === denyAction) return Effect.fail(new PermissionV2.DeniedError({ rules: [] }))
+            const configured = rules
+            if (!configured) return Effect.void
+            const effects = input.resources.map(
+              (resource) => PermissionV2.evaluate(input.action, resource, configured).effect,
+            )
+            if (effects.includes("deny")) return Effect.fail(new PermissionV2.DeniedError({ rules: configured }))
+            if (effects.includes("ask")) return Effect.fail(new PermissionV2.RejectedError())
+            return Effect.void
+          }),
         ),
       ),
     ask: () => Effect.die("unused"),
@@ -70,7 +82,12 @@ const appProcess = Layer.succeed(
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
-    entries: () => Effect.succeed([]),
+    entries: () =>
+      Effect.succeed(
+        configuredShell
+          ? [new Config.Document({ type: "document", info: new Config.Info({ shell: configuredShell }) })]
+          : [],
+      ),
   }),
 )
 
@@ -78,6 +95,8 @@ const reset = () => {
   assertions.length = 0
   runs.length = 0
   denyAction = undefined
+  rules = undefined
+  configuredShell = undefined
   runFailure = undefined
   afterPermission = () => Effect.void
   result = {
@@ -291,6 +310,99 @@ describe("BashTool", () => {
     ),
   )
 
+  it.live("authorizes every atomic command before creating a process", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        rules = [
+          { action: "bash", resource: "*", effect: "ask" },
+          { action: "bash", resource: "git *", effect: "allow" },
+          { action: "bash", resource: "rm *", effect: "deny" },
+        ]
+        return withTool(tmp.path, (registry) =>
+          settleTool(registry, call({ command: "git status; rm -rf target" })),
+        ).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toMatchObject({ type: "error" })
+              expect(assertions).toHaveLength(1)
+              expect(assertions[0]).toMatchObject({
+                action: "bash",
+                resources: ["git status", "rm -rf target"],
+                save: ["git status", "rm -rf target"],
+              })
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("does not execute a compound command until every resource is authorized", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        rules = [
+          { action: "bash", resource: "*", effect: "ask" },
+          { action: "bash", resource: "git *", effect: "allow" },
+        ]
+        return withTool(tmp.path, (registry) =>
+          settleTool(registry, call({ command: "git status; rm -rf target" })),
+        ).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toMatchObject({ type: "error" })
+              expect(assertions[0]?.resources).toEqual(["git status", "rm -rf target"])
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("parses with the configured shell and fails closed before permission", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          reset()
+          configuredShell = "/bin/bash"
+          yield* withTool(tmp.path, (registry) => executeTool(registry, call({ command: "printf configured" })))
+          expect(runs[0]?.shell).toBe("/bin/bash")
+
+          reset()
+          configuredShell = "/usr/bin/fish"
+          const unsupported = yield* withTool(tmp.path, (registry) =>
+            settleTool(registry, call({ command: "printf unsupported" })),
+          )
+          expect(unsupported.result).toMatchObject({
+            type: "error",
+            value: expect.stringContaining("Unable to safely authorize command"),
+          })
+          expect(assertions).toEqual([])
+          expect(runs).toEqual([])
+
+          reset()
+          const malformed = yield* withTool(tmp.path, (registry) =>
+            settleTool(registry, call({ command: 'git status; "' })),
+          )
+          expect(malformed.result).toMatchObject({
+            type: "error",
+            value: expect.stringContaining("Unable to safely authorize command"),
+          })
+          expect(assertions).toEqual([])
+          expect(runs).toEqual([])
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
   it.live("reports external command arguments as advisory warnings without enforcing approval", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
@@ -401,7 +513,6 @@ describe("BashTool", () => {
 test("keeps locked deferred parity TODOs visible", async () => {
   const source = await fs.readFile(new URL("../src/tool/bash.ts", import.meta.url), "utf8")
   for (const todo of [
-    "Port tree-sitter bash / PowerShell parser-based approval reduction.",
     "Port BashArity reusable command-prefix approvals.",
     "Replace token-based command-argument external-directory advisories with parser-based detection.",
     "Restore PowerShell and cmd-specific invocation/path handling on Windows.",

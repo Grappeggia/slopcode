@@ -10,6 +10,7 @@ import { LocationMutation } from "../location-mutation"
 import { AppProcess } from "../process"
 import { PermissionV2 } from "../permission"
 import { PositiveInt } from "../schema"
+import { ShellParser } from "../shell-parser"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -77,7 +78,6 @@ const isTimeout = (error: AppProcess.AppProcessError) =>
  * Minimal V2 core shell boundary. Keep parity debt visible without pulling the
  * legacy shell runtime into core.
  */
-// TODO: Port tree-sitter bash / PowerShell parser-based approval reduction.
 // TODO: Port BashArity reusable command-prefix approvals.
 // TODO: Replace token-based command-argument external-directory advisories with parser-based detection.
 // TODO: Restore PowerShell and cmd-specific invocation/path handling on Windows.
@@ -128,6 +128,17 @@ export const layer = Layer.effectDiscard(
                 callID: context.toolCallID,
               }
               const target = yield* mutation.resolve({ path: input.workdir ?? ".", kind: "directory" })
+              const entries = yield* config.entries()
+              const shell =
+                Object.assign({}, ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])))
+                  .shell ?? defaultShell()
+              const resources = yield* Effect.tryPromise({
+                try: () => ShellParser.resources(input.command, shell),
+                catch: (error) =>
+                  new ToolFailure({
+                    message: `Unable to safely authorize command for shell ${JSON.stringify(shell)}: ${error instanceof Error ? error.message : String(error)}`,
+                  }),
+              })
               const external = target.externalDirectory
               if (external)
                 yield* permission.assert({
@@ -142,8 +153,8 @@ export const layer = Layer.effectDiscard(
               )
               yield* permission.assert({
                 action: name,
-                resources: [input.command],
-                save: [input.command],
+                resources,
+                save: resources,
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source,
@@ -152,10 +163,6 @@ export const layer = Layer.effectDiscard(
               if ((yield* fs.stat(target.canonical)).type !== "Directory")
                 return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
 
-              const entries = yield* config.entries()
-              const shell =
-                Object.assign({}, ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])))
-                  .shell ?? defaultShell()
               const command = ChildProcess.make(input.command, [], {
                 cwd: target.canonical,
                 shell,
@@ -198,7 +205,13 @@ export const layer = Layer.effectDiscard(
                 ...(result.stdoutTruncated ? { stdoutTruncated: true } : {}),
                 ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to execute command: ${input.command}` }))),
+            }).pipe(
+              Effect.mapError((error) =>
+                error instanceof ToolFailure
+                  ? error
+                  : new ToolFailure({ message: `Unable to execute command: ${input.command}` }),
+              ),
+            ),
         }),
       })
       .pipe(Effect.orDie)
