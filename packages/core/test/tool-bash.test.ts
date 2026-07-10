@@ -12,6 +12,7 @@ import { PermissionV2 } from "@slopcode-ai/core/permission"
 import { AppProcess } from "@slopcode-ai/core/process"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { SessionV2 } from "@slopcode-ai/core/session"
+import { ShellParser } from "@slopcode-ai/core/shell-parser"
 import { BashTool } from "@slopcode-ai/core/tool/bash"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
 import { location } from "./fixture/location"
@@ -256,6 +257,75 @@ describe("BashTool", () => {
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
       ),
     )
+
+    for (const shell of [Bun.which("dash"), Bun.which("sh")].filter((item): item is string => Boolean(item))) {
+      it.live(
+        `does not execute a dash-style appended command with git-only authorization [${path.basename(shell)}]`,
+        () =>
+          Effect.acquireUseRelease(
+            Effect.promise(() => tmpdir()),
+            (tmp) => {
+              reset()
+              configuredShell = shell
+              rules = [
+                { action: "bash", resource: "*", effect: "ask" },
+                { action: "bash", resource: "git *", effect: "allow" },
+              ]
+              const marker = path.join(tmp.path, "appended-command-ran")
+              const command = `git status &> /dev/null touch "${marker}"`
+              return withTool(
+                tmp.path,
+                (registry) => settleTool(registry, call({ command })),
+                AppProcess.defaultLayer,
+              ).pipe(
+                Effect.andThen((settled) =>
+                  Effect.promise(async () => {
+                    expect(settled.result).toMatchObject({ type: "error" })
+                    expect(assertions[0]?.resources).toEqual([ShellParser.opaque(shell, command)])
+                    expect(await Bun.file(marker).exists()).toBeFalse()
+                  }),
+                ),
+              )
+            },
+            (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+          ),
+      )
+    }
+  }
+
+  if (process.platform === "win32") {
+    const shell = process.env.COMSPEC ?? Bun.which("cmd.exe")
+    if (shell) {
+      it.live("does not execute a cmd command after a quoted caret with git-only authorization", () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => {
+            reset()
+            configuredShell = shell
+            rules = [
+              { action: "bash", resource: "*", effect: "ask" },
+              { action: "bash", resource: "git *", effect: "allow" },
+            ]
+            const marker = path.join(tmp.path, "cmd-appended-command-ran")
+            const command = `git status "foo^" & type nul > "${marker}"`
+            return withTool(
+              tmp.path,
+              (registry) => settleTool(registry, call({ command })),
+              AppProcess.defaultLayer,
+            ).pipe(
+              Effect.andThen((settled) =>
+                Effect.promise(async () => {
+                  expect(settled.result).toMatchObject({ type: "error" })
+                  expect(assertions[0]?.resources).toEqual([ShellParser.opaque(shell, command)])
+                  expect(await Bun.file(marker).exists()).toBeFalse()
+                }),
+              ),
+            )
+          },
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        ),
+      )
+    }
   }
 
   it.live("approves an explicit external workdir before bash execution", () =>
@@ -315,6 +385,7 @@ describe("BashTool", () => {
       Effect.promise(() => tmpdir()),
       (tmp) => {
         reset()
+        configuredShell = "/bin/bash"
         rules = [
           { action: "bash", resource: "*", effect: "ask" },
           { action: "bash", resource: "git *", effect: "allow" },
@@ -346,6 +417,7 @@ describe("BashTool", () => {
       Effect.promise(() => tmpdir()),
       (tmp) => {
         reset()
+        configuredShell = "/bin/bash"
         rules = [
           { action: "bash", resource: "*", effect: "ask" },
           { action: "bash", resource: "git *", effect: "allow" },
@@ -357,6 +429,31 @@ describe("BashTool", () => {
             Effect.sync(() => {
               expect(settled.result).toMatchObject({ type: "error" })
               expect(assertions[0]?.resources).toEqual(["git status", "rm -rf target"])
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("requires authorization for a PowerShell expression redirect before a trailing git command", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        configuredShell = "pwsh.exe"
+        rules = [
+          { action: "bash", resource: "*", effect: "ask" },
+          { action: "bash", resource: "git *", effect: "allow" },
+        ]
+        const command = '"payload" > target | git status'
+        return withTool(tmp.path, (registry) => settleTool(registry, call({ command }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toMatchObject({ type: "error" })
+              expect(assertions[0]?.resources).toEqual(['"payload" > target', "git status"])
               expect(runs).toEqual([])
             }),
           ),
@@ -398,6 +495,48 @@ describe("BashTool", () => {
           })
           expect(assertions).toEqual([])
           expect(runs).toEqual([])
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("never default-allows zero-resource shell statements", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          for (const item of [
+            { shell: "/bin/bash", command: "" },
+            { shell: "/bin/bash", command: "# comment" },
+            { shell: "pwsh.exe", command: "exit" },
+          ]) {
+            reset()
+            configuredShell = item.shell
+            rules = [{ action: "bash", resource: "*", effect: "deny" }]
+            const denied = yield* withTool(tmp.path, (registry) =>
+              settleTool(registry, call({ command: item.command })),
+            )
+            expect(denied.result).toMatchObject({ type: "error" })
+            expect(assertions[0]?.resources).toEqual([ShellParser.opaque(item.shell, item.command)])
+            expect(runs).toEqual([])
+          }
+
+          reset()
+          configuredShell = "/bin/bash"
+          rules = [{ action: "bash", resource: "*", effect: "allow" }]
+          const empty = yield* withTool(tmp.path, (registry) => settleTool(registry, call({ command: "" })))
+          expect(empty.result).toMatchObject({ type: "text" })
+          expect(assertions[0]?.resources).toEqual([ShellParser.opaque("/bin/bash", "")])
+          expect(runs).toHaveLength(1)
+
+          reset()
+          configuredShell = "/bin/sh"
+          rules = [{ action: "bash", resource: "*", effect: "allow" }]
+          const command = "git status; printf intentionally-allowed"
+          const allowed = yield* withTool(tmp.path, (registry) => settleTool(registry, call({ command })))
+          expect(allowed.result).toMatchObject({ type: "text" })
+          expect(assertions[0]?.resources).toEqual([ShellParser.opaque("/bin/sh", command)])
+          expect(runs).toHaveLength(1)
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),

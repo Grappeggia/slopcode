@@ -5,8 +5,8 @@ import type { Node, Parser, Tree } from "web-tree-sitter"
 
 export type { Node, Tree } from "web-tree-sitter"
 
-export type Kind = "bash" | "powershell" | "cmd" | "unsupported"
-export type Language = Exclude<Kind, "cmd" | "unsupported">
+export type Kind = "bash" | "posix" | "powershell" | "cmd" | "unsupported"
+export type Language = Extract<Kind, "bash" | "powershell">
 type Resource = { text: string; start: number; end: number }
 
 export class SyntaxError extends Error {
@@ -65,14 +65,40 @@ const name = (shell: string) =>
     .at(-1)
     ?.replace(/\.exe$/i, "")
     .toLowerCase()
-const POSIX = new Set(["ash", "bash", "dash", "ksh", "sh", "zsh"])
+const POSIX = new Set(["ash", "dash", "ksh", "sh", "zsh"])
 
 export function kind(shell: string): Kind {
   const base = name(shell)
   if (base === "powershell" || base === "pwsh") return "powershell"
   if (base === "cmd") return "cmd"
-  if (base && POSIX.has(base)) return "bash"
+  if (base === "bash") return "bash"
+  if (base && POSIX.has(base)) return "posix"
   return "unsupported"
+}
+
+// Saved resources are wildcard patterns, so opaque payloads cannot contain wildcard or path-normalized characters.
+const encode = (value: string) =>
+  Array.from({ length: value.length }, (_, index) => {
+    const code = value.charCodeAt(index)
+    const char = value[index]
+    if (
+      code > 0x1f &&
+      code !== 0x7f &&
+      (code < 0xd800 || code > 0xdfff) &&
+      char !== "%" &&
+      char !== "*" &&
+      char !== "?" &&
+      char !== "\\" &&
+      char !== "/"
+    )
+      return char
+    return code > 0xff
+      ? `%u${code.toString(16).toUpperCase().padStart(4, "0")}`
+      : `%${code.toString(16).toUpperCase().padStart(2, "0")}`
+  }).join("")
+
+export function opaque(shell: string, command: string) {
+  return `[opaque shell statement] shell=${encode(shell)} source=${encode(command)}`
 }
 
 export async function parse(command: string, language: Language) {
@@ -88,6 +114,12 @@ const item = (node: Node, source = node): Resource => ({
   text: source.text.trim(),
   start: source.startIndex,
   end: source.endIndex,
+})
+
+const through = (node: Node, end: Node): Resource => ({
+  text: node.text.slice(0, end.endIndex - node.startIndex).trim(),
+  start: node.startIndex,
+  end: end.endIndex,
 })
 
 const unique = (items: Resource[]) => {
@@ -141,48 +173,99 @@ const powershellResources = (tree: Tree) => {
   const commands = descendants(tree.rootNode, ["command", "data_command"])
     .filter((node) => node.type !== "command" || !scriptBlock(node))
     .map((node) => item(node))
-  const expressions = descendants(tree.rootNode, ["pipeline_chain"])
-    .filter((node) => !node.namedChildren.some((child) => child?.type === "command"))
-    .map((node) => item(node))
+  const expressions = descendants(tree.rootNode, ["pipeline_chain"]).flatMap((node) => {
+    const children = node.namedChildren.filter((child): child is Node => child !== null)
+    const first = children[0]
+    if (!first || first.type === "command") return []
+    const redirects = children.find((child) => child.type === "redirections")
+    return [redirects ? through(node, redirects) : item(first)]
+  })
   const assignments = descendants(tree.rootNode, ["assignment_expression"]).map((node) => item(node))
   const invocations = descendants(tree.rootNode, ["invokation_expression"]).map((node) => item(node))
   return unique([...commands, ...expressions, ...assignments, ...invocations])
 }
 
-const cmdResources = (command: string, shell: string) => {
-  let quoted = false
+const posixResources = (command: string, shell: string) => {
+  let quote: "single" | "double" | undefined
+  let unsafe = false
   for (let i = 0; i < command.length; i++) {
     const char = command[i]
-    if (char === "%" || char === "!") throw new UnsupportedError(shell, "dynamic expansion is not supported")
-    if (char === "\r" || char === "\n") throw new UnsupportedError(shell, "compound commands are not supported")
-    if (char === "^") {
-      if (command[i + 1] === "%" || command[i + 1] === "!")
-        throw new UnsupportedError(shell, "dynamic expansion is not supported")
+    if (quote === "single") {
+      if (char === "'") quote = undefined
+      continue
+    }
+    if (quote === "double") {
+      if (char === '"') {
+        quote = undefined
+        continue
+      }
+      if (char === "$" || char === "`") unsafe = true
+      if (char !== "\\") continue
+      if (["$", "`", '"', "\\", "\n"].includes(command[i + 1] ?? "")) i++
+      continue
+    }
+    if (char === "'") {
+      quote = "single"
+      continue
+    }
+    if (char === '"') {
+      quote = "double"
+      continue
+    }
+    if (char === "\\") {
+      if (command[i + 1] === undefined) throw new SyntaxError(shell)
       i++
       continue
     }
+    if (char === "$" || char === "`" || ";&|<>(){}\r\n".includes(char)) unsafe = true
+  }
+  if (quote) throw new SyntaxError(shell)
+  const source = command.trim()
+  if (!source || source.startsWith("#") || unsafe) return [opaque(shell, command)]
+  return [source]
+}
+
+const cmdResources = (command: string, shell: string) => {
+  let quoted = false
+  let unsafe = false
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i]
+    if (char === "%" || char === "!" || char === "\r" || char === "\n") unsafe = true
     if (char === '"') {
       quoted = !quoted
       continue
     }
     if (quoted) continue
-    if (char === "|" || char === "(" || char === ")")
-      throw new UnsupportedError(shell, "compound commands are not supported")
+    if (char === "^") {
+      if (command[i + 1] === undefined) {
+        unsafe = true
+        continue
+      }
+      if (command[i + 1] === "%" || command[i + 1] === "!" || command[i + 1] === "\r" || command[i + 1] === "\n")
+        unsafe = true
+      i++
+      continue
+    }
+    if (char === "|" || char === "(" || char === ")") unsafe = true
     if (char !== "&") continue
     const redirect = (command[i - 1] === ">" || command[i - 1] === "<") && /^[0-9-]$/.test(command[i + 1] ?? "")
-    if (!redirect) throw new UnsupportedError(shell, "compound commands are not supported")
+    if (!redirect) unsafe = true
   }
   if (quoted) throw new SyntaxError(shell)
-  return [command.trim()]
+  const source = command.trim()
+  if (!source || unsafe) return [opaque(shell, command)]
+  return [source]
 }
 
 export async function resources(command: string, shell: string) {
   const family = kind(shell)
   if (family === "unsupported") throw new UnsupportedError(shell)
   if (family === "cmd") return cmdResources(command, shell)
+  if (family === "posix") return posixResources(command, shell)
   const tree = await parse(command, family)
   try {
-    return family === "bash" ? bashResources(tree) : powershellResources(tree)
+    const result = family === "bash" ? bashResources(tree) : powershellResources(tree)
+    return result.length ? result : [opaque(shell, command)]
   } finally {
     tree.delete()
   }

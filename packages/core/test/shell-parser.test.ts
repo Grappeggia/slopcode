@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { ShellParser } from "@slopcode-ai/core/shell-parser"
+import { Wildcard } from "@slopcode-ai/core/util/wildcard"
 
 const bash = (command: string) => ShellParser.resources(command, "/bin/bash")
+const sh = (command: string, shell = "/bin/sh") => ShellParser.resources(command, shell)
 const powershell = (command: string) => ShellParser.resources(command, "C:\\Program Files\\PowerShell\\7\\pwsh.exe")
 const cmd = (command: string) => ShellParser.resources(command, "C:\\Windows\\System32\\cmd.exe")
 
@@ -62,6 +64,54 @@ describe("ShellParser Bash resources", () => {
       ShellParser.UnsupportedError,
     )
   })
+
+  test("uses an opaque resource when Bash has no executable atoms", async () => {
+    expect(await bash("")).toEqual([ShellParser.opaque("/bin/bash", "")])
+    expect(await bash("   ")).toEqual([ShellParser.opaque("/bin/bash", "   ")])
+    expect(await bash("# comment")).toEqual([ShellParser.opaque("/bin/bash", "# comment")])
+  })
+})
+
+describe("ShellParser conservative POSIX resources", () => {
+  test("only identifies an actual bash executable as Bash", () => {
+    expect(ShellParser.kind("/bin/bash")).toBe("bash")
+    for (const shell of ["/bin/sh", "/usr/bin/dash", "/bin/ash", "/bin/ksh", "/bin/zsh"]) {
+      expect(ShellParser.kind(shell)).toBe("posix")
+    }
+  })
+
+  test("keeps demonstrably safe single commands prefix-matchable", async () => {
+    expect(await sh("git status")).toEqual(["git status"])
+    expect(await sh(`git "a; b & c"`)).toEqual([`git "a; b & c"`])
+    expect(await sh("git status \\; literal")).toEqual(["git status \\; literal"])
+    expect(await sh("git '$HOME $(rm target) `rm target`'")).toEqual(["git '$HOME $(rm target) `rm target`'"])
+  })
+
+  test.each([
+    "git status &> /dev/null rm -rf target",
+    "git status; rm -rf target",
+    "git status\nrm -rf target",
+    "git status && rm -rf target",
+    "git status || rm -rf target",
+    "git status | rm -rf target",
+    "git status & rm -rf target",
+    "git status > target",
+    "(git status)",
+    "{ git status; }",
+    "git $HOME",
+    "git $(rm -rf target)",
+    "git `rm -rf target`",
+  ])("makes unsafe or dynamic syntax opaque: %s", async (command) => {
+    const resource = ShellParser.opaque("/bin/sh", command)
+    expect(await sh(command)).toEqual([resource])
+    expect(Wildcard.match(resource, "git *")).toBeFalse()
+    expect(Wildcard.match(resource, "*")).toBeTrue()
+  })
+
+  test("makes empty and comment-only statements opaque", async () => {
+    expect(await sh("")).toEqual([ShellParser.opaque("/bin/sh", "")])
+    expect(await sh("# comment")).toEqual([ShellParser.opaque("/bin/sh", "# comment")])
+  })
 })
 
 describe("ShellParser PowerShell resources", () => {
@@ -91,10 +141,19 @@ describe("ShellParser PowerShell resources", () => {
       '[IO.File]::ReadAllText("target")',
       "git status",
     ])
+    expect(await powershell('"payload" > target | git status')).toEqual(['"payload" > target', "git status"])
+    expect(await powershell('"payload" | git status')).toEqual(['"payload"', "git status"])
   })
 
   test("fails closed on malformed syntax", async () => {
     await expect(powershell('git status; "')).rejects.toBeInstanceOf(ShellParser.SyntaxError)
+  })
+
+  test("uses an opaque resource when no executable atom is extracted", async () => {
+    const shell = "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+    expect(await powershell("exit")).toEqual([ShellParser.opaque(shell, "exit")])
+    expect(await powershell("return")).toEqual([ShellParser.opaque(shell, "return")])
+    expect(await powershell(";")).toEqual([ShellParser.opaque(shell, ";")])
   })
 })
 
@@ -104,6 +163,8 @@ describe("ShellParser cmd resources", () => {
     expect(await cmd('echo "a & b"')).toEqual(['echo "a & b"'])
     expect(await cmd("echo a ^& b")).toEqual(["echo a ^& b"])
     expect(await cmd("> target")).toEqual(["> target"])
+    expect(await cmd('echo "a^&b"')).toEqual(['echo "a^&b"'])
+    expect(await cmd("echo ^& b")).toEqual(["echo ^& b"])
   })
 
   test("rejects an unterminated quoted command", async () => {
@@ -118,7 +179,28 @@ describe("ShellParser cmd resources", () => {
     "git status\nrm target",
     "(git status)",
     "git %ARGS%",
-  ])("fails closed on compound or dynamic cmd syntax: %s", async (command) => {
-    await expect(cmd(command)).rejects.toBeInstanceOf(ShellParser.UnsupportedError)
+    'git status "foo^" & type nul > marker',
+    'git status "foo^^" & type nul > marker',
+    "git status ^^& type nul > marker",
+    'git status ^"foo&bar^"',
+  ])("makes compound, dynamic, or uncertain cmd syntax opaque: %s", async (command) => {
+    const shell = "C:\\Windows\\System32\\cmd.exe"
+    const resource = ShellParser.opaque(shell, command)
+    expect(await cmd(command)).toEqual([resource])
+    expect(Wildcard.match(resource, "git *")).toBeFalse()
+    expect(Wildcard.match(resource, "*")).toBeTrue()
+  })
+})
+
+describe("ShellParser opaque resources", () => {
+  test("are stable, meaningful, and wildcard-safe", () => {
+    const resource = ShellParser.opaque("/bin/sh", "git * ? / \\ \n")
+    expect(resource).toBe("[opaque shell statement] shell=%2Fbin%2Fsh source=git %2A %3F %2F %5C %0A")
+    expect(Wildcard.match(resource, "*")).toBeTrue()
+    expect(Wildcard.match(resource, "git *")).toBeFalse()
+    expect(Wildcard.match(ShellParser.opaque("/bin/sh", "git value"), resource)).toBeFalse()
+    expect(
+      Wildcard.match(ShellParser.opaque("/bin/sh", "read \\tmp"), ShellParser.opaque("/bin/sh", "read /tmp")),
+    ).toBeFalse()
   })
 })

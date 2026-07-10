@@ -14,6 +14,7 @@ import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionStore } from "@slopcode-ai/core/session/store"
+import { ShellParser } from "@slopcode-ai/core/shell-parser"
 import { eq } from "drizzle-orm"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
@@ -325,6 +326,39 @@ describe("PermissionV2", () => {
       expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_denied") })).toMatchObject({
         effect: "deny",
       })
+    }),
+  )
+
+  it.effect("scopes saved opaque shell approvals to one exact shell statement", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const resource = ShellParser.opaque("/bin/sh", "git *.ts; rm target")
+      const input = assertion({ action: "bash", resources: [resource], save: [resource] })
+      const { service, fiber, request } = yield* waitForRequest(input)
+      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* Fiber.join(fiber)
+
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_opaque_saved") })).toMatchObject({
+        effect: "allow",
+      })
+      expect(
+        yield* service.ask(
+          assertion({
+            id: PermissionV2.ID.create("per_opaque_other"),
+            action: "bash",
+            resources: [ShellParser.opaque("/bin/sh", "git index.ts; rm target")],
+          }),
+        ),
+      ).toMatchObject({ effect: "ask" })
+      expect(
+        yield* service.ask(
+          assertion({
+            id: PermissionV2.ID.create("per_opaque_shell"),
+            action: "bash",
+            resources: [ShellParser.opaque("/bin/dash", "git *.ts; rm target")],
+          }),
+        ),
+      ).toMatchObject({ effect: "ask" })
     }),
   )
 
