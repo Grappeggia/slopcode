@@ -14,6 +14,7 @@ import { UserTable } from "./schema/user.sql"
 import { getMonthlyBounds, getWeekBounds } from "./util/date"
 
 export type UsageReservationSource = (typeof UsageReservationSources)[number]
+export const USAGE_LEASE_SECONDS = 45
 export type UsageReservationInput = {
   id: string
   workspaceID: string
@@ -390,7 +391,12 @@ export async function reserveUsage(input: UsageReservationInput) {
   })
 }
 
-export function markUsageDispatched(input: { id: string; usage: UsageReservationUsage }) {
+function lease(seconds: number) {
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) throw new Error("Invalid usage reservation lease")
+  return new Date(Date.now() + seconds * 1000)
+}
+
+export function markUsageDispatched(input: { id: string; usage: UsageReservationUsage; leaseSeconds?: number }) {
   return Database.use(
     async (tx) =>
       affected(
@@ -399,14 +405,37 @@ export function markUsageDispatched(input: { id: string; usage: UsageReservation
           .set({
             usage: input.usage,
             timeDispatched: sql`COALESCE(${UsageReservationTable.timeDispatched}, now())`,
+            timeLeaseExpires: lease(input.leaseSeconds ?? USAGE_LEASE_SECONDS),
           })
           .where(and(eq(UsageReservationTable.id, input.id), eq(UsageReservationTable.status, "pending"))),
       ) > 0,
   )
 }
 
+export function heartbeatUsage(id: string, seconds = USAGE_LEASE_SECONDS) {
+  return Database.use(
+    async (tx) =>
+      affected(
+        await tx
+          .update(UsageReservationTable)
+          .set({ timeLeaseExpires: lease(seconds) })
+          .where(
+            and(
+              eq(UsageReservationTable.id, id),
+              eq(UsageReservationTable.status, "pending"),
+              isNotNull(UsageReservationTable.timeDispatched),
+            ),
+          ),
+      ) > 0,
+  )
+}
+
 export async function failUsage(id: string) {
   if (await releaseUsage(id)) return true
+  return settleUnknownUsage(id)
+}
+
+async function settleUnknownUsage(id: string, claim?: { lease: { now: Date; legacyBefore: Date } }) {
   const reservation = await Database.use((tx) =>
     tx
       .select()
@@ -421,18 +450,25 @@ export async function failUsage(id: string) {
     inputTokens: 0,
     outputTokens: 0,
   }
-  return settleUsage(id, reservation.amount, "settled", {
-    ...usage,
-    cost: reservation.amount,
-    enrichment: {
-      ...usage.enrichment,
-      estimated: true,
-      unknown: true,
+  return settleUsage(
+    id,
+    reservation.amount,
+    "settled",
+    {
+      ...usage,
+      cost: reservation.amount,
+      enrichment: {
+        ...usage.enrichment,
+        estimated: true,
+        unknown: true,
+      },
     },
-  })
+    claim,
+  )
 }
 
-export async function recoverUsage(input: { workspaceID: string; before: Date; limit?: number }) {
+export async function recoverUsage(input: { workspaceID: string; before: Date; now?: Date; limit?: number }) {
+  const now = input.now ?? new Date()
   const rows = await Database.use((tx) =>
     tx
       .select({
@@ -449,7 +485,13 @@ export async function recoverUsage(input: { workspaceID: string; before: Date; l
             and(isNull(UsageReservationTable.timeDispatched), lte(UsageReservationTable.timeCreated, input.before)),
             and(
               isNotNull(UsageReservationTable.timeDispatched),
-              lte(UsageReservationTable.timeDispatched, input.before),
+              or(
+                lte(UsageReservationTable.timeLeaseExpires, now),
+                and(
+                  isNull(UsageReservationTable.timeLeaseExpires),
+                  lte(UsageReservationTable.timeDispatched, input.before),
+                ),
+              ),
             ),
           ),
         ),
@@ -457,7 +499,16 @@ export async function recoverUsage(input: { workspaceID: string; before: Date; l
       .orderBy(UsageReservationTable.timeCreated)
       .limit(input.limit ?? 100),
   )
-  const results = await Promise.all(rows.map((row) => failUsage(row.id)))
+  const results = await Promise.all(
+    rows.map((row) =>
+      row.timeDispatched
+        ? settleUnknownUsage(row.id, { lease: { now, legacyBefore: input.before } })
+        : settleUsage(row.id, 0, "released", undefined, {
+            undispatched: true,
+            createdBefore: input.before,
+          }),
+    ),
+  )
   return {
     released: rows.filter((row, index) => !row.timeDispatched && results[index]).length,
     settled: rows.filter((row, index) => row.timeDispatched && results[index]).length,
@@ -465,7 +516,7 @@ export async function recoverUsage(input: { workspaceID: string; before: Date; l
 }
 
 export function releaseUsage(id: string) {
-  return settleUsage(id, 0, "released", undefined, true)
+  return settleUsage(id, 0, "released", undefined, { undispatched: true })
 }
 
 export function finalizeUsage(input: UsageFinalization) {
@@ -477,19 +528,36 @@ async function settleUsage(
   amount: number,
   status: "settled" | "released",
   usage?: UsageFinalization["usage"],
-  undispatched = false,
+  claim?: {
+    undispatched?: boolean
+    createdBefore?: Date
+    lease?: { now: Date; legacyBefore: Date }
+  },
 ) {
   if (!Number.isSafeInteger(amount) || amount < 0) throw new Error("Invalid finalized usage amount")
 
   return Database.transaction(async (tx) => {
     const claimed = await tx
       .update(UsageReservationTable)
-      .set({ status, amountActual: amount })
+      .set({ status, amountActual: amount, timeLeaseExpires: null })
       .where(
         and(
           eq(UsageReservationTable.id, id),
           eq(UsageReservationTable.status, "pending"),
-          undispatched ? isNull(UsageReservationTable.timeDispatched) : undefined,
+          claim?.undispatched ? isNull(UsageReservationTable.timeDispatched) : undefined,
+          claim?.createdBefore ? lte(UsageReservationTable.timeCreated, claim.createdBefore) : undefined,
+          claim?.lease
+            ? and(
+                isNotNull(UsageReservationTable.timeDispatched),
+                or(
+                  lte(UsageReservationTable.timeLeaseExpires, claim.lease.now),
+                  and(
+                    isNull(UsageReservationTable.timeLeaseExpires),
+                    lte(UsageReservationTable.timeDispatched, claim.lease.legacyBefore),
+                  ),
+                ),
+              )
+            : undefined,
         ),
       )
     if (affected(claimed) === 0) return false

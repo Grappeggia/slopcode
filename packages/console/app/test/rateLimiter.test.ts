@@ -55,6 +55,7 @@ class Redis {
       if (keys.length !== 1 || args.length !== 2) throw new Error("Invalid key admission contract")
       const limit = Number(args[0])
       const count = this.counts.get(keys[0]) ?? 0
+      if (count > 0 && !this.expires.has(keys[0])) this.expires.set(keys[0], Number(args[1]))
       if (count >= limit) return [0, count] as T
       this.counts.set(keys[0], count + 1)
       if (count === 0) this.expires.set(keys[0], Number(args[1]))
@@ -68,6 +69,7 @@ class Redis {
     const isDefault = Number(args[2]) === 1
     const lifetime = this.counts.get(keys[1]) ?? 0
     const daily = this.counts.get(keys[0]) ?? 0
+    if (daily > 0 && !this.expires.has(keys[0])) this.expires.set(keys[0], retryAfter)
     const isNew = isDefault && lifetime < limit * 7
     const allowed = isNew ? limit * 2 : limit
     if (daily >= allowed) return [0, daily, isNew ? 1 : 0] as T
@@ -113,6 +115,21 @@ describe("atomic rate-limit admission", () => {
     await expect(Promise.reject(new Error("provider unavailable"))).rejects.toThrow("provider unavailable")
     expect(await admitKeyRequest(redis, "key", 1, 60)).toBe(false)
     expect(redis.counts.get("key")).toBe(1)
+  })
+
+  test("repairs missing TTLs on existing key and IP counters", async () => {
+    const redis = new Redis()
+    redis.counts.set("key", 1)
+    redis.counts.set("daily", 1)
+
+    expect(await admitKeyRequest(redis, "key", 3, 60)).toBe(true)
+    expect(await admitIpRequest(redis, "daily", "lifetime", 3, 3_600, false)).toEqual({
+      admitted: true,
+      isNew: false,
+    })
+    expect(redis.expires.get("key")).toBe(60)
+    expect(redis.expires.get("daily")).toBe(3_600)
+    await expect(redis.eval("return 1", [], [])).rejects.toThrow("Unexpected Redis script")
   })
 
   test("admits at most the IP limit and updates lifetime count atomically", async () => {

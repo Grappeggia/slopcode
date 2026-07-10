@@ -5,6 +5,7 @@ import { Database } from "../src/drizzle"
 import { AuthTable } from "../src/schema/auth.sql"
 import {
   BillingTable,
+  LegacyUsageClaimTable,
   LiteTable,
   SubscriptionTable,
   UsageReservationTable,
@@ -102,6 +103,7 @@ beforeEach(async () => {
   await pool.query("DROP TRIGGER IF EXISTS fail_usage_insert")
   await db.delete(UsageTable)
   await db.delete(UsageReservationTable)
+  await db.delete(LegacyUsageClaimTable)
   await db.delete(SubscriptionTable)
   await db.delete(LiteTable)
   await db.delete(KeyTable)

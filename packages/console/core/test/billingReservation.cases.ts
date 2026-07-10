@@ -12,6 +12,7 @@ import { WorkspaceTable } from "../src/schema/workspace.sql"
 import {
   failUsage,
   finalizeUsage,
+  heartbeatUsage,
   markUsageDispatched,
   recoverUsage,
   releaseUsage,
@@ -313,7 +314,7 @@ describe("Zen usage reservations", () => {
     await testDatabase().update(UsageReservationTable).set({ timeCreated: stale })
     await testDatabase()
       .update(UsageReservationTable)
-      .set({ timeDispatched: stale })
+      .set({ timeDispatched: stale, timeLeaseExpires: stale })
       .where(eq(UsageReservationTable.id, "rsv_stale_dispatched"))
 
     const recovered = await useTestDatabase(() =>
@@ -330,6 +331,43 @@ describe("Zen usage reservations", () => {
     expect(rows.find((row) => row.id === "rsv_stale_pending")?.status).toBe("released")
     expect(billing.balance).toBe(125)
     expect(await testDatabase().select().from(UsageTable)).toHaveLength(1)
+  })
+
+  test("keeps a live dispatched lease out of recovery until actual finalization", async () => {
+    await seed(100)
+    await reserve("rsv_live_lease", 75)
+    await useTestDatabase(() =>
+      markUsageDispatched({
+        id: "rsv_live_lease",
+        leaseSeconds: 60,
+        usage: {
+          model: "test-model",
+          provider: "test-provider",
+          inputTokens: 40,
+          outputTokens: 20,
+        },
+      }),
+    )
+    await testDatabase()
+      .update(UsageReservationTable)
+      .set({ timeLeaseExpires: new Date(Date.now() - 1_000) })
+      .where(eq(UsageReservationTable.id, "rsv_live_lease"))
+
+    expect(await useTestDatabase(() => heartbeatUsage("rsv_live_lease", 60))).toBe(true)
+    expect(await useTestDatabase(() => recoverUsage({ workspaceID, before: new Date(), now: new Date() }))).toEqual({
+      released: 0,
+      settled: 0,
+    })
+    expect(await usage("rsv_live_lease", 30)).toBe(true)
+    expect(await useTestDatabase(() => heartbeatUsage("rsv_live_lease", 60))).toBe(false)
+
+    const reservation = await testDatabase()
+      .select()
+      .from(UsageReservationTable)
+      .where(eq(UsageReservationTable.id, "rsv_live_lease"))
+      .then((rows) => rows[0])
+    expect(reservation.status).toBe("settled")
+    expect(reservation.amountActual).toBe(30)
   })
 
   test("reports the exact subscription quota dimension", async () => {

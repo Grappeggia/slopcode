@@ -55,6 +55,16 @@ import { drainUsage, HOT_WORKSPACES } from "./usageBatcher"
 import { calculateUsageCost } from "./cost"
 
 type ZenData = Awaited<ReturnType<typeof ZenData.list>>
+export type HandlerRuntime = {
+  data?: ZenData
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+  waitUntil?: (promise: Promise<void>) => unknown
+  rateLimit?: boolean
+  reload?: boolean
+  leaseSeconds?: number
+  heartbeatInterval?: number
+  drainTimeout?: number
+}
 type RetryOptions = {
   excludeProviders: string[]
   retryCount: number
@@ -80,6 +90,7 @@ export async function handler(
     parseVariant: (url: string, body: any) => string | undefined
     parseIsStream: (url: string, body: any) => boolean
   },
+  runtime: HandlerRuntime = {},
 ) {
   type AuthInfo = Awaited<ReturnType<typeof authenticate>>
   type ModelInfo = Awaited<ReturnType<typeof validateModel>>
@@ -129,16 +140,19 @@ export async function handler(
       "model.variant": variant,
       "model.tier": opts.modelList === "full" ? "zen" : "go",
     })
-    const zenData = ZenData.list(opts.modelList)
+    const zenData = runtime.data ?? ZenData.list(opts.modelList)
     const modelInfo = validateModel(zenData, model)
     let reservation = prepareReservation(body, opts.format, modelInfo.cost, modelInfo.cost200K, {
       limit: modelInfo.limit,
     })
     const trialLimiter = createTrialLimiter(modelInfo.trialProvider, ip)
     const trialProviders = await trialLimiter?.check()
-    const rateLimiter = modelInfo.allowAnonymous
-      ? createIpRateLimiter(modelInfo.id, modelInfo.rateLimit, ip, input.request)
-      : createKeyRateLimiter(modelInfo.id, modelInfo.rateLimit, zenApiKey, input.request)
+    const rateLimiter =
+      runtime.rateLimit === false
+        ? undefined
+        : modelInfo.allowAnonymous
+          ? createIpRateLimiter(modelInfo.id, modelInfo.rateLimit, ip, input.request)
+          : createKeyRateLimiter(modelInfo.id, modelInfo.rateLimit, zenApiKey, input.request)
     await rateLimiter?.admit()
     let authInfo = await authenticate(modelInfo, zenApiKey)
     if (authInfo) {
@@ -158,6 +172,36 @@ export async function handler(
     let billingSource: BillingSource | undefined
     let providerSucceeded = false
     let settlement: Promise<string | undefined> | undefined
+    let heartbeat: { stop: () => Promise<void> } | undefined
+    const startHeartbeat = () => {
+      if (heartbeat || !authInfo) return
+      let stopped = false
+      let work = Promise.resolve()
+      const pulse = () => {
+        work = work
+          .then(async () => {
+            if (stopped) return
+            if (!(await Billing.heartbeatUsage(internalRequestId, runtime.leaseSeconds))) stopped = true
+          })
+          .catch((error) => {
+            logger.metric({ "heartbeat.error": error instanceof Error ? error.message : String(error) })
+          })
+      }
+      const timer = setInterval(pulse, runtime.heartbeatInterval ?? 10_000)
+      heartbeat = {
+        stop: async () => {
+          stopped = true
+          clearInterval(timer)
+          await work
+          await retrySettlement(() => Billing.heartbeatUsage(internalRequestId, runtime.leaseSeconds))
+        },
+      }
+    }
+    const stopHeartbeat = async () => {
+      const active = heartbeat
+      heartbeat = undefined
+      await active?.stop()
+    }
 
     const settle = (
       providerInfo?: ProviderInfo,
@@ -167,6 +211,7 @@ export async function handler(
     ) => {
       if (settlement) return settlement
       const pending = (async () => {
+        await stopHeartbeat()
         if (!providerInfo || !usageInfo) {
           if (authInfo) await retrySettlement(() => Billing.failUsage(internalRequestId))
           if (providerInfo && providerSucceeded)
@@ -210,9 +255,10 @@ export async function handler(
         tracking
           .filter((result): result is PromiseRejectedResult => result.status === "rejected")
           .forEach((result) => logger.metric({ "tracking.error": String(result.reason) }))
-        await reload(billingSource!, authInfo).catch((error) => {
-          logger.metric({ "reload.error": error instanceof Error ? error.message : String(error) })
-        })
+        if (runtime.reload !== false)
+          await reload(billingSource!, authInfo).catch((error) => {
+            logger.metric({ "reload.error": error instanceof Error ? error.message : String(error) })
+          })
         if (billingSource !== "balance") return "0"
         return (amount / 100_000_000).toFixed(8)
       })()
@@ -268,15 +314,17 @@ export async function handler(
           return replacer(providerInfo.payloadModifier ?? {})
         })(),
       })
+      const bound = prepareReservation(reqPayload, providerInfo.format, modelInfo.cost, modelInfo.cost200K, {
+        limit: modelInfo.limit,
+        payloads: [body],
+      })
       if (billingSource === undefined) {
-        reservation = prepareReservation(body, opts.format, modelInfo.cost, modelInfo.cost200K, {
-          limit: modelInfo.limit,
-          payloads: [reqPayload],
-        })
+        reservation = bound
         billingSource = await reserveBilling(authInfo, modelInfo, internalRequestId, reservation.amount)
         abort = () => (authInfo ? retrySettlement(() => Billing.failUsage(internalRequestId)) : Promise.resolve(false))
         logger.metric({ source: billingSource })
       }
+      if (bound.amount > reservation.amount) throw new RequestError("provider payload exceeds its usage reservation")
       validateModelSettings(billingSource, authInfo)
       const reqBody = JSON.stringify(reqPayload)
       logger.debug("REQUEST URL: " + reqUrl)
@@ -303,8 +351,8 @@ export async function handler(
             usage: {
               model: modelInfo.id,
               provider: providerInfo.id,
-              inputTokens: reservation.inputTokens,
-              outputTokens: reservation.outputTokens,
+              inputTokens: bound.inputTokens,
+              outputTokens: bound.outputTokens,
               keyID: authInfo.apiKeyId,
               sessionID: sessionId,
               enrichment: (() => {
@@ -314,9 +362,11 @@ export async function handler(
                 return undefined
               })(),
             },
+            leaseSeconds: runtime.leaseSeconds,
           }),
         )
         if (!marked) throw new Error("Usage reservation is no longer pending")
+        startHeartbeat()
       }
       const res = await fetchWith429Retry(reqUrl, {
         method: "POST",
@@ -453,7 +503,9 @@ export async function handler(
         if (error) return
         return encoder.encode(buildCostChunk(opts.format, cost ?? "0"))
       },
-      waitUntil,
+      waitUntil: runtime.waitUntil ?? waitUntil,
+      drained: () => !!usageParser.retrieve(),
+      drainTimeout: runtime.drainTimeout,
       abort: cancel,
     }).stream
     return new Response(stream, {
@@ -1088,8 +1140,9 @@ export async function handler(
   }
 
   async function fetchWith429Retry(url: string, options: RequestInit, retry = { count: 0 }) {
-    const pending = fetch(url, options)
-    waitUntil(
+    const pending = (runtime.fetch ?? globalThis.fetch)(url, options)
+    const lifetime = runtime.waitUntil ?? waitUntil
+    lifetime(
       pending.then(
         () => undefined,
         () => undefined,

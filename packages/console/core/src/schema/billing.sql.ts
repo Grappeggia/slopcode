@@ -119,6 +119,11 @@ export const StripeWebhookEventTable = mysqlTable("stripe_webhook_event", {
   timeCreated: utc("time_created").notNull().defaultNow(),
 })
 
+export const LegacyUsageClaimTable = mysqlTable("usage_legacy_claim", {
+  id: varchar("id", { length: 64 }).collate("utf8mb4_bin").notNull().primaryKey(),
+  timeCreated: utc("time_created").notNull().defaultNow(),
+})
+
 export const UsageReservationSources = ["free", "byok", "subscription", "lite", "balance"] as const
 export const UsageReservationStatuses = ["pending", "settled", "released"] as const
 export type UsageReservationLimits = {
@@ -155,9 +160,13 @@ export const UsageReservationTable = mysqlTable(
     limits: json("limits").$type<UsageReservationLimits>(),
     usage: json("usage").$type<UsageReservationUsage>(),
     timeDispatched: utc("time_dispatched"),
+    timeLeaseExpires: utc("time_lease_expires"),
     timeCreated: utc("time_created").notNull().defaultNow(),
   },
-  (table) => [index("usage_reservation_workspace_status").on(table.workspaceID, table.status)],
+  (table) => [
+    index("usage_reservation_workspace_status").on(table.workspaceID, table.status),
+    index("usage_reservation_lease").on(table.workspaceID, table.status, table.timeLeaseExpires),
+  ],
 )
 
 export const UsageTable = mysqlTable(

@@ -26,30 +26,38 @@ export function prepareReservation(
     limit?: { context?: number; output?: number }
   },
 ) {
+  const aliases = [
+    "max_tokens",
+    "max_output_tokens",
+    "max_completion_tokens",
+    "maxTokens",
+    "maxOutputTokens",
+    "maxCompletionTokens",
+  ]
+  const nested = [body.generationConfig, body.generation_config].filter(
+    (value): value is Record<string, unknown> => typeof value === "object" && !!value && !Array.isArray(value),
+  )
+  const records = [body, ...nested]
+  const values = records.flatMap((record) =>
+    aliases.map((alias) => record[alias]).filter((value) => value !== undefined),
+  )
+  values.forEach((value) => {
+    if (!Number.isSafeInteger(value) || Number(value) <= 0)
+      throw new RequestError("max output tokens must be a positive integer")
+  })
+  const outputTokens = values.length ? Math.max(...values.map(Number)) : DEFAULT_OUTPUT_TOKENS
+  const outputLimit = Math.min(MAX_OUTPUT_TOKENS, options?.limit?.output ?? MAX_OUTPUT_TOKENS)
+  if (outputTokens > outputLimit) throw new RequestError(`max output tokens must be at most ${outputLimit}`)
+  records.forEach((record) => aliases.forEach((alias) => delete record[alias]))
   const config = (() => {
     if (format !== "google") return body
-    const value = body.generationConfig
-    if (typeof value === "object" && value && !Array.isArray(value)) return value as Record<string, unknown>
+    if (nested[0] && nested[0] === body.generationConfig) return nested[0]
     const result: Record<string, unknown> = {}
     body.generationConfig = result
     return result
   })()
-  const key = (() => {
-    if (format === "google") return "maxOutputTokens"
-    if (body.max_completion_tokens !== undefined) return "max_completion_tokens"
-    if (body.max_output_tokens !== undefined) return "max_output_tokens"
-    if (body.maxCompletionTokens !== undefined) return "maxCompletionTokens"
-    if (body.maxOutputTokens !== undefined) return "maxOutputTokens"
-    if (body.maxTokens !== undefined) return "maxTokens"
-    if (format === "openai") return "max_output_tokens"
-    return "max_tokens"
-  })()
-  const outputTokens = config[key] ?? DEFAULT_OUTPUT_TOKENS
-  const outputLimit = Math.min(MAX_OUTPUT_TOKENS, options?.limit?.output ?? MAX_OUTPUT_TOKENS)
-  if (!Number.isSafeInteger(outputTokens) || Number(outputTokens) <= 0)
-    throw new RequestError("max output tokens must be a positive integer")
-  if (Number(outputTokens) > outputLimit) throw new RequestError(`max output tokens must be at most ${outputLimit}`)
-  config[key] = outputTokens
+  config[format === "google" ? "maxOutputTokens" : format === "openai" ? "max_output_tokens" : "max_tokens"] =
+    outputTokens
 
   const media = (value: unknown): number => {
     if (Array.isArray(value)) return value.reduce((total, item) => total + media(item), 0)
@@ -67,7 +75,16 @@ export function prepareReservation(
     if (Array.isArray(value)) return value.some(hidden)
     if (typeof value !== "object" || !value) return false
     const record = value as Record<string, unknown>
-    if (["previous_response_id", "cached_content", "cachedContent"].some((field) => record[field] !== undefined))
+    if (
+      [
+        "previous_response_id",
+        "previousResponseId",
+        "conversation",
+        "container",
+        "cached_content",
+        "cachedContent",
+      ].some((field) => record[field] !== undefined)
+    )
       return true
     return Object.values(record).some(hidden)
   }
@@ -84,7 +101,7 @@ export function prepareReservation(
     throw new RequestError("model context limit must exceed max output tokens")
   const inputLimit = context - Number(outputTokens)
   const payloads = [body, ...(options?.payloads ?? [])]
-  const inputTokens = hidden(body) ? inputLimit : Math.min(inputLimit, Math.max(...payloads.map(estimate)))
+  const inputTokens = payloads.some(hidden) ? context : Math.min(inputLimit, Math.max(...payloads.map(estimate)))
   const prices = cost200K ? [cost, cost200K] : [cost]
   const input = Math.max(
     ...prices.flatMap((price) => [price.input, price.cacheRead ?? 0, price.cacheWrite5m ?? 0, price.cacheWrite1h ?? 0]),

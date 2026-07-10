@@ -70,9 +70,46 @@ describe("Zen reservation bound", () => {
     expect(prepareReservation(body, "oa-compat", cost, undefined, { limit: { output: 8_000 } }).outputTokens).toBe(
       4_000,
     )
-    expect(body.max_tokens).toBeUndefined()
+    expect(body.max_tokens).toBe(4_000)
+    expect(body.max_completion_tokens).toBeUndefined()
     expect(() =>
       prepareReservation({ messages: [], max_completion_tokens: 8_001 }, "oa-compat", cost, undefined, {
+        limit: { output: 8_000 },
+      }),
+    ).toThrow("max output tokens must be at most 8000")
+  })
+
+  test("normalizes conflicting output aliases to the largest request", () => {
+    const body: Record<string, unknown> = {
+      messages: [],
+      max_tokens: 1_000,
+      max_output_tokens: 2_000,
+      max_completion_tokens: 4_000,
+    }
+    const result = prepareReservation(body, "oa-compat", cost)
+
+    expect(result.outputTokens).toBe(4_000)
+    expect(body.max_tokens).toBe(4_000)
+    expect(body.max_output_tokens).toBeUndefined()
+    expect(body.max_completion_tokens).toBeUndefined()
+  })
+
+  test("enforces aliases injected by the final provider modifier", () => {
+    const payload: Record<string, unknown> = {
+      messages: [{ role: "system", content: "x".repeat(20_000) }],
+      max_tokens: 1_000,
+      max_completion_tokens: 8_000,
+    }
+    const result = prepareReservation(payload, "oa-compat", cost, undefined, {
+      limit: { context: 100_000, output: 8_000 },
+    })
+
+    expect(result.outputTokens).toBe(8_000)
+    expect(result.inputTokens).toBeGreaterThan(20_000)
+    expect(payload.max_tokens).toBe(8_000)
+    expect(payload.max_completion_tokens).toBeUndefined()
+    expect(() =>
+      prepareReservation({ messages: [], maxOutputTokens: 8_001 }, "oa-compat", cost, undefined, {
         limit: { output: 8_000 },
       }),
     ).toThrow("max output tokens must be at most 8000")
@@ -88,14 +125,17 @@ describe("Zen reservation bound", () => {
 
   test("holds the available context when prior response state hides input", () => {
     const result = prepareReservation(
-      { previous_response_id: "resp_123", input: "continue", max_output_tokens: 1_000 },
-      "openai",
+      { messages: [{ role: "user", content: "continue" }], max_tokens: 1_000 },
+      "oa-compat",
       cost,
       undefined,
-      { limit: { context: 200_000, output: 16_000 } },
+      {
+        limit: { context: 200_000, output: 16_000 },
+        payloads: [{ previous_response_id: "resp_123", input: "continue" }],
+      },
     )
 
-    expect(result.inputTokens).toBe(199_000)
+    expect(result.inputTokens).toBe(200_000)
   })
 
   test("uses UTF-8 byte length rather than JavaScript character count", () => {

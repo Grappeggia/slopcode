@@ -5,11 +5,13 @@ const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
 describe("Zen provider stream accounting", () => {
-  test("aborts upstream and finalizes immediately after downstream cancellation", async () => {
+  test("drains a usage trailer after downstream cancellation", async () => {
     let canceled: unknown
+    let release = () => {}
     const source = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(encoder.encode("content"))
+        release = () => controller.enqueue(encoder.encode("usage"))
       },
       cancel(reason) {
         canceled = reason
@@ -37,6 +39,10 @@ describe("Zen provider stream accounting", () => {
       waitUntil(promise) {
         lifetime = promise
       },
+      drained() {
+        return usage > 0
+      },
+      drainTimeout: 100,
       abort() {
         aborted++
       },
@@ -46,15 +52,16 @@ describe("Zen provider stream accounting", () => {
 
     expect(decoder.decode((await reader.read()).value)).toBe("content")
     await reader.cancel("client disconnected")
+    release()
     await result.completed
     await lifetime
 
-    expect(chunks).toEqual(["content"])
-    expect(usage).toBe(0)
-    expect(aborted).toBe(1)
-    expect(canceled).toBe("client disconnected")
+    expect(chunks).toEqual(["content", "usage"])
+    expect(usage).toBe(1)
+    expect(aborted).toBe(0)
+    expect(canceled).toBeDefined()
     expect(finalized).toBe(1)
-    expect(errors[0]).toBeInstanceOf(Error)
+    expect(errors).toEqual([undefined])
   })
 
   test("settles once when the provider stream fails", async () => {
@@ -82,8 +89,10 @@ describe("Zen provider stream accounting", () => {
     expect(settled).toBe(failure)
   })
 
-  test("does not wait for a provider cancellation that never resolves", async () => {
+  test("aborts and finalizes unknown when the bounded drain times out", async () => {
     let finalized = 0
+    let failure: unknown
+    let aborted = 0
     const result = forwardProviderStream({
       source: new ReadableStream({
         cancel() {
@@ -91,21 +100,28 @@ describe("Zen provider stream accounting", () => {
         },
       }),
       chunk() {},
-      async finalize() {
+      async finalize(error) {
         finalized++
+        failure = error
       },
       waitUntil() {},
-      abort() {},
+      drainTimeout: 20,
+      abort() {
+        aborted++
+      },
     })
 
     await result.stream.cancel("disconnected")
     await Promise.race([
       result.completed,
-      Bun.sleep(100).then(() => {
+      Bun.sleep(200).then(() => {
         throw new Error("settlement remained coupled to provider cancellation")
       }),
     ])
     expect(finalized).toBe(1)
+    expect(aborted).toBe(1)
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toContain("drain timed out")
   })
 
   test("preserves the final cost chunk for connected clients", async () => {

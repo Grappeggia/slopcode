@@ -21,6 +21,7 @@ import { LiteData } from "./lite"
 import {
   failUsage as failReservation,
   finalizeUsage as finalizeReservation,
+  heartbeatUsage as heartbeatReservation,
   markUsageDispatched as markReservationDispatched,
   recoverUsage as recoverReservations,
   releaseUsage as releaseReservation,
@@ -38,6 +39,7 @@ export namespace Billing {
   export const reserveUsage = reserveReservation
   export const finalizeUsage = finalizeReservation
   export const failUsage = failReservation
+  export const heartbeatUsage = heartbeatReservation
   export const markUsageDispatched = markReservationDispatched
   export const recoverUsage = recoverReservations
   export const releaseUsage = releaseReservation
