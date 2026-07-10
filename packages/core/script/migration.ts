@@ -4,6 +4,7 @@ import { $ } from "bun"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
+import { format, resolveConfig } from "prettier"
 import { pathToFileURL } from "url"
 import { parseArgs } from "util"
 
@@ -52,7 +53,7 @@ async function generate() {
 
     await fs.mkdir(full)
     await drizzle(temporary, full, "schema")
-    await Bun.write(schema, renderSchema(await generatedSql(full)))
+    await Bun.write(schema, await renderSchema(await generatedSql(full)))
     await Bun.write(registry, renderRegistry(await typescriptMigrations()))
   } finally {
     await fs.rm(temporary, { recursive: true, force: true })
@@ -76,7 +77,7 @@ async function check() {
 
     await fs.mkdir(full)
     await drizzle(temporary, full, "schema")
-    if ((await Bun.file(schema).text()) !== renderSchema(await generatedSql(full))) {
+    if ((await Bun.file(schema).text()) !== (await renderSchema(await generatedSql(full)))) {
       throw new Error("Current database schema is stale. Run `bun script/migration.ts` from packages/core.")
     }
 
@@ -137,8 +138,9 @@ ${renderStatements(sql)}
 `
 }
 
-function renderSchema(sql: string) {
-  return `import { Effect } from "effect"
+async function renderSchema(sql: string) {
+  return format(
+    `import { Effect } from "effect"
 import type { DatabaseMigration } from "./migration"
 
 export default {
@@ -148,7 +150,12 @@ ${renderStatements(sql)}
     })
   },
 } satisfies Omit<DatabaseMigration.Migration, "id">
-`
+`,
+    {
+      ...((await resolveConfig(schema)) ?? {}),
+      filepath: schema,
+    },
+  )
 }
 
 function renderStatements(sql: string) {
