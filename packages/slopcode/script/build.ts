@@ -121,7 +121,7 @@ const nvimAssets = {
   },
 } as const
 
-const nvimCache = path.join(dir, "dist", ".neovim-cache")
+const nvimCache = path.join(dir, "node_modules", ".cache", "slopcode", "neovim")
 const nvimDownloads = new Map<string, Promise<string>>()
 const alpineIndexes = new Map<
   string,
@@ -295,14 +295,14 @@ const nvimDownload = (key: keyof typeof nvimAssets) => {
     const out = path.join(nvimCache, asset.name)
     await fs.promises.mkdir(nvimCache, { recursive: true })
     if (!(await Bun.file(out).exists())) {
-      const res = await fetch(asset.url)
-      if (!res.ok) {
-        throw new Error(`Failed to download ${asset.url}: ${res.status} ${res.statusText}`)
-      }
-      await Bun.write(out, await res.arrayBuffer())
+      const tmp = `${out}.download`
+      await fs.promises.rm(tmp, { force: true })
+      await $`curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --silent --show-error --output ${tmp} ${asset.url}`
+      await fs.promises.rename(tmp, out)
     }
     const digest = new Bun.CryptoHasher("sha256").update(await Bun.file(out).arrayBuffer()).digest("hex")
     if (digest !== asset.sha256) {
+      await fs.promises.rm(out, { force: true })
       throw new Error(`Neovim digest mismatch for ${asset.name}`)
     }
     return out
