@@ -6,8 +6,9 @@ import { Identifier } from "./identifier"
 import { UserTable } from "./schema/user.sql"
 import { BillingTable } from "./schema/billing.sql"
 import { WorkspaceTable } from "./schema/workspace.sql"
+import { KeyTable } from "./schema/key.sql"
 import { Key } from "./key"
-import { eq, sql } from "drizzle-orm"
+import { and, eq, isNull, sql } from "drizzle-orm"
 
 export namespace Workspace {
   export const create = fn(
@@ -66,11 +67,17 @@ export namespace Workspace {
   )
 
   export const remove = fn(z.void(), async () => {
-    await Database.use((tx) =>
-      tx
+    Actor.assertAdmin()
+    const workspaceID = Actor.workspace()
+    await Database.transaction(async (tx) => {
+      await tx
         .update(WorkspaceTable)
         .set({ timeDeleted: sql`now()` })
-        .where(eq(WorkspaceTable.id, Actor.workspace())),
-    )
+        .where(eq(WorkspaceTable.id, workspaceID))
+      await tx
+        .update(KeyTable)
+        .set({ timeDeleted: sql`now()` })
+        .where(and(eq(KeyTable.workspaceID, workspaceID), isNull(KeyTable.timeDeleted)))
+    })
   })
 }

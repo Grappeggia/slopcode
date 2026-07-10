@@ -9,12 +9,13 @@ import styles from "./reload-section.module.css"
 import { queryBillingInfo } from "../../common"
 import { useI18n } from "~/context/i18n"
 import { formError, formErrorReloadAmountMin, formErrorReloadTriggerMin, localizeError } from "~/lib/form-error"
+import { asBillingAdmin } from "./authorize"
 
 const reload = action(async (form: FormData) => {
   "use server"
   const workspaceID = form.get("workspaceID") as string | null
   if (!workspaceID) return { error: formError.workspaceRequired }
-  return json(await withActor(() => Billing.reload(), workspaceID), {
+  return json(await withActor(() => asBillingAdmin(() => Billing.reload()), workspaceID), {
     revalidate: queryBillingInfo.key,
   })
 }, "billing.reload")
@@ -23,38 +24,44 @@ const setReload = action(async (form: FormData) => {
   "use server"
   const workspaceID = form.get("workspaceID") as string | null
   if (!workspaceID) return { error: formError.workspaceRequired }
-  const reloadValue = (form.get("reload") as string | null) === "true"
-  const amountStr = form.get("reloadAmount") as string | null
-  const triggerStr = form.get("reloadTrigger") as string | null
+  return withActor(
+    () =>
+      asBillingAdmin(async (workspaceID) => {
+        const reloadValue = (form.get("reload") as string | null) === "true"
+        const amountStr = form.get("reloadAmount") as string | null
+        const triggerStr = form.get("reloadTrigger") as string | null
 
-  const reloadAmount = amountStr && amountStr.trim() !== "" ? parseInt(amountStr) : null
-  const reloadTrigger = triggerStr && triggerStr.trim() !== "" ? parseInt(triggerStr) : null
+        const reloadAmount = amountStr && amountStr.trim() !== "" ? parseInt(amountStr) : null
+        const reloadTrigger = triggerStr && triggerStr.trim() !== "" ? parseInt(triggerStr) : null
 
-  if (reloadValue) {
-    if (reloadAmount === null || reloadAmount < Billing.RELOAD_AMOUNT_MIN)
-      return { error: formErrorReloadAmountMin(Billing.RELOAD_AMOUNT_MIN) }
-    if (reloadTrigger === null || reloadTrigger < Billing.RELOAD_TRIGGER_MIN)
-      return { error: formErrorReloadTriggerMin(Billing.RELOAD_TRIGGER_MIN) }
-  }
+        if (reloadValue) {
+          if (reloadAmount === null || reloadAmount < Billing.RELOAD_AMOUNT_MIN)
+            return { error: formErrorReloadAmountMin(Billing.RELOAD_AMOUNT_MIN) }
+          if (reloadTrigger === null || reloadTrigger < Billing.RELOAD_TRIGGER_MIN)
+            return { error: formErrorReloadTriggerMin(Billing.RELOAD_TRIGGER_MIN) }
+        }
 
-  return json(
-    await Database.use((tx) =>
-      tx
-        .update(BillingTable)
-        .set({
-          reload: reloadValue,
-          ...(reloadAmount !== null ? { reloadAmount } : {}),
-          ...(reloadTrigger !== null ? { reloadTrigger } : {}),
-          ...(reloadValue
-            ? {
-                reloadError: null,
-                timeReloadError: null,
-              }
-            : {}),
-        })
-        .where(eq(BillingTable.workspaceID, workspaceID)),
-    ),
-    { revalidate: queryBillingInfo.key },
+        return json(
+          await Database.use((tx) =>
+            tx
+              .update(BillingTable)
+              .set({
+                reload: reloadValue,
+                ...(reloadAmount !== null ? { reloadAmount } : {}),
+                ...(reloadTrigger !== null ? { reloadTrigger } : {}),
+                ...(reloadValue
+                  ? {
+                      reloadError: null,
+                      timeReloadError: null,
+                    }
+                  : {}),
+              })
+              .where(eq(BillingTable.workspaceID, workspaceID)),
+          ),
+          { revalidate: queryBillingInfo.key },
+        )
+      }),
+    workspaceID,
   )
 }, "billing.setReload")
 

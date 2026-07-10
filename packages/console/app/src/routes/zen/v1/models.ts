@@ -1,7 +1,9 @@
 import type { APIEvent } from "@solidjs/start/server"
 import { ZenData } from "@slopcode-ai/console-core/model.js"
 import { and, Database, eq, isNull } from "@slopcode-ai/console-core/drizzle/index.js"
+import { Key } from "@slopcode-ai/console-core/key.js"
 import { KeyTable } from "@slopcode-ai/console-core/schema/key.sql.js"
+import { UserTable } from "@slopcode-ai/console-core/schema/user.sql.js"
 import { WorkspaceTable } from "@slopcode-ai/console-core/schema/workspace.sql.js"
 import { ModelTable } from "@slopcode-ai/console-core/schema/model.sql.js"
 import { buildOptionsResponse, buildModelsResponse } from "~/routes/zen/util/modelsHandler"
@@ -22,8 +24,9 @@ export async function GET(input: APIEvent) {
         })
         .from(KeyTable)
         .innerJoin(WorkspaceTable, eq(WorkspaceTable.id, KeyTable.workspaceID))
+        .innerJoin(UserTable, and(eq(UserTable.workspaceID, KeyTable.workspaceID), eq(UserTable.id, KeyTable.userID)))
         .innerJoin(ModelTable, and(eq(ModelTable.workspaceID, KeyTable.workspaceID), isNull(ModelTable.timeDeleted)))
-        .where(and(eq(KeyTable.key, apiKey), isNull(KeyTable.timeDeleted)))
+        .where(and(eq(KeyTable.key, apiKey), Key.active()))
         .then((rows) => rows.map((row) => row.model)),
     )
   })()

@@ -213,14 +213,20 @@ export namespace User {
   export const remove = fn(z.string(), async (id) => {
     Actor.assertAdmin()
     assertNotSelf(id)
+    const workspaceID = Actor.workspace()
 
-    return await Database.use((tx) =>
-      tx
+    return await Database.transaction(async (tx) => {
+      const result = await tx
         .update(UserTable)
         .set({
           timeDeleted: sql`now()`,
         })
-        .where(and(eq(UserTable.id, id), eq(UserTable.workspaceID, Actor.workspace()))),
-    )
+        .where(and(eq(UserTable.id, id), eq(UserTable.workspaceID, workspaceID)))
+      await tx
+        .update(KeyTable)
+        .set({ timeDeleted: sql`now()` })
+        .where(and(eq(KeyTable.userID, id), eq(KeyTable.workspaceID, workspaceID), isNull(KeyTable.timeDeleted)))
+      return result
+    })
   })
 }

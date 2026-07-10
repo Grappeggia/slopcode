@@ -6,8 +6,12 @@ import { Identifier } from "./identifier"
 import { KeyTable } from "./schema/key.sql"
 import { UserTable } from "./schema/user.sql"
 import { AuthTable } from "./schema/auth.sql"
+import { WorkspaceTable } from "./schema/workspace.sql"
 
 export namespace Key {
+  export const active = () =>
+    and(isNull(KeyTable.timeDeleted), isNull(UserTable.timeDeleted), isNull(WorkspaceTable.timeDeleted))
+
   export const list = fn(z.void(), async () => {
     const keys = await Database.use((tx) =>
       tx

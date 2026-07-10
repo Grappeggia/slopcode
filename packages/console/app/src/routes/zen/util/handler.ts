@@ -7,6 +7,7 @@ import { getMonthlyBounds, getWeekBounds } from "@slopcode-ai/console-core/util/
 import { Identifier } from "@slopcode-ai/console-core/identifier.js"
 import { Billing } from "@slopcode-ai/console-core/billing.js"
 import { Actor } from "@slopcode-ai/console-core/actor.js"
+import { Key as ApiKey } from "@slopcode-ai/console-core/key.js"
 import { WorkspaceTable } from "@slopcode-ai/console-core/schema/workspace.sql.js"
 import { ZenData } from "@slopcode-ai/console-core/model.js"
 import { Subscription } from "@slopcode-ai/console-core/subscription.js"
@@ -661,7 +662,7 @@ export async function handler(
             isNull(LiteTable.timeDeleted),
           ),
         )
-        .where(and(eq(KeyTable.key, zenApiKey), isNull(KeyTable.timeDeleted)))
+        .where(and(eq(KeyTable.key, zenApiKey), ApiKey.active()))
         .then((rows) => rows[0]),
     )
 
