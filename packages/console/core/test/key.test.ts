@@ -9,6 +9,7 @@ import { WorkspaceTable } from "../src/schema/workspace.sql"
 import { User } from "../src/user"
 import { Workspace } from "../src/workspace"
 import { testDatabase, useTestDatabase } from "./database"
+import "./billingReservation.cases"
 
 const workspaceID = "workspace_security"
 const adminID = "user_admin"

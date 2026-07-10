@@ -18,6 +18,12 @@ import { centsToMicroCents } from "./util/price"
 import { User } from "./user"
 import { BlackData } from "./black"
 import { LiteData } from "./lite"
+import {
+  finalizeUsage as finalizeReservation,
+  releaseUsage as releaseReservation,
+  reserveUsage as reserveReservation,
+  UsageReservationError as ReservationError,
+} from "./usage-reservation"
 
 export namespace Billing {
   export const ITEM_CREDIT_NAME = "slopcode credits"
@@ -26,6 +32,10 @@ export namespace Billing {
   export const RELOAD_AMOUNT_MIN = 10
   export const RELOAD_TRIGGER = 5
   export const RELOAD_TRIGGER_MIN = 5
+  export const reserveUsage = reserveReservation
+  export const finalizeUsage = finalizeReservation
+  export const releaseUsage = releaseReservation
+  export const UsageReservationError = ReservationError
   export const stripe = () =>
     new Stripe(Resource.STRIPE_SECRET_KEY.value, {
       apiVersion: "2025-03-31.basil",

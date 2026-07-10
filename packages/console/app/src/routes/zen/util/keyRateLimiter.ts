@@ -3,6 +3,32 @@ import { buildRateLimitKey, getRedis } from "./redis"
 import { i18n } from "~/i18n"
 import { localeFromRequest } from "~/lib/language"
 
+type Redis = {
+  eval<T>(script: string, keys: string[], args: unknown[]): Promise<T>
+}
+
+const ADMIT = `
+local count = tonumber(redis.call("GET", KEYS[1]) or "0")
+local limit = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+if redis.call("TTL", KEYS[1]) < 0 and count > 0 then
+  redis.call("EXPIRE", KEYS[1], ttl)
+end
+if count >= limit then
+  return {0, count}
+end
+count = redis.call("INCR", KEYS[1])
+if count == 1 then
+  redis.call("EXPIRE", KEYS[1], ttl)
+end
+return {1, count}
+`
+
+export async function admitKeyRequest(redis: Redis, key: string, limit: number, ttl: number) {
+  const result = await redis.eval<[number, number]>(ADMIT, [key], [limit, ttl])
+  return Number(result[0]) === 1
+}
+
 export function createRateLimiter(
   modelId: string,
   rateLimit: number | undefined,
@@ -22,16 +48,9 @@ export function createRateLimiter(
   const key = buildRateLimitKey("key", zenApiKey, interval)
 
   return {
-    check: async () => {
-      const count = Number((await redis.mget<(string | number | null)[]>([key]))[0] ?? 0)
-
-      if (count >= LIMIT) throw new RateLimitError(dict["zen.api.error.rateLimitExceeded"], 60)
-    },
-    track: async () => {
-      const pipeline = redis.pipeline()
-      pipeline.incr(key)
-      pipeline.expire(key, 60)
-      await pipeline.exec()
+    admit: async () => {
+      if (!(await admitKeyRequest(redis, key, LIMIT, 60)))
+        throw new RateLimitError(dict["zen.api.error.rateLimitExceeded"], 60)
     },
   }
 }

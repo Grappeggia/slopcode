@@ -119,6 +119,34 @@ export const StripeWebhookEventTable = mysqlTable("stripe_webhook_event", {
   timeCreated: utc("time_created").notNull().defaultNow(),
 })
 
+export const UsageReservationSources = ["free", "byok", "subscription", "lite", "balance"] as const
+export const UsageReservationStatuses = ["pending", "settled", "released"] as const
+export type UsageReservationLimits = {
+  calendar?: { start: number }
+  workspace?: number
+  user?: number
+  fixed?: { amount: number; start: number }
+  rolling?: { amount: number; seconds: number; start?: number }
+  weekly?: { amount: number; start: number }
+  monthly?: { amount: number; start: number }
+}
+
+export const UsageReservationTable = mysqlTable(
+  "usage_reservation",
+  {
+    id: varchar("id", { length: 64 }).collate("utf8mb4_bin").notNull().primaryKey(),
+    workspaceID: ulid("workspace_id").notNull(),
+    userID: ulid("user_id").notNull(),
+    source: mysqlEnum("source", UsageReservationSources).notNull(),
+    status: mysqlEnum("status", UsageReservationStatuses).notNull().default("pending"),
+    amount: bigint("amount", { mode: "number" }).notNull(),
+    amountActual: bigint("amount_actual", { mode: "number" }),
+    limits: json("limits").$type<UsageReservationLimits>(),
+    timeCreated: utc("time_created").notNull().defaultNow(),
+  },
+  (table) => [index("usage_reservation_workspace_status").on(table.workspaceID, table.status)],
+)
+
 export const UsageTable = mysqlTable(
   "usage",
   {
@@ -137,6 +165,7 @@ export const UsageTable = mysqlTable(
     sessionID: varchar("session_id", { length: 30 }),
     enrichment: json("enrichment").$type<{
       plan: "sub" | "byok" | "lite"
+      estimated?: boolean
     }>(),
   },
   (table) => [...workspaceIndexes(table), index("usage_time_created").on(table.workspaceID, table.timeCreated)],

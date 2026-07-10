@@ -3,7 +3,13 @@ import mysql, { type Pool } from "mysql2/promise"
 import { drizzle } from "drizzle-orm/mysql2"
 import { Database } from "../src/drizzle"
 import { AuthTable } from "../src/schema/auth.sql"
-import { BillingTable } from "../src/schema/billing.sql"
+import {
+  BillingTable,
+  LiteTable,
+  SubscriptionTable,
+  UsageReservationTable,
+  UsageTable,
+} from "../src/schema/billing.sql"
 import { KeyTable } from "../src/schema/key.sql"
 import { UserTable } from "../src/schema/user.sql"
 import { WorkspaceTable } from "../src/schema/workspace.sql"
@@ -92,6 +98,11 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await pool.query("DROP TRIGGER IF EXISTS fail_key_update")
+  await pool.query("DROP TRIGGER IF EXISTS fail_billing_update")
+  await db.delete(UsageTable)
+  await db.delete(UsageReservationTable)
+  await db.delete(SubscriptionTable)
+  await db.delete(LiteTable)
   await db.delete(KeyTable)
   await db.delete(UserTable)
   await db.delete(BillingTable)

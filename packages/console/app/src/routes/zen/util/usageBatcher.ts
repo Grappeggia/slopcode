@@ -1,5 +1,13 @@
 import { Resource } from "@slopcode-ai/console-resource"
+import { and, Database, eq, sql } from "@slopcode-ai/console-core/drizzle/index.js"
+import { BillingTable } from "@slopcode-ai/console-core/schema/billing.sql.js"
+import { UserTable } from "@slopcode-ai/console-core/schema/user.sql.js"
 import { getRedis } from "./redis"
+
+type Redis = {
+  getdel<T>(key: string): Promise<T | null | undefined>
+  incrby(key: string, amount: number): Promise<unknown>
+}
 
 // Workspaces whose balance/usage updates should be batched in Redis to avoid
 // row-level lock contention on BillingTable / UserTable.
@@ -28,4 +36,49 @@ export async function accumulateUsage(workspaceID: string, userID: string, works
   if (workspaceFlush === 0 && userFlush === 0) return null
 
   return { workspaceCost: workspaceFlush, userCost: userFlush }
+}
+
+export async function drainUsage(
+  workspaceID: string,
+  userID: string,
+  redis: Redis = getRedis(),
+  stage = Resource.App.stage,
+) {
+  const wKey = `${stage}:usage:wrk:${workspaceID}`
+  const uKey = `${stage}:usage:usr:${workspaceID}:${userID}`
+  const [workspaceCost, userCost] = await Promise.all([redis.getdel<number>(wKey), redis.getdel<number>(uKey)]).then(
+    (values) => values.map((value) => Number(value ?? 0)),
+  )
+  if (workspaceCost === 0 && userCost === 0) return
+
+  await Database.transaction(async (tx) => {
+    await tx
+      .update(BillingTable)
+      .set({
+        balance: sql`${BillingTable.balance} - ${workspaceCost}`,
+        monthlyUsage: sql`
+          CASE
+            WHEN MONTH(${BillingTable.timeMonthlyUsageUpdated}) = MONTH(now()) AND YEAR(${BillingTable.timeMonthlyUsageUpdated}) = YEAR(now()) THEN COALESCE(${BillingTable.monthlyUsage}, 0) + ${workspaceCost}
+            ELSE ${workspaceCost}
+          END
+        `,
+        timeMonthlyUsageUpdated: sql`now()`,
+      })
+      .where(eq(BillingTable.workspaceID, workspaceID))
+    await tx
+      .update(UserTable)
+      .set({
+        monthlyUsage: sql`
+          CASE
+            WHEN MONTH(${UserTable.timeMonthlyUsageUpdated}) = MONTH(now()) AND YEAR(${UserTable.timeMonthlyUsageUpdated}) = YEAR(now()) THEN COALESCE(${UserTable.monthlyUsage}, 0) + ${userCost}
+            ELSE ${userCost}
+          END
+        `,
+        timeMonthlyUsageUpdated: sql`now()`,
+      })
+      .where(and(eq(UserTable.workspaceID, workspaceID), eq(UserTable.id, userID)))
+  }).catch(async (error) => {
+    await Promise.all([redis.incrby(wKey, workspaceCost), redis.incrby(uKey, userCost)])
+    throw error
+  })
 }

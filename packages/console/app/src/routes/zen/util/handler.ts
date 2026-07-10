@@ -1,7 +1,7 @@
 import type { APIEvent } from "@solidjs/start/server"
 import { and, Database, eq, isNull, lt, or, sql } from "@slopcode-ai/console-core/drizzle/index.js"
 import { KeyTable } from "@slopcode-ai/console-core/schema/key.sql.js"
-import { BillingTable, LiteTable, SubscriptionTable, UsageTable } from "@slopcode-ai/console-core/schema/billing.sql.js"
+import { BillingTable, LiteTable, SubscriptionTable } from "@slopcode-ai/console-core/schema/billing.sql.js"
 import { centsToMicroCents } from "@slopcode-ai/console-core/util/price.js"
 import { getMonthlyBounds, getWeekBounds } from "@slopcode-ai/console-core/util/date.js"
 import { Identifier } from "@slopcode-ai/console-core/identifier.js"
@@ -22,6 +22,7 @@ import {
   MonthlyLimitError,
   UserLimitError,
   ModelError,
+  RequestError,
   RateLimitError,
   FreeUsageLimitError,
   GoUsageLimitError,
@@ -43,12 +44,14 @@ import { createRateLimiter as createKeyRateLimiter } from "./keyRateLimiter"
 import { createTrialLimiter } from "./trialLimiter"
 import { createStickyTracker } from "./stickyProviderTracker"
 import { LiteData } from "@slopcode-ai/console-core/lite.js"
-import { Resource } from "@slopcode-ai/console-resource"
+import { Resource, waitUntil } from "@slopcode-ai/console-resource"
 import { i18n, type Key } from "~/i18n"
 import { localeFromRequest } from "~/lib/language"
 import { createModelTpmLimiter } from "./modelTpmLimiter"
 import { createModelTpsLimiter } from "./modelTpsLimiter"
-import { accumulateUsage, HOT_WORKSPACES } from "./usageBatcher"
+import { forwardProviderStream } from "./stream"
+import { prepareReservation } from "./reservation"
+import { drainUsage, HOT_WORKSPACES } from "./usageBatcher"
 
 type ZenData = Awaited<ReturnType<typeof ZenData.list>>
 type RetryOptions = {
@@ -91,6 +94,7 @@ export async function handler(
     "wrk_01K6W1A3VE0KMNVSCQT43BG2SX", // benchmark
     "wrk_01KKZDKDWCS1VTJF8QTX62DD50", // contributors
   ]
+  let abort: (() => Promise<unknown>) | undefined
 
   try {
     const url = input.request.url
@@ -104,12 +108,14 @@ export async function handler(
     const zenApiKey = rawZenApiKey === "public" ? undefined : rawZenApiKey
     const sessionId = input.request.headers.get("x-slopcode-session") ?? ""
     const requestId = input.request.headers.get("x-slopcode-request") ?? ""
+    const internalRequestId = Identifier.create("reservation")
     const ocClient = input.request.headers.get("x-slopcode-client") ?? ""
     const userAgent = input.request.headers.get("user-agent") ?? ""
     logger.metric({
       is_stream: isStream,
       session: sessionId,
       request: requestId,
+      "request.internal": internalRequestId,
       client: ocClient,
       user_agent: userAgent,
       "model.variant": variant,
@@ -117,22 +123,70 @@ export async function handler(
     })
     const zenData = ZenData.list(opts.modelList)
     const modelInfo = validateModel(zenData, model)
+    const reservation = prepareReservation(body, opts.format, modelInfo.cost, modelInfo.cost200K)
     const trialLimiter = createTrialLimiter(modelInfo.trialProvider, ip)
     const trialProviders = await trialLimiter?.check()
     const rateLimiter = modelInfo.allowAnonymous
       ? createIpRateLimiter(modelInfo.id, modelInfo.rateLimit, ip, input.request)
       : createKeyRateLimiter(modelInfo.id, modelInfo.rateLimit, zenApiKey, input.request)
-    await rateLimiter?.check()
+    await rateLimiter?.admit()
     const authInfo = await authenticate(modelInfo, zenApiKey)
     const stickyId = sessionId ? sessionId : (authInfo?.workspaceID ?? ip)
     const stickyTracker = createStickyTracker(modelInfo.id, modelInfo.stickyProvider, stickyId)
     const stickyProvider = await stickyTracker?.get()
-    const billingSource = validateBilling(authInfo, modelInfo)
+    const billingSource = await reserveBilling(authInfo, modelInfo, internalRequestId, reservation.amount)
+    abort = () => (authInfo ? Billing.releaseUsage(internalRequestId) : Promise.resolve(false))
     logger.metric({ source: billingSource })
     const modelTpmLimiter = createModelTpmLimiter(modelInfo.providers)
     const modelTpmLimits = await modelTpmLimiter?.check()
     const modelTpsLimiter = createModelTpsLimiter(modelInfo.providers)
     const modelTpsLimits = await modelTpsLimiter?.check()
+    let settlement: Promise<string | undefined> | undefined
+
+    const settle = (
+      providerInfo?: ProviderInfo,
+      usageInfo?: UsageInfo,
+      timing?: { first: number; last: number },
+      estimated = false,
+    ) => {
+      if (settlement) return settlement
+      settlement = (async () => {
+        if (!providerInfo || !usageInfo) {
+          if (authInfo) await Billing.releaseUsage(internalRequestId)
+          return
+        }
+
+        const costInfo = calculateCost(modelInfo, usageInfo)
+        await trialLimiter?.track(usageInfo)
+        await modelTpmLimiter?.track(providerInfo.id, providerInfo.model, usageInfo)
+        if (timing)
+          await modelTpsLimiter?.track(
+            providerInfo.id,
+            providerInfo.model,
+            providerInfo.tpsGoal,
+            timing.first,
+            timing.last,
+            usageInfo,
+          )
+        const amount = await trackUsage(
+          sessionId,
+          billingSource,
+          authInfo,
+          modelInfo,
+          providerInfo,
+          usageInfo,
+          costInfo,
+          internalRequestId,
+          reservation.amount,
+          estimated,
+        )
+        await reload(billingSource, authInfo)
+        if (billingSource !== "balance") return "0"
+        return (amount / 100_000_000).toFixed(8)
+      })()
+      return settlement
+    }
+    abort = () => settle()
 
     const retriableRequest = async (retry: RetryOptions = { excludeProviders: [], retryCount: 0 }) => {
       const providerInfo = selectProvider(
@@ -227,10 +281,10 @@ export async function handler(
         })
       }
 
-      return { providerInfo, reqBody, res, startTimestamp }
+      return { providerInfo, res, startTimestamp }
     }
 
-    const { providerInfo, reqBody, res, startTimestamp } = await retriableRequest()
+    const { providerInfo, res, startTimestamp } = await retriableRequest()
 
     // Store sticky provider
     if (res.status === 200) await stickyTracker?.set(providerInfo.id)
@@ -249,18 +303,20 @@ export async function handler(
     logger.debug("STATUS: " + res.status + " " + res.statusText)
 
     // Handle non-streaming response
-    if (!isStream || [400, 404, 429].includes(res.status)) {
+    if (!isStream || res.status !== 200) {
       const json = await res.json()
-      await rateLimiter?.track()
       const usage = providerInfo.extractUsage(json)
       if (usage) {
         const usageInfo = providerInfo.normalizeUsage(usage)
-        const costInfo = calculateCost(modelInfo, usageInfo)
-        await trialLimiter?.track(usageInfo)
-        await modelTpmLimiter?.track(providerInfo.id, providerInfo.model, usageInfo)
-        await trackUsage(sessionId, billingSource, authInfo, modelInfo, providerInfo, usageInfo, costInfo)
-        await reload(billingSource, authInfo, costInfo)
-        json.cost = calculateOccurredCost(billingSource, costInfo)
+        json.cost = await settle(providerInfo, usageInfo)
+      } else if (res.status === 200) {
+        const usageInfo = {
+          inputTokens: reservation.inputTokens,
+          outputTokens: Math.min(reservation.outputTokens, JSON.stringify(json).length),
+        }
+        json.cost = await settle(providerInfo, usageInfo, undefined, true)
+      } else {
+        await settle()
       }
       if (res.status === 400) {
         logger.metric({ "error.response": JSON.stringify(json) })
@@ -284,96 +340,75 @@ export async function handler(
     const streamConverter = createStreamPartConverter(providerInfo.format, opts.format)
     const usageParser = providerInfo.createUsageParser()
     const binaryDecoder = providerInfo.createBinaryStreamDecoder()
-    const stream = new ReadableStream({
-      start(c) {
-        const reader = res.body?.getReader()
-        const decoder = new TextDecoder()
-        const encoder = new TextEncoder()
-
-        let buffer = ""
-        let responseLength = 0
-        let timestampFirstByte = 0
-
-        function pump(): Promise<void> {
-          return (
-            reader?.read().then(async ({ done, value: rawValue }) => {
-              if (done) {
-                const timestampLastByte = Date.now()
-                logger.metric({
-                  response_length: responseLength,
-                  "timestamp.last_byte": timestampLastByte,
-                })
-                await rateLimiter?.track()
-                const usage = usageParser.retrieve()
-                if (usage) {
-                  const usageInfo = providerInfo.normalizeUsage(usage)
-                  const costInfo = calculateCost(modelInfo, usageInfo)
-                  await trialLimiter?.track(usageInfo)
-                  await modelTpmLimiter?.track(providerInfo.id, providerInfo.model, usageInfo)
-                  await modelTpsLimiter?.track(
-                    providerInfo.id,
-                    providerInfo.model,
-                    providerInfo.tpsGoal,
-                    timestampFirstByte,
-                    timestampLastByte,
-                    usageInfo,
-                  )
-                  await trackUsage(sessionId, billingSource, authInfo, modelInfo, providerInfo, usageInfo, costInfo)
-                  await reload(billingSource, authInfo, costInfo)
-                  const cost = calculateOccurredCost(billingSource, costInfo)
-                  c.enqueue(encoder.encode(buildCostChunk(opts.format, cost)))
-                }
-                c.close()
-                return
-              }
-
-              if (responseLength === 0) {
-                timestampFirstByte = Date.now()
-                logger.metric({
-                  time_to_first_byte: timestampFirstByte - startTimestamp,
-                  "timestamp.first_byte": timestampFirstByte,
-                })
-              }
-
-              const value = binaryDecoder ? binaryDecoder(rawValue) : rawValue
-              if (!value) return
-
-              responseLength += value.length
-              buffer += decoder.decode(value, { stream: true })
-
-              const parts = buffer.split(providerInfo.streamSeparator)
-              buffer = parts.pop() ?? ""
-
-              for (let part of parts) {
-                logger.debug("PART: " + part)
-
-                part = part.trim()
-                usageParser.parse(part)
-
-                if (providerInfo.format !== opts.format) {
-                  part = streamConverter(part)
-                  c.enqueue(encoder.encode(part + "\n\n"))
-                }
-              }
-
-              if (providerInfo.format === opts.format) {
-                c.enqueue(value)
-              }
-
-              return pump()
-            }) || Promise.resolve()
-          )
+    const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
+    let buffer = ""
+    let responseLength = 0
+    let timestampFirstByte = 0
+    const stream = forwardProviderStream({
+      source: res.body,
+      chunk(rawValue, emit) {
+        if (responseLength === 0) {
+          timestampFirstByte = Date.now()
+          logger.metric({
+            time_to_first_byte: timestampFirstByte - startTimestamp,
+            "timestamp.first_byte": timestampFirstByte,
+          })
         }
 
-        return pump()
+        const value = binaryDecoder ? binaryDecoder(rawValue) : rawValue
+        if (!value) return
+        responseLength += value.length
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split(providerInfo.streamSeparator)
+        buffer = parts.pop() ?? ""
+
+        for (let part of parts) {
+          logger.debug("PART: " + part)
+          part = part.trim()
+          usageParser.parse(part)
+          if (providerInfo.format === opts.format) continue
+          emit(encoder.encode(streamConverter(part) + "\n\n"))
+        }
+        if (providerInfo.format === opts.format) emit(value)
       },
-    })
+      async finalize(error) {
+        const timestampLastByte = Date.now()
+        logger.metric({
+          response_length: responseLength,
+          "timestamp.last_byte": timestampLastByte,
+        })
+        buffer += decoder.decode()
+        if (buffer.trim()) usageParser.parse(buffer.trim())
+        const usage = usageParser.retrieve()
+        const usageInfo = usage
+          ? providerInfo.normalizeUsage(usage)
+          : {
+              inputTokens: reservation.inputTokens,
+              outputTokens: Math.min(reservation.outputTokens, responseLength),
+            }
+        const cost = await settle(
+          providerInfo,
+          usageInfo,
+          { first: timestampFirstByte, last: timestampLastByte },
+          !usage,
+        )
+        if (error) return
+        return encoder.encode(buildCostChunk(opts.format, cost ?? "0"))
+      },
+      waitUntil,
+    }).stream
     return new Response(stream, {
       status: resStatus,
       statusText: res.statusText,
       headers: resHeaders,
     })
   } catch (error: any) {
+    await abort?.().catch((settlementError) => {
+      logger.metric({
+        "settlement.error": settlementError instanceof Error ? settlementError.message : String(settlementError),
+      })
+    })
     logger.metric({
       "error.type": error.constructor.name,
       "error.message": error.message,
@@ -393,14 +428,15 @@ export async function handler(
       error instanceof CreditsError ||
       error instanceof MonthlyLimitError ||
       error instanceof UserLimitError ||
-      error instanceof ModelError
+      error instanceof ModelError ||
+      error instanceof RequestError
     )
       return new Response(
         JSON.stringify({
           type: "error",
           error: { type: error.constructor.name, message: error.message },
         }),
-        { status: 401 },
+        { status: error instanceof RequestError ? 400 : 401 },
       )
 
     if (
@@ -703,6 +739,99 @@ export async function handler(
     }
   }
 
+  async function reserveBilling(authInfo: AuthInfo, modelInfo: ModelInfo, id: string, amount: number) {
+    const source = validateBilling(authInfo, modelInfo)
+    if (!authInfo || source === "anonymous") return source
+    if (HOT_WORKSPACES.has(authInfo.workspaceID)) await drainUsage(authInfo.workspaceID, authInfo.user.id)
+
+    const limits = (next: Exclude<BillingSource, "anonymous">) => {
+      if (next === "balance")
+        return {
+          workspace: authInfo.billing.monthlyLimit ? centsToMicroCents(authInfo.billing.monthlyLimit * 100) : undefined,
+          user: authInfo.user.monthlyLimit ? centsToMicroCents(authInfo.user.monthlyLimit * 100) : undefined,
+        }
+      if (next === "subscription") {
+        const data = BlackData.getLimits({ plan: authInfo.billing.subscription!.plan })
+        return {
+          fixed: { amount: centsToMicroCents(data.fixedLimit * 100), start: getWeekBounds(new Date()).start },
+          rolling: { amount: centsToMicroCents(data.rollingLimit * 100), seconds: data.rollingWindow * 3600 },
+        }
+      }
+      if (next === "lite") {
+        const data = LiteData.getLimits()
+        return {
+          weekly: { amount: centsToMicroCents(data.weeklyLimit * 100), start: getWeekBounds(new Date()).start },
+          monthly: {
+            amount: centsToMicroCents(data.monthlyLimit * 100),
+            start: getMonthlyBounds(new Date(), authInfo.lite!.timeCreated).start,
+          },
+          rolling: { amount: centsToMicroCents(data.rollingLimit * 100), seconds: data.rollingWindow * 3600 },
+        }
+      }
+      return undefined
+    }
+    const reserve = async (next: Exclude<BillingSource, "anonymous">) => {
+      await Billing.reserveUsage({
+        id,
+        workspaceID: authInfo.workspaceID,
+        userID: authInfo.user.id,
+        source: next,
+        amount,
+        limits: limits(next),
+      })
+      return next
+    }
+    const reject = (error: unknown, next: Exclude<BillingSource, "anonymous">): never => {
+      if (!(error instanceof Billing.UsageReservationError)) throw error
+      const billingUrl = `https://slopcode.ai/workspace/${authInfo.workspaceID}/billing`
+      if (error.reason === "balance") throw new CreditsError(t("zen.api.error.insufficientBalance", { billingUrl }))
+      if (error.reason === "workspace")
+        throw new MonthlyLimitError(
+          t("zen.api.error.workspaceMonthlyLimitReached", {
+            amount: authInfo.billing.monthlyLimit ?? 0,
+            billingUrl,
+          }),
+        )
+      if (error.reason === "user")
+        throw new UserLimitError(
+          t("zen.api.error.userMonthlyLimitReached", {
+            amount: authInfo.user.monthlyLimit ?? 0,
+            membersUrl: `https://slopcode.ai/workspace/${authInfo.workspaceID}/members`,
+          }),
+        )
+      if (next === "subscription") {
+        const seconds = BlackData.getLimits({ plan: authInfo.billing.subscription!.plan }).rollingWindow * 3600
+        throw new BlackUsageLimitError(
+          t("zen.api.error.subscriptionQuotaExceeded", { retryIn: `${Math.ceil(seconds / 3600)}hr` }),
+          seconds,
+        )
+      }
+      if (next === "lite") {
+        const seconds = LiteData.getLimits().rollingWindow * 3600
+        throw new GoUsageLimitError(
+          t("zen.api.error.goSubscriptionRollingLimitExceeded", {
+            retryIn: `${Math.ceil(seconds / 3600)}hr`,
+            consoleGoUrl: `https://slopcode.ai/workspace/${authInfo.workspaceID}/go`,
+          }),
+          authInfo.workspaceID,
+          "5 hour",
+          seconds,
+        )
+      }
+      throw error
+    }
+
+    return reserve(source).catch(async (error) => {
+      const fallback =
+        error instanceof Billing.UsageReservationError &&
+        error.reason === "quota" &&
+        ((source === "subscription" && authInfo.billing.subscription?.useBalance) ||
+          (source === "lite" && authInfo.billing.lite?.useBalance))
+      if (!fallback) return reject(error, source)
+      return reserve("balance").catch((fallbackError) => reject(fallbackError, "balance"))
+    })
+  }
+
   function validateBilling(authInfo: AuthInfo, modelInfo: ModelInfo): BillingSource {
     if (!authInfo) return "anonymous"
     if (authInfo.provider?.credentials) return "byok"
@@ -893,7 +1022,14 @@ export async function handler(
   }
 
   async function fetchWith429Retry(url: string, options: RequestInit, retry = { count: 0 }) {
-    const res = await fetch(url, options)
+    const pending = fetch(url, options)
+    waitUntil(
+      pending.then(
+        () => undefined,
+        () => undefined,
+      ),
+    )
+    const res = await pending
     if (res.status === 429 && retry.count < MAX_429_RETRIES) {
       await new Promise((resolve) => setTimeout(resolve, Math.pow(2, retry.count) * 500))
       return fetchWith429Retry(url, options, { count: retry.count + 1 })
@@ -902,8 +1038,7 @@ export async function handler(
   }
 
   function calculateCost(modelInfo: ModelInfo, usageInfo: UsageInfo) {
-    const { inputTokens, outputTokens, reasoningTokens, cacheReadTokens, cacheWrite5mTokens, cacheWrite1hTokens } =
-      usageInfo
+    const { inputTokens, outputTokens, cacheReadTokens, cacheWrite5mTokens, cacheWrite1hTokens } = usageInfo
 
     const modelCost =
       modelInfo.cost200K &&
@@ -940,10 +1075,6 @@ export async function handler(
     }
   }
 
-  function calculateOccurredCost(billingSource: BillingSource, costInfo: CostInfo) {
-    return billingSource === "balance" ? (costInfo.totalCostInCent / 100).toFixed(8) : "0"
-  }
-
   async function trackUsage(
     sessionId: string,
     billingSource: BillingSource,
@@ -952,6 +1083,9 @@ export async function handler(
     providerInfo: ProviderInfo,
     usageInfo: UsageInfo,
     costInfo: CostInfo,
+    requestID: string,
+    reserved: number,
+    estimated: boolean,
   ) {
     const { inputTokens, outputTokens, reasoningTokens, cacheReadTokens, cacheWrite5mTokens, cacheWrite1hTokens } =
       usageInfo
@@ -976,174 +1110,51 @@ export async function handler(
       "cost.cache_write_5m": cacheWrite5mCost ? Math.round(cacheWrite5mCost) : undefined,
       "cost.cache_write_1h": cacheWrite1hCost ? Math.round(cacheWrite1hCost) : undefined,
       "cost.total": Math.round(totalCostInCent),
+      "usage.estimated": estimated,
     })
 
-    if (billingSource === "anonymous") return
+    const cost = Math.min(centsToMicroCents(totalCostInCent), reserved)
+    if (cost < centsToMicroCents(totalCostInCent)) {
+      logger.metric({
+        "reservation.exceeded": true,
+        "reservation.microcents": reserved,
+        "cost.unbounded.microcents": centsToMicroCents(totalCostInCent),
+      })
+    }
+    if (billingSource === "anonymous") return cost
     authInfo = authInfo!
 
-    const cost = centsToMicroCents(totalCostInCent)
-
-    // For hot workspaces, batch balance/usage updates through Redis to avoid
-    // row-level lock contention on BillingTable/UserTable. Returns the amount
-    // to flush this request, or null to skip the DB writes entirely.
-    const balanceFlush = await (async () => {
-      if (billingSource !== "subscription" && billingSource !== "lite" && HOT_WORKSPACES.has(authInfo.workspaceID)) {
-        const workspaceCost = billingSource === "free" || billingSource === "byok" ? 0 : cost
-        const flush = await accumulateUsage(authInfo.workspaceID, authInfo.user.id, workspaceCost, cost)
-        return { batched: true as const, flush }
-      }
-      return { batched: false as const, flush: null }
-    })()
-
-    await Database.use((db) =>
-      Promise.all([
-        db.insert(UsageTable).values({
-          workspaceID: authInfo.workspaceID,
-          id: Identifier.create("usage"),
-          model: modelInfo.id,
-          provider: providerInfo.id,
-          inputTokens,
-          outputTokens,
-          reasoningTokens,
-          cacheReadTokens,
-          cacheWrite5mTokens,
-          cacheWrite1hTokens,
-          cost,
-          keyID: authInfo.apiKeyId,
-          sessionID: sessionId.substring(0, 30),
-          enrichment: (() => {
-            if (billingSource === "subscription") return { plan: "sub" }
-            if (billingSource === "byok") return { plan: "byok" }
-            if (billingSource === "lite") return { plan: "lite" }
-            return undefined
-          })(),
-        }),
-        ...(() => {
-          if (billingSource === "subscription") {
-            const plan = authInfo.billing.subscription!.plan
-            const black = BlackData.getLimits({ plan })
-            const week = getWeekBounds(new Date())
-            const rollingWindowSeconds = black.rollingWindow * 3600
-            return [
-              db
-                .update(SubscriptionTable)
-                .set({
-                  fixedUsage: sql`
-              CASE
-                WHEN ${SubscriptionTable.timeFixedUpdated} >= ${week.start} THEN ${SubscriptionTable.fixedUsage} + ${cost}
-                ELSE ${cost}
-              END
-            `,
-                  timeFixedUpdated: sql`now()`,
-                  rollingUsage: sql`
-              CASE
-                WHEN UNIX_TIMESTAMP(${SubscriptionTable.timeRollingUpdated}) >= UNIX_TIMESTAMP(now()) - ${rollingWindowSeconds} THEN ${SubscriptionTable.rollingUsage} + ${cost}
-                ELSE ${cost}
-              END
-            `,
-                  timeRollingUpdated: sql`
-              CASE
-                WHEN UNIX_TIMESTAMP(${SubscriptionTable.timeRollingUpdated}) >= UNIX_TIMESTAMP(now()) - ${rollingWindowSeconds} THEN ${SubscriptionTable.timeRollingUpdated}
-                ELSE now()
-              END
-            `,
-                })
-                .where(
-                  and(
-                    eq(SubscriptionTable.workspaceID, authInfo.workspaceID),
-                    eq(SubscriptionTable.userID, authInfo.user.id),
-                  ),
-                ),
-            ]
-          }
-          if (billingSource === "lite") {
-            const lite = LiteData.getLimits()
-            const week = getWeekBounds(new Date())
-            const month = getMonthlyBounds(new Date(), authInfo.lite!.timeCreated)
-            const rollingWindowSeconds = lite.rollingWindow * 3600
-            return [
-              db
-                .update(LiteTable)
-                .set({
-                  monthlyUsage: sql`
-              CASE
-                WHEN ${LiteTable.timeMonthlyUpdated} >= ${month.start} THEN ${LiteTable.monthlyUsage} + ${cost}
-                ELSE ${cost}
-              END
-            `,
-                  timeMonthlyUpdated: sql`now()`,
-                  weeklyUsage: sql`
-              CASE
-                WHEN ${LiteTable.timeWeeklyUpdated} >= ${week.start} THEN ${LiteTable.weeklyUsage} + ${cost}
-                ELSE ${cost}
-              END
-            `,
-                  timeWeeklyUpdated: sql`now()`,
-                  rollingUsage: sql`
-              CASE
-                WHEN UNIX_TIMESTAMP(${LiteTable.timeRollingUpdated}) >= UNIX_TIMESTAMP(now()) - ${rollingWindowSeconds} THEN ${LiteTable.rollingUsage} + ${cost}
-                ELSE ${cost}
-              END
-            `,
-                  timeRollingUpdated: sql`
-              CASE
-                WHEN UNIX_TIMESTAMP(${LiteTable.timeRollingUpdated}) >= UNIX_TIMESTAMP(now()) - ${rollingWindowSeconds} THEN ${LiteTable.timeRollingUpdated}
-                ELSE now()
-              END
-            `,
-                })
-                .where(and(eq(LiteTable.workspaceID, authInfo.workspaceID), eq(LiteTable.userID, authInfo.user.id))),
-            ]
-          }
-
-          // Batched hot workspace: skip DB writes unless this request is the flush.
-          if (balanceFlush.batched && !balanceFlush.flush) return []
-
-          const workspaceDelta = balanceFlush.flush?.workspaceCost ?? cost
-          const userDelta = balanceFlush.flush?.userCost ?? cost
-          const balanceDelta = billingSource === "free" || billingSource === "byok" ? 0 : workspaceDelta
-
-          return [
-            db
-              .update(BillingTable)
-              .set({
-                balance: sql`${BillingTable.balance} - ${balanceDelta}`,
-                monthlyUsage: sql`
-              CASE
-                WHEN MONTH(${BillingTable.timeMonthlyUsageUpdated}) = MONTH(now()) AND YEAR(${BillingTable.timeMonthlyUsageUpdated}) = YEAR(now()) THEN ${BillingTable.monthlyUsage} + ${workspaceDelta}
-                ELSE ${workspaceDelta}
-              END
-            `,
-                timeMonthlyUsageUpdated: sql`now()`,
-              })
-              .where(eq(BillingTable.workspaceID, authInfo.workspaceID)),
-            db
-              .update(UserTable)
-              .set({
-                monthlyUsage: sql`
-              CASE
-                WHEN MONTH(${UserTable.timeMonthlyUsageUpdated}) = MONTH(now()) AND YEAR(${UserTable.timeMonthlyUsageUpdated}) = YEAR(now()) THEN ${UserTable.monthlyUsage} + ${userDelta}
-                ELSE ${userDelta}
-              END
-            `,
-                timeMonthlyUsageUpdated: sql`now()`,
-              })
-              .where(and(eq(UserTable.workspaceID, authInfo.workspaceID), eq(UserTable.id, authInfo.user.id))),
-          ]
+    await Billing.finalizeUsage({
+      id: requestID,
+      amount: cost,
+      usage: {
+        model: modelInfo.id,
+        provider: providerInfo.id,
+        inputTokens,
+        outputTokens,
+        reasoningTokens,
+        cacheReadTokens,
+        cacheWrite5mTokens,
+        cacheWrite1hTokens,
+        cost,
+        keyID: authInfo.apiKeyId,
+        sessionID: sessionId,
+        enrichment: (() => {
+          if (billingSource === "subscription") return { plan: "sub" as const, estimated: estimated || undefined }
+          if (billingSource === "byok") return { plan: "byok" as const, estimated: estimated || undefined }
+          if (billingSource === "lite") return { plan: "lite" as const, estimated: estimated || undefined }
+          return undefined
         })(),
-      ]),
-    )
-
-    return { costInMicroCents: cost }
+      },
+    })
+    return cost
   }
 
-  async function reload(billingSource: BillingSource, authInfo: AuthInfo, costInfo: CostInfo) {
+  async function reload(billingSource: BillingSource, authInfo: AuthInfo) {
     if (billingSource !== "balance") return
     authInfo = authInfo!
 
     const reloadTrigger = centsToMicroCents((authInfo.billing.reloadTrigger ?? Billing.RELOAD_TRIGGER) * 100)
-    if (authInfo.billing.balance - costInfo.totalCostInCent >= reloadTrigger) return
-    if (authInfo.billing.timeReloadLockedTill && authInfo.billing.timeReloadLockedTill > new Date()) return
 
     const lock = await Database.use((tx) =>
       tx

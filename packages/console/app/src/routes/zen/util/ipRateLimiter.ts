@@ -5,6 +5,50 @@ import { i18n } from "~/i18n"
 import { localeFromRequest } from "~/lib/language"
 import { Subscription } from "@slopcode-ai/console-core/subscription.js"
 
+type Redis = {
+  eval<T>(script: string, keys: string[], args: unknown[]): Promise<T>
+}
+
+const ADMIT = `
+local limit = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+local is_default = tonumber(ARGV[3]) == 1
+local lifetime = tonumber(redis.call("GET", KEYS[2]) or "0")
+local daily = tonumber(redis.call("GET", KEYS[1]) or "0")
+local is_new = is_default and lifetime < limit * 7
+local allowed = is_new and limit * 2 or limit
+if redis.call("TTL", KEYS[1]) < 0 and daily > 0 then
+  redis.call("EXPIRE", KEYS[1], ttl)
+end
+if daily >= allowed then
+  return {0, daily, is_new and 1 or 0}
+end
+daily = redis.call("INCR", KEYS[1])
+if daily == 1 then
+  redis.call("EXPIRE", KEYS[1], ttl)
+end
+if is_new then
+  redis.call("INCR", KEYS[2])
+end
+return {1, daily, is_new and 1 or 0}
+`
+
+export async function admitIpRequest(
+  redis: Redis,
+  dailyKey: string,
+  lifetimeKey: string,
+  limit: number,
+  ttl: number,
+  isDefault: boolean,
+) {
+  const result = await redis.eval<[number, number, number]>(
+    ADMIT,
+    [dailyKey, lifetimeKey],
+    [limit, ttl, isDefault ? 1 : 0],
+  )
+  return { admitted: Number(result[0]) === 1, isNew: Number(result[2]) === 1 }
+}
+
 export function createRateLimiter(modelId: string, rateLimit: number | undefined, rawIp: string, request: Request) {
   const dict = i18n(localeFromRequest(request))
 
@@ -25,26 +69,11 @@ export function createRateLimiter(modelId: string, rateLimit: number | undefined
   const redis = getRedis()
   const lifetimeKey = buildRateLimitKey("ip", ip)
   const dailyKey = buildRateLimitKey("ip", ip, dailyInterval)
-  let isNew = false
-
   return {
-    check: async () => {
-      const counts = await redis.mget<(string | number | null)[]>(isDefaultModel ? [lifetimeKey, dailyKey] : [dailyKey])
-      const lifetimeCount = isDefaultModel ? Number(counts[0] ?? 0) : 0
-      const dailyCount = Number(counts[isDefaultModel ? 1 : 0] ?? 0)
-      logger.debug(`rate limit lifetime: ${lifetimeCount}, daily: ${dailyCount}`)
-
-      isNew = isDefaultModel && lifetimeCount < dailyLimit * 7
-
-      if ((isNew && dailyCount >= dailyLimit * 2) || (!isNew && dailyCount >= dailyLimit))
-        throw new FreeUsageLimitError(dict["zen.api.error.rateLimitExceeded"], retryAfter)
-    },
-    track: async () => {
-      const pipeline = redis.pipeline()
-      pipeline.incr(dailyKey)
-      pipeline.expire(dailyKey, retryAfter)
-      if (isNew) pipeline.incr(lifetimeKey)
-      await pipeline.exec()
+    admit: async () => {
+      const result = await admitIpRequest(redis, dailyKey, lifetimeKey, dailyLimit, retryAfter, isDefaultModel)
+      logger.debug(`rate limit admitted: ${result.admitted}, new: ${result.isNew}`)
+      if (!result.admitted) throw new FreeUsageLimitError(dict["zen.api.error.rateLimitExceeded"], retryAfter)
     },
   }
 }
