@@ -22,6 +22,7 @@ import { SessionV2 } from "@slopcode-ai/core/session"
 import { ContextSnapshotDecodeError } from "@slopcode-ai/core/session/error"
 import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionInput } from "@slopcode-ai/core/session/input"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
@@ -61,6 +62,7 @@ const events = EventV2.layer.pipe(Layer.provide(database))
 const questions = QuestionV2.layer.pipe(Layer.provide(events))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
+const runtime = SessionRuntime.layer.pipe(Layer.provide(database))
 const requests: LLMRequest[] = []
 let response: LLMEvent[] = []
 let responses: LLMEvent[][] | undefined
@@ -237,6 +239,7 @@ const config = Layer.succeed(
 const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(database),
   Layer.provide(store),
+  Layer.provide(runtime),
   Layer.provide(events),
   Layer.provide(client),
   Layer.provide(registry),
@@ -287,6 +290,7 @@ const it = testEffect(
     skillGuidance,
     config,
     runner,
+    runtime,
     coordinator,
     execution,
     sessions,
@@ -307,6 +311,7 @@ const insertSession = (id: SessionV2.ID) =>
         directory: "/project",
         title: "test",
         version: "test",
+        runtime: "v2",
       })
       .onConflictDoNothing()
       .run()
@@ -629,6 +634,51 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.messages({ sessionID })).toMatchObject([
         { id: message.id, type: "user", text: "Run automatically" },
       ])
+    }),
+  )
+
+  it.effect("rejects V1-owned sessions before a runner turn starts", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const runner = yield* SessionRunner.Service
+      requests.length = 0
+      yield* db
+        .update(SessionTable)
+        .set({ runtime: "v1" })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+
+      expect(yield* runner.run({ sessionID, force: true }).pipe(Effect.flip)).toMatchObject({
+        _tag: "SessionRuntime.Mismatch",
+        expectedOwner: "v2",
+        actualOwner: "v1",
+      })
+      expect(requests).toEqual([])
+    }),
+  )
+
+  it.effect("stops on a stale runtime epoch before publishing provider output", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      modelResolveHook = runtime
+        .assign({ sessionID, state: "ready", expectedOwner: "v2", expectedEpoch: 0 })
+        .pipe(Effect.asVoid)
+      response = fragmentFixture("text", "text-stale", ["Should not persist"]).completeEvents
+
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Fence this run" }), resume: false })
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "SessionRuntime.Mismatch",
+        expectedOwner: "v2",
+        expectedEpoch: 0,
+        actualEpoch: 1,
+      })
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toEqual([])
     }),
   )
 

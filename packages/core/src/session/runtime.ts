@@ -3,6 +3,7 @@ export * as SessionRuntime from "./runtime"
 import { and, eq, sql } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
+import { LayerNode } from "../effect/layer-node"
 import { NonNegativeInt } from "../schema"
 import { V2Schema } from "../v2-schema"
 import { SessionSchema } from "./schema"
@@ -142,3 +143,5 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(Layer.provide(Database.defaultLayer))
+
+export const node = LayerNode.make(layer, [Database.node])

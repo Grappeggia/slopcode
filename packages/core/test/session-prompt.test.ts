@@ -13,7 +13,9 @@ import { Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
+import { SessionControl } from "@slopcode-ai/core/session/control"
 import { SessionInput } from "@slopcode-ai/core/session/input"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { testEffect } from "./lib/effect"
@@ -22,6 +24,7 @@ const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
+const runtime = SessionRuntime.layer.pipe(Layer.provide(database))
 const executionCalls: SessionV2.ID[] = []
 const interruptCalls: SessionV2.ID[] = []
 const interruptSeqs: Array<number | undefined> = []
@@ -53,7 +56,8 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(Project.defaultLayer),
   Layer.provide(execution),
 )
-const it = testEffect(Layer.mergeAll(database, events, projector, store, execution, sessions))
+const control = SessionControl.layer.pipe(Layer.provide(sessions), Layer.provide(runtime))
+const it = testEffect(Layer.mergeAll(database, events, projector, store, runtime, execution, sessions, control))
 const sessionID = SessionV2.ID.make("ses_prompt_test")
 const messageID = SessionMessage.ID.create()
 
@@ -603,6 +607,44 @@ describe("SessionV2.prompt", () => {
       expect(executionCalls).toEqual([])
       expect(wakeCalls).toEqual([])
       expect(wakeSeqs).toEqual([])
+    }),
+  )
+})
+
+describe("SessionControl", () => {
+  it.effect("rejects V1-owned sessions before V2 prompt admission", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const control = yield* SessionControl.Service
+      wakeCalls.length = 0
+
+      const failure = yield* control
+        .prompt({ sessionID, prompt: new Prompt({ text: "Should not run" }) })
+        .pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "SessionRuntime.Mismatch",
+        expectedOwner: "v2",
+        actualOwner: "v1",
+      })
+      expect(yield* admittedCount).toBe(0)
+      expect(wakeCalls).toEqual([])
+    }),
+  )
+
+  it.effect("admits V2-owned prompts through V2 execution only", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const control = yield* SessionControl.Service
+      const runtime = yield* SessionRuntime.Service
+      wakeCalls.length = 0
+      yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
+
+      const admitted = yield* control.prompt({ sessionID, prompt: new Prompt({ text: "Run through V2" }) })
+
+      expect(admitted.prompt.text).toBe("Run through V2")
+      expect(wakeCalls).toEqual([sessionID])
+      expect(yield* admittedCount).toBe(1)
     }),
   )
 })

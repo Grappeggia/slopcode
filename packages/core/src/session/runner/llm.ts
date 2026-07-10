@@ -27,6 +27,7 @@ import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionRuntime } from "../runtime"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service, StepLimitExceededError } from "./index"
@@ -96,6 +97,7 @@ export const layer = Layer.effect(
     const tools = yield* ToolRegistry.Service
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
+    const runtime = yield* SessionRuntime.Service
     const location = yield* Location.Service
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
@@ -134,7 +136,7 @@ export const layer = Layer.effect(
       }
     })
 
-    const awaitToolFibers = (fibers: FiberSet.FiberSet<void, ToolOutputStore.Error>) =>
+    const awaitToolFibers = (fibers: FiberSet.FiberSet<void, ToolOutputStore.Error | SessionRuntime.Error>) =>
       Effect.raceFirst(FiberSet.join(fibers), FiberSet.awaitEmpty(fibers))
 
     // Match V1: dismissing a question halts the loop instead of becoming model-facing tool output.
@@ -172,14 +174,20 @@ export const layer = Layer.effect(
         concurrency: "unbounded",
       }).pipe(Effect.map(SystemContext.combine))
 
+    const assertRuntime = (sessionID: SessionSchema.ID, epoch: number) =>
+      runtime.assert({ sessionID, owner: "v2", epoch }).pipe(Effect.asVoid)
+
     const runTurnAttempt = Effect.fn("SessionRunner.runTurn")(function* (
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
+      runtimeEpoch: number,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
     ) {
+      yield* assertRuntime(sessionID, runtimeEpoch)
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
+      yield* assertRuntime(sessionID, runtimeEpoch)
       const agent = yield* agents.select(session.agent)
       const initialized = yield* SessionContextEpoch.initialize(
         db,
@@ -188,7 +196,7 @@ export const layer = Layer.effect(
         session.location,
         agent.id,
       ).pipe(retryAgentMismatch(promotion))
-      const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
+      const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error | SessionRuntime.Error>()
       let needsContinuation = false
       if (promotion) {
         const cutoff = yield* SessionInput.latestSeq(db, session.id)
@@ -238,7 +246,9 @@ export const layer = Layer.effect(
       })
       const withPublication = Semaphore.makeUnsafe(1).withPermit
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
-        withPublication(publisher.publish(event, outputPaths))
+        assertRuntime(sessionID, runtimeEpoch).pipe(
+          Effect.andThen(withPublication(publisher.publish(event, outputPaths))),
+        )
       let overflowFailure: ProviderErrorEvent | undefined
       if (!(yield* SessionContextEpoch.current(db, session.id, agent.id, system.revision)))
         return yield* Effect.die(rebuildPreparedTurn())
@@ -256,6 +266,7 @@ export const layer = Layer.effect(
             if (event.type !== "tool-call" || event.providerExecuted) return
             needsContinuation = true
             const assistantMessageID = yield* publisher.assistantMessageID(event.id)
+            yield* assertRuntime(sessionID, runtimeEpoch)
             yield* Effect.uninterruptibleMask((restore) =>
               restore(
                 toolMaterialization.settle({
@@ -340,40 +351,40 @@ export const layer = Layer.effect(
     type RunTurn = (
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
+      runtimeEpoch: number,
     ) => Effect.Effect<boolean, RunError>
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion) {
-      return yield* runTurnAttempt(sessionID, promotion).pipe(
+    const runAfterOverflowCompaction: RunTurn = (sessionID, promotion, runtimeEpoch) =>
+      runTurnAttempt(sessionID, promotion, runtimeEpoch).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
             yield* Effect.yieldNow
-            return yield* runAfterOverflowCompaction(sessionID, defect.transition.promotion)
+            return yield* runAfterOverflowCompaction(sessionID, defect.transition.promotion, runtimeEpoch)
           }),
         ),
       )
-    })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion) {
-      return yield* runTurnAttempt(sessionID, promotion, compaction.compactAfterOverflow).pipe(
+    const runTurn: RunTurn = (sessionID, promotion, runtimeEpoch) =>
+      runTurnAttempt(sessionID, promotion, runtimeEpoch, compaction.compactAfterOverflow).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* runAfterOverflowCompaction(sessionID, undefined)
-            return yield* runTurn(sessionID, defect.transition.promotion)
+              return yield* runAfterOverflowCompaction(sessionID, undefined, runtimeEpoch)
+            return yield* runTurn(sessionID, defect.transition.promotion, runtimeEpoch)
           }),
         ),
       )
-    })
 
     const run = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly force?: boolean
     }) {
+      const owner = yield* runtime.assert({ sessionID: input.sessionID, owner: "v2" })
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
       if (input.force !== true && !hasSteer && !hasQueue) return
@@ -381,10 +392,12 @@ export const layer = Layer.effect(
       let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
       let openActivity = input.force === true || hasSteer || hasQueue
       while (openActivity) {
+        yield* assertRuntime(input.sessionID, owner.epoch)
         let needsContinuation = true
         for (let step = 0; step < MAX_STEPS; step++) {
-          needsContinuation = yield* runTurn(input.sessionID, promotion)
+          needsContinuation = yield* runTurn(input.sessionID, promotion, owner.epoch)
           promotion = "steer"
+          yield* assertRuntime(input.sessionID, owner.epoch)
           if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
           if (!needsContinuation) break
         }

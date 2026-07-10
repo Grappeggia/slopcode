@@ -150,7 +150,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         resume: Schema.Boolean.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionInput.Admitted }),
-      error: [ConflictError, SessionNotFoundError],
+      error: [ConflictError, SessionNotFoundError, ServiceUnavailableError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(

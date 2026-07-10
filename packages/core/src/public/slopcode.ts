@@ -12,6 +12,7 @@ import { PluginBoot } from "../plugin/boot"
 import { ProjectV2 } from "../project"
 import { SessionV2 } from "../session"
 import * as SessionExecutionLocal from "../session/execution/local"
+import { SessionRuntime } from "../session/runtime"
 import { SessionProjector } from "../session/projector"
 import { SessionStore } from "../session/store"
 import { ApplicationTools } from "../tool/application-tools"
@@ -140,6 +141,7 @@ const SessionsLayer = Layer.merge(
   SessionV2.layer.pipe(
     Layer.provide(SessionProjector.layer),
     Layer.provide(SessionExecutionLocal.layer),
+    Layer.provide(SessionRuntime.layer),
     Layer.provide(SessionStore.layer),
     Layer.provide(EventV2.layer),
     Layer.provide(Database.defaultLayer),

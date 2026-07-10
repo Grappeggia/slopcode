@@ -40,6 +40,7 @@ import { ApplicationTools } from "./tool/application-tools"
 import { ToolOutputStore } from "./tool-output-store"
 import { AppProcess } from "./process"
 import { SessionStore } from "./session/store"
+import { SessionRuntime } from "./session/runtime"
 import { SessionTodo } from "./session/todo"
 import { QuestionV2 } from "./question"
 import { LLMClient } from "@slopcode-ai/llm"
@@ -101,6 +102,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     const runner = SessionRunnerLLM.defaultLayer.pipe(
       Layer.provide(services),
       Layer.provide(model),
+      Layer.provide(SessionRuntime.layer),
       Layer.provide(skillGuidance),
       Layer.provide(referenceGuidance),
     )
@@ -139,6 +141,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     Database.defaultLayer,
     ProjectDirectories.defaultLayer,
     SessionStore.layer.pipe(Layer.provide(Database.defaultLayer)),
+    SessionRuntime.layer.pipe(Layer.provide(Database.defaultLayer)),
     PermissionSaved.defaultLayer,
     RepositoryCache.defaultLayer,
     LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer)),

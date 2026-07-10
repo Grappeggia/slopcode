@@ -1,4 +1,6 @@
 import { SessionV2 } from "@slopcode-ai/core/session"
+import { SessionControl } from "@slopcode-ai/core/session/control"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { Layer } from "effect"
@@ -45,7 +47,9 @@ export const handlers = Layer.mergeAll(
 ).pipe(
   Layer.provide(sessionLocationLayer),
   Layer.provide(locationLayer),
+  Layer.provide(SessionControl.layer),
   Layer.provide(SessionV2.defaultLayer),
+  Layer.provide(SessionRuntime.defaultLayer),
   Layer.provide(SessionExecutionLocal.defaultLayer),
   Layer.provide(PermissionSaved.defaultLayer),
   Layer.provide(LocationServiceMap.layer),
