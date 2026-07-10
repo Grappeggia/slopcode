@@ -337,7 +337,7 @@ const nvimBundle = async (item: { os: string; arch: "arm64" | "x64"; abi?: "musl
   await Archive.extractZip(file, tmp)
   const entries = await fs.promises.readdir(tmp, { withFileTypes: true })
   const source = entries.length === 1 && entries[0]?.isDirectory() ? path.join(tmp, entries[0].name) : tmp
-  await fs.promises.cp(source, dest, { recursive: true, force: true })
+  await $`cp -RL ${source + "/."} ${dest}`
   await fs.promises.rm(tmp, { recursive: true, force: true })
 }
 
