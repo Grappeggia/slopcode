@@ -1,9 +1,9 @@
 import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Cause, Effect, Exit, Layer } from "effect"
-import { GlobTool } from "../../src/tool/glob"
+import { GlobTool, mapPath } from "../../src/tool/glob"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@slopcode-ai/core/ripgrep"
@@ -72,6 +72,20 @@ const githubBase = <A, E, R>(url: string, self: Effect.Effect<A, E, R>) =>
         else delete process.env.SLOPCODE_REPO_CLONE_GITHUB_BASE_URL
       }),
   )
+
+describe("tool.glob path mapping", () => {
+  test("maps POSIX results to the requested lexical root", () => {
+    expect(mapPath("/canonical/target", "/workspace/linked", "nested/file.ts", path.posix)).toBe(
+      "/workspace/linked/nested/file.ts",
+    )
+  })
+
+  test("maps Windows results to the requested lexical root", () => {
+    expect(mapPath("C:\\canonical\\target", "C:\\workspace\\linked", "nested/file.ts", path.win32)).toBe(
+      "C:\\workspace\\linked\\nested\\file.ts",
+    )
+  })
+})
 
 const git = Effect.fn("GlobToolTest.git")(function* (cwd: string, args: string[]) {
   return yield* Effect.promise(async () => {
@@ -159,6 +173,37 @@ describe("tool.glob", () => {
           expect(result.output).not.toContain(canonical)
           expect(items.find((item) => item.permission === "external_directory")).toMatchObject({
             patterns: [path.join(canonical, "*").replaceAll("\\", "/")],
+            metadata: { filepath: linked, canonicalPath: canonical },
+          })
+        }),
+      { git: true },
+    )
+  }
+
+  if (process.platform === "win32") {
+    it.instance(
+      "renders junction search results under the requested lexical directory",
+      () =>
+        Effect.gen(function* () {
+          const test = yield* TestInstance
+          const outside = yield* tmpdirScoped()
+          const linked = path.join(test.directory, "linked")
+          yield* Effect.promise(async () => {
+            await fs.writeFile(path.join(outside, "external.ts"), "export const external = true\n")
+            await fs.symlink(outside, linked, "junction")
+          })
+          const { items, next } = asks()
+          const info = yield* GlobTool
+          const glob = yield* info.init()
+
+          const result = yield* glob.execute({ pattern: "*.ts", path: linked }, next)
+
+          const canonical = yield* Effect.promise(() => fs.realpath(outside))
+          expect(result.title).toBe("linked")
+          expect(result.output).toBe(path.join(linked, "external.ts"))
+          expect(result.output).not.toContain(canonical)
+          expect(items.find((item) => item.permission === "external_directory")).toMatchObject({
+            patterns: [Filesystem.normalizePathPattern(path.join(canonical, "*"))],
             metadata: { filepath: linked, canonicalPath: canonical },
           })
         }),

@@ -113,6 +113,15 @@ export const ApplyPatchTool = Tool.define(
         const displayPath = process.platform === "win32" ? filePath : source.original
         const link = hunk.type === "update" && hunk.move_path ? yield* inspectLink(source.original) : undefined
         yield* assertExternalDirectoryWithFsEffect(afs, ctx, source)
+        if (link) {
+          const parent = yield* resolvePathEffect(afs, path.dirname(link.path), instance.directory)
+          yield* assertExternalDirectoryWithFsEffect(afs, ctx, {
+            original: link.path,
+            canonical: path.join(parent.canonical, path.basename(link.path)),
+            exists: true,
+            directory: false,
+          })
+        }
 
         switch (hunk.type) {
           case "add": {
@@ -306,7 +315,7 @@ export const ApplyPatchTool = Tool.define(
               yield* afs.writeWithDirs(change.movePath, Bom.join(change.newContent, change.bom))
               if (change.link) yield* validateLink(change.link)
               yield* afs.remove(change.link?.path ?? change.filePath)
-              updates.push({ file: change.filePath, event: "unlink" })
+              updates.push({ file: change.link?.path ?? change.filePath, event: "unlink" })
               updates.push({ file: change.movePath, event: "add" })
             }
             break
@@ -337,17 +346,14 @@ export const ApplyPatchTool = Tool.define(
         yield* lsp.touchFile(target, "document")
       }
       const rawDiagnostics = yield* lsp.diagnostics()
-      const diagnostics = fileChanges.reduce(
-        (result, change) => {
-          if (change.type === "delete") return result
-          const canonical = change.movePath ?? change.filePath
-          const shown = change.displayMovePath ?? change.displayPath
-          const key = FSUtil.normalizePath(canonical)
-          if (!Object.hasOwn(rawDiagnostics, key)) return result
-          return remapDiagnostics({ ...result, [key]: rawDiagnostics[key] }, key, shown)
-        },
-        rawDiagnostics,
-      )
+      const diagnostics = fileChanges.reduce((result, change) => {
+        if (change.type === "delete") return result
+        const canonical = change.movePath ?? change.filePath
+        const shown = change.displayMovePath ?? change.displayPath
+        const key = FSUtil.normalizePath(canonical)
+        if (!Object.hasOwn(rawDiagnostics, key)) return result
+        return remapDiagnostics({ ...result, [key]: rawDiagnostics[key] }, key, shown)
+      }, rawDiagnostics)
 
       // Generate output summary
       const summaryLines = fileChanges.map((change) => {

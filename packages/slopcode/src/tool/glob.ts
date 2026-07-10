@@ -14,6 +14,15 @@ export const Parameters = Schema.Struct({
   }),
 })
 
+export function mapPath(
+  search: string,
+  shown: string,
+  file: string,
+  platform: Pick<typeof path, "relative" | "resolve"> = path,
+) {
+  return platform.resolve(shown, platform.relative(search, platform.resolve(search, file)))
+}
+
 export const GlobTool = Tool.define(
   "glob",
   Effect.gen(function* () {
@@ -40,7 +49,7 @@ export const GlobTool = Tool.define(
             : path.resolve(ins.directory, params.path ?? ins.directory)
           const target = yield* resolvePathEffect(fs, requested, ins.directory)
           const search = target.canonical
-          const shown = process.platform === "win32" ? search : target.original
+          const shown = target.original
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           if (info?.type === "File") {
             throw new Error(`glob path must be a directory: ${shown}`)
@@ -57,9 +66,7 @@ export const GlobTool = Tool.define(
           const output = []
           if (files.length === 0) output.push("No files found")
           if (files.length > 0) {
-            output.push(
-              ...files.map((file) => path.resolve(shown, path.relative(search, path.resolve(search, file.path)))),
-            )
+            output.push(...files.map((file) => mapPath(search, shown, file.path)))
             if (truncated) {
               output.push("")
               output.push(

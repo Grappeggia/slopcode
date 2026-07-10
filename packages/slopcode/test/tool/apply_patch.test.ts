@@ -418,8 +418,93 @@ describe("tool.apply_patch freeform", () => {
         expect(result.metadata.diagnostics).toEqual({ [shownDestination]: [diagnostic] })
         expect(result.output).toContain(`<diagnostics file="${shownDestination}">`)
         expect(touched).toEqual([canonicalDestination])
-        expect(updated).toContain(canonicalSource)
-        expect(updated).toContain(canonicalDestination)
+        expect(updated).toEqual([source, canonicalDestination])
+      }),
+    )
+
+    it.instance("denies an external symlink entry move before changing the source or destination", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const root = path.join(path.dirname(test.directory), `${path.basename(test.directory)}-link-denied`)
+        const target = path.join(test.directory, "target.txt")
+        const source = path.join(root, "source.txt")
+        const destination = path.join(test.directory, "moved.txt")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(root)
+          await fs.writeFile(target, "source original\n")
+          await fs.writeFile(destination, "destination original\n")
+          await fs.symlink(target, source)
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
+        const denied = new Error("external link denied")
+        const { ctx, calls } = makeCtx((input) =>
+          input.permission === "external_directory" ? Effect.die(denied) : Effect.void,
+        )
+
+        yield* expectFailure(
+          execute(
+            {
+              patchText: `*** Begin Patch\n*** Update File: ${path.relative(test.directory, source)}\n*** Move to: moved.txt\n@@\n-source original\n+source changed\n*** End Patch`,
+            },
+            ctx,
+          ),
+          denied.message,
+        )
+
+        const parent = yield* Effect.promise(() => fs.realpath(root))
+        expect(calls.filter((input) => input.permission === "external_directory")).toEqual([
+          expect.objectContaining({
+            patterns: [path.join(parent, "*").replaceAll("\\", "/")],
+            metadata: expect.objectContaining({
+              filepath: source,
+              canonicalPath: path.join(parent, path.basename(source)),
+              parentDir: parent,
+            }),
+          }),
+        ])
+        expect((yield* Effect.promise(() => fs.lstat(source))).isSymbolicLink()).toBe(true)
+        expect(yield* Effect.promise(() => fs.realpath(source))).toBe(yield* Effect.promise(() => fs.realpath(target)))
+        expect(yield* readText(target)).toBe("source original\n")
+        expect(yield* readText(destination)).toBe("destination original\n")
+      }),
+    )
+
+    it.instance("authorizes external symlink entries and targets separately", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const root = path.join(path.dirname(test.directory), `${path.basename(test.directory)}-external-move`)
+        const links = path.join(root, "links")
+        const targets = path.join(root, "targets")
+        const target = path.join(targets, "target.txt")
+        const source = path.join(links, "source.txt")
+        const destination = path.join(test.directory, "moved.txt")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(links, { recursive: true })
+          await fs.mkdir(targets, { recursive: true })
+          await fs.writeFile(target, "source original\n")
+          await fs.symlink(target, source)
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
+        const { ctx, calls } = makeCtx()
+
+        yield* execute(
+          {
+            patchText: `*** Begin Patch\n*** Update File: ${path.relative(test.directory, source)}\n*** Move to: moved.txt\n@@\n-source original\n+source changed\n*** End Patch`,
+          },
+          ctx,
+        )
+
+        const targetPath = yield* Effect.promise(() => fs.realpath(target))
+        const linkPath = path.join(yield* Effect.promise(() => fs.realpath(links)), path.basename(source))
+        const external = calls.filter((input) => input.permission === "external_directory")
+        expect(external).toHaveLength(2)
+        expect(external.map((input) => input.metadata.canonicalPath).sort()).toEqual([linkPath, targetPath].sort())
+        expect(external.map((input) => input.metadata.parentDir).sort()).toEqual(
+          [path.dirname(linkPath), path.dirname(targetPath)].sort(),
+        )
+        yield* expectReadFailure(source)
+        expect(yield* readText(target)).toBe("source original\n")
+        expect(yield* readText(destination)).toBe("source changed\n")
       }),
     )
 
