@@ -5,26 +5,30 @@ import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { Config } from "../../src/config/config"
 import { InstanceState } from "../../src/effect/instance-state"
-import { Memory } from "../../src/memory/memory"
+import { Memory, candidates } from "../../src/memory/memory"
 import { LLM } from "../../src/session/llm"
 import type { Info as SessionInfo } from "../../src/session/session"
 import { Provider } from "../../src/provider/provider"
-import { TestInstance } from "../fixture/fixture"
+import { provideInstanceEffect, TestInstance, tmpdir } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const configLayer = Layer.mock(Config.Service, {
   get: () => Effect.succeed({ memory: { enabled: false } }),
 })
-function memoryLayer(database = Database.defaultLayer) {
+const enabledConfigLayer = Layer.mock(Config.Service, {
+  get: () => Effect.succeed({ memory: { enabled: true } }),
+})
+function memoryLayer(database = Database.defaultLayer, config = configLayer) {
   return Memory.layer.pipe(
     Layer.provide(database),
-    Layer.provide(configLayer),
+    Layer.provide(config),
     Layer.provide(Layer.mock(Agent.Service, {})),
     Layer.provide(Layer.mock(Provider.Service, {})),
     Layer.provide(Layer.mock(LLM.Service, {})),
   )
 }
 const it = testEffect(memoryLayer())
+const enabled = testEffect(memoryLayer(Database.defaultLayer, enabledConfigLayer))
 
 function session(input: { projectID: string; metadata?: Record<string, unknown> }) {
   return {
@@ -95,6 +99,38 @@ it.instance("dedupes a disabled memory", () =>
   }),
 )
 
+it.instance("rejects an update that duplicates another memory", () =>
+  Effect.gen(function* () {
+    const memory = yield* Memory.Service
+    const first = yield* memory.create({ content: "Keep the first durable project memory" })
+    const second = yield* memory.create({ content: "Keep the second durable project memory" })
+    if (!first || !second) return
+
+    expect(yield* memory.update(second.id, { content: first.content })).toBeUndefined()
+    expect((yield* memory.list({ includeDisabled: true })).find((item) => item.id === second.id)?.content).toBe(
+      second.content,
+    )
+  }),
+)
+
+it.instance("keeps concurrent duplicate updates conflict-safe", () =>
+  Effect.gen(function* () {
+    const memory = yield* Memory.Service
+    const first = yield* memory.create({ content: "Keep the first concurrent update fixture" })
+    const second = yield* memory.create({ content: "Keep the second concurrent update fixture" })
+    if (!first || !second) return
+
+    const updated = yield* Effect.all(
+      [first.id, second.id].map((id) => memory.update(id, { content: "Converge on one durable memory value" })),
+      { concurrency: "unbounded" },
+    )
+    const rows = yield* memory.list({ includeDisabled: true })
+
+    expect(updated.filter((item) => item !== undefined)).toHaveLength(1)
+    expect(rows.filter((item) => item.content === "Converge on one durable memory value")).toHaveLength(1)
+  }),
+)
+
 it.instance("recreates a hard-deleted memory as a new active row", () =>
   Effect.gen(function* () {
     yield* project()
@@ -112,6 +148,30 @@ it.instance("recreates a hard-deleted memory as a new active row", () =>
   }),
 )
 
+it.instance(
+  "does not mutate another project's memories",
+  () =>
+    Effect.gen(function* () {
+      const memory = yield* Memory.Service
+      const directory = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true })),
+        (item) => Effect.promise(() => item[Symbol.asyncDispose]()),
+      )
+      const foreign = yield* memory
+        .create({ content: "Keep this memory private to the foreign project", scope: "project" })
+        .pipe(provideInstanceEffect(directory.path))
+      if (!foreign) return
+
+      expect(yield* memory.update(foreign.id, { content: "Cross-project update must not succeed" })).toBeUndefined()
+      yield* memory.remove(foreign.id)
+
+      const rows = yield* memory.list({ includeDisabled: true }).pipe(provideInstanceEffect(directory.path))
+      expect(rows.map((item) => item.id)).toContain(foreign.id)
+      expect(rows.find((item) => item.id === foreign.id)?.content).toBe(foreign.content)
+    }),
+  { git: true },
+)
+
 it.instance("selects only when session memory is enabled", () =>
   Effect.gen(function* () {
     const projectID = yield* project()
@@ -119,9 +179,9 @@ it.instance("selects only when session memory is enabled", () =>
     yield* memory.create({ content: "Prefer compact test fixtures in this project", scope: "project" })
 
     expect(yield* memory.select({ session: session({ projectID }) })).toEqual([])
-    expect(yield* memory.select({ session: session({ projectID, metadata: { memory: { status: "enabled" } } }) })).toHaveLength(
-      1,
-    )
+    expect(
+      yield* memory.select({ session: session({ projectID, metadata: { memory: { status: "enabled" } } }) }),
+    ).toHaveLength(1)
   }),
 )
 
@@ -219,17 +279,87 @@ it.instance("redacts JSON and SDK credentials before prompt reuse", () =>
   }),
 )
 
+it.instance("redacts standalone private keys and common bearer credentials", () =>
+  Effect.gen(function* () {
+    const memory = yield* Memory.Service
+    const pem = "-----BEGIN PRIVATE KEY-----\nZmFrZS1wcml2YXRlLWtleQ==\n-----END PRIVATE KEY-----"
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzbG9wY29kZSJ9.c2lnbmF0dXJlMTIzNDU2"
+    const google = "AIzaSyA12345678901234567890123456789012"
+    const password = "Password is correct-horse-battery-staple"
+    const created = yield* Effect.forEach(
+      [pem, `Keep this JWT private: ${jwt}`, `Google API key is ${google}`, password],
+      (content) => memory.create({ content }),
+      { concurrency: 1 },
+    )
+    const contents = [
+      ...created.flatMap((item) => (item ? [item.content] : [])),
+      ...(yield* memory.list({ includeDisabled: true })).map((item) => item.content),
+    ]
+
+    expect(
+      contents.some((content) =>
+        [pem, jwt, google, "correct-horse-battery-staple"].some((value) => content.includes(value)),
+      ),
+    ).toBe(false)
+  }),
+)
+
+it.instance("includes recent global memories when project memories exceed the prompt limit", () =>
+  Effect.gen(function* () {
+    const projectID = yield* project()
+    const memory = yield* Memory.Service
+    yield* Effect.forEach(
+      Array.from({ length: 9 }, (_, index) => `Project selection fixture number ${index}`),
+      (content) => memory.create({ content }),
+      { concurrency: 1, discard: true },
+    )
+    yield* Effect.sleep("2 millis")
+    const global = yield* memory.create({ content: "Use concise explanations in every project", scope: "global" })
+    if (!global) return
+    const selected = yield* memory.select({
+      session: session({ projectID, metadata: { memory: { status: "enabled" } } }),
+      limit: 8,
+    })
+
+    expect(selected).toHaveLength(8)
+    expect(selected.map((item) => item.id)).toContain(global?.id)
+    expect((yield* memory.list({ includeDisabled: true })).find((item) => item.id === global?.id)?.time.updated).toBe(
+      global?.time.updated,
+    )
+  }),
+)
+
+enabled.instance("requires explicit session consent before selecting global memories", () =>
+  Effect.gen(function* () {
+    const projectID = yield* project()
+    const memory = yield* Memory.Service
+    const global = yield* memory.create({ content: "Use concise explanations in every project", scope: "global" })
+    const projectMemory = yield* memory.create({ content: "Use Bun APIs in this project", scope: "project" })
+    if (!global || !projectMemory) return
+    const selected = yield* memory.select({ session: session({ projectID }) })
+
+    expect(selected.map((item) => item.id)).toContain(projectMemory?.id)
+    expect(selected.map((item) => item.id)).not.toContain(global?.id)
+  }),
+)
+
+it.effect("forces automatically extracted candidates to project scope", () =>
+  Effect.sync(() => {
+    expect(candidates('{"memories":[{"content":"Use concise explanations everywhere","scope":"global"}]}')).toEqual([
+      { content: "Use concise explanations everywhere", scope: "project" },
+    ])
+  }),
+)
+
 it.instance("lists and manages more than 100 memories", () =>
   Effect.gen(function* () {
-    yield* project()
+    const projectID = yield* project()
     const memory = yield* Memory.Service
-    const ids = (
-      yield* Effect.forEach(
-        Array.from({ length: 102 }, (_, index) => `Project memory fixture number ${index.toString().padStart(3, "0")}`),
-        (content) => memory.create({ content }),
-        { concurrency: 1 },
-      )
-    ).flatMap((item) => (item ? [item.id] : []))
+    const ids = (yield* Effect.forEach(
+      Array.from({ length: 102 }, (_, index) => `Project memory fixture number ${index.toString().padStart(3, "0")}`),
+      (content) => memory.create({ content }),
+      { concurrency: 1 },
+    )).flatMap((item) => (item ? [item.id] : []))
     const first = ids[0]!
     const last = ids.at(-1)!
     const listed = yield* memory.list({ includeDisabled: true })
@@ -245,5 +375,11 @@ it.instance("lists and manages more than 100 memories", () =>
 
     yield* memory.remove(last)
     expect((yield* memory.list({ includeDisabled: true })).some((item) => item.id === last)).toBe(false)
+    expect(
+      yield* memory.select({
+        session: session({ projectID, metadata: { memory: { status: "enabled" } } }),
+        limit: 1_000,
+      }),
+    ).toHaveLength(50)
   }),
 )

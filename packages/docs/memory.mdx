@@ -24,6 +24,8 @@ Turn it on in your SlopCode config with `memory.enabled`.
 
 Set it in global config for all projects, or in project config for one repo.
 
+Project config can enable project memories, but global memories are reused only after you explicitly opt the current session in with `/memory` or `/memories`.
+
 ---
 
 ## Limit context
@@ -39,21 +41,25 @@ Use `memory.limit` to choose how many relevant entries can be injected into a pr
 }
 ```
 
-The default is `8`.
+The default is `8`; SlopCode caps the effective value at `50`.
 
 ---
 
 ## Keep private
 
-Entries are stored in SlopCode's local SQLite database and stay private on your machine.
+Entries are stored only in SlopCode's local SQLite database.
 
 SlopCode redacts common secrets before persistence, including tokens, API keys, and passwords.
+
+Do not deliberately store credentials in memory. Redaction is a defense-in-depth safeguard, not a substitute for keeping secrets out of prompts.
 
 ---
 
 ## Inject briefly
 
 Relevant entries are added as temporary prompt context when a session uses them.
+
+That context is sent to the active model provider as part of the request. When automatic extraction is enabled, each completed turn also makes a separate request using the configured memory agent or selected small model; provider charges may apply and are not included in the parent session's displayed usage. Automatically extracted entries are restricted to the current project. Global entries require explicit creation and session opt-in.
 
 The entries themselves are not written to the transcript, shared with `/share`, included in `/export`, or copied by transcript commands.
 

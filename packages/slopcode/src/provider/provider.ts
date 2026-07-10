@@ -11,6 +11,7 @@ import { Plugin } from "../plugin"
 import { serviceUse } from "@slopcode-ai/core/effect/service-use"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
 import { ModelsDev } from "@slopcode-ai/core/models-dev"
+import { isLoopbackUrl } from "@slopcode-ai/core/util/url"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { InstallationVersion } from "@slopcode-ai/core/installation/version"
@@ -1068,7 +1069,9 @@ function normalizeBaseURL(value: string) {
 }
 
 function modelDiscoveryBaseURL(provider: Info, config: ConfigProviderInfo) {
-  return nonEmptyString(config.options?.baseURL) ?? nonEmptyString(config.api) ?? nonEmptyString(provider.options.baseURL)
+  return (
+    nonEmptyString(config.options?.baseURL) ?? nonEmptyString(config.api) ?? nonEmptyString(provider.options.baseURL)
+  )
 }
 
 function modelDiscoveryCandidates(value: string) {
@@ -1085,7 +1088,12 @@ function isOpenAICompatiblePackage(value: string | undefined) {
   return value === "@ai-sdk/openai-compatible" || value?.includes("openai-compatible") === true
 }
 
-function shouldDiscoverModels(provider: Info, config: ConfigProviderInfo, source: ModelsDev.Provider | undefined, npm: string) {
+function shouldDiscoverModels(
+  provider: Info,
+  config: ConfigProviderInfo,
+  source: ModelsDev.Provider | undefined,
+  npm: string,
+) {
   if (!isOpenAICompatiblePackage(npm)) return false
   if (!source) return true
   if (config.npm) return true
@@ -1182,12 +1190,13 @@ async function discoverOpenAICompatibleModels(
 ) {
   const baseURL = modelDiscoveryBaseURL(provider, config)
   const npm = config.npm ?? source?.npm ?? Object.values(provider.models)[0]?.api.npm ?? "@ai-sdk/openai-compatible"
-  if (!baseURL || !shouldDiscoverModels(provider, config, source, npm)) return
+  if (!baseURL || !isLoopbackUrl(baseURL) || !shouldDiscoverModels(provider, config, source, npm)) return
 
   for (const item of modelDiscoveryCandidates(baseURL)) {
     try {
       const response = await fetch(item.url, {
         headers: discoveryHeaders(provider),
+        redirect: "error",
         signal: AbortSignal.timeout(2_000),
       })
       if (!response.ok) continue
@@ -1195,7 +1204,9 @@ async function discoverOpenAICompatibleModels(
       if (models.length === 0) continue
       return {
         baseURL: item.baseURL,
-        models: Object.fromEntries(models.map((model) => [model.id, discoveredModel(provider, model, npm, item.baseURL)])),
+        models: Object.fromEntries(
+          models.map((model) => [model.id, discoveredModel(provider, model, npm, item.baseURL)]),
+        ),
       }
     } catch {}
   }
@@ -2129,9 +2140,7 @@ export function sort<T extends { id: string }>(models: T[]) {
     models,
     [
       (model) =>
-        model.id.includes("gpt-5.5-fast")
-          ? priority.length
-          : priority.findIndex((filter) => model.id.includes(filter)),
+        model.id.includes("gpt-5.5-fast") ? priority.length : priority.findIndex((filter) => model.id.includes(filter)),
       "desc",
     ],
     [(model) => (model.id.includes("latest") ? 0 : 1), "asc"],

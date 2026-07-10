@@ -7,6 +7,7 @@ import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
 import { PluginV2 } from "../../plugin"
 import { ProviderV2 } from "../../provider"
+import { isLoopbackUrl } from "../../util/url"
 
 type ProviderConfig = Config.Info["providers"] extends Record<string, infer T> | undefined ? T : never
 
@@ -97,12 +98,13 @@ function models(input: unknown) {
 
 async function discover(id: ProviderV2.ID, provider: ProviderConfig): Promise<Discovery | undefined> {
   const root = endpoint(provider)
-  if (!root || !local(id, provider)) return
+  if (!root || !local(id, provider) || !isLoopbackUrl(root)) return
   const npm = provider.api?.type === "aisdk" ? provider.api.package : "@ai-sdk/openai-compatible"
   for (const candidate of urls(root)) {
     try {
       const response = await fetch(candidate.url, {
         headers: headers(provider),
+        redirect: "error",
         signal: AbortSignal.timeout(2_000),
       })
       if (!response.ok) continue

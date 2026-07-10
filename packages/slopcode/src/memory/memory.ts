@@ -12,9 +12,10 @@ import { InstanceState } from "@/effect/instance-state"
 import { LLM } from "@/session/llm"
 import { Provider } from "@/provider/provider"
 import type { Info as SessionInfo } from "@/session/session"
-import { Context, Effect, Layer } from "effect"
+import { Cause, Context, Effect, Layer, Option } from "effect"
 import * as Stream from "effect/Stream"
-import { and, desc, eq, inArray, isNull } from "drizzle-orm"
+import { isSqlError } from "effect/unstable/sql/SqlError"
+import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
 import { LLMEvent } from "@slopcode-ai/llm"
 import PROMPT_MEMORY from "@/agent/prompt/memory.txt"
 
@@ -71,7 +72,11 @@ export function isEnabled(cfg: { memory?: { enabled?: boolean } }, session: Sess
 export function redact(input: string) {
   return input
     .replace(
-      /((["']?)\b(?:_*(?:[a-z0-9]+[_-])*(?:api[_-]?key|auth[_-]?token|token|secret|password|passwd|pwd|private[_-]?key|access[_-]?key(?:[_-]?id)?)|[a-z0-9]*(?:secretAccessKey|accessKey(?:Id)?|sessionToken|accessToken|refreshToken|idToken|apiKey|authToken|privateKey|clientSecret|clientToken))\2\s*[:=]\s*)(?:"([^"]*)"|'([^']*)'|[^\s"',;}\]]+)/gi,
+      /-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END (?:[A-Z0-9]+ )?PRIVATE KEY(?: BLOCK)?-----/g,
+      "[redacted]",
+    )
+    .replace(
+      /((["']?)\b(?:_*(?:[a-z0-9]+[_-])*(?:api[\s_-]?key|auth[\s_-]?token|token|secret|password|passwd|pwd|private[\s_-]?key|access[\s_-]?key(?:[\s_-]?id)?)|[a-z0-9]*(?:secretAccessKey|accessKey(?:Id)?|sessionToken|accessToken|refreshToken|idToken|apiKey|authToken|privateKey|clientSecret|clientToken))\2\s*(?:[:=]|\bis\b)\s*)(?:"([^"]*)"|'([^']*)'|[^\s"',;}\]]+)/gi,
       (_match: string, prefix: string, _quote: string, double: string | undefined, single: string | undefined) =>
         prefix + (double !== undefined ? '"[redacted]"' : single !== undefined ? "'[redacted]'" : "[redacted]"),
     )
@@ -80,6 +85,8 @@ export function redact(input: string) {
     .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[redacted]")
     .replace(/\bnpm_[A-Za-z0-9]{20,}\b/g, "[redacted]")
     .replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[redacted]")
+    .replace(/\bAIza[A-Za-z0-9_-]{35}\b/g, "[redacted]")
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[redacted]")
 }
 
 function normalize(input: string) {
@@ -97,6 +104,23 @@ function content(input: string) {
 
 function hash(input: string) {
   return Hash.sha256(normalize(input).toLowerCase())
+}
+
+function access(projectID: SessionInfo["projectID"]) {
+  return or(
+    and(eq(MemoryTable.scope, "project"), eq(MemoryTable.project_id, projectID)),
+    and(eq(MemoryTable.scope, "global"), isNull(MemoryTable.project_id)),
+  )
+}
+
+function conflict(input: unknown) {
+  if (!input || typeof input !== "object" || !("cause" in input)) return false
+  const error = isSqlError(input.cause)
+    ? input.cause
+    : Cause.isCause(input.cause)
+      ? Option.getOrUndefined(Cause.findErrorOption(input.cause))
+      : undefined
+  return isSqlError(error) && error.reason._tag === "UniqueViolation"
 }
 
 function fromRow(row: typeof MemoryTable.$inferSelect): CoreMemory.Info {
@@ -163,7 +187,7 @@ function prompt(input: { prompt: string; answer: string }) {
   ].join("\n")
 }
 
-function candidates(input: string) {
+export function candidates(input: string) {
   const clean = input.replace(/```(?:json)?/gi, "").replace(/```/g, "")
   const start = clean.indexOf("{")
   const end = clean.lastIndexOf("}")
@@ -178,7 +202,7 @@ function candidates(input: string) {
       return [
         {
           content: candidate.content,
-          scope: candidate.scope === "global" ? ("global" as const) : ("project" as const),
+          scope: "project" as const,
         },
       ]
     })
@@ -238,27 +262,17 @@ export const layer = Layer.effect(
     const listForProject = Effect.fn("Memory.listForProject")(function* (input: {
       projectID: SessionInfo["projectID"]
       includeDisabled?: boolean
+      includeGlobal?: boolean
       limit?: number
     }) {
       const visible = input.includeDisabled ? undefined : eq(MemoryTable.enabled, true)
-      const projectQuery = db
-        .select()
-        .from(MemoryTable)
-        .where(and(eq(MemoryTable.scope, "project"), eq(MemoryTable.project_id, input.projectID), visible))
-        .orderBy(desc(MemoryTable.time_updated))
-      const projectRows = yield* (input.limit === undefined
-        ? projectQuery.all()
-        : projectQuery.limit(input.limit).all()
-      ).pipe(Effect.orDie)
-      const globalQuery = db
-        .select()
-        .from(MemoryTable)
-        .where(and(eq(MemoryTable.scope, "global"), isNull(MemoryTable.project_id), visible))
-        .orderBy(desc(MemoryTable.time_updated))
-      const globalRows = yield* (input.limit === undefined ? globalQuery.all() : globalQuery.limit(input.limit).all()).pipe(
-        Effect.orDie,
-      )
-      return [...projectRows, ...globalRows].slice(0, input.limit).map(fromRow)
+      const allowed =
+        input.includeGlobal === false
+          ? and(eq(MemoryTable.scope, "project"), eq(MemoryTable.project_id, input.projectID))
+          : access(input.projectID)
+      const query = db.select().from(MemoryTable).where(and(allowed, visible)).orderBy(desc(MemoryTable.time_updated))
+      const rows = yield* (input.limit === undefined ? query.all() : query.limit(input.limit).all()).pipe(Effect.orDie)
+      return rows.map(fromRow)
     })
 
     const enabled = Effect.fn("Memory.enabled")(function* (session: SessionInfo) {
@@ -273,14 +287,19 @@ export const layer = Layer.effect(
     const select = Effect.fn("Memory.select")(function* (input: { session: SessionInfo; limit?: number }) {
       if (!(yield* enabled(input.session))) return []
       const cfg = yield* config.get()
+      const current = settings(input.session.metadata?.memory)
       const selected = yield* listForProject({
         projectID: input.session.projectID,
-        limit: input.limit ?? cfg.memory?.limit ?? 8,
+        includeGlobal: current?.status === "enabled",
+        limit: Math.min(Math.max(input.limit ?? cfg.memory?.limit ?? 8, 0), 50),
       })
       if (selected.length > 0) {
         yield* db
           .update(MemoryTable)
-          .set({ time_accessed: Date.now() })
+          .set({
+            time_accessed: Date.now(),
+            time_updated: sql`${MemoryTable.time_updated}`,
+          })
           .where(
             inArray(
               MemoryTable.id,
@@ -312,26 +331,51 @@ export const layer = Layer.effect(
     })
 
     const update = Effect.fn("Memory.update")(function* (id: CoreMemory.ID, input: CoreMemory.UpdateInput) {
-      const row = yield* db.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get().pipe(Effect.orDie)
+      const ctx = yield* InstanceState.context
+      const filter = and(eq(MemoryTable.id, id), access(ctx.project.id))
+      const row = yield* db.select().from(MemoryTable).where(filter).get().pipe(Effect.orDie)
       if (!row) return
       const value = input.content === undefined ? row.content : content(input.content)
       if (!value) return
-      yield* db
+      const fingerprint = hash(value)
+      const duplicate = yield* db
+        .select({ id: MemoryTable.id })
+        .from(MemoryTable)
+        .where(
+          and(
+            access(ctx.project.id),
+            eq(MemoryTable.scope, row.scope),
+            eq(MemoryTable.hash, fingerprint),
+            ne(MemoryTable.id, id),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      if (duplicate) return
+      const updated = yield* db
         .update(MemoryTable)
         .set({
           content: value,
-          hash: hash(value),
+          hash: fingerprint,
           enabled: input.enabled ?? row.enabled,
         })
-        .where(eq(MemoryTable.id, id))
-        .run()
-        .pipe(Effect.orDie)
-      const updated = yield* db.select().from(MemoryTable).where(eq(MemoryTable.id, id)).get().pipe(Effect.orDie)
+        .where(filter)
+        .returning()
+        .get()
+        .pipe(
+          Effect.catchIf(conflict, () => Effect.succeed(undefined)),
+          Effect.orDie,
+        )
       if (updated) return fromRow(updated)
     })
 
     const remove = Effect.fn("Memory.remove")(function* (id: CoreMemory.ID) {
-      yield* db.delete(MemoryTable).where(eq(MemoryTable.id, id)).run().pipe(Effect.orDie)
+      const ctx = yield* InstanceState.context
+      yield* db
+        .delete(MemoryTable)
+        .where(and(eq(MemoryTable.id, id), access(ctx.project.id)))
+        .run()
+        .pipe(Effect.orDie)
     })
 
     const extract = Effect.fn("Memory.extract")(

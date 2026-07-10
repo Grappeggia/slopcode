@@ -61,13 +61,25 @@ function variants(model: ModelsDev.Model, packageName?: string) {
   })
 }
 
+function effort(model: ModelsDev.Model) {
+  if (!model.reasoning_options) return "medium"
+  const option = model.reasoning_options.find((item) => item.type === "effort")
+  if (!option) return
+  const values = option.values.filter((item): item is string => typeof item === "string")
+  if (values.includes("medium")) return "medium"
+  if (values.includes("high")) return "high"
+  return values[0]
+}
+
 function defaults(model: ModelsDev.Model, packageName?: string) {
+  const reasoning = packageName === "@ai-sdk/openai" && model.reasoning
+  const level = reasoning ? effort(model) : undefined
   return ModelRequest.normalizeAiSdkOptions(
     packageName,
-    packageName === "@ai-sdk/openai" && model.reasoning
+    reasoning
       ? {
           store: false,
-          reasoningEffort: "medium",
+          ...(level ? { reasoningEffort: level } : {}),
           reasoningSummary: "auto",
           include: ["reasoning.encrypted_content"],
         }

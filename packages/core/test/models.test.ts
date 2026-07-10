@@ -154,8 +154,59 @@ describe("ModelsDev Service", () => {
       )
       expect(result.slopcode?.models["big-pickle"]).toBeDefined()
       expect(result["slopcode-go"]?.models).toBeDefined()
+      expect(Object.keys(result.openai?.models ?? {}).sort()).toEqual([
+        "gpt-5.6",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+      ])
+      expect(result.openai?.models["gpt-5.6"]?.reasoning_options).toEqual([
+        { type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] },
+      ])
+      expect(result.openai?.models["gpt-5.6"]?.modalities?.input).toEqual(["text", "image", "pdf"])
+      expect(result.openai?.models["gpt-5.6"]?.cost).toMatchObject({
+        tiers: [{ input: 10, output: 45, tier: { type: "context", size: 272_000 } }],
+        context_over_200k: { input: 10, output: 45 },
+      })
+      expect(result.openai?.models["gpt-5.6"]?.experimental?.modes?.fast?.provider).toEqual({
+        body: { service_tier: "priority" },
+      })
       const final = yield* Ref.get(state)
       expect(final.calls).toEqual([])
+    }),
+  )
+
+  it.live("supplements a stale OpenAI cache with bundled GPT-5.6 models", () =>
+    Effect.gen(function* () {
+      yield* writeCache({
+        openai: {
+          id: "openai",
+          name: "OpenAI",
+          env: ["OPENAI_API_KEY"],
+          npm: "@ai-sdk/openai",
+          models: {
+            "gpt-5.5": {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              release_date: "2026-04-23",
+              attachment: true,
+              reasoning: true,
+              temperature: false,
+              tool_call: true,
+              limit: { context: 1_050_000, input: 922_000, output: 128_000 },
+            },
+          },
+        },
+      })
+      const state = yield* Ref.make(initialState)
+      const result = yield* provided(
+        state,
+        ModelsDev.Service.use((service) => service.get()),
+      )
+
+      expect(result.openai?.models["gpt-5.5"]).toBeDefined()
+      expect(result.openai?.models["gpt-5.6"]).toBeDefined()
+      expect((yield* Ref.get(state)).calls).toEqual([])
     }),
   )
 

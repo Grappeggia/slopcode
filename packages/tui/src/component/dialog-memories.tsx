@@ -41,7 +41,9 @@ export function DialogMemories(props: { sessionID: string }) {
   const [loading, setLoading] = createSignal(false)
   const session = createMemo(() => sync.session.get(props.sessionID))
   const enabled = createMemo(() => active(session()?.metadata, sync.data.config.memory))
-  const inherited = createMemo(() => session()?.metadata?.memory === undefined && sync.data.config.memory?.enabled === true)
+  const inherited = createMemo(
+    () => session()?.metadata?.memory === undefined && sync.data.config.memory?.enabled === true,
+  )
 
   async function refresh() {
     setLoading(true)
@@ -56,10 +58,11 @@ export function DialogMemories(props: { sessionID: string }) {
   async function sessionToggle() {
     const current = session()
     if (!current) return
-    await sdk.client.session.update({
+    const result = await sdk.client.session.update({
       sessionID: props.sessionID,
       metadata: metadata(current.metadata, { status: enabled() ? "disabled" : "enabled" }),
     })
+    if (result.error) toast.show({ variant: "error", message: "Failed to update session memory" })
   }
 
   async function add(scope: "project" | "global") {

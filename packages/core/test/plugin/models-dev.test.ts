@@ -228,6 +228,14 @@ describe("ModelsDevPlugin", () => {
           const legacy = yield* catalog.model.get(providerID, ModelV2.ID.make("gpt-5.5"))
           expect(legacy.variants.map((variant) => variant.id)).toEqual(["fast", "pro"])
           expect(models.map((model) => model.id)).not.toContain("gpt-5.5-fast")
+
+          const pro = yield* catalog.model.get(providerID, ModelV2.ID.make("gpt-5-pro"))
+          expect(pro.request.options).toMatchObject({
+            store: false,
+            reasoningEffort: "high",
+            reasoningSummary: "auto",
+            include: ["reasoning.encrypted_content"],
+          })
         }).pipe(Effect.provide(ModelsDev.defaultLayer)),
       (previous) =>
         Effect.sync(() => {

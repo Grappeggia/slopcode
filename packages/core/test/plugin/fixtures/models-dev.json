@@ -151,6 +151,19 @@
             "pro": { "provider": { "body": { "reasoning": { "mode": "pro" } } } }
           }
         }
+      },
+      "gpt-5-pro": {
+        "id": "gpt-5-pro",
+        "name": "GPT-5 Pro",
+        "family": "gpt-pro",
+        "release_date": "2025-10-06",
+        "attachment": true,
+        "reasoning": true,
+        "reasoning_options": [{ "type": "effort", "values": ["high"] }],
+        "temperature": false,
+        "tool_call": true,
+        "modalities": { "input": ["text", "image"], "output": ["text"] },
+        "limit": { "context": 400000, "input": 272000, "output": 128000 }
       }
     }
   }

@@ -1,8 +1,117 @@
 // Auto-generated fallback catalog for local development
 // Generated from models.dev API snapshot
-// Contains 60 slopcode models and 14 slopcode-go models
+// Contains the OpenAI GPT-5.6 family plus 60 slopcode models and 14 slopcode-go models
+
+function gpt(id: string, name: string, family: string, description: string, input: number, output: number) {
+  return {
+    id,
+    name,
+    description,
+    family,
+    attachment: true,
+    reasoning: true,
+    reasoning_options: [{ type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] }],
+    tool_call: true,
+    structured_output: true,
+    temperature: false,
+    knowledge: "2026-02-16",
+    release_date: "2026-07-09",
+    last_updated: "2026-07-09",
+    modalities: {
+      input: ["text", "image", "pdf"],
+      output: ["text"],
+    },
+    open_weights: false,
+    limit: {
+      context: 1_050_000,
+      input: 922_000,
+      output: 128_000,
+    },
+    cost: {
+      input,
+      output,
+      cache_read: input / 10,
+      cache_write: input * 1.25,
+      tiers: [
+        {
+          input: input * 2,
+          output: output * 1.5,
+          cache_read: input / 5,
+          cache_write: input * 2.5,
+          tier: { type: "context", size: 272_000 },
+        },
+      ],
+      context_over_200k: {
+        input: input * 2,
+        output: output * 1.5,
+        cache_read: input / 5,
+        cache_write: input * 2.5,
+      },
+    },
+    experimental: {
+      modes: {
+        fast: {
+          cost: {
+            input: input * 2,
+            output: output * 2,
+            cache_read: input / 5,
+            cache_write: input * 2.5,
+          },
+          provider: {
+            body: { service_tier: "priority" },
+          },
+        },
+        pro: {
+          provider: {
+            body: { reasoning: { mode: "pro" } },
+          },
+        },
+      },
+    },
+  }
+}
 
 export const fallback: Record<string, Record<string, unknown>> = {
+  openai: {
+    id: "openai",
+    env: ["OPENAI_API_KEY"],
+    npm: "@ai-sdk/openai",
+    name: "OpenAI",
+    models: {
+      "gpt-5.6": gpt(
+        "gpt-5.6",
+        "GPT-5.6",
+        "gpt",
+        "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+        5,
+        30,
+      ),
+      "gpt-5.6-sol": gpt(
+        "gpt-5.6-sol",
+        "GPT-5.6 Sol",
+        "gpt",
+        "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+        5,
+        30,
+      ),
+      "gpt-5.6-terra": gpt(
+        "gpt-5.6-terra",
+        "GPT-5.6 Terra",
+        "gpt-mini",
+        "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
+        2.5,
+        15,
+      ),
+      "gpt-5.6-luna": gpt(
+        "gpt-5.6-luna",
+        "GPT-5.6 Luna",
+        "gpt-nano",
+        "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
+        1,
+        6,
+      ),
+    },
+  },
   slopcode: {
     id: "slopcode",
     env: ["SLOPCODE_API_KEY"],

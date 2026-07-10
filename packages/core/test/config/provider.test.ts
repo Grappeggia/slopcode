@@ -320,12 +320,102 @@ describe("ConfigProviderPlugin.Plugin", () => {
       expect(server.requests).toContain("Bearer test-key")
     }),
   )
+
+  it.live("does not discover models or forward credentials to non-loopback endpoints", () =>
+    Effect.gen(function* () {
+      const server = yield* Effect.acquireRelease(
+        Effect.promise(() => modelsServer("0.0.0.0")),
+        (server) => Effect.sync(() => server.server.close()),
+      )
+      const catalog = yield* Catalog.Service
+      const plugin = yield* PluginV2.Service
+      const config = Config.Service.of({
+        entries: () =>
+          Effect.succeed([
+            new Config.Document({
+              type: "document",
+              info: decode({
+                providers: {
+                  openwebui: {
+                    request: { body: { apiKey: "must-not-leak", baseURL: server.url } },
+                    models: { manual: { name: "Manual" } },
+                  },
+                },
+              }),
+            }),
+          ]),
+      })
+
+      yield* plugin.add({
+        ...ConfigProviderPlugin.Plugin,
+        effect: ConfigProviderPlugin.Plugin.effect.pipe(
+          Effect.provideService(Config.Service, config),
+          Effect.provideService(Catalog.Service, catalog),
+        ),
+      })
+
+      expect(server.requests).toEqual([])
+    }),
+  )
+
+  it.live("does not follow model discovery redirects away from loopback", () =>
+    Effect.gen(function* () {
+      const target = yield* Effect.acquireRelease(
+        Effect.promise(() => modelsServer("0.0.0.0")),
+        (server) => Effect.sync(() => server.server.close()),
+      )
+      const redirect = yield* Effect.acquireRelease(
+        Effect.promise(() => modelsServer("127.0.0.1", target.url)),
+        (server) => Effect.sync(() => server.server.close()),
+      )
+      const catalog = yield* Catalog.Service
+      const plugin = yield* PluginV2.Service
+      const config = Config.Service.of({
+        entries: () =>
+          Effect.succeed([
+            new Config.Document({
+              type: "document",
+              info: decode({
+                providers: {
+                  openwebui: {
+                    request: {
+                      headers: { "x-api-key": "must-not-leak" },
+                      body: { apiKey: "must-not-leak", baseURL: redirect.url },
+                    },
+                    models: { manual: { name: "Manual" } },
+                  },
+                },
+              }),
+            }),
+          ]),
+      })
+
+      yield* plugin.add({
+        ...ConfigProviderPlugin.Plugin,
+        effect: ConfigProviderPlugin.Plugin.effect.pipe(
+          Effect.provideService(Config.Service, config),
+          Effect.provideService(Catalog.Service, catalog),
+        ),
+      })
+
+      expect(redirect.requests).toContain("must-not-leak")
+      expect(target.requests).toEqual([])
+    }),
+  )
 })
 
-async function modelsServer(): Promise<{ server: Server; url: string; requests: string[] }> {
+async function modelsServer(
+  host = "127.0.0.1",
+  redirect?: string,
+): Promise<{ server: Server; url: string; requests: string[] }> {
   const requests: string[] = []
   const server = createServer((req, res) => {
-    requests.push(String(req.headers.authorization ?? ""))
+    requests.push(String(req.headers.authorization ?? ""), String(req.headers["x-api-key"] ?? ""))
+    if (redirect) {
+      res.writeHead(302, { location: `${redirect}/api/models` })
+      res.end()
+      return
+    }
     const url = new URL(req.url ?? "/", "http://localhost")
     if (url.pathname !== "/api/models") {
       res.writeHead(404)
@@ -343,13 +433,13 @@ async function modelsServer(): Promise<{ server: Server; url: string; requests: 
 
   return await new Promise((resolve, reject) => {
     server.once("error", reject)
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, host, () => {
       const address = server.address()
       if (!address || typeof address === "string") {
         reject(new Error("missing test server address"))
         return
       }
-      resolve({ server, url: `http://127.0.0.1:${address.port}`, requests })
+      resolve({ server, url: `http://${host}:${address.port}`, requests })
     })
   })
 }

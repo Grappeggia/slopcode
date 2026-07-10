@@ -213,7 +213,18 @@ export const layer = Layer.effect(
     const mergeFallback = (data?: Record<string, Provider>) => {
       if (Flag.SLOPCODE_MODELS_PATH !== undefined) return data
       if (Object.keys(fallback).length === 0) return data
-      return { ...fallback, ...(data ?? {}) }
+      const result = { ...fallback, ...(data ?? {}) }
+      if (data?.openai && fallback.openai) {
+        result.openai = {
+          ...fallback.openai,
+          ...data.openai,
+          models: {
+            ...fallback.openai.models,
+            ...data.openai.models,
+          },
+        }
+      }
+      return result
     }
 
     const fetchAndWrite = Effect.fn("ModelsDev.fetchAndWrite")(function* () {
