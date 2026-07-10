@@ -31,6 +31,7 @@
     "electron-store": "11.0.2",
     "electron-updater": "6.8.9",
     "electron-window-state": "^5.0.3",
+    "jsonc-parser": "3.3.1",
     "marked": "^15"
   },
   "devDependencies": {
@@ -51,6 +52,7 @@
     "electron": "42.3.3",
     "electron-builder": "26.15.2",
     "electron-vite": "^5",
+    "slopcode": "workspace:*",
     "solid-js": "catalog:",
     "sury": "11.0.0-alpha.4",
     "typescript": "~5.6.2",

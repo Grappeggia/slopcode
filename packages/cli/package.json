@@ -17,13 +17,13 @@
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
+    "@opentui/core": "catalog:",
+    "@opentui/solid": "catalog:",
+    "@parcel/watcher": "2.5.1",
     "@slopcode-ai/core": "workspace:*",
     "@slopcode-ai/sdk": "workspace:*",
     "@slopcode-ai/server": "workspace:*",
     "@slopcode-ai/tui": "workspace:*",
-    "@opentui/core": "catalog:",
-    "@opentui/solid": "catalog:",
-    "@parcel/watcher": "2.5.1",
     "effect": "catalog:",
     "solid-js": "catalog:"
   },

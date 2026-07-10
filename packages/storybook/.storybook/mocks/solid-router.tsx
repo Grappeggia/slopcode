@@ -11,6 +11,10 @@ export function useNavigate() {
   return () => undefined
 }
 
+export function useSearchParams() {
+  return [{}, () => undefined] as const
+}
+
 export function useLocation() {
   return {
     pathname: "/story/session/story-session",
