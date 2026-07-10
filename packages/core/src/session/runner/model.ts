@@ -167,7 +167,12 @@ export const locationLayer = Layer.effect(
           .map((model) => ({ model, variant: undefined }))[0]
         const selected = preferred ?? fallback ?? available
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
-        return yield* resolve(session, selected.model, yield* catalog.provider.get(selected.model.providerID), selected.variant)
+        return yield* resolve(
+          session,
+          selected.model,
+          yield* catalog.provider.get(selected.model.providerID),
+          selected.variant,
+        )
       }),
     })
   }),

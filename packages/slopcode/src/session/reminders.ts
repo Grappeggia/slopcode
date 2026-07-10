@@ -85,7 +85,9 @@ export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
   if (input.agent.name !== "memory") {
     const memory = yield* Effect.serviceOption(Memory.Service)
     if (Option.isSome(memory)) {
-      const items = yield* memory.value.select({ session: input.session }).pipe(Effect.catchCause(() => Effect.succeed([])))
+      const items = yield* memory.value
+        .select({ session: input.session })
+        .pipe(Effect.catchCause(() => Effect.succeed([])))
       if (items.length > 0) {
         userMessage.parts.push({
           id: PartID.ascending(),

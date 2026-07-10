@@ -2911,6 +2911,296 @@
         ]
       }
     },
+    "/memory": {
+      "get": {
+        "tags": ["memory"],
+        "operationId": "memory.list",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "includeDisabled",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "enum": ["true", "false"]
+                }
+              ]
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored memories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Memory"
+                  },
+                  "description": "Stored memories"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          }
+        },
+        "description": "List local memories available to the current project.",
+        "summary": "List memories",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.memory.list({\n  ...\n})"
+          }
+        ]
+      },
+      "post": {
+        "tags": ["memory"],
+        "operationId": "memory.create",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Created memory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Memory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Create a local memory for the current project or globally.",
+        "summary": "Create memory",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryCreateInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.memory.create({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/memory/{memoryID}": {
+      "patch": {
+        "tags": ["memory"],
+        "operationId": "memory.update",
+        "parameters": [
+          {
+            "name": "memoryID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^mem_"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated memory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Memory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Update the contents or enabled state of a local memory.",
+        "summary": "Update memory",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryUpdateInput"
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.memory.update({\n  ...\n})"
+          }
+        ]
+      },
+      "delete": {
+        "tags": ["memory"],
+        "operationId": "memory.delete",
+        "parameters": [
+          {
+            "name": "memoryID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^mem_"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted memory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean",
+                  "description": "Deleted memory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Delete a local memory.",
+        "summary": "Delete memory",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.memory.delete({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/mcp": {
       "get": {
         "tags": ["mcp"],
@@ -19753,6 +20043,19 @@
           "snapshot": {
             "type": "boolean"
           },
+          "memory": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "limit": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "additionalProperties": false
+          },
           "plugin": {
             "type": "array",
             "items": {
@@ -19846,6 +20149,9 @@
                 "$ref": "#/components/schemas/AgentConfig"
               },
               "explore": {
+                "$ref": "#/components/schemas/AgentConfig"
+              },
+              "memory": {
                 "$ref": "#/components/schemas/AgentConfig"
               },
               "title": {
@@ -21123,6 +21429,56 @@
           }
         },
         "required": ["name", "extensions", "enabled"],
+        "additionalProperties": false
+      },
+      "Memory": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^mem_"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/MemoryScope"
+          },
+          "projectID": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "sourceSessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "sourceMessageID": {
+            "type": "string",
+            "pattern": "^msg"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "updated": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "accessed": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["created", "updated"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "scope", "content", "enabled", "time"],
         "additionalProperties": false
       },
       "MCPStatusConnected": {
@@ -25381,6 +25737,38 @@
           }
         },
         "required": ["action", "effect", "resource"],
+        "additionalProperties": false
+      },
+      "MemoryScope": {
+        "type": "string",
+        "enum": ["project", "global"]
+      },
+      "MemoryCreateInput": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/MemoryScope"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": ["content"],
+        "additionalProperties": false
+      },
+      "MemoryUpdateInput": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
         "additionalProperties": false
       },
       "ProjectDirectories": {
@@ -30446,6 +30834,10 @@
     {
       "name": "instance",
       "description": "Experimental HttpApi instance read routes."
+    },
+    {
+      "name": "memory",
+      "description": "Local memory management routes."
     },
     {
       "name": "mcp",

@@ -3416,7 +3416,7 @@ describe("ProviderTransform.variants", () => {
   })
 
   describe("@ai-sdk/openai", () => {
-    ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].forEach((id) => {
+    ;["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].forEach((id) => {
       test(`${id} falls back to the exact GPT-5.6 effort variants`, () => {
         const result = ProviderTransform.variants(
           createMockModel({
@@ -3441,7 +3441,7 @@ describe("ProviderTransform.variants", () => {
     })
 
     test("does not infer max for generic GPT-5.2+ models", () => {
-      ["gpt-5.2", "gpt-5.7"].forEach((id) => {
+      ;["gpt-5.2", "gpt-5.7"].forEach((id) => {
         const result = ProviderTransform.variants(
           createMockModel({
             id,

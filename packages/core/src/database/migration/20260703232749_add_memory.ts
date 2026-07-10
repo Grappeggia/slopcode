@@ -21,7 +21,9 @@ export default {
           CONSTRAINT \`fk_memory_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
         );
       `)
-      yield* tx.run(`CREATE INDEX \`memory_project_enabled_time_idx\` ON \`memory\` (\`project_id\`,\`enabled\`,\`time_updated\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`memory_project_enabled_time_idx\` ON \`memory\` (\`project_id\`,\`enabled\`,\`time_updated\`);`,
+      )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`memory_global_scope_hash_idx\` ON \`memory\` (\`scope\`,\`hash\`) WHERE "memory"."project_id" IS NULL;`,
       )
