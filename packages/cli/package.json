@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@slopcode-ai/cli",
-  "version": "0.2.188",
+  "version": "0.2.189",
   "type": "module",
   "license": "MIT",
   "bin": {
