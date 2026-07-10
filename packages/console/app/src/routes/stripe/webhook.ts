@@ -50,6 +50,10 @@ function affected(result: unknown) {
   throw new Error("Database mutation count not found")
 }
 
+async function record(tx: Database.TxOrDb, payment: typeof PaymentTable.$inferInsert) {
+  return affected(await tx.insert(PaymentTable).ignore().values(payment)) > 0
+}
+
 export async function processStripeEvent<T>(id: string, callback: () => Promise<T>) {
   return Database.transaction(async (tx) => {
     const claim = await tx.insert(StripeWebhookEventTable).ignore().values({ id })
@@ -115,6 +119,18 @@ export async function processStripeWebhook(body: Stripe.Event, stripe = Billing.
         if (!paymentMethod || typeof paymentMethod === "string") throw new Error("Payment method not expanded")
 
         await Database.transaction(async (tx) => {
+          if (
+            !(await record(tx, {
+              workspaceID,
+              id: Identifier.create("payment"),
+              amount: centsToMicroCents(amountInCents),
+              paymentID,
+              invoiceID,
+              customerID,
+            }))
+          )
+            return
+
           await tx
             .update(BillingTable)
             .set({
@@ -132,14 +148,6 @@ export async function processStripeWebhook(body: Stripe.Event, stripe = Billing.
                   }),
             })
             .where(eq(BillingTable.workspaceID, workspaceID))
-          await tx.insert(PaymentTable).values({
-            workspaceID,
-            id: Identifier.create("payment"),
-            amount: centsToMicroCents(amountInCents),
-            paymentID,
-            invoiceID,
-            customerID,
-          })
         })
       })
     }
@@ -213,13 +221,9 @@ export async function processStripeWebhook(body: Stripe.Event, stripe = Billing.
             }
           })
 
-          await Database.use(() =>
-            Referral.completeFromLiteSubscription({
-              workspaceID,
-              userID,
-            }),
-          ).catch((error) => {
-            console.error("Referral sync failed", error)
+          await Referral.completeFromLiteSubscription({
+            workspaceID,
+            userID,
           })
         })
       }
@@ -282,7 +286,7 @@ export async function processStripeWebhook(body: Stripe.Event, stripe = Billing.
         if (!workspaceID) throw new Error("Workspace ID not found for customer")
 
         await Database.use((tx) =>
-          tx.insert(PaymentTable).values({
+          record(tx, {
             workspaceID,
             id: Identifier.create("payment"),
             amount: centsToMicroCents(amountInCents),
@@ -313,6 +317,18 @@ export async function processStripeWebhook(body: Stripe.Event, stripe = Billing.
             expand: ["payments"],
           })
           await Database.transaction(async (tx) => {
+            if (
+              !(await record(tx, {
+                workspaceID: Actor.workspace(),
+                id: Identifier.create("payment"),
+                amount: centsToMicroCents(amountInCents),
+                invoiceID,
+                paymentID: invoice.payments?.data[0].payment.payment_intent as string,
+                customerID,
+              }))
+            )
+              return
+
             await tx
               .update(BillingTable)
               .set({
@@ -321,14 +337,6 @@ export async function processStripeWebhook(body: Stripe.Event, stripe = Billing.
                 timeReloadError: null,
               })
               .where(eq(BillingTable.workspaceID, Actor.workspace()))
-            await tx.insert(PaymentTable).values({
-              workspaceID: Actor.workspace(),
-              id: Identifier.create("payment"),
-              amount: centsToMicroCents(amountInCents),
-              invoiceID,
-              paymentID: invoice.payments?.data[0].payment.payment_intent as string,
-              customerID,
-            })
           })
         })
       }

@@ -92,8 +92,8 @@ export const PaymentTable = mysqlTable(
     ...workspaceColumns,
     ...timestamps,
     customerID: varchar("customer_id", { length: 255 }),
-    invoiceID: varchar("invoice_id", { length: 255 }),
-    paymentID: varchar("payment_id", { length: 255 }),
+    invoiceID: varchar("invoice_id", { length: 255 }).collate("utf8mb4_bin"),
+    paymentID: varchar("payment_id", { length: 255 }).collate("utf8mb4_bin"),
     amount: bigint("amount", { mode: "number" }).notNull(),
     timeRefunded: utc("time_refunded"),
     enrichment: json("enrichment").$type<
@@ -115,7 +115,7 @@ export const PaymentTable = mysqlTable(
 )
 
 export const StripeWebhookEventTable = mysqlTable("stripe_webhook_event", {
-  id: varchar("id", { length: 255 }).notNull().primaryKey(),
+  id: varchar("id", { length: 255 }).collate("utf8mb4_bin").notNull().primaryKey(),
   timeCreated: utc("time_created").notNull().defaultNow(),
 })
 

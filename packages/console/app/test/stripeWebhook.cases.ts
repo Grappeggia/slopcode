@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import type { Stripe } from "stripe"
 import { Database, eq, sql } from "@slopcode-ai/console-core/drizzle/index.js"
-import { BillingTable, PaymentTable, StripeWebhookEventTable } from "@slopcode-ai/console-core/schema/billing.sql.js"
+import {
+  BillingTable,
+  LiteTable,
+  PaymentTable,
+  StripeWebhookEventTable,
+} from "@slopcode-ai/console-core/schema/billing.sql.js"
+import { UserTable } from "@slopcode-ai/console-core/schema/user.sql.js"
 import { WorkspaceTable } from "@slopcode-ai/console-core/schema/workspace.sql.js"
 import { centsToMicroCents } from "@slopcode-ai/console-core/util/price.js"
 
@@ -30,7 +36,7 @@ const customerID = "cus_stripe"
 type Client = NonNullable<Parameters<typeof processStripeWebhook>[1]>
 type Harness = Pick<typeof import("../../core/test/database"), "testDatabase" | "useTestDatabase">
 
-function checkout(id = "evt_checkout") {
+function checkout(id = "evt_checkout", paymentID = "pi_checkout", invoiceID = "in_checkout") {
   return {
     id,
     type: "checkout.session.completed",
@@ -40,24 +46,64 @@ function checkout(id = "evt_checkout") {
         mode: "payment",
         metadata: { workspaceID, amount: "2000" },
         customer: customerID,
-        payment_intent: "pi_checkout",
-        invoice: "in_checkout",
+        payment_intent: paymentID,
+        invoice: invoiceID,
       },
     },
   } as unknown as Stripe.Event
 }
 
-function manual(id = "evt_manual") {
+function manual(id = "evt_manual", invoiceID = "in_manual") {
   return {
     id,
     type: "invoice.payment_succeeded",
     created: 1_700_000_000,
     data: {
       object: {
-        id: "in_manual",
+        id: invoiceID,
         billing_reason: "manual",
         metadata: { workspaceID, amount: "1500" },
         customer: customerID,
+      },
+    },
+  } as unknown as Stripe.Event
+}
+
+function subscription(id = "evt_subscription", invoiceID = "in_subscription") {
+  return {
+    id,
+    type: "invoice.payment_succeeded",
+    created: 1_700_000_000,
+    data: {
+      object: {
+        id: invoiceID,
+        billing_reason: "subscription_cycle",
+        amount_paid: 1000,
+        customer: customerID,
+        currency: "usd",
+        parent: { subscription_details: { subscription: "sub_stripe" } },
+        lines: { data: [{ pricing: { price_details: { product: "prod_lite" } } }] },
+      },
+    },
+  } as unknown as Stripe.Event
+}
+
+function lite(id = "evt_lite") {
+  return {
+    id,
+    type: "customer.subscription.created",
+    created: 1_700_000_000,
+    data: {
+      object: {
+        id: "sub_lite",
+        customer: customerID,
+        latest_invoice: "in_lite",
+        default_payment_method: "pm_lite",
+        metadata: {
+          type: "lite",
+          workspaceID,
+          userID: "user_stripe",
+        },
       },
     },
   } as unknown as Stripe.Event
@@ -105,6 +151,7 @@ export function stripeWebhookTests(harness: Harness) {
     beforeEach(async () => {
       await harness.testDatabase().delete(StripeWebhookEventTable)
       await harness.testDatabase().delete(PaymentTable)
+      await harness.testDatabase().delete(LiteTable)
     })
 
     test("does not double-credit a duplicate checkout top-up", async () => {
@@ -161,6 +208,187 @@ export function stripeWebhookTests(harness: Harness) {
       expect(result.payments).toHaveLength(1)
       expect(result.events).toHaveLength(1)
       expect(calls).toBe(1)
+    })
+
+    test("treats a new checkout event for an existing payment as successful", async () => {
+      await seed()
+      const client = {
+        paymentIntents: {
+          retrieve: async () => ({
+            payment_method: {
+              id: "pm_checkout",
+              type: "card",
+              card: { last4: "4242" },
+            },
+          }),
+        },
+      } as unknown as Client
+
+      await harness.useTestDatabase(async () => {
+        expect(await processStripeWebhook(checkout("evt_checkout_first"), client)).toBeUndefined()
+        expect(await processStripeWebhook(checkout("evt_checkout_second"), client)).toBeUndefined()
+      })
+
+      const result = await state()
+      expect(result.billing.balance).toBe(centsToMicroCents(2000))
+      expect(result.payments).toHaveLength(1)
+      expect(result.events).toHaveLength(2)
+    })
+
+    test("treats a new manual event for an existing invoice as successful", async () => {
+      await seed()
+      const client = {
+        invoices: {
+          retrieve: async () => ({
+            payments: { data: [{ payment: { payment_intent: "pi_manual" } }] },
+          }),
+        },
+      } as unknown as Client
+
+      await harness.useTestDatabase(async () => {
+        expect(await processStripeWebhook(manual("evt_manual_first"), client)).toBeUndefined()
+        expect(await processStripeWebhook(manual("evt_manual_second"), client)).toBeUndefined()
+      })
+
+      const result = await state()
+      expect(result.billing.balance).toBe(centsToMicroCents(1500))
+      expect(result.payments).toHaveLength(1)
+      expect(result.events).toHaveLength(2)
+    })
+
+    test("credits concurrent checkout events sharing identifiers only once", async () => {
+      await seed()
+      const client = {
+        paymentIntents: {
+          retrieve: async () => ({
+            payment_method: {
+              id: "pm_checkout",
+              type: "card",
+              card: { last4: "4242" },
+            },
+          }),
+        },
+      } as unknown as Client
+
+      await harness.useTestDatabase(() =>
+        Promise.all([
+          processStripeWebhook(checkout("evt_checkout_concurrent_one"), client),
+          processStripeWebhook(checkout("evt_checkout_concurrent_two"), client),
+        ]),
+      )
+
+      const result = await state()
+      expect(result.billing.balance).toBe(centsToMicroCents(2000))
+      expect(result.payments).toHaveLength(1)
+      expect(result.events).toHaveLength(2)
+    })
+
+    test("credits concurrent manual events sharing identifiers only once", async () => {
+      await seed()
+      const client = {
+        invoices: {
+          retrieve: async () => ({
+            payments: { data: [{ payment: { payment_intent: "pi_manual" } }] },
+          }),
+        },
+      } as unknown as Client
+
+      await harness.useTestDatabase(() =>
+        Promise.all([
+          processStripeWebhook(manual("evt_manual_concurrent_one"), client),
+          processStripeWebhook(manual("evt_manual_concurrent_two"), client),
+        ]),
+      )
+
+      const result = await state()
+      expect(result.billing.balance).toBe(centsToMicroCents(1500))
+      expect(result.payments).toHaveLength(1)
+      expect(result.events).toHaveLength(2)
+    })
+
+    test("records subscription payments once across distinct events", async () => {
+      await seed()
+      const client = {
+        invoices: {
+          retrieve: async () => ({
+            discounts: [],
+            payments: { data: [{ payment: { payment_intent: "pi_subscription" } }] },
+          }),
+        },
+      } as unknown as Client
+
+      await harness.useTestDatabase(async () => {
+        expect(await processStripeWebhook(subscription("evt_subscription_first"), client)).toBeUndefined()
+        expect(await processStripeWebhook(subscription("evt_subscription_second"), client)).toBeUndefined()
+      })
+
+      const result = await state()
+      expect(result.billing.balance).toBe(0)
+      expect(result.payments).toHaveLength(1)
+      expect(result.events).toHaveLength(2)
+    })
+
+    test("keeps case-distinct Stripe event and payment identifiers separate", async () => {
+      await seed()
+      const client = {
+        paymentIntents: {
+          retrieve: async (paymentID: string) => ({
+            payment_method: {
+              id: `pm_${paymentID}`,
+              type: "card",
+              card: { last4: "4242" },
+            },
+          }),
+        },
+      } as unknown as Client
+
+      await harness.useTestDatabase(async () => {
+        expect(await processStripeWebhook(checkout("evt_case", "pi_case", "in_case"), client)).toBeUndefined()
+        expect(await processStripeWebhook(checkout("evt_CASE", "pi_CASE", "in_CASE"), client)).toBeUndefined()
+      })
+
+      const result = await state()
+      expect(result.billing.balance).toBe(centsToMicroCents(4000))
+      expect(result.payments.map((payment) => payment.paymentID)).toContain("pi_case")
+      expect(result.payments.map((payment) => payment.paymentID)).toContain("pi_CASE")
+      expect(result.payments.map((payment) => payment.invoiceID)).toContain("in_case")
+      expect(result.payments.map((payment) => payment.invoiceID)).toContain("in_CASE")
+      expect(result.events.map((event) => event.id)).toContain("evt_case")
+      expect(result.events.map((event) => event.id)).toContain("evt_CASE")
+    })
+
+    test("rolls back Lite entitlement and claim when referral completion fails", async () => {
+      await seed()
+      const client = {
+        paymentMethods: {
+          retrieve: async () => ({
+            id: "pm_lite",
+            type: "card",
+            card: { last4: "4242" },
+          }),
+        },
+      } as unknown as Client
+
+      await expect(harness.useTestDatabase(() => processStripeWebhook(lite(), client))).rejects.toThrow(
+        "Referral invitee account missing",
+      )
+
+      expect((await state()).billing.liteSubscriptionID).toBeNull()
+      expect((await state()).events).toHaveLength(0)
+      expect(await harness.testDatabase().select().from(LiteTable)).toHaveLength(0)
+
+      await harness.testDatabase().insert(UserTable).values({
+        workspaceID,
+        id: "user_stripe",
+        accountID: "account_stripe",
+        name: "Stripe",
+        role: "member",
+      })
+      await harness.useTestDatabase(() => processStripeWebhook(lite(), client))
+
+      expect((await state()).billing.liteSubscriptionID).toBe("sub_lite")
+      expect((await state()).events).toHaveLength(1)
+      expect(await harness.testDatabase().select().from(LiteTable)).toHaveLength(1)
     })
 
     test("deducts a refund only once across duplicate and distinct events", async () => {

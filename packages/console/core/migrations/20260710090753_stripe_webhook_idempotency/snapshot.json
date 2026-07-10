@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "mysql",
-  "id": "b82fc7f0-630f-4791-85c1-074882a276a6",
+  "id": "3c57f6e1-c3b2-4279-a189-78abebb99d15",
   "prevIds": [
     "a946ea14-a35d-49cc-a10a-8c93c30a3cb1"
   ],
@@ -1020,7 +1020,7 @@
       "onUpdateNow": false,
       "onUpdateNowFsp": null,
       "charSet": null,
-      "collation": null,
+      "collation": "utf8mb4_bin",
       "generated": null,
       "name": "invoice_id",
       "entityType": "columns",
@@ -1034,7 +1034,7 @@
       "onUpdateNow": false,
       "onUpdateNowFsp": null,
       "charSet": null,
-      "collation": null,
+      "collation": "utf8mb4_bin",
       "generated": null,
       "name": "payment_id",
       "entityType": "columns",
@@ -1090,7 +1090,7 @@
       "onUpdateNow": false,
       "onUpdateNowFsp": null,
       "charSet": null,
-      "collation": null,
+      "collation": "utf8mb4_bin",
       "generated": null,
       "name": "id",
       "entityType": "columns",
