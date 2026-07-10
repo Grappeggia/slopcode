@@ -16,6 +16,7 @@ import { Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionRunCoordinator } from "@slopcode-ai/core/session/run-coordinator"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import * as SessionRunnerLLM from "@slopcode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@slopcode-ai/core/session/runner/model"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
@@ -36,6 +37,7 @@ const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
+const runtime = SessionRuntime.layer.pipe(Layer.provide(database))
 const cassette =
   process.env.RECORD === "true"
     ? HttpRecorderInternal.cassetteLayer("session-runner/openai-chat-streams-text", {
@@ -76,6 +78,7 @@ const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => 
 const runner = SessionRunnerLLM.defaultLayer.pipe(
   Layer.provide(database),
   Layer.provide(store),
+  Layer.provide(runtime),
   Layer.provide(events),
   Layer.provide(client),
   Layer.provide(registry),
@@ -113,6 +116,7 @@ const it = testEffect(
     events,
     projector,
     store,
+    runtime,
     executor,
     client,
     permission,
@@ -150,6 +154,7 @@ describe("SessionRunnerLLM recorded", () => {
           directory: "/project",
           title: "test",
           version: "test",
+          runtime: "v2",
         })
         .onConflictDoNothing()
         .run()
