@@ -96,6 +96,39 @@ describe("tool.assertExternalDirectory", () => {
     }),
   )
 
+  it.instance("deduplicates successful checks with a shared resource set", () =>
+    Effect.gen(function* () {
+      const outside = yield* tmpdirScoped()
+      const first = path.join(outside, "first.txt")
+      const second = path.join(outside, "second.txt")
+      yield* Effect.promise(async () => {
+        await fs.writeFile(first, "first")
+        await fs.writeFile(second, "second")
+      })
+      const { requests, ctx } = makeCtx()
+      const seen = new Set<string>()
+
+      yield* assertExternalDirectoryEffect(ctx, first, { seen })
+      yield* assertExternalDirectoryEffect(ctx, second, { seen })
+
+      const parent = yield* Effect.promise(() => fs.realpath(outside))
+      const resource = glob(path.join(parent, "*"))
+      expect(requests).toEqual([
+        expect.objectContaining({
+          patterns: [resource],
+          always: [resource],
+          metadata: expect.objectContaining({
+            filepath: first,
+            canonicalPath: yield* Effect.promise(() => fs.realpath(first)),
+            parentDir: parent,
+            resource,
+          }),
+        }),
+      ])
+      expect(seen).toEqual(new Set([resource]))
+    }),
+  )
+
   it.live("skips prompting when bypass=true", () =>
     Effect.gen(function* () {
       const { requests, ctx } = makeCtx()

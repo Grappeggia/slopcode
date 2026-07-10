@@ -106,21 +106,27 @@ export const ApplyPatchTool = Tool.define(
       }> = []
 
       let totalDiff = ""
+      const seen = new Set<string>()
 
       for (const hunk of hunks) {
         const source = yield* resolvePathEffect(afs, path.resolve(instance.directory, hunk.path), instance.directory)
         const filePath = source.canonical
         const displayPath = process.platform === "win32" ? filePath : source.original
         const link = hunk.type === "update" && hunk.move_path ? yield* inspectLink(source.original) : undefined
-        yield* assertExternalDirectoryWithFsEffect(afs, ctx, source)
+        yield* assertExternalDirectoryWithFsEffect(afs, ctx, source, { seen })
         if (link) {
           const parent = yield* resolvePathEffect(afs, path.dirname(link.path), instance.directory)
-          yield* assertExternalDirectoryWithFsEffect(afs, ctx, {
-            original: link.path,
-            canonical: path.join(parent.canonical, path.basename(link.path)),
-            exists: true,
-            directory: false,
-          })
+          yield* assertExternalDirectoryWithFsEffect(
+            afs,
+            ctx,
+            {
+              original: link.path,
+              canonical: path.join(parent.canonical, path.basename(link.path)),
+              exists: true,
+              directory: false,
+            },
+            { seen },
+          )
         }
 
         switch (hunk.type) {
@@ -200,7 +206,7 @@ export const ApplyPatchTool = Tool.define(
                 ),
               )
             }
-            yield* assertExternalDirectoryWithFsEffect(afs, ctx, destination)
+            yield* assertExternalDirectoryWithFsEffect(afs, ctx, destination, { seen })
             const movePath = destination?.canonical
             const displayMovePath = destination
               ? process.platform === "win32"

@@ -508,6 +508,179 @@ describe("tool.apply_patch freeform", () => {
       }),
     )
 
+    it.instance("authorizes one resource when a symlink source target and destination share a directory", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const root = path.join(path.dirname(test.directory), `${path.basename(test.directory)}-shared-move`)
+        const target = path.join(root, "target.txt")
+        const source = path.join(root, "source.txt")
+        const destination = path.join(root, "moved.txt")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(root)
+          await fs.writeFile(target, "source original\n")
+          await fs.symlink(target, source)
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
+        const once = new Set<string>()
+        const { ctx, calls } = makeCtx((input) => {
+          if (input.permission !== "external_directory") return Effect.void
+          return Effect.sync(() => {
+            const resource = input.patterns[0]
+            if (once.has(resource)) throw new Error(`duplicate external authorization: ${resource}`)
+            once.add(resource)
+          })
+        })
+
+        yield* execute(
+          {
+            patchText: `*** Begin Patch\n*** Update File: ${path.relative(test.directory, source)}\n*** Move to: ${path.relative(test.directory, destination)}\n@@\n-source original\n+source changed\n*** End Patch`,
+          },
+          ctx,
+        )
+
+        const parent = yield* Effect.promise(() => fs.realpath(root))
+        const resource = path.join(parent, "*").replaceAll("\\", "/")
+        expect(calls.filter((input) => input.permission === "external_directory")).toEqual([
+          expect.objectContaining({
+            patterns: [resource],
+            always: [resource],
+            metadata: expect.objectContaining({
+              filepath: source,
+              canonicalPath: yield* Effect.promise(() => fs.realpath(target)),
+              parentDir: parent,
+              resource,
+            }),
+          }),
+        ])
+        yield* expectReadFailure(source)
+        expect(yield* readText(target)).toBe("source original\n")
+        expect(yield* readText(destination)).toBe("source changed\n")
+      }),
+    )
+
+    it.instance("authorizes each external resource once across multiple hunks", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const root = path.join(path.dirname(test.directory), `${path.basename(test.directory)}-multi-move`)
+        const first = path.join(root, "first")
+        const second = path.join(root, "second")
+        const targetA = path.join(first, "target-a.txt")
+        const sourceA = path.join(first, "source-a.txt")
+        const destinationA = path.join(second, "moved-a.txt")
+        const targetB = path.join(second, "target-b.txt")
+        const sourceB = path.join(second, "source-b.txt")
+        const destinationB = path.join(first, "moved-b.txt")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(first, { recursive: true })
+          await fs.mkdir(second, { recursive: true })
+          await fs.writeFile(targetA, "first original\n")
+          await fs.writeFile(targetB, "second original\n")
+          await fs.symlink(targetA, sourceA)
+          await fs.symlink(targetB, sourceB)
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
+        const once = new Set<string>()
+        const { ctx, calls } = makeCtx((input) => {
+          if (input.permission !== "external_directory") return Effect.void
+          return Effect.sync(() => {
+            const resource = input.patterns[0]
+            if (once.has(resource)) throw new Error(`duplicate external authorization: ${resource}`)
+            once.add(resource)
+          })
+        })
+
+        yield* execute(
+          {
+            patchText: `*** Begin Patch\n*** Update File: ${path.relative(test.directory, sourceA)}\n*** Move to: ${path.relative(test.directory, destinationA)}\n@@\n-first original\n+first changed\n*** Update File: ${path.relative(test.directory, sourceB)}\n*** Move to: ${path.relative(test.directory, destinationB)}\n@@\n-second original\n+second changed\n*** End Patch`,
+          },
+          ctx,
+        )
+
+        const firstParent = yield* Effect.promise(() => fs.realpath(first))
+        const secondParent = yield* Effect.promise(() => fs.realpath(second))
+        const firstResource = path.join(firstParent, "*").replaceAll("\\", "/")
+        const secondResource = path.join(secondParent, "*").replaceAll("\\", "/")
+        const external = calls.filter((input) => input.permission === "external_directory")
+        expect(external.map((input) => input.patterns[0])).toEqual([firstResource, secondResource])
+        expect(external.map((input) => input.metadata)).toEqual([
+          expect.objectContaining({
+            filepath: sourceA,
+            canonicalPath: yield* Effect.promise(() => fs.realpath(targetA)),
+            parentDir: firstParent,
+            resource: firstResource,
+          }),
+          expect.objectContaining({
+            filepath: destinationA,
+            canonicalPath: path.join(secondParent, path.basename(destinationA)),
+            parentDir: secondParent,
+            resource: secondResource,
+          }),
+        ])
+        yield* expectReadFailure(sourceA)
+        yield* expectReadFailure(sourceB)
+        expect(yield* readText(targetA)).toBe("first original\n")
+        expect(yield* readText(targetB)).toBe("second original\n")
+        expect(yield* readText(destinationA)).toBe("first changed\n")
+        expect(yield* readText(destinationB)).toBe("second changed\n")
+      }),
+    )
+
+    it.instance("leaves every hunk unchanged when a distinct external resource is denied", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const root = path.join(path.dirname(test.directory), `${path.basename(test.directory)}-multi-denied`)
+        const first = path.join(root, "first")
+        const second = path.join(root, "second")
+        const targetA = path.join(first, "target-a.txt")
+        const sourceA = path.join(first, "source-a.txt")
+        const destinationA = path.join(first, "moved-a.txt")
+        const targetB = path.join(second, "target-b.txt")
+        const sourceB = path.join(second, "source-b.txt")
+        const destinationB = path.join(second, "moved-b.txt")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(first, { recursive: true })
+          await fs.mkdir(second, { recursive: true })
+          await fs.writeFile(targetA, "first original\n")
+          await fs.writeFile(destinationA, "first destination\n")
+          await fs.writeFile(targetB, "second original\n")
+          await fs.writeFile(destinationB, "second destination\n")
+          await fs.symlink(targetA, sourceA)
+          await fs.symlink(targetB, sourceB)
+        })
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(root, { recursive: true, force: true })))
+        const firstParent = yield* Effect.promise(() => fs.realpath(first))
+        const secondParent = yield* Effect.promise(() => fs.realpath(second))
+        const firstResource = path.join(firstParent, "*").replaceAll("\\", "/")
+        const secondResource = path.join(secondParent, "*").replaceAll("\\", "/")
+        const denied = new Error("second external resource denied")
+        const { ctx, calls } = makeCtx((input) =>
+          input.permission === "external_directory" && input.patterns[0] === secondResource
+            ? Effect.die(denied)
+            : Effect.void,
+        )
+
+        yield* expectFailure(
+          execute(
+            {
+              patchText: `*** Begin Patch\n*** Update File: ${path.relative(test.directory, sourceA)}\n*** Move to: ${path.relative(test.directory, destinationA)}\n@@\n-first original\n+first changed\n*** Update File: ${path.relative(test.directory, sourceB)}\n*** Move to: ${path.relative(test.directory, destinationB)}\n@@\n-second original\n+second changed\n*** End Patch`,
+            },
+            ctx,
+          ),
+          denied.message,
+        )
+
+        expect(
+          calls.filter((input) => input.permission === "external_directory").map((input) => input.patterns[0]),
+        ).toEqual([firstResource, secondResource])
+        expect((yield* Effect.promise(() => fs.lstat(sourceA))).isSymbolicLink()).toBe(true)
+        expect((yield* Effect.promise(() => fs.lstat(sourceB))).isSymbolicLink()).toBe(true)
+        expect(yield* readText(targetA)).toBe("first original\n")
+        expect(yield* readText(destinationA)).toBe("first destination\n")
+        expect(yield* readText(targetB)).toBe("second original\n")
+        expect(yield* readText(destinationB)).toBe("second destination\n")
+      }),
+    )
+
     it.instance("rejects move aliases that resolve to the same canonical file without data loss", () =>
       Effect.gen(function* () {
         const test = yield* TestInstance

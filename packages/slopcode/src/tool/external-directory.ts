@@ -10,6 +10,7 @@ type Kind = "file" | "directory"
 type Options = {
   bypass?: boolean
   kind?: Kind
+  seen?: Set<string>
 }
 
 export interface ResolvedPath {
@@ -131,6 +132,7 @@ export const assertExternalDirectoryWithFsEffect = Effect.fn("Tool.assertExterna
     process.platform === "win32"
       ? FSUtil.normalizePathPattern(path.join(dir, "*"))
       : path.join(dir, "*").replaceAll("\\", "/")
+  if (options?.seen?.has(glob)) return resolved
 
   yield* ctx.ask({
     permission: "external_directory",
@@ -143,6 +145,7 @@ export const assertExternalDirectoryWithFsEffect = Effect.fn("Tool.assertExterna
       resource: glob,
     },
   })
+  options?.seen?.add(glob)
   return resolved
 })
 
