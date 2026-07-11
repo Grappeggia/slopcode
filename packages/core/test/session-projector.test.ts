@@ -305,9 +305,13 @@ describe("SessionProjector", () => {
       })
       yield* events.publish(SessionEvent.Shell.Ended, {
         sessionID,
+        messageID: SessionMessage.ID.make("msg_shell_projected"),
         timestamp: DateTime.makeUnsafe(1),
         callID: "shell-1",
         output: "/project",
+        status: "completed",
+        exitCode: 0,
+        truncated: false,
       })
       const compactionID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Compaction.Started, {
@@ -367,6 +371,9 @@ describe("SessionProjector", () => {
       ])
       expect(messages.find((message) => message.type === "shell")).toMatchObject({
         output: "/project",
+        status: "completed",
+        exitCode: 0,
+        truncated: false,
         time: { completed: DateTime.makeUnsafe(1) },
       })
       expect(messages.find((message) => message.type === "compaction")).toMatchObject({
@@ -380,6 +387,61 @@ describe("SessionProjector", () => {
         model,
         time_updated: DateTime.toEpochMillis(created),
       })
+    }),
+  )
+
+  it.effect("replays legacy shell history without requiring V2 terminal metadata", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "legacy-shell",
+          directory: "/project",
+          title: "legacy-shell",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const id = SessionMessage.ID.make("msg_legacy_shell")
+      yield* (yield* EventV2.Service).replayAll([
+        {
+          id: EventV2.ID.make("evt_legacy_shell_started"),
+          aggregateID: sessionID,
+          seq: 0,
+          type: EventV2.versionedType(SessionEvent.Shell.Started.type, 1),
+          data: { sessionID, messageID: id, timestamp: 0, callID: "legacy-call", command: "pwd" },
+        },
+        {
+          id: EventV2.ID.make("evt_legacy_shell_ended"),
+          aggregateID: sessionID,
+          seq: 1,
+          type: EventV2.versionedType(SessionEvent.Shell.Ended.type, 1),
+          data: { sessionID, timestamp: 1, callID: "legacy-call", output: "/project" },
+        },
+      ])
+
+      const row = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.id, id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(Schema.decodeUnknownSync(SessionMessage.Message)({ ...row!.data, id: row!.id, type: row!.type })).toMatchObject({
+        type: "shell",
+        command: "pwd",
+        output: "/project",
+        time: { completed: DateTime.makeUnsafe(1) },
+      })
+      expect(row!.data).not.toHaveProperty("status")
     }),
   )
 

@@ -528,7 +528,7 @@ export const layer = Layer.effect(
               }
               const completed = Date.now()
               if (flags.experimentalEventSystem) {
-                yield* events.publish(SessionEvent.Shell.Ended, {
+                yield* events.publish(SessionEvent.Shell.EndedV1, {
                   sessionID: input.sessionID,
                   timestamp: DateTime.makeUnsafe(completed),
                   callID: part.callID,

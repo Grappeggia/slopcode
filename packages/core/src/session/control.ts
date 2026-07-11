@@ -43,6 +43,13 @@ type CompactInput = {
   readonly prompt?: Prompt
 }
 
+type ShellInput = {
+  readonly id?: SessionMessage.ID
+  readonly sessionID: SessionSchema.ID
+  readonly command: string
+  readonly resume?: boolean
+}
+
 export interface Interface {
   readonly prompt: (
     input: PromptInput,
@@ -66,6 +73,12 @@ export interface Interface {
     | SessionV2.CompactionConflictError
     | SessionV2.CompactionPromptUnsupportedError
     | SessionV2.CompactionFailedError
+  >
+  readonly shell: (
+    input: ShellInput,
+  ) => Effect.Effect<
+    void,
+    SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.ShellConflictError
   >
   readonly switchModel: (input: SwitchModelInput) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError>
   readonly switchAgent: (
@@ -111,6 +124,10 @@ export const layer = Layer.effect(
       compact: Effect.fn("SessionControl.compact")(function* (input) {
         yield* assertV2(input.sessionID)
         yield* sessions.compact(input)
+      }),
+      shell: Effect.fn("SessionControl.shell")(function* (input) {
+        yield* assertV2(input.sessionID)
+        yield* sessions.shell(input)
       }),
       switchModel: Effect.fn("SessionControl.switchModel")(function* (input) {
         yield* assertV2(input.sessionID)

@@ -61,6 +61,11 @@ export class Shell extends Schema.Class<Shell>("Session.Message.Shell")({
   callID: SessionEvent.Shell.Started.data.fields.callID,
   command: SessionEvent.Shell.Started.data.fields.command,
   output: Schema.String,
+  status: SessionEvent.Shell.Status.pipe(Schema.optional),
+  exitCode: Schema.Number.pipe(Schema.optional),
+  truncated: Schema.Boolean.pipe(Schema.optional),
+  stdoutTruncated: Schema.Boolean.pipe(Schema.optional),
+  stderrTruncated: Schema.Boolean.pipe(Schema.optional),
   time: Schema.Struct({
     created: V2Schema.DateTimeUtcFromMillis,
     completed: V2Schema.DateTimeUtcFromMillis.pipe(Schema.optional),

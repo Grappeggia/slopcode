@@ -29,6 +29,7 @@ import { FileAttachment, Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionContextEpoch } from "@slopcode-ai/core/session/context-epoch"
+import { SessionControl } from "@slopcode-ai/core/session/control"
 import { SessionRunCoordinator } from "@slopcode-ai/core/session/run-coordinator"
 import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import * as SessionRunnerLLM from "@slopcode-ai/core/session/runner/llm"
@@ -57,9 +58,11 @@ import { ModelHarness } from "@slopcode-ai/core/model-harness"
 import { Location } from "@slopcode-ai/core/location"
 import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { PluginBoot } from "@slopcode-ai/core/plugin/boot"
+import { AppProcess } from "@slopcode-ai/core/process"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { SkillV2 } from "@slopcode-ai/core/skill"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { ChildProcess } from "effect/unstable/process"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -81,6 +84,47 @@ let toolExecutionsStarted: Deferred.Deferred<void> | undefined
 let toolExecutionsReady = 5
 let activeToolExecutions = 0
 let maxActiveToolExecutions = 0
+const shellRuns: Array<{
+  command: string
+  cwd?: string
+  shell?: string | boolean
+  stdin?: ChildProcess.CommandInput
+  detached?: boolean
+  options?: AppProcess.RunOptions
+}> = []
+let shellResult: AppProcess.RunResult = {
+  command: "mock",
+  exitCode: 0,
+  stdout: Buffer.from("shell output"),
+  stderr: Buffer.alloc(0),
+  stdoutTruncated: false,
+  stderrTruncated: false,
+}
+let shellFailure: AppProcess.AppProcessError | undefined
+let shellGate: Deferred.Deferred<void> | undefined
+let shellStarted: Deferred.Deferred<void> | undefined
+let configuredShell: string | undefined
+const processLayer = Layer.succeed(
+  AppProcess.Service,
+  AppProcess.Service.of({
+    run: (command: ChildProcess.Command, options?: AppProcess.RunOptions) =>
+      Effect.gen(function* () {
+        if (command._tag !== "StandardCommand") return yield* Effect.die("expected standard shell command")
+        shellRuns.push({
+          command: command.command,
+          cwd: command.options.cwd,
+          shell: command.options.shell,
+          stdin: command.options.stdin,
+          detached: command.options.detached,
+          options,
+        })
+        if (shellStarted) yield* Deferred.succeed(shellStarted, undefined)
+        if (shellGate) yield* Deferred.await(shellGate)
+        if (shellFailure) return yield* shellFailure
+        return shellResult
+      }),
+  } as unknown as AppProcess.Interface),
+)
 const client = Layer.succeed(
   LLMClient.Service,
   LLMClient.Service.of({
@@ -248,6 +292,7 @@ const config = Layer.succeed(
         new Config.Document({
           type: "document",
           info: new Config.Info({
+            shell: configuredShell,
             compaction: new ConfigCompaction.Info({
               buffer: 3_000,
               keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
@@ -271,6 +316,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(skillGuidance),
   Layer.provide(referenceGuidance),
   Layer.provide(config),
+  Layer.provide(processLayer),
 )
 const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
 const execution = Layer.effect(
@@ -294,6 +340,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(execution),
   Layer.provide(locations),
 )
+const controls = SessionControl.layer.pipe(Layer.provide(sessions), Layer.provide(runtime))
 const it = testEffect(
   Layer.mergeAll(
     database,
@@ -315,11 +362,13 @@ const it = testEffect(
     location,
     skillGuidance,
     config,
+    processLayer,
     runner,
     runtime,
     coordinator,
     execution,
     sessions,
+    controls,
   ),
 )
 const sessionID = SessionV2.ID.make("ses_runner_test")
@@ -367,6 +416,19 @@ const setup = Effect.gen(function* () {
   toolExecutionsReady = 5
   activeToolExecutions = 0
   maxActiveToolExecutions = 0
+  shellRuns.length = 0
+  shellResult = {
+    command: "mock",
+    exitCode: 0,
+    stdout: Buffer.from("shell output"),
+    stderr: Buffer.alloc(0),
+    stdoutTruncated: false,
+    stderrTruncated: false,
+  }
+  shellFailure = undefined
+  shellGate = undefined
+  shellStarted = undefined
+  configuredShell = undefined
   yield* db
     .insert(ProjectTable)
     .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -1878,6 +1940,313 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         summary: "## Goal\n- Preserve the updated task",
       })
+    }),
+  )
+
+  it.effect("runs a foreground shell with configured shell, Location cwd, and bounded combined output", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      configuredShell = "/bin/bash"
+      shellResult = {
+        ...shellResult,
+        exitCode: 7,
+        stdout: Buffer.from("stdout text"),
+        stderr: Buffer.from("stderr text"),
+        stdoutTruncated: true,
+      }
+      const id = SessionMessage.ID.make("msg_shell_result")
+
+      yield* session.shell({ id, sessionID, command: "printf result", resume: false })
+
+      expect(shellRuns).toMatchObject([
+        {
+          command: "printf result",
+          cwd: "/project",
+          shell: "/bin/bash",
+          stdin: "ignore",
+          detached: process.platform !== "win32",
+          options: { maxOutputBytes: 1024 * 1024, maxErrorBytes: 1024 * 1024 },
+        },
+      ])
+      expect(yield* session.message({ sessionID, messageID: id })).toMatchObject({
+        id,
+        type: "shell",
+        command: "printf result",
+        output: "stdout text\n\nstderr:\nstderr text\n\n[stdout capture truncated at the in-memory safety limit]",
+        status: "completed",
+        exitCode: 7,
+        truncated: true,
+        stdoutTruncated: true,
+        time: { completed: expect.anything() },
+      })
+      expect(requests).toEqual([])
+
+      yield* replaySessionProjection(sessionID)
+      expect(yield* session.message({ sessionID, messageID: id })).toMatchObject({
+        type: "shell",
+        status: "completed",
+        exitCode: 7,
+        truncated: true,
+        stdoutTruncated: true,
+      })
+    }),
+  )
+
+  it.effect("settles shell timeout and spawn failure as deterministic terminal observations", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      shellFailure = new AppProcess.AppProcessError({ command: "sleep", cause: new Error("Timed out") })
+      const timeoutID = SessionMessage.ID.make("msg_shell_timeout")
+      yield* session.shell({ id: timeoutID, sessionID, command: "sleep 200", resume: false })
+      expect(yield* session.message({ sessionID, messageID: timeoutID })).toMatchObject({
+        status: "timed_out",
+        output: "Command exceeded timeout of 120000 ms. Retry with a larger timeout if the command is expected to take longer.",
+        truncated: false,
+      })
+
+      shellFailure = new AppProcess.AppProcessError({ command: "missing", cause: new Error("ENOENT") })
+      const failedID = SessionMessage.ID.make("msg_shell_spawn_failure")
+      yield* session.shell({ id: failedID, sessionID, command: "missing", resume: false })
+      expect(yield* session.message({ sessionID, messageID: failedID })).toMatchObject({
+        status: "failed",
+        output: "Unable to start shell command.",
+      })
+    }),
+  )
+
+  it.effect("makes exact shell retries idempotent and conflicting command or resume typed", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const id = SessionMessage.ID.make("msg_shell_retry")
+      const input = { id, sessionID, command: "pwd", resume: false }
+      yield* session.shell(input)
+      yield* session.shell(input)
+      const command = yield* session.shell({ ...input, command: "whoami" }).pipe(Effect.flip)
+      const resume = yield* session.shell({ ...input, resume: true }).pipe(Effect.flip)
+
+      expect(shellRuns).toHaveLength(1)
+      expect(command).toMatchObject({
+        _tag: "Session.ShellConflictError",
+        sessionID,
+        messageID: id,
+      })
+      expect(resume).toMatchObject({
+        _tag: "Session.ShellConflictError",
+        sessionID,
+        messageID: id,
+      })
+    }),
+  )
+
+  it.effect("serializes concurrent foreground shell commands through one lane", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      shellGate = yield* Deferred.make<void>()
+      shellStarted = yield* Deferred.make<void>()
+      const first = yield* session
+        .shell({ id: SessionMessage.ID.make("msg_shell_concurrent_one"), sessionID, command: "first", resume: false })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(shellStarted)
+      const second = yield* session
+        .shell({ id: SessionMessage.ID.make("msg_shell_concurrent_two"), sessionID, command: "second", resume: false })
+        .pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(shellRuns.map((run) => run.command)).toEqual(["first"])
+
+      yield* Deferred.succeed(shellGate, undefined)
+      yield* Effect.all([Fiber.join(first), Fiber.join(second)])
+
+      expect(shellRuns.map((run) => run.command)).toEqual(["first", "second"])
+    }),
+  )
+
+  it.effect("continues from the durable shell message only when resume is true", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      response = fragmentFixture("text", "text-after-shell", ["continued"]).completeEvents
+
+      yield* session.shell({
+        id: SessionMessage.ID.make("msg_shell_resume"),
+        sessionID,
+        command: "pwd",
+        resume: true,
+      })
+      yield* session.wait(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toContain("Shell command: pwd\n\nshell output")
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "shell", command: "pwd", status: "completed" },
+        { type: "assistant", content: [{ type: "text", text: "continued" }] },
+      ])
+    }),
+  )
+
+  it.effect("cleans up interruption and settles the shell without rerunning it", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      shellGate = yield* Deferred.make<void>()
+      shellStarted = yield* Deferred.make<void>()
+      const id = SessionMessage.ID.make("msg_shell_interrupted")
+      const shell = yield* session.shell({ id, sessionID, command: "sleep 30", resume: false }).pipe(Effect.forkChild)
+      yield* Deferred.await(shellStarted)
+
+      yield* session.interrupt(sessionID)
+      yield* Fiber.join(shell)
+      yield* session.shell({ id, sessionID, command: "sleep 30", resume: false })
+
+      expect(shellRuns).toHaveLength(1)
+      expect(yield* session.message({ sessionID, messageID: id })).toMatchObject({
+        status: "interrupted",
+        output: "Shell command was interrupted before completion.",
+      })
+    }),
+  )
+
+  it.effect("settles a persisted started shell as restart-unknown without spawning again", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const id = SessionMessage.ID.make("msg_shell_restart_unknown")
+      const request = yield* SessionInput.admitShell(db, events, {
+        id,
+        sessionID,
+        command: "touch marker",
+        resume: false,
+      })
+      yield* events.publish(
+        SessionEvent.Shell.Started,
+        {
+          sessionID,
+          messageID: id,
+          timestamp: yield* DateTime.now,
+          callID: id,
+          command: request.command,
+        },
+        { id: SessionInput.shellStartedEventID(id) },
+      )
+
+      yield* session.resume(sessionID)
+
+      expect(shellRuns).toEqual([])
+      expect(yield* session.message({ sessionID, messageID: id })).toMatchObject({
+        status: "unknown",
+        output: "Shell command outcome is unknown because execution was interrupted by a runtime restart.",
+      })
+    }),
+  )
+
+  it.effect("recovers a durable provider continuation after shell completion", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const id = SessionMessage.ID.make("msg_shell_resume_recovery")
+      const request = yield* SessionInput.admitShell(db, events, {
+        id,
+        sessionID,
+        command: "pwd",
+        resume: true,
+      })
+      yield* SessionInput.startShell(db, events, request)
+      yield* SessionInput.endShell(db, events, request, {
+        status: "completed",
+        output: "/project",
+        exitCode: 0,
+        truncated: false,
+      })
+      response = fragmentFixture("text", "text-shell-recovered", ["recovered continuation"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      expect(shellRuns).toEqual([])
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toContain("Shell command: pwd\n\n/project")
+      expect(yield* SessionInput.shellContinued(db, id)).toBeTrue()
+    }),
+  )
+
+  it.effect("settles epoch loss after process start without publishing stale output", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      shellGate = yield* Deferred.make<void>()
+      shellStarted = yield* Deferred.make<void>()
+      const id = SessionMessage.ID.make("msg_shell_epoch_loss")
+      const shell = yield* session.shell({ id, sessionID, command: "pwd", resume: false }).pipe(Effect.forkChild)
+      yield* Deferred.await(shellStarted)
+      yield* runtime.assign({ sessionID, state: "paused", expectedOwner: "v2", expectedEpoch: 1 })
+      yield* Deferred.succeed(shellGate, undefined)
+
+      yield* Fiber.join(shell)
+
+      expect(shellRuns).toHaveLength(1)
+      expect(yield* session.message({ sessionID, messageID: id })).toMatchObject({
+        status: "interrupted",
+        output: "Shell command was interrupted before completion.",
+      })
+    }),
+  )
+
+  it.effect("returns at its shell terminal while a coalesced prompt runs later", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      shellGate = yield* Deferred.make<void>()
+      shellStarted = yield* Deferred.make<void>()
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      response = fragmentFixture("text", "text-after-ordered-shell", ["later prompt"]).completeEvents
+      const shell = yield* session
+        .shell({ id: SessionMessage.ID.make("msg_shell_ordered"), sessionID, command: "pwd", resume: false })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(shellStarted)
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Prompt after shell" }) })
+      yield* Deferred.succeed(shellGate, undefined)
+
+      yield* Fiber.join(shell)
+      yield* Deferred.await(streamStarted)
+      expect(userTexts(requests[0]!)).toEqual([
+        "Shell command: pwd\n\nshell output",
+        "Prompt after shell",
+      ])
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* session.wait(sessionID)
+    }),
+  )
+
+  it.effect("rejects missing and V1-owned shell controls before admission", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const control = yield* SessionControl.Service
+      const missing = SessionV2.ID.make("ses_missing_shell_control")
+      const missingError = yield* control.shell({ sessionID: missing, command: "pwd" }).pipe(Effect.flip)
+      yield* db.update(SessionTable).set({ runtime: "v1" }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      const v1 = yield* control.shell({ sessionID, command: "pwd" }).pipe(Effect.flip)
+
+      expect(missingError).toMatchObject({ _tag: "SessionRuntime.NotFound", sessionID: missing })
+      expect(v1).toMatchObject({ _tag: "SessionRuntime.Mismatch", actualOwner: "v1" })
+      expect(shellRuns).toEqual([])
+      expect(yield* SessionInput.pendingShell(db, sessionID)).toBeUndefined()
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.type, "session.next.shell.requested.1"))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([])
     }),
   )
 

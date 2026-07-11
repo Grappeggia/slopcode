@@ -6,6 +6,7 @@ import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { EventTable } from "@slopcode-ai/core/event/sql"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
+import { AppProcess } from "@slopcode-ai/core/process"
 import { AgentV2 } from "@slopcode-ai/core/agent"
 import { Config } from "@slopcode-ai/core/config"
 import { Project } from "@slopcode-ai/core/project"
@@ -90,6 +91,7 @@ const runner = SessionRunnerLLM.defaultLayer.pipe(
   Layer.provide(skillGuidance),
   Layer.provide(referenceGuidance),
   Layer.provide(config),
+  Layer.provide(AppProcess.defaultLayer),
 )
 const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
 const execution = Layer.effect(

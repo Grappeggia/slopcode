@@ -148,6 +148,18 @@ export const Synthetic = EventV2.define({
 export type Synthetic = typeof Synthetic.Type
 
 export namespace Shell {
+  export const Requested = EventV2.define({
+    type: "session.next.shell.requested",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessageID.ID,
+      command: Schema.String,
+      resume: Schema.Boolean,
+    },
+  })
+  export type Requested = typeof Requested.Type
+
   export const Started = EventV2.define({
     type: "session.next.shell.started",
     ...options,
@@ -160,7 +172,8 @@ export namespace Shell {
   })
   export type Started = typeof Started.Type
 
-  export const Ended = EventV2.define({
+  // Retain the v1 decoder so existing shell history remains replayable.
+  export const EndedV1 = EventV2.define({
     type: "session.next.shell.ended",
     ...options,
     schema: {
@@ -169,7 +182,36 @@ export namespace Shell {
       output: Schema.String,
     },
   })
+
+  export const Status = Schema.Literals(["completed", "timed_out", "failed", "interrupted", "unknown"])
+  export type Status = typeof Status.Type
+
+  export const Ended = EventV2.define({
+    type: "session.next.shell.ended",
+    sync: { aggregate: "sessionID", version: 2 },
+    schema: {
+      ...Base,
+      messageID: SessionMessageID.ID,
+      callID: Schema.String,
+      output: Schema.String,
+      status: Status,
+      exitCode: Schema.Number.pipe(Schema.optional),
+      truncated: Schema.Boolean,
+      stdoutTruncated: Schema.Boolean.pipe(Schema.optional),
+      stderrTruncated: Schema.Boolean.pipe(Schema.optional),
+    },
+  })
   export type Ended = typeof Ended.Type
+
+  export const Continued = EventV2.define({
+    type: "session.next.shell.continued",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessageID.ID,
+    },
+  })
+  export type Continued = typeof Continued.Type
 }
 
 export namespace Step {
@@ -527,8 +569,10 @@ const DurableDefinitions = [
   InterruptRequested,
   ContextUpdated,
   Synthetic,
+  Shell.Requested,
   Shell.Started,
   Shell.Ended,
+  Shell.Continued,
   Step.Started,
   Step.Ended,
   Step.Failed,

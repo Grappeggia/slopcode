@@ -2,8 +2,7 @@ export * as BashTool from "./bash"
 
 import path from "path"
 import { ToolFailure } from "@slopcode-ai/llm"
-import { Duration, Effect, Layer, Schema } from "effect"
-import { ChildProcess } from "effect/unstable/process"
+import { Effect, Layer, Schema } from "effect"
 import { Config } from "../config"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
@@ -11,13 +10,14 @@ import { AppProcess } from "../process"
 import { PermissionV2 } from "../permission"
 import { PositiveInt } from "../schema"
 import { ShellParser } from "../shell-parser"
+import { ShellCommand } from "../shell"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
 export const name = "bash"
-export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
-export const MAX_TIMEOUT_MS = 10 * 60 * 1_000
-export const MAX_CAPTURE_BYTES = 1024 * 1024
+export const DEFAULT_TIMEOUT_MS = ShellCommand.DEFAULT_TIMEOUT_MS
+export const MAX_TIMEOUT_MS = ShellCommand.MAX_TIMEOUT_MS
+export const MAX_CAPTURE_BYTES = ShellCommand.MAX_CAPTURE_BYTES
 
 export const Input = Schema.Struct({
   command: Schema.String.annotate({ description: "Shell command string to execute" }),
@@ -49,20 +49,6 @@ const Output = Schema.Struct({
 
 type Output = typeof Output.Type
 
-const defaultShell = () => (process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh")
-
-const compactOutput = (stdout: string, stderr: string) => {
-  const output = stdout && stderr ? `${stdout}\n\nstderr:\n${stderr}` : stderr ? `stderr:\n${stderr}` : stdout
-  return output || "(no output)"
-}
-
-const captureNotice = (stdoutTruncated: boolean, stderrTruncated: boolean) => {
-  if (stdoutTruncated && stderrTruncated) return "[stdout and stderr capture truncated at the in-memory safety limit]"
-  if (stdoutTruncated) return "[stdout capture truncated at the in-memory safety limit]"
-  if (stderrTruncated) return "[stderr capture truncated at the in-memory safety limit]"
-  return undefined
-}
-
 const modelOutput = (output: Output) => {
   const warnings = output.warnings?.length
     ? `\n\nWarnings:\n${output.warnings.map((warning) => `- ${warning}`).join("\n")}`
@@ -70,9 +56,6 @@ const modelOutput = (output: Output) => {
   if (output.timedOut) return `${output.output}${warnings}\n\nCommand timed out before completion.`
   return `${output.output}${warnings}\n\nCommand exited with code ${output.exitCode}.`
 }
-
-const isTimeout = (error: AppProcess.AppProcessError) =>
-  error.cause instanceof Error && error.cause.message === "Timed out"
 
 /**
  * Minimal V2 core shell boundary. Keep parity debt visible without pulling the
@@ -129,9 +112,7 @@ export const layer = Layer.effectDiscard(
               }
               const target = yield* mutation.resolve({ path: input.workdir ?? ".", kind: "directory" })
               const entries = yield* config.entries()
-              const shell =
-                Object.assign({}, ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])))
-                  .shell ?? defaultShell()
+              const shell = ShellCommand.select(entries)
               const resources = yield* Effect.tryPromise({
                 try: () => ShellParser.resources(input.command, shell),
                 catch: (error) =>
@@ -168,47 +149,17 @@ export const layer = Layer.effectDiscard(
               if ((yield* fs.stat(target.canonical)).type !== "Directory")
                 return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
 
-              const command = ChildProcess.make(input.command, [], {
-                cwd: target.canonical,
-                shell,
-                stdin: "ignore",
-                detached: process.platform !== "win32",
-                forceKillAfter: Duration.seconds(3),
-              })
-              const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
-              const result = yield* appProcess
-                .run(command, {
-                  timeout: Duration.millis(timeout),
-                  maxOutputBytes: MAX_CAPTURE_BYTES,
-                  maxErrorBytes: MAX_CAPTURE_BYTES,
-                })
-                .pipe(
-                  Effect.catchTag("AppProcessError", (error) =>
-                    isTimeout(error) ? Effect.succeed(undefined) : Effect.fail(error),
-                  ),
-                )
-              if (!result) {
-                return {
-                  command: input.command,
-                  cwd: target.canonical,
-                  output: `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
-                  truncated: false,
-                  timedOut: true,
-                  ...(warnings.length ? { warnings } : {}),
-                }
-              }
-
-              const compact = compactOutput(result.stdout.toString("utf8"), result.stderr.toString("utf8"))
-              const notice = captureNotice(result.stdoutTruncated, result.stderrTruncated)
-              return {
+              const result = yield* ShellCommand.run({
                 command: input.command,
                 cwd: target.canonical,
-                exitCode: result.exitCode,
-                output: notice ? `${compact}\n\n${notice}` : compact,
-                truncated: result.stdoutTruncated || result.stderrTruncated,
+                timeout: input.timeout,
+              }).pipe(
+                Effect.provideService(Config.Service, config),
+                Effect.provideService(AppProcess.Service, appProcess),
+              )
+              return {
+                ...result,
                 ...(warnings.length ? { warnings } : {}),
-                ...(result.stdoutTruncated ? { stdoutTruncated: true } : {}),
-                ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
               }
             }).pipe(
               Effect.mapError((error) =>
