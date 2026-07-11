@@ -126,4 +126,89 @@ describe("ToolRegistry turn-local overlays", () => {
       ).toMatchObject({ ok: false, error: { kind: "UnknownTool" } })
     }),
   )
+
+  it.effect("fails closed on overlay and direct exec collisions in code modes", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const turn = { tools: { exec: tool("overlay exec") } }
+      const direct = { ...turn, direct: new Set(["exec"]) }
+
+      const functions = yield* registry.materialize([], { mode: "function" }, turn)
+      const directFunctions = yield* registry.materialize([], { mode: "function" }, direct)
+      expect(functions.definitions.map((item) => item.name)).toEqual(["exec"])
+      expect(directFunctions.definitions.map((item) => item.name)).toEqual(["exec"])
+      expect((yield* settle(functions, "exec")).output?.structured).toEqual({ value: "overlay exec" })
+
+      for (const mode of ["code-preferred", "code-only"] as const) {
+        for (const collision of [turn, direct]) {
+          const failure = yield* Effect.flip(registry.materialize([], { mode }, collision))
+          expect(failure).toBeInstanceOf(Tool.RegistrationError)
+          expect(failure).toMatchObject({ name: "exec", message: expect.stringContaining("reserved") })
+        }
+      }
+
+      yield* registry.register({ exec: tool("persistent exec") })
+      const preferred = yield* registry.materialize([], { mode: "code-preferred" })
+      const only = yield* registry.materialize([], { mode: "code-only" })
+      expect(preferred.definitions.map((item) => item.name)).toEqual(["exec"])
+      expect(only.definitions.map((item) => item.name)).toEqual(["exec"])
+      expect(new Set(preferred.definitions.map((item) => item.name)).size).toBe(preferred.definitions.length)
+      expect(new Set(only.definitions.map((item) => item.name)).size).toBe(only.definitions.length)
+
+      const directPersistent = yield* Effect.flip(
+        registry.materialize([], { mode: "code-only" }, { tools: {}, direct: new Set(["exec"]) }),
+      )
+      expect(directPersistent).toBeInstanceOf(Tool.RegistrationError)
+      expect(directPersistent).toMatchObject({ name: "exec", message: expect.stringContaining("reserved") })
+    }),
+  )
+
+  it.effect("preserves shell and freeform patch aliases for dynamic overlays", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const inputs: unknown[] = []
+      const dynamic = (description: string, inputSchema: Record<string, unknown>) =>
+        Tool.dynamic({
+          description,
+          inputSchema,
+          outputSchema: { type: "object" },
+          decodeInput: (input) => Effect.succeed(input),
+          encodeOutput: Effect.succeed,
+          execute: (input) => Effect.sync(() => inputs.push(input)).pipe(Effect.as({ ok: true })),
+        })
+      const materialized = yield* registry.materialize(
+        [],
+        { mode: "code-only", shell: "shell_command", patch: "freeform" },
+        {
+          tools: {
+            bash: dynamic("Run shell", {
+              type: "object",
+              properties: { command: { type: "string" } },
+              required: ["command"],
+            }),
+            apply_patch: dynamic("Apply patch", { type: "object" }),
+          },
+        },
+      )
+
+      const result = yield* materialized.settle({
+        ...identity,
+        call: {
+          type: "tool-call",
+          toolType: "custom",
+          id: "call-dynamic-aliases",
+          name: "exec",
+          input:
+            'const shell = await tools.shell_command({ command: "pwd" }); const patch = await tools.apply_patch("*** Begin Patch\\n*** End Patch"); return { shell, patch }',
+        },
+      })
+      expect(inputs).toEqual([{ command: "pwd" }, { patchText: "*** Begin Patch\n*** End Patch" }])
+      expect(result.output?.structured).toMatchObject({
+        ok: true,
+        value: { shell: { ok: true }, patch: { ok: true } },
+        toolCalls: [{ name: "bash" }, { name: "apply_patch" }],
+      })
+      expect(bounded).toEqual(expect.arrayContaining(["call-dynamic-aliases/0", "call-dynamic-aliases/1", "call-dynamic-aliases"]))
+    }),
+  )
 })
