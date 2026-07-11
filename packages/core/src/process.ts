@@ -12,12 +12,17 @@ export class AppProcessError extends Schema.TaggedErrorClass<AppProcessError>()(
   cause: Schema.optional(Schema.Defect()),
 }) {}
 
+export interface Launch {
+  <A, E, R>(spawn: Effect.Effect<A, E, R>): Effect.Effect<A, E | unknown, R>
+}
+
 export interface RunOptions {
   readonly maxOutputBytes?: number
   readonly maxErrorBytes?: number
   readonly signal?: AbortSignal
   readonly timeout?: Duration.Input
   readonly stdin?: string | Uint8Array | Stream.Stream<Uint8Array, PlatformError>
+  readonly launch?: Launch
 }
 
 export interface RunStreamOptions {
@@ -135,7 +140,8 @@ export const layer = Layer.effect(
       const description = describeCommand(command)
       const collect = Effect.scoped(
         Effect.gen(function* () {
-          const handle = yield* spawner.spawn(command)
+          const spawn = spawner.spawn(command)
+          const handle = yield* (options?.launch ? options.launch(spawn) : spawn)
           const [stdout, stderr, exitCode] = yield* Effect.all(
             [
               collectStream(handle.stdout, options?.maxOutputBytes),

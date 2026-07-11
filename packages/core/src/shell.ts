@@ -41,6 +41,7 @@ export const isTimeout = (error: AppProcess.AppProcessError) =>
 export const run = Effect.fn("ShellCommand.run")(function* (
   input: { readonly command: string; readonly cwd: string; readonly timeout?: number },
   beforeSpawn: Effect.Effect<void> = Effect.void,
+  launch?: AppProcess.Launch,
 ) {
   const config = yield* Config.Service
   const appProcess = yield* AppProcess.Service
@@ -59,6 +60,7 @@ export const run = Effect.fn("ShellCommand.run")(function* (
         timeout: Duration.millis(timeout),
         maxOutputBytes: MAX_CAPTURE_BYTES,
         maxErrorBytes: MAX_CAPTURE_BYTES,
+        ...(launch ? { launch } : {}),
       }),
     ),
     Effect.catchTag("AppProcessError", (error) => (isTimeout(error) ? Effect.succeed(undefined) : Effect.fail(error))),

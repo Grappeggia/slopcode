@@ -648,6 +648,22 @@ export const layer = Layer.effect(
             if (event.seq === undefined)
               return yield* Effect.die("Interrupt request event is missing aggregate sequence")
             yield* execution.interrupt(sessionID, event.seq)
+            yield* Effect.forEach(
+              yield* SessionInput.pendingRequestedShells(db, sessionID),
+              (request) =>
+                SessionInput.endShell(
+                  db,
+                  events,
+                  request,
+                  {
+                    status: "interrupted",
+                    output: "Shell command was interrupted before completion.",
+                    truncated: false,
+                  },
+                  "requested",
+                ),
+              { discard: true },
+            )
           }),
         ),
       ),

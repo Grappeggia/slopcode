@@ -159,19 +159,33 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }),
         )
       },
-      "session.next.shell.requested": () => Effect.void,
-      "session.next.shell.started": (event) => {
-        return adapter.appendMessage(
+      "session.next.shell.requested": (event) =>
+        adapter.appendMessage(
           new SessionMessage.Shell({
             id: event.data.messageID,
             type: "shell",
             metadata: event.metadata,
-            callID: event.data.callID,
+            callID: event.data.messageID,
             command: event.data.command,
             output: "",
             time: { created: event.data.timestamp },
           }),
-        )
+        ),
+      "session.next.shell.started": (event) => {
+        return Effect.gen(function* () {
+          if (yield* adapter.getCurrentShell(event.data.callID)) return
+          yield* adapter.appendMessage(
+            new SessionMessage.Shell({
+              id: event.data.messageID,
+              type: "shell",
+              metadata: event.metadata,
+              callID: event.data.callID,
+              command: event.data.command,
+              output: "",
+              time: { created: event.data.timestamp },
+            }),
+          )
+        })
       },
       "session.next.shell.ended": (event) => {
         return Effect.gen(function* () {
