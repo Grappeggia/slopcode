@@ -18,6 +18,7 @@ import { ShellParser } from "@slopcode-ai/core/shell-parser"
 import { eq } from "drizzle-orm"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { locationServices } from "./lib/location-services"
 
 const database = Database.layerFromPath(":memory:")
 const current = Layer.succeed(
@@ -32,6 +33,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(store),
   Layer.provide(Project.defaultLayer),
   Layer.provide(SessionExecution.noopLayer),
+  Layer.provide(locationServices),
 )
 const saved = PermissionSaved.layer.pipe(Layer.provide(database))
 const layer = PermissionV2.locationLayer.pipe(

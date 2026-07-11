@@ -20,6 +20,7 @@ import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
+import { locationServices } from "./lib/location-services"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
@@ -206,6 +207,7 @@ describe("SessionProjector", () => {
           Layer.provide(Project.defaultLayer),
           Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
           Layer.provide(SessionExecution.noopLayer),
+          Layer.provide(locationServices),
         ),
       ),
     ),

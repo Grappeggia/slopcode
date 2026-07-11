@@ -25,6 +25,8 @@ describe("public native SlopCode API", () => {
         "message",
         "messages",
         "prompt",
+        "skill",
+        "switchAgent",
         "switchModel",
       ])
       expect(Session.ID.create()).toStartWith("ses_")
@@ -60,6 +62,42 @@ describe("public native SlopCode API", () => {
           yield* slopcode.sessions.switchModel({ sessionID, model })
 
           expect((yield* slopcode.sessions.get(sessionID)).model).toEqual(model)
+        }),
+      ),
+    ),
+  )
+
+  it.live("validates agent and skill catalogs through public embedding methods", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const slopcode = yield* SlopCode.Service
+          const sessionID = Session.ID.create()
+          yield* slopcode.sessions.create({
+            id: sessionID,
+            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+          })
+
+          yield* slopcode.sessions.switchAgent({ sessionID, agent: "plan" })
+          const admitted = yield* slopcode.sessions.skill({
+            sessionID,
+            skill: "customize-slopcode",
+            resume: false,
+          })
+          const agentError = yield* slopcode.sessions
+            .switchAgent({ sessionID, agent: "missing" })
+            .pipe(Effect.flip)
+          const skillError = yield* slopcode.sessions
+            .skill({ sessionID, skill: "missing", resume: false })
+            .pipe(Effect.flip)
+
+          expect((yield* slopcode.sessions.get(sessionID)).agent).toBe("plan")
+          expect(admitted.prompt.text).toContain("slopcode.json")
+          expect(agentError).toBeInstanceOf(Session.AgentUnavailableError)
+          expect(skillError).toBeInstanceOf(Session.SkillNotFoundError)
         }),
       ),
     ),

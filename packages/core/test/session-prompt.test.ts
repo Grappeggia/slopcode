@@ -20,6 +20,7 @@ import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { testEffect } from "./lib/effect"
+import { locationServices } from "./lib/location-services"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
@@ -72,6 +73,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(store),
   Layer.provide(Project.defaultLayer),
   Layer.provide(execution),
+  Layer.provide(locationServices),
 )
 const control = SessionControl.layer.pipe(Layer.provide(sessions), Layer.provide(runtime))
 const it = testEffect(Layer.mergeAll(database, events, projector, store, runtime, execution, sessions, control))
