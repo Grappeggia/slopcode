@@ -231,6 +231,7 @@ export const layer = Layer.effect(
           request: LLM.request({ model: resolved.model, messages: [], tools: [] }),
           messageID: request.id,
           instruction: request.instruction,
+          terminalID: SessionInput.compactionTerminalEventID(request.id),
         })
         if (result.type === "skipped") return yield* SessionInput.skipCompaction(db, fenced, request)
         if (result.type === "failed") return yield* SessionInput.failCompaction(db, fenced, request, result)
@@ -552,7 +553,10 @@ export const layer = Layer.effect(
             needsContinuation = yield* runTurn(input.sessionID, promotion, active.epoch)
             promotion = "steer"
             yield* assertRuntime(input.sessionID, active.epoch)
-            yield* drainManualCompactions(input.sessionID, active.epoch)
+            if (!needsContinuation && (yield* SessionInput.hasPendingCompaction(db, input.sessionID))) {
+              yield* drainManualCompactions(input.sessionID, active.epoch)
+              return
+            }
             if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
             if (!needsContinuation) break
           }

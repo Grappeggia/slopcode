@@ -558,20 +558,24 @@ export const layer = Layer.effect(
                 reason: "execution",
                 message: "Compaction execution could not be scheduled",
               })
-              return yield* finish()
             }
-            const pending = yield* Effect.all([
-              SessionInput.hasPending(db, input.sessionID, "steer"),
-              SessionInput.hasPending(db, input.sessionID, "queue"),
-            ])
-            if (pending.some(Boolean)) yield* execution.wake(input.sessionID).pipe(Effect.exit)
-            yield* restore(
-              events.aggregateEvents({ aggregateID: input.sessionID, after: EventV2.Cursor.make(admitted.admittedSeq) }).pipe(
-                Stream.filter((event) => event.event.id === SessionInput.compactionTerminalEventID(id)),
-                Stream.take(1),
-                Stream.runDrain,
-              ),
+            if (wake._tag === "Success")
+              yield* restore(
+                events.aggregateEvents({ aggregateID: input.sessionID, after: EventV2.Cursor.make(admitted.admittedSeq) }).pipe(
+                  Stream.filter((event) => event.event.id === SessionInput.compactionTerminalEventID(id)),
+                  Stream.take(1),
+                  Stream.runDrain,
+                ),
+              )
+            if (
+              (
+                yield* Effect.all([
+                  SessionInput.hasPending(db, input.sessionID, "steer"),
+                  SessionInput.hasPending(db, input.sessionID, "queue"),
+                ])
+              ).some(Boolean)
             )
+              yield* execution.wake(input.sessionID).pipe(Effect.exit)
             yield* finish()
           }).pipe(Effect.asVoid),
         )

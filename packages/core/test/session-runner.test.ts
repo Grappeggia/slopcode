@@ -2144,6 +2144,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.wait(sessionID)
 
       expect(requests).toHaveLength(3)
+      expect(requests[1]!.tools).toEqual([])
       expect(userTexts(requests[1]!)[0]).toContain("Create a new anchored summary")
       expect(userTexts(requests[2]!)).toContain("Queued after active turn")
     }),
