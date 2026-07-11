@@ -251,7 +251,6 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
                 type: "tool",
                 id: event.data.callID,
                 name: event.data.name,
-                toolType: event.data.toolType,
                 time: { created: event.data.timestamp },
                 state: new SessionMessage.ToolStatePending({ status: "pending", input: "" }),
               }),
@@ -270,7 +269,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match) {
-            match.toolType = event.data.toolType
+            match.toolType = event.data.toolType === "custom" ? "custom" : undefined
             match.provider = event.data.provider
             match.time.ran = event.data.timestamp
             match.state = castDraft(

@@ -2939,7 +2939,7 @@ describe("SessionRunnerLLM", () => {
         callID: "call-interrupted",
         text: '{"text":"stale"}',
       })
-      yield* events.publish(SessionEvent.Tool.Called, {
+      yield* events.publish(SessionEvent.Tool.CalledV1, {
         sessionID,
         timestamp: yield* DateTime.now,
         assistantMessageID,
@@ -3003,7 +3003,7 @@ describe("SessionRunnerLLM", () => {
         callID: "call-hosted-interrupted",
         text: '{"query":"stale"}',
       })
-      yield* events.publish(SessionEvent.Tool.Called, {
+      yield* events.publish(SessionEvent.Tool.CalledV1, {
         sessionID,
         timestamp: yield* DateTime.now,
         assistantMessageID,

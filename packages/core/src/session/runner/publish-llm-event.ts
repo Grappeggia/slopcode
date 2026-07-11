@@ -180,7 +180,6 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       assistantMessageID,
       callID: event.id,
       name: event.name,
-      toolType: event.toolType,
     })
   })
 
@@ -317,19 +316,22 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         tool.called = true
         tool.providerExecuted = event.providerExecuted === true
         tool.providerMetadata = event.providerMetadata
-        yield* events.publish(SessionEvent.Tool.Called, {
+        const data = {
           sessionID: input.sessionID,
           timestamp: yield* timestamp,
           assistantMessageID: tool.assistantMessageID,
           callID: event.id,
           tool: event.name,
-          input: event.toolType === "custom" ? event.input : record(event.input),
-          toolType: event.toolType,
           provider: {
             executed: tool.providerExecuted,
             ...(event.providerMetadata === undefined ? {} : { metadata: event.providerMetadata }),
           },
-        })
+        }
+        if (event.toolType === "custom") {
+          yield* events.publish(SessionEvent.Tool.Called, { ...data, input: event.input, toolType: "custom" })
+          return
+        }
+        yield* events.publish(SessionEvent.Tool.CalledV1, { ...data, input: record(event.input) })
         return
       }
       case "tool-result": {

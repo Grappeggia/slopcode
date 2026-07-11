@@ -76,7 +76,7 @@ describe("Tool.Progress", () => {
             callID,
             name: "bash",
           })
-          yield* service.publish(SessionEvent.Tool.Called, {
+          yield* service.publish(SessionEvent.Tool.CalledV1, {
             sessionID,
             timestamp,
             assistantMessageID,

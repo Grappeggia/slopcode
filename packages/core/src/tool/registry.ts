@@ -233,7 +233,7 @@ SOURCE: /[\s\S]+/
                     ...input,
                     call: {
                       type: "tool-call",
-                      id: `${input.call.id}:codemode:${index}`,
+                      id: `${input.call.id}/${index}`,
                       name: target,
                       input: value,
                     },
@@ -255,7 +255,7 @@ SOURCE: /[\s\S]+/
                     }),
                   ),
                 ),
-                limits: { timeoutMs: 60_000, maxToolCalls: 64, maxOutputBytes: 65_536 },
+                limits: { timeoutMs: 120_000, maxToolCalls: 64, maxOutputBytes: 1_048_576 },
                 discovery: { maxInlineCatalogTokens: 0 },
                 onToolCallStart: (call) => {
                   started++
@@ -301,7 +301,13 @@ SOURCE: /[\s\S]+/
         return {
           definitions:
             mode === "code-only" ? [exec] : [exec, ...definitions.filter((definition) => definition.name !== "exec")],
-          settle: (input) => (input.call.name === "exec" ? settleExec(input) : settleMaterialized(input)),
+          settle: (input) => {
+            if (input.call.name !== "exec") return settleMaterialized(input)
+            if (input.call.toolType === "custom") return settleExec(input)
+            return Effect.succeed({
+              result: { type: "error", value: "Invalid exec call: expected a raw custom tool call" },
+            })
+          },
         }
       }),
     })

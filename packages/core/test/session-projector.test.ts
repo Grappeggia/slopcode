@@ -44,6 +44,94 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("replays stored Tool.Called V1 events as function calls", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "v1-tool-call",
+          directory: "/project",
+          title: "v1-tool-call",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+      const assistantMessageID = SessionMessage.ID.make("msg_v1_tool_call")
+
+      yield* events.replayAll([
+        {
+          id: EventV2.ID.make("evt_v1_tool_step"),
+          aggregateID: sessionID,
+          seq: 0,
+          type: EventV2.versionedType(SessionEvent.Step.Started.type, 1),
+          data: {
+            sessionID,
+            timestamp: 0,
+            assistantMessageID,
+            agent: "build",
+            model,
+          },
+        },
+        {
+          id: EventV2.ID.make("evt_v1_tool_input"),
+          aggregateID: sessionID,
+          seq: 1,
+          type: EventV2.versionedType(SessionEvent.Tool.Input.Started.type, 1),
+          data: {
+            sessionID,
+            timestamp: 0,
+            assistantMessageID,
+            callID: "call-v1",
+            name: "echo",
+          },
+        },
+        {
+          id: EventV2.ID.make("evt_v1_tool_called"),
+          aggregateID: sessionID,
+          seq: 2,
+          type: EventV2.versionedType(SessionEvent.Tool.Called.type, 1),
+          data: {
+            sessionID,
+            timestamp: 0,
+            assistantMessageID,
+            callID: "call-v1",
+            tool: "echo",
+            input: { text: "stored" },
+            provider: { executed: false },
+          },
+        },
+      ])
+
+      const row = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.id, assistantMessageID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(row).toBeDefined()
+      expect(Schema.decodeUnknownSync(SessionMessage.Message)({ ...row!.data, id: row!.id, type: row!.type })).toMatchObject({
+        type: "assistant",
+        content: [
+          {
+            type: "tool",
+            id: "call-v1",
+            name: "echo",
+            state: { status: "running", input: { text: "stored" } },
+          },
+        ],
+      })
+    }),
+  )
+
   it.effect("orders projected messages and context by durable aggregate sequence", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
