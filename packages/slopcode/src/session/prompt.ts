@@ -43,7 +43,7 @@ import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Semaphore, Types } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -62,12 +62,23 @@ import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@slopcode-ai/llm"
+import { EventV2 } from "@slopcode-ai/core/event"
+import { createHash } from "crypto"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
 
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
+const PromptAdmitted = EventV2.define({
+  type: "internal.v1.prompt.admitted",
+  sync: { aggregate: "sessionID", version: 1 },
+  schema: {
+    sessionID: SessionID,
+    messageID: MessageID,
+    identity: Schema.String,
+  },
+})
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -134,6 +145,17 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
+    const admissions = new Map<string, { lock: Semaphore.Semaphore; users: number }>()
+    const admission = (key: string) => {
+      const existing = admissions.get(key)
+      if (existing) {
+        existing.users++
+        return existing
+      }
+      const created = { lock: Semaphore.makeUnsafe(1), users: 1 }
+      admissions.set(key, created)
+      return created
+    }
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -646,10 +668,7 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* <E = never>(
-      input: PromptInput,
-      guard: Effect.Effect<void, E> = Effect.void,
-    ) {
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
@@ -1019,7 +1038,7 @@ export const layer = Layer.effect(
         })
       }
 
-      yield* sessions.updateMessage(info, guard.pipe(Effect.orDie))
+      yield* sessions.updateMessage(info)
       yield* Effect.addFinalizer(() => instruction.clear(info.id))
       if (current?.agent !== info.agent) {
         yield* events.publish(SessionEvent.AgentSwitched, {
@@ -1125,23 +1144,63 @@ export const layer = Layer.effect(
       input: PromptInput,
       guard: Effect.Effect<void, E> = Effect.void,
     ) {
-      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-      yield* guard
-      const message = yield* createUserMessage(input, guard)
-      yield* revert.cleanup(session, message.info.id)
-      yield* sessions.touch(input.sessionID)
+      const messageID = input.messageID ?? MessageID.ascending()
+      const request = { ...input, messageID }
+      const key = JSON.stringify([input.sessionID, messageID])
+      const entry = admission(key)
+      return yield* entry.lock
+        .withPermits(1)(
+          Effect.gen(function* () {
+            const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+            let admitted = false
+            yield* events.publish(
+              PromptAdmitted,
+              { sessionID: input.sessionID, messageID, identity: promptIdentity(request) },
+              {
+                id: EventV2.ID.fromExternal({
+                  namespace: "slopcode.v1.prompt",
+                  key,
+                }),
+                idempotent: true,
+                guard: () => guard.pipe(Effect.orDie),
+                commit: () =>
+                  Effect.sync(() => {
+                    admitted = true
+                  }),
+              },
+            )
+            if (!admitted) {
+              const existing = yield* sessions
+                .findMessage(input.sessionID, (item) => item.info.id === messageID)
+                .pipe(Effect.orDie)
+              if (Option.isSome(existing)) return existing.value
+              return yield* Effect.die(`Prompt admission ${messageID} is already in progress`)
+            }
+            const message = yield* createUserMessage(request)
+            yield* revert.cleanup(session, message.info.id)
+            yield* sessions.touch(input.sessionID)
 
-      const permissions: PermissionV1.Rule[] = []
-      for (const [t, enabled] of Object.entries(input.tools ?? {})) {
-        permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
-      }
-      if (permissions.length > 0) {
-        session.permission = permissions
-        yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
-      }
+            const permissions: PermissionV1.Rule[] = []
+            for (const [t, enabled] of Object.entries(input.tools ?? {})) {
+              permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
+            }
+            if (permissions.length > 0) {
+              session.permission = permissions
+              yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
+            }
 
-      if (input.noReply === true) return message
-      return yield* loop({ sessionID: input.sessionID })
+            if (input.noReply === true) return message
+            return yield* loop({ sessionID: input.sessionID })
+          }),
+        )
+        .pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              entry.users--
+              if (entry.users === 0) admissions.delete(key)
+            }),
+          ),
+        )
     })
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
@@ -1670,6 +1729,34 @@ export const PromptInput = Schema.Struct({
   ),
 })
 export type PromptInput = Schema.Schema.Type<typeof PromptInput>
+
+function promptIdentity(input: PromptInput) {
+  return createHash("sha256")
+    .update(
+      stableStringify({
+        agent: input.agent,
+        format: input.format,
+        model: input.model,
+        noReply: input.noReply,
+        parts: input.parts,
+        system: input.system,
+        tools: input.tools,
+        variant: input.variant,
+      }),
+    )
+    .digest("hex")
+}
+
+function stableStringify(value: unknown): string {
+  if (value === undefined) return "null"
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`
+  if (!value || typeof value !== "object") return JSON.stringify(value)
+  return `{${Object.entries(value)
+    .filter(([, item]) => item !== undefined)
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+    .join(",")}}`
+}
 
 export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
   sessionID: SessionID,
