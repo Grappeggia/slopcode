@@ -46,6 +46,7 @@ export const layer = Layer.effect(
       interrupt: coordinator.interrupt,
       resume: coordinator.run,
       wake: coordinator.wake,
+      wait: coordinator.awaitIdle,
     })
   }),
 )

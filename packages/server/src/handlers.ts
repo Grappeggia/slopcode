@@ -25,6 +25,22 @@ import { IntegrationHandler } from "./handlers/integration"
 import { CredentialHandler } from "./handlers/credential"
 import { Credential } from "@slopcode-ai/core/credential"
 import { ProjectCopyHandler } from "./handlers/project-copy"
+import { Database } from "@slopcode-ai/core/database/database"
+import { EventV2 } from "@slopcode-ai/core/event"
+import { ProjectV2 } from "@slopcode-ai/core/project"
+import { SessionProjector } from "@slopcode-ai/core/session/projector"
+import { SessionStore } from "@slopcode-ai/core/session/store"
+
+// The application graph also builds the noop default; freshness keeps this live composition from reusing it.
+const sessions = Layer.fresh(SessionV2.layer).pipe(
+  Layer.provide(SessionExecutionLocal.defaultLayer),
+  Layer.provide(SessionStore.defaultLayer),
+  Layer.provide(SessionProjector.defaultLayer),
+  Layer.provide(EventV2.defaultLayer),
+  Layer.provide(Database.defaultLayer),
+  Layer.provide(ProjectV2.defaultLayer),
+  Layer.orDie,
+)
 
 export const handlers = Layer.mergeAll(
   HealthHandler,
@@ -48,9 +64,8 @@ export const handlers = Layer.mergeAll(
   Layer.provide(sessionLocationLayer),
   Layer.provide(locationLayer),
   Layer.provide(SessionControl.layer),
-  Layer.provide(SessionV2.defaultLayer),
+  Layer.provide(sessions),
   Layer.provide(SessionRuntime.defaultLayer),
-  Layer.provide(SessionExecutionLocal.defaultLayer),
   Layer.provide(PermissionSaved.defaultLayer),
   Layer.provide(LocationServiceMap.layer),
   Layer.provide(Credential.defaultLayer),

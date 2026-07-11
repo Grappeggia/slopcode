@@ -46,7 +46,7 @@ export interface Interface {
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRuntime.Error>
   readonly wait: (
     sessionID: SessionSchema.ID,
-  ) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.OperationUnavailableError>
+  ) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError | SessionRunner.RunError>
   readonly compact: (
     input: CompactInput,
   ) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.OperationUnavailableError>
