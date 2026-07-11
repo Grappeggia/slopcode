@@ -81,7 +81,7 @@ export const layer = Layer.effectDiscard(
 
     yield* PluginV2.attachTools(
       plugin,
-      Effect.fn("PluginTool.register")(function* (id, definitions) {
+      Effect.fn("PluginTool.register")(function* (id, definitions, slot) {
         const entries = yield* boundary(String(id), "read plugin tool map", () => Object.entries(definitions))
         const adapted = yield* Effect.forEach(entries, ([name, definition]) =>
           adapt({ name, definition, plugin, permission, location, events }).pipe(
@@ -90,7 +90,7 @@ export const layer = Layer.effectDiscard(
         )
         const registered = yield* boundary(String(id), "construct plugin tool map", () => Object.fromEntries(adapted))
         yield* tools
-          .register(registered)
+          .register(registered, { slot })
           .pipe(Effect.mapError((error) => new LoadError({ name: error.name, message: error.message })))
       }),
     )

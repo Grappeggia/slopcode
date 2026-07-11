@@ -109,6 +109,7 @@ export function define<R>(input: { id: ID; effect: Effect.Effect<Registration | 
 type ToolAdapter = (
   id: ID,
   tools: Readonly<Record<string, PluginTool.Definition>>,
+  slot: object,
 ) => Effect.Effect<void, PluginTool.LoadError, Scope.Scope>
 
 const adapters = new WeakMap<Interface, { adapter?: ToolAdapter; ready: Deferred.Deferred<void> }>()
@@ -155,6 +156,7 @@ export const layer = Layer.effect(
       id: ID
       hooks: HookFunctions
       scope: Scope.Closeable
+      slot: object
     }[] = []
     const events = yield* EventV2.Service
     const scope = yield* Scope.Scope
@@ -165,6 +167,8 @@ export const layer = Layer.effect(
       add: Effect.fn("Plugin.add")(function* (input) {
         yield* locks.withLock(input.id)(
           Effect.gen(function* () {
+            const existing = hooks.find((item) => item.id === input.id)
+            const slot = existing?.slot ?? {}
             const childScope = yield* Scope.fork(scope)
             const result = yield* input.effect.pipe(
               Scope.provide(childScope),
@@ -183,7 +187,7 @@ export const layer = Layer.effect(
               yield* Deferred.await(ready)
               const adapter = adapters.get(svc)?.adapter
               if (!adapter) return yield* Effect.die("Plugin tool adapter is unavailable")
-              yield* adapter(input.id, result.tool).pipe(
+              yield* adapter(input.id, result.tool, slot).pipe(
                 Scope.provide(childScope),
                 Effect.tapError((error) =>
                   events.publish(Event.Failed, {
@@ -195,15 +199,8 @@ export const layer = Layer.effect(
                 Effect.onError((cause) => Scope.close(childScope, Exit.failCause(cause))),
               )
             }
-            const existing = hooks.find((item) => item.id === input.id)
-            hooks = [
-              ...hooks.filter((item) => item.id !== input.id),
-              {
-                id: input.id,
-                hooks: result ?? {},
-                scope: childScope,
-              },
-            ]
+            const item = { id: input.id, hooks: result ?? {}, scope: childScope, slot }
+            hooks = existing ? hooks.map((current) => (current === existing ? item : current)) : [...hooks, item]
             if (existing) yield* Scope.close(existing.scope, Exit.void).pipe(Effect.ignore)
             yield* events.publish(Event.Added, { id: input.id })
           }),
