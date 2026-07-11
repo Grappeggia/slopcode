@@ -108,6 +108,20 @@
         "@typescript/native-preview": "catalog:",
       },
     },
+    "packages/codemode": {
+      "name": "@slopcode-ai/codemode",
+      "version": "0.0.1",
+      "dependencies": {
+        "acorn": "8.16.0",
+        "effect": "catalog:",
+        "typescript": "catalog:",
+      },
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+        "@typescript/native-preview": "catalog:",
+      },
+    },
     "packages/console/app": {
       "name": "@slopcode-ai/console-app",
       "version": "0.2.192",
@@ -2358,6 +2372,8 @@
     "@slopcode-ai/app": ["@slopcode-ai/app@workspace:packages/app"],
 
     "@slopcode-ai/cli": ["@slopcode-ai/cli@workspace:packages/cli"],
+
+    "@slopcode-ai/codemode": ["@slopcode-ai/codemode@workspace:packages/codemode"],
 
     "@slopcode-ai/console-app": ["@slopcode-ai/console-app@workspace:packages/console/app"],
 
