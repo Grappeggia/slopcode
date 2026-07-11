@@ -607,19 +607,21 @@ export const layer = Layer.effect(
                 )
                   continue
                 const task = yield* SessionTask.request(db, sessionID, message.id, tool.id)
-                if (!task) continue
-                const data = {
-                  sessionID,
-                  timestamp: yield* DateTime.now,
-                  assistantMessageID: message.id,
-                  callID: tool.id,
-                  childSessionID: task.childSessionID,
+                if (task) {
+                  const data = {
+                    sessionID,
+                    timestamp: yield* DateTime.now,
+                    assistantMessageID: message.id,
+                    callID: tool.id,
+                    childSessionID: task.childSessionID,
+                  }
+                  if (!(yield* SessionTask.interrupted(db, sessionID, message.id, tool.id)))
+                    yield* events.publish(SessionEvent.Task.Interrupted, data, {
+                      id: SessionTask.interruptedEventID(sessionID, message.id, tool.id),
+                    })
+                  yield* events.publish(SessionEvent.Task.Interrupt, data)
                 }
-                if (!(yield* SessionTask.interrupted(db, sessionID, message.id, tool.id)))
-                  yield* events.publish(SessionEvent.Task.Interrupted, data, {
-                    id: SessionTask.interruptedEventID(sessionID, message.id, tool.id),
-                  })
-                yield* events.publish(SessionEvent.Task.Interrupt, data)
+                if (!task && !(yield* SessionTask.prepared(db, sessionID, message.id, tool.id))) continue
                 yield* events.publish(
                   SessionEvent.Tool.Failed,
                   {

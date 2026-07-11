@@ -676,6 +676,86 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("public interruption terminally settles a prepared task before its request", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const parent = yield* session.create({ id, location, runtime: "v2" })
+      const messageID = SessionMessage.ID.make("msg_public_prepared_interrupt")
+      const callID = "call-public-prepared-interrupt"
+      const model = ModelV2.Ref.make({ id: ModelV2.ID.make("fake"), providerID: ProviderV2.ID.make("fake") })
+      const input = { description: "Prepared", prompt: "wait", subagent_type: "general" }
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID: parent.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        agent: "build",
+        model,
+      })
+      yield* events.publish(
+        SessionEvent.Task.Prepared,
+        {
+          sessionID: parent.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: messageID,
+          callID,
+          input,
+          callerAgent: "build",
+          permissions: [],
+          plan: { multiAgent: "v2" },
+          agent: "general",
+          available: ["general"],
+          model,
+          projectID: parent.projectID,
+          location,
+          title: "Prepared (@general subagent)",
+          ceiling: [],
+        },
+        { id: SessionTask.preparedEventID(parent.id, messageID, callID) },
+      )
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID: parent.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID: parent.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        text: JSON.stringify(input),
+      })
+
+      yield* Effect.all([session.interrupt(parent.id), session.interrupt(parent.id)], { concurrency: "unbounded" })
+
+      expect(yield* SessionTask.request(db, parent.id, messageID, callID)).toBeUndefined()
+      expect(yield* SessionTask.interrupted(db, parent.id, messageID, callID)).toBeFalse()
+      expect(yield* session.context(parent.id)).toMatchObject([
+        {
+          type: "assistant",
+          content: [
+            {
+              type: "tool",
+              id: callID,
+              state: { status: "error", error: { message: "Tool execution interrupted" } },
+            },
+          ],
+        },
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.id, SessionTask.interruptedToolEventID(parent.id, messageID, callID)))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(1)
+    }),
+  )
+
   it.effect("a durable parent interrupt immediately orphans its child before task settlement", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

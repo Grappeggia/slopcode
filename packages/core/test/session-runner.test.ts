@@ -4620,6 +4620,20 @@ describe("SessionRunnerLLM", () => {
       expect(request).toMatchObject({ callerAgent: "build", permissions, plan, agent: "general", model, ceiling })
       expect(requests.filter((item) => userTexts(item).includes(input.prompt))).toHaveLength(1)
       expect(
+        yield* database.db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.id, SessionTask.progressEventID(sessionID, messageID, callID)))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({
+        data: {
+          assistantMessageID: messageID,
+          callID,
+          structured: { childSessionID: childID, agent: "general", model },
+        },
+      })
+      expect(
         yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, childID)).all().pipe(Effect.orDie),
       ).toHaveLength(1)
     }),

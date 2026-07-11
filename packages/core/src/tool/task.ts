@@ -228,6 +228,56 @@ export const layer = Layer.effectDiscard(
       )
     })
 
+    const progress = Effect.fn("TaskTool.progress")(function* (request: SessionEvent.Task.Requested["data"]) {
+      const data = {
+        sessionID: request.sessionID,
+        timestamp: request.timestamp,
+        assistantMessageID: request.assistantMessageID,
+        callID: request.callID,
+        structured: {
+          state: "running",
+          taskID: request.childSessionID,
+          childSessionID: request.childSessionID,
+          agent: request.agent,
+          model: request.model,
+        },
+        content: [],
+      }
+      const verify = Effect.fnUntraced(function* () {
+        const existing = yield* SessionTask.progress(
+          db,
+          request.sessionID,
+          request.assistantMessageID,
+          request.callID,
+        )
+        if (
+          existing?.sessionID === data.sessionID &&
+          existing.assistantMessageID === data.assistantMessageID &&
+          existing.callID === data.callID &&
+          JSON.stringify(existing.structured) === JSON.stringify(data.structured) &&
+          existing.content.length === 0
+        )
+          return
+        return yield* new ResumeConflictError({
+          taskID: request.childSessionID,
+          message: `Task ${request.childSessionID} progress identity conflicts`,
+        })
+      })
+      if (yield* SessionTask.progress(db, request.sessionID, request.assistantMessageID, request.callID))
+        return yield* verify()
+      yield* events
+        .publish(SessionEvent.Tool.Progress, data, {
+          id: SessionTask.progressEventID(request.sessionID, request.assistantMessageID, request.callID),
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            SessionTask.progress(db, request.sessionID, request.assistantMessageID, request.callID).pipe(
+              Effect.flatMap((existing) => (existing ? verify() : Effect.failCause(cause))),
+            ),
+          ),
+        )
+    })
+
     const interrupt = Effect.fn("TaskTool.interruptChild")(function* (input: {
       parentID: SessionSchema.ID
       messageID: SessionMessage.ID
@@ -376,6 +426,7 @@ export const layer = Layer.effectDiscard(
                   canonical: true,
                   request,
                 })
+                yield* progress(request)
                 const result = yield* run({
                   taskID: request.childSessionID,
                   promptID: request.promptMessageID,
@@ -619,14 +670,7 @@ export const layer = Layer.effectDiscard(
                 canonical: true,
                 request: recorded ?? request,
               })
-              yield* events.publish(SessionEvent.Tool.Progress, {
-                sessionID: context.sessionID,
-                timestamp: yield* DateTime.now,
-                assistantMessageID: context.assistantMessageID,
-                callID: context.toolCallID,
-                structured: { state: "running", taskID, childSessionID: taskID, agent: selectedID, model },
-                content: [],
-              })
+              yield* progress(recorded ?? request)
 
               const result = yield* run({ taskID, promptID, prompt: input.prompt, context }).pipe(
                 Effect.onInterrupt(() =>
