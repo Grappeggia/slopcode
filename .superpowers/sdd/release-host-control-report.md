@@ -8,8 +8,8 @@ DONE_WITH_CONCERNS
 
 - Routed Slopcode V2 prompt and interrupt through Core `SessionControl`, preserving the V1 `SessionPrompt` path and Core's ready/owner/epoch commit guard.
 - Added deterministic paused, draining, migrating, and owner/state/epoch TOCTOU tests proving the guarded V2 prompt/interrupt mutations do not occur.
-- Fenced V1 prompt routing on persisted V1 ownership, ready state, and observed epoch; the final guard now shares the synchronized first-message SQLite transaction with projection and event insertion.
-- Added an immediate-transaction `SessionRuntime.claim` as the V1 cancellation linearization point shared with runtime ownership/state/epoch transitions.
+- Fenced V1 prompt routing on persisted V1 ownership, ready state, and observed epoch; the guarded user-message insert is now the first mutation, with revert cleanup, switch/error events, parts, and permissions following the admitted operation.
+- Added an immediate-transaction `SessionRuntime.claim` as the V1 cancellation linearization point; it executes `SessionRunState.cancel` as its coordinate before runtime ownership/state/epoch assignments can commit.
 - Made guarded missing-projection `SessionV2.interrupt` validate and return without calling execution, while preserving unguarded missing-session interruption compatibility.
 - Installed scoped `PluginPackage.Host` layers in Slopcode's in-process and listener server compositions, with configured SDK transport, actual listener URL, auth injection, and no standalone server runtime.
 - Bridged package workspace registrations into the production adapter registry with token-owned cleanup on location/host scope disposal.
@@ -30,12 +30,14 @@ DONE_WITH_CONCERNS
 - Final atomicity follow-up: pausing V1 prompt admission after its guard let owner/state/epoch transitions complete before the first message projection.
 - Final atomicity follow-up: the V1 cancellation regression initially failed because no transactional runtime claim API existed.
 - Final atomicity follow-up: a successful guarded missing-projection V2 interrupt still called `SessionExecution.interrupt`.
+- Precise linearization follow-up: transition-wins tests failed because revert cleanup and agent/model projections mutated before guarded admission; coordinated cancellation failed because `state.cancel` ran after `SessionRuntime.claim` returned.
 
 ## Verification
 
 - PASS: `packages/slopcode`: `bun test test/session/control.test.ts test/control-plane/adapters.test.ts test/server/plugin-package-production.test.ts` (17 pass).
-- PASS: `packages/slopcode`: three atomic owner/state/epoch admission regressions in `test/session/prompt.test.ts` (3 pass); full file completed with 54 pass, 1 skip, and only 4 previously classified failures.
-- PASS: `packages/slopcode`: `bun test test/session/control.test.ts` (13 pass), including the V1 cancellation claim regression.
+- PASS: `packages/slopcode`: six owner/state/epoch admission race directions in `test/session/prompt.test.ts` (6 pass); full file completed with 57 pass, 1 skip, and only 4 previously classified failures.
+- PASS: `packages/slopcode`: `bun test test/session/control.test.ts` (16 pass), including coordinated cancellation and concurrent owner/state/epoch ordering.
+- PASS: `packages/slopcode`: `bun test test/session/revert-compact.test.ts` (7 pass), including cleanup compatibility.
 - PASS: `packages/core`: guarded missing-projection V2 interrupt regression (1 pass).
 - PASS: `packages/core`: `bun test test/event.test.ts test/session-prompt.test.ts` (80 pass).
 - PASS: `packages/server`: `bun test` (4 pass).
@@ -45,7 +47,7 @@ DONE_WITH_CONCERNS
 - PASS: `packages/core`: `bun run typecheck`.
 - PASS: repository `git diff --check`.
 - FULL SUITE: `packages/slopcode`: `bun test` (3059 pass, 22 skip, 1 todo, 11 fail). All 11 named failures also fail at base commit `8389b8fbac`; eight reproduce with the same assertion/timeout, while the three native V2 HTTP tests fail earlier there because `LocationServiceMap` is absent. No listed pass/fail regression is caused by the host-control commits.
-- TYPECHECK: `packages/slopcode`: `bun run typecheck` reaches two existing errors: `src/session/processor.ts:495` (`Record<string, unknown>` to `string`) and pre-existing runtime mismatch construction in `src/session/prompt.ts:1159` (missing `actualState`; shifted from line 1147 by these tests).
+- TYPECHECK: `packages/slopcode`: `bun run typecheck` reaches two existing errors: `src/session/processor.ts:495` (`Record<string, unknown>` to `string`) and pre-existing runtime mismatch construction in `src/session/prompt.ts:1165` (missing `actualState`; shifted by these changes).
 
 ## Concerns
 
