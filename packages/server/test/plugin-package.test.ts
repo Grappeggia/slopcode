@@ -55,7 +55,7 @@ test("configured plugins use the in-process server client and register workspace
       health: { healthy: true },
       url: "http://configured.test:7777/",
     })
-    expect(PluginServer.workspace(body.project.id, "server-test")).toBeDefined()
+    expect(app.workspace(body.project.id, "server-test")).toBeDefined()
     const state = globalThis as typeof globalThis & {
       __h5c3b_location: Promise<{ data: unknown }>
       __h5c3b_factories: number
@@ -66,7 +66,7 @@ test("configured plugins use the in-process server client and register workspace
     expect(state.__h5c3b_factories).toBe(1)
     await app.dispose()
     expect(state.__h5c3b_disposed).toBe(1)
-    expect(PluginServer.workspace(body.project.id, "server-test")).toBeUndefined()
+    expect(app.workspace(body.project.id, "server-test")).toBeUndefined()
   } finally {
     await fs.rm(directory, { recursive: true, force: true })
   }
@@ -74,27 +74,26 @@ test("configured plugins use the in-process server client and register workspace
 
 test("workspace registrations are token-owned across replacement and host disposal", async () => {
   const scope = await Effect.runPromise(Scope.make())
-  const context = await Effect.runPromise(
-    Layer.buildWithScope(
-      PluginServer.layer({ baseUrl: new URL("http://test"), fetch: () => Promise.resolve(new Response()) }),
-      scope,
-    ),
-  )
+  const runtime = PluginServer.runtime({
+    baseUrl: new URL("http://test"),
+    fetch: () => Promise.resolve(new Response()),
+  })
+  const context = await Effect.runPromise(Layer.buildWithScope(runtime.layer, scope))
   const host = Context.get(context, PluginPackage.Host)
   const first = { name: "first" }
   const second = { name: "second" }
   const cleanFirst = host.register("project", "type", first)
   const cleanSecond = host.register("project", "type", second)
 
-  expect(PluginServer.workspace("project", "type")).toBe(second)
+  expect(runtime.workspace("project", "type")).toBe(second)
   cleanFirst()
-  expect(PluginServer.workspace("project", "type")).toBe(second)
+  expect(runtime.workspace("project", "type")).toBe(second)
   cleanSecond()
-  expect(PluginServer.workspace("project", "type")).toBeUndefined()
+  expect(runtime.workspace("project", "type")).toBeUndefined()
 
   host.register("project", "type", first)
   await Effect.runPromise(Scope.close(scope, Exit.void))
-  expect(PluginServer.workspace("project", "type")).toBeUndefined()
+  expect(runtime.workspace("project", "type")).toBeUndefined()
 })
 
 test("Location invalidation removes configured workspace registrations", async () => {
@@ -109,17 +108,11 @@ test("Location invalidation removes configured workspace registrations", async (
         `export default async (input) => { input.experimental_workspace.register("location-test", { name: "location-test" }); return {} }`,
       ),
     ])
-    const context = await Effect.runPromise(
-      Layer.buildWithScope(
-        withPluginHost(
-          PluginServer.layer({
-            baseUrl: new URL("http://location.test"),
-            fetch: () => Promise.resolve(new Response()),
-          }),
-        ),
-        scope,
-      ),
-    )
+    const runtime = PluginServer.runtime({
+      baseUrl: new URL("http://location.test"),
+      fetch: () => Promise.resolve(new Response()),
+    })
+    const context = await Effect.runPromise(Layer.buildWithScope(withPluginHost(runtime.layer), scope))
     const locations = Context.get(context, LocationServiceMap)
     const ref = Location.Ref.make({ directory: AbsolutePath.make(directory) })
     const projectID = await Effect.runPromise(
@@ -129,11 +122,37 @@ test("Location invalidation removes configured workspace registrations", async (
       }).pipe(Effect.scoped, Effect.provide(locations.get(ref))),
     )
 
-    expect(PluginServer.workspace(projectID, "location-test")).toBeDefined()
+    expect(runtime.workspace(projectID, "location-test")).toBeDefined()
     await Effect.runPromise(locations.invalidate(ref))
-    expect(PluginServer.workspace(projectID, "location-test")).toBeUndefined()
+    expect(runtime.workspace(projectID, "location-test")).toBeUndefined()
   } finally {
     await Effect.runPromise(Scope.close(scope, Exit.void))
     await fs.rm(directory, { recursive: true, force: true })
   }
+})
+
+test("concurrent handlers isolate workspace visibility and disposal", async () => {
+  const first = webHandler()
+  const second = webHandler()
+  await Promise.all([
+    first.handler(new Request("http://localhost/api/health"), undefined as never),
+    second.handler(new Request("http://localhost/api/health"), undefined as never),
+  ])
+  const project = "shared-project"
+  const one = { name: "one" }
+  const two = { name: "two" }
+  const cleanFirst = first.pluginHost.register(project, "shared", one)
+  const cleanSecond = second.pluginHost.register(project, "shared", two)
+
+  expect(first.workspace(project, "shared")).toBe(one)
+  expect(second.workspace(project, "shared")).toBe(two)
+  cleanFirst()
+  expect(first.workspace(project, "shared")).toBeUndefined()
+  expect(second.workspace(project, "shared")).toBe(two)
+
+  await first.dispose()
+  expect(second.workspace(project, "shared")).toBe(two)
+  await second.dispose()
+  expect(second.workspace(project, "shared")).toBeUndefined()
+  cleanSecond()
 })
