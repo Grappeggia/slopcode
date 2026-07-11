@@ -714,24 +714,83 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
   )
 
-  it.instance(
-    "returns v2 public unavailable errors for unfinished session mutations",
-    () =>
-      Effect.gen(function* () {
-        const test = yield* TestInstance
-        const headers = { "x-slopcode-directory": test.directory }
-        const session = yield* createSession({ title: "v2 unavailable" })
-        yield* assignV2Runtime(session.id)
+  it.live("compacts a native v2 session through the public HTTP route", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const id = SessionID.descending()
+      const headers = { "x-slopcode-directory": directory, "content-type": "application/json" }
+      yield* request("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          id,
+          location: { directory },
+          model: { providerID: "test", id: "test-model" },
+        }),
+      })
+      yield* llm.text("Earlier answer")
+      yield* request(`/api/session/${id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: { text: "Short HTTP history" } }),
+      })
+      expect((yield* request(`/api/session/${id}/wait`, { method: "POST", headers })).status).toBe(204)
+      yield* llm.text("## Goal\n- HTTP compaction")
 
-        const compact = yield* request(`/api/session/${session.id}/compact`, { method: "POST", headers })
-        expect(compact.status).toBe(503)
-        expect(yield* responseJson(compact)).toEqual({
-          _tag: "ServiceUnavailableError",
-          message: "Session compact is not available yet",
-          service: "session.compact",
-        })
-      }),
-    { git: true, config: { formatter: false, lsp: false } },
+      const compact = yield* request(`/api/session/${id}/compact`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          id: "msg_http_compaction",
+          prompt: { text: "Preserve HTTP details" },
+        }),
+      })
+
+      expect(compact.status).toBe(204)
+      expect(yield* requestJson<{ data: Array<{ type: string; summary?: string }> }>(`/api/session/${id}/context`, {
+        headers,
+      })).toMatchObject({ data: [{ type: "compaction", summary: "## Goal\n- HTTP compaction" }] })
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+  )
+
+  it.live("returns a safe typed HTTP error when native v2 compaction fails", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const id = SessionID.descending()
+      const headers = { "x-slopcode-directory": directory, "content-type": "application/json" }
+      yield* request("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          id,
+          location: { directory },
+          model: { providerID: "test", id: "test-model" },
+        }),
+      })
+      yield* llm.text("Earlier answer")
+      yield* request(`/api/session/${id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: { text: "History before failure" } }),
+      })
+      yield* request(`/api/session/${id}/wait`, { method: "POST", headers })
+      yield* llm.fail("provider failed")
+
+      const compact = yield* request(`/api/session/${id}/compact`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ id: "msg_http_compaction_failure" }),
+      })
+
+      expect(compact.status).toBe(500)
+      expect(yield* responseJson(compact)).toEqual({
+        _tag: "UnknownError",
+        message: "Compaction provider returned an empty summary",
+        ref: "msg_http_compaction_failure",
+      })
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )
 
   it.live("runs and waits for a native v2 prompt through the shared live execution layer", () =>

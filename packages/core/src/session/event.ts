@@ -438,6 +438,39 @@ export const Retried = EventV2.define({
 export type Retried = typeof Retried.Type
 
 export namespace Compaction {
+  export const Requested = EventV2.define({
+    type: "session.next.compaction.requested",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessageID.ID,
+      instruction: Schema.String.pipe(Schema.optional),
+    },
+  })
+  export type Requested = typeof Requested.Type
+
+  export const Skipped = EventV2.define({
+    type: "session.next.compaction.skipped",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessageID.ID,
+    },
+  })
+  export type Skipped = typeof Skipped.Type
+
+  export const Failed = EventV2.define({
+    type: "session.next.compaction.failed",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessageID.ID,
+      reason: Schema.Literals(["provider", "empty", "context", "interrupted", "runtime", "execution"]),
+      message: Schema.String,
+    },
+  })
+  export type Failed = typeof Failed.Type
+
   export const Started = EventV2.define({
     type: "session.next.compaction.started",
     ...options,
@@ -510,6 +543,9 @@ const DurableDefinitions = [
   Reasoning.Started,
   Reasoning.Ended,
   Retried,
+  Compaction.Requested,
+  Compaction.Skipped,
+  Compaction.Failed,
   Compaction.Started,
   Compaction.Ended,
 ] as const

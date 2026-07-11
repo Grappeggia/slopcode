@@ -4,7 +4,7 @@ import { and, asc, eq, isNull, lte } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import type { Database } from "../database/database"
 import type { EventV2 } from "../event"
-import { EventSequenceTable } from "../event/sql"
+import { EventSequenceTable, EventTable } from "../event/sql"
 import { NonNegativeInt } from "../schema"
 import { V2Schema } from "../v2-schema"
 import { SessionEvent } from "./event"
@@ -195,6 +195,214 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   return row !== undefined
 })
 
+export type CompactionRequest = {
+  readonly admittedSeq: number
+  readonly id: SessionMessage.ID
+  readonly sessionID: SessionSchema.ID
+  readonly instruction?: string
+}
+
+export type CompactionTerminal =
+  | { readonly type: "ended" }
+  | { readonly type: "skipped" }
+  | {
+      readonly type: "failed"
+      readonly reason: typeof SessionEvent.Compaction.Failed.data.Type.reason
+      readonly message: string
+    }
+
+export const compactionRequestEventID = (id: SessionMessage.ID) =>
+  `evt_compaction_request_${id}` as EventV2.ID
+export const compactionTerminalEventID = (id: SessionMessage.ID) =>
+  `evt_compaction_terminal_${id}` as EventV2.ID
+
+const compactionRequestedType = `${SessionEvent.Compaction.Requested.type}.1`
+const compactionSkippedType = `${SessionEvent.Compaction.Skipped.type}.1`
+const compactionFailedType = `${SessionEvent.Compaction.Failed.type}.1`
+const compactionEndedType = `${SessionEvent.Compaction.Ended.type}.2`
+const decodeCompactionRequest = Schema.decodeUnknownEffect(SessionEvent.Compaction.Requested.data)
+const decodeCompactionFailed = Schema.decodeUnknownEffect(SessionEvent.Compaction.Failed.data)
+
+export const findCompaction = Effect.fn("SessionInput.findCompaction")(function* (
+  db: DatabaseService,
+  id: SessionMessage.ID,
+) {
+  const row = yield* db
+    .select()
+    .from(EventTable)
+    .where(eq(EventTable.id, compactionRequestEventID(id)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row || row.type !== compactionRequestedType) return
+  const data = yield* decodeCompactionRequest(row.data).pipe(Effect.orDie)
+  return {
+    admittedSeq: row.seq,
+    id: data.messageID,
+    sessionID: data.sessionID,
+    ...(data.instruction === undefined ? {} : { instruction: data.instruction }),
+  } satisfies CompactionRequest
+})
+
+export const terminalCompaction = Effect.fn("SessionInput.terminalCompaction")(function* (
+  db: DatabaseService,
+  id: SessionMessage.ID,
+) {
+  const row = yield* db
+    .select()
+    .from(EventTable)
+    .where(eq(EventTable.id, compactionTerminalEventID(id)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return
+  if (row.type === compactionEndedType) return { type: "ended" } as const
+  if (row.type === compactionSkippedType) return { type: "skipped" } as const
+  if (row.type !== compactionFailedType) return yield* Effect.die(`Invalid manual compaction terminal event: ${row.type}`)
+  const data = yield* decodeCompactionFailed(row.data).pipe(Effect.orDie)
+  return { type: "failed", reason: data.reason, message: data.message } as const
+})
+
+export const pendingCompaction = Effect.fn("SessionInput.pendingCompaction")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const rows = yield* db
+    .select()
+    .from(EventTable)
+    .where(and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.type, compactionRequestedType)))
+    .orderBy(asc(EventTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  const requests = yield* Effect.forEach(rows, (row) =>
+    decodeCompactionRequest(row.data).pipe(
+      Effect.orDie,
+      Effect.map(
+        (data) =>
+          ({
+            admittedSeq: row.seq,
+            id: data.messageID,
+            sessionID: data.sessionID,
+            ...(data.instruction === undefined ? {} : { instruction: data.instruction }),
+          }) satisfies CompactionRequest,
+      ),
+    ),
+  )
+  const unsettled = yield* Effect.filter(requests, (request) =>
+    terminalCompaction(db, request.id).pipe(Effect.map((result) => result === undefined)),
+  )
+  return unsettled[0]
+})
+
+export const hasPendingCompaction = Effect.fn("SessionInput.hasPendingCompaction")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  return (yield* pendingCompaction(db, sessionID)) !== undefined
+})
+
+export const pendingCompactionSessions = Effect.fn("SessionInput.pendingCompactionSessions")(function* (
+  db: DatabaseService,
+) {
+  const rows = yield* db
+    .select({ data: EventTable.data })
+    .from(EventTable)
+    .where(eq(EventTable.type, compactionRequestedType))
+    .orderBy(asc(EventTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  const requests = yield* Effect.forEach(rows, (row) => decodeCompactionRequest(row.data).pipe(Effect.orDie))
+  const pending = yield* Effect.filter(requests, (request) =>
+    terminalCompaction(db, request.messageID).pipe(Effect.map((result) => result === undefined)),
+  )
+  return [...new Set(pending.map((request) => request.sessionID))]
+})
+
+export const admitCompaction = Effect.fn("SessionInput.admitCompaction")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  input: {
+    readonly id: SessionMessage.ID
+    readonly sessionID: SessionSchema.ID
+    readonly instruction?: string
+  },
+) {
+  const existing = yield* findCompaction(db, input.id)
+  if (existing) return existing
+  const timestamp = yield* DateTime.now
+  return yield* events
+    .publish(
+      SessionEvent.Compaction.Requested,
+      {
+        sessionID: input.sessionID,
+        messageID: input.id,
+        timestamp,
+        ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
+      },
+      { id: compactionRequestEventID(input.id) },
+    )
+    .pipe(
+      Effect.flatMap((event) =>
+        event.seq === undefined
+          ? Effect.die("Compaction request event is missing aggregate sequence")
+          : Effect.succeed({
+              admittedSeq: event.seq,
+              id: input.id,
+              sessionID: input.sessionID,
+              ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
+            } satisfies CompactionRequest),
+      ),
+      Effect.catchDefect((defect) =>
+        findCompaction(db, input.id).pipe(
+          Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect))),
+        ),
+      ),
+    )
+})
+
+const settleCompaction = <D extends typeof SessionEvent.Compaction.Skipped | typeof SessionEvent.Compaction.Failed>(
+  db: DatabaseService,
+  events: EventV2.Interface,
+  definition: D,
+  data: EventV2.Data<D>,
+) =>
+  events.publish(definition, data, { id: compactionTerminalEventID(data.messageID) }).pipe(
+    Effect.asVoid,
+    Effect.catchDefect((defect) =>
+      terminalCompaction(db, data.messageID).pipe(
+        Effect.flatMap((stored) => (stored ? Effect.void : Effect.die(defect))),
+      ),
+    ),
+  )
+
+export const skipCompaction = Effect.fn("SessionInput.skipCompaction")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  request: CompactionRequest,
+) {
+  yield* settleCompaction(db, events, SessionEvent.Compaction.Skipped, {
+    sessionID: request.sessionID,
+    messageID: request.id,
+    timestamp: yield* DateTime.now,
+  })
+})
+
+export const failCompaction = Effect.fn("SessionInput.failCompaction")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  request: CompactionRequest,
+  failure: {
+    readonly reason: typeof SessionEvent.Compaction.Failed.data.Type.reason
+    readonly message: string
+  },
+) {
+  yield* settleCompaction(db, events, SessionEvent.Compaction.Failed, {
+    sessionID: request.sessionID,
+    messageID: request.id,
+    timestamp: yield* DateTime.now,
+    reason: failure.reason,
+    message: failure.message,
+  })
+})
+
 export const equivalent = (
   input: Admitted,
   expected: {
@@ -215,8 +423,16 @@ export const guardReservedID = Effect.fn("SessionInput.guardReservedID")(functio
   if (
     Schema.is(SessionEvent.PromptLifecycle.Admitted)(event) ||
     Schema.is(SessionEvent.PromptLifecycle.Promoted)(event)
-  )
+  ) {
+    const requested = yield* db
+      .select({ id: EventTable.id })
+      .from(EventTable)
+      .where(eq(EventTable.id, compactionRequestEventID(event.data.messageID)))
+      .get()
+      .pipe(Effect.orDie)
+    if (requested) return yield* Effect.die(new LifecycleConflict({ id: event.data.messageID }))
     return
+  }
   const id = reservedID(event)
   if (id === undefined) return
   const admitted = yield* db
@@ -236,6 +452,7 @@ const reservedID = (event: EventV2.Payload) => {
   if (Schema.is(SessionEvent.Prompted)(event)) return event.data.messageID
   if (Schema.is(SessionEvent.Synthetic)(event)) return event.data.messageID
   if (Schema.is(SessionEvent.Shell.Started)(event)) return event.data.messageID
+  if (Schema.is(SessionEvent.Compaction.Requested)(event)) return event.data.messageID
   if (Schema.is(SessionEvent.Compaction.Started)(event)) return event.data.messageID
 }
 

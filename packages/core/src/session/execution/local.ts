@@ -19,6 +19,16 @@ export const layer = Layer.effect(
     const locations = yield* LocationServiceMap
     const runtime = yield* SessionRuntime.Service
     const recovered = yield* runtime.recover()
+    const recovery = new Map(recovered.map((info) => [info.sessionID, info]))
+    yield* Effect.forEach(
+      yield* SessionInput.pendingCompactionSessions(db),
+      Effect.fnUntraced(function* (sessionID) {
+        if (recovery.has(sessionID)) return
+        const info = yield* runtime.get(sessionID)
+        if (info?.owner === "v2") recovery.set(sessionID, info)
+      }),
+      { discard: true },
+    )
     const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, void, SessionRunner.RunError>({
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, mode) {
         const session = yield* store.get(sessionID)
@@ -30,14 +40,16 @@ export const layer = Layer.effect(
       onFailure: (sessionID, cause) => logFailure("Failed to drain Session", sessionID, cause),
     })
     yield* Effect.forEach(
-      recovered,
+      recovery.values(),
       Effect.fnUntraced(function* (info) {
         const pending = yield* Effect.all([
+          SessionInput.hasPendingCompaction(db, info.sessionID),
           SessionInput.hasPending(db, info.sessionID, "steer"),
           SessionInput.hasPending(db, info.sessionID, "queue"),
         ])
         if (!pending.some(Boolean)) return
         yield* coordinator.wake(info.sessionID)
+        if (pending.slice(1).some(Boolean)) yield* coordinator.wake(info.sessionID)
       }),
       { discard: true },
     )

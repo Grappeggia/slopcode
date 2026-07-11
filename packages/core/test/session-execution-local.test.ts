@@ -126,6 +126,73 @@ describe("SessionExecutionLocal startup recovery", () => {
   it.effect("recovers and drains queued durable input without a new prompt", () => verify("queue"))
   it.effect("leaves recovered sessions paused when no durable input is pending", () => verify())
   it.effect("drains pending input when the previous startup stopped after pausing", () => verify("steer", true))
+
+  it.effect("recovers one durable manual compaction request without repeating its terminal", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const sessionID = SessionSchema.ID.make("ses_recovered_manual_compaction")
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: sessionID,
+          directory: "/project",
+          title: "Recovered manual compaction",
+          version: "test",
+          runtime: "v2",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const id = SessionMessage.ID.make("msg_recovered_manual_compaction")
+      const request = yield* SessionInput.admitCompaction(db, events, { id, sessionID })
+      const done = yield* Deferred.make<void>()
+      let runs = 0
+      const runner = Layer.succeed(
+        SessionRunner.Service,
+        SessionRunner.Service.of({
+          run: () =>
+            Effect.gen(function* () {
+              runs++
+              yield* SessionInput.skipCompaction(db, events, request)
+              yield* Deferred.succeed(done, undefined)
+            }),
+        }),
+      )
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.gen(function* () {
+        yield* SessionExecution.Service
+        yield* Deferred.await(done)
+      }).pipe(Effect.provide(execution))
+      expect(yield* SessionInput.terminalCompaction(db, id)).toEqual({ type: "skipped" })
+      expect(runs).toBe(1)
+
+      yield* runtime.assign({
+        sessionID,
+        state: "draining",
+        expectedOwner: "v2",
+        expectedEpoch: (yield* runtime.assert({ sessionID, owner: "v2" })).epoch,
+      })
+      yield* SessionExecution.Service.pipe(Effect.provide(execution))
+      expect(runs).toBe(1)
+    }),
+  )
 })
 
 describe("SessionExecutionLocal wait", () => {

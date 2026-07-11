@@ -38,6 +38,7 @@ type SkillInput = {
 }
 
 type CompactInput = {
+  readonly id?: SessionMessage.ID
   readonly sessionID: SessionSchema.ID
   readonly prompt?: Prompt
 }
@@ -58,7 +59,14 @@ export interface Interface {
   ) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError | SessionRunner.RunError>
   readonly compact: (
     input: CompactInput,
-  ) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.OperationUnavailableError>
+  ) => Effect.Effect<
+    void,
+    | SessionRuntime.Error
+    | SessionV2.NotFoundError
+    | SessionV2.CompactionConflictError
+    | SessionV2.CompactionPromptUnsupportedError
+    | SessionV2.CompactionFailedError
+  >
   readonly switchModel: (input: SwitchModelInput) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError>
   readonly switchAgent: (
     input: SwitchAgentInput,

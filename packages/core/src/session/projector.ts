@@ -435,6 +435,9 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))
     // yield* events.project(SessionEvent.Retried, (event) => run(db, event))
+    yield* events.project(SessionEvent.Compaction.Requested, () => Effect.void)
+    yield* events.project(SessionEvent.Compaction.Skipped, () => Effect.void)
+    yield* events.project(SessionEvent.Compaction.Failed, () => Effect.void)
     yield* events.project(SessionEvent.Compaction.Ended, (event) => {
       if (event.version === 1) return Effect.void
       const seq = event.seq
