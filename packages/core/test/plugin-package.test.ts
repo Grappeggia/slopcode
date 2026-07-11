@@ -152,6 +152,92 @@ describe("PluginPackage", () => {
     ),
   )
 
+  it.effect("isolates every module stage, skips deprecated packages, and keeps healthy exports", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          published.length = 0
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(path.join(dir.path, "import.ts"), `throw new Error("import failed")`),
+              Bun.write(
+                path.join(dir.path, "factory.ts"),
+                `export default async () => { throw new Error("factory failed") }`,
+              ),
+              Bun.write(path.join(dir.path, "shape.ts"), `export default async () => ({ tool: false })`),
+              Bun.write(
+                path.join(dir.path, "mixed.ts"),
+                `export const invalid = 1
+                 export const healthy = async () => ({
+                   tool: { continued_tool: { description: "continued", args: {}, execute: async () => "ok" } }
+                 })`,
+              ),
+            ]),
+          )
+          const location = Location.Service.of({
+            directory: AbsolutePath.make(dir.path),
+            project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+          })
+          const config = Config.Service.of({
+            entries: () =>
+              Effect.succeed([
+                new Config.Document({
+                  type: "document",
+                  path: path.join(dir.path, "slopcode.json"),
+                  info: new Config.Info({
+                    plugins: ["slopcode-openai-codex-auth", "./import.ts", "./factory.ts", "./shape.ts", "./mixed.ts"],
+                  }),
+                }),
+              ]),
+          })
+          const added: string[] = []
+          const npm = Npm.Service.of({
+            install: () => Effect.void,
+            add: (spec) =>
+              Effect.sync(() => {
+                added.push(spec)
+                return { directory: dir.path, entrypoint: Option.none<string>() }
+              }),
+            which: () => Effect.die("unused"),
+          })
+          const adapter = PluginTool.layer.pipe(
+            Layer.provide(plugins),
+            Layer.provide(registry),
+            Layer.provide(permission),
+            Layer.provide(Layer.succeed(Location.Service, location)),
+            Layer.provide(events),
+          )
+          yield* PluginPackage.load.pipe(
+            Effect.provide(adapter),
+            Effect.provideService(Config.Service, config),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(Npm.Service, npm),
+          )
+
+          expect(added).toEqual([])
+          expect(
+            published
+              .filter((item) => item.type === PluginV2.Event.Failed.type)
+              .map((item) => (item.data as { stage: string }).stage),
+          ).toEqual(["import", "factory", "hook-shape", "hook-shape"])
+          expect(published).toContainEqual({
+            type: PluginV2.Event.Warning.type,
+            data: expect.objectContaining({
+              package: "slopcode-openai-codex-auth",
+              message: expect.stringContaining("deprecated"),
+            }),
+          })
+          expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toContain(
+            "continued_tool",
+          )
+        }),
+      ),
+    ),
+  )
+
   test("selects server, main, and index entrypoints and rejects package-root escapes", async () => {
     await using dir = await tmpdir()
     const roots = await Promise.all(
