@@ -55,4 +55,47 @@
 
 ## Concerns
 
-- No known correctness concerns. Production embedding must provide `PluginPackage.Host`; absence intentionally produces the typed unavailable SDK transport and a no-op workspace registration callback.
+- No known correctness concerns. Production server/web-handler paths now provide `PluginPackage.Host`; embedded Core without a host intentionally retains the typed unavailable SDK transport.
+
+## Review Fixes
+
+### Design Corrections
+
+- Added `LocationServiceMap.withPluginHost` so hosted route stacks inject `PluginPackage.Host` into the LayerMap dependency context instead of leaving production plugins on the embedded fallback.
+- Added the server `PluginServer` host with lazy in-process fetch, configured/lazy base URL, internal authorization, and project/type workspace adapter registration. `webHandler` uses hosted routes, and the CLI listener supplies its actual bound address lazily after startup.
+- Directory-valued server exports and package mains now select supported nested index files only after lexical and realpath containment checks. Symlinked directories escaping the package root are rejected.
+- Retry eligibility now requires a Bun module-not-found code plus an npm identity declared by the originating config directory and successful dependency preparation. The single retry imports a temporary sibling source to avoid Bun's failed-referrer cache, removes it afterward, and still occurs before factory discovery/invocation.
+- Dependency preparation failures identify the config document itself in `package` and `source`; malformed package metadata, missing installed roots, and entrypoint inspection failures are classified as `entrypoint`.
+- Deprecated auth packages are matched by exact `npm-package-arg` identity, including versions and aliases, while similarly named npm packages and local paths remain loadable.
+- Modern IDs are validated before factory identity deduplication, so an invalid alias cannot suppress a later valid alias.
+
+### Review RED Evidence
+
+- `bun test test/plugin-package.test.ts` from `packages/core`: 5 pass, 4 fail. Failures showed directory exports returning the directory, malformed JSON lacking `stage: "entrypoint"`, missing exact-deprecation API, and invalid-ID alias suppression.
+- Retry boundary test from `packages/core`: 10 pass, 1 fail. Installation reached count 2 but `retry_tool` remained absent, proving a query string did not bypass Bun's failed dependency-resolution cache.
+- `bun test test/plugin-package.test.ts` from `packages/server`: failed before tests with `Cannot find module '../src/plugin'`, proving no production host existed.
+
+### Review GREEN Evidence
+
+- `bun test test/plugin-package.test.ts test/location-layer.test.ts test/plugin-tool.test.ts` from `packages/core`: 31 pass, 0 fail, 124 expectations.
+- `bun test test/plugin-package.test.ts` from `packages/server`: 1 pass, 0 fail; configured plugin called `/api/health` through the lazy in-process SDK transport, observed the configured URL, and registered a workspace adapter by project/type.
+- `bun test` from `packages/core`: 1298 pass, 0 fail, 3712 expectations.
+- `bun test` from `packages/codemode`: 254 pass, 0 fail, 744 expectations.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `bun run typecheck` from `packages/cli`: passed.
+- `git diff --check`: passed.
+
+### Review Coverage
+
+- Stable incompatible, stable compatible, prerelease-skipped, and local-skipped engine checks.
+- Successful npm package loading, config-order factories, explicit/default IDs, duplicate-ID replacement, stable tool slot, and both replacement/final disposal.
+- Before/after hook adaptation, supported hook retention, unsupported hook warnings, options identity, legacy/modern exports, duplicate identity suppression, and invalid-ID alias continuation.
+- Config-source dependency failure metadata and package-level entrypoint/import/factory/hook-shape continuation.
+- Declared dependency retry count/cache success plus no retry for missing source, user-thrown lookalike, or factory failure.
+- Nested server/main directories, lexical escape, symlink escape, actual embedded unavailable-client call, production server client call, and healthy `PluginBoot` continuation.
+
+### Review Commit
+
+- `98fbc56900 fix(plugin): close configured package review gaps`
+- Report append: this document's follow-up commit.
