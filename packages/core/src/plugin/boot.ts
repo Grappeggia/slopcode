@@ -125,8 +125,8 @@ export const layer = Layer.effect(
       yield* add(ConfigCommandPlugin.Plugin)
       yield* add(ConfigSkillPlugin.Plugin)
       yield* add(ConfigReferencePlugin.Plugin)
-      yield* PluginPackage.load
       yield* Deferred.succeed(configured, undefined)
+      yield* PluginPackage.load
       yield* PluginTool.discover
     }).pipe(
       Effect.withSpan("PluginBoot.boot"),
