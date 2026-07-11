@@ -40,6 +40,7 @@ export type ExecuteInput = {
   readonly assistantMessageID: SessionMessage.ID
   readonly call: ToolCall
   readonly task?: SessionEvent.Task.Requested["data"]
+  readonly prepared?: SessionEvent.Task.Prepared["data"]
 }
 
 export interface Interface {
@@ -122,6 +123,7 @@ const registryLayer = Layer.effect(
             }),
           },
           task: { value: input.task },
+          prepared: { value: input.prepared },
         },
       ) as ToolContext
       const pending = yield* settle(registration.tool, input.call, context).pipe(

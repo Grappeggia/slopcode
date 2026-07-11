@@ -22,6 +22,7 @@ export interface Context {
     readonly multiAgent?: "v1" | "v2"
   }
   readonly task?: SessionEvent.Task.Requested["data"]
+  readonly prepared?: SessionEvent.Task.Prepared["data"]
 }
 
 export type SchemaType<A> = Schema.Codec<A, any, never, never>

@@ -175,7 +175,7 @@ const executions: string[] = []
 const permission = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
-    assert: () => Effect.die("unused"),
+    assert: (input) => (input.rules ? Effect.void : Effect.die("unused")),
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
     get: () => Effect.die("unused"),
@@ -3235,6 +3235,73 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("persists the immutable task preparation before projecting a live task call", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) => {
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.permissions = [{ action: "task", resource: "general", effect: "allow" }]
+        })
+        editor.update(AgentV2.ID.make("general"), (agent) => {
+          agent.mode = "subagent"
+        })
+      })
+      yield* (yield* ToolRegistry.Service).register({
+        task: Tool.make({
+          description: "Prepared task",
+          input: Schema.Struct({
+            description: Schema.String,
+            prompt: Schema.String,
+            subagent_type: Schema.String,
+          }),
+          output: Schema.Struct({ result: Schema.String }),
+          execute: ({ prompt }) => Effect.succeed({ result: prompt }),
+        }),
+      })
+      const input = { description: "Prepared", prompt: "live", subagent_type: "general" }
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-live-prepared", name: "task", input }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Prepare a task" }), resume: false })
+      yield* session.resume(sessionID)
+
+      const context = yield* session.context(sessionID)
+      const messageID = context
+        .filter((message): message is SessionMessage.Assistant => message.type === "assistant")
+        .find((message) => message.content.some((part) => part.type === "tool" && part.id === "call-live-prepared"))!.id
+      const prepared = (yield* SessionTask.prepared(db, sessionID, messageID, "call-live-prepared"))!
+      expect(prepared).toMatchObject({
+        input,
+        callerAgent: "build",
+        agent: "general",
+        permissions: [{ action: "task", resource: "general", effect: "allow" }],
+        plan: { multiAgent: "v2" },
+      })
+      const rows = yield* db
+        .select({ id: EventTable.id, seq: EventTable.seq, data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      const preparedSeq = rows.find((row) => row.id === SessionTask.preparedEventID(sessionID, messageID, "call-live-prepared"))!.seq
+      const projectedSeq = rows.find((row) => row.data.callID === "call-live-prepared" && row.data.name === "task")!.seq
+      expect(preparedSeq).toBeLessThan(projectedSeq)
+    }),
+  )
+
   it.effect("replays durable custom tool calls and results with raw source", () =>
     Effect.gen(function* () {
       yield* setup
@@ -3949,6 +4016,31 @@ describe("SessionRunnerLLM", () => {
         agent: "build",
         model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
       })
+      for (const item of [
+        { callID: "call-task-pending", prompt: "once" },
+        { callID: "call-task-running", prompt: "twice" },
+      ])
+        yield* events.publish(
+          SessionEvent.Task.Prepared,
+          {
+            sessionID,
+            timestamp: yield* DateTime.now,
+            assistantMessageID,
+            callID: item.callID,
+            input: { prompt: item.prompt },
+            callerAgent: AgentV2.ID.make("build"),
+            permissions: [],
+            plan: { multiAgent: "v2" },
+            agent: AgentV2.ID.make("general"),
+            available: [AgentV2.ID.make("general")],
+            model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+            projectID: Project.ID.global,
+            location: { directory: AbsolutePath.make("/project") },
+            title: "Recovered task (@general subagent)",
+            ceiling: [],
+          },
+          { id: SessionTask.preparedEventID(sessionID, assistantMessageID, item.callID) },
+        )
       yield* events.publish(SessionEvent.Tool.Input.Started, {
         sessionID,
         timestamp: yield* DateTime.now,
@@ -4406,6 +4498,130 @@ describe("SessionRunnerLLM", () => {
       expect(settled).toMatchObject({
         state: { status: "completed", structured: { result: "snapshot result", task_id: childID } },
       })
+    }),
+  )
+
+  it.effect("recovers a pre-request task only from its immutable prepared snapshot", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Recover prepared task" }), resume: false })
+      yield* SessionInput.promoteSteers(database.db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const messageID = SessionMessage.ID.make("msg_e2e_prepared_before_request")
+      const callID = "call-e2e-prepared-before-request"
+      const childID = SessionTask.childID(sessionID, messageID, callID)
+      const model = ModelV2.Ref.make({
+        providerID: ProviderV2.ID.make("fake"),
+        id: ModelV2.ID.make("fake-model"),
+        variant: ModelV2.VariantID.make("default"),
+      })
+      const input = { description: "Prepared first", prompt: "prepared snapshot work", subagent_type: "general" }
+      const permissions = [
+        { action: "task", resource: "general", effect: "allow" as const },
+        { action: "edit", resource: "prepared-secret", effect: "deny" as const },
+      ]
+      const plan = { mode: "code-only" as const, multiAgent: "v2" as const }
+      const ceiling = [
+        permissions[1]!,
+        { action: "task", resource: "*", effect: "deny" as const },
+        { action: "todowrite", resource: "*", effect: "deny" as const },
+      ]
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        agent: "build",
+        model,
+      })
+      yield* events.publish(
+        SessionEvent.Task.Prepared,
+        {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: messageID,
+          callID,
+          input,
+          callerAgent: AgentV2.ID.make("build"),
+          permissions,
+          plan,
+          agent: AgentV2.ID.make("general"),
+          available: [AgentV2.ID.make("general")],
+          model,
+          projectID: Project.ID.global,
+          location: { directory: AbsolutePath.make("/project") },
+          title: "Prepared first (@general subagent)",
+          ceiling,
+        },
+        { id: SessionTask.preparedEventID(sessionID, messageID, callID) },
+      )
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        text: JSON.stringify(input),
+      })
+      expect(yield* SessionTask.request(database.db, sessionID, messageID, callID)).toBeUndefined()
+      yield* database.db
+        .update(SessionTable)
+        .set({ agent: "reviewer", model: { providerID: "fake", id: "replacement" } })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* (yield* AgentV2.Service).transform((editor) => {
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.permissions = [{ action: "task", resource: "general", effect: "deny" }]
+        })
+        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+          agent.permissions = [{ action: "read", resource: "mutated", effect: "allow" }]
+        })
+        editor.remove(AgentV2.ID.make("general"))
+      })
+      currentCatalog = catalogModel("gpt-5.6-luna", "gpt-5.6-luna")
+      requests.length = 0
+      responses = [
+        fragmentFixture("text", "text-e2e-prepared-child", ["prepared result"]).completeEvents,
+        fragmentFixture("text", "text-e2e-prepared-parent", ["parent continued"]).completeEvents,
+      ]
+      const local = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(
+          Layer.mock(LocationServiceMap, {
+            get: () => Layer.succeed(SessionRunner.Service, runner),
+          }),
+        ),
+      )
+
+      yield* Effect.gen(function* () {
+        const execution = yield* SessionExecution.Service
+        yield* execution.wait(sessionID)
+      }).pipe(Effect.provide(local), Effect.provide(TaskTool.layer))
+
+      expect(
+        (yield* session.context(sessionID))
+          .flatMap((message) => (message.type === "assistant" ? message.content : []))
+          .find((part) => part.type === "tool" && part.id === callID),
+      ).toMatchObject({ state: { status: "completed" } })
+      const request = (yield* SessionTask.request(database.db, sessionID, messageID, callID))!
+      expect(request).toMatchObject({ callerAgent: "build", permissions, plan, agent: "general", model, ceiling })
+      expect(requests.filter((item) => userTexts(item).includes(input.prompt))).toHaveLength(1)
+      expect(
+        yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, childID)).all().pipe(Effect.orDie),
+      ).toHaveLength(1)
     }),
   )
 
