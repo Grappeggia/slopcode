@@ -139,3 +139,33 @@
 
 - `6e55a86e25 fix(plugin): close package release blockers`
 - Report append: this document's final evidence commit.
+
+## Final Review Fixes
+
+### Design Corrections
+
+- Moved supported-hook adaptation and unsupported-hook key enumeration into one `Effect.try` inspection boundary. Proxy `get`/`ownKeys` failures now publish one configured package/source/`hook-shape` failure, skip that export, and continue package loading.
+- Regenerated `bun.lock` with Bun so the `packages/core` workspace dependency list includes `@slopcode-ai/sdk`. The lock diff is exactly one added workspace dependency line with no package version or resolution changes.
+
+### Final RED Evidence
+
+- `bun test test/plugin-package.test.ts test/location-layer.test.ts` from `packages/core`: 21 pass, 2 fail. Direct loading escaped with `hostile ownKeys`, and the same trap failed `PluginBoot.boot`, preventing later configured/local discovery.
+- Lock inspection showed `packages/core/package.json` declared `@slopcode-ai/sdk` while the `packages/core` entry in `bun.lock` omitted it.
+
+### Final GREEN Evidence
+
+- `bun test test/plugin-package.test.ts test/location-layer.test.ts test/plugin-tool.test.ts` from `packages/core`: 36 pass, 0 fail, 142 expectations.
+- Hostile Proxy regression asserts exactly one attributed failure, later configured tool registration, later local tool discovery, completed `PluginBoot.wait()`, and configured disposal on Location invalidation.
+- `bun install --lockfile-only`: succeeded with Bun 1.3.14; lock diff added only `packages/core -> @slopcode-ai/sdk: workspace:*`.
+- `bun install --frozen-lockfile --ignore-scripts`: succeeded, checked 2372 installs across 2656 packages with no changes.
+- `bun test` from `packages/core`: 1303 pass, 0 fail, 3730 expectations.
+- `bun test` from `packages/codemode`: 254 pass, 0 fail, 744 expectations.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `bun run typecheck` from `packages/cli`: passed.
+- `git diff --check`: passed.
+
+### Final Commit
+
+- `f70ffde7a1 fix(plugin): contain hostile hook inspection`
+- Report append: this document's concluding evidence commit.
