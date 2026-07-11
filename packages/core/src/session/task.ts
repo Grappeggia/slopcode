@@ -29,6 +29,9 @@ export const promptID = (parentID: SessionSchema.ID, messageID: SessionMessage.I
 export const requestEventID = (parentID: SessionSchema.ID, messageID: SessionMessage.ID, callID: string) =>
   EventV2.ID.make(`evt_${hash("task-request-v2", parentID, messageID, callID)}`)
 
+export const preparedEventID = (parentID: SessionSchema.ID, messageID: SessionMessage.ID, callID: string) =>
+  EventV2.ID.make(`evt_${hash("task-prepared-v2", parentID, messageID, callID)}`)
+
 export const interruptedEventID = (parentID: SessionSchema.ID, messageID: SessionMessage.ID, callID: string) =>
   EventV2.ID.make(`evt_${hash("task-interrupted-v2", parentID, messageID, callID)}`)
 
@@ -36,6 +39,7 @@ export const interruptedToolEventID = (parentID: SessionSchema.ID, messageID: Se
   EventV2.ID.make(`evt_${hash("task-tool-interrupted-v2", parentID, messageID, callID)}`)
 
 const requestedType = `${SessionEvent.Task.Requested.type}.1`
+const preparedType = `${SessionEvent.Task.Prepared.type}.1`
 const interruptedType = `${SessionEvent.Task.Interrupted.type}.1`
 const interruptRequestedType = `${SessionEvent.InterruptRequested.type}.1`
 const taskCallTypes = [
@@ -44,6 +48,57 @@ const taskCallTypes = [
   `${SessionEvent.Tool.CalledV1.type}.1`,
 ]
 const decodeRequest = Schema.decodeUnknownEffect(SessionEvent.Task.Requested.data)
+const decodePrepared = Schema.decodeUnknownEffect(SessionEvent.Task.Prepared.data)
+
+export const prepared = Effect.fn("SessionTask.prepared")(function* (
+  db: DatabaseService,
+  parentID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+  callID: string,
+) {
+  const row = yield* db
+    .select()
+    .from(EventTable)
+    .where(eq(EventTable.id, preparedEventID(parentID, messageID, callID)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return
+  if (row.type !== preparedType) return yield* Effect.die(`Invalid task prepared event: ${row.type}`)
+  return yield* decodePrepared(row.data).pipe(Effect.orDie)
+})
+
+export const strengthen = Effect.fn("SessionTask.strengthen")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  ceiling: SessionTaskMetadata.Owner["ceiling"],
+) {
+  return yield* db.transaction(
+    () =>
+      Effect.gen(function* () {
+        const row = yield* db
+          .select({ metadata: SessionTable.metadata })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        const owner = SessionTaskMetadata.owner(row?.metadata)
+        if (!row || !owner) return
+        const merged = [...owner.ceiling, ...ceiling].filter(
+          (rule, index, rules) =>
+            rules.findIndex((current) => JSON.stringify(current) === JSON.stringify(rule)) === index,
+        )
+        if (merged.length !== owner.ceiling.length)
+          yield* db
+            .update(SessionTable)
+            .set({ metadata: { ...(row.metadata ?? {}), task: { ...owner, ceiling: merged } } })
+            .where(eq(SessionTable.id, sessionID))
+            .run()
+            .pipe(Effect.orDie)
+        return { ...owner, ceiling: merged }
+      }),
+    { behavior: "immediate" },
+  )
+})
 
 export const request = Effect.fn("SessionTask.request")(function* (
   db: DatabaseService,
@@ -132,7 +187,7 @@ export const requestedSessions = Effect.fn("SessionTask.requestedSessions")(func
   const rows = yield* db
     .select({ aggregateID: EventTable.aggregate_id })
     .from(EventTable)
-    .where(eq(EventTable.type, requestedType))
+    .where(inArray(EventTable.type, [preparedType, requestedType]))
     .all()
     .pipe(Effect.orDie)
   return [...new Set(rows.map((row) => SessionSchema.ID.make(row.aggregateID)))]

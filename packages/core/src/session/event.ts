@@ -507,6 +507,33 @@ export namespace Task {
     childSessionID: SessionSchema.ID,
   }
 
+  export const Prepared = EventV2.define({
+    type: "session.next.task.prepared",
+    ...options,
+    schema: {
+      ...Base,
+      assistantMessageID: SessionMessageID.ID,
+      callID: Schema.String,
+      input: Schema.Unknown,
+      callerAgent: AgentV2.ID,
+      permissions: PermissionSchema.Ruleset,
+      plan: Schema.Struct({
+        mode: Schema.Literals(["function", "code-preferred", "code-only"]).pipe(Schema.optional),
+        shell: Schema.Literal("shell_command").pipe(Schema.optional),
+        patch: Schema.Literal("freeform").pipe(Schema.optional),
+        multiAgent: Schema.Literals(["v1", "v2"]),
+      }),
+      agent: AgentV2.ID,
+      available: Schema.Array(AgentV2.ID),
+      model: ModelV2.Ref,
+      projectID: ProjectV2.ID,
+      location: Location.RefJson,
+      title: Schema.String,
+      ceiling: PermissionSchema.Ruleset,
+    },
+  })
+  export type Prepared = typeof Prepared.Type
+
   export const Requested = EventV2.define({
     type: "session.next.task.requested",
     ...options,
@@ -689,6 +716,7 @@ const DurableDefinitions = [
   Tool.Progress,
   Tool.Success,
   Tool.Failed,
+  Task.Prepared,
   Task.Requested,
   Task.Interrupted,
   Reasoning.Started,

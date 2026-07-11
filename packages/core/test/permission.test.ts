@@ -211,7 +211,7 @@ describe("PermissionV2", () => {
               parentID: SessionV2.ID.make("ses_parent"),
               agent: AgentV2.ID.make("test"),
               origin: { messageID: "msg_parent", callID: "call-parent" },
-              ceiling: [{ action: "external_directory", resource: "/outside/*", effect: "ask" }],
+              ceiling: [{ action: "*", resource: "/outside/*", effect: "ask" }],
             },
           },
         })

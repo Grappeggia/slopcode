@@ -641,12 +641,12 @@ describe("TaskTool durable orchestration", () => {
       yield* settleWith(
         "call-ceiling-origin",
         { description: "Ceiling", prompt: "origin", subagent_type: "general" },
-        [{ action: "external_directory", resource: "/outside/*", effect: "ask" }],
+        [{ action: "*", resource: "/outside/*", effect: "ask" }],
       )
       const taskID = SessionTask.childID(parentID, messageID, "call-ceiling-origin")
       const callID = "call-ceiling-resume"
       const permissions: PermissionV2.Ruleset = [
-        { action: "external_directory", resource: "/outside/*", effect: "ask" },
+        { action: "*", resource: "/outside/*", effect: "ask" },
         { action: "edit", resource: "new-secret", effect: "deny" },
       ]
       const input = {
@@ -657,7 +657,7 @@ describe("TaskTool durable orchestration", () => {
       }
       expect((yield* settleWith(callID, input, permissions)).result.type).toBe("text")
       const expected = expect.arrayContaining([
-        { action: "external_directory", resource: "/outside/*", effect: "ask" },
+        { action: "*", resource: "/outside/*", effect: "ask" },
         { action: "edit", resource: "new-secret", effect: "deny" },
         { action: "task", resource: "*", effect: "deny" },
         { action: "todowrite", resource: "*", effect: "deny" },
@@ -676,6 +676,62 @@ describe("TaskTool durable orchestration", () => {
         })).result.type,
       ).toBe("text")
       expect(runs).toEqual(["call-ceiling-origin", callID])
+    }),
+  )
+
+  fixture.it.effect("atomically unions concurrent resume ceiling revisions and recovers both requests", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const runs: string[] = []
+      yield* complete(runs)
+      yield* settle("call-ceiling-race-origin", {
+        description: "Race",
+        prompt: "origin",
+        subagent_type: "general",
+      })
+      const taskID = SessionTask.childID(parentID, messageID, "call-ceiling-race-origin")
+      const calls = [
+        {
+          id: "call-ceiling-race-a",
+          deny: { action: "edit", resource: "secret-a", effect: "deny" as const },
+        },
+        {
+          id: "call-ceiling-race-b",
+          deny: { action: "read", resource: "secret-b", effect: "deny" as const },
+        },
+      ]
+      yield* Effect.all(
+        calls.map((item) =>
+          settleWith(
+            item.id,
+            { description: item.id, prompt: item.id, subagent_type: "general", task_id: taskID },
+            [item.deny],
+          ),
+        ),
+        { concurrency: "unbounded" },
+      )
+      const ceiling = (yield* (yield* SessionStore.Service).task(taskID))!.ceiling
+      expect(ceiling).toEqual(expect.arrayContaining(calls.map((item) => item.deny)))
+      for (const item of calls) {
+        const request = (yield* SessionTask.request(db, parentID, messageID, item.id))!
+        expect(request.ceiling.every((rule) => ceiling.some((current) => JSON.stringify(current) === JSON.stringify(rule)))).toBeTrue()
+        const materialized = yield* (yield* ToolRegistry.Service).materialize(request.permissions, request.plan)
+        expect(
+          (yield* materialized.settle({
+            sessionID: parentID,
+            agent: request.callerAgent,
+            assistantMessageID: messageID,
+            call: {
+              type: "tool-call",
+              id: item.id,
+              name: "task",
+              input: { description: item.id, prompt: item.id, subagent_type: "general", task_id: taskID },
+            },
+            task: request,
+          })).result.type,
+        ).toBe("text")
+      }
     }),
   )
 

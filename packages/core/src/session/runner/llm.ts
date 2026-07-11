@@ -16,6 +16,7 @@ import { EventV2 } from "../../event"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
 import { ModelHarness } from "../../model-harness"
+import { PermissionV2 } from "../../permission"
 import { ProviderV2 } from "../../provider"
 import { QuestionV2 } from "../../question"
 import { AppProcess } from "../../process"
@@ -26,6 +27,7 @@ import { ReferenceGuidance } from "../../reference/guidance"
 import { ShellCommand } from "../../shell"
 import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
+import { Wildcard } from "../../util/wildcard"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
@@ -143,28 +145,21 @@ export const layer = Layer.effect(
           if (tool.type !== "tool" || (tool.state.status !== "pending" && tool.state.status !== "running")) continue
           if (tool.name === "task" && !(yield* SessionTask.cancelled(db, sessionID, message.id, tool.id))) {
             const request = yield* SessionTask.request(db, sessionID, message.id, tool.id)
-            const current = request
-              ? undefined
-              : yield* Effect.gen(function* () {
-                  const session = yield* getSession(sessionID)
-                  const agent = yield* agents.select(session.agent)
-                  const resolved = yield* models.resolve(session)
-                  return { agent, resolved }
-                })
+            const prepared = request ? undefined : yield* SessionTask.prepared(db, sessionID, message.id, tool.id)
+            if (!request && !prepared) {
+              yield* events.publish(SessionEvent.Tool.Failed, {
+                sessionID,
+                timestamp: yield* DateTime.now,
+                assistantMessageID: message.id,
+                callID: tool.id,
+                error: { type: "unknown", message: "Task has no immutable prepared snapshot" },
+                provider: { executed: tool.provider?.executed === true },
+              })
+              continue
+            }
             const materialized = yield* tools.materialize(
-              request
-                ? request.permissions
-                : [...(current?.agent.info?.permissions ?? []), ...((yield* store.task(sessionID))?.ceiling ?? [])],
-              request
-                ? request.plan
-                : current?.resolved.harness
-                  ? {
-                      mode: current.resolved.harness.tools.mode,
-                      shell: current.resolved.harness.tools.shell,
-                      patch: current.resolved.harness.tools.patch,
-                      multiAgent: current.resolved.harness.multiAgent,
-                    }
-                  : undefined,
+              (request ?? prepared)!.permissions,
+              (request ?? prepared)!.plan,
             )
             const call = {
               type: "tool-call" as const,
@@ -190,10 +185,11 @@ export const layer = Layer.effect(
               })
             const settlement = yield* materialized.settle({
               sessionID,
-              agent: request?.callerAgent ?? current!.agent.id,
+              agent: (request ?? prepared)!.callerAgent,
               assistantMessageID: message.id,
               call,
               task: request,
+              prepared,
             })
             if (settlement.result.type === "error") {
               yield* events.publish(SessionEvent.Tool.Failed, {
@@ -521,14 +517,19 @@ export const layer = Layer.effect(
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
       const instructions = resolved.harness ? yield* ModelHarness.instructions(resolved.harness) : undefined
-      const toolMaterialization = yield* tools.materialize(
-        [...(agent.info?.permissions ?? []), ...((yield* store.task(session.id))?.ceiling ?? [])],
-        resolved.harness
+      const permissions = [...(agent.info?.permissions ?? []), ...((yield* store.task(session.id))?.ceiling ?? [])]
+      const plan = resolved.harness
+        ? {
+            mode: resolved.harness.tools.mode,
+            shell: resolved.harness.tools.shell,
+            patch: resolved.harness.tools.patch,
+            multiAgent: resolved.harness.multiAgent,
+          }
+        : {}
+      const toolMaterialization = yield* tools.materialize(permissions, {
+        ...plan,
+        ...(resolved.harness
           ? {
-              mode: resolved.harness.tools.mode,
-              shell: resolved.harness.tools.shell,
-              patch: resolved.harness.tools.patch,
-              multiAgent: resolved.harness.multiAgent,
               progress: (input, progress) =>
                 Effect.gen(function* () {
                   yield* events.publish(SessionEvent.Tool.Progress, {
@@ -541,8 +542,8 @@ export const layer = Layer.effect(
                   })
                 }),
             }
-          : undefined,
-      )
+          : {}),
+      })
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
         model,
@@ -593,10 +594,71 @@ export const layer = Layer.effect(
                 return
               }
             }
+            if (event.type === "tool-call" && !event.providerExecuted && event.name === "task") {
+              const assistantMessageID = yield* publisher.startAssistant()
+              const input = event.input as {
+                readonly description?: unknown
+                readonly subagent_type?: unknown
+              }
+              const selectedID = AgentV2.ID.make(
+                typeof input.subagent_type === "string" ? input.subagent_type : "invalid",
+              )
+              const catalog = yield* agents.all()
+              const available = catalog
+                .filter((item) => !item.hidden && (item.mode === "subagent" || item.mode === "all"))
+                .filter((item) => PermissionV2.evaluate("task", item.id, permissions).effect !== "deny")
+                .map((item) => item.id)
+              const selected = catalog.find((item) => item.id === selectedID)
+              const modelRef =
+                selected?.model ??
+                ModelV2.Ref.make({
+                  id: ModelV2.ID.make(model.id),
+                  providerID: ProviderV2.ID.make(model.provider),
+                  variant: ModelV2.VariantID.make(session.model?.variant ?? "default"),
+                })
+              const ceiling = [
+                ...permissions.filter(
+                  (rule) =>
+                    rule.effect === "deny" ||
+                    (rule.effect === "ask" && Wildcard.match("external_directory", rule.action)),
+                ),
+                ...(selected?.permissions.some((rule) => rule.action === "task")
+                  ? []
+                  : [{ action: "task", resource: "*", effect: "deny" as const }]),
+                ...(selected?.permissions.some((rule) => rule.action === "todowrite")
+                  ? []
+                  : [{ action: "todowrite", resource: "*", effect: "deny" as const }]),
+              ]
+              yield* events.publish(
+                SessionEvent.Task.Prepared,
+                {
+                  sessionID: session.id,
+                  timestamp: yield* DateTime.now,
+                  assistantMessageID,
+                  callID: event.id,
+                  input: event.input,
+                  callerAgent: agent.id,
+                  permissions,
+                  plan: { ...plan, multiAgent: plan.multiAgent ?? "v2" },
+                  agent: selectedID,
+                  available,
+                  model: modelRef,
+                  projectID: session.projectID,
+                  location: session.location,
+                  title: `${typeof input.description === "string" ? input.description : "Task"} (@${selectedID} subagent)`,
+                  ceiling,
+                },
+                { id: SessionTask.preparedEventID(session.id, assistantMessageID, event.id) },
+              )
+            }
             yield* publish(event)
             if (event.type !== "tool-call" || event.providerExecuted) return
             needsContinuation = true
             const assistantMessageID = yield* publisher.assistantMessageID(event.id)
+            const prepared =
+              event.name === "task"
+                ? yield* SessionTask.prepared(db, session.id, assistantMessageID, event.id)
+                : undefined
             yield* assertRuntime(sessionID, runtimeEpoch)
             yield* Effect.uninterruptibleMask((restore) =>
               restore(
@@ -605,6 +667,7 @@ export const layer = Layer.effect(
                   agent: agent.id,
                   assistantMessageID,
                   call: event,
+                  prepared,
                 }),
               ).pipe(
                 Effect.flatMap((settlement) =>

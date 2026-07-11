@@ -369,6 +369,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }
         })
       },
+      "session.next.task.prepared": () => Effect.void,
       "session.next.task.requested": () => Effect.void,
       "session.next.task.interrupted": () => Effect.void,
       "session.next.reasoning.started": (event) => {

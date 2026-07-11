@@ -22,6 +22,7 @@ import { SessionStore } from "../session/store"
 import { SessionTask } from "../session/task"
 import { SessionTaskMetadata } from "../session/task-metadata"
 import { SessionCreate } from "../session/create"
+import { Wildcard } from "../util/wildcard"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -94,9 +95,6 @@ const sameModel = (left: ModelV2.Ref, right: typeof SessionTable.$inferSelect.mo
 
 const contains = (ceiling: PermissionV2.Ruleset, prior: PermissionV2.Ruleset) =>
   prior.every((rule) => ceiling.some((current) => JSON.stringify(current) === JSON.stringify(rule)))
-
-const merge = (...ceilings: ReadonlyArray<PermissionV2.Ruleset>) =>
-  ceilings.flat().filter((rule, index, rules) => rules.findIndex((item) => JSON.stringify(item) === JSON.stringify(rule)) === index)
 
 const render = (output: { readonly task_id: string; readonly state: "completed"; readonly result: string }) =>
   [`<task id="${output.task_id}" state="completed">`, "<task_result>", output.result, "</task_result>", "</task>"].join(
@@ -395,25 +393,40 @@ export const layer = Layer.effectDiscard(
                 )
                 return { task_id: request.childSessionID, state: "completed" as const, result }
               }
-              const current = (yield* agents.all())
-                .filter(callable)
-                .filter((agent) => PermissionV2.evaluate(name, agent.id, context.permissions).effect !== "deny")
-                .toSorted((left, right) => left.id.localeCompare(right.id))
+              const prepared = context.prepared
+              if (
+                prepared &&
+                (prepared.sessionID !== context.sessionID ||
+                  prepared.assistantMessageID !== context.assistantMessageID ||
+                  prepared.callID !== context.toolCallID ||
+                  JSON.stringify(prepared.input) !== JSON.stringify(input))
+              )
+                return yield* new ResumeConflictError({
+                  taskID: input.task_id ?? "new",
+                  message: "Task prepared snapshot identity conflicts",
+                })
+              const current = prepared
+                ? []
+                : (yield* agents.all())
+                    .filter(callable)
+                    .filter((agent) => PermissionV2.evaluate(name, agent.id, context.permissions).effect !== "deny")
+                    .toSorted((left, right) => left.id.localeCompare(right.id))
               const selectedID = AgentV2.ID.make(input.subagent_type)
-              const selected = current.find((agent) => agent.id === selectedID)
-              if (!selected)
+              const selected = prepared ? undefined : current.find((agent) => agent.id === selectedID)
+              if (prepared ? prepared.agent !== selectedID || !prepared.available.includes(selectedID) : !selected)
                 return yield* new AgentUnavailableError({
                   agent: selectedID,
-                  available: current.map((agent) => agent.id),
+                  available: prepared?.available ?? current.map((agent) => agent.id),
                 })
 
               yield* permission.assert({
                 action: name,
-                resources: [selected.id],
-                save: [selected.id],
+                resources: [selectedID],
+                save: [selectedID],
                 sessionID: context.sessionID,
                 agent: context.agent,
-                metadata: { description: input.description, agent: selected.id },
+                rules: context.permissions,
+                metadata: { description: input.description, agent: selectedID },
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
 
@@ -430,15 +443,17 @@ export const layer = Layer.effectDiscard(
                   message: "Task source is not an assistant message in the parent Session",
                 })
               const inherited = source.message.model
-              const expected = selected.model ?? inherited
-              const derived = [
+              const expected = prepared?.model ?? selected!.model ?? inherited
+              const derived = prepared?.ceiling ?? [
                 ...context.permissions.filter(
-                  (rule) => rule.effect === "deny" || (rule.action === "external_directory" && rule.effect === "ask"),
+                  (rule) =>
+                    rule.effect === "deny" ||
+                    (rule.effect === "ask" && Wildcard.match("external_directory", rule.action)),
                 ),
-                ...(selected.permissions.some((rule) => rule.action === name)
+                ...(selected!.permissions.some((rule) => rule.action === name)
                   ? []
                   : [{ action: name, resource: "*", effect: "deny" as const }]),
-                ...(selected.permissions.some((rule) => rule.action === "todowrite")
+                ...(selected!.permissions.some((rule) => rule.action === "todowrite")
                   ? []
                   : [{ action: "todowrite", resource: "*", effect: "deny" as const }]),
               ]
@@ -447,9 +462,9 @@ export const layer = Layer.effectDiscard(
                 context.assistantMessageID,
                 context.toolCallID,
               )
-              const title = `${input.description} (@${selected.id} subagent)`
+              const title = prepared?.title ?? `${input.description} (@${selectedID} subagent)`
               const origin = { messageID: context.assistantMessageID, callID: context.toolCallID }
-              const owner = { version: 1 as const, parentID: context.sessionID, agent: selected.id, origin, ceiling: derived }
+              const owner = { version: 1 as const, parentID: context.sessionID, agent: selectedID, origin, ceiling: derived }
               const recorded = yield* SessionTask.request(
                 db,
                 context.sessionID,
@@ -470,11 +485,11 @@ export const layer = Layer.effectDiscard(
               const row = existing
                 ? yield* validate(
                     input.task_id
-                      ? { id: input.task_id, parent, agent: selected.id, canonical: true }
+                      ? { id: input.task_id, parent, agent: selectedID, canonical: true }
                       : {
                           id: deterministic,
                           parent,
-                          agent: selected.id,
+                          agent: selectedID,
                           model: expected,
                           title,
                           origin,
@@ -503,15 +518,13 @@ export const layer = Layer.effectDiscard(
                   taskID,
                   message: `Task resume conflict: ${taskID} has no persisted owner`,
                 })
-              const ceiling = input.task_id ? merge(persisted.ceiling, derived) : derived
-              const ownership = { ...persisted, ceiling }
-              if (input.task_id && JSON.stringify(persisted.ceiling) !== JSON.stringify(ceiling))
-                yield* db
-                  .update(SessionTable)
-                  .set({ metadata: { ...(row?.metadata ?? {}), task: ownership } })
-                  .where(eq(SessionTable.id, taskID))
-                  .run()
-                  .pipe(Effect.orDie)
+              const ownership = input.task_id ? yield* SessionTask.strengthen(db, taskID, derived) : persisted
+              if (!ownership)
+                return yield* new ResumeConflictError({
+                  taskID,
+                  message: `Task resume conflict: ${taskID} has no persisted owner`,
+                })
+              const ceiling = ownership.ceiling
               const identity = input.task_id && row
                 ? {
                     projectID: row.project_id,
@@ -522,7 +535,12 @@ export const layer = Layer.effectDiscard(
                     title: row.title,
                     ceiling,
                   }
-                : { projectID: parent.projectID, location, title, ceiling: derived }
+                : {
+                    projectID: prepared?.projectID ?? parent.projectID,
+                    location: prepared?.location ?? location,
+                    title,
+                    ceiling: derived,
+                  }
               const promptID = SessionTask.promptID(context.sessionID, context.assistantMessageID, context.toolCallID)
               const request = {
                 sessionID: context.sessionID,
@@ -533,7 +551,7 @@ export const layer = Layer.effectDiscard(
                 promptMessageID: promptID,
                 description: input.description,
                 prompt: input.prompt,
-                agent: selected.id,
+                agent: selectedID,
                 model,
                 command: input.command,
                 multiAgent: context.multiAgent ?? "v2",
@@ -585,7 +603,7 @@ export const layer = Layer.effectDiscard(
                   location: request.location,
                   subpath: parent.subpath,
                   title: request.title,
-                  agent: selected.id,
+                    agent: selectedID,
                   model: request.model,
                   metadata: { task: owner },
                   runtime: "v2",
@@ -593,7 +611,7 @@ export const layer = Layer.effectDiscard(
               yield* validate({
                 id: taskID,
                 parent,
-                agent: selected.id,
+                agent: selectedID,
                 model: request.model,
                 title: request.title,
                 origin: ownership.origin,
@@ -606,7 +624,7 @@ export const layer = Layer.effectDiscard(
                 timestamp: yield* DateTime.now,
                 assistantMessageID: context.assistantMessageID,
                 callID: context.toolCallID,
-                structured: { state: "running", taskID, childSessionID: taskID, agent: selected.id, model },
+                structured: { state: "running", taskID, childSessionID: taskID, agent: selectedID, model },
                 content: [],
               })
 

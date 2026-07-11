@@ -472,6 +472,7 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Tool.Progress, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Success, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Failed, (event) => run(db, event))
+    yield* events.project(SessionEvent.Task.Prepared, () => Effect.void)
     yield* events.project(SessionEvent.Task.Requested, () => Effect.void)
     yield* events.project(SessionEvent.Task.Interrupted, () => Effect.void)
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
