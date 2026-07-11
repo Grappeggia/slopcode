@@ -28,6 +28,7 @@ import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { FileAttachment, Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
+import * as SessionExecutionLocal from "@slopcode-ai/core/session/execution/local"
 import { SessionContextEpoch } from "@slopcode-ai/core/session/context-epoch"
 import { SessionControl } from "@slopcode-ai/core/session/control"
 import { SessionRunCoordinator } from "@slopcode-ai/core/session/run-coordinator"
@@ -42,6 +43,7 @@ import { AgentV2 } from "@slopcode-ai/core/agent"
 import { Config } from "@slopcode-ai/core/config"
 import { ConfigCompaction } from "@slopcode-ai/core/config/compaction"
 import { Tool } from "@slopcode-ai/core/tool/tool"
+import { TaskTool } from "@slopcode-ai/core/tool/task"
 import {
   SessionContextEpochTable,
   SessionInputTable,
@@ -4106,6 +4108,165 @@ describe("SessionRunnerLLM", () => {
       expect(contexts[0]?.permissions).toEqual(original)
       expect(contexts[0]?.plan).toEqual({ mode: "code-only", multiAgent: "v2", patch: undefined, shell: undefined })
       expect(contexts[0]?.task?.childSessionID).toBe(childID)
+    }),
+  )
+
+  it.effect("recovers a resumed task end to end through TaskTool, SessionRunner, and SessionExecutionLocal", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Recover resumed task" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const originMessageID = SessionMessage.ID.make("msg_e2e_resume_origin")
+      const resumeMessageID = SessionMessage.ID.make("msg_e2e_resume_current")
+      const originCallID = "call-e2e-resume-origin"
+      const resumeCallID = "call-e2e-resume-current"
+      const childID = SessionTask.childID(sessionID, originMessageID, originCallID)
+      const model = ModelV2.Ref.make({
+        providerID: ProviderV2.ID.make("fake"),
+        id: ModelV2.ID.make("fake-model"),
+        variant: ModelV2.VariantID.make("default"),
+      })
+      const title = "Original task (@general subagent)"
+      const request = (messageID: SessionMessage.ID, callID: string, description: string, prompt: string) => ({
+        sessionID,
+        timestamp: DateTime.makeUnsafe(0),
+        assistantMessageID: messageID,
+        callID,
+        childSessionID: childID,
+        promptMessageID: SessionTask.promptID(sessionID, messageID, callID),
+        description,
+        prompt,
+        agent: "general",
+        model,
+        multiAgent: "v2" as const,
+        callerAgent: AgentV2.ID.make("build"),
+        permissions: [{ action: "edit", resource: "resume-secret", effect: "deny" as const }],
+        plan: { multiAgent: "v2" as const },
+        projectID: Project.ID.global,
+        location: { directory: AbsolutePath.make("/project") },
+        title,
+        ceiling: [],
+      })
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: childID,
+          project_id: Project.ID.global,
+          parent_id: sessionID,
+          slug: childID,
+          directory: "/project",
+          title,
+          version: "test",
+          runtime: "v2",
+          agent: "general",
+          model,
+          metadata: {
+            task: {
+              version: 1,
+              parentID: sessionID,
+              agent: "general",
+              origin: { messageID: originMessageID, callID: originCallID },
+              ceiling: [],
+            },
+          },
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        request(originMessageID, originCallID, "Original task", "original work"),
+        { id: SessionTask.requestEventID(sessionID, originMessageID, originCallID) },
+      )
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: resumeMessageID,
+        agent: "build",
+        model,
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: resumeMessageID,
+        callID: resumeCallID,
+        name: "task",
+      })
+      const input = {
+        description: "Continue after restart",
+        prompt: "resume work",
+        subagent_type: "general",
+        task_id: childID,
+      }
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: resumeMessageID,
+        callID: resumeCallID,
+        text: JSON.stringify(input),
+      })
+      yield* events.publish(SessionEvent.Tool.CalledV1, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: resumeMessageID,
+        callID: resumeCallID,
+        tool: "task",
+        input,
+        provider: { executed: false },
+      })
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        request(resumeMessageID, resumeCallID, input.description, input.prompt),
+        { id: SessionTask.requestEventID(sessionID, resumeMessageID, resumeCallID) },
+      )
+      yield* SessionInput.admit(db, events, {
+        id: SessionTask.promptID(sessionID, resumeMessageID, resumeCallID),
+        sessionID: childID,
+        prompt: new Prompt({ text: input.prompt }),
+        delivery: "steer",
+      })
+      requests.length = 0
+      responses = [
+        fragmentFixture("text", "text-e2e-resumed-child", ["resumed result"]).completeEvents,
+        fragmentFixture("text", "text-e2e-resumed-parent", ["parent continued"]).completeEvents,
+      ]
+      const local = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, { db })),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(
+          Layer.mock(LocationServiceMap, {
+            get: () => Layer.succeed(SessionRunner.Service, runner),
+          }),
+        ),
+      )
+
+      yield* Effect.gen(function* () {
+        const execution = yield* SessionExecution.Service
+        yield* execution.wait(sessionID)
+      }).pipe(Effect.provide(local), Effect.provide(TaskTool.layer))
+
+      expect(requests.filter((item) => userTexts(item).includes("resume work"))).toHaveLength(1)
+      const settled = (yield* session.context(sessionID))
+        .flatMap((message) => (message.type === "assistant" ? message.content : []))
+        .find((part) => part.type === "tool" && part.id === resumeCallID)
+      expect(settled).toMatchObject({
+        type: "tool",
+        id: resumeCallID,
+        state: {
+          status: "completed",
+          structured: {
+            task_id: childID,
+            state: "completed",
+            result: "resumed result",
+          },
+        },
+      })
     }),
   )
 

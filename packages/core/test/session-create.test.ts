@@ -561,7 +561,7 @@ describe("SessionV2.create", () => {
       const db = (yield* Database.Service).db
       const parent = yield* session.create({ id, location, runtime: "v2" })
       const messageID = SessionMessage.ID.make("msg_public_task_interrupt")
-      const childID = SessionV2.ID.make("ses_public_task_interrupt_child")
+      const childID = SessionTask.childID(parent.id, messageID, "call-public-task-interrupt")
       const model = ModelV2.Ref.make({ id: ModelV2.ID.make("fake"), providerID: ProviderV2.ID.make("fake") })
       yield* db
         .insert(SessionTable)
@@ -626,7 +626,7 @@ describe("SessionV2.create", () => {
           assistantMessageID: messageID,
           callID: "call-public-task-interrupt",
           childSessionID: childID,
-          promptMessageID: SessionMessage.ID.make("msg_public_task_interrupt_prompt"),
+          promptMessageID: SessionTask.promptID(parent.id, messageID, "call-public-task-interrupt"),
           description: "Wait",
           prompt: "wait",
           agent: "general",
