@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { ContentBlockID, FinishReason, ProtocolID, ProviderMetadata, RouteID, ToolCallID } from "./ids"
+import { ContentBlockID, FinishReason, ProtocolID, ProviderMetadata, RouteID, ToolCallID, ToolType } from "./ids"
 import { ModelSchema } from "./options"
 import { ToolOutput, ToolResultValue } from "./messages"
 import { ProviderFailureClassification } from "./errors"
@@ -129,6 +129,7 @@ export const ToolInputStart = Schema.Struct({
   type: Schema.tag("tool-input-start"),
   id: ToolCallID,
   name: Schema.String,
+  toolType: Schema.optional(ToolType),
   providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Event.ToolInputStart" })
 export type ToolInputStart = Schema.Schema.Type<typeof ToolInputStart>
@@ -138,6 +139,7 @@ export const ToolInputDelta = Schema.Struct({
   id: ToolCallID,
   name: Schema.String,
   text: Schema.String,
+  toolType: Schema.optional(ToolType),
 }).annotate({ identifier: "LLM.Event.ToolInputDelta" })
 export type ToolInputDelta = Schema.Schema.Type<typeof ToolInputDelta>
 
@@ -145,6 +147,7 @@ export const ToolInputEnd = Schema.Struct({
   type: Schema.tag("tool-input-end"),
   id: ToolCallID,
   name: Schema.String,
+  toolType: Schema.optional(ToolType),
   providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Event.ToolInputEnd" })
 export type ToolInputEnd = Schema.Schema.Type<typeof ToolInputEnd>
@@ -154,6 +157,7 @@ export const ToolCall = Schema.Struct({
   id: ToolCallID,
   name: Schema.String,
   input: Schema.Unknown,
+  toolType: Schema.optional(ToolType),
   providerExecuted: Schema.optional(Schema.Boolean),
   providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Event.ToolCall" })
@@ -164,6 +168,7 @@ export const ToolResult = Schema.Struct({
   id: ToolCallID,
   name: Schema.String,
   result: ToolResultValue,
+  toolType: Schema.optional(ToolType),
   output: Schema.optional(ToolOutput),
   providerExecuted: Schema.optional(Schema.Boolean),
   providerMetadata: Schema.optional(ProviderMetadata),
@@ -175,6 +180,7 @@ export const ToolError = Schema.Struct({
   id: ToolCallID,
   name: Schema.String,
   message: Schema.String,
+  toolType: Schema.optional(ToolType),
   error: Schema.optional(Schema.Defect()),
   providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Event.ToolError" })

@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { JsonSchema, MessageRole, ProviderMetadata } from "./ids"
+import { JsonSchema, MessageRole, ProviderMetadata, ToolType } from "./ids"
 import { CacheHint, CachePolicy, GenerationOptions, HttpOptions, ModelSchema, ProviderOptions } from "./options"
 import { isRecord } from "../utils/record"
 
@@ -140,6 +140,7 @@ export const ToolCallPart = Object.assign(
     id: Schema.String,
     name: Schema.String,
     input: Schema.Unknown,
+    toolType: Schema.optional(ToolType),
     providerExecuted: Schema.optional(Schema.Boolean),
     metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
     providerMetadata: Schema.optional(ProviderMetadata),
@@ -156,6 +157,7 @@ export const ToolResultPart = Object.assign(
     id: Schema.String,
     name: Schema.String,
     result: ToolResultValue,
+    toolType: Schema.optional(ToolType),
     providerExecuted: Schema.optional(Schema.Boolean),
     cache: Schema.optional(CacheHint),
     metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
@@ -172,6 +174,7 @@ export const ToolResultPart = Object.assign(
       id: input.id,
       name: input.name,
       result: ToolResultValue.make(input.result, input.resultType),
+      toolType: input.toolType,
       providerExecuted: input.providerExecuted,
       cache: input.cache,
       metadata: input.metadata,
@@ -246,30 +249,74 @@ export class ToolDefinition extends Schema.Class<ToolDefinition>("LLM.ToolDefini
   native: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 }) {}
 
-export namespace ToolDefinition {
-  export type Input = ToolDefinition | ConstructorParameters<typeof ToolDefinition>[0]
+export const CustomToolFormat = Schema.Struct({
+  type: Schema.Literal("grammar"),
+  syntax: Schema.Literal("lark"),
+  definition: Schema.String,
+}).annotate({ identifier: "LLM.CustomToolFormat" })
+export type CustomToolFormat = Schema.Schema.Type<typeof CustomToolFormat>
 
-  /** Normalize tool definition input into the canonical `ToolDefinition` class. */
-  export const make = (input: Input) => (input instanceof ToolDefinition ? input : new ToolDefinition(input))
+export class CustomToolDefinition extends Schema.Class<CustomToolDefinition>("LLM.CustomToolDefinition")({
+  type: Schema.tag("custom"),
+  name: Schema.String,
+  description: Schema.String,
+  format: Schema.optional(CustomToolFormat),
+  cache: Schema.optional(CacheHint),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  native: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+}) {}
+
+export namespace CustomToolDefinition {
+  export type Input = CustomToolDefinition | ConstructorParameters<typeof CustomToolDefinition>[0]
+}
+
+export const ToolDefinitionSchema = Schema.Union([ToolDefinition, CustomToolDefinition])
+export type AnyToolDefinition = Schema.Schema.Type<typeof ToolDefinitionSchema>
+export const isCustomToolDefinition = (tool: AnyToolDefinition): tool is CustomToolDefinition =>
+  "type" in tool && tool.type === "custom"
+export const isFunctionToolDefinition = (tool: AnyToolDefinition): tool is ToolDefinition =>
+  !isCustomToolDefinition(tool)
+
+export namespace ToolDefinition {
+  export type Input =
+    | ToolDefinition
+    | ConstructorParameters<typeof ToolDefinition>[0]
+    | CustomToolDefinition
+    | ConstructorParameters<typeof CustomToolDefinition>[0]
+
+  /** Normalize function or custom tool input into its canonical class. */
+  export function make(
+    input: ToolDefinition | ConstructorParameters<typeof ToolDefinition>[0],
+  ): ToolDefinition
+  export function make(
+    input: CustomToolDefinition | ConstructorParameters<typeof CustomToolDefinition>[0],
+  ): CustomToolDefinition
+  export function make(input: Input): AnyToolDefinition {
+    if (input instanceof ToolDefinition || input instanceof CustomToolDefinition) return input
+    if ("inputSchema" in input) return new ToolDefinition(input)
+    return new CustomToolDefinition(input)
+  }
 }
 
 export class ToolChoice extends Schema.Class<ToolChoice>("LLM.ToolChoice")({
   type: Schema.Literals(["auto", "none", "required", "tool"]),
   name: Schema.optional(Schema.String),
+  toolType: Schema.optional(ToolType),
 }) {}
 
 export namespace ToolChoice {
   export type Mode = Exclude<ToolChoice["type"], "tool">
-  export type Input = ToolChoice | ConstructorParameters<typeof ToolChoice>[0] | ToolDefinition | string
+  export type Input = ToolChoice | ConstructorParameters<typeof ToolChoice>[0] | AnyToolDefinition | string
 
   const isMode = (value: string): value is Mode => value === "auto" || value === "none" || value === "required"
 
   /** Select a specific named tool. */
-  export const named = (value: string) => new ToolChoice({ type: "tool", name: value })
+  export const named = (value: string, toolType?: ToolType) => new ToolChoice({ type: "tool", name: value, toolType })
 
   /** Normalize ergonomic tool-choice inputs into the canonical `ToolChoice` class. */
   export const make = (input: Input) => {
     if (input instanceof ToolChoice) return input
+    if (input instanceof CustomToolDefinition) return named(input.name, "custom")
     if (input instanceof ToolDefinition) return named(input.name)
     if (typeof input === "string") return isMode(input) ? new ToolChoice({ type: input }) : named(input)
     return new ToolChoice(input)
@@ -288,7 +335,7 @@ export class LLMRequest extends Schema.Class<LLMRequest>("LLM.Request")({
   model: ModelSchema,
   system: Schema.Array(SystemPart),
   messages: Schema.Array(Message),
-  tools: Schema.Array(ToolDefinition),
+  tools: Schema.Array(ToolDefinitionSchema),
   toolChoice: Schema.optional(ToolChoice),
   generation: Schema.optional(GenerationOptions),
   providerOptions: Schema.optional(ProviderOptions),

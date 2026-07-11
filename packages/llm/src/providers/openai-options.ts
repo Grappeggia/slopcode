@@ -1,8 +1,12 @@
 import type { ProviderOptions, ReasoningEffort, TextVerbosity } from "../schema"
 import { mergeProviderOptions } from "../schema"
-import type { OpenAIResponseIncludable, OpenAIServiceTier } from "../protocols/utils/openai-options"
+import type {
+  OpenAIResponseIncludable,
+  OpenAIServiceTier,
+  OpenAITruncation,
+} from "../protocols/utils/openai-options"
 
-export type { OpenAIResponseIncludable, OpenAIServiceTier } from "../protocols/utils/openai-options"
+export type { OpenAIResponseIncludable, OpenAIServiceTier, OpenAITruncation } from "../protocols/utils/openai-options"
 
 export interface OpenAIOptionsInput {
   readonly [key: string]: unknown
@@ -16,6 +20,8 @@ export interface OpenAIOptionsInput {
   readonly include?: ReadonlyArray<OpenAIResponseIncludable>
   readonly textVerbosity?: TextVerbosity
   readonly serviceTier?: OpenAIServiceTier
+  readonly parallelToolCalls?: boolean
+  readonly truncation?: OpenAITruncation
 }
 
 export type OpenAIProviderOptionsInput = ProviderOptions & {
@@ -35,6 +41,8 @@ const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): Provide
       include: options?.include,
       textVerbosity: options?.textVerbosity,
       serviceTier: options?.serviceTier,
+      parallelToolCalls: options?.parallelToolCalls,
+      truncation: options?.truncation,
     }),
   )
   if (Object.keys(openai).length === 0) return undefined
