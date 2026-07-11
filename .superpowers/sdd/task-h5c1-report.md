@@ -78,3 +78,70 @@ Complete. Foreground V2 subagent tasks now use one Location-scoped canonical `ta
 
 - Startup task discovery scans durable task request events because H5C1 intentionally adds no migration or dedicated lifecycle table. A future indexed projection may be useful at very large event volumes.
 - As with the existing authoritative Session lane, a process loss during an in-flight provider request cannot prove the remote provider did not execute; H5C1 guarantees deterministic local admission and avoids redispatch once terminal child output is durable.
+
+## Review Rejection Fixes
+
+### Findings Resolved
+
+- Pending recovery: `failInterruptedTools` now recognizes both pending and running `task` projections. Pending JSON input is decoded and durably promoted through the ordinary Tool.Called transition before the captured ToolRegistry settles it. Running tasks retain the same registry path.
+- Crash boundaries: deterministic child-only, requested-before-progress, admitted-before-execution, and terminal-child states all reconnect through one child identity. Existing prompt admission and terminal output are reused, and terminal recovery does not emit another child execution.
+- Permission ceiling: task creation derives the ceiling only from the immutable materialized caller rules, persists only deny statements, and appends nested `task`/`todowrite` denies unless the selected child explicitly declares those exact actions. Live parent-agent reconstruction and persisted ask/allow rules were removed.
+- Hard ceiling: PermissionV2 now treats any matching persisted ceiling deny as terminal before child rules or saved approvals. Rule ordering cannot turn a ceiling deny into allow.
+- V2 creation boundary: `SessionCreate` and internal synchronized `SessionEvent.Created` now own canonical Session creation/projection. Normal SessionV2 creation and task child creation share it. `TaskTool` has no SessionV1 or BackgroundJob dependency; legacy V1 creation projection remains only for compatibility.
+- Deterministic collision validation: an occupied deterministic child ID is validated for V2 runtime, parent, project, Location, agent, model, title, task owner/origin, and ceiling before request publication or prompt admission. Resume validates V2 ownership, parent, project, Location, agent, and task-owner compatibility.
+- Real gates: SessionRunner reconnects pending and running canonical task calls; SessionExecutionLocal discovers a ready parent with durable task work; public Session interruption durably marks the task and waits for child cleanup signaling.
+- Registry and harness gates: task-specific stale registration and output bounding are covered, and real runner settlement observes `multiAgent: v2` for GPT-5.6 and `multiAgent: v1` for Luna without entering V1 execution.
+
+### Review RED Evidence
+
+- Command from `packages/core`: `bun test test/permission.test.ts test/tool-task.test.ts test/session-create.test.ts test/session-runner.test.ts`.
+- Result before fixes: `185 pass`, `5 fail`, `576 expect()` calls. Failures reproduced V1 creation persistence, hard-ceiling override, live-agent ceiling reconstruction, unvalidated deterministic collision, and pending task generic failure.
+- The first expanded execution gate additionally timed out because its fixture had a Task.Requested event without the required projected parent tool state. Seeding the real pending Tool.Input projection made the gate exercise production recovery and pass.
+
+### Review GREEN Evidence
+
+- Focused command from `packages/core`: `bun test test/permission.test.ts test/tool-task.test.ts test/session-create.test.ts test/session-runner.test.ts test/session-execution-local.test.ts test/session-runner-tool-registry.test.ts test/tool-codemode.test.ts test/model-harness.test.ts`; `238 pass`, `0 fail`, `744 expect()` calls.
+- Full Core command from `packages/core`: `bun test`; `1236 pass`, `0 fail`, `3451 expect()` calls across 140 files.
+- Full CodeMode command from `packages/codemode`: `bun test`; `254 pass`, `0 fail`, `744 expect()` calls.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `git diff --check`: passed.
+- Source check: `packages/core/src/tool/task.ts` contains no `SessionV1` or `BackgroundJob` reference.
+
+### Review Files
+
+- `packages/core/src/permission.ts`
+- `packages/core/src/session.ts`
+- `packages/core/src/session/create.ts`
+- `packages/core/src/session/event.ts`
+- `packages/core/src/session/message-updater.ts`
+- `packages/core/src/session/projector.ts`
+- `packages/core/src/session/runner/llm.ts`
+- `packages/core/src/tool/task.ts`
+- `packages/core/test/permission.test.ts`
+- `packages/core/test/session-create.test.ts`
+- `packages/core/test/session-execution-local.test.ts`
+- `packages/core/test/session-runner.test.ts`
+- `packages/core/test/tool-task.test.ts`
+- `.superpowers/sdd/task-h5c1-report.md`
+
+### Review Commit
+
+- Fixes and regressions: `a6078140d0 fix(session): harden V2 task recovery`
+- Report: recorded in the following documentation commit.
+- Nothing was pushed.
+
+### Review Self-Review
+
+- The internal V2 creation event is synchronized and replayable but intentionally excluded from the public Session event stream, preserving the prior API behavior while removing task's V1 implementation dependency.
+- Concurrent creation still has one deterministic event/projector winner. Normal Session creation returns the existing projection as before; task creation performs strict post-race ownership validation.
+- Pending recovery records Tool.Called before settlement, so Tool.Success/Failed uses the normal running-state transition and settles exactly once.
+- Ceiling denies are checked independently with deny-any semantics in both initial assertions and remembered-approval reconciliation.
+- The immutable caller snapshot, rather than mutable AgentV2 state, is the sole parent restriction source for newly persisted child metadata.
+- Lifecycle tests count Task.Execute/provider work and prompt rows across child-only, requested, admitted, and terminal states; terminal retries do not execute again.
+- Location/project/agent/task-owner conflicts are rejected before deterministic prompt admission.
+
+### Review Concerns
+
+- Durable task discovery still scans synchronized request events; this remains the intentional no-migration tradeoff from H5C1.
+- Remote provider execution cannot be proven exactly once if the process dies while the request is in flight. Locally durable prompt admission and terminal recovery are exactly-once/idempotent, and no terminal child is redispatched.
