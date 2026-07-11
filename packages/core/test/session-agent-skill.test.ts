@@ -14,6 +14,7 @@ import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import * as SessionExecutionLocal from "@slopcode-ai/core/session/execution/local"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
+import { Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionRunner } from "@slopcode-ai/core/session/runner"
@@ -21,7 +22,7 @@ import { SessionInputTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { SkillV2 } from "@slopcode-ai/core/skill"
 import { eq, sql } from "drizzle-orm"
-import { Deferred, Effect, Layer } from "effect"
+import { Context, Deferred, Effect, Exit, Layer, Scope } from "effect"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -444,29 +445,115 @@ describe("SessionControl", () => {
       const { db } = yield* Database.Service
       const events = yield* EventV2.Service
       const control = yield* SessionControl.Service
-      yield* events.beforeCommit((event) =>
-        "sessionID" in event.data && event.data.sessionID === sessionID
-          ? db
-              .update(SessionTable)
-              .set({ runtime: "v1", runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` })
-              .where(eq(SessionTable.id, sessionID))
-              .run()
-              .pipe(Effect.orDie, Effect.asVoid)
-          : Effect.void,
-      )
-      for (const operation of [
-        control.switchAgent({ sessionID, agent: "reviewer" }),
-        control.skill({ sessionID, skill: "review", resume: false }),
-      ])
-        expect(yield* operation.pipe(Effect.flip)).toMatchObject({
-          _tag: "SessionRuntime.Mismatch",
-          actualOwner: "v1",
-        })
+      const runtime = yield* SessionRuntime.Service
+      const changes = ["owner", "state", "epoch"] as const
+      let change: (typeof changes)[number] = "owner"
+      let commits = 0
+      yield* events.beforeCommit((event) => {
+        if (!("sessionID" in event.data) || event.data.sessionID !== sessionID) return Effect.void
+        commits++
+        return db
+          .update(SessionTable)
+          .set({
+            ...(change === "owner" ? { runtime: "v1" as const } : {}),
+            ...(change === "state" ? { runtime_state: "draining" as const } : {}),
+            runtime_epoch: sql`${SessionTable.runtime_epoch} + 1`,
+          })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+      })
+      const operations = [
+        () => control.switchAgent({ sessionID, agent: "reviewer" }),
+        () => control.skill({ sessionID, skill: "review", resume: false }),
+      ]
+      for (change of changes)
+        for (const operation of operations) {
+          expect(yield* operation().pipe(Effect.flip)).toMatchObject({
+            _tag: "SessionRuntime.Mismatch",
+            actualOwner: change === "owner" ? "v1" : "v2",
+            actualState: change === "state" ? "draining" : "ready",
+            actualEpoch: 1,
+          })
+          expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 0 })).toBeDefined()
+        }
+      expect(commits).toBe(6)
       expect(
         yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
       ).toEqual([])
       expect(yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).toEqual([])
       expect(wakes).toEqual([])
+    }),
+  )
+
+  it.effect("fences same-agent and exact-skill retries without mutation or wake", () =>
+    Effect.gen(function* () {
+      yield* setup
+      skillItems.push(
+        new SkillV2.Info({ name: "review", location: AbsolutePath.make("/skills/review.md"), content: "Review" }),
+      )
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const sessions = yield* SessionV2.Service
+      const id = SessionMessage.ID.make("msg_guarded_skill_retry")
+      wakes.length = 0
+      yield* db.update(SessionTable).set({ agent: "reviewer" }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      yield* SessionInput.admit(db, events, {
+        id,
+        sessionID,
+        prompt: new Prompt({ text: "Review" }),
+        delivery: "steer",
+      })
+      let change: "owner" | "epoch" = "epoch"
+      const transition = () =>
+        db
+          .update(SessionTable)
+          .set({
+            ...(change === "owner" ? { runtime: "v1" as const } : {}),
+            runtime_epoch: sql`${SessionTable.runtime_epoch} + 1`,
+          })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+      const fenced = SessionRuntime.Service.of({
+        ...runtime,
+        assert: (input) =>
+          input.epoch === undefined ? runtime.assert(input).pipe(Effect.tap(transition)) : runtime.assert(input),
+      })
+      const layer = SessionControl.layer.pipe(
+        Layer.provide(Layer.succeed(SessionV2.Service, sessions)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, fenced)),
+      )
+      const before = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
+      expect(yield* control.switchAgent({ sessionID, agent: "reviewer" }).pipe(Effect.flip)).toMatchObject({
+        _tag: "SessionRuntime.Mismatch",
+        actualEpoch: 1,
+      })
+      yield* db
+        .update(SessionTable)
+        .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 0 })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      change = "owner"
+      expect(yield* control.skill({ id, sessionID, skill: "review" }).pipe(Effect.flip)).toMatchObject({
+        _tag: "SessionRuntime.Mismatch",
+        actualOwner: "v1",
+      })
+      yield* db
+        .update(SessionTable)
+        .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 0 })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)).toEqual(before)
+      expect(wakes).toEqual([])
+      expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 0 })).toBeDefined()
     }),
   )
 })

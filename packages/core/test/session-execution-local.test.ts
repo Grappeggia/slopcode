@@ -835,8 +835,10 @@ describe("SessionExecutionLocal startup recovery", () => {
       const parentID = SessionSchema.ID.make("ses_damaged_task_parent")
       const fabricatedMessage = SessionMessage.ID.make("msg_fabricated_task_origin")
       const damagedMessage = SessionMessage.ID.make("msg_damaged_task_origin")
+      const wrongTypeMessage = SessionMessage.ID.make("msg_wrong_type_task_origin")
       const fabricated = SessionTask.childID(parentID, fabricatedMessage, "call-fabricated")
       const damaged = SessionTask.childID(parentID, damagedMessage, "call-damaged")
+      const wrongType = SessionTask.childID(parentID, wrongTypeMessage, "call-wrong-type")
       const model = ModelV2.Ref.make({ providerID: ProviderV2.ID.make("fake"), id: ModelV2.ID.make("fake") })
       yield* db
         .insert(ProjectTable)
@@ -892,11 +894,38 @@ describe("SessionExecutionLocal startup recovery", () => {
             model,
             metadata: { task: { version: 1, damaged: true } },
           },
+          {
+            id: wrongType,
+            project_id: Project.ID.global,
+            parent_id: parentID,
+            slug: wrongType,
+            directory: "/project",
+            title: "Wrong type (@general subagent)",
+            version: "test",
+            runtime: "v2" as const,
+            runtime_state: "draining" as const,
+            agent: "general",
+            model,
+            metadata: {
+              task: {
+                version: 1,
+                parentID,
+                agent: "general",
+                origin: { messageID: wrongTypeMessage, callID: "call-wrong-type" },
+                ceiling: [],
+              },
+            },
+          },
         ])
         .run()
         .pipe(Effect.orDie)
+      yield* events.publish(
+        SessionEvent.InterruptRequested,
+        { sessionID: parentID, timestamp: yield* DateTime.now },
+        { id: SessionTask.requestEventID(parentID, wrongTypeMessage, "call-wrong-type") },
+      )
       yield* Effect.forEach(
-        [fabricated, damaged],
+        [fabricated, damaged, wrongType],
         (sessionID) =>
           SessionInput.admit(db, events, {
             id: SessionMessage.ID.create(),
@@ -922,11 +951,24 @@ describe("SessionExecutionLocal startup recovery", () => {
         ),
       )
 
-      yield* SessionExecution.Service.pipe(Effect.provide(execution))
-      yield* Effect.yieldNow
+      expect(
+        (yield* SessionTask.request(db, parentID, wrongTypeMessage, "call-wrong-type").pipe(Effect.exit))._tag,
+      ).toBe("Failure")
+      yield* Effect.gen(function* () {
+        yield* SessionExecution.Service
+        yield* events.publish(SessionEvent.Task.Execute, {
+          sessionID: parentID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: wrongTypeMessage,
+          callID: "call-wrong-type",
+          childSessionID: wrongType,
+        })
+        yield* Effect.yieldNow
+      }).pipe(Effect.provide(execution))
 
       expect(yield* SessionTask.orphaned(db, fabricated)).toBeTrue()
       expect(yield* SessionTask.orphaned(db, damaged)).toBeTrue()
+      expect(yield* SessionTask.orphaned(db, wrongType)).toBeTrue()
       expect(runs).toEqual([])
     }),
   )
