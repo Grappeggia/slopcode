@@ -211,3 +211,61 @@ Complete. Foreground V2 subagent tasks now use one Location-scoped canonical `ta
 
 - Durable task discovery and parent interrupt checks query synchronized events because H5C1 intentionally adds no lifecycle table or migration.
 - A remote provider request interrupted before its response is durably recorded still cannot provide remote exactly-once proof; deterministic local admission and terminal recovery remain idempotent.
+
+## Final Resume Correctness Fixes
+
+### Findings Resolved
+
+- A validated `task_id` resume now separates current invocation data from canonical child identity. The new request retains the current description, prompt, caller permission snapshot, permission admission, and plan, while project, Location, title, model, and ceiling remain those of the validated existing child and original owner request.
+- Resume recovery therefore accepts changed descriptions and changed current caller permissions without weakening or rewriting the persisted child ceiling. The request's current permission snapshot remains available for exact recovery rematerialization.
+- Child orphan detection validates every deterministic `Task.Requested` event targeting the canonical child and checks each corresponding interruption marker. An interrupted resume call now fences startup recovery even when the original owner call was not interrupted; parent `InterruptRequested` sequencing remains unchanged.
+- The production recovery gate now registers the real canonical `TaskTool`, starts the real `SessionRunnerLLM` through `SessionExecutionLocal`, recovers an admitted resumed prompt, executes the child provider once, and terminally settles the parent task before its continuation turn.
+
+### Final RED Evidence
+
+- Command from `packages/core`: `bun test test/tool-task.test.ts test/session-execution-local.test.ts`.
+- Result before fixes: `24 pass`, `2 fail`, `96 expect()` calls. The failures reproduced a changed-description resume request persisting a non-canonical title and a resumed-call interruption failing to orphan its pending child.
+
+### Final GREEN Evidence
+
+- Focused command from `packages/core`: `bun test test/permission.test.ts test/tool-task.test.ts test/session-create.test.ts test/session-runner.test.ts test/session-execution-local.test.ts test/session-runner-tool-registry.test.ts test/tool-codemode.test.ts test/model-harness.test.ts`; `246 pass`, `0 fail`, `773 expect()` calls.
+- Full Core command from `packages/core`: `bun test`; `1244 pass`, `0 fail`, `3480 expect()` calls across 140 files.
+- Full CodeMode command from `packages/codemode`: `bun test`; `254 pass`, `0 fail`, `744 expect()` calls.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `git diff --check`: passed.
+- Source check: `packages/core/src/tool/task.ts` contains no `SessionV1` or `BackgroundJob` reference.
+
+### Final Production Gate
+
+- The resumed task starts from a deterministic original child and a distinct durable resume request with a changed description and current deny snapshot.
+- Startup uses `SessionExecutionLocal` with the actual `SessionRunnerLLM`; runner recovery materializes the actual scoped `TaskTool` registration and publishes `Task.Execute` through the normal event listener.
+- The child provider sees the resumed prompt exactly once, the parent tool reaches completed state with the child result, and the parent continuation runs afterward.
+
+### Final Files
+
+- `packages/core/src/session/task.ts`
+- `packages/core/src/tool/task.ts`
+- `packages/core/test/session-create.test.ts`
+- `packages/core/test/session-execution-local.test.ts`
+- `packages/core/test/session-runner.test.ts`
+- `packages/core/test/tool-task.test.ts`
+- `.superpowers/sdd/task-h5c1-report.md`
+
+### Final Commit
+
+- Fixes and production-path regressions: `1bb05dfa02 fix(session): harden resumed task recovery`.
+- Report: recorded in the following documentation commit.
+- Nothing was pushed.
+
+### Final Self-Review
+
+- Resume calls cannot replace immutable child ownership fields with description-derived or current-permission-derived values.
+- Canonical request matching includes deterministic event/prompt IDs plus child, parent, agent, model, project, Location, title, and ceiling identity before an interruption can orphan the child.
+- Public parent interruption behavior is preserved, while ordinary interruption of any valid resume call now blocks child restart.
+- The integrated gate contains no replacement task definition and performs no direct registry settlement.
+
+### Final Concerns
+
+- Orphan evaluation scans the parent's durable task requests because H5C1 intentionally adds no task lifecycle index or migration.
+- Remote provider work interrupted before durable response recording still cannot provide remote exactly-once proof; local admission, recovery, and terminal settlement remain deterministic.
