@@ -47,3 +47,50 @@
 ## Concerns
 
 - No known H5C3A correctness concerns. Configured npm plugin loading remains intentionally deferred to H5C3B.
+
+## Review Correction
+
+This section supersedes the original coverage and self-review claims above where they implied the rejected edge cases were already gated.
+
+### Fix Design
+
+- Wrapped plugin-map reads, file imports/exports, export inspection, Zod object/schema generation, legacy schema construction/compilation, and `Tool.dynamic` construction in typed `PluginTool.LoadError` boundaries. Discovery publishes/logs failures and continues unrelated exports/directories; execution and hook defects remain defects.
+- Registered `dispose` before canonical tools so LIFO scope shutdown deregisters tools first, then awaits disposal exactly once. Added slow remove/replacement and plugin/Location shutdown gates.
+- Added an ordered final `SessionEvent.Tool.Progress` projection carrying the post-hook title and metadata before canonical success settlement.
+- Collects all valid exports for one Config Directory before registration, rejects every export participating in an ambiguous generated name, and preserves cross-directory precedence.
+- Split PluginBoot into configured-plugin and complete phases so built-ins can register before custom discovery without deadlocking `PluginBoot.wait`.
+
+### Review RED Evidence
+
+- `bun test test/plugin-tool.test.ts`: `5 pass`, `5 fail`. Reproduced an uncaught `z.toJSONSchema` defect, absent execute/after title progress, visible registrations during slow disposal, missing real-store bounding, and accepted same-directory collisions.
+- `bun test test/location-layer.test.ts`: `2 pass`, `1 fail`; the new bad-tool `PluginBoot.wait` gate timed out after 5000 ms.
+- `bun test test/plugin-tool.test.ts -t "preserves defects from plugin execution"`: `0 pass`, `1 fail`; execution rejection was incorrectly projected as an ordinary successful settlement.
+- The first phased-boot regression run exposed mock incompatibility (`PluginBoot.plugins`) and retained Location caching; the helper was moved behind `PluginBoot.beforeTools`, and the Location gate now releases and explicitly invalidates the cached Location.
+
+### Review GREEN Evidence
+
+- `bun test test/plugin-tool.test.ts test/plugin.test.ts test/tool-dynamic.test.ts test/tool-overlay.test.ts`: `23 pass`, `0 fail`, `113 expect()` calls.
+- `bun test test/location-layer.test.ts test/tool-skill.test.ts test/tool-task.test.ts`: `25 pass`, `0 fail`, `108 expect()` calls.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun test` from `packages/codemode`: `254 pass`, `0 fail`, `744 expect()` calls.
+- `bun run typecheck` from `packages/server`: passed.
+- First full Core run: `1281 pass`, `1 fail`; the unrelated process readiness test observed an empty just-created PID file. Its isolated rerun passed (`1 pass`, `0 fail`).
+- Final `bun test` from `packages/core`: `1282 pass`, `0 fail`, `3641 expect()` calls.
+- `git diff --check`: passed.
+
+### Added Gates
+
+- Typed Zod, invalid legacy, and canonical-construction adaptation failures followed by a healthy registration.
+- Execute-title and after-hook-title durable progress, invalid after-hook output, malformed non-attachment result objects, and execution-defect preservation.
+- Slow remove/replacement invisibility, plugin-scope disposal, and real `LocationServiceMap` shutdown disposal exactly once.
+- Real `ToolOutputStore` truncation and managed full-output persistence.
+- PluginBoot successful completion with a bad local export and a later healthy tool.
+- Default-vs-named and `tool/`-vs-`tools/` same-directory collisions, plus retained cross-directory precedence and CodeMode execution.
+
+### Review Commit
+
+- `b0bc713a4e fix(plugin): close H5C3A review gaps`
+
+### Review Concerns
+
+- No remaining H5C3A correctness concerns. One unrelated process readiness test was transient on the first full run and passed both isolated and final full-suite reruns.
