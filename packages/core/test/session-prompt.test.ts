@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Fiber, Layer, Stream } from "effect"
+import { Context, DateTime, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
@@ -736,37 +736,125 @@ describe("SessionControl", () => {
       wakeCalls.length = 0
       interruptCalls.length = 0
       yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
-      yield* events.beforeCommit((event) =>
-        "sessionID" in event.data && event.data.sessionID === sessionID
-          ? db
-              .update(SessionTable)
-              .set({ runtime_state: "draining", runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` })
-              .where(eq(SessionTable.id, sessionID))
-              .run()
-              .pipe(Effect.orDie, Effect.asVoid)
-          : Effect.void,
-      )
+      const changes = ["owner", "state", "epoch"] as const
+      let change: (typeof changes)[number] = "owner"
+      let commits = 0
+      yield* events.beforeCommit((event) => {
+        if (!("sessionID" in event.data) || event.data.sessionID !== sessionID) return Effect.void
+        commits++
+        return db
+          .update(SessionTable)
+          .set({
+            ...(change === "owner" ? { runtime: "v1" as const } : {}),
+            ...(change === "state" ? { runtime_state: "draining" as const } : {}),
+            runtime_epoch: sql`${SessionTable.runtime_epoch} + 1`,
+          })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+      })
       const operations = [
-        control.prompt({ sessionID, prompt: new Prompt({ text: "race" }), resume: false }),
-        control.switchModel({
-          sessionID,
-          model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("target") }),
-        }),
-        control.interrupt(sessionID),
-        control.compact({ sessionID }),
-        control.shell({ sessionID, command: "true", resume: false }),
+        () => control.prompt({ sessionID, prompt: new Prompt({ text: "race" }), resume: false }),
+        () =>
+          control.switchModel({
+            sessionID,
+            model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("target") }),
+          }),
+        () => control.interrupt(sessionID),
+        () => control.compact({ sessionID }),
+        () => control.shell({ sessionID, command: "true", resume: false }),
       ]
-      for (const operation of operations)
-        expect(yield* operation.pipe(Effect.flip)).toMatchObject({
-          _tag: "SessionRuntime.Mismatch",
-          actualState: "draining",
-        })
+      for (change of changes)
+        for (const operation of operations) {
+          const failure = yield* operation().pipe(Effect.flip)
+          expect(failure).toMatchObject({
+            _tag: "SessionRuntime.Mismatch",
+            actualOwner: change === "owner" ? "v1" : "v2",
+            actualState: change === "state" ? "draining" : "ready",
+            actualEpoch: 2,
+          })
+          expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 1 })).toBeDefined()
+        }
+      expect(commits).toBe(15)
       expect(
         yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
       ).toEqual([])
       expect(yield* admittedCount).toBe(0)
       expect(wakeCalls).toEqual([])
       expect(interruptCalls).toEqual([])
+    }),
+  )
+
+  it.effect("fences exact prompt, shell, and compaction retries before wake", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const sessions = yield* SessionV2.Service
+      wakeCalls.length = 0
+      yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
+      const promptID = SessionMessage.ID.make("msg_guarded_prompt_retry")
+      const shellID = SessionMessage.ID.make("msg_guarded_shell_retry")
+      const compactID = SessionMessage.ID.make("msg_guarded_compaction_retry")
+      yield* SessionInput.admit(db, events, {
+        id: promptID,
+        sessionID,
+        prompt: new Prompt({ text: "retry" }),
+        delivery: "steer",
+      })
+      yield* SessionInput.admitShell(db, events, { id: shellID, sessionID, command: "true", resume: true })
+      yield* SessionInput.admitCompaction(db, events, { id: compactID, sessionID })
+      const changes = ["owner", "state", "epoch"] as const
+      let change: (typeof changes)[number] = "owner"
+      const transition = () =>
+        db
+          .update(SessionTable)
+          .set({
+            ...(change === "owner" ? { runtime: "v1" as const } : {}),
+            ...(change === "state" ? { runtime_state: "draining" as const } : {}),
+            runtime_epoch: sql`${SessionTable.runtime_epoch} + 1`,
+          })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+      const fenced = SessionRuntime.Service.of({
+        ...runtime,
+        assert: (input) =>
+          input.epoch === undefined ? runtime.assert(input).pipe(Effect.tap(transition)) : runtime.assert(input),
+      })
+      const layer = SessionControl.layer.pipe(
+        Layer.provide(Layer.succeed(SessionV2.Service, sessions)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, fenced)),
+      )
+      const before = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
+      const operations = [
+        () => control.prompt({ id: promptID, sessionID, prompt: new Prompt({ text: "retry" }) }),
+        () => control.shell({ id: shellID, sessionID, command: "true" }),
+        () => control.compact({ id: compactID, sessionID }),
+      ]
+      for (const [index, operation] of operations.entries()) {
+        change = changes[index]!
+        expect(yield* operation().pipe(Effect.flip)).toMatchObject({
+          _tag: "SessionRuntime.Mismatch",
+          actualOwner: change === "owner" ? "v1" : "v2",
+          actualState: change === "state" ? "draining" : "ready",
+          actualEpoch: 2,
+        })
+        yield* db
+          .update(SessionTable)
+          .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 1 })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie)
+      }
+
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)).toEqual(before)
+      expect(wakeCalls).toEqual([])
+      expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 1 })).toBeDefined()
     }),
   )
 })

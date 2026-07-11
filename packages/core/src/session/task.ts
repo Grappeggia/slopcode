@@ -139,6 +139,22 @@ export const request = Effect.fn("SessionTask.request")(function* (
   return Option.getOrUndefined(yield* decodeRequest(row.data).pipe(Effect.option))
 })
 
+const recoveryRequest = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  parentID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+  callID: string,
+) {
+  const row = yield* db
+    .select({ type: EventTable.type, data: EventTable.data })
+    .from(EventTable)
+    .where(eq(EventTable.id, requestEventID(parentID, messageID, callID)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row || row.type !== requestedType) return
+  return Option.getOrUndefined(yield* decodeRequest(row.data).pipe(Effect.option))
+})
+
 export const interrupted = Effect.fn("SessionTask.interrupted")(function* (
   db: DatabaseService,
   parentID: SessionSchema.ID,
@@ -236,7 +252,7 @@ export const orphaned = Effect.fn("SessionTask.orphaned")(function* (db: Databas
     return (
       row.parent_id !== null || (typeof row.metadata === "object" && row.metadata !== null && "task" in row.metadata)
     )
-  const origin = yield* request(db, owner.parentID, owner.origin.messageID, owner.origin.callID)
+  const origin = yield* recoveryRequest(db, owner.parentID, owner.origin.messageID, owner.origin.callID)
   const canonical = (item: SessionEvent.Task.Requested["data"]) =>
     row.id === childID(owner.parentID, owner.origin.messageID, owner.origin.callID) &&
     item.sessionID === owner.parentID &&

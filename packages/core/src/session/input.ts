@@ -15,6 +15,9 @@ import { SessionInputTable, SessionMessageTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 
+const checkCommit = (db: DatabaseService, commit: Effect.Effect<void>) =>
+  db.transaction(() => commit, { behavior: "immediate" }).pipe(Effect.orDie)
+
 export const Delivery = Schema.Literals(["steer", "queue"])
 export type Delivery = typeof Delivery.Type
 
@@ -63,7 +66,10 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
   commit: Effect.Effect<void> = Effect.void,
 ) {
   const existing = yield* find(db, input.id)
-  if (existing !== undefined) return existing
+  if (existing !== undefined) {
+    yield* checkCommit(db, commit)
+    return existing
+  }
   const timestamp = yield* DateTime.now
   return yield* events
     .publish(
@@ -444,7 +450,10 @@ export const admitShell = Effect.fn("SessionInput.admitShell")(function* (
   commit: Effect.Effect<void> = Effect.void,
 ) {
   const existing = yield* findShell(db, input.id)
-  if (existing) return existing
+  if (existing) {
+    yield* checkCommit(db, commit)
+    return existing
+  }
   const timestamp = yield* DateTime.now
   return yield* events
     .publish(
@@ -778,7 +787,10 @@ export const admitCompaction = Effect.fn("SessionInput.admitCompaction")(functio
   commit: Effect.Effect<void> = Effect.void,
 ) {
   const existing = yield* findCompaction(db, input.id)
-  if (existing) return existing
+  if (existing) {
+    yield* checkCommit(db, commit)
+    return existing
+  }
   const timestamp = yield* DateTime.now
   return yield* events
     .publish(

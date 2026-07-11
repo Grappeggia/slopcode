@@ -263,6 +263,9 @@ const guardedCommit = <A, E, R, G>(
     ),
   )
 
+const guardedCheck = <G>(db: Database.Interface["db"], guard: Effect.Effect<void, G>) =>
+  guardedCommit((commit) => db.transaction(() => commit, { behavior: "immediate" }).pipe(Effect.orDie), guard)
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -465,29 +468,27 @@ export const layer = Layer.effect(
                 (yield* store.message(id)))
             )
               return yield* new ShellConflictError({ sessionID: input.sessionID, messageID: id })
-            const admitted =
-              recorded ??
-              (yield* guardedCommit(
-                (commit) =>
-                  SessionInput.admitShell(
-                    db,
-                    events,
-                    {
-                      id,
-                      sessionID: input.sessionID,
-                      command: input.command,
-                      resume,
-                    },
-                    commit,
-                  ),
-                guard,
-              ).pipe(
-                Effect.catchDefect((defect) =>
-                  defect instanceof SessionInput.LifecycleConflict
-                    ? new ShellConflictError({ sessionID: input.sessionID, messageID: id })
-                    : Effect.die(defect),
+            const admitted = yield* guardedCommit(
+              (commit) =>
+                SessionInput.admitShell(
+                  db,
+                  events,
+                  {
+                    id,
+                    sessionID: input.sessionID,
+                    command: input.command,
+                    resume,
+                  },
+                  commit,
                 ),
-              ))
+              guard,
+            ).pipe(
+              Effect.catchDefect((defect) =>
+                defect instanceof SessionInput.LifecycleConflict
+                  ? new ShellConflictError({ sessionID: input.sessionID, messageID: id })
+                  : Effect.die(defect),
+              ),
+            )
             if (
               admitted.sessionID !== input.sessionID ||
               admitted.command !== input.command ||
@@ -552,7 +553,7 @@ export const layer = Layer.effect(
             available: catalog.filter((item) => item.mode !== "subagent" && !item.hidden).map((item) => item.id),
           })
         }).pipe(Effect.provide(locations.get(session.location)))
-        if (session.agent === selected) return
+        if (session.agent === selected) return yield* guardedCheck(db, guard)
         const timestamp = yield* DateTime.now
         yield* guardedCommit(
           (commit) =>
@@ -614,28 +615,26 @@ export const layer = Layer.effect(
             const recorded = yield* SessionInput.findCompaction(db, id)
             if (!recorded && ((yield* SessionInput.find(db, id)) || (yield* store.message(id))))
               return yield* new CompactionConflictError({ sessionID: input.sessionID, messageID: id })
-            const admitted =
-              recorded ??
-              (yield* guardedCommit(
-                (commit) =>
-                  SessionInput.admitCompaction(
-                    db,
-                    events,
-                    {
-                      id,
-                      sessionID: input.sessionID,
-                      instruction: input.prompt?.text,
-                    },
-                    commit,
-                  ),
-                guard,
-              ).pipe(
-                Effect.catchDefect((defect) =>
-                  defect instanceof SessionInput.LifecycleConflict
-                    ? new CompactionConflictError({ sessionID: input.sessionID, messageID: id })
-                    : Effect.die(defect),
+            const admitted = yield* guardedCommit(
+              (commit) =>
+                SessionInput.admitCompaction(
+                  db,
+                  events,
+                  {
+                    id,
+                    sessionID: input.sessionID,
+                    instruction: input.prompt?.text,
+                  },
+                  commit,
                 ),
-              ))
+              guard,
+            ).pipe(
+              Effect.catchDefect((defect) =>
+                defect instanceof SessionInput.LifecycleConflict
+                  ? new CompactionConflictError({ sessionID: input.sessionID, messageID: id })
+                  : Effect.die(defect),
+              ),
+            )
             if (admitted.sessionID !== input.sessionID || admitted.instruction !== input.prompt?.text)
               return yield* new CompactionConflictError({ sessionID: input.sessionID, messageID: id })
             const finish = Effect.fnUntraced(function* () {
