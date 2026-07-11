@@ -10,6 +10,7 @@ import { Location } from "../location"
 import { ModelV2 } from "../model"
 import { PermissionV2 } from "../permission"
 import { ProviderV2 } from "../provider"
+import { AbsolutePath } from "../schema"
 import { PluginBoot } from "../plugin/boot"
 import { SessionEvent } from "../session/event"
 import { SessionInput } from "../session/input"
@@ -381,7 +382,7 @@ export const layer = Layer.effectDiscard(
                 })
               const inherited = source.message.model
               const expected = selected.model ?? inherited
-              const ceiling = [
+              const derived = [
                 ...context.permissions.filter((rule) => rule.effect === "deny"),
                 ...(selected.permissions.some((rule) => rule.action === name)
                   ? []
@@ -397,7 +398,7 @@ export const layer = Layer.effectDiscard(
               )
               const title = `${input.description} (@${selected.id} subagent)`
               const origin = { messageID: context.assistantMessageID, callID: context.toolCallID }
-              const owner = { version: 1 as const, parentID: context.sessionID, agent: selected.id, origin, ceiling }
+              const owner = { version: 1 as const, parentID: context.sessionID, agent: selected.id, origin, ceiling: derived }
               if (!input.task_id) {
                 const existing = yield* db
                   .select({ id: SessionTable.id })
@@ -422,7 +423,7 @@ export const layer = Layer.effectDiscard(
               const row = yield* validate(
                 input.task_id
                   ? { id: input.task_id, parent, agent: selected.id, canonical: true }
-                  : { id: deterministic, parent, agent: selected.id, model: expected, title, origin, ceiling },
+                  : { id: deterministic, parent, agent: selected.id, model: expected, title, origin, ceiling: derived },
               )
               if (!row.model)
                 return yield* new ResumeConflictError({
@@ -440,6 +441,23 @@ export const layer = Layer.effectDiscard(
                   message: `Task ${row.id} model identity conflicts`,
                 })
               const taskID = SessionSchema.ID.make(row.id)
+              const ownership = yield* store.task(taskID)
+              if (!ownership)
+                return yield* new ResumeConflictError({
+                  taskID,
+                  message: `Task resume conflict: ${taskID} has no persisted owner`,
+                })
+              const identity = input.task_id
+                ? {
+                    projectID: row.project_id,
+                    location: Location.Ref.make({
+                      directory: AbsolutePath.make(row.directory),
+                      workspaceID: row.workspace_id ?? undefined,
+                    }),
+                    title: row.title,
+                    ceiling: ownership.ceiling,
+                  }
+                : { projectID: parent.projectID, location, title, ceiling: derived }
               const promptID = SessionTask.promptID(context.sessionID, context.assistantMessageID, context.toolCallID)
               const recorded = yield* SessionTask.request(
                 db,
@@ -463,10 +481,10 @@ export const layer = Layer.effectDiscard(
                 callerAgent: context.agent,
                 permissions: context.permissions,
                 plan: { ...context.plan, multiAgent: context.multiAgent ?? "v2" },
-                projectID: parent.projectID,
-                location,
-                title,
-                ceiling,
+                projectID: identity.projectID,
+                location: identity.location,
+                title: identity.title,
+                ceiling: identity.ceiling,
               } as const
               if (
                 recorded &&

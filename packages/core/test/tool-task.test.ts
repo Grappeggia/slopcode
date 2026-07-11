@@ -575,6 +575,63 @@ describe("TaskTool durable orchestration", () => {
     }),
   )
 
+  fixture.it.effect("recovers valid resumes with changed descriptions and caller permissions", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const runs: string[] = []
+      yield* complete(runs)
+      yield* settle("call-resume-origin", {
+        description: "Modeled",
+        prompt: "first",
+        subagent_type: "modeled",
+      })
+      const taskID = SessionTask.childID(parentID, messageID, "call-resume-origin")
+      const cases = [
+        {
+          callID: "call-resume-description-recovery",
+          description: "Continue with a different description",
+          permissions: [] as PermissionV2.Ruleset,
+        },
+        {
+          callID: "call-resume-permission-recovery",
+          description: "Modeled",
+          permissions: [{ action: "edit", resource: "new-secret", effect: "deny" as const }],
+        },
+      ]
+      for (const item of cases) {
+        const input = {
+          description: item.description,
+          prompt: item.callID,
+          subagent_type: "modeled",
+          task_id: taskID,
+        }
+        expect((yield* settleWith(item.callID, input, item.permissions)).result.type).toBe("text")
+        const request = yield* SessionTask.request(db, parentID, messageID, item.callID)
+        expect(request).toMatchObject({
+          title: "Modeled (@modeled subagent)",
+          ceiling: [],
+          permissions: item.permissions,
+        })
+        const materialized = yield* (yield* ToolRegistry.Service).materialize(request!.permissions, request!.plan)
+        expect(
+          (yield* materialized.settle({
+            sessionID: parentID,
+            agent: request!.callerAgent,
+            assistantMessageID: messageID,
+            call: { type: "tool-call", id: item.callID, name: "task", input },
+            task: request,
+          })).result.type,
+        ).toBe("text")
+      }
+      expect(runs).toEqual([
+        "call-resume-origin",
+        "call-resume-description-recovery",
+        "call-resume-permission-recovery",
+      ])
+    }),
+  )
+
   fixture.it.effect("recovers child creation, request, admission, and terminal boundaries without duplicate work", () =>
     Effect.gen(function* () {
       yield* seed

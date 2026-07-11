@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { AgentV2 } from "@slopcode-ai/core/agent"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
@@ -461,9 +462,9 @@ describe("SessionExecutionLocal startup recovery", () => {
       const store = yield* SessionStore.Service
       const runtime = yield* SessionRuntime.Service
       const parentID = SessionSchema.ID.make("ses_interrupted_task_parent")
-      const childID = SessionSchema.ID.make("ses_interrupted_task_child")
       const messageID = SessionMessage.ID.make("msg_interrupted_task_parent")
       const callID = "call-interrupted-task-parent"
+      const childID = SessionTask.childID(parentID, messageID, callID)
       const model = {
         providerID: ProviderV2.ID.make("fake"),
         id: ModelV2.ID.make("fake"),
@@ -550,6 +551,136 @@ describe("SessionExecutionLocal startup recovery", () => {
         Layer.provide(Layer.succeed(SessionStore.Service, store)),
         Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
         Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* SessionExecution.Service.pipe(Effect.provide(execution))
+      yield* Effect.yieldNow
+
+      expect(runs).not.toContain(childID)
+    }),
+  )
+
+  it.effect("never restarts a child after a resumed task call is durably interrupted", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const parentID = SessionSchema.ID.make("ses_interrupted_resume_parent")
+      const originMessageID = SessionMessage.ID.make("msg_interrupted_resume_origin")
+      const resumeMessageID = SessionMessage.ID.make("msg_interrupted_resume_current")
+      const originCallID = "call-interrupted-resume-origin"
+      const resumeCallID = "call-interrupted-resume-current"
+      const childID = SessionTask.childID(parentID, originMessageID, originCallID)
+      const model = ModelV2.Ref.make({
+        providerID: ProviderV2.ID.make("fake"),
+        id: ModelV2.ID.make("fake"),
+        variant: ModelV2.VariantID.make("default"),
+      })
+      const now = yield* DateTime.now
+      const request = (messageID: SessionMessage.ID, callID: string, prompt: string) => ({
+        sessionID: parentID,
+        timestamp: now,
+        assistantMessageID: messageID,
+        callID,
+        childSessionID: childID,
+        promptMessageID: SessionTask.promptID(parentID, messageID, callID),
+        description: callID === originCallID ? "Origin" : "Resume",
+        prompt,
+        agent: "general",
+        model,
+        multiAgent: "v2" as const,
+        callerAgent: AgentV2.ID.make("build"),
+        permissions: [],
+        plan: { multiAgent: "v2" as const },
+        projectID: Project.ID.global,
+        location: { directory: AbsolutePath.make("/project") },
+        title: "Origin (@general subagent)",
+        ceiling: [],
+      })
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values([
+          {
+            id: parentID,
+            project_id: Project.ID.global,
+            slug: parentID,
+            directory: "/project",
+            title: "Interrupted resume parent",
+            version: "test",
+            runtime: "v2" as const,
+          },
+          {
+            id: childID,
+            project_id: Project.ID.global,
+            parent_id: parentID,
+            slug: childID,
+            directory: "/project",
+            title: "Origin (@general subagent)",
+            version: "test",
+            runtime: "v2" as const,
+            runtime_state: "draining" as const,
+            agent: "general",
+            model,
+            metadata: {
+              task: {
+                version: 1,
+                parentID,
+                agent: "general",
+                origin: { messageID: originMessageID, callID: originCallID },
+                ceiling: [],
+              },
+            },
+          },
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      yield* events.publish(SessionEvent.Task.Requested, request(originMessageID, originCallID, "origin"), {
+        id: SessionTask.requestEventID(parentID, originMessageID, originCallID),
+      })
+      yield* events.publish(SessionEvent.Task.Requested, request(resumeMessageID, resumeCallID, "never run"), {
+        id: SessionTask.requestEventID(parentID, resumeMessageID, resumeCallID),
+      })
+      yield* SessionInput.admit(db, events, {
+        id: SessionTask.promptID(parentID, resumeMessageID, resumeCallID),
+        sessionID: childID,
+        prompt: new Prompt({ text: "never run" }),
+        delivery: "steer",
+      })
+      yield* events.publish(
+        SessionEvent.Task.Interrupted,
+        {
+          sessionID: parentID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: resumeMessageID,
+          callID: resumeCallID,
+          childSessionID: childID,
+        },
+        { id: SessionTask.interruptedEventID(parentID, resumeMessageID, resumeCallID) },
+      )
+      expect(yield* SessionTask.interrupted(db, parentID, originMessageID, originCallID)).toBeFalse()
+      expect(yield* SessionTask.orphaned(db, childID)).toBeTrue()
+      const runs: SessionSchema.ID[] = []
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(
+          Layer.mock(LocationServiceMap, {
+            get: () =>
+              Layer.succeed(
+                SessionRunner.Service,
+                SessionRunner.Service.of({ run: (input) => Effect.sync(() => runs.push(input.sessionID)) }),
+              ),
+          }),
+        ),
       )
 
       yield* SessionExecution.Service.pipe(Effect.provide(execution))
