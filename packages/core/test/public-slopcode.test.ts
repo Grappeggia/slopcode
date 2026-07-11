@@ -189,6 +189,31 @@ describe("public native SlopCode API", () => {
     }),
   )
 
+  it.live("rejects an unsupported model route before persisting a switch", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* writeProvider(tmp.path, false, true)
+          const slopcode = yield* SlopCode.Service
+          const sessionID = Session.ID.create()
+          yield* slopcode.sessions.create({
+            id: sessionID,
+            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+          })
+
+          expect(yield* slopcode.sessions.switchModel({ sessionID, model: ref() }).pipe(Effect.flip)).toMatchObject({
+            _tag: "SessionRunnerModel.UnsupportedApiError",
+            api: "native",
+          })
+          expect((yield* slopcode.sessions.get(sessionID)).model).toBeUndefined()
+        }),
+      ),
+    ),
+  )
+
   it.live("fences every native mutating control for V1 and transition runtimes before mutation", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -276,7 +301,7 @@ const ref = (input: { id?: string; variant?: string } = {}) =>
     variant: input.variant,
   })
 
-const writeProvider = (directory: string, disabled = false) =>
+const writeProvider = (directory: string, disabled = false, unsupported = false) =>
   Effect.promise(() =>
     fs.writeFile(
       path.join(directory, "slopcode.json"),
@@ -284,7 +309,9 @@ const writeProvider = (directory: string, disabled = false) =>
         providers: {
           "public-test": {
             name: "Public test",
-            api: { type: "native", settings: {} },
+            api: unsupported
+              ? { type: "native", settings: {} }
+              : { type: "aisdk", package: "@ai-sdk/openai", url: "https://public-test.example/v1" },
             models: {
               chat: {
                 disabled,

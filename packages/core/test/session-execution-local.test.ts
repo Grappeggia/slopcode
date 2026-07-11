@@ -824,6 +824,112 @@ describe("SessionExecutionLocal startup recovery", () => {
       expect(runs).not.toContain(childID)
     }),
   )
+
+  it.effect("never starts damaged or fabricated task children as ordinary V2 work", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const parentID = SessionSchema.ID.make("ses_damaged_task_parent")
+      const fabricatedMessage = SessionMessage.ID.make("msg_fabricated_task_origin")
+      const damagedMessage = SessionMessage.ID.make("msg_damaged_task_origin")
+      const fabricated = SessionTask.childID(parentID, fabricatedMessage, "call-fabricated")
+      const damaged = SessionTask.childID(parentID, damagedMessage, "call-damaged")
+      const model = ModelV2.Ref.make({ providerID: ProviderV2.ID.make("fake"), id: ModelV2.ID.make("fake") })
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values([
+          {
+            id: parentID,
+            project_id: Project.ID.global,
+            slug: parentID,
+            directory: "/project",
+            title: "Damaged task parent",
+            version: "test",
+            runtime: "v2" as const,
+          },
+          {
+            id: fabricated,
+            project_id: Project.ID.global,
+            parent_id: parentID,
+            slug: fabricated,
+            directory: "/project",
+            title: "Fabricated (@general subagent)",
+            version: "test",
+            runtime: "v2" as const,
+            runtime_state: "draining" as const,
+            agent: "general",
+            model,
+            metadata: {
+              task: {
+                version: 1,
+                parentID,
+                agent: "general",
+                origin: { messageID: fabricatedMessage, callID: "call-fabricated" },
+                ceiling: [],
+              },
+            },
+          },
+          {
+            id: damaged,
+            project_id: Project.ID.global,
+            parent_id: parentID,
+            slug: damaged,
+            directory: "/project",
+            title: "Damaged (@general subagent)",
+            version: "test",
+            runtime: "v2" as const,
+            runtime_state: "draining" as const,
+            agent: "general",
+            model,
+            metadata: { task: { version: 1, damaged: true } },
+          },
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      yield* Effect.forEach(
+        [fabricated, damaged],
+        (sessionID) =>
+          SessionInput.admit(db, events, {
+            id: SessionMessage.ID.create(),
+            sessionID,
+            prompt: new Prompt({ text: "must not execute" }),
+            delivery: "steer",
+          }),
+        { discard: true },
+      )
+      const runs: SessionSchema.ID[] = []
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(
+          Layer.mock(LocationServiceMap, {
+            get: () =>
+              Layer.succeed(
+                SessionRunner.Service,
+                SessionRunner.Service.of({ run: (input) => Effect.sync(() => runs.push(input.sessionID)) }),
+              ),
+          }),
+        ),
+      )
+
+      yield* SessionExecution.Service.pipe(Effect.provide(execution))
+      yield* Effect.yieldNow
+
+      expect(yield* SessionTask.orphaned(db, fabricated)).toBeTrue()
+      expect(yield* SessionTask.orphaned(db, damaged)).toBeTrue()
+      expect(runs).toEqual([])
+    }),
+  )
 })
 
 describe("SessionExecutionLocal wait", () => {

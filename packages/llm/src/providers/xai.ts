@@ -12,23 +12,26 @@ export type ModelOptions = RouteDefaultsInput &
     readonly baseURL?: string
   }
 
-export const routes = [OpenAIResponses.route, OpenAICompatibleChat.route]
-
 const auth = (options: ProviderAuthOption<"optional">) => AuthOptions.bearer(options, "XAI_API_KEY")
+
+const responsesRoute = OpenAIResponses.route.with({ provider: id, capabilities: [] })
+const chatRoute = OpenAICompatibleChat.route.with({ provider: id })
+export const routes = [responsesRoute, chatRoute]
 
 const configuredResponsesRoute = (input: ModelOptions) => {
   const { apiKey: _, auth: _auth, baseURL, ...rest } = input
-  return OpenAIResponses.route.with({
+  return responsesRoute.with({
     ...rest,
     provider: id,
     endpoint: { baseURL: baseURL ?? OpenAICompatibleProfiles.profiles.xai.baseURL },
     auth: auth(input),
+    capabilities: [],
   })
 }
 
 const configuredChatRoute = (input: ModelOptions) => {
   const { apiKey: _, auth: _auth, baseURL, ...rest } = input
-  return OpenAICompatibleChat.route.with({
+  return chatRoute.with({
     ...rest,
     provider: id,
     endpoint: { baseURL: baseURL ?? OpenAICompatibleProfiles.profiles.xai.baseURL },

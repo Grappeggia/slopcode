@@ -34,6 +34,7 @@ import { SkillV2 } from "./skill"
 import { SessionTask } from "./session/task"
 import { SessionCreate } from "./session/create"
 import { SessionRunnerModel } from "./session/runner/model"
+import { SessionHistory } from "./session/history"
 
 // get project -> project.locations
 //
@@ -196,26 +197,35 @@ export interface Interface {
     },
     guard?: Effect.Effect<void, E>,
   ) => Effect.Effect<void, NotFoundError | AgentUnavailableError | E>
-  readonly switchModel: (input: {
-    sessionID: SessionSchema.ID
-    model: ModelV2.Ref
-  }) => Effect.Effect<
+  readonly switchModel: <E = never>(
+    input: {
+      sessionID: SessionSchema.ID
+      model: ModelV2.Ref
+    },
+    guard?: Effect.Effect<void, E>,
+  ) => Effect.Effect<
     void,
-    NotFoundError | MessageDecodeError | ModelHistoryIncompatibleError | SessionRunnerModel.Error
+    NotFoundError | MessageDecodeError | ModelHistoryIncompatibleError | SessionRunnerModel.Error | E
   >
-  readonly prompt: (input: {
-    id?: SessionMessage.ID
-    sessionID: SessionSchema.ID
-    prompt: Prompt
-    delivery?: SessionInput.Delivery
-    resume?: boolean
-  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
-  readonly shell: (input: {
-    id?: SessionMessage.ID
-    sessionID: SessionSchema.ID
-    command: string
-    resume?: boolean
-  }) => Effect.Effect<void, NotFoundError | ShellConflictError>
+  readonly prompt: <E = never>(
+    input: {
+      id?: SessionMessage.ID
+      sessionID: SessionSchema.ID
+      prompt: Prompt
+      delivery?: SessionInput.Delivery
+      resume?: boolean
+    },
+    guard?: Effect.Effect<void, E>,
+  ) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | E>
+  readonly shell: <E = never>(
+    input: {
+      id?: SessionMessage.ID
+      sessionID: SessionSchema.ID
+      command: string
+      resume?: boolean
+    },
+    guard?: Effect.Effect<void, E>,
+  ) => Effect.Effect<void, NotFoundError | ShellConflictError | E>
   readonly skill: <E = never>(
     input: {
       id?: SessionMessage.ID
@@ -225,18 +235,33 @@ export interface Interface {
     },
     guard?: Effect.Effect<void, E>,
   ) => Effect.Effect<SessionInput.Admitted, NotFoundError | SkillNotFoundError | PromptConflictError | E>
-  readonly compact: (
+  readonly compact: <E = never>(
     input: CompactInput,
+    guard?: Effect.Effect<void, E>,
   ) => Effect.Effect<
     void,
-    NotFoundError | CompactionConflictError | CompactionPromptUnsupportedError | CompactionFailedError
+    NotFoundError | CompactionConflictError | CompactionPromptUnsupportedError | CompactionFailedError | E
   >
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
-  readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly interrupt: <E = never>(sessionID: SessionSchema.ID, guard?: Effect.Effect<void, E>) => Effect.Effect<void, E>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/Session") {}
+
+class MutationGuardFailure {
+  constructor(readonly error: unknown) {}
+}
+
+const guardedCommit = <A, E, R, G>(
+  mutation: (commit: Effect.Effect<void>) => Effect.Effect<A, E, R>,
+  guard: Effect.Effect<void, G>,
+): Effect.Effect<A, E | G, R> =>
+  mutation(guard.pipe(Effect.catch((error) => Effect.die(new MutationGuardFailure(error))))).pipe(
+    Effect.catchDefect((defect) =>
+      defect instanceof MutationGuardFailure ? Effect.fail(defect.error as G) : Effect.die(defect),
+    ),
+  )
 
 export const layer = Layer.effect(
   Service,
@@ -388,7 +413,7 @@ export const layer = Layer.effect(
             isDurableSessionEvent(event.event),
           ),
         ),
-      prompt: Effect.fn("V2Session.prompt")((input) =>
+      prompt: Effect.fn("V2Session.prompt")((input, guard = Effect.void) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
             yield* result.get(input.sessionID)
@@ -399,12 +424,21 @@ export const layer = Layer.effect(
             const messageID = input.id ?? SessionMessage.ID.create()
             const delivery = input.delivery ?? "steer"
             const expected = { sessionID: input.sessionID, messageID, prompt: input.prompt, delivery }
-            const admitted = yield* SessionInput.admit(db, events, {
-              id: messageID,
-              sessionID: input.sessionID,
-              prompt: input.prompt,
-              delivery,
-            }).pipe(
+            const admitted = yield* guardedCommit(
+              (commit) =>
+                SessionInput.admit(
+                  db,
+                  events,
+                  {
+                    id: messageID,
+                    sessionID: input.sessionID,
+                    prompt: input.prompt,
+                    delivery,
+                  },
+                  commit,
+                ),
+              guard,
+            ).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict
                   ? new PromptConflictError({ sessionID: input.sessionID, messageID })
@@ -417,7 +451,7 @@ export const layer = Layer.effect(
           }),
         ),
       ),
-      shell: Effect.fn("V2Session.shell")(function* (input) {
+      shell: Effect.fn("V2Session.shell")(function* (input, guard = Effect.void) {
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             yield* result.get(input.sessionID)
@@ -433,12 +467,21 @@ export const layer = Layer.effect(
               return yield* new ShellConflictError({ sessionID: input.sessionID, messageID: id })
             const admitted =
               recorded ??
-              (yield* SessionInput.admitShell(db, events, {
-                id,
-                sessionID: input.sessionID,
-                command: input.command,
-                resume,
-              }).pipe(
+              (yield* guardedCommit(
+                (commit) =>
+                  SessionInput.admitShell(
+                    db,
+                    events,
+                    {
+                      id,
+                      sessionID: input.sessionID,
+                      command: input.command,
+                      resume,
+                    },
+                    commit,
+                  ),
+                guard,
+              ).pipe(
                 Effect.catchDefect((defect) =>
                   defect instanceof SessionInput.LifecycleConflict
                     ? new ShellConflictError({ sessionID: input.sessionID, messageID: id })
@@ -486,13 +529,15 @@ export const layer = Layer.effect(
             available: catalog.map((item) => item.name),
           })
         }).pipe(Effect.provide(locations.get(session.location)))
-        yield* guard
-        return yield* result.prompt({
-          id: input.id,
-          sessionID: input.sessionID,
-          prompt: new Prompt({ text: skill.content }),
-          resume: input.resume,
-        })
+        return yield* result.prompt(
+          {
+            id: input.id,
+            sessionID: input.sessionID,
+            prompt: new Prompt({ text: skill.content }),
+            resume: input.resume,
+          },
+          guard,
+        )
       }),
       switchAgent: Effect.fn("V2Session.switchAgent")(function* (input, guard = Effect.void) {
         const session = yield* result.get(input.sessionID)
@@ -508,51 +553,56 @@ export const layer = Layer.effect(
           })
         }).pipe(Effect.provide(locations.get(session.location)))
         if (session.agent === selected) return
-        yield* guard
-        yield* events.publish(SessionEvent.AgentSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: yield* DateTime.now,
-          agent: selected,
-        })
-      }),
-      switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
-        const session = yield* result.get(input.sessionID)
-        const rows = yield* db
-          .select()
-          .from(SessionMessageTable)
-          .where(and(eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.type, "assistant")))
-          .all()
-          .pipe(Effect.orDie)
-        const custom = yield* Effect.findFirst(rows, (row) =>
-          decode(row).pipe(
-            Effect.map(
-              (message) =>
-                message.type === "assistant" &&
-                message.content.some((part) => part.type === "tool" && part.toolType === "custom"),
+        const timestamp = yield* DateTime.now
+        yield* guardedCommit(
+          (commit) =>
+            events.publish(
+              SessionEvent.AgentSwitched,
+              {
+                sessionID: input.sessionID,
+                messageID: SessionMessage.ID.create(),
+                timestamp,
+                agent: selected,
+              },
+              { commit: () => commit },
             ),
-          ),
+          guard,
         )
-        if (custom._tag === "Some") {
-          const resolved = yield* Effect.gen(function* () {
-            return yield* (yield* SessionRunnerModel.Service).resolve({ ...session, model: input.model })
-          }).pipe(Effect.provide(locations.get(session.location)))
-          if (!resolved.model.route.capabilities.includes("custom-tools"))
-            return yield* new ModelHistoryIncompatibleError({
-              sessionID: input.sessionID,
-              model: input.model,
-              protocol: resolved.model.route.protocol,
-              feature: "custom-tools",
-            })
-        }
-        yield* events.publish(SessionEvent.ModelSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: yield* DateTime.now,
-          model: input.model,
-        })
       }),
-      compact: Effect.fn("V2Session.compact")(function* (input) {
+      switchModel: Effect.fn("V2Session.switchModel")(function* (input, guard = Effect.void) {
+        const session = yield* result.get(input.sessionID)
+        const resolved = yield* Effect.gen(function* () {
+          return yield* (yield* SessionRunnerModel.Service).resolve({ ...session, model: input.model })
+        }).pipe(Effect.provide(locations.get(session.location)))
+        const custom = (yield* SessionHistory.load(db, input.sessionID)).some(
+          (message) =>
+            message.type === "assistant" &&
+            message.content.some((part) => part.type === "tool" && part.toolType === "custom"),
+        )
+        if (custom && !resolved.model.route.capabilities.includes("custom-tools"))
+          return yield* new ModelHistoryIncompatibleError({
+            sessionID: input.sessionID,
+            model: input.model,
+            protocol: resolved.model.route.protocol,
+            feature: "custom-tools",
+          })
+        const timestamp = yield* DateTime.now
+        yield* guardedCommit(
+          (commit) =>
+            events.publish(
+              SessionEvent.ModelSwitched,
+              {
+                sessionID: input.sessionID,
+                messageID: SessionMessage.ID.create(),
+                timestamp,
+                model: input.model,
+              },
+              { commit: () => commit },
+            ),
+          guard,
+        )
+      }),
+      compact: Effect.fn("V2Session.compact")(function* (input, guard = Effect.void) {
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             yield* result.get(input.sessionID)
@@ -566,11 +616,20 @@ export const layer = Layer.effect(
               return yield* new CompactionConflictError({ sessionID: input.sessionID, messageID: id })
             const admitted =
               recorded ??
-              (yield* SessionInput.admitCompaction(db, events, {
-                id,
-                sessionID: input.sessionID,
-                instruction: input.prompt?.text,
-              }).pipe(
+              (yield* guardedCommit(
+                (commit) =>
+                  SessionInput.admitCompaction(
+                    db,
+                    events,
+                    {
+                      id,
+                      sessionID: input.sessionID,
+                      instruction: input.prompt?.text,
+                    },
+                    commit,
+                  ),
+                guard,
+              ).pipe(
                 Effect.catchDefect((defect) =>
                   defect instanceof SessionInput.LifecycleConflict
                     ? new CompactionConflictError({ sessionID: input.sessionID, messageID: id })
@@ -628,15 +687,17 @@ export const layer = Layer.effect(
         yield* result.get(sessionID)
         yield* execution.resume(sessionID)
       }),
-      interrupt: Effect.fn("V2Session.interrupt")((sessionID) =>
+      interrupt: Effect.fn("V2Session.interrupt")((sessionID, guard = Effect.void) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
             const session = yield* store.get(sessionID)
             if (!session) return yield* execution.interrupt(sessionID)
-            const event = yield* events.publish(SessionEvent.InterruptRequested, {
-              sessionID,
-              timestamp: yield* DateTime.now,
-            })
+            const timestamp = yield* DateTime.now
+            const event = yield* guardedCommit(
+              (commit) =>
+                events.publish(SessionEvent.InterruptRequested, { sessionID, timestamp }, { commit: () => commit }),
+              guard,
+            )
             if (event.seq === undefined)
               return yield* Effect.die("Interrupt request event is missing aggregate sequence")
             for (const message of yield* store.context(sessionID).pipe(Effect.orDie)) {

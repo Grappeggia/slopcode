@@ -569,6 +569,18 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
 const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request: LLMRequest) {
   const generation = request.generation
   const lite = OpenAIOptions.responsesMode(request) === "lite"
+  if (lite && !request.model.route.capabilities.includes("responses-lite"))
+    return yield* invalid(`${request.model.provider}/${request.model.route.id} does not support Responses Lite`)
+  const custom =
+    request.tools.some((tool) => "type" in tool && tool.type === "custom") ||
+    request.messages.some((message) =>
+      message.content.some(
+        (part) => (part.type === "tool-call" || part.type === "tool-result") && part.toolType === "custom",
+      ),
+    ) ||
+    request.toolChoice?.toolType === "custom"
+  if (custom && !request.model.route.capabilities.includes("custom-tools"))
+    return yield* invalid(`${request.model.provider}/${request.model.route.id} does not support custom tools`)
   const tools = request.tools.map(lowerTool)
   const messages = yield* lowerMessages(request, !lite)
   const instructions = OpenAIOptions.instructions(request)
@@ -1080,7 +1092,6 @@ const step = (state: ParserState, event: OpenAIResponsesEvent) => {
  */
 export const protocol = Protocol.make({
   id: ADAPTER,
-  capabilities: ["responses-lite", "custom-tools"],
   body: {
     schema: OpenAIResponsesBody,
     from: fromRequest,
@@ -1115,6 +1126,7 @@ export const route = Route.make({
   auth,
   headers,
   transport: httpTransport,
+  capabilities: ["responses-lite", "custom-tools"],
 })
 
 const decodeWebSocketMessage = ProviderShared.validateWith(Schema.decodeUnknownEffect(OpenAIResponsesWebSocketMessage))
@@ -1153,6 +1165,7 @@ export const webSocketRoute = Route.make({
   auth,
   headers,
   transport: webSocketTransport,
+  capabilities: ["responses-lite", "custom-tools"],
 })
 
 export * as OpenAIResponses from "./openai-responses"
