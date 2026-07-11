@@ -1,7 +1,16 @@
 import { describe, expect } from "bun:test"
 import { ConfigProvider, Effect, Layer, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
-import { LLM, LLMError, Message, Model, ToolCallPart, Usage } from "../../src"
+import {
+  CustomToolDefinition,
+  LLM,
+  LLMError,
+  Message,
+  Model,
+  ToolCallPart,
+  ToolResultPart,
+  Usage,
+} from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import * as Azure from "../../src/providers/azure"
 import * as OpenAI from "../../src/providers/openai"
@@ -127,6 +136,41 @@ describe("OpenAI Responses route", () => {
           },
         },
       ])
+    }),
+  )
+
+  it.effect("lowers function and custom tool definitions without changing function wire shape", () =>
+    Effect.gen(function* () {
+      const custom = new CustomToolDefinition({
+        name: "patch",
+        description: "Apply a patch.",
+        format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+      })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.updateRequest(request, {
+          tools: [
+            { name: "lookup", description: "Lookup data.", inputSchema: { type: "object" } },
+            custom,
+          ],
+          toolChoice: custom,
+        }),
+      )
+
+      expect(prepared.body.tools).toEqual([
+        {
+          type: "function",
+          name: "lookup",
+          description: "Lookup data.",
+          parameters: { type: "object" },
+        },
+        {
+          type: "custom",
+          name: "patch",
+          description: "Apply a patch.",
+          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+        },
+      ])
+      expect(prepared.body.tool_choice).toEqual({ type: "custom", name: "patch" })
     }),
   )
 
@@ -360,6 +404,65 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("replays custom calls and results with retained item ids and raw input", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [
+            Message.assistant([
+              ToolCallPart.make({
+                id: "call_1",
+                name: "patch",
+                input: "*** Begin Patch\n*** End Patch",
+                toolType: "custom",
+                providerMetadata: { openai: { itemId: "ctc_1" } },
+              }),
+            ]),
+            Message.tool(
+              ToolResultPart.make({
+                id: "call_1",
+                name: "patch",
+                result: "applied",
+                resultType: "text",
+                toolType: "custom",
+              }),
+            ),
+          ],
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        {
+          type: "custom_tool_call",
+          id: "ctc_1",
+          call_id: "call_1",
+          name: "patch",
+          input: "*** Begin Patch\n*** End Patch",
+        },
+        { type: "custom_tool_call_output", call_id: "call_1", output: "applied" },
+      ])
+    }),
+  )
+
+  it.effect("rejects non-string custom call history instead of coercing it", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          messages: [
+            Message.assistant([
+              ToolCallPart.make({ id: "call_1", name: "patch", input: { patch: "invalid" }, toolType: "custom" }),
+            ]),
+          ],
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
+      expect(error.message).toContain("custom tool call patch input must be a string")
+    }),
+  )
+
   // Regression: screenshot/read tool results must stay structured so base64
   // image data is not JSON-stringified into `function_call_output.output`.
   it.effect("lowers image tool-result content as structured input_image items", () =>
@@ -517,6 +620,65 @@ describe("OpenAI Responses route", () => {
       )
 
       expect(prepared.body.reasoning).toEqual({ effort: "max" })
+    }),
+  )
+
+  it.effect("lowers parallel calls, public truncation values, and ultra reasoning", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.updateRequest(request, {
+          providerOptions: {
+            openai: { parallelToolCalls: false, truncation: "auto", reasoningEffort: "ultra" },
+          },
+        }),
+      )
+
+      expect(prepared.body).toMatchObject({
+        parallel_tool_calls: false,
+        truncation: "auto",
+        reasoning: { effort: "ultra" },
+      })
+    }),
+  )
+
+  it.effect("omits unknown truncation values instead of passing raw provider input", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.updateRequest(request, { providerOptions: { openai: { truncation: { mode: "tokens", limit: 10_000 } } } }),
+      )
+
+      expect(prepared.body).not.toHaveProperty("truncation")
+    }),
+  )
+
+  it.effect("prepares identical Responses fields for HTTP and WebSocket", () =>
+    Effect.gen(function* () {
+      const custom = new CustomToolDefinition({ name: "shell", description: "Run shell text." })
+      const input = LLM.request({
+        model,
+        prompt: "Run it.",
+        tools: [custom],
+        providerOptions: { openai: { parallelToolCalls: true, truncation: "disabled", reasoningEffort: "ultra" } },
+      })
+      const http = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(input)
+      const websocket = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.updateRequest(input, {
+          model: Model.update(model, {
+            route: OpenAIResponses.webSocketRoute.with({
+              endpoint: { baseURL: "https://api.openai.test/v1/" },
+              auth: Auth.bearer("test"),
+            }),
+          }),
+        }),
+      )
+
+      expect(websocket.body).toEqual(http.body)
+      expect(websocket.body).toMatchObject({
+        tools: [{ type: "custom", name: "shell", description: "Run shell text." }],
+        parallel_tool_calls: true,
+        truncation: "disabled",
+        reasoning: { effort: "ultra" },
+      })
     }),
   )
 
@@ -1160,6 +1322,64 @@ describe("OpenAI Responses route", () => {
           usage,
         },
       ])
+    }),
+  )
+
+  it.effect("assembles streamed custom tool input as raw text", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        {
+          type: "response.output_item.added",
+          item: { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "patch", input: "" },
+        },
+        { type: "response.custom_tool_call_input.delta", item_id: "ctc_1", delta: "*** Begin" },
+        { type: "response.custom_tool_call_input.delta", item_id: "ctc_1", delta: " Patch" },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "custom_tool_call",
+            id: "ctc_1",
+            call_id: "call_1",
+            name: "patch",
+            input: "*** Begin Patch",
+          },
+        },
+        { type: "response.completed", response: {} },
+      )
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          tools: [new CustomToolDefinition({ name: "patch", description: "Apply a patch." })],
+        }),
+      ).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events.filter((event) => event.type.startsWith("tool-"))).toEqual([
+        {
+          type: "tool-input-start",
+          id: "call_1",
+          name: "patch",
+          toolType: "custom",
+          providerMetadata: { openai: { itemId: "ctc_1" } },
+        },
+        { type: "tool-input-delta", id: "call_1", name: "patch", text: "*** Begin", toolType: "custom" },
+        { type: "tool-input-delta", id: "call_1", name: "patch", text: " Patch", toolType: "custom" },
+        {
+          type: "tool-input-end",
+          id: "call_1",
+          name: "patch",
+          toolType: "custom",
+          providerMetadata: { openai: { itemId: "ctc_1" } },
+        },
+        {
+          type: "tool-call",
+          id: "call_1",
+          name: "patch",
+          input: "*** Begin Patch",
+          toolType: "custom",
+          providerExecuted: undefined,
+          providerMetadata: { openai: { itemId: "ctc_1" } },
+        },
+      ])
+      expect(response.events.at(-1)).toMatchObject({ type: "finish", reason: "tool-calls" })
     }),
   )
 

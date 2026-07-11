@@ -20,17 +20,21 @@ export const OpenAIResponseIncludables = [
 export type OpenAIResponseIncludable = (typeof OpenAIResponseIncludables)[number]
 export const OpenAIServiceTiers = ["auto", "default", "flex", "priority"] as const
 export type OpenAIServiceTier = (typeof OpenAIServiceTiers)[number]
+export const OpenAITruncations = ["auto", "disabled"] as const
+export type OpenAITruncation = (typeof OpenAITruncations)[number]
 
 const REASONING_EFFORTS = new Set<string>(ReasoningEfforts)
 const OPENAI_REASONING_EFFORTS = new Set<string>(OpenAIReasoningEfforts)
 const TEXT_VERBOSITY = new Set<string>(["low", "medium", "high"])
 const INCLUDABLES = new Set<string>(OpenAIResponseIncludables)
 const SERVICE_TIERS = new Set<string>(OpenAIServiceTiers)
+const TRUNCATIONS = new Set<string>(OpenAITruncations)
 
 export const OpenAIReasoningEffort = Schema.Literals(OpenAIReasoningEfforts)
 export const OpenAITextVerbosity = TextVerbosity
 export const OpenAIResponseIncludable = Schema.Literals(OpenAIResponseIncludables)
 export const OpenAIServiceTier = Schema.Literals(OpenAIServiceTiers)
+export const OpenAITruncation = Schema.Literals(OpenAITruncations)
 
 const isAnyReasoningEffort = (effort: unknown): effort is ReasoningEffort =>
   typeof effort === "string" && REASONING_EFFORTS.has(effort)
@@ -86,6 +90,16 @@ export const serviceTier = (request: LLMRequest) => {
 export const instructions = (request: LLMRequest) => {
   const value = options(request)?.instructions
   return typeof value === "string" ? value : undefined
+}
+
+export const parallelToolCalls = (request: LLMRequest) => {
+  const value = options(request)?.parallelToolCalls
+  return typeof value === "boolean" ? value : undefined
+}
+
+export const truncation = (request: LLMRequest) => {
+  const value = options(request)?.truncation
+  return typeof value === "string" && TRUNCATIONS.has(value) ? (value as OpenAITruncation) : undefined
 }
 
 export * as OpenAIOptions from "./openai-options"

@@ -13,7 +13,7 @@
 // Manual `cache: CacheHint` placements on individual parts are preserved —
 // this function only fills gaps the caller left empty.
 import { CacheHint, type CachePolicy, type CachePolicyObject } from "./schema/options"
-import { LLMRequest, Message, ToolDefinition, type ContentPart } from "./schema/messages"
+import { LLMRequest, Message, ToolDefinition, type AnyToolDefinition, type ContentPart } from "./schema/messages"
 
 const AUTO: CachePolicyObject = {
   tools: true,
@@ -44,11 +44,11 @@ const RESPECTS_INLINE_HINTS = new Set(["anthropic-messages", "bedrock-converse"]
 const makeHint = (ttlSeconds: number | undefined): CacheHint =>
   ttlSeconds !== undefined ? new CacheHint({ type: "ephemeral", ttlSeconds }) : new CacheHint({ type: "ephemeral" })
 
-const markLastTool = (tools: ReadonlyArray<ToolDefinition>, hint: CacheHint): ReadonlyArray<ToolDefinition> => {
+const markLastTool = (tools: ReadonlyArray<AnyToolDefinition>, hint: CacheHint): ReadonlyArray<AnyToolDefinition> => {
   if (tools.length === 0) return tools
   const last = tools.length - 1
   if (tools[last]!.cache) return tools
-  return tools.map((tool, i) => (i === last ? new ToolDefinition({ ...tool, cache: hint }) : tool))
+  return tools.map((tool, i) => (i === last ? ToolDefinition.make({ ...tool, cache: hint }) : tool))
 }
 
 const markLastSystem = (system: LLMRequest["system"], hint: CacheHint): LLMRequest["system"] => {
