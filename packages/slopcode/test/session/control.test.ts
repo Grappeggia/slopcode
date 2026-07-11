@@ -25,6 +25,7 @@ const database = Database.layerFromPath(":memory:")
 const runtime = SessionRuntime.layer.pipe(Layer.provide(database))
 const sessionID = SessionID.make("ses_control_test")
 const legacyCalls: SessionPrompt.PromptInput[] = []
+const legacyCancelCalls: SessionID[] = []
 const v2Calls: Array<{ readonly prompt: string; readonly resume?: boolean }> = []
 const interruptCalls: SessionID[] = []
 const realInterruptCalls: SessionID[] = []
@@ -43,9 +44,14 @@ const legacyMessage = {
 const legacy = Layer.succeed(
   SessionPrompt.Service,
   SessionPrompt.Service.of({
-    cancel: () => Effect.void,
-    prompt: (input) =>
-      Effect.sync(() => {
+    cancel: (id, guard) =>
+      Effect.gen(function* () {
+        yield* guard ?? Effect.void
+        legacyCancelCalls.push(id)
+      }),
+    prompt: (input, guard) =>
+      Effect.gen(function* () {
+        yield* guard ?? Effect.void
         legacyCalls.push(input)
         return legacyMessage
       }),
@@ -119,6 +125,7 @@ const realSessions = SessionV2.layer.pipe(
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
   legacyCalls.length = 0
+  legacyCancelCalls.length = 0
   v2Calls.length = 0
   interruptCalls.length = 0
   realInterruptCalls.length = 0
@@ -160,6 +167,39 @@ describe("SessionControl", () => {
       expect(v2Calls).toEqual([])
     }),
   )
+
+  it.effect("routes ready V1-owned interrupts to SessionPrompt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const control = yield* SessionControl.Service
+
+      yield* control.cancel(sessionID)
+      expect(legacyCancelCalls).toEqual([sessionID])
+      expect(interruptCalls).toEqual([])
+    }),
+  )
+
+  for (const state of ["paused", "draining", "migrating"] as const) {
+    it.effect(`rejects V1 prompt and interrupt while ${state} without mutation`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const control = yield* SessionControl.Service
+        const runtime = yield* SessionRuntime.Service
+        yield* runtime.assign({ sessionID, state, expectedOwner: "v1", expectedEpoch: 0 })
+
+        expect(
+          yield* control.prompt({ sessionID, parts: [{ type: "text", text: state }] }).pipe(Effect.flip),
+        ).toMatchObject({ _tag: "SessionRuntime.Mismatch", expectedState: "ready", actualState: state })
+        expect(yield* control.cancel(sessionID).pipe(Effect.flip)).toMatchObject({
+          _tag: "SessionRuntime.Mismatch",
+          expectedState: "ready",
+          actualState: state,
+        })
+        expect(legacyCalls).toEqual([])
+        expect(legacyCancelCalls).toEqual([])
+      }),
+    )
+  }
 
   it.effect("routes V2-owned prompts to SessionV2", () =>
     Effect.gen(function* () {
@@ -257,6 +297,64 @@ describe("SessionControl", () => {
       }
       expect(v2Calls).toEqual([])
       expect(interruptCalls).toEqual([])
+    }),
+  )
+
+  it.effect("fences V1 prompt and interrupt owner, state, and epoch races at mutation", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const runtime = yield* SessionRuntime.Service
+      const changes = ["owner", "state", "epoch"] as const
+      let change: (typeof changes)[number] = "owner"
+      let checks = 0
+      const transition = () =>
+        db
+          .update(SessionTable)
+          .set({
+            ...(change === "owner" ? { runtime: "v2" as const } : {}),
+            ...(change === "state" ? { runtime_state: "migrating" as const } : {}),
+            ...(change === "epoch" ? { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } : {}),
+          })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+      const fenced = SessionRuntime.Service.of({
+        ...runtime,
+        assert: (input) => runtime.assert(input).pipe(Effect.tap(() => (++checks === 1 ? transition() : Effect.void))),
+      })
+      const layer = SessionControl.layer.pipe(
+        Layer.provide(Layer.succeed(SessionRuntime.Service, fenced)),
+        Layer.provide(legacy),
+        Layer.provide(core),
+        Layer.provide(sessions),
+      )
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
+
+      for (change of changes) {
+        for (const operation of [
+          () => control.prompt({ sessionID, parts: [{ type: "text", text: change }] }),
+          () => control.cancel(sessionID),
+        ]) {
+          checks = 0
+          expect(yield* operation().pipe(Effect.flip)).toMatchObject({
+            _tag: "SessionRuntime.Mismatch",
+            actualOwner: change === "owner" ? "v2" : "v1",
+            actualState: change === "state" ? "migrating" : "ready",
+            actualEpoch: change === "epoch" ? 1 : 0,
+          })
+          yield* db
+            .update(SessionTable)
+            .set({ runtime: "v1", runtime_state: "ready", runtime_epoch: 0 })
+            .where(eq(SessionTable.id, sessionID))
+            .run()
+            .pipe(Effect.orDie)
+        }
+      }
+      expect(legacyCalls).toEqual([])
+      expect(legacyCancelCalls).toEqual([])
     }),
   )
 
