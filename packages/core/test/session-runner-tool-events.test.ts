@@ -125,3 +125,44 @@ test("old success event data containing result still decodes", () => {
   })
   expect(decoded.result).toMatchObject({ type: "content" })
 })
+
+test("custom tool events preserve raw input and tool kind", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(
+    publisher.publish(
+      LLMEvent.toolCall({ id: "call-exec", name: "exec", toolType: "custom", input: "return 42" }),
+    ),
+  )
+  await Effect.runPromise(
+    publisher.publish(
+      LLMEvent.toolResult({
+        id: "call-exec",
+        name: "exec",
+        toolType: "custom",
+        result: { type: "json", value: { ok: true, value: 42 } },
+        output: { structured: { ok: true, value: 42 }, content: [] },
+      }),
+    ),
+  )
+
+  expect(published.find((event) => event.type === "session.next.tool.called.1")?.data).toMatchObject({
+    toolType: "custom",
+    input: "return 42",
+  })
+})
+
+test("custom tool results cannot change kind", async () => {
+  const { publisher } = capture()
+  await Effect.runPromise(
+    publisher.publish(
+      LLMEvent.toolCall({ id: "call-exec-kind", name: "exec", toolType: "custom", input: "return 42" }),
+    ),
+  )
+  const exit = await Effect.runPromiseExit(
+    publisher.publish(
+      LLMEvent.toolResult({ id: "call-exec-kind", name: "exec", result: { type: "json", value: 42 } }),
+    ),
+  )
+
+  expect(exit._tag).toBe("Failure")
+})

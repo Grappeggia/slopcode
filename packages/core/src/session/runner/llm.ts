@@ -303,6 +303,7 @@ export const layer = Layer.effect(
                       name: event.name,
                       result: settlement.result,
                       output: settlement.output,
+                      toolType: event.toolType,
                     }),
                     settlement.outputPaths ?? [],
                   ),

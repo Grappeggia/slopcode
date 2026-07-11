@@ -293,6 +293,7 @@
         "@opentelemetry/sdk-trace-base": "2.6.1",
         "@parcel/watcher": "2.5.1",
         "@silvia-odwyer/photon-node": "0.3.4",
+        "@slopcode-ai/codemode": "workspace:*",
         "@slopcode-ai/effect-drizzle-sqlite": "workspace:*",
         "@slopcode-ai/effect-sqlite-node": "workspace:*",
         "@slopcode-ai/llm": "workspace:*",

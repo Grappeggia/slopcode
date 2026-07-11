@@ -1,7 +1,20 @@
 export * as ToolRegistry from "./registry"
 
-import { ToolOutput, type ToolCall, type ToolDefinition, type ToolResultValue } from "@slopcode-ai/llm"
-import { Context, Effect, Layer, Scope } from "effect"
+import {
+  CodeMode,
+  Tool as CodeModeTool,
+  toolError,
+  type JsonSchema as CodeModeJsonSchema,
+  type ToolDefinition as CodeModeToolDefinition,
+} from "@slopcode-ai/codemode"
+import {
+  CustomToolDefinition,
+  ToolOutput,
+  type AnyToolDefinition,
+  type ToolCall,
+  type ToolResultValue,
+} from "@slopcode-ai/llm"
+import { Context, Effect, Layer, Scope, Semaphore } from "effect"
 import { AgentV2 } from "../agent"
 import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
@@ -20,14 +33,30 @@ export type ExecuteInput = {
 }
 
 export interface Interface {
-  readonly materialize: (permissions?: PermissionV2.Ruleset) => Effect.Effect<Materialization>
+  readonly materialize: (permissions?: PermissionV2.Ruleset, plan?: ToolPlan) => Effect.Effect<Materialization>
   /** Internal registration capability exposed publicly only through Tools.Service. */
   readonly register: (tools: Readonly<Record<string, AnyTool>>) => Effect.Effect<void, RegistrationError, Scope.Scope>
 }
 
 export interface Materialization {
-  readonly definitions: ReadonlyArray<ToolDefinition>
+  readonly definitions: ReadonlyArray<AnyToolDefinition>
   readonly settle: (input: ExecuteInput) => Effect.Effect<Settlement, ToolOutputStore.Error>
+}
+
+export interface ChildProgress {
+  readonly started: number
+  readonly settled: number
+  readonly latest: {
+    readonly name: string
+    readonly outcome: "started" | "success" | "failure"
+  }
+}
+
+export interface ToolPlan {
+  readonly mode?: "function" | "code-preferred" | "code-only"
+  readonly shell?: "shell_command"
+  readonly patch?: "freeform"
+  readonly progress?: (input: ExecuteInput, progress: ChildProgress) => Effect.Effect<void>
 }
 
 export interface Settlement {
@@ -102,7 +131,7 @@ const registryLayer = Layer.effect(
           }),
         )
       }),
-      materialize: Effect.fn("ToolRegistry.materialize")(function* (permissions = []) {
+      materialize: Effect.fn("ToolRegistry.materialize")(function* (permissions = [], plan = {}) {
         const registrations = new Map(applications.entries())
         for (const [name, entries] of local) {
           const registration = entries.at(-1)?.registration
@@ -110,13 +139,169 @@ const registryLayer = Layer.effect(
         }
         for (const [name, registration] of registrations)
           if (whollyDisabled(permission(registration.tool, name), permissions)) registrations.delete(name)
-        return {
-          definitions: Array.from(registrations, ([name, registration]) => definition(name, registration.tool)),
-          settle: (input) => {
-            const registration = registrations.get(input.call.name)
-            if (registration) return settleWith(input, registration.identity)
-            return Effect.succeed({ result: { type: "error", value: `Unknown tool: ${input.call.name}` } })
+        const definitions = Object.freeze(
+          Array.from(registrations, ([name, registration]) => definition(name, registration.tool)),
+        )
+        const settleMaterialized = (input: ExecuteInput): Effect.Effect<Settlement, ToolOutputStore.Error> => {
+          const registration = registrations.get(input.call.name)
+          if (registration) return settleWith(input, registration.identity)
+          return Effect.succeed({ result: { type: "error" as const, value: `Unknown tool: ${input.call.name}` } })
+        }
+        const mode = plan.mode ?? "function"
+        if (mode === "function") return { definitions, settle: settleMaterialized }
+
+        const catalog = Object.freeze(
+          definitions
+            .filter((item) => item.name !== "exec")
+            .filter((item) => !(plan.shell === "shell_command" && item.name === "shell_command"))
+            .map((item) => ({
+              name: plan.shell === "shell_command" && item.name === "bash" ? "shell_command" : item.name,
+              target: item.name,
+              description: item.description,
+              input:
+                plan.patch === "freeform" && item.name === "apply_patch"
+                  ? ({ type: "string" } as const)
+                  : (item.inputSchema as CodeModeJsonSchema),
+              output: item.outputSchema as CodeModeJsonSchema | undefined,
+            })),
+        )
+        const projected = new Map(catalog.map((item) => [item.name, item.target]))
+        const codeTools = (
+          run: (target: string, input: unknown, index: number) => Effect.Effect<unknown, unknown, never>,
+        ): Record<string, CodeModeToolDefinition> =>
+          Object.freeze(
+            Object.fromEntries(
+              catalog.map((item) => [
+                item.name,
+                CodeModeTool.make({
+                  description: item.description,
+                  input: item.input,
+                  output: item.output,
+                  run: (value, context) => {
+                    if (!context) return Effect.die("CodeMode invocation context is required")
+                    return run(
+                      item.target,
+                      plan.patch === "freeform" && item.target === "apply_patch" ? { patchText: value } : value,
+                      context.index,
+                    )
+                  },
+                }),
+              ]),
+            ),
+          )
+        const preview = CodeMode.make({
+          tools: codeTools(() => Effect.die("CodeMode catalog preview cannot execute tools")),
+          discovery: { maxInlineCatalogTokens: 0 },
+        })
+        const exec = new CustomToolDefinition({
+          type: "custom",
+          name: "exec",
+          description: preview.instructions(),
+          format: {
+            type: "grammar",
+            syntax: "lark",
+            definition: String.raw`
+start: pragma_source | plain_source
+pragma_source: PRAGMA_LINE NEWLINE SOURCE
+plain_source: SOURCE
+
+PRAGMA_LINE: /[ \t]*\/\/ @exec:[^\r\n]*/
+NEWLINE: /\r?\n/
+SOURCE: /[\s\S]+/
+`,
           },
+        })
+        const serial = Semaphore.makeUnsafe(1).withPermit
+        const settleExec = (input: ExecuteInput) => {
+          if (typeof input.call.input !== "string")
+            return Effect.succeed({
+              result: { type: "error" as const, value: "Invalid exec input: expected raw source text" },
+            })
+          const source = input.call.input
+          return serial(
+            Effect.gen(function* () {
+              const artifacts = new Map<
+                number,
+                { readonly content: ToolOutput["content"]; readonly outputPaths: ReadonlyArray<string> }
+              >()
+              let started = 0
+              let settled = 0
+              const progress = (event: ChildProgress) => plan.progress?.(input, event) ?? Effect.void
+              const runtime = CodeMode.make({
+                tools: codeTools((target, value, index) =>
+                  settleMaterialized({
+                    ...input,
+                    call: {
+                      type: "tool-call",
+                      id: `${input.call.id}:codemode:${index}`,
+                      name: target,
+                      input: value,
+                    },
+                  }).pipe(
+                    Effect.flatMap((result) => {
+                      if (result.result.type === "error")
+                        return Effect.fail(
+                          toolError(
+                            typeof result.result.value === "string"
+                              ? result.result.value
+                              : (JSON.stringify(result.result.value) ?? String(result.result.value)),
+                          ),
+                        )
+                      artifacts.set(index, {
+                        content: result.output?.content ?? [],
+                        outputPaths: result.outputPaths ?? [],
+                      })
+                      return Effect.succeed(result.output?.structured ?? result.result.value)
+                    }),
+                  ),
+                ),
+                limits: { timeoutMs: 60_000, maxToolCalls: 64, maxOutputBytes: 65_536 },
+                discovery: { maxInlineCatalogTokens: 0 },
+                onToolCallStart: (call) => {
+                  started++
+                  return progress({
+                    started,
+                    settled,
+                    latest: { name: projected.get(call.name) ?? call.name, outcome: "started" },
+                  })
+                },
+                onToolCallEnd: (call) => {
+                  settled++
+                  return progress({
+                    started,
+                    settled,
+                    latest: { name: projected.get(call.name) ?? call.name, outcome: call.outcome },
+                  })
+                },
+              })
+              const result = yield* runtime.execute(source)
+              const audited = {
+                ...result,
+                toolCalls: result.toolCalls.map((call) => ({ name: projected.get(call.name) ?? call.name })),
+              }
+              const ordered = [...artifacts].sort(([left], [right]) => left - right).map(([, value]) => value)
+              const content = ordered.flatMap((item) => item.content)
+              const outputPaths = ordered.flatMap((item) => item.outputPaths)
+              const output = {
+                structured: audited,
+                content:
+                  content.length === 0
+                    ? []
+                    : [{ type: "text" as const, text: JSON.stringify(audited) }, ...content],
+              }
+              const bounded = yield* resources.bound({ sessionID: input.sessionID, toolCallID: input.call.id, output })
+              const paths = [...new Set([...outputPaths, ...bounded.outputPaths])]
+              const resultValue = ToolOutput.toResultValue(bounded.output)
+              return paths.length > 0
+                ? { result: resultValue, output: bounded.output, outputPaths: paths }
+                : { result: resultValue, output: bounded.output }
+            }),
+          )
+        }
+        return {
+          definitions:
+            mode === "code-only" ? [exec] : [exec, ...definitions.filter((definition) => definition.name !== "exec")],
+          settle: (input) => (input.call.name === "exec" ? settleExec(input) : settleMaterialized(input)),
         }
       }),
     })

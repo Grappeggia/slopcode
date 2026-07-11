@@ -38,7 +38,13 @@ export type Definition<R = never> = {
   readonly description: string
   readonly input: ToolSchema
   readonly output: ToolSchema | undefined
-  readonly run: (input: unknown) => Effect.Effect<unknown, unknown, R>
+  readonly run: (input: unknown, context?: Context) => Effect.Effect<unknown, unknown, R>
+}
+
+/** Stable invocation identity supplied by CodeMode when it admits a nested call. */
+export type Context = {
+  readonly index: number
+  readonly name: string
 }
 
 /** The value `run` receives: the decoded type for Effect Schemas, `unknown` for JSON Schemas. */
@@ -52,7 +58,7 @@ export type Options<I extends ToolSchema, O extends ToolSchema | undefined, R = 
   readonly description: string
   readonly input: I
   readonly output?: O
-  readonly run: (input: InputType<I>) => Effect.Effect<ResultType<O>, unknown, R>
+  readonly run: (input: InputType<I>, context?: Context) => Effect.Effect<ResultType<O>, unknown, R>
 }
 
 export const isDefinition = <R = never>(value: unknown): value is Definition<R> =>
@@ -391,7 +397,7 @@ export const make = <I extends ToolSchema, const O extends ToolSchema | undefine
   description: options.description,
   input: options.input,
   output: options.output,
-  run: (input) => options.run(input as InputType<I>),
+  run: (input, context) => options.run(input as InputType<I>, context),
 })
 
 /** Constructors for schema-backed tools exposed inside CodeMode programs. */

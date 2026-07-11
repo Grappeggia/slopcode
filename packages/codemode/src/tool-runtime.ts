@@ -811,7 +811,7 @@ export const make = <R>(
         if (isDefinition(tool)) {
           return yield* observeEnd(
             Effect.gen(function* () {
-              const raw = yield* runHost(Effect.suspend(() => tool.run(describedInput)))
+              const raw = yield* runHost(Effect.suspend(() => tool.run(describedInput, { index, name })))
               const result = yield* Effect.try({
                 try: () => decodeToolOutput(tool, raw),
                 catch: () => new ToolRuntimeError("InvalidToolOutput", `Invalid output from tool '${name}'.`),
