@@ -54,7 +54,7 @@ const inputStart = (tool: PendingTool) =>
   LLMEvent.toolInputStart({
     id: tool.id,
     name: tool.name,
-    toolType: tool.toolType,
+    ...(tool.toolType ? { toolType: tool.toolType } : {}),
     providerMetadata: tool.providerMetadata,
   })
 
@@ -63,7 +63,7 @@ const inputDelta = (tool: PendingTool, text: string) =>
     id: tool.id,
     name: tool.name,
     text,
-    toolType: tool.toolType,
+    ...(tool.toolType ? { toolType: tool.toolType } : {}),
   })
 
 const toolCall = (route: string, tool: PendingTool, inputOverride?: string) =>
@@ -71,17 +71,17 @@ const toolCall = (route: string, tool: PendingTool, inputOverride?: string) =>
     ? Effect.succeed(inputOverride ?? tool.input)
     : parseToolInput(route, tool.name, inputOverride ?? tool.input)
   ).pipe(
-    Effect.map(
-      (input): ToolCall =>
-        LLMEvent.toolCall({
-          id: tool.id,
-          name: tool.name,
-          input,
-          toolType: tool.toolType,
-          providerExecuted: tool.providerExecuted ? true : undefined,
-          providerMetadata: tool.providerMetadata,
-        }),
-    ),
+    Effect.map((input): ToolCall => {
+      const common = {
+        id: tool.id,
+        name: tool.name,
+        providerExecuted: tool.providerExecuted ? (true as const) : undefined,
+        providerMetadata: tool.providerMetadata,
+      }
+      if (tool.toolType === "custom")
+        return LLMEvent.toolCall({ ...common, input: input as string, toolType: "custom" })
+      return LLMEvent.toolCall({ ...common, input, ...(tool.toolType ? { toolType: tool.toolType } : {}) })
+    }),
   )
 
 /** Store the updated tool and produce the optional public delta event. */
@@ -179,7 +179,7 @@ export const finish = <K extends StreamKey>(route: string, tools: State<K>, key:
         LLMEvent.toolInputEnd({
           id: tool.id,
           name: tool.name,
-          toolType: tool.toolType,
+          ...(tool.toolType ? { toolType: tool.toolType } : {}),
           providerMetadata: tool.providerMetadata,
         }),
         yield* toolCall(route, tool),
@@ -202,7 +202,7 @@ export const finishWithInput = <K extends StreamKey>(route: string, tools: State
         LLMEvent.toolInputEnd({
           id: tool.id,
           name: tool.name,
-          toolType: tool.toolType,
+          ...(tool.toolType ? { toolType: tool.toolType } : {}),
           providerMetadata: tool.providerMetadata,
         }),
         yield* toolCall(route, tool, input),
@@ -228,7 +228,7 @@ export const finishAll = <K extends StreamKey>(route: string, tools: State<K>) =
             LLMEvent.toolInputEnd({
               id: tool.id,
               name: tool.name,
-              toolType: tool.toolType,
+              ...(tool.toolType ? { toolType: tool.toolType } : {}),
               providerMetadata: tool.providerMetadata,
             }),
             call,

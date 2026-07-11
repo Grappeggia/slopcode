@@ -112,10 +112,41 @@ describe("llm schema", () => {
 
     expect(call).toMatchObject({ input: "*** Begin Patch", toolType: "custom" })
     expect(result).toMatchObject({ toolType: "custom" })
+    expect(Schema.decodeUnknownSync(ToolCallPart)(call)).toEqual(call)
+    expect(Schema.decodeUnknownSync(ToolResultPart)(result)).toEqual(result)
     expect(LLMEvent.toolCall(call)).toMatchObject({ input: "*** Begin Patch", toolType: "custom" })
     expect(
       LLMEvent.toolResult({ id: result.id, name: result.name, result: result.result, toolType: result.toolType }),
     ).toMatchObject({ toolType: "custom" })
+  })
+
+  test("rejects custom calls without string input at schema and construction boundaries", () => {
+    const invalid = { id: "call_1", name: "patch", input: { patch: "bad" }, toolType: "custom" }
+
+    expect(() => Schema.decodeUnknownSync(ToolCallPart)({ type: "tool-call", ...invalid })).toThrow()
+    expect(() => ToolCallPart.make(invalid as unknown as Parameters<typeof ToolCallPart.make>[0])).toThrow()
+    expect(() => decodeLLMEvent({ type: "tool-call", ...invalid })).toThrow()
+    expect(() => LLMEvent.toolCall(invalid as unknown as Parameters<typeof LLMEvent.toolCall>[0])).toThrow()
+  })
+
+  test("preserves legacy function call and result constructor shapes", () => {
+    expect(ToolCallPart.make({ id: "call_1", name: "lookup", input: { city: "Paris" } })).toEqual({
+      type: "tool-call",
+      id: "call_1",
+      name: "lookup",
+      input: { city: "Paris" },
+    })
+    expect(ToolResultPart.make({ id: "call_1", name: "lookup", result: { temperature: 22 } })).toEqual({
+      type: "tool-result",
+      id: "call_1",
+      name: "lookup",
+      result: { type: "json", value: { temperature: 22 } },
+      toolType: undefined,
+      providerExecuted: undefined,
+      cache: undefined,
+      metadata: undefined,
+      providerMetadata: undefined,
+    })
   })
 })
 

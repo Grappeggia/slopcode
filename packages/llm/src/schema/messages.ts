@@ -134,42 +134,78 @@ const toolResultText = (value: unknown) => {
   }
 }
 
-export const ToolCallPart = Object.assign(
-  Schema.Struct({
-    type: Schema.Literal("tool-call"),
-    id: Schema.String,
-    name: Schema.String,
-    input: Schema.Unknown,
-    toolType: Schema.optional(ToolType),
-    providerExecuted: Schema.optional(Schema.Boolean),
-    metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-    providerMetadata: Schema.optional(ProviderMetadata),
-  }).annotate({ identifier: "LLM.Content.ToolCall" }),
-  {
-    make: (input: Omit<ToolCallPart, "type">): ToolCallPart => ({ type: "tool-call", ...input }),
-  },
-)
-export type ToolCallPart = Schema.Schema.Type<typeof ToolCallPart>
+const ToolCallPartFields = {
+  type: Schema.Literal("tool-call"),
+  id: Schema.String,
+  name: Schema.String,
+  providerExecuted: Schema.optional(Schema.Boolean),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  providerMetadata: Schema.optional(ProviderMetadata),
+}
 
-export const ToolResultPart = Object.assign(
-  Schema.Struct({
-    type: Schema.Literal("tool-result"),
-    id: Schema.String,
-    name: Schema.String,
-    result: ToolResultValue,
-    toolType: Schema.optional(ToolType),
-    providerExecuted: Schema.optional(Schema.Boolean),
-    cache: Schema.optional(CacheHint),
-    metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-    providerMetadata: Schema.optional(ProviderMetadata),
-  }).annotate({ identifier: "LLM.Content.ToolResult" }),
-  {
-    make: (
-      input: Omit<ToolResultPart, "type" | "result"> & {
+const ToolCallPartBase = Schema.Struct({
+  ...ToolCallPartFields,
+  input: Schema.Unknown,
+  toolType: Schema.optional(ToolType),
+})
+type ToolCallPartBase = Schema.Schema.Type<typeof ToolCallPartBase>
+export type ToolCallPart = Omit<ToolCallPartBase, "input" | "toolType"> &
+  ({ readonly input: unknown; readonly toolType?: "function" } | { readonly input: string; readonly toolType: "custom" })
+const ToolCallPartSchema = ToolCallPartBase.pipe(
+  Schema.refine(
+    (value): value is ToolCallPart => value.toolType !== "custom" || typeof value.input === "string",
+    { message: "Custom tool call input must be a string" },
+  ),
+).annotate({ identifier: "LLM.Content.ToolCall" })
+
+type ToolCallPartInput = ToolCallPart extends infer Part
+  ? Part extends { readonly type: "tool-call" }
+    ? Omit<Part, "type">
+    : never
+  : never
+
+export const ToolCallPart = Object.assign(ToolCallPartSchema, {
+  make: (input: ToolCallPartInput): ToolCallPart => {
+    if (input.toolType === "custom" && typeof input.input !== "string")
+      throw new TypeError("Custom tool call input must be a string")
+    return { type: "tool-call", ...input } as ToolCallPart
+  },
+})
+
+const ToolResultPartFields = {
+  type: Schema.Literal("tool-result"),
+  id: Schema.String,
+  name: Schema.String,
+  result: ToolResultValue,
+  providerExecuted: Schema.optional(Schema.Boolean),
+  cache: Schema.optional(CacheHint),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  providerMetadata: Schema.optional(ProviderMetadata),
+}
+
+const ToolResultPartBase = Schema.Struct({
+  ...ToolResultPartFields,
+  toolType: Schema.optional(ToolType),
+})
+type ToolResultPartBase = Schema.Schema.Type<typeof ToolResultPartBase>
+export type ToolResultPart = Omit<ToolResultPartBase, "toolType"> &
+  ({ readonly toolType?: "function" } | { readonly toolType: "custom" })
+const ToolResultPartSchema = ToolResultPartBase.pipe(
+  Schema.refine((value): value is ToolResultPart => value.toolType !== "custom" || value.toolType === "custom"),
+).annotate({ identifier: "LLM.Content.ToolResult" })
+
+type ToolResultPartInput = ToolResultPart extends infer Part
+  ? Part extends { readonly type: "tool-result" }
+    ? Omit<Part, "type" | "result"> & {
         readonly result: unknown
         readonly resultType?: ToolResultValue["type"]
-      },
-    ): ToolResultPart => ({
+      }
+    : never
+  : never
+
+export const ToolResultPart = Object.assign(ToolResultPartSchema, {
+  make: (input: ToolResultPartInput): ToolResultPart =>
+    ({
       type: "tool-result",
       id: input.id,
       name: input.name,
@@ -179,10 +215,8 @@ export const ToolResultPart = Object.assign(
       cache: input.cache,
       metadata: input.metadata,
       providerMetadata: input.providerMetadata,
-    }),
-  },
-)
-export type ToolResultPart = Schema.Schema.Type<typeof ToolResultPart>
+    }) as ToolResultPart,
+})
 
 export const ReasoningPart = Schema.Struct({
   type: Schema.Literal("reasoning"),

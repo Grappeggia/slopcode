@@ -43,6 +43,12 @@ const OpenAIResponsesInputImage = Schema.Struct({
 const OpenAIResponsesInputContent = Schema.Union([OpenAIResponsesInputText, OpenAIResponsesInputImage])
 type OpenAIResponsesInputContent = Schema.Schema.Type<typeof OpenAIResponsesInputContent>
 
+const OpenAIResponsesDeveloperMessage = Schema.Struct({
+  type: Schema.tag("message"),
+  role: Schema.tag("developer"),
+  content: Schema.Array(OpenAIResponsesInputText),
+})
+
 const OpenAIResponsesOutputText = Schema.Struct({
   type: Schema.tag("output_text"),
   text: Schema.String,
@@ -75,7 +81,7 @@ const OpenAIResponsesFunctionCallOutput = Schema.Union([
   Schema.Array(OpenAIResponsesFunctionCallOutputContent),
 ])
 
-const OpenAIResponsesInputItem = Schema.Union([
+const OpenAIResponsesHistoryItem = Schema.Union([
   Schema.Struct({ role: Schema.tag("system"), content: Schema.String }),
   Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenAIResponsesInputContent) }),
   Schema.Struct({ role: Schema.tag("assistant"), content: Schema.Array(OpenAIResponsesOutputText) }),
@@ -105,7 +111,7 @@ const OpenAIResponsesInputItem = Schema.Union([
     output: OpenAIResponsesFunctionCallOutput,
   }),
 ])
-type OpenAIResponsesInputItem = Schema.Schema.Type<typeof OpenAIResponsesInputItem>
+type OpenAIResponsesInputItem = Schema.Schema.Type<typeof OpenAIResponsesHistoryItem>
 
 // Mutable counterpart of the schema reasoning item so `lowerMessages` can fold
 // multiple streamed summary parts into the same item before flushing.
@@ -138,6 +144,18 @@ const OpenAIResponsesCustomTool = Schema.Struct({
 const OpenAIResponsesTool = Schema.Union([OpenAIResponsesFunctionTool, OpenAIResponsesCustomTool])
 type OpenAIResponsesTool = Schema.Schema.Type<typeof OpenAIResponsesTool>
 
+const OpenAIResponsesAdditionalTools = Schema.Struct({
+  type: Schema.tag("additional_tools"),
+  role: Schema.tag("developer"),
+  tools: Schema.Array(OpenAIResponsesTool),
+})
+
+const OpenAIResponsesInputItem = Schema.Union([
+  OpenAIResponsesAdditionalTools,
+  OpenAIResponsesDeveloperMessage,
+  OpenAIResponsesHistoryItem,
+])
+
 const OpenAIResponsesToolChoice = Schema.Union([
   Schema.Literals(["auto", "none", "required"]),
   Schema.Struct({ type: Schema.tag("function"), name: Schema.String }),
@@ -164,6 +182,7 @@ const OpenAIResponsesCoreFields = {
     Schema.Struct({
       effort: Schema.optional(OpenAIOptions.OpenAIReasoningEffort),
       summary: Schema.optional(Schema.Literal("auto")),
+      context: Schema.optional(OpenAIOptions.OpenAIReasoningContext),
     }),
   ),
   text: Schema.optional(
@@ -182,13 +201,11 @@ const OpenAIResponsesBody = Schema.Struct({
 })
 export type OpenAIResponsesBody = Schema.Schema.Type<typeof OpenAIResponsesBody>
 
-const OpenAIResponsesWebSocketMessage = Schema.StructWithRest(
-  Schema.Struct({
-    type: Schema.tag("response.create"),
-    ...OpenAIResponsesCoreFields,
-  }),
-  [Schema.Record(Schema.String, Schema.Unknown)],
-)
+const OpenAIResponsesWebSocketMessage = Schema.Struct({
+  type: Schema.tag("response.create"),
+  ...OpenAIResponsesCoreFields,
+  client_metadata: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+})
 type OpenAIResponsesWebSocketMessage = Schema.Schema.Type<typeof OpenAIResponsesWebSocketMessage>
 const encodeWebSocketMessage = Schema.encodeSync(Schema.fromJsonString(OpenAIResponsesWebSocketMessage))
 
@@ -501,12 +518,14 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
 })
 
 const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (request: LLMRequest) {
+  const lite = OpenAIOptions.responsesMode(request) === "lite"
   const store = OpenAIOptions.store(request)
   const promptCacheKey = OpenAIOptions.promptCacheKey(request)
   const effort = OpenAIOptions.reasoningEffort(request)
   if (effort && !OpenAIOptions.isReasoningEffort(effort))
     return yield* invalid(`OpenAI Responses does not support reasoning effort ${effort}`)
   const summary = OpenAIOptions.reasoningSummary(request)
+  const context = lite ? ("all_turns" as const) : OpenAIOptions.reasoningContext(request)
   const include = OpenAIOptions.include(request)
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
@@ -514,25 +533,47 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   const parallelToolCalls = OpenAIOptions.parallelToolCalls(request)
   const truncation = OpenAIOptions.truncation(request)
   return {
-    ...(instructions ? { instructions } : {}),
+    ...(lite ? { instructions: "" } : instructions ? { instructions } : {}),
     ...(store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     ...(include ? { include } : {}),
-    ...(effort || summary ? { reasoning: { effort, summary } } : {}),
+    ...(effort || summary || context ? { reasoning: { effort, summary, context } } : {}),
     ...(verbosity ? { text: { verbosity } } : {}),
     ...(serviceTier ? { service_tier: serviceTier } : {}),
-    ...(parallelToolCalls !== undefined ? { parallel_tool_calls: parallelToolCalls } : {}),
+    ...(lite
+      ? { parallel_tool_calls: false }
+      : parallelToolCalls !== undefined
+        ? { parallel_tool_calls: parallelToolCalls }
+        : {}),
     ...(truncation ? { truncation } : {}),
   }
 })
 
 const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request: LLMRequest) {
   const generation = request.generation
+  const lite = OpenAIOptions.responsesMode(request) === "lite"
+  const tools = request.tools.map(lowerTool)
+  const messages = yield* lowerMessages(request)
+  const instructions = OpenAIOptions.instructions(request)
   const options = yield* lowerOptions(request)
   return {
     model: request.model.id,
-    input: yield* lowerMessages(request),
-    tools: request.tools.length === 0 ? undefined : request.tools.map(lowerTool),
+    input: lite
+      ? [
+          { type: "additional_tools" as const, role: "developer" as const, tools },
+          ...(instructions
+            ? [
+                {
+                  type: "message" as const,
+                  role: "developer" as const,
+                  content: [{ type: "input_text" as const, text: instructions }],
+                },
+              ]
+            : []),
+          ...messages,
+        ]
+      : messages,
+    tools: !lite && tools.length > 0 ? tools : undefined,
     tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined,
     stream: true as const,
     max_output_tokens: generation?.maxTokens,
@@ -1046,23 +1087,37 @@ const auth = Auth.none
 
 export const httpTransport = HttpTransport.sseJson.with<OpenAIResponsesBody>()
 
+const headers = ({ request }: { readonly request: LLMRequest }): Record<string, string> =>
+  OpenAIOptions.responsesMode(request) === "lite" ? { "x-openai-internal-codex-responses-lite": "true" } : {}
+
 export const route = Route.make({
   id: ADAPTER,
   provider: "openai",
   protocol,
   endpoint,
   auth,
+  headers,
   transport: httpTransport,
 })
 
 const decodeWebSocketMessage = ProviderShared.validateWith(Schema.decodeUnknownEffect(OpenAIResponsesWebSocketMessage))
 
-const webSocketMessage = (body: OpenAIResponsesBody | Record<string, unknown>) =>
+const webSocketMessage = (body: OpenAIResponsesBody | Record<string, unknown>, request: LLMRequest) =>
   Effect.gen(function* () {
     if (!ProviderShared.isRecord(body))
       return yield* ProviderShared.invalidRequest("OpenAI Responses WebSocket body must be a JSON object")
     const { stream: _stream, ...message } = body
-    return yield* decodeWebSocketMessage({ ...message, type: "response.create" })
+    return yield* decodeWebSocketMessage({
+      ...message,
+      type: "response.create",
+      ...(OpenAIOptions.responsesMode(request) === "lite"
+        ? {
+            client_metadata: {
+              ws_request_header_x_openai_internal_codex_responses_lite: "true",
+            },
+          }
+        : {}),
+    })
   })
 
 export const webSocketTransport = WebSocketTransport.jsonTransport.with<
@@ -1079,6 +1134,7 @@ export const webSocketRoute = Route.make({
   protocol,
   endpoint,
   auth,
+  headers,
   transport: webSocketTransport,
 })
 

@@ -1,19 +1,29 @@
 import type { ProviderOptions, ReasoningEffort, TextVerbosity } from "../schema"
 import { mergeProviderOptions } from "../schema"
 import type {
+  OpenAIReasoningContext,
   OpenAIResponseIncludable,
+  OpenAIResponsesMode,
   OpenAIServiceTier,
   OpenAITruncation,
 } from "../protocols/utils/openai-options"
 
-export type { OpenAIResponseIncludable, OpenAIServiceTier, OpenAITruncation } from "../protocols/utils/openai-options"
+export type {
+  OpenAIReasoningContext,
+  OpenAIResponseIncludable,
+  OpenAIResponsesMode,
+  OpenAIServiceTier,
+  OpenAITruncation,
+} from "../protocols/utils/openai-options"
 
 export interface OpenAIOptionsInput {
   readonly [key: string]: unknown
   readonly store?: boolean
   readonly promptCacheKey?: string
+  readonly instructions?: string
   readonly reasoningEffort?: ReasoningEffort
   readonly reasoningSummary?: "auto"
+  readonly reasoningContext?: OpenAIReasoningContext
   // OpenAI Responses `include` wire field. Mirrors the official SDK's
   // `ResponseIncludable[]` union exactly so AI SDK callers and direct
   // native-SDK callers share one shape and no translation is required.
@@ -22,6 +32,7 @@ export interface OpenAIOptionsInput {
   readonly serviceTier?: OpenAIServiceTier
   readonly parallelToolCalls?: boolean
   readonly truncation?: OpenAITruncation
+  readonly responsesMode?: OpenAIResponsesMode
 }
 
 export type OpenAIProviderOptionsInput = ProviderOptions & {
@@ -36,13 +47,16 @@ const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): Provide
     definedEntries({
       store: options?.store,
       promptCacheKey: options?.promptCacheKey,
+      instructions: options?.instructions,
       reasoningEffort: options?.reasoningEffort,
       reasoningSummary: options?.reasoningSummary,
+      reasoningContext: options?.reasoningContext,
       include: options?.include,
       textVerbosity: options?.textVerbosity,
       serviceTier: options?.serviceTier,
       parallelToolCalls: options?.parallelToolCalls,
       truncation: options?.truncation,
+      responsesMode: options?.responsesMode,
     }),
   )
   if (Object.keys(openai).length === 0) return undefined
