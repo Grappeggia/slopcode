@@ -152,28 +152,40 @@ export const ToolInputEnd = Schema.Struct({
 }).annotate({ identifier: "LLM.Event.ToolInputEnd" })
 export type ToolInputEnd = Schema.Schema.Type<typeof ToolInputEnd>
 
-export const ToolCall = Schema.Struct({
+const ToolCallFields = {
   type: Schema.tag("tool-call"),
   id: ToolCallID,
   name: Schema.String,
-  input: Schema.Unknown,
-  toolType: Schema.optional(ToolType),
   providerExecuted: Schema.optional(Schema.Boolean),
   providerMetadata: Schema.optional(ProviderMetadata),
-}).annotate({ identifier: "LLM.Event.ToolCall" })
-export type ToolCall = Schema.Schema.Type<typeof ToolCall>
+}
+const ToolCallBase = Schema.Struct({ ...ToolCallFields, input: Schema.Unknown, toolType: Schema.optional(ToolType) })
+type ToolCallBase = Schema.Schema.Type<typeof ToolCallBase>
+export type ToolCall = Omit<ToolCallBase, "input" | "toolType"> &
+  ({ readonly input: unknown; readonly toolType?: "function" } | { readonly input: string; readonly toolType: "custom" })
+export const ToolCall = ToolCallBase.pipe(
+  Schema.refine(
+    (value): value is ToolCall => value.toolType !== "custom" || typeof value.input === "string",
+    { message: "Custom tool call input must be a string" },
+  ),
+).annotate({ identifier: "LLM.Event.ToolCall" })
 
-export const ToolResult = Schema.Struct({
+const ToolResultFields = {
   type: Schema.tag("tool-result"),
   id: ToolCallID,
   name: Schema.String,
   result: ToolResultValue,
-  toolType: Schema.optional(ToolType),
   output: Schema.optional(ToolOutput),
   providerExecuted: Schema.optional(Schema.Boolean),
   providerMetadata: Schema.optional(ProviderMetadata),
-}).annotate({ identifier: "LLM.Event.ToolResult" })
-export type ToolResult = Schema.Schema.Type<typeof ToolResult>
+}
+const ToolResultBase = Schema.Struct({ ...ToolResultFields, toolType: Schema.optional(ToolType) })
+type ToolResultBase = Schema.Schema.Type<typeof ToolResultBase>
+export type ToolResult = Omit<ToolResultBase, "toolType"> &
+  ({ readonly toolType?: "function" } | { readonly toolType: "custom" })
+export const ToolResult = ToolResultBase.pipe(
+  Schema.refine((value): value is ToolResult => value.toolType !== "custom" || value.toolType === "custom"),
+).annotate({ identifier: "LLM.Event.ToolResult" })
 
 export const ToolError = Schema.Struct({
   type: Schema.tag("tool-error"),
@@ -231,7 +243,9 @@ const llmEventTagged = Schema.Union([
   ProviderErrorEvent,
 ]).pipe(Schema.toTaggedUnion("type"))
 
-type WithID<Event extends { readonly id: unknown }, ID> = Omit<Event, "type" | "id"> & { readonly id: ID | string }
+type WithID<Event extends { readonly id: unknown }, ID> = Event extends unknown
+  ? Omit<Event, "type" | "id"> & { readonly id: ID | string }
+  : never
 type WithUsage<Event extends { readonly usage?: Usage }> = Omit<Event, "type" | "usage"> & {
   readonly usage?: UsageInput
 }
@@ -260,13 +274,18 @@ export const LLMEvent = Object.assign(llmEventTagged, {
   toolInputDelta: (input: WithID<ToolInputDelta, ToolCallID>) =>
     ToolInputDelta.make({ ...input, id: toolCallID(input.id) }),
   toolInputEnd: (input: WithID<ToolInputEnd, ToolCallID>) => ToolInputEnd.make({ ...input, id: toolCallID(input.id) }),
-  toolCall: (input: WithID<ToolCall, ToolCallID>) => ToolCall.make({ ...input, id: toolCallID(input.id) }),
+  toolCall: (input: WithID<ToolCall, ToolCallID>) => {
+    if (input.toolType === "custom" && typeof input.input !== "string")
+      throw new TypeError("Custom tool call input must be a string")
+    return { type: "tool-call" as const, ...input, id: toolCallID(input.id) } as ToolCall
+  },
   toolResult: (input: WithID<ToolResult, ToolCallID>) =>
-    ToolResult.make({
+    ({
+      type: "tool-result" as const,
       ...input,
       id: toolCallID(input.id),
       output: input.output === undefined ? undefined : ToolOutput.make(input.output.structured, input.output.content),
-    }),
+    }) as ToolResult,
   toolError: (input: WithID<ToolError, ToolCallID>) => ToolError.make({ ...input, id: toolCallID(input.id) }),
   stepFinish: (input: WithUsage<StepFinish>) =>
     StepFinish.make({

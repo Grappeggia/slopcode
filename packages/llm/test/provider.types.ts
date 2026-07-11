@@ -43,7 +43,13 @@ multiApiProvider.apis.chat("chat-model")
 
 OpenAI.configure({
   providerOptions: {
-    openai: { parallelToolCalls: false, truncation: "auto", reasoningEffort: "ultra" },
+    openai: {
+      parallelToolCalls: false,
+      truncation: "auto",
+      reasoningEffort: "ultra",
+      responsesMode: "lite",
+      reasoningContext: "all_turns",
+    },
   },
 })
 
@@ -52,6 +58,17 @@ OpenAI.configure({
     openai: {
       // @ts-expect-error Responses truncation only accepts public wire values.
       truncation: { mode: "tokens", limit: 10_000 },
+    },
+  },
+})
+
+OpenAI.configure({
+  providerOptions: {
+    openai: {
+      // @ts-expect-error Responses mode requires an explicit supported profile.
+      responsesMode: "automatic",
+      // @ts-expect-error Reasoning context uses OpenAI wire values.
+      reasoningContext: "all-turns",
     },
   },
 })

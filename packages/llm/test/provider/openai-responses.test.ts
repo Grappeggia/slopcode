@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { ConfigProvider, Effect, Layer, Stream } from "effect"
+import { ConfigProvider, Effect, Layer, Schema, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
 import {
   CustomToolDefinition,
@@ -9,6 +9,8 @@ import {
   Model,
   ToolCallPart,
   ToolResultPart,
+  ToolRuntime,
+  Tool,
   Usage,
 } from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
@@ -446,20 +448,15 @@ describe("OpenAI Responses route", () => {
   )
 
   it.effect("rejects non-string custom call history instead of coercing it", () =>
-    Effect.gen(function* () {
-      const error = yield* LLMClient.prepare(
-        LLM.request({
-          model,
-          messages: [
-            Message.assistant([
-              ToolCallPart.make({ id: "call_1", name: "patch", input: { patch: "invalid" }, toolType: "custom" }),
-            ]),
-          ],
-        }),
-      ).pipe(Effect.flip)
-
-      expect(error.reason).toMatchObject({ _tag: "InvalidRequest" })
-      expect(error.message).toContain("custom tool call patch input must be a string")
+    Effect.sync(() => {
+      expect(() =>
+        ToolCallPart.make({
+          id: "call_1",
+          name: "patch",
+          input: { patch: "invalid" },
+          toolType: "custom",
+        } as unknown as Parameters<typeof ToolCallPart.make>[0]),
+      ).toThrow("Custom tool call input must be a string")
     }),
   )
 
@@ -679,6 +676,252 @@ describe("OpenAI Responses route", () => {
         truncation: "disabled",
         reasoning: { effort: "ultra" },
       })
+    }),
+  )
+
+  it.effect("lowers exact Responses Lite HTTP body and header", () =>
+    Effect.gen(function* () {
+      const input = LLM.request({
+        model,
+        system: "Conversation policy.",
+        prompt: "Apply the change.",
+        tools: [
+          { name: "lookup", description: "Lookup data.", inputSchema: { type: "object" } },
+          new CustomToolDefinition({ name: "patch", description: "Apply a patch." }),
+        ],
+        providerOptions: {
+          openai: {
+            instructions: "Base instructions.",
+            responsesMode: "lite",
+            parallelToolCalls: true,
+            reasoningEffort: "high",
+          },
+        },
+      })
+
+      yield* LLMClient.generate(input).pipe(
+        Effect.provide(
+          dynamicResponse((request) =>
+            Effect.gen(function* () {
+              const web = yield* HttpClientRequest.toWeb(request.request).pipe(Effect.orDie)
+              expect(web.headers.get("x-openai-internal-codex-responses-lite")).toBe("true")
+              expect(yield* Effect.promise(() => web.json())).toEqual({
+                model: "gpt-4.1-mini",
+                input: [
+                  {
+                    type: "additional_tools",
+                    role: "developer",
+                    tools: [
+                      {
+                        type: "function",
+                        name: "lookup",
+                        description: "Lookup data.",
+                        parameters: { type: "object" },
+                      },
+                      { type: "custom", name: "patch", description: "Apply a patch." },
+                    ],
+                  },
+                  {
+                    type: "message",
+                    role: "developer",
+                    content: [{ type: "input_text", text: "Base instructions." }],
+                  },
+                  { role: "system", content: "Conversation policy." },
+                  { role: "user", content: [{ type: "input_text", text: "Apply the change." }] },
+                ],
+                instructions: "",
+                parallel_tool_calls: false,
+                reasoning: { effort: "high", context: "all_turns" },
+                stream: true,
+              })
+              return request.respond(sseEvents({ type: "response.completed", response: {} }), {
+                headers: { "content-type": "text/event-stream" },
+              })
+            }),
+          ),
+        ),
+      )
+    }),
+  )
+
+  it.effect("keeps empty Lite instructions deterministic", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          prompt: "Hello.",
+          providerOptions: { openai: { responsesMode: "lite", instructions: "" } },
+        }),
+      )
+
+      expect(prepared.body).toEqual({
+        model: "gpt-4.1-mini",
+        input: [
+          { type: "additional_tools", role: "developer", tools: [] },
+          { role: "user", content: [{ type: "input_text", text: "Hello." }] },
+        ],
+        instructions: "",
+        parallel_tool_calls: false,
+        reasoning: { context: "all_turns" },
+        stream: true,
+      })
+    }),
+  )
+
+  it.effect("sends the Lite marker in WebSocket metadata and handshake headers", () =>
+    Effect.gen(function* () {
+      const sent: string[] = []
+      const headers: Array<string | undefined> = []
+      const deps = Layer.mergeAll(
+        Layer.succeed(
+          RequestExecutor.Service,
+          RequestExecutor.Service.of({ execute: () => Effect.die("unexpected HTTP request") }),
+        ),
+        Layer.succeed(
+          WebSocketExecutor.Service,
+          WebSocketExecutor.Service.of({
+            open: (input) =>
+              Effect.succeed({
+                sendText: (message) =>
+                  Effect.sync(() => {
+                    headers.push(input.headers["x-openai-internal-codex-responses-lite"])
+                    sent.push(message)
+                  }),
+                messages: Stream.fromArray([
+                  ProviderShared.encodeJson({ type: "response.completed", response: { id: "resp_ws" } }),
+                ]),
+                close: Effect.void,
+              }),
+          }),
+        ),
+      )
+      const route = OpenAIResponses.webSocketRoute.with({
+        endpoint: { baseURL: "https://api.openai.test/v1/" },
+        auth: Auth.bearer("test"),
+      })
+
+      yield* LLMClient.generate(
+        LLM.request({
+          model: route.model({ id: "gpt-4.1-mini" }),
+          prompt: "Hello.",
+          providerOptions: { openai: { responsesMode: "lite", instructions: "Base instructions." } },
+        }),
+      ).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(deps))))
+
+      expect(headers).toEqual(["true"])
+      expect(sent.map((message) => JSON.parse(message))).toEqual([
+        {
+          type: "response.create",
+          model: "gpt-4.1-mini",
+          input: [
+            { type: "additional_tools", role: "developer", tools: [] },
+            {
+              type: "message",
+              role: "developer",
+              content: [{ type: "input_text", text: "Base instructions." }],
+            },
+            { role: "user", content: [{ type: "input_text", text: "Hello." }] },
+          ],
+          instructions: "",
+          parallel_tool_calls: false,
+          reasoning: { context: "all_turns" },
+          client_metadata: { ws_request_header_x_openai_internal_codex_responses_lite: "true" },
+        },
+      ])
+    }),
+  )
+
+  it.effect("preserves exact full Responses body and omits Lite markers", () =>
+    Effect.gen(function* () {
+      const input = LLM.request({
+        model,
+        prompt: "Look it up.",
+        tools: [{ name: "lookup", description: "Lookup data.", inputSchema: { type: "object" } }],
+        providerOptions: {
+          openai: {
+            responsesMode: "full",
+            instructions: "Base instructions.",
+            parallelToolCalls: true,
+            reasoningEffort: "high",
+          },
+        },
+      })
+
+      yield* LLMClient.generate(input).pipe(
+        Effect.provide(
+          dynamicResponse((request) =>
+            Effect.gen(function* () {
+              const web = yield* HttpClientRequest.toWeb(request.request).pipe(Effect.orDie)
+              expect(web.headers.get("x-openai-internal-codex-responses-lite")).toBeNull()
+              expect(yield* Effect.promise(() => web.json())).toEqual({
+                model: "gpt-4.1-mini",
+                input: [{ role: "user", content: [{ type: "input_text", text: "Look it up." }] }],
+                instructions: "Base instructions.",
+                tools: [
+                  {
+                    type: "function",
+                    name: "lookup",
+                    description: "Lookup data.",
+                    parameters: { type: "object" },
+                  },
+                ],
+                parallel_tool_calls: true,
+                reasoning: { effort: "high" },
+                stream: true,
+              })
+              return request.respond(sseEvents({ type: "response.completed", response: {} }), {
+                headers: { "content-type": "text/event-stream" },
+              })
+            }),
+          ),
+        ),
+      )
+    }),
+  )
+
+  it.effect("allows full Responses reasoning context independently", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.updateRequest(request, { providerOptions: { openai: { reasoningContext: "current_turn" } } }),
+      )
+
+      expect(prepared.body.reasoning).toEqual({ context: "current_turn" })
+    }),
+  )
+
+  it.effect("continues dispatched custom results as custom tool outputs", () =>
+    Effect.gen(function* () {
+      const call = ToolCallPart.make({
+        id: "call_1",
+        name: "patch",
+        input: "*** Begin Patch\n*** End Patch",
+        toolType: "custom",
+      })
+      const patch = Tool.make({
+        description: "Apply a patch.",
+        parameters: Schema.String,
+        success: Schema.String,
+        execute: () => Effect.succeed("applied"),
+      })
+      const dispatched = yield* ToolRuntime.dispatch({ patch }, call)
+      const result = dispatched.events.find((event) => event.type === "tool-result")
+      if (!result || result.type !== "tool-result") throw new Error("Expected custom tool result")
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [Message.assistant(call), Message.tool(result)],
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        {
+          type: "custom_tool_call",
+          call_id: "call_1",
+          name: "patch",
+          input: "*** Begin Patch\n*** End Patch",
+        },
+        { type: "custom_tool_call_output", call_id: "call_1", output: "applied" },
+      ])
     }),
   )
 

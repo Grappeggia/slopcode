@@ -22,6 +22,10 @@ export const OpenAIServiceTiers = ["auto", "default", "flex", "priority"] as con
 export type OpenAIServiceTier = (typeof OpenAIServiceTiers)[number]
 export const OpenAITruncations = ["auto", "disabled"] as const
 export type OpenAITruncation = (typeof OpenAITruncations)[number]
+export const OpenAIResponsesModes = ["full", "lite"] as const
+export type OpenAIResponsesMode = (typeof OpenAIResponsesModes)[number]
+export const OpenAIReasoningContexts = ["auto", "current_turn", "all_turns"] as const
+export type OpenAIReasoningContext = (typeof OpenAIReasoningContexts)[number]
 
 const REASONING_EFFORTS = new Set<string>(ReasoningEfforts)
 const OPENAI_REASONING_EFFORTS = new Set<string>(OpenAIReasoningEfforts)
@@ -29,12 +33,16 @@ const TEXT_VERBOSITY = new Set<string>(["low", "medium", "high"])
 const INCLUDABLES = new Set<string>(OpenAIResponseIncludables)
 const SERVICE_TIERS = new Set<string>(OpenAIServiceTiers)
 const TRUNCATIONS = new Set<string>(OpenAITruncations)
+const RESPONSES_MODES = new Set<string>(OpenAIResponsesModes)
+const REASONING_CONTEXTS = new Set<string>(OpenAIReasoningContexts)
 
 export const OpenAIReasoningEffort = Schema.Literals(OpenAIReasoningEfforts)
 export const OpenAITextVerbosity = TextVerbosity
 export const OpenAIResponseIncludable = Schema.Literals(OpenAIResponseIncludables)
 export const OpenAIServiceTier = Schema.Literals(OpenAIServiceTiers)
 export const OpenAITruncation = Schema.Literals(OpenAITruncations)
+export const OpenAIResponsesMode = Schema.Literals(OpenAIResponsesModes)
+export const OpenAIReasoningContext = Schema.Literals(OpenAIReasoningContexts)
 
 const isAnyReasoningEffort = (effort: unknown): effort is ReasoningEffort =>
   typeof effort === "string" && REASONING_EFFORTS.has(effort)
@@ -59,6 +67,11 @@ export const reasoningEffort = (request: LLMRequest): ReasoningEffort | undefine
 
 export const reasoningSummary = (request: LLMRequest): "auto" | undefined =>
   options(request)?.reasoningSummary === "auto" ? "auto" : undefined
+
+export const reasoningContext = (request: LLMRequest) => {
+  const value = options(request)?.reasoningContext
+  return typeof value === "string" && REASONING_CONTEXTS.has(value) ? (value as OpenAIReasoningContext) : undefined
+}
 
 // Resolve the OpenAI Responses `include` field. Filters out unknown
 // includable values defensively so a typo in upstream config drops the
@@ -100,6 +113,11 @@ export const parallelToolCalls = (request: LLMRequest) => {
 export const truncation = (request: LLMRequest) => {
   const value = options(request)?.truncation
   return typeof value === "string" && TRUNCATIONS.has(value) ? (value as OpenAITruncation) : undefined
+}
+
+export const responsesMode = (request: LLMRequest) => {
+  const value = options(request)?.responsesMode
+  return typeof value === "string" && RESPONSES_MODES.has(value) ? (value as OpenAIResponsesMode) : "full"
 }
 
 export * as OpenAIOptions from "./openai-options"
