@@ -19,6 +19,7 @@ import { AgentV2 } from "../agent"
 import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
+import type { SessionEvent } from "../session/event"
 import { ToolOutputStore } from "../tool-output-store"
 import { Wildcard } from "../util/wildcard"
 import { ApplicationTools } from "./application-tools"
@@ -38,6 +39,7 @@ export type ExecuteInput = {
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly call: ToolCall
+  readonly task?: SessionEvent.Task.Requested["data"]
 }
 
 export interface Interface {
@@ -87,7 +89,7 @@ const registryLayer = Layer.effect(
     const settleWith = Effect.fn("ToolRegistry.settle")(function* (
       input: ExecuteInput,
       advertised?: object,
-      multiAgent?: "v1" | "v2",
+      plan: ToolPlan = {},
       permissions: PermissionV2.Ruleset = [],
     ) {
       const registration =
@@ -101,16 +103,26 @@ const registryLayer = Layer.effect(
         }
       if (advertised && registration.identity !== advertised)
         return { result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } }
-      const context = Object.defineProperty(
+      const context = Object.defineProperties(
         {
           sessionID: input.sessionID,
           agent: input.agent,
           assistantMessageID: input.assistantMessageID,
           toolCallID: input.call.id,
-          ...(multiAgent === undefined ? {} : { multiAgent }),
+          ...(plan.multiAgent === undefined ? {} : { multiAgent: plan.multiAgent }),
         },
-        "permissions",
-        { value: permissions },
+        {
+          permissions: { value: permissions },
+          plan: {
+            value: Object.freeze({
+              mode: plan.mode,
+              shell: plan.shell,
+              patch: plan.patch,
+              multiAgent: plan.multiAgent,
+            }),
+          },
+          task: { value: input.task },
+        },
       ) as ToolContext
       const pending = yield* settle(registration.tool, input.call, context).pipe(
         Effect.map((output) => ({ output })),
@@ -165,7 +177,7 @@ const registryLayer = Layer.effect(
         )
         const settleMaterialized = (input: ExecuteInput): Effect.Effect<Settlement, ToolOutputStore.Error> => {
           const registration = registrations.get(input.call.name)
-          if (registration) return settleWith(input, registration.identity, plan.multiAgent, rules)
+          if (registration) return settleWith(input, registration.identity, plan, rules)
           return Effect.succeed({ result: { type: "error" as const, value: `Unknown tool: ${input.call.name}` } })
         }
         const mode = plan.mode ?? "function"

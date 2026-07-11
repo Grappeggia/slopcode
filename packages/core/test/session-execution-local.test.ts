@@ -418,6 +418,13 @@ describe("SessionExecutionLocal startup recovery", () => {
           agent: "general",
           model,
           multiAgent: "v2",
+          callerAgent: "build",
+          permissions: [],
+          plan: { multiAgent: "v2" },
+          projectID: Project.ID.global,
+          location: { directory: AbsolutePath.make("/project") },
+          title: "Recovered child",
+          ceiling: [],
         },
         { id: SessionTask.requestEventID(sessionID, messageID, "call-recovered-task") },
       )
@@ -443,6 +450,112 @@ describe("SessionExecutionLocal startup recovery", () => {
       }).pipe(Effect.provide(execution))
 
       expect(runs).toEqual([sessionID])
+    }),
+  )
+
+  it.effect("never restarts an owned child after the durable parent interrupt crash window", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const parentID = SessionSchema.ID.make("ses_interrupted_task_parent")
+      const childID = SessionSchema.ID.make("ses_interrupted_task_child")
+      const messageID = SessionMessage.ID.make("msg_interrupted_task_parent")
+      const callID = "call-interrupted-task-parent"
+      const model = {
+        providerID: ProviderV2.ID.make("fake"),
+        id: ModelV2.ID.make("fake"),
+        variant: ModelV2.VariantID.make("default"),
+      }
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values([
+          {
+            id: parentID,
+            project_id: Project.ID.global,
+            slug: parentID,
+            directory: "/project",
+            title: "Interrupted parent",
+            version: "test",
+            runtime: "v2" as const,
+          },
+          {
+            id: childID,
+            project_id: Project.ID.global,
+            parent_id: parentID,
+            slug: childID,
+            directory: "/project",
+            title: "Interrupted child",
+            version: "test",
+            runtime: "v2" as const,
+            runtime_state: "draining" as const,
+            agent: "general",
+            model,
+            metadata: {
+              task: { version: 1, parentID, agent: "general", origin: { messageID, callID }, ceiling: [] },
+            },
+          },
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        {
+          sessionID: parentID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: messageID,
+          callID,
+          childSessionID: childID,
+          promptMessageID: SessionTask.promptID(parentID, messageID, callID),
+          description: "Interrupted",
+          prompt: "never run",
+          agent: "general",
+          model,
+          multiAgent: "v2",
+          callerAgent: "build",
+          permissions: [],
+          plan: { multiAgent: "v2" },
+          projectID: Project.ID.global,
+          location: { directory: AbsolutePath.make("/project") },
+          title: "Interrupted child",
+          ceiling: [],
+        },
+        { id: SessionTask.requestEventID(parentID, messageID, callID) },
+      )
+      yield* SessionInput.admit(db, events, {
+        id: SessionTask.promptID(parentID, messageID, callID),
+        sessionID: childID,
+        prompt: new Prompt({ text: "never run" }),
+        delivery: "steer",
+      })
+      yield* events.publish(SessionEvent.InterruptRequested, {
+        sessionID: parentID,
+        timestamp: yield* DateTime.now,
+      })
+      const runs: SessionSchema.ID[] = []
+      const runner = Layer.succeed(
+        SessionRunner.Service,
+        SessionRunner.Service.of({ run: (input) => Effect.sync(() => runs.push(input.sessionID)) }),
+      )
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* SessionExecution.Service.pipe(Effect.provide(execution))
+      yield* Effect.yieldNow
+
+      expect(runs).not.toContain(childID)
     }),
   )
 })

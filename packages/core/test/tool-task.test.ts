@@ -435,6 +435,55 @@ describe("TaskTool durable orchestration", () => {
     }),
   )
 
+  fixture.it.effect("rejects schema-valid task metadata without its canonical origin request", () =>
+    Effect.gen(function* () {
+      yield* seed
+      yield* complete([])
+      const db = (yield* Database.Service).db
+      const originMessage = SessionMessage.ID.make("msg_fabricated_origin")
+      const originCall = "call-fabricated-origin"
+      const taskID = SessionTask.childID(parentID, originMessage, originCall)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: taskID,
+          project_id: ProjectV2.ID.global,
+          parent_id: parentID,
+          slug: taskID,
+          directory: location.directory,
+          title: "Fabricated (@general subagent)",
+          version: "test",
+          runtime: "v2",
+          agent: "general",
+          model: inherited,
+          metadata: {
+            task: {
+              version: 1,
+              parentID,
+              agent: "general",
+              origin: { messageID: originMessage, callID: originCall },
+              ceiling: [],
+            },
+          },
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      const callID = "call-fabricated-resume"
+      expect(
+        (
+          yield* settle(callID, {
+            description: "Continue",
+            prompt: "never",
+            subagent_type: "general",
+            task_id: taskID,
+          })
+        ).result,
+      ).toMatchObject({ type: "error", value: expect.stringContaining("conflict") })
+      expect(yield* SessionInput.find(db, SessionTask.promptID(parentID, messageID, callID))).toBeUndefined()
+    }),
+  )
+
   fixture.it.effect("rejects Location, project, agent, and task-owner resume conflicts before admission", () =>
     Effect.gen(function* () {
       yield* seed
@@ -580,6 +629,16 @@ describe("TaskTool durable orchestration", () => {
               agent: "general",
               model: inherited,
               multiAgent: "v2",
+              callerAgent: "build",
+              permissions: [],
+              plan: { multiAgent: "v2" },
+              projectID: ProjectV2.ID.global,
+              location,
+              title: `Restart ${phase} (@general subagent)`,
+              ceiling: [
+                { action: "task", resource: "*", effect: "deny" },
+                { action: "todowrite", resource: "*", effect: "deny" },
+              ],
             },
             { id: SessionTask.requestEventID(parentID, messageID, callID) },
           )
@@ -605,6 +664,36 @@ describe("TaskTool durable orchestration", () => {
       expect((yield* settle("call-restart-terminal", terminalInput)).result.type).toBe("text")
       expect((yield* settle("call-restart-terminal", terminalInput)).result.type).toBe("text")
       expect(runs.filter((id) => id === "call-restart-terminal")).toHaveLength(1)
+    }),
+  )
+
+  fixture.it.effect("reconnects a persisted request through the canonical task registration without duplicate work", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const runs: string[] = []
+      yield* complete(runs)
+      const callID = "call-canonical-recovery"
+      const input = { description: "Canonical", prompt: "recover", subagent_type: "general" }
+      const permissions = [{ action: "edit", resource: "secret", effect: "deny" as const }]
+      expect((yield* settleWith(callID, input, permissions, { mode: "code-only", multiAgent: "v2" })).result.type).toBe(
+        "text",
+      )
+      const request = yield* SessionTask.request(db, parentID, messageID, callID)
+      expect(request).toBeDefined()
+      const assertions = fixture.assertions.length
+      const materialized = yield* (yield* ToolRegistry.Service).materialize(request!.permissions, request!.plan)
+      const recovered = yield* materialized.settle({
+        sessionID: parentID,
+        agent: request!.callerAgent,
+        assistantMessageID: messageID,
+        call: { type: "tool-call", id: callID, name: "task", input },
+        task: request,
+      })
+
+      expect(recovered.result.type).toBe("text")
+      expect(runs).toEqual([callID])
+      expect(fixture.assertions).toHaveLength(assertions)
     }),
   )
 

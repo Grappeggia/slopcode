@@ -142,19 +142,29 @@ export const layer = Layer.effect(
         for (const tool of message.content) {
           if (tool.type !== "tool" || (tool.state.status !== "pending" && tool.state.status !== "running")) continue
           if (tool.name === "task" && !(yield* SessionTask.interrupted(db, sessionID, message.id, tool.id))) {
-            const session = yield* getSession(sessionID)
-            const agent = yield* agents.select(session.agent)
-            const resolved = yield* models.resolve(session)
+            const request = yield* SessionTask.request(db, sessionID, message.id, tool.id)
+            const current = request
+              ? undefined
+              : yield* Effect.gen(function* () {
+                  const session = yield* getSession(sessionID)
+                  const agent = yield* agents.select(session.agent)
+                  const resolved = yield* models.resolve(session)
+                  return { agent, resolved }
+                })
             const materialized = yield* tools.materialize(
-              [...(agent.info?.permissions ?? []), ...((yield* store.task(sessionID))?.ceiling ?? [])],
-              resolved.harness
-                ? {
-                    mode: resolved.harness.tools.mode,
-                    shell: resolved.harness.tools.shell,
-                    patch: resolved.harness.tools.patch,
-                    multiAgent: resolved.harness.multiAgent,
-                  }
-                : undefined,
+              request
+                ? request.permissions
+                : [...(current?.agent.info?.permissions ?? []), ...((yield* store.task(sessionID))?.ceiling ?? [])],
+              request
+                ? request.plan
+                : current?.resolved.harness
+                  ? {
+                      mode: current.resolved.harness.tools.mode,
+                      shell: current.resolved.harness.tools.shell,
+                      patch: current.resolved.harness.tools.patch,
+                      multiAgent: current.resolved.harness.multiAgent,
+                    }
+                  : undefined,
             )
             const call = {
               type: "tool-call" as const,
@@ -180,9 +190,10 @@ export const layer = Layer.effect(
               })
             const settlement = yield* materialized.settle({
               sessionID,
-              agent: agent.id,
+              agent: request?.callerAgent ?? current!.agent.id,
               assistantMessageID: message.id,
               call,
+              task: request,
             })
             if (settlement.result.type === "error") {
               yield* events.publish(SessionEvent.Tool.Failed, {

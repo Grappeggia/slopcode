@@ -11,6 +11,7 @@ import { RelativePath } from "../schema"
 import { SessionMessageID } from "./message-id"
 import { ProjectV2 } from "../project"
 import { AgentV2 } from "../agent"
+import { PermissionSchema } from "../permission/schema"
 
 export { FileAttachment }
 
@@ -518,6 +519,18 @@ export namespace Task {
       model: ModelV2.Ref,
       command: Schema.String.pipe(Schema.optional),
       multiAgent: Schema.Literals(["v1", "v2"]),
+      callerAgent: AgentV2.ID,
+      permissions: PermissionSchema.Ruleset,
+      plan: Schema.Struct({
+        mode: Schema.Literals(["function", "code-preferred", "code-only"]).pipe(Schema.optional),
+        shell: Schema.Literal("shell_command").pipe(Schema.optional),
+        patch: Schema.Literal("freeform").pipe(Schema.optional),
+        multiAgent: Schema.Literals(["v1", "v2"]),
+      }),
+      projectID: ProjectV2.ID,
+      location: Location.RefJson,
+      title: Schema.String,
+      ceiling: PermissionSchema.Ruleset,
     },
   })
   export type Requested = typeof Requested.Type
