@@ -21,7 +21,10 @@ export const layer = Layer.effect(
     const recovered = yield* runtime.recover()
     const recovery = new Map(recovered.map((info) => [info.sessionID, info]))
     yield* Effect.forEach(
-      yield* SessionInput.pendingCompactionSessions(db),
+      [
+        ...(yield* SessionInput.pendingCompactionSessions(db)),
+        ...(yield* SessionInput.pendingShellSessions(db)),
+      ].filter((sessionID, index, sessions) => sessions.indexOf(sessionID) === index),
       Effect.fnUntraced(function* (sessionID) {
         if (recovery.has(sessionID)) return
         const info = yield* runtime.get(sessionID)
@@ -43,13 +46,14 @@ export const layer = Layer.effect(
       recovery.values(),
       Effect.fnUntraced(function* (info) {
         const pending = yield* Effect.all([
+          SessionInput.hasPendingShell(db, info.sessionID),
           SessionInput.hasPendingCompaction(db, info.sessionID),
           SessionInput.hasPending(db, info.sessionID, "steer"),
           SessionInput.hasPending(db, info.sessionID, "queue"),
         ])
         if (!pending.some(Boolean)) return
         yield* coordinator.wake(info.sessionID)
-        if (pending.slice(1).some(Boolean)) yield* coordinator.wake(info.sessionID)
+        if (pending.slice(2).some(Boolean)) yield* coordinator.wake(info.sessionID)
       }),
       { discard: true },
     )

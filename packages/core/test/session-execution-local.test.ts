@@ -193,6 +193,79 @@ describe("SessionExecutionLocal startup recovery", () => {
       expect(runs).toBe(1)
     }),
   )
+
+  it.effect("discovers a ready runtime shell request and never repeats its terminal", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const sessionID = SessionSchema.ID.make("ses_recovered_ready_shell")
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: sessionID,
+          directory: "/project",
+          title: "Recovered ready shell",
+          version: "test",
+          runtime: "v2",
+          runtime_state: "ready",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const id = SessionMessage.ID.make("msg_recovered_ready_shell")
+      const request = yield* SessionInput.admitShell(db, events, {
+        id,
+        sessionID,
+        command: "pwd",
+        resume: false,
+      })
+      const done = yield* Deferred.make<void>()
+      let runs = 0
+      const runner = Layer.succeed(
+        SessionRunner.Service,
+        SessionRunner.Service.of({
+          run: () =>
+            Effect.gen(function* () {
+              runs++
+              yield* SessionInput.startShell(db, events, request)
+              yield* SessionInput.endShell(db, events, request, {
+                status: "completed",
+                output: "/project",
+                exitCode: 0,
+                truncated: false,
+              })
+              yield* Deferred.succeed(done, undefined)
+            }),
+        }),
+      )
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.gen(function* () {
+        yield* SessionExecution.Service
+        yield* Deferred.await(done)
+      }).pipe(Effect.provide(execution))
+      expect(yield* SessionInput.terminalShell(db, id)).toMatchObject({ status: "completed", exitCode: 0 })
+      expect(runs).toBe(1)
+
+      yield* SessionExecution.Service.pipe(Effect.provide(execution))
+      expect(runs).toBe(1)
+    }),
+  )
 })
 
 describe("SessionExecutionLocal wait", () => {

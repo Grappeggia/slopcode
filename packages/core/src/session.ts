@@ -92,13 +92,6 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ses
   sessionID: SessionSchema.ID,
 }) {}
 
-export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
-  "Session.OperationUnavailableError",
-  {
-    operation: Schema.Literals(["move", "shell"]),
-  },
-) {}
-
 export { ContextSnapshotDecodeError, MessageDecodeError } from "./session/error"
 
 export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictError>()("Session.PromptConflictError", {
@@ -113,6 +106,11 @@ export class CompactionConflictError extends Schema.TaggedErrorClass<CompactionC
     messageID: SessionMessage.ID,
   },
 ) {}
+
+export class ShellConflictError extends Schema.TaggedErrorClass<ShellConflictError>()("Session.ShellConflictError", {
+  sessionID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+}) {}
 
 export class CompactionPromptUnsupportedError extends Schema.TaggedErrorClass<CompactionPromptUnsupportedError>()(
   "Session.CompactionPromptUnsupportedError",
@@ -147,8 +145,8 @@ export class SkillNotFoundError extends Schema.TaggedErrorClass<SkillNotFoundErr
 export type Error =
   | NotFoundError
   | MessageDecodeError
-  | OperationUnavailableError
   | PromptConflictError
+  | ShellConflictError
   | CompactionConflictError
   | CompactionPromptUnsupportedError
   | CompactionFailedError
@@ -198,11 +196,11 @@ export interface Interface {
     resume?: boolean
   }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
   readonly shell: (input: {
-    id?: EventV2.ID
+    id?: SessionMessage.ID
     sessionID: SessionSchema.ID
     command: string
     resume?: boolean
-  }) => Effect.Effect<void, OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError | ShellConflictError>
   readonly skill: <E = never>(
     input: {
       id?: SessionMessage.ID
@@ -236,7 +234,7 @@ export const layer = Layer.effect(
     const locations = yield* LocationServiceMap
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
-    const enqueueWake = (admitted: SessionInput.Admitted) =>
+    const enqueueWake = (admitted: { readonly sessionID: SessionSchema.ID; readonly admittedSeq: number }) =>
       execution.wake(admitted.sessionID, admitted.admittedSeq).pipe(
         Effect.tapCause((cause) =>
           Cause.hasInterruptsOnly(cause)
@@ -453,8 +451,53 @@ export const layer = Layer.effect(
           }),
         ),
       ),
-      shell: Effect.fn("V2Session.shell")(function* () {
-        return yield* new OperationUnavailableError({ operation: "shell" })
+      shell: Effect.fn("V2Session.shell")(function* (input) {
+        return yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            yield* result.get(input.sessionID)
+            const id = input.id ?? SessionMessage.ID.create()
+            const resume = input.resume !== false
+            const recorded = yield* SessionInput.findShell(db, id)
+            if (
+              !recorded &&
+              ((yield* SessionInput.find(db, id)) || (yield* SessionInput.findCompaction(db, id)) || (yield* store.message(id)))
+            )
+              return yield* new ShellConflictError({ sessionID: input.sessionID, messageID: id })
+            const admitted =
+              recorded ??
+              (yield* SessionInput.admitShell(db, events, {
+                id,
+                sessionID: input.sessionID,
+                command: input.command,
+                resume,
+              }).pipe(
+                Effect.catchDefect((defect) =>
+                  defect instanceof SessionInput.LifecycleConflict
+                    ? new ShellConflictError({ sessionID: input.sessionID, messageID: id })
+                    : Effect.die(defect),
+                ),
+              ))
+            if (
+              admitted.sessionID !== input.sessionID ||
+              admitted.command !== input.command ||
+              admitted.resume !== resume
+            )
+              return yield* new ShellConflictError({ sessionID: input.sessionID, messageID: id })
+            const terminal = yield* SessionInput.terminalShell(db, id)
+            if (terminal) {
+              if (resume && !(yield* SessionInput.shellContinued(db, id))) yield* enqueueWake(admitted)
+              return
+            }
+            yield* enqueueWake(admitted)
+            yield* restore(
+              events.aggregateEvents({ aggregateID: input.sessionID, after: EventV2.Cursor.make(admitted.admittedSeq) }).pipe(
+                Stream.filter((event) => event.event.id === SessionInput.shellTerminalEventID(id)),
+                Stream.take(1),
+                Stream.runDrain,
+              ),
+            )
+          }),
+        )
       }),
       skill: Effect.fn("V2Session.skill")(function* (input, guard = Effect.void) {
         const session = yield* result.get(input.sessionID)

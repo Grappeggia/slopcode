@@ -18,10 +18,12 @@ import { ModelV2 } from "../../model"
 import { ModelHarness } from "../../model-harness"
 import { ProviderV2 } from "../../provider"
 import { QuestionV2 } from "../../question"
+import { AppProcess } from "../../process"
 import { SystemContext } from "../../system-context/index"
 import { SystemContextRegistry } from "../../system-context/registry"
 import { SkillGuidance } from "../../skill/guidance"
 import { ReferenceGuidance } from "../../reference/guidance"
+import { ShellCommand } from "../../shell"
 import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
 import { SessionContextEpoch } from "../context-epoch"
@@ -105,6 +107,7 @@ export const layer = Layer.effect(
     const skillGuidance = yield* SkillGuidance.Service
     const referenceGuidance = yield* ReferenceGuidance.Service
     const config = yield* Config.Service
+    const appProcess = yield* AppProcess.Service
     const db = (yield* Database.Service).db
     const documents = yield* config.entries()
     const fencedEvents = (sessionID: SessionSchema.ID, epoch: number): EventV2.Interface => ({
@@ -192,6 +195,66 @@ export const layer = Layer.effect(
 
     const assertRuntime = (sessionID: SessionSchema.ID, epoch: number) =>
       runtime.assert({ sessionID, owner: "v2", epoch }).pipe(Effect.asVoid)
+
+    const runShell = Effect.fn("SessionRunner.runShell")(function* (
+      request: SessionInput.ShellRequest,
+      runtimeEpoch: number,
+    ) {
+      const fenced = fencedEvents(request.sessionID, runtimeEpoch)
+      const settle = Effect.fnUntraced(function* (result: SessionInput.ShellTerminal) {
+        const published = yield* SessionInput.endShell(db, fenced, request, result).pipe(Effect.exit)
+        if (published._tag === "Success") return
+        yield* SessionInput.endShell(db, events, request, {
+          status: "interrupted",
+          output: "Shell command was interrupted before completion.",
+          truncated: false,
+        })
+      })
+      if (yield* SessionInput.startedShell(db, request.id))
+        return yield* settle({
+          status: "unknown",
+          output: "Shell command outcome is unknown because execution was interrupted by a runtime restart.",
+          truncated: false,
+        })
+
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const exit = yield* restore(
+            assertRuntime(request.sessionID, runtimeEpoch).pipe(
+              Effect.andThen(
+                ShellCommand.run(
+                  { command: request.command, cwd: location.directory },
+                  SessionInput.startShell(db, fenced, request),
+                ).pipe(
+                  Effect.provideService(Config.Service, config),
+                  Effect.provideService(AppProcess.Service, appProcess),
+                ),
+              ),
+            ),
+          ).pipe(Effect.exit)
+          if (exit._tag === "Success")
+            return yield* settle({
+              status: exit.value.timedOut ? "timed_out" : "completed",
+              output: exit.value.output,
+              exitCode: "exitCode" in exit.value ? exit.value.exitCode : undefined,
+              truncated: exit.value.truncated,
+              stdoutTruncated: "stdoutTruncated" in exit.value ? exit.value.stdoutTruncated : undefined,
+              stderrTruncated: "stderrTruncated" in exit.value ? exit.value.stderrTruncated : undefined,
+            })
+          const failure = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+          yield* settle({
+            status: Cause.hasInterrupts(exit.cause) ? "interrupted" : "failed",
+            output: Cause.hasInterrupts(exit.cause)
+              ? "Shell command was interrupted before completion."
+              : failure instanceof AppProcess.AppProcessError && ShellCommand.isTimeout(failure)
+                ? `Command exceeded timeout of ${ShellCommand.DEFAULT_TIMEOUT_MS} ms. Retry with a larger timeout if the command is expected to take longer.`
+                : "Unable to start shell command.",
+            truncated: false,
+          })
+          if (Cause.hasInterrupts(exit.cause)) return yield* Effect.interrupt
+        }),
+      )
+    })
 
     const runManualCompaction = Effect.fn("SessionRunner.runManualCompaction")(function* (
       request: SessionInput.CompactionRequest,
@@ -512,15 +575,54 @@ export const layer = Layer.effect(
         ),
       )
 
+    const continueShell = Effect.fn("SessionRunner.continueShell")(function* (
+      request: SessionInput.ShellRequest,
+      runtimeEpoch: number,
+    ) {
+      let promotion: SessionInput.Delivery | undefined
+      let continuation = true
+      for (let step = 0; step < MAX_STEPS && continuation; step++) {
+        continuation = yield* runTurn(request.sessionID, promotion, runtimeEpoch)
+        promotion = "steer"
+        yield* assertRuntime(request.sessionID, runtimeEpoch)
+        if (!continuation) continuation = yield* SessionInput.hasPending(db, request.sessionID, "steer")
+      }
+      if (continuation) return yield* new StepLimitExceededError({ sessionID: request.sessionID, limit: MAX_STEPS })
+      yield* SessionInput.continueShell(db, fencedEvents(request.sessionID, runtimeEpoch), request)
+    })
+
+    const drainShells = Effect.fn("SessionRunner.drainShells")(function* (
+      sessionID: SessionSchema.ID,
+      runtimeEpoch: number,
+    ) {
+      let request = yield* SessionInput.pendingShell(db, sessionID)
+      while (request) {
+        if (request.phase === "execute") yield* runShell(request, runtimeEpoch)
+        if (request.phase === "continue") yield* continueShell(request, runtimeEpoch)
+        request = yield* SessionInput.pendingShell(db, sessionID)
+      }
+    })
+
     const run = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly force?: boolean
     }) {
-      const owner = yield* runtime.assert({ sessionID: input.sessionID, owner: "v2" })
+      const shell = yield* SessionInput.pendingShell(db, input.sessionID)
+      const owned = yield* runtime.assert({ sessionID: input.sessionID, owner: "v2" }).pipe(Effect.exit)
+      if (owned._tag === "Failure") {
+        if (shell?.phase === "execute")
+          yield* SessionInput.endShell(db, events, shell, {
+            status: "failed",
+            output: "Unable to start shell command.",
+            truncated: false,
+          })
+        return yield* Effect.failCause(owned.cause)
+      }
+      const owner = owned.value
       const manual = yield* SessionInput.pendingCompaction(db, input.sessionID)
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
-      if (input.force !== true && !manual && !hasSteer && !hasQueue) return
+      if (input.force !== true && !shell && !manual && !hasSteer && !hasQueue) return
       const assigned = yield* runtime
         .assign({
           sessionID: input.sessionID,
@@ -530,6 +632,13 @@ export const layer = Layer.effect(
         })
         .pipe(Effect.exit)
       if (assigned._tag === "Failure") {
+        if (shell?.phase === "execute") {
+          yield* SessionInput.endShell(db, events, shell, {
+            status: "failed",
+            output: "Unable to start shell command.",
+            truncated: false,
+          })
+        }
         if (manual)
           yield* SessionInput.failCompaction(db, events, manual, {
             reason: "runtime",
@@ -540,6 +649,10 @@ export const layer = Layer.effect(
       const active = assigned.value
       yield* Effect.gen(function* () {
         yield* failInterruptedTools(fencedEvents(input.sessionID, active.epoch), input.sessionID)
+        if (shell) {
+          yield* drainShells(input.sessionID, active.epoch)
+          return
+        }
         if (manual) {
           yield* drainManualCompactions(input.sessionID, active.epoch)
           return
@@ -555,6 +668,10 @@ export const layer = Layer.effect(
             yield* assertRuntime(input.sessionID, active.epoch)
             if (!needsContinuation && (yield* SessionInput.hasPendingCompaction(db, input.sessionID))) {
               yield* drainManualCompactions(input.sessionID, active.epoch)
+              return
+            }
+            if (!needsContinuation && (yield* SessionInput.hasPendingShell(db, input.sessionID))) {
+              yield* drainShells(input.sessionID, active.epoch)
               return
             }
             if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")

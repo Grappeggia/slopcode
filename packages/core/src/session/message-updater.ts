@@ -159,6 +159,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }),
         )
       },
+      "session.next.shell.requested": () => Effect.void,
       "session.next.shell.started": (event) => {
         return adapter.appendMessage(
           new SessionMessage.Shell({
@@ -180,11 +181,19 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
               produce(currentShell, (draft) => {
                 draft.output = event.data.output
                 draft.time.completed = event.data.timestamp
+                if (event.version === 2) {
+                  draft.status = event.data.status
+                  draft.exitCode = event.data.exitCode
+                  draft.truncated = event.data.truncated
+                  draft.stdoutTruncated = event.data.stdoutTruncated
+                  draft.stderrTruncated = event.data.stderrTruncated
+                }
               }),
             )
           }
         })
       },
+      "session.next.shell.continued": () => Effect.void,
       "session.next.step.started": (event) => {
         return Effect.gen(function* () {
           const currentAssistant = yield* adapter.getCurrentAssistant()

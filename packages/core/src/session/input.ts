@@ -195,6 +195,267 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   return row !== undefined
 })
 
+export type ShellRequest = {
+  readonly admittedSeq: number
+  readonly id: SessionMessage.ID
+  readonly sessionID: SessionSchema.ID
+  readonly command: string
+  readonly resume: boolean
+}
+
+export type PendingShell = ShellRequest & { readonly phase: "execute" | "continue" }
+
+export type ShellTerminal = {
+  readonly status: SessionEvent.Shell.Status
+  readonly output: string
+  readonly exitCode?: number
+  readonly truncated: boolean
+  readonly stdoutTruncated?: boolean
+  readonly stderrTruncated?: boolean
+}
+
+export const shellRequestEventID = (id: SessionMessage.ID) => `evt_shell_request_${id}` as EventV2.ID
+export const shellStartedEventID = (id: SessionMessage.ID) => `evt_shell_started_${id}` as EventV2.ID
+export const shellTerminalEventID = (id: SessionMessage.ID) => `evt_shell_terminal_${id}` as EventV2.ID
+export const shellContinuedEventID = (id: SessionMessage.ID) => `evt_shell_continued_${id}` as EventV2.ID
+
+const shellRequestedType = `${SessionEvent.Shell.Requested.type}.1`
+const shellStartedType = `${SessionEvent.Shell.Started.type}.1`
+const shellEndedType = `${SessionEvent.Shell.Ended.type}.2`
+const shellContinuedType = `${SessionEvent.Shell.Continued.type}.1`
+const decodeShellRequest = Schema.decodeUnknownEffect(SessionEvent.Shell.Requested.data)
+const decodeShellTerminal = Schema.decodeUnknownEffect(SessionEvent.Shell.Ended.data)
+
+export const findShell = Effect.fn("SessionInput.findShell")(function* (db: DatabaseService, id: SessionMessage.ID) {
+  const row = yield* db
+    .select()
+    .from(EventTable)
+    .where(eq(EventTable.id, shellRequestEventID(id)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row || row.type !== shellRequestedType) return
+  const data = yield* decodeShellRequest(row.data).pipe(Effect.orDie)
+  return {
+    admittedSeq: row.seq,
+    id: data.messageID,
+    sessionID: data.sessionID,
+    command: data.command,
+    resume: data.resume,
+  } satisfies ShellRequest
+})
+
+export const startedShell = Effect.fn("SessionInput.startedShell")(function* (
+  db: DatabaseService,
+  id: SessionMessage.ID,
+) {
+  const row = yield* db
+    .select({ type: EventTable.type })
+    .from(EventTable)
+    .where(eq(EventTable.id, shellStartedEventID(id)))
+    .get()
+    .pipe(Effect.orDie)
+  return row?.type === shellStartedType
+})
+
+export const terminalShell = Effect.fn("SessionInput.terminalShell")(function* (
+  db: DatabaseService,
+  id: SessionMessage.ID,
+) {
+  const row = yield* db
+    .select()
+    .from(EventTable)
+    .where(eq(EventTable.id, shellTerminalEventID(id)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return
+  if (row.type !== shellEndedType) return yield* Effect.die(`Invalid shell terminal event: ${row.type}`)
+  const data = yield* decodeShellTerminal(row.data).pipe(Effect.orDie)
+  return {
+    status: data.status,
+    output: data.output,
+    exitCode: data.exitCode,
+    truncated: data.truncated,
+    stdoutTruncated: data.stdoutTruncated,
+    stderrTruncated: data.stderrTruncated,
+  } satisfies ShellTerminal
+})
+
+export const shellContinued = Effect.fn("SessionInput.shellContinued")(function* (
+  db: DatabaseService,
+  id: SessionMessage.ID,
+) {
+  const row = yield* db
+    .select({ type: EventTable.type })
+    .from(EventTable)
+    .where(eq(EventTable.id, shellContinuedEventID(id)))
+    .get()
+    .pipe(Effect.orDie)
+  return row?.type === shellContinuedType
+})
+
+const shellRequests = Effect.fnUntraced(function* (db: DatabaseService, sessionID?: SessionSchema.ID) {
+  const rows = yield* db
+    .select()
+    .from(EventTable)
+    .where(
+      sessionID
+        ? and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.type, shellRequestedType))
+        : eq(EventTable.type, shellRequestedType),
+    )
+    .orderBy(asc(EventTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  return yield* Effect.forEach(rows, (row) =>
+    decodeShellRequest(row.data).pipe(
+      Effect.orDie,
+      Effect.map(
+        (data) =>
+          ({
+            admittedSeq: row.seq,
+            id: data.messageID,
+            sessionID: data.sessionID,
+            command: data.command,
+            resume: data.resume,
+          }) satisfies ShellRequest,
+      ),
+    ),
+  )
+})
+
+export const pendingShell = Effect.fn("SessionInput.pendingShell")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  for (const request of yield* shellRequests(db, sessionID)) {
+    const terminal = yield* terminalShell(db, request.id)
+    if (!terminal) return { ...request, phase: "execute" } satisfies PendingShell
+    if (request.resume && !(yield* shellContinued(db, request.id)))
+      return { ...request, phase: "continue" } satisfies PendingShell
+  }
+})
+
+export const hasPendingShell = Effect.fn("SessionInput.hasPendingShell")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  return (yield* pendingShell(db, sessionID)) !== undefined
+})
+
+export const pendingShellSessions = Effect.fn("SessionInput.pendingShellSessions")(function* (db: DatabaseService) {
+  const requests = yield* shellRequests(db)
+  const pending = yield* Effect.filter(requests, (request) =>
+    pendingShell(db, request.sessionID).pipe(Effect.map((item) => item !== undefined)),
+  )
+  return [...new Set(pending.map((request) => request.sessionID))]
+})
+
+export const admitShell = Effect.fn("SessionInput.admitShell")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  input: {
+    readonly id: SessionMessage.ID
+    readonly sessionID: SessionSchema.ID
+    readonly command: string
+    readonly resume: boolean
+  },
+) {
+  const existing = yield* findShell(db, input.id)
+  if (existing) return existing
+  const timestamp = yield* DateTime.now
+  return yield* events
+    .publish(
+      SessionEvent.Shell.Requested,
+      { ...input, messageID: input.id, timestamp },
+      { id: shellRequestEventID(input.id) },
+    )
+    .pipe(
+      Effect.flatMap((event) =>
+        event.seq === undefined
+          ? Effect.die("Shell request event is missing aggregate sequence")
+          : Effect.succeed({
+              admittedSeq: event.seq,
+              id: input.id,
+              sessionID: input.sessionID,
+              command: input.command,
+              resume: input.resume,
+            } satisfies ShellRequest),
+      ),
+      Effect.catchDefect((defect) =>
+        findShell(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
+      ),
+    )
+})
+
+export const startShell = Effect.fn("SessionInput.startShell")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  request: ShellRequest,
+) {
+  yield* events
+    .publish(
+      SessionEvent.Shell.Started,
+      {
+        sessionID: request.sessionID,
+        messageID: request.id,
+        timestamp: yield* DateTime.now,
+        callID: request.id,
+        command: request.command,
+      },
+      { id: shellStartedEventID(request.id) },
+    )
+    .pipe(
+      Effect.asVoid,
+      Effect.catchDefect((defect) =>
+        startedShell(db, request.id).pipe(Effect.flatMap((stored) => (stored ? Effect.void : Effect.die(defect)))),
+      ),
+    )
+})
+
+export const endShell = Effect.fn("SessionInput.endShell")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  request: ShellRequest,
+  result: ShellTerminal,
+) {
+  yield* events
+    .publish(
+      SessionEvent.Shell.Ended,
+      {
+        sessionID: request.sessionID,
+        messageID: request.id,
+        timestamp: yield* DateTime.now,
+        callID: request.id,
+        ...result,
+      },
+      { id: shellTerminalEventID(request.id) },
+    )
+    .pipe(
+      Effect.asVoid,
+      Effect.catchDefect((defect) =>
+        terminalShell(db, request.id).pipe(Effect.flatMap((stored) => (stored ? Effect.void : Effect.die(defect)))),
+      ),
+    )
+})
+
+export const continueShell = Effect.fn("SessionInput.continueShell")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  request: ShellRequest,
+) {
+  yield* events
+    .publish(
+      SessionEvent.Shell.Continued,
+      { sessionID: request.sessionID, messageID: request.id, timestamp: yield* DateTime.now },
+      { id: shellContinuedEventID(request.id) },
+    )
+    .pipe(
+      Effect.asVoid,
+      Effect.catchDefect((defect) =>
+        shellContinued(db, request.id).pipe(Effect.flatMap((stored) => (stored ? Effect.void : Effect.die(defect)))),
+      ),
+    )
+})
+
 export type CompactionRequest = {
   readonly admittedSeq: number
   readonly id: SessionMessage.ID
@@ -424,24 +685,58 @@ export const guardReservedID = Effect.fn("SessionInput.guardReservedID")(functio
     Schema.is(SessionEvent.PromptLifecycle.Admitted)(event) ||
     Schema.is(SessionEvent.PromptLifecycle.Promoted)(event)
   ) {
-    const requested = yield* db
-      .select({ id: EventTable.id })
-      .from(EventTable)
-      .where(eq(EventTable.id, compactionRequestEventID(event.data.messageID)))
-      .get()
-      .pipe(Effect.orDie)
-    if (requested) return yield* Effect.die(new LifecycleConflict({ id: event.data.messageID }))
+    const requested = yield* Effect.all([
+      db
+        .select({ id: EventTable.id })
+        .from(EventTable)
+        .where(eq(EventTable.id, compactionRequestEventID(event.data.messageID)))
+        .get()
+        .pipe(Effect.orDie),
+      db
+        .select({ id: EventTable.id })
+        .from(EventTable)
+        .where(eq(EventTable.id, shellRequestEventID(event.data.messageID)))
+        .get()
+        .pipe(Effect.orDie),
+    ])
+    if (requested.some(Boolean)) return yield* Effect.die(new LifecycleConflict({ id: event.data.messageID }))
     return
   }
   const id = reservedID(event)
   if (id === undefined) return
-  const admitted = yield* db
-    .select({ id: SessionInputTable.id })
-    .from(SessionInputTable)
-    .where(eq(SessionInputTable.id, id))
-    .get()
-    .pipe(Effect.orDie)
-  if (admitted === undefined) return
+  const conflicts = yield* Effect.all([
+    db
+      .select({ id: SessionInputTable.id })
+      .from(SessionInputTable)
+      .where(eq(SessionInputTable.id, id))
+      .get()
+      .pipe(Effect.orDie),
+    Schema.is(SessionEvent.Shell.Started)(event)
+      ? Effect.succeed(undefined)
+      : db
+          .select({ id: EventTable.id })
+          .from(EventTable)
+          .where(eq(EventTable.id, shellRequestEventID(id)))
+          .get()
+          .pipe(Effect.orDie),
+    Schema.is(SessionEvent.Compaction.Started)(event)
+      ? Effect.succeed(undefined)
+      : db
+          .select({ id: EventTable.id })
+          .from(EventTable)
+          .where(eq(EventTable.id, compactionRequestEventID(id)))
+          .get()
+          .pipe(Effect.orDie),
+    Schema.is(SessionEvent.Shell.Requested)(event) || Schema.is(SessionEvent.Compaction.Requested)(event)
+      ? db
+          .select({ id: SessionMessageTable.id })
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.id, id))
+          .get()
+          .pipe(Effect.orDie)
+      : Effect.succeed(undefined),
+  ])
+  if (!conflicts.some(Boolean)) return
   return yield* Effect.die(new LifecycleConflict({ id }))
 })
 
@@ -451,6 +746,7 @@ const reservedID = (event: EventV2.Payload) => {
   if (Schema.is(SessionEvent.ModelSwitched)(event)) return event.data.messageID
   if (Schema.is(SessionEvent.Prompted)(event)) return event.data.messageID
   if (Schema.is(SessionEvent.Synthetic)(event)) return event.data.messageID
+  if (Schema.is(SessionEvent.Shell.Requested)(event)) return event.data.messageID
   if (Schema.is(SessionEvent.Shell.Started)(event)) return event.data.messageID
   if (Schema.is(SessionEvent.Compaction.Requested)(event)) return event.data.messageID
   if (Schema.is(SessionEvent.Compaction.Started)(event)) return event.data.messageID
