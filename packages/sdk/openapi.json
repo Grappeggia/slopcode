@@ -10676,6 +10676,88 @@
         ]
       }
     },
+    "/api/session/{sessionID}/runtime": {
+      "get": {
+        "tags": ["sessions"],
+        "operationId": "v2.session.runtime",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SessionRuntimeInfo"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Retrieve native runtime ownership and state for a session.",
+        "summary": "Get session runtime",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.session.runtime({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/api/session/{sessionID}/prompt": {
       "post": {
         "tags": ["sessions"],
@@ -26016,6 +26098,39 @@
           }
         },
         "required": ["id", "projectID", "cost", "tokens", "time", "title", "location"],
+        "additionalProperties": false
+      },
+      "SessionRuntimeInfo": {
+        "type": "object",
+        "properties": {
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "owner": {
+            "type": "string",
+            "enum": ["v1", "v2"]
+          },
+          "epoch": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string",
+            "enum": ["ready", "draining", "migrating", "paused"]
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "updated": {
+                "type": "number"
+              }
+            },
+            "required": ["updated"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["sessionID", "owner", "epoch", "state", "time"],
         "additionalProperties": false
       },
       "SessionInputAdmitted": {

@@ -337,9 +337,7 @@ describe("SessionV2.create", () => {
         ]),
       )
       expect(yield* runtime.get(drainingID)).toMatchObject({ owner: "v2", state: "paused", epoch: 2 })
-      expect(
-        yield* runtime.assert({ sessionID: drainingID, owner: "v2", epoch: 1 }).pipe(Effect.flip),
-      ).toMatchObject({
+      expect(yield* runtime.assert({ sessionID: drainingID, owner: "v2", epoch: 1 }).pipe(Effect.flip)).toMatchObject({
         _tag: "SessionRuntime.Mismatch",
         expectedEpoch: 1,
         actualEpoch: 2,

@@ -59,7 +59,12 @@ const verify = (delivery?: SessionInput.Delivery, interrupted = false) =>
         prompt: new Prompt({ text: "Persisted before restart" }),
         delivery,
       })
-    yield* runtime.assign({ sessionID, state: interrupted ? "paused" : "draining", expectedOwner: "v2", expectedEpoch: 0 })
+    yield* runtime.assign({
+      sessionID,
+      state: interrupted ? "paused" : "draining",
+      expectedOwner: "v2",
+      expectedEpoch: 0,
+    })
 
     const started = yield* Deferred.make<boolean>()
     const release = yield* Deferred.make<void>()

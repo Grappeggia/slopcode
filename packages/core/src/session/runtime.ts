@@ -125,7 +125,10 @@ export const layer = Layer.effect(
           .from(SessionTable)
           .where(and(eq(SessionTable.runtime, "v2"), eq(SessionTable.runtime_state, "paused")))
           .all()
-          .pipe(Effect.orDie, Effect.map((rows) => rows.map(info)))
+          .pipe(
+            Effect.orDie,
+            Effect.map((rows) => rows.map(info)),
+          )
       }),
       assert,
       assign: Effect.fn("SessionRuntime.assign")(function* (input) {

@@ -955,11 +955,7 @@ describe("SessionRunnerLLM", () => {
       const guard = () =>
         runtime
           .assign({ sessionID, state: "ready", expectedOwner: "v2", expectedEpoch: 0 })
-          .pipe(
-            Effect.andThen(runtime.assert({ sessionID, owner: "v2", epoch: 0 })),
-            Effect.asVoid,
-            Effect.orDie,
-          )
+          .pipe(Effect.andThen(runtime.assert({ sessionID, owner: "v2", epoch: 0 })), Effect.asVoid, Effect.orDie)
 
       expect(
         yield* SessionContextEpoch.initialize(
@@ -1011,11 +1007,7 @@ describe("SessionRunnerLLM", () => {
       const guard = () =>
         runtime
           .assign({ sessionID, state: "ready", expectedOwner: "v2", expectedEpoch: 0 })
-          .pipe(
-            Effect.andThen(runtime.assert({ sessionID, owner: "v2", epoch: 0 })),
-            Effect.asVoid,
-            Effect.orDie,
-          )
+          .pipe(Effect.andThen(runtime.assert({ sessionID, owner: "v2", epoch: 0 })), Effect.asVoid, Effect.orDie)
 
       expect(
         yield* SessionContextEpoch.prepare(
