@@ -6,12 +6,14 @@ import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
 import { Tool } from "@slopcode-ai/core/tool/tool"
 import { ToolOutputStore } from "@slopcode-ai/core/tool-output-store"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { testEffect } from "./lib/effect"
 
+const bounded: string[] = []
 const outputStore = Layer.mock(ToolOutputStore.Service, {
   limits: () => Effect.succeed({ maxLines: 2_000, maxBytes: 50 * 1024 }),
-  bound: (input) => Effect.succeed({ output: input.output, outputPaths: [] }),
+  bound: (input) =>
+    Effect.sync(() => bounded.push(input.toolCallID)).pipe(Effect.as({ output: input.output, outputPaths: [] })),
   cleanup: () => Effect.void,
 })
 const it = testEffect(ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), Layer.provide(outputStore)))
@@ -127,6 +129,102 @@ describe("Tool.dynamic", () => {
         }),
       )
       expect(Exit.isFailure(exit) && Cause.pretty(exit.cause)).toContain("dynamic defect")
+    }),
+  )
+
+  it.effect("rejects malformed canonical text and file output before bounding", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const malformed = (content: unknown) =>
+        Tool.dynamic({
+          description: "Malformed canonical output",
+          inputSchema: {},
+          outputSchema: {},
+          decodeInput: Effect.succeed,
+          encodeOutput: Effect.succeed,
+          execute: () => Effect.succeed({ ok: true }),
+          toModelOutput: () => content as ReadonlyArray<Tool.Content>,
+        })
+      const materialized = yield* registry.materialize([], {}, {
+        tools: {
+          canonical: malformed({ type: "text", text: "not an array" }),
+          entry: malformed([null]),
+          text: malformed([{ type: "text", text: 1 }]),
+          file: malformed([{ type: "file", data: 1, mime: undefined }]),
+        },
+      })
+
+      for (const name of ["canonical", "entry", "text", "file"]) {
+        const result = yield* materialized.settle({
+          ...identity,
+          call: { type: "tool-call", id: `call-malformed-${name}`, name, input: {} },
+        })
+        expect(result.result).toMatchObject({
+          type: "error",
+          value: expect.stringContaining("Tool returned an invalid ToolOutput"),
+        })
+        expect(bounded).not.toContain(`call-malformed-${name}`)
+      }
+    }),
+  )
+
+  it.effect("preserves interruption and resists schema mutation from execution", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const started = yield* Deferred.make<void>()
+      const input = { type: "object", properties: { stable: { const: true } } }
+      const output = { type: "object", properties: { stable: { const: true } } }
+      let advertised: object | undefined
+      const interrupt = Tool.dynamic({
+        description: "Interruptible",
+        inputSchema: input,
+        outputSchema: output,
+        decodeInput: Effect.succeed,
+        encodeOutput: Effect.succeed,
+        execute: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      })
+      const mutate = Tool.dynamic({
+        description: "Mutate schemas",
+        inputSchema: input,
+        outputSchema: output,
+        decodeInput: Effect.succeed,
+        encodeOutput: Effect.succeed,
+        execute: () =>
+          Effect.sync(() => {
+            input.properties.stable.const = false
+            output.properties.stable.const = false
+            if (advertised) Reflect.set(advertised, "mutated", true)
+            return { stable: true }
+          }),
+      })
+      const materialized = yield* registry.materialize([], {}, { tools: { interrupt, mutate } })
+      advertised = materialized.definitions.find((item) => item.name === "mutate")!.inputSchema
+
+      const fiber = yield* materialized
+        .settle({
+          ...identity,
+          call: { type: "tool-call", id: "call-interrupt", name: "interrupt", input: {} },
+        })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      yield* Fiber.interrupt(fiber)
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true)
+      expect(bounded).not.toContain("call-interrupt")
+
+      yield* materialized.settle({
+        ...identity,
+        call: { type: "tool-call", id: "call-mutate", name: "mutate", input: {} },
+      })
+      expect(materialized.definitions.find((item) => item.name === "mutate")).toMatchObject({
+        inputSchema: { properties: { stable: { const: true } } },
+        outputSchema: { properties: { stable: { const: true } } },
+      })
+      const later = yield* registry.materialize([], {}, { tools: { mutate } })
+      expect(later.definitions[0]).toMatchObject({
+        inputSchema: { properties: { stable: { const: true } } },
+        outputSchema: { properties: { stable: { const: true } } },
+      })
     }),
   )
 

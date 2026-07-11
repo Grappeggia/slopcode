@@ -206,6 +206,11 @@ const registryLayer = Layer.effect(
         for (const name of direct)
           if (!registrations.has(name))
             return yield* Effect.fail(new RegistrationError({ name, message: `Unknown direct tool name: ${name}` }))
+        const mode = captured.mode ?? "function"
+        if (mode !== "function" && (names.has("exec") || direct.has("exec")))
+          return yield* Effect.fail(
+            new RegistrationError({ name: "exec", message: `Tool name is reserved in ${mode} mode: exec` }),
+          )
         for (const [name, entry] of registrations)
           if (whollyDisabled(permission(entry.registration.tool, name), rules)) registrations.delete(name)
         const definitions = Object.freeze(
@@ -222,7 +227,6 @@ const registryLayer = Layer.effect(
           }
           return Effect.succeed({ result: { type: "error" as const, value: `Unknown tool: ${input.call.name}` } })
         }
-        const mode = captured.mode ?? "function"
         if (mode === "function") return { definitions, permissions: rules, settle: settleMaterialized }
 
         const catalog = Object.freeze(

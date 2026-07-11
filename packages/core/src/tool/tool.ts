@@ -49,6 +49,18 @@ export type Content =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "file"; readonly data: string; readonly mime: string; readonly name?: string }
 
+const DynamicContent = Schema.Array(
+  Schema.Union([
+    Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+    Schema.Struct({
+      type: Schema.Literal("file"),
+      data: Schema.String,
+      mime: Schema.String,
+      name: Schema.optional(Schema.String),
+    }),
+  ]),
+) as Schema.Codec<ReadonlyArray<Content>, ReadonlyArray<Content>, never, never>
+
 type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
   readonly description: string | ((permissions: PermissionV2.Ruleset) => string)
   readonly input: Input
@@ -177,20 +189,28 @@ export function dynamic<Input, Output, Encoded>(
         Effect.flatMap((input) =>
           execute(input, context).pipe(
             Effect.flatMap(encode),
-            Effect.map((output) => ({
-              structured: output,
-              content:
-                project?.({ input, output }).map((part) =>
-                  part.type === "text"
-                    ? { type: "text" as const, text: part.text }
-                    : {
-                        type: "file" as const,
-                        uri: `data:${part.mime};base64,${part.data}`,
-                        mime: part.mime,
-                        name: part.name,
-                      },
-                ) ?? (typeof output === "string" ? [{ type: "text" as const, text: output }] : []),
-            })),
+            Effect.flatMap((output) => {
+              const content: Effect.Effect<ToolOutput["content"], ToolFailure> = project
+                ? Schema.decodeUnknownEffect(DynamicContent)(project({ input, output })).pipe(
+                    Effect.mapError(
+                      (error) => new ToolFailure({ message: `Tool returned an invalid ToolOutput: ${error.message}` }),
+                    ),
+                    Effect.map((content) =>
+                      content.map((part) =>
+                        part.type === "text"
+                          ? { type: "text" as const, text: part.text }
+                          : {
+                              type: "file" as const,
+                              uri: `data:${part.mime};base64,${part.data}`,
+                              mime: part.mime,
+                              name: part.name,
+                            },
+                      ),
+                    ),
+                  )
+                : Effect.succeed(typeof output === "string" ? [{ type: "text" as const, text: output }] : [])
+              return Effect.map(content, (content) => ({ structured: output, content }))
+            }),
             Effect.flatMap(Schema.decodeUnknownEffect(ToolOutput)),
             Effect.mapError(
               (error) =>
