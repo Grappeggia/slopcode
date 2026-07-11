@@ -238,6 +238,21 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
+  it.effect("guards interruption before execution when the projected Session is missing", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const missing = SessionV2.ID.make("ses_missing_guarded")
+      interruptCalls.length = 0
+      interruptSeqs.length = 0
+
+      expect(yield* session.interrupt(missing, Effect.fail("runtime changed")).pipe(Effect.flip)).toBe(
+        "runtime changed",
+      )
+      expect(interruptCalls).toEqual([])
+      expect(interruptSeqs).toEqual([])
+    }),
+  )
+
   it.effect("durably admits one user message before transcript promotion", () =>
     Effect.gen(function* () {
       yield* setup

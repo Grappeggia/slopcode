@@ -690,7 +690,10 @@ export const layer = Layer.effect(
         Effect.uninterruptible(
           Effect.gen(function* () {
             const session = yield* store.get(sessionID)
-            if (!session) return yield* execution.interrupt(sessionID)
+            if (!session) {
+              yield* guard
+              return yield* execution.interrupt(sessionID)
+            }
             const timestamp = yield* DateTime.now
             const event = yield* guardedCommit(
               (commit) =>

@@ -272,7 +272,19 @@ const app = LayerNode.group([
 export function createRoutes(
   corsOptions?: CorsOptions,
   host?: Layer.Layer<PluginPackage.Host>,
+  observe?: (locations: Context.Service.Shape<typeof LocationServiceMap>) => void,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
+  const locations = host ? withPluginHost(host) : LocationServiceMap.layer
+  const locationLayer = observe
+    ? Layer.effect(
+        LocationServiceMap,
+        Effect.gen(function* () {
+          const service = yield* LocationServiceMap
+          yield* Effect.sync(() => observe(service))
+          return service
+        }),
+      ).pipe(Layer.provide(locations))
+    : locations
   return Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,
@@ -293,7 +305,7 @@ export function createRoutes(
       HttpServer.layerServices,
     ]),
     Layer.provide(LayerNode.buildLayer(app)),
-    Layer.provide(host ? withPluginHost(host) : LocationServiceMap.layer),
+    Layer.provide(locationLayer),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provide(Observability.layer),
   )
@@ -301,10 +313,16 @@ export function createRoutes(
 
 export const routes = createRoutes()
 
-export function makeWebHandler(host?: Layer.Layer<PluginPackage.Host>) {
-  return HttpRouter.toWebHandler(createRoutes(undefined, host), {
+export function makeWebHandler(
+  host?: Layer.Layer<PluginPackage.Host>,
+  options?: {
+    readonly memoMap?: Layer.MemoMap
+    readonly observe?: (locations: Context.Service.Shape<typeof LocationServiceMap>) => void
+  },
+) {
+  return HttpRouter.toWebHandler(createRoutes(undefined, host, options?.observe), {
     disableLogger: true,
-    memoMap,
+    memoMap: options?.memoMap ?? memoMap,
     middleware: disposeMiddleware,
   })
 }

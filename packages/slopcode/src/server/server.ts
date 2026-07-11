@@ -12,7 +12,10 @@ import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
 import { PublicApi } from "./routes/instance/httpapi/public"
 import { ServerAuth } from "./auth"
 import { PluginServer } from "@slopcode-ai/server/plugin"
+import { Location } from "@slopcode-ai/core/location"
+import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { ProjectV2 } from "@slopcode-ai/core/project"
+import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { registerAdapter } from "@/control-plane/adapters"
 import type { WorkspaceAdapter } from "@/control-plane/types"
 import type { CorsOptions } from "./cors"
@@ -59,6 +62,7 @@ class ListenerServerService extends Context.Service<ListenerServerService, Liste
 
 export const Default = lazy(() => {
   let handler: ReturnType<typeof HttpApiApp.makeWebHandler>["handler"] | undefined
+  let locations: Context.Service.Shape<typeof LocationServiceMap> | undefined
   const plugins = pluginHost(
     () => url ?? new URL("http://localhost:4096"),
     (request, init) => {
@@ -66,7 +70,10 @@ export const Default = lazy(() => {
       return handler(authenticated(request, init), HttpApiApp.context)
     },
   )
-  const web = HttpApiApp.makeWebHandler(plugins.layer)
+  const web = HttpApiApp.makeWebHandler(plugins.layer, {
+    memoMap: Layer.makeMemoMapUnsafe(),
+    observe: (service) => (locations = service),
+  })
   handler = web.handler
   const app: ServerApp = {
     fetch: (request: Request) => web.handler(request, HttpApiApp.context),
@@ -74,7 +81,14 @@ export const Default = lazy(() => {
       return app.fetch(input instanceof Request ? input : new Request(new URL(input, "http://localhost"), init))
     },
   }
-  return { app, dispose: web.dispose }
+  return {
+    app,
+    dispose: web.dispose,
+    invalidate: (directory: string) =>
+      locations
+        ? Effect.runPromise(locations.invalidate(Location.Ref.make({ directory: AbsolutePath.make(directory) })))
+        : Promise.resolve(),
+  }
 })
 
 export async function openapi() {
