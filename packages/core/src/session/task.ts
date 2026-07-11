@@ -72,6 +72,42 @@ export const interrupted = Effect.fn("SessionTask.interrupted")(function* (
   return row?.type === interruptedType
 })
 
+export const cancelled = Effect.fn("SessionTask.cancelled")(function* (
+  db: DatabaseService,
+  parentID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+  callID: string,
+) {
+  if (yield* interrupted(db, parentID, messageID, callID)) return true
+  const requested = yield* db
+    .select({ seq: EventTable.seq })
+    .from(EventTable)
+    .where(
+      and(
+        eq(EventTable.aggregate_id, parentID),
+        eq(EventTable.type, requestedType),
+        eq(EventTable.id, requestEventID(parentID, messageID, callID)),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  if (!requested) return false
+  return (
+    (yield* db
+      .select({ id: EventTable.id })
+      .from(EventTable)
+      .where(
+        and(
+          eq(EventTable.aggregate_id, parentID),
+          gt(EventTable.seq, requested.seq),
+          eq(EventTable.type, interruptRequestedType),
+        ),
+      )
+      .get()
+      .pipe(Effect.orDie)) !== undefined
+  )
+})
+
 export const requestedSessions = Effect.fn("SessionTask.requestedSessions")(function* (db: DatabaseService) {
   const rows = yield* db
     .select({ aggregateID: EventTable.aggregate_id })

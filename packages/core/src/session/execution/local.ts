@@ -50,9 +50,16 @@ export const layer = Layer.effect(
     })
     yield* events.listen((event) => {
       if (Schema.is(SessionEvent.Task.Execute)(event))
-        return coordinator
-          .wake(event.data.childSessionID)
-          .pipe(Effect.andThen(coordinator.awaitIdle(event.data.childSessionID)), Effect.orDie)
+        return SessionTask.orphaned(db, event.data.childSessionID).pipe(
+          Effect.flatMap((orphaned) =>
+            orphaned
+              ? Effect.void
+              : coordinator
+                  .wake(event.data.childSessionID)
+                  .pipe(Effect.andThen(coordinator.awaitIdle(event.data.childSessionID))),
+          ),
+          Effect.orDie,
+        )
       if (Schema.is(SessionEvent.Task.Interrupt)(event))
         return coordinator.interrupt(event.data.childSessionID).pipe(
           Effect.andThen(coordinator.awaitIdle(event.data.childSessionID)),
