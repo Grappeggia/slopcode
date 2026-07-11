@@ -3808,6 +3808,16 @@ export type SessionV2Info = {
   subpath?: string
 }
 
+export type SessionRuntimeInfo = {
+  sessionID: string
+  owner: "v1" | "v2"
+  epoch: number
+  state: "ready" | "draining" | "migrating" | "paused"
+  time: {
+    updated: number
+  }
+}
+
 export type SessionInputAdmitted = {
   admittedSeq: number
   id: string
@@ -9784,6 +9794,43 @@ export type V2SessionGetResponses = {
 }
 
 export type V2SessionGetResponse = V2SessionGetResponses[keyof V2SessionGetResponses]
+
+export type V2SessionRuntimeData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/runtime"
+}
+
+export type V2SessionRuntimeErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionRuntimeError = V2SessionRuntimeErrors[keyof V2SessionRuntimeErrors]
+
+export type V2SessionRuntimeResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionRuntimeInfo
+  }
+}
+
+export type V2SessionRuntimeResponse = V2SessionRuntimeResponses[keyof V2SessionRuntimeResponses]
 
 export type V2SessionPromptData = {
   body: {

@@ -1,6 +1,6 @@
 export * as SessionRuntime from "./runtime"
 
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { LayerNode } from "../effect/layer-node"
@@ -41,6 +41,7 @@ export type Error = NotFound | Mismatch
 
 export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<Info | undefined>
+  readonly recover: () => Effect.Effect<ReadonlyArray<Info>>
   readonly assert: (input: {
     readonly sessionID: SessionSchema.ID
     readonly owner: Owner
@@ -107,6 +108,25 @@ export const layer = Layer.effect(
 
     return Service.of({
       get,
+      recover: Effect.fn("SessionRuntime.recover")(function* () {
+        const updated = DateTime.toEpochMillis(yield* DateTime.now)
+        yield* db
+          .update(SessionTable)
+          .set({
+            runtime_state: "paused",
+            runtime_epoch: sql`${SessionTable.runtime_epoch} + 1`,
+            time_updated: updated,
+          })
+          .where(and(eq(SessionTable.runtime, "v2"), inArray(SessionTable.runtime_state, ["draining", "migrating"])))
+          .run()
+          .pipe(Effect.orDie)
+        return yield* db
+          .select()
+          .from(SessionTable)
+          .where(and(eq(SessionTable.runtime, "v2"), eq(SessionTable.runtime_state, "paused")))
+          .all()
+          .pipe(Effect.orDie, Effect.map((rows) => rows.map(info)))
+      }),
       assert,
       assign: Effect.fn("SessionRuntime.assign")(function* (input) {
         const updated = DateTime.toEpochMillis(yield* DateTime.now)

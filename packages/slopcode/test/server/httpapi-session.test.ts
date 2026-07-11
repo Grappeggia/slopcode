@@ -582,6 +582,79 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "creates native v2 sessions with v2 runtime ownership",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const id = SessionID.descending()
+        const response = yield* request("/api/session", {
+          method: "POST",
+          headers: { "x-slopcode-directory": test.directory, "content-type": "application/json" },
+          body: JSON.stringify({ id }),
+        })
+
+        expect(response.status).toBe(200)
+        expect(yield* responseJson(response)).toMatchObject({ data: { id } })
+        const row = yield* Database.Service.use(({ db }) =>
+          db
+            .select({
+              runtime: SessionTable.runtime,
+              epoch: SessionTable.runtime_epoch,
+              state: SessionTable.runtime_state,
+            })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, id))
+            .get()
+            .pipe(Effect.orDie),
+        )
+        expect(row).toEqual({ runtime: "v2", epoch: 0, state: "ready" })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "reports legacy and native session runtime diagnostics",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-slopcode-directory": test.directory }
+        const legacy = yield* createSession({ title: "legacy runtime" })
+        const nativeID = SessionID.descending()
+        const created = yield* request("/api/session", {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ id: nativeID }),
+        })
+        expect(created.status).toBe(200)
+
+        const legacyRuntime = yield* request(`/api/session/${legacy.id}/runtime`, { headers })
+        expect(legacyRuntime.status).toBe(200)
+        expect(yield* responseJson(legacyRuntime)).toMatchObject({
+          data: { sessionID: legacy.id, owner: "v1", state: "ready", epoch: 0 },
+        })
+
+        const nativeRuntime = yield* request(`/api/session/${nativeID}/runtime`, { headers })
+        expect(nativeRuntime.status).toBe(200)
+        expect(yield* responseJson(nativeRuntime)).toMatchObject({
+          data: { sessionID: nativeID, owner: "v2", state: "ready", epoch: 0 },
+        })
+
+        const prompt = yield* request(`/api/session/${legacy.id}/prompt`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ prompt: { text: "hello" } }),
+        })
+        expect(prompt.status).toBe(503)
+        expect(yield* responseJson(prompt)).toEqual({
+          _tag: "ServiceUnavailableError",
+          message: `Session ${legacy.id} is owned by legacy V1 and must be migrated or assigned to V2 before native control`,
+          service: "session.runtime",
+        })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "durably records one v2 prompt for exact message-ID retries",
     () =>
       Effect.gen(function* () {

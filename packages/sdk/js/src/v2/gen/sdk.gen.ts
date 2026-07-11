@@ -349,6 +349,8 @@ import type {
   V2SessionQuestionRejectResponses,
   V2SessionQuestionReplyErrors,
   V2SessionQuestionReplyResponses,
+  V2SessionRuntimeErrors,
+  V2SessionRuntimeResponses,
   V2SessionWaitErrors,
   V2SessionWaitResponses,
   V2SkillListErrors,
@@ -5481,6 +5483,25 @@ export class Session3 extends HeyApiClient {
     const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
     return (options?.client ?? this.client).get<V2SessionGetResponses, V2SessionGetErrors, ThrowOnError>({
       url: "/api/session/{sessionID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get session runtime
+   *
+   * Retrieve native runtime ownership and state for a session.
+   */
+  public runtime<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<V2SessionRuntimeResponses, V2SessionRuntimeErrors, ThrowOnError>({
+      url: "/api/session/{sessionID}/runtime",
       ...options,
       ...params,
     })

@@ -29,6 +29,7 @@ import { logFailure } from "./session/logging"
 import { MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { SessionRuntime } from "./session/runtime"
 
 // get project -> project.locations
 //
@@ -75,6 +76,7 @@ type CreateInput = {
   agent?: AgentV2.ID
   model?: ModelV2.Ref
   location: Location.Ref
+  runtime?: SessionRuntime.Owner
 }
 
 type CompactInput = {
@@ -230,8 +232,25 @@ export const layer = Layer.effect(
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           time: { created: now, updated: now },
         })
+        const runtime = input.runtime
         const projected = yield* events
-          .publish(SessionV1.Event.Created, { sessionID, info }, { location: input.location })
+          .publish(
+            SessionV1.Event.Created,
+            { sessionID, info },
+            {
+              location: input.location,
+              commit:
+                runtime === undefined
+                  ? undefined
+                  : () =>
+                      db
+                        .update(SessionTable)
+                        .set({ runtime, runtime_epoch: 0, runtime_state: "ready" })
+                        .where(eq(SessionTable.id, sessionID))
+                        .run()
+                        .pipe(Effect.orDie),
+            },
+          )
           .pipe(
             Effect.as({ type: "created" } as const),
             Effect.catchDefect((defect) => {

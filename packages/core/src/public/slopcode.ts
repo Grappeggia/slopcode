@@ -166,6 +166,7 @@ export const layer = Layer.effect(
             agent: input.agent,
             model: input.model,
             location: input.location,
+            runtime: "v2",
           }),
         get: sessions.get,
         list: sessions.list,

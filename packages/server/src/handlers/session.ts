@@ -1,5 +1,6 @@
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionControl } from "@slopcode-ai/core/session/control"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { DateTime, Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -19,10 +20,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
     const control = yield* SessionControl.Service
+    const runtime = yield* SessionRuntime.Service
 
-    const runtimeUnavailable = (error: { readonly sessionID: string; readonly actualOwner?: string }) =>
+    const runtimeUnavailable = (error: { readonly sessionID: string; readonly actualOwner: "v1" | "v2" }) =>
       new ServiceUnavailableError({
-        message: `Session runtime is not available for V2 control: ${error.sessionID}`,
+        message:
+          error.actualOwner === "v1"
+            ? `Session ${error.sessionID} is owned by legacy V1 and must be migrated or assigned to V2 before native control`
+            : `Session runtime changed for ${error.sessionID}; retry the request`,
         service: "session.runtime",
       })
 
@@ -79,6 +84,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               agent: ctx.payload.agent,
               model: ctx.payload.model,
               location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+              runtime: "v2",
             }),
           }
         }),
@@ -98,6 +104,18 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               ),
             ),
           }
+        }),
+      )
+      .handle(
+        "session.runtime",
+        Effect.fn(function* (ctx) {
+          const info = yield* runtime.get(ctx.params.sessionID)
+          if (!info)
+            return yield* new SessionNotFoundError({
+              sessionID: ctx.params.sessionID,
+              message: `Session not found: ${ctx.params.sessionID}`,
+            })
+          return { data: info }
         }),
       )
       .handle(

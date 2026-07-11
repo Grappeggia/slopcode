@@ -4,6 +4,10 @@ import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { useSync } from "../context/sync"
 import { For, Match, Switch, Show, createMemo } from "solid-js"
+import { createResource } from "solid-js"
+import { useRoute } from "../context/route"
+import { useSDK } from "../context/sdk"
+import { runtimeHint, runtimeOwner } from "../util/session-runtime"
 
 export type DialogStatusProps = {}
 
@@ -11,6 +15,13 @@ export function DialogStatus() {
   const sync = useSync()
   const { theme } = useTheme()
   const dialog = useDialog()
+  const route = useRoute()
+  const sdk = useSDK()
+  const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+  const [runtime] = createResource(
+    () => sessionID,
+    async (sessionID) => (await sdk.client.v2.session.runtime({ sessionID }, { throwOnError: true })).data.data,
+  )
 
   const enabledFormatters = createMemo(() => sync.data.formatter.filter((f) => f.enabled))
 
@@ -50,6 +61,26 @@ export function DialogStatus() {
           esc
         </text>
       </box>
+      <Show when={runtime()}>
+        {(info) => (
+          <box>
+            <text fg={theme.text}>Session Runtime</text>
+            <text fg={theme.text} wrapMode="word">
+              <b>{runtimeOwner(info().owner)}</b>{" "}
+              <span style={{ fg: theme.textMuted }}>
+                {info().state} · epoch {info().epoch}
+              </span>
+            </text>
+            <Show when={runtimeHint(info().state)}>
+              {(hint) => (
+                <text fg={theme.textMuted} wrapMode="word">
+                  {hint()}
+                </text>
+              )}
+            </Show>
+          </box>
+        )}
+      </Show>
       <Show when={Object.keys(sync.data.mcp).length > 0} fallback={<text fg={theme.text}>No MCP Servers</text>}>
         <box>
           <text fg={theme.text}>{Object.keys(sync.data.mcp).length} MCP Servers</text>

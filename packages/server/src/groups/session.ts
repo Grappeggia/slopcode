@@ -19,6 +19,7 @@ import { SessionLocationMiddleware } from "../middleware/session-location"
 import { AgentV2 } from "@slopcode-ai/core/agent"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { Location } from "@slopcode-ai/core/location"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 
 const SessionsQueryFields = {
   workspace: WorkspaceV2.ID.pipe(Schema.optional),
@@ -137,6 +138,21 @@ export const SessionGroup = HttpApiGroup.make("server.session")
           identifier: "v2.session.get",
           summary: "Get session",
           description: "Retrieve a session by ID.",
+        }),
+      ),
+  )
+  .add(
+    HttpApiEndpoint.get("session.runtime", "/api/session/:sessionID/runtime", {
+      params: { sessionID: SessionV2.ID },
+      success: Schema.Struct({ data: SessionRuntime.Info }),
+      error: SessionNotFoundError,
+    })
+      .middleware(SessionLocationMiddleware)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.runtime",
+          summary: "Get session runtime",
+          description: "Retrieve native runtime ownership and state for a session.",
         }),
       ),
   )

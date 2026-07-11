@@ -196,6 +196,7 @@ describe("PublicApi OpenAPI v2 errors", () => {
       ["post", "/api/session/{sessionID}/prompt"],
       ["post", "/api/session/{sessionID}/compact"],
       ["post", "/api/session/{sessionID}/wait"],
+      ["get", "/api/session/{sessionID}/runtime"],
       ["get", "/api/session/{sessionID}/context"],
       ["get", "/api/session/{sessionID}/message"],
     ] as const) {

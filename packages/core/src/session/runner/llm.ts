@@ -104,7 +104,20 @@ export const layer = Layer.effect(
     const referenceGuidance = yield* ReferenceGuidance.Service
     const config = yield* Config.Service
     const db = (yield* Database.Service).db
-    const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
+    const documents = yield* config.entries()
+    const fencedEvents = (sessionID: SessionSchema.ID, epoch: number): EventV2.Interface => ({
+      ...events,
+      publish: (definition, data, options) =>
+        definition.sync === undefined
+          ? events.publish(definition, data, options)
+          : events.publish(definition, data, {
+              ...options,
+              commit: (seq) =>
+                runtime
+                  .assert({ sessionID, owner: "v2", epoch })
+                  .pipe(Effect.andThen(options?.commit?.(seq) ?? Effect.void), Effect.orDie),
+            }),
+    })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
@@ -115,6 +128,7 @@ export const layer = Layer.effect(
       return yield* store.context(sessionID)
     })
     const failInterruptedTools = Effect.fn("SessionRunner.failInterruptedTools")(function* (
+      events: EventV2.Interface,
       sessionID: SessionSchema.ID,
     ) {
       for (const message of yield* getContext(sessionID)) {
@@ -181,8 +195,11 @@ export const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       runtimeEpoch: number,
-      recoverOverflow?: typeof compaction.compactAfterOverflow,
+      recoverOverflow = false,
     ) {
+      const events = fencedEvents(sessionID, runtimeEpoch)
+      const compaction = SessionCompaction.make({ events, llm, config: documents })
+      const guard = () => assertRuntime(sessionID, runtimeEpoch).pipe(Effect.orDie)
       yield* assertRuntime(sessionID, runtimeEpoch)
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
@@ -195,6 +212,7 @@ export const layer = Layer.effect(
         session.id,
         session.location,
         agent.id,
+        guard,
       ).pipe(retryAgentMismatch(promotion))
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error | SessionRuntime.Error>()
       let needsContinuation = false
@@ -215,6 +233,7 @@ export const layer = Layer.effect(
           session.id,
           session.location,
           agent.id,
+          guard,
         ).pipe(retryAgentMismatch(undefined)))
       const current = yield* getSession(sessionID)
       if ((yield* agents.select(current.agent)).id !== agent.id || !sameModel(current.model, session.model))
@@ -303,7 +322,7 @@ export const layer = Layer.effect(
             recoverOverflow &&
             !publisher.hasAssistantStarted() &&
             isContextOverflowFailure(overflowFailure ?? failure) &&
-            (yield* restore(recoverOverflow({ sessionID: session.id, entries, model, request })))
+            (yield* restore(compaction.compactAfterOverflow({ sessionID: session.id, entries, model, request })))
           )
             return yield* Effect.die(continueAfterOverflowCompaction)
           if (overflowFailure) yield* publish(overflowFailure)
@@ -368,7 +387,7 @@ export const layer = Layer.effect(
       )
 
     const runTurn: RunTurn = (sessionID, promotion, runtimeEpoch) =>
-      runTurnAttempt(sessionID, promotion, runtimeEpoch, compaction.compactAfterOverflow).pipe(
+      runTurnAttempt(sessionID, promotion, runtimeEpoch, true).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
@@ -388,24 +407,43 @@ export const layer = Layer.effect(
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
       if (input.force !== true && !hasSteer && !hasQueue) return
-      yield* failInterruptedTools(input.sessionID)
-      let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
-      let openActivity = input.force === true || hasSteer || hasQueue
-      while (openActivity) {
-        yield* assertRuntime(input.sessionID, owner.epoch)
-        let needsContinuation = true
-        for (let step = 0; step < MAX_STEPS; step++) {
-          needsContinuation = yield* runTurn(input.sessionID, promotion, owner.epoch)
-          promotion = "steer"
-          yield* assertRuntime(input.sessionID, owner.epoch)
-          if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
-          if (!needsContinuation) break
+      const active = yield* runtime.assign({
+        sessionID: input.sessionID,
+        state: "draining",
+        expectedOwner: "v2",
+        expectedEpoch: owner.epoch,
+      })
+      yield* Effect.gen(function* () {
+        yield* failInterruptedTools(fencedEvents(input.sessionID, active.epoch), input.sessionID)
+        let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
+        let openActivity = input.force === true || hasSteer || hasQueue
+        while (openActivity) {
+          yield* assertRuntime(input.sessionID, active.epoch)
+          let needsContinuation = true
+          for (let step = 0; step < MAX_STEPS; step++) {
+            needsContinuation = yield* runTurn(input.sessionID, promotion, active.epoch)
+            promotion = "steer"
+            yield* assertRuntime(input.sessionID, active.epoch)
+            if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+            if (!needsContinuation) break
+          }
+          if (needsContinuation)
+            return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: MAX_STEPS })
+          openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
+          promotion = openActivity ? "queue" : undefined
         }
-        if (needsContinuation)
-          return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: MAX_STEPS })
-        openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
-        promotion = openActivity ? "queue" : undefined
-      }
+      }).pipe(
+        Effect.ensuring(
+          runtime
+            .assign({
+              sessionID: input.sessionID,
+              state: "ready",
+              expectedOwner: "v2",
+              expectedEpoch: active.epoch,
+            })
+            .pipe(Effect.catch(() => Effect.void)),
+        ),
+      )
     })
 
     return Service.of({

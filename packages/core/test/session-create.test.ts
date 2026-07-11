@@ -215,6 +215,65 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("creates explicitly V2-owned sessions at epoch zero", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ id, location, runtime: "v2" })
+
+      expect(yield* runtime.get(created.id)).toMatchObject({
+        sessionID: created.id,
+        owner: "v2",
+        epoch: 0,
+        state: "ready",
+      })
+      const event = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, created.id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(event?.data).not.toHaveProperty("runtime")
+      expect(event?.data).not.toHaveProperty("owner")
+    }),
+  )
+
+  it.effect("keeps exact V2 creation retries idempotent", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const { db } = yield* Database.Service
+      const input = { id, location, runtime: "v2" as const }
+
+      const created = yield* session.create(input)
+      const retried = yield* session.create(input)
+
+      expect(retried).toEqual(created)
+      expect(yield* runtime.get(id)).toMatchObject({ owner: "v2", epoch: 0, state: "ready" })
+      expect(
+        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, id)).all().pipe(Effect.orDie),
+      ).toHaveLength(1)
+    }),
+  )
+
+  it.effect("does not take ownership from an existing V1 session", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ id, location })
+
+      const collided = yield* session.create({ id, location, runtime: "v2" })
+
+      expect(collided).toEqual(created)
+      expect(yield* runtime.get(id)).toMatchObject({ owner: "v1", epoch: 0, state: "ready" })
+      expect(
+        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, id)).all().pipe(Effect.orDie),
+      ).toHaveLength(1)
+    }),
+  )
+
   it.effect("assigns runtime ownership with epoch fencing", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -251,6 +310,62 @@ describe("SessionV2.create", () => {
         epoch: 1,
         state: "migrating",
       })
+    }),
+  )
+
+  it.effect("recovers active V2 runtimes once and fences their stale epochs", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const drainingID = SessionV2.ID.make("ses_recover_draining")
+      const migratingID = SessionV2.ID.make("ses_recover_migrating")
+      yield* session.create({ id: drainingID, location, runtime: "v2" })
+      yield* session.create({ id: migratingID, location, runtime: "v2" })
+      yield* runtime.assign({ sessionID: drainingID, state: "draining", expectedOwner: "v2", expectedEpoch: 0 })
+      yield* runtime.assign({ sessionID: migratingID, state: "migrating", expectedOwner: "v2", expectedEpoch: 0 })
+
+      expect(yield* runtime.recover()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ sessionID: drainingID, owner: "v2", state: "paused", epoch: 2 }),
+          expect.objectContaining({ sessionID: migratingID, owner: "v2", state: "paused", epoch: 2 }),
+        ]),
+      )
+      expect(yield* runtime.recover()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ sessionID: drainingID, owner: "v2", state: "paused", epoch: 2 }),
+          expect.objectContaining({ sessionID: migratingID, owner: "v2", state: "paused", epoch: 2 }),
+        ]),
+      )
+      expect(yield* runtime.get(drainingID)).toMatchObject({ owner: "v2", state: "paused", epoch: 2 })
+      expect(
+        yield* runtime.assert({ sessionID: drainingID, owner: "v2", epoch: 1 }).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "SessionRuntime.Mismatch",
+        expectedEpoch: 1,
+        actualEpoch: 2,
+      })
+    }),
+  )
+
+  it.effect("leaves V1 and inactive V2 runtimes untouched during recovery", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const v1ID = SessionV2.ID.make("ses_recover_v1")
+      const readyID = SessionV2.ID.make("ses_recover_ready")
+      const pausedID = SessionV2.ID.make("ses_recover_paused")
+      yield* session.create({ id: v1ID, location })
+      yield* session.create({ id: readyID, location, runtime: "v2" })
+      yield* session.create({ id: pausedID, location, runtime: "v2" })
+      yield* runtime.assign({ sessionID: v1ID, state: "draining", expectedOwner: "v1", expectedEpoch: 0 })
+      yield* runtime.assign({ sessionID: pausedID, state: "paused", expectedOwner: "v2", expectedEpoch: 0 })
+
+      expect(yield* runtime.recover()).toEqual([
+        expect.objectContaining({ sessionID: pausedID, owner: "v2", state: "paused", epoch: 1 }),
+      ])
+      expect(yield* runtime.get(v1ID)).toMatchObject({ owner: "v1", state: "draining", epoch: 1 })
+      expect(yield* runtime.get(readyID)).toMatchObject({ owner: "v2", state: "ready", epoch: 0 })
+      expect(yield* runtime.get(pausedID)).toMatchObject({ owner: "v2", state: "paused", epoch: 1 })
     }),
   )
 

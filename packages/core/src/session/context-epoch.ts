@@ -15,6 +15,7 @@ import { SessionSchema } from "./schema"
 import { SessionContextEpochTable, SessionTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
+type Guard = () => Effect.Effect<void>
 
 class RevisionMismatch extends Error {}
 class LocationMismatch extends Error {}
@@ -45,8 +46,9 @@ export function initialize(
   sessionID: SessionSchema.ID,
   location: Location.Ref,
   agent: AgentV2.ID,
+  guard?: Guard,
 ): Effect.Effect<Prepared | undefined, SystemContext.InitializationBlocked> {
-  return retryRevisionMismatch(() => initializeOnce(db, context, sessionID, location, agent)).pipe(
+  return retryRevisionMismatch(() => initializeOnce(db, context, sessionID, location, agent, guard)).pipe(
     Effect.withSpan("SessionContextEpoch.initialize"),
   )
 }
@@ -58,8 +60,9 @@ export function prepare(
   sessionID: SessionSchema.ID,
   location: Location.Ref,
   agent: AgentV2.ID,
+  guard?: Guard,
 ): Effect.Effect<Prepared, SystemContext.InitializationBlocked | ContextSnapshotDecodeError | AgentReplacementBlocked> {
-  return retryRevisionMismatch(() => prepareOnce(db, events, context, sessionID, location, agent)).pipe(
+  return retryRevisionMismatch(() => prepareOnce(db, events, context, sessionID, location, agent, guard)).pipe(
     Effect.withSpan("SessionContextEpoch.prepare"),
   )
 }
@@ -71,11 +74,12 @@ const prepareOnce = Effect.fnUntraced(function* (
   sessionID: SessionSchema.ID,
   location: Location.Ref,
   agent: AgentV2.ID,
+  guard?: Guard,
 ) {
   const [value, stored] = yield* Effect.all([context, find(db, sessionID)], { concurrency: "unbounded" })
   if (!stored) {
     const generation = yield* SystemContext.initialize(value)
-    const baselineSeq = yield* insert(db, sessionID, location, agent, generation)
+    const baselineSeq = yield* insert(db, sessionID, location, agent, generation, guard)
     return { baseline: generation.baseline, baselineSeq, revision: 0 }
   }
 
@@ -97,7 +101,7 @@ const prepareOnce = Effect.fnUntraced(function* (
   }
   if (result._tag === "ReplacementReady") {
     const replacementSeq = stored.replacement_seq ?? (yield* SessionInput.latestSeq(db, sessionID))
-    yield* replace(db, sessionID, agent, stored.revision, replacementSeq, result.generation)
+    yield* replace(db, sessionID, agent, stored.revision, replacementSeq, result.generation, guard)
     return { baseline: result.generation.baseline, baselineSeq: replacementSeq, revision: stored.revision + 1 }
   }
 
@@ -115,10 +119,11 @@ const initializeOnce = Effect.fnUntraced(function* (
   sessionID: SessionSchema.ID,
   location: Location.Ref,
   agent: AgentV2.ID,
+  guard?: Guard,
 ) {
   if (yield* exists(db, sessionID)) return
   const generation = yield* context.pipe(Effect.flatMap(SystemContext.initialize))
-  const baselineSeq = yield* insert(db, sessionID, location, agent, generation)
+  const baselineSeq = yield* insert(db, sessionID, location, agent, generation, guard)
   return { baseline: generation.baseline, baselineSeq, revision: 0 }
 })
 
@@ -192,6 +197,7 @@ const insert = Effect.fnUntraced(function* (
   location: Location.Ref,
   agent: AgentV2.ID,
   generation: SystemContext.Generation,
+  guard?: Guard,
 ) {
   return yield* db
     .transaction(
@@ -214,6 +220,7 @@ const insert = Effect.fnUntraced(function* (
           if (!placed) return yield* Effect.die(new LocationMismatch())
           if (placed.agent !== null && placed.agent !== agent) return yield* Effect.die(new AgentMismatch())
           const baselineSeq = yield* SessionInput.latestSeq(db, sessionID)
+          if (guard) yield* guard()
           yield* db
             .insert(SessionContextEpochTable)
             .values({
@@ -245,12 +252,14 @@ const replace = Effect.fnUntraced(function* (
   expectedRevision: number,
   baselineSeq: number,
   generation: SystemContext.Generation,
+  guard?: Guard,
 ) {
   yield* db
     .transaction(
       () =>
         Effect.gen(function* () {
           yield* requireAgentSelection(db, sessionID, agent)
+          if (guard) yield* guard()
           const updated = yield* db
             .update(SessionContextEpochTable)
             .set({

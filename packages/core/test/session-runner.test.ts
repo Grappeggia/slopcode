@@ -659,13 +659,79 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("records draining activity while provider work is blocked and returns to ready", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Observe activity" }), resume: false })
+
+      const fiber = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+
+      expect(yield* runtime.get(sessionID)).toMatchObject({ owner: "v2", state: "draining", epoch: 1 })
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(fiber)
+      expect(yield* runtime.get(sessionID)).toMatchObject({ owner: "v2", state: "ready", epoch: 2 })
+    }),
+  )
+
+  it.effect("does not bump the runtime epoch when a non-forced drain has no work", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runner = yield* SessionRunner.Service
+      const runtime = yield* SessionRuntime.Service
+      requests.length = 0
+
+      yield* runner.run({ sessionID })
+
+      expect(yield* runtime.get(sessionID)).toMatchObject({ owner: "v2", state: "ready", epoch: 0 })
+      expect(requests).toEqual([])
+    }),
+  )
+
+  it.effect("leaves a recovered paused runtime untouched when its advisory wake finds no work", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runner = yield* SessionRunner.Service
+      const runtime = yield* SessionRuntime.Service
+      requests.length = 0
+      yield* runtime.assign({ sessionID, state: "draining", expectedOwner: "v2", expectedEpoch: 0 })
+      yield* runtime.recover()
+
+      yield* runner.run({ sessionID })
+
+      expect(yield* runtime.get(sessionID)).toMatchObject({ owner: "v2", state: "paused", epoch: 2 })
+      expect(requests).toEqual([])
+    }),
+  )
+
+  it.effect("wakes a recovered paused V2 runtime", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      requests.length = 0
+      yield* runtime.assign({ sessionID, state: "draining", expectedOwner: "v2", expectedEpoch: 0 })
+      yield* runtime.recover()
+
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Resume after restart" }) })
+      yield* (yield* SessionRunCoordinator.Service).awaitIdle(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(yield* runtime.get(sessionID)).toMatchObject({ owner: "v2", state: "ready", epoch: 4 })
+    }),
+  )
+
   it.effect("stops on a stale runtime epoch before publishing provider output", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
       const runtime = yield* SessionRuntime.Service
       modelResolveHook = runtime
-        .assign({ sessionID, state: "ready", expectedOwner: "v2", expectedEpoch: 0 })
+        .assign({ sessionID, owner: "v1", state: "migrating", expectedOwner: "v2", expectedEpoch: 1 })
         .pipe(Effect.asVoid)
       response = fragmentFixture("text", "text-stale", ["Should not persist"]).completeEvents
 
@@ -675,9 +741,49 @@ describe("SessionRunnerLLM", () => {
       expect(failure).toMatchObject({
         _tag: "SessionRuntime.Mismatch",
         expectedOwner: "v2",
-        expectedEpoch: 0,
-        actualEpoch: 1,
+        actualOwner: "v1",
+        expectedEpoch: 1,
+        actualEpoch: 2,
       })
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toEqual([])
+      expect(yield* runtime.get(sessionID)).toMatchObject({ owner: "v1", state: "migrating", epoch: 2 })
+    }),
+  )
+
+  it.effect("rolls back provider output when the runtime epoch changes at event commit", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      let armed = true
+      yield* events.beforeCommit((event) => {
+        if (!armed || !Schema.is(SessionEvent.Step.Started)(event)) return Effect.void
+        armed = false
+        return runtime
+          .assign({ sessionID, state: "ready", expectedOwner: "v2", expectedEpoch: 1 })
+          .pipe(Effect.orDie, Effect.asVoid)
+      })
+      response = fragmentFixture("text", "text-commit-fence", ["Should roll back"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Fence the commit" }), resume: false })
+
+      const failure = yield* session.resume(sessionID).pipe(Effect.catchDefect(Effect.succeed))
+
+      expect(failure).toMatchObject({
+        _tag: "SessionRuntime.Mismatch",
+        expectedOwner: "v2",
+        expectedEpoch: 1,
+        actualEpoch: 2,
+      })
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Step.Started.type, 1)))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([])
       expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toEqual([])
     }),
   )
@@ -831,6 +937,109 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("rolls back direct context initialization when its runtime guard becomes stale", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const { db } = yield* Database.Service
+      const context = Effect.succeed(
+        SystemContext.make({
+          key: systemContextKey,
+          codec: Schema.toCodecJson(Schema.String),
+          load: Effect.succeed("Initial context"),
+          baseline: String,
+          update: (_previous, current) => current,
+        }),
+      )
+      const guard = () =>
+        runtime
+          .assign({ sessionID, state: "ready", expectedOwner: "v2", expectedEpoch: 0 })
+          .pipe(
+            Effect.andThen(runtime.assert({ sessionID, owner: "v2", epoch: 0 })),
+            Effect.asVoid,
+            Effect.orDie,
+          )
+
+      expect(
+        yield* SessionContextEpoch.initialize(
+          db,
+          context,
+          sessionID,
+          (yield* session.get(sessionID)).location,
+          AgentV2.defaultID,
+          guard,
+        ).pipe(Effect.catchDefect(Effect.succeed)),
+      ).toMatchObject({ _tag: "SessionRuntime.Mismatch", expectedEpoch: 0, actualEpoch: 1 })
+      expect(
+        yield* db
+          .select()
+          .from(SessionContextEpochTable)
+          .where(eq(SessionContextEpochTable.session_id, sessionID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toBeUndefined()
+      expect(yield* runtime.get(sessionID)).toMatchObject({ state: "ready", epoch: 0 })
+    }),
+  )
+
+  it.effect("rolls back direct context replacement when its runtime guard becomes stale", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const context = (text: string) =>
+        Effect.succeed(
+          SystemContext.make({
+            key: systemContextKey,
+            codec: Schema.toCodecJson(Schema.String),
+            load: Effect.succeed(text),
+            baseline: String,
+            update: (_previous, current) => current,
+          }),
+        )
+      const location = (yield* session.get(sessionID)).location
+      yield* SessionContextEpoch.initialize(db, context("Initial context"), sessionID, location, AgentV2.defaultID)
+      yield* db
+        .update(SessionTable)
+        .set({ agent: "reviewer" })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const guard = () =>
+        runtime
+          .assign({ sessionID, state: "ready", expectedOwner: "v2", expectedEpoch: 0 })
+          .pipe(
+            Effect.andThen(runtime.assert({ sessionID, owner: "v2", epoch: 0 })),
+            Effect.asVoid,
+            Effect.orDie,
+          )
+
+      expect(
+        yield* SessionContextEpoch.prepare(
+          db,
+          events,
+          context("Reviewer context"),
+          sessionID,
+          location,
+          AgentV2.ID.make("reviewer"),
+          guard,
+        ).pipe(Effect.catchDefect(Effect.succeed)),
+      ).toMatchObject({ _tag: "SessionRuntime.Mismatch", expectedEpoch: 0, actualEpoch: 1 })
+      expect(
+        yield* db
+          .select({ agent: SessionContextEpochTable.agent, baseline: SessionContextEpochTable.baseline })
+          .from(SessionContextEpochTable)
+          .where(eq(SessionContextEpochTable.session_id, sessionID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ agent: AgentV2.defaultID, baseline: "Initial context" })
+      expect(yield* runtime.get(sessionID)).toMatchObject({ state: "ready", epoch: 0 })
+    }),
+  )
+
   it.effect("reuses one durable baseline after the context producer changes", () =>
     Effect.gen(function* () {
       yield* setup
@@ -840,6 +1049,13 @@ describe("SessionRunnerLLM", () => {
       requests.length = 0
       response = []
       yield* session.resume(sessionID)
+      const { db } = yield* Database.Service
+      const before = yield* db
+        .select({ revision: SessionContextEpochTable.revision, snapshot: SessionContextEpochTable.snapshot })
+        .from(SessionContextEpochTable)
+        .where(eq(SessionContextEpochTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       systemBaseline = "Changed context"
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second" }), resume: false })
       yield* session.resume(sessionID)
@@ -851,7 +1067,14 @@ describe("SessionRunnerLLM", () => {
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
       expect(requests[1]?.messages.at(-1)?.content).toEqual([{ type: "text", text: "Changed context" }])
       expect(yield* session.messages({ sessionID })).toHaveLength(3)
-      const { db } = yield* Database.Service
+      const after = yield* db
+        .select({ revision: SessionContextEpochTable.revision, snapshot: SessionContextEpochTable.snapshot })
+        .from(SessionContextEpochTable)
+        .where(eq(SessionContextEpochTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(after?.revision).toBe((before?.revision ?? -1) + 1)
+      expect(after?.snapshot).not.toEqual(before?.snapshot)
       expect(
         yield* db
           .select({ id: EventTable.id })
@@ -862,6 +1085,57 @@ describe("SessionRunnerLLM", () => {
       ).toHaveLength(1)
       yield* replaySessionProjection(sessionID)
       expect(yield* session.messages({ sessionID })).toHaveLength(3)
+    }),
+  )
+
+  it.effect("rolls back ContextUpdated and its advance hook when the runtime fence becomes stale", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
+      response = []
+      yield* session.resume(sessionID)
+      const before = yield* db
+        .select({ revision: SessionContextEpochTable.revision, snapshot: SessionContextEpochTable.snapshot })
+        .from(SessionContextEpochTable)
+        .where(eq(SessionContextEpochTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      systemBaseline = "Changed context"
+      let armed = true
+      yield* events.beforeCommit((event) => {
+        if (!armed || !Schema.is(SessionEvent.ContextUpdated)(event)) return Effect.void
+        armed = false
+        return runtime
+          .assign({ sessionID, state: "ready", expectedOwner: "v2", expectedEpoch: 3 })
+          .pipe(Effect.orDie, Effect.asVoid)
+      })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second" }), resume: false })
+
+      expect(yield* session.resume(sessionID).pipe(Effect.catchDefect(Effect.succeed))).toMatchObject({
+        _tag: "SessionRuntime.Mismatch",
+        expectedEpoch: 3,
+        actualEpoch: 4,
+      })
+      expect(
+        yield* db
+          .select({ revision: SessionContextEpochTable.revision, snapshot: SessionContextEpochTable.snapshot })
+          .from(SessionContextEpochTable)
+          .where(eq(SessionContextEpochTable.session_id, sessionID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual(before)
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.ContextUpdated.type, 1)))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([])
     }),
   )
 
