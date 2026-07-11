@@ -560,7 +560,7 @@ describe("SessionExecutionLocal startup recovery", () => {
     }),
   )
 
-  it.effect("never restarts a child after a resumed task call is durably interrupted", () =>
+  it.effect("rechecks interruption committed between startup pending reads and child wake", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const db = database.db
@@ -654,23 +654,32 @@ describe("SessionExecutionLocal startup recovery", () => {
         prompt: new Prompt({ text: "never run" }),
         delivery: "steer",
       })
-      yield* events.publish(
-        SessionEvent.Task.Interrupted,
-        {
-          sessionID: parentID,
-          timestamp: yield* DateTime.now,
-          assistantMessageID: resumeMessageID,
-          callID: resumeCallID,
-          childSessionID: childID,
-        },
-        { id: SessionTask.interruptedEventID(parentID, resumeMessageID, resumeCallID) },
-      )
-      expect(yield* SessionTask.interrupted(db, parentID, originMessageID, originCallID)).toBeFalse()
-      expect(yield* SessionTask.orphaned(db, childID)).toBeTrue()
+      let raced = false
+      const racing = SessionStore.Service.of({
+        ...store,
+        context: (sessionID) =>
+          Effect.gen(function* () {
+            if (sessionID === childID && !raced) {
+              raced = true
+              yield* events.publish(
+                SessionEvent.Task.Interrupted,
+                {
+                  sessionID: parentID,
+                  timestamp: yield* DateTime.now,
+                  assistantMessageID: resumeMessageID,
+                  callID: resumeCallID,
+                  childSessionID: childID,
+                },
+                { id: SessionTask.interruptedEventID(parentID, resumeMessageID, resumeCallID) },
+              )
+            }
+            return yield* store.context(sessionID)
+          }),
+      })
       const runs: SessionSchema.ID[] = []
       const execution = SessionExecutionLocal.layer.pipe(
         Layer.provide(Layer.succeed(Database.Service, database)),
-        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionStore.Service, racing)),
         Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
         Layer.provide(
           Layer.mock(LocationServiceMap, {
@@ -686,6 +695,9 @@ describe("SessionExecutionLocal startup recovery", () => {
       yield* SessionExecution.Service.pipe(Effect.provide(execution))
       yield* Effect.yieldNow
 
+      expect(raced).toBeTrue()
+      expect(yield* SessionTask.interrupted(db, parentID, originMessageID, originCallID)).toBeFalse()
+      expect(yield* SessionTask.orphaned(db, childID)).toBeTrue()
       expect(runs).not.toContain(childID)
     }),
   )

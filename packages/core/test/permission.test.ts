@@ -198,6 +198,48 @@ describe("PermissionV2", () => {
     }),
   )
 
+  it.effect("forces external-directory ceiling asks over child allows and saved approvals", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "external_directory", resource: "*", effect: "allow" }])
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({
+          metadata: {
+            task: {
+              version: 1,
+              parentID: SessionV2.ID.make("ses_parent"),
+              agent: AgentV2.ID.make("test"),
+              origin: { messageID: "msg_parent", callID: "call-parent" },
+              ceiling: [{ action: "external_directory", resource: "/outside/*", effect: "ask" }],
+            },
+          },
+        })
+        .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      yield* (yield* PermissionSaved.Service).add({
+        projectID: Project.ID.global,
+        action: "external_directory",
+        resources: ["/outside/file"],
+      })
+      const service = yield* PermissionV2.Service
+      const input = assertion({
+        action: "external_directory",
+        resources: ["/outside/file"],
+        save: ["/outside/file"],
+      })
+      expect(yield* service.ask(input)).toMatchObject({ effect: "ask" })
+      const pending = yield* service.assert({ ...input, id: PermissionV2.ID.create("per_ceiling_once") }).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* service.reply({ requestID: PermissionV2.ID.create("per_ceiling_once"), reply: "always" })
+      yield* Fiber.join(pending)
+      expect(
+        yield* service.ask({ ...input, id: PermissionV2.ID.create("per_ceiling_future") }),
+      ).toMatchObject({ effect: "ask" })
+    }),
+  )
+
   it.effect("allows managed output reads without granting external directory access", () =>
     Effect.gen(function* () {
       yield* setup([
