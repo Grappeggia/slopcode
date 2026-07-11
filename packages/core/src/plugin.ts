@@ -24,6 +24,19 @@ export const Event = {
     schema: {
       id: ID.pipe(Schema.optional),
       source: Schema.String,
+      package: Schema.String.pipe(Schema.optional),
+      stage: Schema.Literals(["install", "entrypoint", "compatibility", "import", "factory", "hook-shape"]).pipe(
+        Schema.optional,
+      ),
+      message: Schema.String,
+    },
+  }),
+  Warning: EventV2.define({
+    type: "plugin.warning",
+    schema: {
+      id: ID.pipe(Schema.optional),
+      source: Schema.String,
+      package: Schema.String,
       message: Schema.String,
     },
   }),
@@ -122,10 +135,11 @@ export const attachTools = (service: Interface, adapter: ToolAdapter) =>
       state.adapter = adapter
       yield* Deferred.succeed(state.ready, undefined)
     }),
-    () => Effect.sync(() => {
-      const state = adapters.get(service)
-      if (state) state.adapter = undefined
-    }),
+    () =>
+      Effect.sync(() => {
+        const state = adapters.get(service)
+        if (state) state.adapter = undefined
+      }),
   )
 
 export interface Interface {

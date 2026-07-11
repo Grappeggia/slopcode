@@ -28,6 +28,7 @@ import { ProviderPlugins } from "./provider"
 import { SkillV2 } from "../skill"
 import { Reference } from "../reference"
 import { PluginTool } from "./tool"
+import { PluginPackage } from "./package"
 
 type Plugin = {
   id: PluginV2.ID
@@ -104,7 +105,10 @@ export const layer = Layer.effect(
             Effect.provideService(PluginV2.Service, plugin),
           ),
         })
-        .pipe(Effect.tapError((error) => Effect.logError("failed to load plugin", { id: input.id, error })), Effect.ignore)
+        .pipe(
+          Effect.tapError((error) => Effect.logError("failed to load plugin", { id: input.id, error })),
+          Effect.ignore,
+        )
     })
 
     const boot = Effect.gen(function* () {
@@ -121,6 +125,7 @@ export const layer = Layer.effect(
       yield* add(ConfigCommandPlugin.Plugin)
       yield* add(ConfigSkillPlugin.Plugin)
       yield* add(ConfigReferencePlugin.Plugin)
+      yield* PluginPackage.load
       yield* Deferred.succeed(configured, undefined)
       yield* PluginTool.discover
     }).pipe(
