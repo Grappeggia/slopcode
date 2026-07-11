@@ -266,6 +266,83 @@ describe("SessionExecutionLocal startup recovery", () => {
       expect(runs).toBe(1)
     }),
   )
+
+  it.effect("recovers shell and compaction work without a prompt wake", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const sessionID = SessionSchema.ID.make("ses_recovered_shell_and_compaction")
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: sessionID,
+          directory: "/project",
+          title: "Recovered shell and compaction",
+          version: "test",
+          runtime: "v2",
+          runtime_state: "ready",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const shell = yield* SessionInput.admitShell(db, events, {
+        id: SessionMessage.ID.make("msg_recovered_shell_with_compaction"),
+        sessionID,
+        command: "pwd",
+        resume: false,
+      })
+      const compaction = yield* SessionInput.admitCompaction(db, events, {
+        id: SessionMessage.ID.make("msg_recovered_compaction_with_shell"),
+        sessionID,
+      })
+      let runs = 0
+      const runner = Layer.succeed(
+        SessionRunner.Service,
+        SessionRunner.Service.of({
+          run: () =>
+            Effect.gen(function* () {
+              runs++
+              if (runs === 1) {
+                yield* SessionInput.startShell(db, events, shell)
+                yield* SessionInput.endShell(db, events, shell, {
+                  status: "completed",
+                  output: "/project",
+                  exitCode: 0,
+                  truncated: false,
+                })
+                return
+              }
+              yield* SessionInput.skipCompaction(db, events, compaction)
+            }),
+        }),
+      )
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.gen(function* () {
+        const service = yield* SessionExecution.Service
+        yield* service.wait(sessionID)
+      }).pipe(Effect.provide(execution))
+
+      expect(runs).toBe(2)
+      expect(yield* SessionInput.terminalShell(db, shell.id)).toMatchObject({ status: "completed" })
+      expect(yield* SessionInput.terminalCompaction(db, compaction.id)).toEqual({ type: "skipped" })
+    }),
+  )
 })
 
 describe("SessionExecutionLocal wait", () => {

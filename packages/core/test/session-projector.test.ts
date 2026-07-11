@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Layer, Schema } from "effect"
+import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
@@ -390,7 +390,7 @@ describe("SessionProjector", () => {
     }),
   )
 
-  it.effect("replays legacy shell history without requiring V2 terminal metadata", () =>
+  it.effect("replays legacy shell history through projection and the public event stream", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
       yield* db
@@ -412,7 +412,8 @@ describe("SessionProjector", () => {
         .run()
         .pipe(Effect.orDie)
       const id = SessionMessage.ID.make("msg_legacy_shell")
-      yield* (yield* EventV2.Service).replayAll([
+      const events = yield* EventV2.Service
+      yield* events.replayAll([
         {
           id: EventV2.ID.make("evt_legacy_shell_started"),
           aggregateID: sessionID,
@@ -428,6 +429,12 @@ describe("SessionProjector", () => {
           data: { sessionID, timestamp: 1, callID: "legacy-call", output: "/project" },
         },
       ])
+      yield* events.publish(SessionEvent.Synthetic, {
+        sessionID,
+        messageID: SessionMessage.ID.make("msg_after_legacy_shell"),
+        timestamp: DateTime.makeUnsafe(2),
+        text: "after legacy shell",
+      })
 
       const row = yield* db
         .select()
@@ -442,7 +449,23 @@ describe("SessionProjector", () => {
         time: { completed: DateTime.makeUnsafe(1) },
       })
       expect(row!.data).not.toHaveProperty("status")
-    }),
+      expect(
+        Array.from(
+          yield* (yield* SessionV2.Service).events({ sessionID }).pipe(Stream.take(2), Stream.runCollect),
+        ).map((item) => item.event.type),
+      ).toEqual(["session.next.shell.started", "session.next.shell.ended"])
+    }).pipe(
+      Effect.provide(
+        SessionV2.layer.pipe(
+          Layer.provide(events),
+          Layer.provide(database),
+          Layer.provide(Project.defaultLayer),
+          Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
+          Layer.provide(SessionExecution.noopLayer),
+          Layer.provide(locationServices),
+        ),
+      ),
+    ),
   )
 
   it.effect("rejects distinct creator events that reuse one projected message ID", () =>

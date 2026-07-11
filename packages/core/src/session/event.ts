@@ -212,6 +212,26 @@ export namespace Shell {
     },
   })
   export type Continued = typeof Continued.Type
+
+  export const ContinuationStarted = EventV2.define({
+    type: "session.next.shell.continuation.started",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessageID.ID,
+    },
+  })
+  export type ContinuationStarted = typeof ContinuationStarted.Type
+
+  export const ContinuationUnknown = EventV2.define({
+    type: "session.next.shell.continuation.unknown",
+    ...options,
+    schema: {
+      ...Base,
+      messageID: SessionMessageID.ID,
+    },
+  })
+  export type ContinuationUnknown = typeof ContinuationUnknown.Type
 }
 
 export namespace Step {
@@ -559,6 +579,9 @@ export namespace Compaction {
   export type Ended = typeof Ended.Type
 }
 
+const ShellEndedV1 = Shell.EndedV1.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
+const ShellEnded = Shell.Ended.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
+
 const DurableDefinitions = [
   AgentSwitched,
   ModelSwitched,
@@ -571,8 +594,11 @@ const DurableDefinitions = [
   Synthetic,
   Shell.Requested,
   Shell.Started,
-  Shell.Ended,
+  ShellEndedV1,
+  ShellEnded,
   Shell.Continued,
+  Shell.ContinuationStarted,
+  Shell.ContinuationUnknown,
   Step.Started,
   Step.Ended,
   Step.Failed,
