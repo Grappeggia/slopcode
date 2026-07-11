@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, Stream } from "effect"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { EventTable } from "@slopcode-ai/core/event/sql"
@@ -19,6 +19,8 @@ import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
+import { ModelV2 } from "@slopcode-ai/core/model"
+import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { testEffect } from "./lib/effect"
 import { locationServices } from "./lib/location-services"
 
@@ -721,6 +723,50 @@ describe("SessionControl", () => {
       expect(admitted.prompt.text).toBe("Run through V2")
       expect(wakeCalls).toEqual([sessionID])
       expect(yield* admittedCount).toBe(1)
+    }),
+  )
+
+  it.effect("fences prompt, model, interrupt, compact, and shell at their event commit", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const runtime = yield* SessionRuntime.Service
+      const events = yield* EventV2.Service
+      const control = yield* SessionControl.Service
+      wakeCalls.length = 0
+      interruptCalls.length = 0
+      yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
+      yield* events.beforeCommit((event) =>
+        "sessionID" in event.data && event.data.sessionID === sessionID
+          ? db
+              .update(SessionTable)
+              .set({ runtime_state: "draining", runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` })
+              .where(eq(SessionTable.id, sessionID))
+              .run()
+              .pipe(Effect.orDie, Effect.asVoid)
+          : Effect.void,
+      )
+      const operations = [
+        control.prompt({ sessionID, prompt: new Prompt({ text: "race" }), resume: false }),
+        control.switchModel({
+          sessionID,
+          model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("target") }),
+        }),
+        control.interrupt(sessionID),
+        control.compact({ sessionID }),
+        control.shell({ sessionID, command: "true", resume: false }),
+      ]
+      for (const operation of operations)
+        expect(yield* operation.pipe(Effect.flip)).toMatchObject({
+          _tag: "SessionRuntime.Mismatch",
+          actualState: "draining",
+        })
+      expect(
+        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
+      ).toEqual([])
+      expect(yield* admittedCount).toBe(0)
+      expect(wakeCalls).toEqual([])
+      expect(interruptCalls).toEqual([])
     }),
   )
 })

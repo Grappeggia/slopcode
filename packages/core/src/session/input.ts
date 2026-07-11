@@ -60,18 +60,23 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly prompt: Prompt
     readonly delivery: Delivery
   },
+  commit: Effect.Effect<void> = Effect.void,
 ) {
   const existing = yield* find(db, input.id)
   if (existing !== undefined) return existing
   const timestamp = yield* DateTime.now
   return yield* events
-    .publish(SessionEvent.PromptLifecycle.Admitted, {
-      messageID: input.id,
-      sessionID: input.sessionID,
-      timestamp,
-      prompt: input.prompt,
-      delivery: input.delivery,
-    })
+    .publish(
+      SessionEvent.PromptLifecycle.Admitted,
+      {
+        messageID: input.id,
+        sessionID: input.sessionID,
+        timestamp,
+        prompt: input.prompt,
+        delivery: input.delivery,
+      },
+      { commit: () => commit },
+    )
     .pipe(
       Effect.flatMap((event) =>
         event.seq === undefined
@@ -415,7 +420,12 @@ export const pendingShellSessions = Effect.fn("SessionInput.pendingShellSessions
 class ShellLifecycleConflict extends Error {}
 
 const shellEvent = Effect.fnUntraced(function* (db: DatabaseService, id: EventV2.ID, type?: string) {
-  const row = yield* db.select({ type: EventTable.type }).from(EventTable).where(eq(EventTable.id, id)).get().pipe(Effect.orDie)
+  const row = yield* db
+    .select({ type: EventTable.type })
+    .from(EventTable)
+    .where(eq(EventTable.id, id))
+    .get()
+    .pipe(Effect.orDie)
   return row !== undefined && (type === undefined || row.type === type)
 })
 
@@ -431,6 +441,7 @@ export const admitShell = Effect.fn("SessionInput.admitShell")(function* (
     readonly command: string
     readonly resume: boolean
   },
+  commit: Effect.Effect<void> = Effect.void,
 ) {
   const existing = yield* findShell(db, input.id)
   if (existing) return existing
@@ -439,7 +450,7 @@ export const admitShell = Effect.fn("SessionInput.admitShell")(function* (
     .publish(
       SessionEvent.Shell.Requested,
       { ...input, messageID: input.id, timestamp },
-      { id: shellRequestEventID(input.id) },
+      { id: shellRequestEventID(input.id), commit: () => commit },
     )
     .pipe(
       Effect.flatMap((event) =>
@@ -454,7 +465,9 @@ export const admitShell = Effect.fn("SessionInput.admitShell")(function* (
             } satisfies ShellRequest),
       ),
       Effect.catchDefect((defect) =>
-        findShell(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
+        findShell(db, input.id).pipe(
+          Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect))),
+        ),
       ),
     )
 })
@@ -521,11 +534,7 @@ export const endShell = Effect.fn("SessionInput.endShell")(function* (
             Effect.all([
               shellEvent(db, shellRequestEventID(request.id), shellRequestedType),
               startedShell(db, request.id),
-            ]).pipe(
-              Effect.map(
-                ([requested, started]) => requested && (expected === "started" ? started : !started),
-              ),
-            ),
+            ]).pipe(Effect.map(([requested, started]) => requested && (expected === "started" ? started : !started))),
           ),
       },
     )
@@ -654,10 +663,8 @@ export type CompactionTerminal =
       readonly message: string
     }
 
-export const compactionRequestEventID = (id: SessionMessage.ID) =>
-  `evt_compaction_request_${id}` as EventV2.ID
-export const compactionTerminalEventID = (id: SessionMessage.ID) =>
-  `evt_compaction_terminal_${id}` as EventV2.ID
+export const compactionRequestEventID = (id: SessionMessage.ID) => `evt_compaction_request_${id}` as EventV2.ID
+export const compactionTerminalEventID = (id: SessionMessage.ID) => `evt_compaction_terminal_${id}` as EventV2.ID
 
 const compactionRequestedType = `${SessionEvent.Compaction.Requested.type}.1`
 const compactionSkippedType = `${SessionEvent.Compaction.Skipped.type}.1`
@@ -699,7 +706,8 @@ export const terminalCompaction = Effect.fn("SessionInput.terminalCompaction")(f
   if (!row) return
   if (row.type === compactionEndedType) return { type: "ended" } as const
   if (row.type === compactionSkippedType) return { type: "skipped" } as const
-  if (row.type !== compactionFailedType) return yield* Effect.die(`Invalid manual compaction terminal event: ${row.type}`)
+  if (row.type !== compactionFailedType)
+    return yield* Effect.die(`Invalid manual compaction terminal event: ${row.type}`)
   const data = yield* decodeCompactionFailed(row.data).pipe(Effect.orDie)
   return { type: "failed", reason: data.reason, message: data.message } as const
 })
@@ -767,6 +775,7 @@ export const admitCompaction = Effect.fn("SessionInput.admitCompaction")(functio
     readonly sessionID: SessionSchema.ID
     readonly instruction?: string
   },
+  commit: Effect.Effect<void> = Effect.void,
 ) {
   const existing = yield* findCompaction(db, input.id)
   if (existing) return existing
@@ -780,7 +789,7 @@ export const admitCompaction = Effect.fn("SessionInput.admitCompaction")(functio
         timestamp,
         ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
       },
-      { id: compactionRequestEventID(input.id) },
+      { id: compactionRequestEventID(input.id), commit: () => commit },
     )
     .pipe(
       Effect.flatMap((event) =>

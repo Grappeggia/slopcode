@@ -708,6 +708,67 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("allows function-only destinations after custom history is compacted away", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const created = yield* session.create({
+        location,
+        model: ModelV2.Ref.make({ id: ModelV2.ID.make("responses"), providerID: ProviderV2.ID.make("openai") }),
+      })
+      const assistantMessageID = SessionMessage.ID.make("msg_compacted_custom_switch")
+      const base = {
+        sessionID: created.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID: "call-compacted-custom",
+      }
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID: created.id,
+        timestamp: base.timestamp,
+        assistantMessageID,
+        agent: "build",
+        model: created.model!,
+      })
+      yield* events.publish(SessionEvent.Tool.Called, {
+        ...base,
+        tool: "exec",
+        input: "return 42",
+        toolType: "custom",
+        provider: { executed: false },
+      })
+      yield* events.publish(SessionEvent.Tool.Success, {
+        ...base,
+        structured: { value: 42 },
+        content: [{ type: "text", text: "42" }],
+        provider: { executed: false },
+      })
+      const compactionID = SessionMessage.ID.make("msg_compacted_custom_summary")
+      yield* events.publish(SessionEvent.Compaction.Started, {
+        sessionID: created.id,
+        messageID: compactionID,
+        timestamp: yield* DateTime.now,
+        reason: "manual",
+      })
+      yield* events.publish(SessionEvent.Compaction.Ended, {
+        sessionID: created.id,
+        messageID: compactionID,
+        timestamp: yield* DateTime.now,
+        reason: "manual",
+        text: "Summary without custom calls",
+        recent: "",
+      })
+      const destination = ModelV2.Ref.make({
+        id: ModelV2.ID.make("destination"),
+        providerID: ProviderV2.ID.make("anthropic"),
+      })
+
+      yield* session.switchModel({ sessionID: created.id, model: destination })
+
+      expect((yield* session.get(created.id)).model).toMatchObject(destination)
+    }),
+  )
+
   it.effect("rejects a model switch for a missing Session", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

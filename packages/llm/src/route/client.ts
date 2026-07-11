@@ -87,6 +87,7 @@ export interface RoutePatch<Body, Prepared> extends RouteDefaultsInput {
   readonly auth?: AuthDef
   readonly transport?: Transport<Body, Prepared, unknown>
   readonly endpoint?: EndpointPatch<Body>
+  readonly capabilities?: ReadonlyArray<ProtocolCapability>
 }
 
 type RouteMappedModelInput = RouteModelInput | RouteRoutedModelInput
@@ -209,6 +210,8 @@ export interface MakeTransportInput<Body, Prepared, Frame, Event, State> {
   readonly transport: Transport<Body, Prepared, Frame>
   /** Route/request defaults used when compiling requests for this route. */
   readonly defaults?: RouteDefaultsInput
+  /** Deployment-specific capabilities. Protocol reuse does not imply deployment support. */
+  readonly capabilities?: ReadonlyArray<ProtocolCapability>
 }
 
 const streamError = (route: string, message: string, cause: Cause.Cause<unknown>) => {
@@ -243,14 +246,14 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
       id: routeInput.id,
       provider: routeInput.provider === undefined ? undefined : ProviderID.make(routeInput.provider),
       protocol: protocol.id,
-      capabilities: protocol.capabilities ?? [],
+      capabilities: routeInput.capabilities ?? [],
       endpoint: routeInput.endpoint,
       auth: routeInput.auth ?? Auth.none,
       transport: routeInput.transport,
       defaults: routeInput.defaults ?? {},
       body: protocol.body,
       with: (patch: RoutePatch<Body, Prepared>) => {
-        const { id, provider, auth, transport, endpoint, ...defaults } = patch
+        const { id, provider, auth, transport, endpoint, capabilities, ...defaults } = patch
         return build({
           ...routeInput,
           id: id ?? routeInput.id,
@@ -258,6 +261,7 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
           auth: auth ?? routeInput.auth,
           endpoint: endpoint ? Endpoint.merge(routeInput.endpoint, endpoint) : routeInput.endpoint,
           transport: (transport as Transport<Body, Prepared, Frame> | undefined) ?? routeInput.transport,
+          capabilities: capabilities ?? routeInput.capabilities,
           defaults: mergeRouteDefaults(route.defaults, defaults),
         })
       },

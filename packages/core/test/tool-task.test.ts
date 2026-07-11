@@ -423,6 +423,7 @@ describe("TaskTool durable orchestration", () => {
           parent_id: parentID,
           agent: "general",
           model: inherited,
+          metadata: { task: { version: 1, damaged: true } },
         })
         .run()
         .pipe(Effect.orDie)
@@ -432,6 +433,7 @@ describe("TaskTool durable orchestration", () => {
           .result,
       ).toMatchObject({ type: "error", value: expect.stringContaining("conflict") })
       expect(yield* SessionInput.find(db, SessionTask.promptID(parentID, messageID, "call-collision"))).toBeUndefined()
+      expect(yield* SessionTask.orphaned(db, taskID)).toBeTrue()
     }),
   )
 
@@ -471,16 +473,16 @@ describe("TaskTool durable orchestration", () => {
 
       const callID = "call-fabricated-resume"
       expect(
-        (
-          yield* settle(callID, {
-            description: "Continue",
-            prompt: "never",
-            subagent_type: "general",
-            task_id: taskID,
-          })
-        ).result,
+        (yield* settle(callID, {
+          description: "Continue",
+          prompt: "never",
+          subagent_type: "general",
+          task_id: taskID,
+        })).result,
       ).toMatchObject({ type: "error", value: expect.stringContaining("conflict") })
       expect(yield* SessionInput.find(db, SessionTask.promptID(parentID, messageID, callID))).toBeUndefined()
+      expect(yield* SessionTask.orphaned(db, taskID)).toBeTrue()
+      expect(yield* SessionTask.cancelled(db, parentID, originMessage, originCall)).toBeTrue()
     }),
   )
 
@@ -546,20 +548,20 @@ describe("TaskTool durable orchestration", () => {
       yield* complete(runs)
       yield* settle("call-modeled", { description: "Modeled", prompt: "first", subagent_type: "modeled" })
       const taskID = SessionTask.childID(parentID, messageID, "call-modeled")
-        expect(
-          yield* (yield* Database.Service).db
+      expect(
+        yield* (yield* Database.Service).db
           .select({ model: SessionTable.model })
           .from(SessionTable)
           .where(eq(SessionTable.id, taskID))
           .get()
           .pipe(Effect.orDie),
-        ).toEqual({ model: override })
-        expect((yield* (yield* SessionStore.Service).task(taskID))?.ceiling).not.toEqual(
-          expect.arrayContaining([
-            { action: "task", resource: "*", effect: "deny" },
-            { action: "todowrite", resource: "*", effect: "deny" },
-          ]),
-        )
+      ).toEqual({ model: override })
+      expect((yield* (yield* SessionStore.Service).task(taskID))?.ceiling).not.toEqual(
+        expect.arrayContaining([
+          { action: "task", resource: "*", effect: "deny" },
+          { action: "todowrite", resource: "*", effect: "deny" },
+        ]),
+      )
       expect(
         (yield* settle("call-resume", {
           description: "Continue",
@@ -638,11 +640,9 @@ describe("TaskTool durable orchestration", () => {
       const db = (yield* Database.Service).db
       const runs: string[] = []
       yield* complete(runs)
-      yield* settleWith(
-        "call-ceiling-origin",
-        { description: "Ceiling", prompt: "origin", subagent_type: "general" },
-        [{ action: "*", resource: "/outside/*", effect: "ask" }],
-      )
+      yield* settleWith("call-ceiling-origin", { description: "Ceiling", prompt: "origin", subagent_type: "general" }, [
+        { action: "*", resource: "/outside/*", effect: "ask" },
+      ])
       const taskID = SessionTask.childID(parentID, messageID, "call-ceiling-origin")
       const callID = "call-ceiling-resume"
       const permissions: PermissionV2.Ruleset = [
@@ -703,11 +703,9 @@ describe("TaskTool durable orchestration", () => {
       ]
       yield* Effect.all(
         calls.map((item) =>
-          settleWith(
-            item.id,
-            { description: item.id, prompt: item.id, subagent_type: "general", task_id: taskID },
-            [item.deny],
-          ),
+          settleWith(item.id, { description: item.id, prompt: item.id, subagent_type: "general", task_id: taskID }, [
+            item.deny,
+          ]),
         ),
         { concurrency: "unbounded" },
       )
@@ -715,7 +713,9 @@ describe("TaskTool durable orchestration", () => {
       expect(ceiling).toEqual(expect.arrayContaining(calls.map((item) => item.deny)))
       for (const item of calls) {
         const request = (yield* SessionTask.request(db, parentID, messageID, item.id))!
-        expect(request.ceiling.every((rule) => ceiling.some((current) => JSON.stringify(current) === JSON.stringify(rule)))).toBeTrue()
+        expect(
+          request.ceiling.every((rule) => ceiling.some((current) => JSON.stringify(current) === JSON.stringify(rule))),
+        ).toBeTrue()
         const materialized = yield* (yield* ToolRegistry.Service).materialize(request.permissions, request.plan)
         expect(
           (yield* materialized.settle({
@@ -755,9 +755,7 @@ describe("TaskTool durable orchestration", () => {
         restrictions.map((rule) => SessionTask.strengthen(db, taskID, [rule])),
         { concurrency: "unbounded" },
       )
-      expect((yield* (yield* SessionStore.Service).task(taskID))?.ceiling).toEqual(
-        expect.arrayContaining(restrictions),
-      )
+      expect((yield* (yield* SessionStore.Service).task(taskID))?.ceiling).toEqual(expect.arrayContaining(restrictions))
     }),
   )
 
@@ -905,49 +903,56 @@ describe("TaskTool durable orchestration", () => {
           task: request,
         })).result.type,
       ).toBe("text")
-      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, taskID)).get().pipe(Effect.orDie)).toMatchObject(
-        {
-          agent: "general",
-          model: inherited,
-          title: request.title,
-          metadata: { task: { ceiling: request.ceiling } },
-        },
-      )
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, taskID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        agent: "general",
+        model: inherited,
+        title: request.title,
+        metadata: { task: { ceiling: request.ceiling } },
+      })
       expect(runs).toEqual([callID])
       expect(
-        yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, request.promptMessageID)).all().pipe(Effect.orDie),
+        yield* db
+          .select()
+          .from(SessionInputTable)
+          .where(eq(SessionInputTable.id, request.promptMessageID))
+          .all()
+          .pipe(Effect.orDie),
       ).toHaveLength(1)
     }),
   )
 
-  fixture.it.effect("reconnects a persisted request through the canonical task registration without duplicate work", () =>
-    Effect.gen(function* () {
-      yield* seed
-      const db = (yield* Database.Service).db
-      const runs: string[] = []
-      yield* complete(runs)
-      const callID = "call-canonical-recovery"
-      const input = { description: "Canonical", prompt: "recover", subagent_type: "general" }
-      const permissions = [{ action: "edit", resource: "secret", effect: "deny" as const }]
-      expect((yield* settleWith(callID, input, permissions, { mode: "code-only", multiAgent: "v2" })).result.type).toBe(
-        "text",
-      )
-      const request = yield* SessionTask.request(db, parentID, messageID, callID)
-      expect(request).toBeDefined()
-      const assertions = fixture.assertions.length
-      const materialized = yield* (yield* ToolRegistry.Service).materialize(request!.permissions, request!.plan)
-      const recovered = yield* materialized.settle({
-        sessionID: parentID,
-        agent: request!.callerAgent,
-        assistantMessageID: messageID,
-        call: { type: "tool-call", id: callID, name: "task", input },
-        task: request,
-      })
+  fixture.it.effect(
+    "reconnects a persisted request through the canonical task registration without duplicate work",
+    () =>
+      Effect.gen(function* () {
+        yield* seed
+        const db = (yield* Database.Service).db
+        const runs: string[] = []
+        yield* complete(runs)
+        const callID = "call-canonical-recovery"
+        const input = { description: "Canonical", prompt: "recover", subagent_type: "general" }
+        const permissions = [{ action: "edit", resource: "secret", effect: "deny" as const }]
+        expect(
+          (yield* settleWith(callID, input, permissions, { mode: "code-only", multiAgent: "v2" })).result.type,
+        ).toBe("text")
+        const request = yield* SessionTask.request(db, parentID, messageID, callID)
+        expect(request).toBeDefined()
+        const assertions = fixture.assertions.length
+        const materialized = yield* (yield* ToolRegistry.Service).materialize(request!.permissions, request!.plan)
+        const recovered = yield* materialized.settle({
+          sessionID: parentID,
+          agent: request!.callerAgent,
+          assistantMessageID: messageID,
+          call: { type: "tool-call", id: callID, name: "task", input },
+          task: request,
+        })
 
-      expect(recovered.result.type).toBe("text")
-      expect(runs).toEqual([callID])
-      expect(fixture.assertions).toHaveLength(assertions)
-    }),
+        expect(recovered.result.type).toBe("text")
+        expect(runs).toEqual([callID])
+        expect(fixture.assertions).toHaveLength(assertions)
+      }),
   )
 
   fixture.it.effect("keeps task stale registration and output bounding authoritative", () =>

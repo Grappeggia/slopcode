@@ -1,7 +1,7 @@
 export * as SessionTask from "./task"
 
 import { and, asc, eq, gt, inArray } from "drizzle-orm"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { createHash } from "node:crypto"
 import type { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -136,7 +136,7 @@ export const request = Effect.fn("SessionTask.request")(function* (
     .pipe(Effect.orDie)
   if (!row) return
   if (row.type !== requestedType) return yield* Effect.die(`Invalid task request event: ${row.type}`)
-  return yield* decodeRequest(row.data).pipe(Effect.orDie)
+  return Option.getOrUndefined(yield* decodeRequest(row.data).pipe(Effect.option))
 })
 
 export const interrupted = Effect.fn("SessionTask.interrupted")(function* (
@@ -162,7 +162,7 @@ export const cancelled = Effect.fn("SessionTask.cancelled")(function* (
 ) {
   if (yield* interrupted(db, parentID, messageID, callID)) return true
   const requested = yield* db
-    .select({ seq: EventTable.seq })
+    .select({ seq: EventTable.seq, data: EventTable.data })
     .from(EventTable)
     .where(
       and(
@@ -173,6 +173,7 @@ export const cancelled = Effect.fn("SessionTask.cancelled")(function* (
     )
     .get()
     .pipe(Effect.orDie)
+  if (requested && Option.isNone(yield* decodeRequest(requested.data).pipe(Effect.option))) return true
   const origin = requested
     ? requested
     : (yield* db
@@ -181,14 +182,13 @@ export const cancelled = Effect.fn("SessionTask.cancelled")(function* (
         .where(and(eq(EventTable.aggregate_id, parentID), inArray(EventTable.type, taskCallTypes)))
         .orderBy(asc(EventTable.seq))
         .all()
-        .pipe(Effect.orDie))
-        .find(
-          (item) =>
-            item.data.assistantMessageID === messageID &&
-            item.data.callID === callID &&
-            (item.data.name === "task" || item.data.tool === "task"),
-        )
-  if (!origin) return false
+        .pipe(Effect.orDie)).find(
+        (item) =>
+          item.data.assistantMessageID === messageID &&
+          item.data.callID === callID &&
+          (item.data.name === "task" || item.data.tool === "task"),
+      )
+  if (!origin) return true
   return (
     (yield* db
       .select({ id: EventTable.id })
@@ -229,14 +229,13 @@ export const hasPending = Effect.fn("SessionTask.hasPending")(function* (
 })
 
 export const orphaned = Effect.fn("SessionTask.orphaned")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
-  const row = yield* db
-    .select()
-    .from(SessionTable)
-    .where(eq(SessionTable.id, sessionID))
-    .get()
-    .pipe(Effect.orDie)
+  const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
   const owner = SessionTaskMetadata.owner(row?.metadata)
-  if (!owner || !row) return false
+  if (!row) return false
+  if (!owner)
+    return (
+      row.parent_id !== null || (typeof row.metadata === "object" && row.metadata !== null && "task" in row.metadata)
+    )
   const origin = yield* request(db, owner.parentID, owner.origin.messageID, owner.origin.callID)
   const canonical = (item: SessionEvent.Task.Requested["data"]) =>
     row.id === childID(owner.parentID, owner.origin.messageID, owner.origin.callID) &&
@@ -253,7 +252,7 @@ export const orphaned = Effect.fn("SessionTask.orphaned")(function* (db: Databas
     item.model.providerID === row.model?.providerID &&
     (item.model.variant ?? "default") === (row.model?.variant ?? "default") &&
     item.ceiling.every((rule) => owner.ceiling.some((current) => JSON.stringify(current) === JSON.stringify(rule)))
-  if (!origin || !canonical(origin)) return false
+  if (!origin || !canonical(origin)) return true
   const originRow = yield* db
     .select({ seq: EventTable.seq })
     .from(EventTable)
@@ -266,16 +265,16 @@ export const orphaned = Effect.fn("SessionTask.orphaned")(function* (db: Databas
     )
     .get()
     .pipe(Effect.orDie)
-  if (!originRow) return false
+  if (!originRow) return true
   const requests = yield* db
     .select({ id: EventTable.id, data: EventTable.data })
     .from(EventTable)
     .where(and(eq(EventTable.aggregate_id, owner.parentID), eq(EventTable.type, requestedType)))
     .all()
     .pipe(Effect.orDie)
-  const decoded = yield* Effect.forEach(requests, (item) =>
-    decodeRequest(item.data).pipe(Effect.map((data) => ({ id: item.id, data })), Effect.orDie),
-  )
+  const decoded = (yield* Effect.forEach(requests, (item) =>
+    decodeRequest(item.data).pipe(Effect.option, Effect.map(Option.map((data) => ({ id: item.id, data })))),
+  )).flatMap(Option.toArray)
   const interruptedRequests = yield* Effect.forEach(
     decoded.filter(
       (item) =>
@@ -296,7 +295,6 @@ export const orphaned = Effect.fn("SessionTask.orphaned")(function* (db: Databas
         ),
       )
       .get()
-      .pipe(Effect.orDie)) !== undefined ||
-    interruptedRequests.some(Boolean)
+      .pipe(Effect.orDie)) !== undefined || interruptedRequests.some(Boolean)
   )
 })

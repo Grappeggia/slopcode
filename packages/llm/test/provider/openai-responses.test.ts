@@ -15,7 +15,9 @@ import {
 } from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import * as Azure from "../../src/providers/azure"
+import * as GitHubCopilot from "../../src/providers/github-copilot"
 import * as OpenAI from "../../src/providers/openai"
+import * as XAI from "../../src/providers/xai"
 import * as OpenAIResponses from "../../src/protocols/openai-responses"
 import * as ProviderShared from "../../src/protocols/shared"
 import { continuationRequest, nativeOpenAIResponsesContinuation } from "../continuation-scenarios"
@@ -794,10 +796,39 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("declares Responses Lite as a typed protocol capability", () =>
+  it.effect("declares internal Responses capabilities only on explicit OpenAI deployments", () =>
     Effect.sync(() => {
-      expect(OpenAIResponses.protocol.capabilities).toEqual(["responses-lite", "custom-tools"])
+      expect(OpenAIResponses.protocol.capabilities).toBeUndefined()
       expect(OpenAIResponses.route.capabilities).toEqual(["responses-lite", "custom-tools"])
+      expect(OpenAIResponses.webSocketRoute.capabilities).toEqual(["responses-lite", "custom-tools"])
+      expect(OpenAI.routes[0]?.capabilities).toEqual(["responses-lite", "custom-tools"])
+      expect(Azure.routes[0]?.capabilities).toEqual([])
+      expect(XAI.routes[0]?.capabilities).toEqual([])
+      expect(GitHubCopilot.routes[0]?.capabilities).toEqual([])
+    }),
+  )
+
+  it.effect("rejects Lite and custom requests on shared non-OpenAI Responses deployments", () =>
+    Effect.gen(function* () {
+      const routes = [
+        Azure.configure({ baseURL: "https://azure.test/openai/v1", apiKey: "test" }).responses("gpt-5"),
+        XAI.configure({ baseURL: "https://xai.test/v1", apiKey: "test" }).responses("grok"),
+        GitHubCopilot.configure({ baseURL: "https://copilot.test", apiKey: "test" }).responses("gpt-5"),
+      ]
+      for (const deployed of routes) {
+        const lite = yield* LLMClient.prepare(
+          LLM.request({ model: deployed, prompt: "test", providerOptions: { openai: { responsesMode: "lite" } } }),
+        ).pipe(Effect.flip)
+        const custom = yield* LLMClient.prepare(
+          LLM.request({
+            model: deployed,
+            prompt: "test",
+            tools: [{ type: "custom", name: "shell", description: "Run shell text." }],
+          }),
+        ).pipe(Effect.flip)
+        expect(lite).toMatchObject({ _tag: "LLM.Error", message: expect.stringContaining("Responses Lite") })
+        expect(custom).toMatchObject({ _tag: "LLM.Error", message: expect.stringContaining("custom tools") })
+      }
     }),
   )
 

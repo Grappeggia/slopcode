@@ -111,32 +111,32 @@ export const layer = Layer.effect(
 
     return Service.of({
       prompt: Effect.fn("SessionControl.prompt")(function* (input) {
-        yield* assertV2(input.sessionID)
-        return yield* sessions.prompt(input)
+        const info = yield* assertV2(input.sessionID)
+        return yield* sessions.prompt(input, assertV2(input.sessionID, info.epoch).pipe(Effect.asVoid))
       }),
       resume: Effect.fn("SessionControl.resume")(function* (sessionID) {
         yield* assertV2(sessionID)
         yield* sessions.resume(sessionID)
       }),
       interrupt: Effect.fn("SessionControl.interrupt")(function* (sessionID) {
-        yield* assertV2(sessionID)
-        yield* sessions.interrupt(sessionID)
+        const info = yield* assertV2(sessionID)
+        yield* sessions.interrupt(sessionID, assertV2(sessionID, info.epoch).pipe(Effect.asVoid))
       }),
       wait: Effect.fn("SessionControl.wait")(function* (sessionID) {
         yield* assertV2(sessionID)
         yield* sessions.wait(sessionID)
       }),
       compact: Effect.fn("SessionControl.compact")(function* (input) {
-        yield* assertV2(input.sessionID)
-        yield* sessions.compact(input)
+        const info = yield* assertV2(input.sessionID)
+        yield* sessions.compact(input, assertV2(input.sessionID, info.epoch).pipe(Effect.asVoid))
       }),
       shell: Effect.fn("SessionControl.shell")(function* (input) {
-        yield* assertV2(input.sessionID)
-        yield* sessions.shell(input)
+        const info = yield* assertV2(input.sessionID)
+        yield* sessions.shell(input, assertV2(input.sessionID, info.epoch).pipe(Effect.asVoid))
       }),
       switchModel: Effect.fn("SessionControl.switchModel")(function* (input) {
-        yield* assertV2(input.sessionID)
-        yield* sessions.switchModel(input)
+        const info = yield* assertV2(input.sessionID)
+        yield* sessions.switchModel(input, assertV2(input.sessionID, info.epoch).pipe(Effect.asVoid))
       }),
       switchAgent: Effect.fn("SessionControl.switchAgent")(function* (input) {
         const runtime = yield* assertV2(input.sessionID, input.epoch)
