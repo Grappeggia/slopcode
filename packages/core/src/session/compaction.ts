@@ -189,6 +189,7 @@ export const make = (dependencies: Dependencies) => {
       readonly messageID: SessionMessage.ID
       readonly tokens: number
       readonly instruction?: string
+      readonly terminalID?: EventV2.ID
     },
   ) {
     const selected = select(input.entries, input.tokens)
@@ -265,9 +266,7 @@ export const make = (dependencies: Dependencies) => {
         text: summary,
         recent: selected.recent,
       },
-      input.reason === "manual"
-        ? { id: `evt_compaction_terminal_${input.messageID}` as EventV2.ID }
-        : undefined,
+      input.terminalID === undefined ? undefined : { id: input.terminalID },
     )
     return { type: "compacted" } as const
   })
@@ -297,7 +296,11 @@ export const make = (dependencies: Dependencies) => {
     compactIfNeeded,
     compactAfterOverflow,
     compactManual: Effect.fn("SessionCompaction.compactManual")(function* (
-      input: Input & { readonly messageID: SessionMessage.ID; readonly instruction?: string },
+      input: Input & {
+        readonly messageID: SessionMessage.ID
+        readonly instruction?: string
+        readonly terminalID: EventV2.ID
+      },
     ) {
       return yield* summarize({ ...input, reason: "manual", tokens: 0 })
     }),
