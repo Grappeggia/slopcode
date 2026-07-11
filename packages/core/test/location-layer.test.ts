@@ -117,6 +117,41 @@ describe("LocationServiceMap", () => {
     ),
   )
 
+  it.live("completes PluginBoot after a failed configured plugin and loads the next package", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(dir.path, "slopcode.json"),
+                JSON.stringify({ plugins: ["./failed.ts", "./healthy.ts"] }),
+              ),
+              Bun.write(path.join(dir.path, "failed.ts"), `export default async () => { throw new Error("failed") }`),
+              Bun.write(
+                path.join(dir.path, "healthy.ts"),
+                `export default async () => ({
+                  tool: { configured_healthy: { description: "healthy", args: {}, execute: async () => "healthy" } }
+                })`,
+              ),
+            ]),
+          )
+          const result = yield* Effect.gen(function* () {
+            yield* (yield* PluginBoot.Service).wait()
+            return yield* toolDefinitions(yield* ToolRegistry.Service)
+          }).pipe(
+            Effect.scoped,
+            Effect.provide(LocationServiceMap.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+          )
+          expect(result.some((tool) => tool.name === "configured_healthy")).toBe(true)
+        }),
+      ),
+    ),
+  )
+
   it.effect("compares equivalent location refs by value", () =>
     Effect.sync(() => {
       const directory = AbsolutePath.make("/project")
