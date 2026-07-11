@@ -307,6 +307,33 @@ function registration(hooks: unknown, spec: string, dispose: (() => void | Promi
   } satisfies PluginV2.Registration
 }
 
+function ownership(host: HostInfo | undefined, projectID: string) {
+  const registrations: Array<() => void> = []
+  let closed = false
+  return {
+    get closed() {
+      return closed
+    },
+    register(type: string, adapter: unknown) {
+      if (!host) return
+      const cleanup = host.register(projectID, type, adapter)
+      if (closed) {
+        cleanup()
+        return
+      }
+      registrations.push(cleanup)
+    },
+    close() {
+      if (closed) return
+      closed = true
+      registrations
+        .splice(0)
+        .toReversed()
+        .forEach((cleanup) => cleanup())
+    },
+  }
+}
+
 export const load = Effect.gen(function* () {
   const config = yield* Config.Service
   const location = yield* Location.Service
@@ -477,88 +504,110 @@ export const load = Effect.gen(function* () {
       }
       const factory = exported.factory
       const id = PluginV2.ID.make(factory.id ?? `${item.spec}#${factory.name}`)
-      const registrations: Array<() => void> = []
-      const release = () =>
-        registrations
-          .splice(0)
-          .toReversed()
-          .forEach((cleanup) => cleanup())
-      const hooks = yield* attempt(
-        Effect.tryPromise({
-          try: () =>
-            factory.value(
-              {
-                ...input,
-                experimental_workspace: {
-                  register: (type: string, adapter: unknown) => {
-                    if (host) registrations.push(host.register(String(location.project.id), type, adapter))
+      const owner = ownership(host, String(location.project.id))
+      let hooks: unknown
+      let dispose: (() => void | Promise<void>) | undefined
+      let disposed = false
+      let transferred = false
+      const cleanup = async () => {
+        owner.close()
+        if (disposed) return
+        if (!dispose && isRecord(hooks)) {
+          const resource = hooks.dispose
+          if (typeof resource === "function") dispose = resource as () => void | Promise<void>
+        }
+        if (!dispose) return
+        disposed = true
+        await dispose()
+      }
+      yield* Effect.gen(function* () {
+        const loaded = yield* attempt(
+          Effect.tryPromise({
+            try: () =>
+              factory
+                .value(
+                  {
+                    ...input,
+                    experimental_workspace: {
+                      register: (type: string, adapter: unknown) => owner.register(type, adapter),
+                    },
                   },
-                },
-              },
-              item.options,
-            ),
-          catch: (cause) => cause,
-        }),
-      )
-      if (!hooks.ok) {
-        release()
-        yield* fail(item, "factory", hooks.error, id)
-        continue
-      }
-      const resource = yield* attempt(
-        Effect.try({
-          try: () => {
-            if (!isRecord(hooks.value)) throw new TypeError(`Plugin ${item.spec} factory must return a hook object`)
-            const dispose = hooks.value.dispose
-            if (dispose !== undefined && typeof dispose !== "function")
-              throw new TypeError(`Plugin ${item.spec} hook dispose must be a function`)
-            return dispose as (() => void | Promise<void>) | undefined
-          },
-          catch: (cause) => cause,
-        }),
-      )
-      if (!resource.ok) {
-        release()
-        yield* fail(item, "hook-shape", resource.error, id)
-        continue
-      }
-      const dispose = () => {
-        release()
-        return Promise.resolve(resource.value?.())
-      }
-      const cleanup = () =>
-        Effect.tryPromise({ try: dispose, catch: (cause) => cause }).pipe(
-          Effect.tapError((cause) =>
-            Effect.logError("failed to dispose rejected configured plugin", {
-              id,
-              package: item.spec,
-              source: item.source,
-              stage: "hook-shape",
-              cause,
-            }),
-          ),
-          Effect.ignore,
-        )
-      const inspected = yield* attempt(
-        Effect.try({
-          try: () => ({
-            adapted: registration(hooks.value, item.spec, dispose),
-            names: Object.keys(hooks.value as Record<string, unknown>),
+                  item.options,
+                )
+                .then(async (value) => {
+                  hooks = value
+                  if (!owner.closed || !isRecord(value)) return value
+                  const resource = value.dispose
+                  if (typeof resource === "function") dispose = resource as () => void | Promise<void>
+                  await cleanup()
+                  return value
+                }),
+            catch: (cause) => cause,
           }),
-          catch: (cause) => cause,
-        }),
+        )
+        if (!loaded.ok) {
+          yield* fail(item, "factory", loaded.error, id)
+          return
+        }
+        const resource = yield* attempt(
+          Effect.try({
+            try: () => {
+              if (!isRecord(loaded.value)) throw new TypeError(`Plugin ${item.spec} factory must return a hook object`)
+              const value = loaded.value.dispose
+              if (value !== undefined && typeof value !== "function")
+                throw new TypeError(`Plugin ${item.spec} hook dispose must be a function`)
+              dispose = value as (() => void | Promise<void>) | undefined
+            },
+            catch: (cause) => cause,
+          }),
+        )
+        if (!resource.ok) {
+          yield* fail(item, "hook-shape", resource.error, id)
+          return
+        }
+        const inspected = yield* attempt(
+          Effect.try({
+            try: () => ({
+              adapted: registration(loaded.value, item.spec, cleanup),
+              names: Object.keys(loaded.value as Record<string, unknown>),
+            }),
+            catch: (cause) => cause,
+          }),
+        )
+        if (!inspected.ok) {
+          yield* fail(item, "hook-shape", inspected.error, id)
+          return
+        }
+        for (const name of inspected.value.names) {
+          if (!supported.has(name)) yield* warn(item, `Plugin ${item.spec} returned unsupported hook ${name}`, id)
+        }
+        transferred = yield* plugin
+          .add({ id, effect: Effect.succeed(inspected.value.adapted), reportFailure: false })
+          .pipe(
+            Effect.as(true),
+            Effect.catch((cause) => fail(item, "hook-shape", cause, id).pipe(Effect.as(false))),
+          )
+      }).pipe(
+        Effect.ensuring(
+          Effect.suspend(() => {
+            if (transferred) return Effect.void
+            owner.close()
+            if (!hooks || disposed) return Effect.void
+            return Effect.tryPromise({ try: cleanup, catch: (cause) => cause }).pipe(
+              Effect.tapError((cause) =>
+                Effect.logError("failed to dispose rejected configured plugin", {
+                  id,
+                  package: item.spec,
+                  source: item.source,
+                  stage: "hook-shape",
+                  cause,
+                }),
+              ),
+              Effect.ignore,
+            )
+          }),
+        ),
       )
-      if (!inspected.ok) {
-        yield* fail(item, "hook-shape", inspected.error, id)
-        yield* cleanup()
-        continue
-      }
-      for (const name of inspected.value.names) {
-        if (!supported.has(name)) yield* warn(item, `Plugin ${item.spec} returned unsupported hook ${name}`, id)
-      }
-      yield* plugin
-        .add({ id, effect: Effect.succeed(inspected.value.adapted), reportFailure: false })
-        .pipe(Effect.catch((cause) => fail(item, "hook-shape", cause, id).pipe(Effect.asVoid)))
     }
   }
 })

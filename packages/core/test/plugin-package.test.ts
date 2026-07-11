@@ -1404,4 +1404,169 @@ describe("PluginPackage", () => {
       ),
     ),
   )
+
+  it.effect("closes workspace registration ownership when a factory is interrupted", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir.path, "cancelled.ts"),
+              `export default { id: "adapter-cancelled", server: async (input) => {
+                input.experimental_workspace.register("during", { name: "during" })
+                globalThis.__adapter_started()
+                await globalThis.__adapter_release
+                input.experimental_workspace.register("late", { name: "late" })
+                return { dispose: () => globalThis.__adapter_disposed() }
+              } }`,
+            ),
+          )
+          const started = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const disposed = yield* Deferred.make<void>()
+          const active = new Map<string, unknown>()
+          Object.assign(globalThis, {
+            __adapter_started: () => Effect.runSync(Deferred.succeed(started, undefined)),
+            __adapter_release: Effect.runPromise(Deferred.await(release)),
+            __adapter_disposed: () => Effect.runSync(Deferred.succeed(disposed, undefined)),
+          })
+          const load = PluginPackage.load.pipe(
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({ plugins: ["./cancelled.ts"] }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, {
+              directory: AbsolutePath.make(dir.path),
+              project: { id: "adapter-cancelled" as never, directory: AbsolutePath.make(dir.path) },
+            }),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () => Effect.void,
+                add: () => Effect.die("unused"),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+            Effect.provideService(
+              PluginPackage.Host,
+              PluginPackage.Host.of({
+                baseUrl: new URL("http://adapter.test"),
+                fetch: async () => Response.json([]),
+                register: (_projectID, type, adapter) => {
+                  active.set(type, adapter)
+                  return () => active.delete(type)
+                },
+              }),
+            ),
+          )
+          const fiber = yield* load.pipe(Effect.forkChild)
+          yield* Deferred.await(started)
+          expect(active.has("during")).toBe(true)
+          yield* Fiber.interrupt(fiber)
+          expect(active.size).toBe(0)
+          yield* Deferred.succeed(release, undefined)
+          yield* Deferred.await(disposed)
+          expect(active.size).toBe(0)
+        }),
+      ),
+    ),
+  )
+
+  it.effect("closes inspected registrations when warning publication is interrupted", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir.path, "warning.ts"),
+              `export default { id: "adapter-warning", server: async (input) => ({
+                get dispose() {
+                  input.experimental_workspace.register("inspected", { name: "inspected" })
+                  return () => globalThis.__adapter_warning_disposed()
+                },
+                unsupported() {}
+              }) }`,
+            ),
+          )
+          const warning = yield* Deferred.make<void>()
+          const active = new Map<string, unknown>()
+          let disposed = 0
+          Object.assign(globalThis, { __adapter_warning_disposed: () => disposed++ })
+          const load = PluginPackage.load.pipe(
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({ plugins: ["./warning.ts"] }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, {
+              directory: AbsolutePath.make(dir.path),
+              project: { id: "adapter-warning" as never, directory: AbsolutePath.make(dir.path) },
+            }),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () => Effect.void,
+                add: () => Effect.die("unused"),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+            Effect.provideService(
+              PluginPackage.Host,
+              PluginPackage.Host.of({
+                baseUrl: new URL("http://adapter.test"),
+                fetch: async () => Response.json([]),
+                register: (_projectID, type, adapter) => {
+                  active.set(type, adapter)
+                  return () => active.delete(type)
+                },
+              }),
+            ),
+            Effect.provideService(
+              EventV2.Service,
+              Context.get(
+                yield* Layer.build(
+                  Layer.mock(EventV2.Service, {
+                    publish: (definition, data) =>
+                      definition.type === PluginV2.Event.Warning.type
+                        ? Deferred.succeed(warning, undefined).pipe(Effect.andThen(Effect.never))
+                        : Effect.succeed({ id: EventV2.ID.make("evt_warning_test"), type: definition.type, data }),
+                  }),
+                ),
+                EventV2.Service,
+              ),
+            ),
+          )
+          const fiber = yield* load.pipe(Effect.forkChild)
+          yield* Deferred.await(warning)
+          expect(active.has("inspected")).toBe(true)
+          yield* Fiber.interrupt(fiber)
+          expect(active.size).toBe(0)
+          expect(disposed).toBe(1)
+        }),
+      ),
+    ),
+  )
 })

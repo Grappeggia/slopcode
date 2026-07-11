@@ -33,22 +33,20 @@ export const routes = createRoutes()
 
 export function webHandler(options?: { readonly baseUrl?: URL | (() => URL); readonly password?: string }) {
   let handler: ReturnType<typeof HttpRouter.toWebHandler>["handler"] | undefined
-  const routes = createRoutes(
-    options?.password,
-    PluginServer.layer({
-      baseUrl: options?.baseUrl ?? new URL("http://localhost"),
-      fetch: (request) => {
-        if (!handler) return Promise.reject(new Error("Server handler is not initialized"))
-        const next = request instanceof Request ? new Request(request) : new Request(request)
-        const authorization = ServerAuth.header(
-          options?.password ? { username: "slopcode", password: options.password } : undefined,
-        )
-        if (authorization) next.headers.set("authorization", authorization)
-        return handler(next, undefined as never)
-      },
-    }),
-  )
+  const plugins = PluginServer.runtime({
+    baseUrl: options?.baseUrl ?? new URL("http://localhost"),
+    fetch: (request) => {
+      if (!handler) return Promise.reject(new Error("Server handler is not initialized"))
+      const next = request instanceof Request ? new Request(request) : new Request(request)
+      const authorization = ServerAuth.header(
+        options?.password ? { username: "slopcode", password: options.password } : undefined,
+      )
+      if (authorization) next.headers.set("authorization", authorization)
+      return handler(next, undefined as never)
+    },
+  })
+  const routes = createRoutes(options?.password, plugins.layer)
   const app = HttpRouter.toWebHandler(routes.pipe(Layer.provide(HttpServer.layerServices)), { disableLogger: true })
   handler = app.handler
-  return app
+  return Object.assign(app, { pluginHost: plugins, workspace: plugins.workspace })
 }
