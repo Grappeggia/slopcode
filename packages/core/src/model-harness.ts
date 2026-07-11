@@ -139,8 +139,13 @@ export class IncompatibilityError extends Schema.TaggedErrorClass<Incompatibilit
   },
 ) {}
 
-export const resolve = (model: ModelV2.Info): Profile | undefined =>
-  Object.hasOwn(profiles, model.api.id) ? profiles[model.api.id as ID] : undefined
+const isID = Schema.is(ID)
+
+export const resolve = (model: ModelV2.Info): Profile | undefined => {
+  if (!isID(model.api.id)) return undefined
+  const id: ID = model.api.id
+  return profiles[id]
+}
 
 export const validate = (profile: Profile, capabilities: readonly Capability[]) => {
   const available = new Set(capabilities)
