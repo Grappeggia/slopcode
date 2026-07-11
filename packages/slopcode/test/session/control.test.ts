@@ -15,7 +15,7 @@ import { SessionStore } from "@slopcode-ai/core/session/store"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { eq, sql } from "drizzle-orm"
-import { Context, DateTime, Effect, Exit, Layer, Scope, Stream } from "effect"
+import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
 import { SessionControl } from "../../src/session/control"
 import { SessionPrompt } from "../../src/session/prompt"
 import { MessageID, SessionID } from "../../src/session/schema"
@@ -26,6 +26,7 @@ const runtime = SessionRuntime.layer.pipe(Layer.provide(database))
 const sessionID = SessionID.make("ses_control_test")
 const legacyCalls: SessionPrompt.PromptInput[] = []
 const legacyCancelCalls: SessionID[] = []
+const legacyCancelGates: Effect.Effect<void>[] = []
 const v2Calls: Array<{ readonly prompt: string; readonly resume?: boolean }> = []
 const interruptCalls: SessionID[] = []
 const realInterruptCalls: SessionID[] = []
@@ -44,11 +45,13 @@ const legacyMessage = {
 const legacy = Layer.succeed(
   SessionPrompt.Service,
   SessionPrompt.Service.of({
-    cancel: (id, guard) =>
-      Effect.gen(function* () {
-        yield* guard ?? Effect.void
+    cancel: (id, coordinate) => {
+      const cancel = Effect.gen(function* () {
+        yield* legacyCancelGates.shift() ?? Effect.void
         legacyCancelCalls.push(id)
-      }),
+      })
+      return coordinate ? coordinate(cancel) : cancel
+    },
     prompt: (input, guard) =>
       Effect.gen(function* () {
         yield* guard ?? Effect.void
@@ -126,6 +129,7 @@ const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
   legacyCalls.length = 0
   legacyCancelCalls.length = 0
+  legacyCancelGates.length = 0
   v2Calls.length = 0
   interruptCalls.length = 0
   realInterruptCalls.length = 0
@@ -358,27 +362,102 @@ describe("SessionControl", () => {
     }),
   )
 
-  it.effect("defines the V1 cancellation claim before a runtime transition", () =>
+  it.effect("coordinates the V1 cancellation mutation inside the runtime claim", () =>
     Effect.gen(function* () {
       yield* setup
       const runtime = yield* SessionRuntime.Service
       const order: string[] = []
-      const claimed = yield* runtime.claim(
-        { sessionID, owner: "v1", state: "ready", epoch: 0 },
-        Effect.sync(() => order.push("claim")).pipe(Effect.asVoid),
-      )
-      order.push("cancel")
-      const transition = yield* runtime.assign({
-        sessionID,
-        owner: "v2",
-        expectedOwner: "v1",
-        expectedEpoch: claimed.epoch,
+      const coordinated = SessionRuntime.Service.of({
+        ...runtime,
+        claim: (input, coordinate) =>
+          runtime.claim(
+            input,
+            Effect.sync(() => order.push("claim")).pipe(
+              Effect.andThen(coordinate ?? Effect.void),
+              Effect.tap(() => Effect.sync(() => order.push("cancelled"))),
+            ),
+          ),
       })
+      const layer = SessionControl.layer.pipe(
+        Layer.provide(Layer.succeed(SessionRuntime.Service, coordinated)),
+        Layer.provide(legacy),
+        Layer.provide(core),
+        Layer.provide(sessions),
+      )
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
 
-      expect(order).toEqual(["claim", "cancel"])
-      expect(transition).toMatchObject({ owner: "v2", epoch: 1 })
+      yield* control.cancel(sessionID)
+
+      expect(order).toEqual(["claim", "cancelled"])
+      expect(legacyCancelCalls).toEqual([sessionID])
     }),
   )
+
+  for (const change of ["owner", "state", "epoch"] as const) {
+    it.effect(`serializes coordinated cancellation before a concurrent ${change} assignment`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const runtime = yield* SessionRuntime.Service
+        const checked = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const done = yield* Deferred.make<void>()
+        let claimed = false
+        legacyCancelGates.push(
+          Deferred.succeed(checked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
+        )
+        const coordinated = SessionRuntime.Service.of({
+          ...runtime,
+          claim: (input, coordinate) =>
+            Effect.gen(function* () {
+              const current = yield* runtime.assert(input)
+              claimed = true
+              yield* coordinate ?? Effect.void
+              claimed = false
+              yield* Deferred.succeed(done, undefined)
+              return current
+            }),
+          assign: (input) =>
+            Effect.suspend(() => (claimed ? Deferred.await(done) : Effect.void)).pipe(
+              Effect.andThen(runtime.assign(input)),
+            ),
+        })
+        const layer = SessionControl.layer.pipe(
+          Layer.provide(Layer.succeed(SessionRuntime.Service, coordinated)),
+          Layer.provide(legacy),
+          Layer.provide(core),
+          Layer.provide(sessions),
+        )
+        const scope = yield* Scope.make()
+        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+        const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
+        const cancellation = yield* control.cancel(sessionID).pipe(Effect.forkChild)
+        yield* Deferred.await(checked)
+        const transition = yield* coordinated
+          .assign({
+            sessionID,
+            ...(change === "owner" ? { owner: "v2" as const } : {}),
+            ...(change === "state" ? { state: "migrating" as const } : {}),
+            expectedOwner: "v1",
+            expectedEpoch: 0,
+          })
+          .pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+        expect(transition.pollUnsafe()).toBeUndefined()
+        expect(legacyCancelCalls).toEqual([])
+
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(cancellation)
+        expect(legacyCancelCalls).toEqual([sessionID])
+        expect(yield* Fiber.join(transition)).toMatchObject({
+          owner: change === "owner" ? "v2" : "v1",
+          state: change === "state" ? "migrating" : "ready",
+          epoch: 1,
+        })
+      }),
+    )
+  }
 
   it.effect("fences missing projected V2 sessions with the real Core service before interrupting", () =>
     Effect.gen(function* () {

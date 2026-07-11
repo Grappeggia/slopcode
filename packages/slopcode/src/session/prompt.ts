@@ -86,7 +86,10 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
 }
 
 export interface Interface {
-  readonly cancel: <E = never>(sessionID: SessionID, guard?: Effect.Effect<void, E>) => Effect.Effect<void, E>
+  readonly cancel: <E = never>(
+    sessionID: SessionID,
+    coordinate?: (cancel: Effect.Effect<void>) => Effect.Effect<void, E>,
+  ) => Effect.Effect<void, E>
   readonly prompt: <E = never>(
     input: PromptInput,
     guard?: Effect.Effect<void, E>,
@@ -141,11 +144,11 @@ export const layer = Layer.effect(
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* <E = never>(
       sessionID: SessionID,
-      guard: Effect.Effect<void, E> = Effect.void,
+      coordinate?: (cancel: Effect.Effect<void>) => Effect.Effect<void, E>,
     ) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
-      yield* guard
-      yield* state.cancel(sessionID)
+      const cancel = state.cancel(sessionID)
+      yield* coordinate ? coordinate(cancel) : cancel
     })
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
@@ -653,7 +656,6 @@ export const layer = Layer.effect(
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
         throw error
       }
 
@@ -689,38 +691,12 @@ export const layer = Layer.effect(
         format: input.format,
       }
 
-      if (current?.agent !== info.agent) {
-        yield* events.publish(SessionEvent.AgentSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          agent: info.agent,
-        })
-      }
-      if (
-        current?.model?.providerID !== info.model.providerID ||
-        current.model.id !== info.model.modelID ||
-        (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant
-      ) {
-        yield* events.publish(SessionEvent.ModelSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          model: {
-            id: ModelV2.ID.make(info.model.modelID),
-            providerID: ProviderV2.ID.make(info.model.providerID),
-            variant: ModelV2.VariantID.make(info.model.variant ?? "default"),
-          },
-        })
-      }
-
-      yield* Effect.addFinalizer(() => instruction.clear(info.id))
-
       type Draft<T> = T extends SessionV1.Part ? Omit<T, "id"> & { id?: string } : never
       const assign = (part: Draft<SessionV1.Part>): SessionV1.Part => ({
         ...part,
         id: part.id ? PartID.make(part.id) : PartID.ascending(),
       })
+      const followups: Effect.Effect<unknown>[] = []
 
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<SessionV1.Part>[]> = Effect.fn(
         "SessionPrompt.resolveUserPart",
@@ -887,10 +863,12 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   yield* Effect.logError("failed to read file", { error, filepath })
                   const message = error instanceof Error ? error.message : String(error)
-                  yield* events.publish(Session.Event.Error, {
-                    sessionID: input.sessionID,
-                    error: new NamedError.Unknown({ message }).toObject(),
-                  })
+                  followups.push(
+                    events.publish(Session.Event.Error, {
+                      sessionID: input.sessionID,
+                      error: new NamedError.Unknown({ message }).toObject(),
+                    }),
+                  )
                   pieces.push({
                     messageID: info.id,
                     sessionID: input.sessionID,
@@ -909,10 +887,12 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   yield* Effect.logError("failed to read directory", { error, filepath })
                   const message = error instanceof Error ? error.message : String(error)
-                  yield* events.publish(Session.Event.Error, {
-                    sessionID: input.sessionID,
-                    error: new NamedError.Unknown({ message }).toObject(),
-                  })
+                  followups.push(
+                    events.publish(Session.Event.Error, {
+                      sessionID: input.sessionID,
+                      error: new NamedError.Unknown({ message }).toObject(),
+                    }),
+                  )
                   return [
                     {
                       messageID: info.id,
@@ -1040,6 +1020,32 @@ export const layer = Layer.effect(
       }
 
       yield* sessions.updateMessage(info, guard.pipe(Effect.orDie))
+      yield* Effect.addFinalizer(() => instruction.clear(info.id))
+      if (current?.agent !== info.agent) {
+        yield* events.publish(SessionEvent.AgentSwitched, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.create(),
+          timestamp: DateTime.makeUnsafe(info.time.created),
+          agent: info.agent,
+        })
+      }
+      if (
+        current?.model?.providerID !== info.model.providerID ||
+        current.model.id !== info.model.modelID ||
+        (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant
+      ) {
+        yield* events.publish(SessionEvent.ModelSwitched, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.create(),
+          timestamp: DateTime.makeUnsafe(info.time.created),
+          model: {
+            id: ModelV2.ID.make(info.model.modelID),
+            providerID: ProviderV2.ID.make(info.model.providerID),
+            variant: ModelV2.VariantID.make(info.model.variant ?? "default"),
+          },
+        })
+      }
+      yield* Effect.forEach(followups, (effect) => effect, { discard: true })
       for (const part of parts) yield* sessions.updatePart(part)
       const nextPrompt = parts.reduce(
         (result, part) => {
@@ -1121,8 +1127,8 @@ export const layer = Layer.effect(
     ) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* guard
-      yield* revert.cleanup(session)
       const message = yield* createUserMessage(input, guard)
+      yield* revert.cleanup(session, message.info.id)
       yield* sessions.touch(input.sessionID)
 
       const permissions: PermissionV1.Rule[] = []

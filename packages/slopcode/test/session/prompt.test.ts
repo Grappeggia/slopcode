@@ -27,7 +27,7 @@ import { Memory } from "../../src/memory/memory"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { SessionMessageTable } from "@slopcode-ai/core/session/sql"
+import { SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
@@ -165,7 +165,9 @@ const blockingProcessor = Layer.succeed(
   }),
 )
 
-function makePrompt(input?: { processor?: "blocking" }) {
+type PromptOptions = { processor?: "blocking"; plugin?: Layer.Layer<Plugin.Service> }
+
+function makePrompt(input?: PromptOptions) {
   const deps = Layer.mergeAll(
     Session.defaultLayer,
     Snapshot.defaultLayer,
@@ -174,7 +176,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     AgentSvc.defaultLayer,
     Command.defaultLayer,
     Permission.defaultLayer,
-    Plugin.defaultLayer,
+    input?.plugin ?? Plugin.defaultLayer,
     Config.defaultLayer,
     ProviderSvc.defaultLayer,
     lsp,
@@ -233,17 +235,27 @@ function makePrompt(input?: { processor?: "blocking" }) {
   )
 }
 
-function makeHttp(input?: { processor?: "blocking" }) {
+function makeHttp(input?: PromptOptions) {
   return Layer.mergeAll(TestLLMServer.layer, makePrompt(input))
 }
 
-function makeHttpNoLLMServer(input?: { processor?: "blocking" }) {
+function makeHttpNoLLMServer(input?: PromptOptions) {
   return makePrompt(input)
 }
 
 const it = testEffect(makeHttp())
 const noLLMServer = testEffect(makeHttpNoLLMServer())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
+const admissionGates: Array<() => Effect.Effect<void>> = []
+const admissionPlugin = Layer.mock(Plugin.Service)({
+  trigger: <Name extends string, Input, Output>(name: Name, _input: Input, output: Output) =>
+    name === "chat.message"
+      ? Effect.suspend(() => admissionGates.shift()?.() ?? Effect.void).pipe(Effect.as(output))
+      : Effect.succeed(output),
+  list: () => Effect.succeed([]),
+  init: () => Effect.void,
+})
+const admissionServer = testEffect(makeHttpNoLLMServer({ plugin: admissionPlugin }))
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
 const unixNoLLMServer = process.platform !== "win32" ? noLLMServer.instance : noLLMServer.instance.skip
 
@@ -468,7 +480,14 @@ for (const change of ["owner", "state", "epoch"] as const) {
     () =>
       Effect.gen(function* () {
         const { prompt, sessions, chat } = yield* boot()
+        const { db } = yield* Database.Service
         const runtime = yield* SessionRuntime.Service
+        const old = yield* user(chat.id, "old")
+        yield* sessions.setRevert({
+          sessionID: chat.id,
+          revert: { messageID: old.id },
+          summary: { additions: 0, deletions: 0, files: 0 },
+        })
         const checked = yield* Deferred.make<void>()
         const release = yield* Deferred.make<void>()
         let checks = 0
@@ -505,13 +524,88 @@ for (const change of ["owner", "state", "epoch"] as const) {
         yield* Effect.sleep("20 millis")
         expect(transition.pollUnsafe()).toBeUndefined()
         yield* Deferred.succeed(release, undefined)
-        yield* Fiber.join(admitted)
-        expect(yield* sessions.messages({ sessionID: chat.id })).toHaveLength(1)
+        const message = yield* Fiber.join(admitted)
+        expect((yield* sessions.messages({ sessionID: chat.id })).map((item) => item.info.id)).toEqual([
+          message.info.id,
+        ])
+        expect((yield* sessions.get(chat.id)).revert).toBeUndefined()
         expect(yield* Fiber.join(transition)).toMatchObject({
           owner: change === "owner" ? "v2" : "v1",
           state: change === "state" ? "migrating" : "ready",
           epoch: 1,
         })
+        expect(
+          yield* db
+            .select({ agent: SessionTable.agent, model: SessionTable.model })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, chat.id))
+            .get()
+            .pipe(Effect.orDie),
+        ).toMatchObject({ agent: "build", model: { providerID: "test", id: "test-model" } })
+      }),
+    { config: cfg },
+  )
+}
+
+for (const change of ["owner", "state", "epoch"] as const) {
+  admissionServer.instance(
+    `prompt admission leaves no mutation when the ${change} transition wins`,
+    () =>
+      Effect.gen(function* () {
+        const { prompt, sessions, chat } = yield* boot()
+        const { db } = yield* Database.Service
+        const runtime = yield* SessionRuntime.Service
+        const old = yield* user(chat.id, "old")
+        yield* sessions.setRevert({
+          sessionID: chat.id,
+          revert: { messageID: old.id },
+          summary: { additions: 0, deletions: 0, files: 0 },
+        })
+        const messages = yield* sessions.messages({ sessionID: chat.id })
+        const before = yield* db
+          .select({ agent: SessionTable.agent, model: SessionTable.model })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, chat.id))
+          .get()
+          .pipe(Effect.orDie)
+        const checked = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        admissionGates.push(() =>
+          Deferred.succeed(checked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
+        )
+        const admitted = yield* prompt
+          .prompt(
+            {
+              sessionID: chat.id,
+              agent: "build",
+              model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test-model") },
+              noReply: true,
+              parts: [{ type: "text", text: change }],
+            },
+            runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid),
+          )
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(checked)
+        yield* runtime.assign({
+          sessionID: chat.id,
+          ...(change === "owner" ? { owner: "v2" as const } : {}),
+          ...(change === "state" ? { state: "migrating" as const } : {}),
+          expectedOwner: "v1",
+          expectedEpoch: 0,
+        })
+        yield* Deferred.succeed(release, undefined)
+
+        expect(Exit.isFailure(yield* Fiber.await(admitted))).toBe(true)
+        expect(yield* sessions.messages({ sessionID: chat.id })).toEqual(messages)
+        expect((yield* sessions.get(chat.id)).revert).toEqual({ messageID: old.id })
+        expect(
+          yield* db
+            .select({ agent: SessionTable.agent, model: SessionTable.model })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, chat.id))
+            .get()
+            .pipe(Effect.orDie),
+        ).toEqual(before)
       }),
     { config: cfg },
   )
