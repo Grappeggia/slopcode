@@ -159,7 +159,7 @@ export const resolve = (model: ModelV2.Info): Profile | undefined => {
   return profiles[id]
 }
 
-export const validate = (profile: Profile, capabilities: readonly Capability[]) => {
+export const validate = (profile: Profile, capabilities: readonly string[]) => {
   const available = new Set(capabilities)
   const missing = profile.transport.required.filter((capability) => !available.has(capability))
   if (missing.length > 0) return Effect.fail(new IncompatibilityError({ profileID: profile.id, missing }))

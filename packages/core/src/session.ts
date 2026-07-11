@@ -33,6 +33,7 @@ import { PluginBoot } from "./plugin/boot"
 import { SkillV2 } from "./skill"
 import { SessionTask } from "./session/task"
 import { SessionCreate } from "./session/create"
+import { SessionRunnerModel } from "./session/runner/model"
 
 // get project -> project.locations
 //
@@ -142,6 +143,16 @@ export class SkillNotFoundError extends Schema.TaggedErrorClass<SkillNotFoundErr
   available: Schema.Array(Schema.String),
 }) {}
 
+export class ModelHistoryIncompatibleError extends Schema.TaggedErrorClass<ModelHistoryIncompatibleError>()(
+  "Session.ModelHistoryIncompatibleError",
+  {
+    sessionID: SessionSchema.ID,
+    model: ModelV2.Ref,
+    protocol: Schema.String,
+    feature: Schema.Literal("custom-tools"),
+  },
+) {}
+
 export type Error =
   | NotFoundError
   | MessageDecodeError
@@ -152,6 +163,7 @@ export type Error =
   | CompactionFailedError
   | AgentUnavailableError
   | SkillNotFoundError
+  | ModelHistoryIncompatibleError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
@@ -187,7 +199,10 @@ export interface Interface {
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
-  }) => Effect.Effect<void, NotFoundError>
+  }) => Effect.Effect<
+    void,
+    NotFoundError | MessageDecodeError | ModelHistoryIncompatibleError | SessionRunnerModel.Error
+  >
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
@@ -502,7 +517,34 @@ export const layer = Layer.effect(
         })
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
-        yield* result.get(input.sessionID)
+        const session = yield* result.get(input.sessionID)
+        const rows = yield* db
+          .select()
+          .from(SessionMessageTable)
+          .where(and(eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.type, "assistant")))
+          .all()
+          .pipe(Effect.orDie)
+        const custom = yield* Effect.findFirst(rows, (row) =>
+          decode(row).pipe(
+            Effect.map(
+              (message) =>
+                message.type === "assistant" &&
+                message.content.some((part) => part.type === "tool" && part.toolType === "custom"),
+            ),
+          ),
+        )
+        if (custom._tag === "Some") {
+          const resolved = yield* Effect.gen(function* () {
+            return yield* (yield* SessionRunnerModel.Service).resolve({ ...session, model: input.model })
+          }).pipe(Effect.provide(locations.get(session.location)))
+          if (!resolved.model.route.capabilities.includes("custom-tools"))
+            return yield* new ModelHistoryIncompatibleError({
+              sessionID: input.sessionID,
+              model: input.model,
+              protocol: resolved.model.route.protocol,
+              feature: "custom-tools",
+            })
+        }
         yield* events.publish(SessionEvent.ModelSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),

@@ -1,12 +1,18 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { AbsolutePath, Location, Model, SlopCode, Session, Tool } from "@slopcode-ai/core/public"
+import { Database } from "@slopcode-ai/core/database/database"
+import { EventV2 } from "@slopcode-ai/core/event"
+import { EventTable } from "@slopcode-ai/core/event/sql"
+import { SessionInputTable, SessionTable } from "@slopcode-ai/core/session/sql"
+import { Prompt } from "@slopcode-ai/core/session/prompt"
+import { eq } from "drizzle-orm"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
-const it = testEffect(SlopCode.layer)
+const it = testEffect(Layer.mergeAll(SlopCode.layer, Database.defaultLayer, EventV2.defaultLayer))
 
 describe("public native SlopCode API", () => {
   it.effect("exposes only the intentional Session capabilities", () =>
@@ -87,9 +93,7 @@ describe("public native SlopCode API", () => {
             skill: "customize-slopcode",
             resume: false,
           })
-          const agentError = yield* slopcode.sessions
-            .switchAgent({ sessionID, agent: "missing" })
-            .pipe(Effect.flip)
+          const agentError = yield* slopcode.sessions.switchAgent({ sessionID, agent: "missing" }).pipe(Effect.flip)
           const skillError = yield* slopcode.sessions
             .skill({ sessionID, skill: "missing", resume: false })
             .pipe(Effect.flip)
@@ -183,6 +187,85 @@ describe("public native SlopCode API", () => {
       expect(error).toBeInstanceOf(Session.NotFoundError)
       if (error instanceof Session.NotFoundError) expect(error.sessionID).toBe(sessionID)
     }),
+  )
+
+  it.live("fences every native mutating control for V1 and transition runtimes before mutation", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* writeProvider(tmp.path)
+          const slopcode = yield* SlopCode.Service
+          const { db } = yield* Database.Service
+          const states = [
+            { owner: "v1", state: "ready" },
+            { owner: "v2", state: "draining" },
+            { owner: "v2", state: "migrating" },
+            { owner: "v2", state: "paused" },
+          ] as const
+
+          for (const runtime of states) {
+            const sessionID = Session.ID.create()
+            yield* slopcode.sessions.create({
+              id: sessionID,
+              location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+            })
+            yield* db
+              .update(SessionTable)
+              .set({ runtime: runtime.owner, runtime_state: runtime.state })
+              .where(eq(SessionTable.id, sessionID))
+              .run()
+              .pipe(Effect.orDie)
+            const before = yield* db
+              .select()
+              .from(EventTable)
+              .where(eq(EventTable.aggregate_id, sessionID))
+              .all()
+              .pipe(Effect.orDie)
+            const inputs = yield* db
+              .select()
+              .from(SessionInputTable)
+              .where(eq(SessionInputTable.session_id, sessionID))
+              .all()
+              .pipe(Effect.orDie)
+            const controls = [
+              slopcode.sessions.prompt({ sessionID, prompt: new Prompt({ text: "blocked" }) }),
+              slopcode.sessions.skill({ sessionID, skill: "customize-slopcode", resume: false }),
+              slopcode.sessions.switchAgent({ sessionID, agent: "plan" }),
+              slopcode.sessions.switchModel({ sessionID, model: ref() }),
+              slopcode.sessions.interrupt(sessionID),
+            ]
+
+            for (const control of controls) {
+              expect(yield* control.pipe(Effect.flip)).toMatchObject({
+                _tag: "SessionRuntime.Mismatch",
+                actualOwner: runtime.owner,
+                actualState: runtime.state,
+              })
+            }
+            expect(
+              yield* db
+                .select()
+                .from(EventTable)
+                .where(eq(EventTable.aggregate_id, sessionID))
+                .all()
+                .pipe(Effect.orDie),
+            ).toEqual(before)
+            expect(
+              yield* db
+                .select()
+                .from(SessionInputTable)
+                .where(eq(SessionInputTable.session_id, sessionID))
+                .all()
+                .pipe(Effect.orDie),
+            ).toEqual(inputs)
+            expect((yield* slopcode.sessions.get(sessionID)).model).toBeUndefined()
+          }
+        }),
+      ),
+    ),
   )
 })
 

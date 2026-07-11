@@ -295,7 +295,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match) {
-            match.toolType = event.data.toolType === "custom" ? "custom" : undefined
+            match.toolType = "toolType" in event.data && event.data.toolType === "custom" ? "custom" : undefined
             match.provider = event.data.provider
             match.time.ran = event.data.timestamp
             match.state = castDraft(

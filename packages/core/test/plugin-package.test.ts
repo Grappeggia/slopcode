@@ -142,7 +142,7 @@ describe("PluginPackage", () => {
                   requests.push(request instanceof Request ? request : new Request(request))
                   return Response.json([])
                 },
-                register: () => {},
+                register: () => () => {},
               }),
             ),
           )
@@ -1295,6 +1295,111 @@ describe("PluginPackage", () => {
               message: expect.stringContaining("No local plugin SDK transport is installed"),
             }),
           })
+        }),
+      ),
+    ),
+  )
+
+  it.effect("cleans workspace registrations on failure, replacement, empty replacement, and slow removal", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(dir.path, "first.ts"),
+                `export default { id: "adapter-shared", server: async (input) => { input.experimental_workspace.register("shared", { name: "first" }); return {} } }`,
+              ),
+              Bun.write(
+                path.join(dir.path, "second.ts"),
+                `export default { id: "adapter-shared", server: async (input) => { input.experimental_workspace.register("shared", { name: "second" }); return {} } }`,
+              ),
+              Bun.write(
+                path.join(dir.path, "failed.ts"),
+                `export default { id: "adapter-failed", server: async (input) => { input.experimental_workspace.register("failed", { name: "failed" }); throw new Error("factory failed") } }`,
+              ),
+              Bun.write(
+                path.join(dir.path, "empty.ts"),
+                `export default { id: "adapter-shared", server: async () => ({}) }`,
+              ),
+              Bun.write(
+                path.join(dir.path, "slow.ts"),
+                `export default { id: "adapter-slow", server: async (input) => { input.experimental_workspace.register("slow", { name: "slow" }); return { dispose: () => globalThis.__adapter_slow() } } }`,
+              ),
+            ]),
+          )
+          const location = Location.Service.of({
+            directory: AbsolutePath.make(dir.path),
+            project: { id: "adapter-project" as never, directory: AbsolutePath.make(dir.path) },
+          })
+          const active = new Map<string, Array<{ token: symbol; adapter: unknown }>>()
+          const host = PluginPackage.Host.of({
+            baseUrl: new URL("http://adapter.test"),
+            fetch: async () => Response.json([]),
+            register: (_projectID, type, adapter) => {
+              const token = Symbol(type)
+              active.set(type, [...(active.get(type) ?? []), { token, adapter }])
+              return () => {
+                const entries = active.get(type)?.filter((entry) => entry.token !== token) ?? []
+                if (entries.length) active.set(type, entries)
+                if (!entries.length) active.delete(type)
+              }
+            },
+          })
+          const npm = Npm.Service.of({
+            install: () => Effect.void,
+            add: () => Effect.die("unused"),
+            which: () => Effect.die("unused"),
+          })
+          const load = (spec: string) =>
+            PluginPackage.load.pipe(
+              Effect.provideService(
+                Config.Service,
+                Config.Service.of({
+                  entries: () =>
+                    Effect.succeed([
+                      new Config.Document({
+                        type: "document",
+                        path: path.join(dir.path, "slopcode.json"),
+                        info: new Config.Info({ plugins: [spec] }),
+                      }),
+                    ]),
+                }),
+              ),
+              Effect.provideService(Location.Service, location),
+              Effect.provideService(Npm.Service, npm),
+              Effect.provideService(PluginPackage.Host, host),
+            )
+          const current = (type: string) => active.get(type)?.at(-1)?.adapter as { name?: string } | undefined
+
+          yield* load("./first.ts")
+          expect(current("shared")?.name).toBe("first")
+          yield* load("./second.ts")
+          expect(current("shared")?.name).toBe("second")
+          yield* load("./failed.ts")
+          expect(current("failed")).toBeUndefined()
+          expect(current("shared")?.name).toBe("second")
+          yield* load("./empty.ts")
+          expect(current("shared")).toBeUndefined()
+
+          const started = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          Object.assign(globalThis, {
+            __adapter_slow: () =>
+              Effect.runPromise(Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)))),
+          })
+          yield* load("./slow.ts")
+          expect(current("slow")?.name).toBe("slow")
+          const removing = yield* (yield* PluginV2.Service)
+            .remove(PluginV2.ID.make("adapter-slow"))
+            .pipe(Effect.forkChild)
+          yield* Deferred.await(started)
+          expect(current("slow")).toBeUndefined()
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(removing)
         }),
       ),
     ),

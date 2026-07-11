@@ -1,7 +1,7 @@
 import { Schema, type Effect } from "effect"
 import type { LLMError, LLMEvent, LLMRequest, ProtocolID } from "../schema"
 
-export type ProtocolCapability = "responses-lite"
+export type ProtocolCapability = "responses-lite" | "custom-tools"
 
 /**
  * The semantic API contract of one model server family.

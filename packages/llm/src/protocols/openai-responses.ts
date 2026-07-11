@@ -1080,7 +1080,7 @@ const step = (state: ParserState, event: OpenAIResponsesEvent) => {
  */
 export const protocol = Protocol.make({
   id: ADAPTER,
-  capabilities: ["responses-lite"],
+  capabilities: ["responses-lite", "custom-tools"],
   body: {
     schema: OpenAIResponsesBody,
     from: fromRequest,

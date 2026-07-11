@@ -29,7 +29,7 @@ export type Fetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Re
 export interface HostInfo {
   readonly baseUrl: URL | (() => URL)
   readonly fetch: Fetch
-  readonly register: (projectID: string, type: string, adapter: unknown) => void
+  readonly register: (projectID: string, type: string, adapter: unknown) => () => void
 }
 
 export class Host extends Context.Service<Host, HostInfo>()("@slopcode/v2/PluginPackage/Host") {}
@@ -411,9 +411,6 @@ export const load = Effect.gen(function* () {
     },
     directory: location.directory,
     worktree: location.project.directory,
-    experimental_workspace: {
-      register: (type: string, adapter: unknown) => host?.register(String(location.project.id), type, adapter),
-    },
     serverUrl: baseUrl ?? new URL("http://unavailable.invalid"),
     $: typeof Bun === "undefined" ? undefined : Bun.$,
   }
@@ -480,13 +477,31 @@ export const load = Effect.gen(function* () {
       }
       const factory = exported.factory
       const id = PluginV2.ID.make(factory.id ?? `${item.spec}#${factory.name}`)
+      const registrations: Array<() => void> = []
+      const release = () =>
+        registrations
+          .splice(0)
+          .toReversed()
+          .forEach((cleanup) => cleanup())
       const hooks = yield* attempt(
         Effect.tryPromise({
-          try: () => factory.value(input, item.options),
+          try: () =>
+            factory.value(
+              {
+                ...input,
+                experimental_workspace: {
+                  register: (type: string, adapter: unknown) => {
+                    if (host) registrations.push(host.register(String(location.project.id), type, adapter))
+                  },
+                },
+              },
+              item.options,
+            ),
           catch: (cause) => cause,
         }),
       )
       if (!hooks.ok) {
+        release()
         yield* fail(item, "factory", hooks.error, id)
         continue
       }
@@ -503,28 +518,31 @@ export const load = Effect.gen(function* () {
         }),
       )
       if (!resource.ok) {
+        release()
         yield* fail(item, "hook-shape", resource.error, id)
         continue
       }
+      const dispose = () => {
+        release()
+        return Promise.resolve(resource.value?.())
+      }
       const cleanup = () =>
-        resource.value
-          ? Effect.tryPromise({ try: () => Promise.resolve(resource.value?.()), catch: (cause) => cause }).pipe(
-              Effect.tapError((cause) =>
-                Effect.logError("failed to dispose rejected configured plugin", {
-                  id,
-                  package: item.spec,
-                  source: item.source,
-                  stage: "hook-shape",
-                  cause,
-                }),
-              ),
-              Effect.ignore,
-            )
-          : Effect.void
+        Effect.tryPromise({ try: dispose, catch: (cause) => cause }).pipe(
+          Effect.tapError((cause) =>
+            Effect.logError("failed to dispose rejected configured plugin", {
+              id,
+              package: item.spec,
+              source: item.source,
+              stage: "hook-shape",
+              cause,
+            }),
+          ),
+          Effect.ignore,
+        )
       const inspected = yield* attempt(
         Effect.try({
           try: () => ({
-            adapted: registration(hooks.value, item.spec, resource.value),
+            adapted: registration(hooks.value, item.spec, dispose),
             names: Object.keys(hooks.value as Record<string, unknown>),
           }),
           catch: (cause) => cause,

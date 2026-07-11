@@ -687,6 +687,8 @@ export namespace Compaction {
 
 const ShellEndedV1 = Shell.EndedV1.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
 const ShellEnded = Shell.Ended.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
+const ToolCalledV1 = Tool.CalledV1.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
+const ToolCalled = Tool.Called.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
 
 const DurableDefinitions = [
   AgentSwitched,
@@ -712,7 +714,8 @@ const DurableDefinitions = [
   Text.Ended,
   Tool.Input.Started,
   Tool.Input.Ended,
-  Tool.Called,
+  ToolCalledV1,
+  ToolCalled,
   Tool.Progress,
   Tool.Success,
   Tool.Failed,
