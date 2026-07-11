@@ -3,6 +3,8 @@
 This document is the upstream working plan for the package now restored as `@slopcode-ai/codemode`.
 It captures every locked decision, everything already implemented, and a detailed TODO of what
 remains - enough context that someone (human or agent) can pick up any item cold.
+References to OpenCode integration below are historical provenance only; this restoration contains
+the reusable package and does not include host integration.
 
 Tracking issue: https://github.com/anomalyco/opencode/issues/34787
 Working branch: `codemode-v2` (base: `dev`)
@@ -539,7 +541,7 @@ adapter needed **no changes**.
 **Fix 4 - token-budgeted catalog (was bytes)** (user direction: signatures need a token
 budget; namespaces must always be present):
 
-- `src/token.ts` added: copy of `@opencode-ai/core/util/token` (`round(chars / 4)`), so
+- `src/token.ts` added with the host token heuristic (`round(chars / 4)`), so
   the package stays dependency-free; keep in sync if the core heuristic changes.
 - `DiscoveryOptions.maxInlineCatalogBytes` -> `maxInlineCatalogTokens` (default 4,000
   estimated tokens ~ the old 16,000 bytes at 4 chars/token - behavior parity, not a size
