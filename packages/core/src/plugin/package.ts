@@ -472,18 +472,24 @@ export const load = Effect.gen(function* () {
         yield* fail(item, "factory", hooks.error, id)
         continue
       }
-      const adapted = yield* attempt(
-        Effect.try({ try: () => registration(hooks.value, item.spec), catch: (cause) => cause }),
+      const inspected = yield* attempt(
+        Effect.try({
+          try: () => ({
+            adapted: registration(hooks.value, item.spec),
+            names: Object.keys(hooks.value as Record<string, unknown>),
+          }),
+          catch: (cause) => cause,
+        }),
       )
-      if (!adapted.ok) {
-        yield* fail(item, "hook-shape", adapted.error, id)
+      if (!inspected.ok) {
+        yield* fail(item, "hook-shape", inspected.error, id)
         continue
       }
-      for (const name of Object.keys(hooks.value as Record<string, unknown>)) {
+      for (const name of inspected.value.names) {
         if (!supported.has(name)) yield* warn(item, `Plugin ${item.spec} returned unsupported hook ${name}`, id)
       }
       yield* plugin
-        .add({ id, effect: Effect.succeed(adapted.value), reportFailure: false })
+        .add({ id, effect: Effect.succeed(inspected.value.adapted), reportFailure: false })
         .pipe(Effect.catch((cause) => fail(item, "hook-shape", cause, id).pipe(Effect.asVoid)))
     }
   }

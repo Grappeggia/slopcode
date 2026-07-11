@@ -125,19 +125,28 @@ describe("LocationServiceMap", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           Object.assign(globalThis, { __h5c3b_location_disposed: 0 })
+          const tools = path.join(dir.path, ".slopcode", "tool")
+          yield* Effect.promise(() => fs.mkdir(tools, { recursive: true }))
           yield* Effect.promise(() =>
             Promise.all([
               Bun.write(
                 path.join(dir.path, "slopcode.json"),
                 JSON.stringify({ plugins: ["./failed.ts", "./healthy.ts"] }),
               ),
-              Bun.write(path.join(dir.path, "failed.ts"), `export default async () => { throw new Error("failed") }`),
+              Bun.write(
+                path.join(dir.path, "failed.ts"),
+                `export default async () => new Proxy({}, { ownKeys() { throw new Error("hostile ownKeys") } })`,
+              ),
               Bun.write(
                 path.join(dir.path, "healthy.ts"),
                 `export default async () => ({
                   tool: { configured_healthy: { description: "healthy", args: {}, execute: async () => "healthy" } },
                   dispose: () => globalThis.__h5c3b_location_disposed++
                 })`,
+              ),
+              Bun.write(
+                path.join(tools, "after-proxy.ts"),
+                `export default { description: "local", args: {}, execute: async () => "local" }`,
               ),
             ]),
           )
@@ -147,6 +156,7 @@ describe("LocationServiceMap", () => {
             return yield* toolDefinitions(yield* ToolRegistry.Service)
           }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get(ref)))
           expect(result.some((tool) => tool.name === "configured_healthy")).toBe(true)
+          expect(result.some((tool) => tool.name === "after-proxy")).toBe(true)
           yield* LocationServiceMap.invalidate(ref)
           expect((globalThis as { __h5c3b_location_disposed: number }).__h5c3b_location_disposed).toBe(1)
         }),
