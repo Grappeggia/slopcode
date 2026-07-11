@@ -143,10 +143,10 @@ describe("SessionRunnerModel", () => {
       })
 
       const resolved = yield* SessionRunnerModel.resolve(session, catalog)
-      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }))
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved.model, prompt: "Hello" }))
 
-      expect(resolved.route.defaults.headers).toMatchObject({ "x-test": "header", "x-variant": "high" })
-      expect(resolved.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
+      expect(resolved.model.route.defaults.headers).toMatchObject({ "x-test": "header", "x-variant": "high" })
+      expect(resolved.model.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
       expect(prepared.body).toMatchObject({
         store: false,
         service_tier: "priority",
@@ -183,9 +183,9 @@ describe("SessionRunnerModel", () => {
       })
 
       const resolved = yield* SessionRunnerModel.resolve(session, catalog)
-      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }))
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved.model, prompt: "Hello" }))
 
-      expect(resolved.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
+      expect(resolved.model.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
       expect(prepared.body).toMatchObject({
         store: false,
         reasoning_effort: "high",
@@ -217,9 +217,9 @@ describe("SessionRunnerModel", () => {
       })
 
       const resolved = yield* SessionRunnerModel.resolve(session, catalog)
-      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }))
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved.model, prompt: "Hello" }))
 
-      expect(resolved.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
+      expect(resolved.model.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
       expect(prepared.body).toMatchObject({
         thinking: { type: "enabled", budget_tokens: 12000 },
       })

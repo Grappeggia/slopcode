@@ -238,7 +238,8 @@ export const layer = Layer.effect(
       const current = yield* getSession(sessionID)
       if ((yield* agents.select(current.agent)).id !== agent.id || !sameModel(current.model, session.model))
         return yield* Effect.die(rebuildPreparedTurn())
-      const model = yield* models.resolve(session)
+      const resolved = yield* models.resolve(session)
+      const model = resolved.model
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
