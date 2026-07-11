@@ -5551,19 +5551,37 @@ export class Session3 extends HeyApiClient {
   /**
    * Compact session
    *
-   * Compact a session conversation.
+   * Durably compact a session conversation with an optional text-only summary instruction.
    */
   public compact<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
+      id?: string
+      prompt?: Prompt
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "id" },
+            { in: "body", key: "prompt" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).post<V2SessionCompactResponses, V2SessionCompactErrors, ThrowOnError>({
       url: "/api/session/{sessionID}/compact",
       ...options,
       ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 
