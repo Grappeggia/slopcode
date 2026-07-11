@@ -17,8 +17,6 @@ import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
 import { SessionV1 } from "./v1/session"
-import { InstallationVersion } from "./installation/version"
-import { Slug } from "./util/slug"
 import { ProjectTable } from "./project/sql"
 import path from "path"
 import { fromRow } from "./session/info"
@@ -34,6 +32,7 @@ import { LocationServiceMap } from "./location-layer"
 import { PluginBoot } from "./plugin/boot"
 import { SkillV2 } from "./skill"
 import { SessionTask } from "./session/task"
+import { SessionCreate } from "./session/create"
 
 // get project -> project.locations
 //
@@ -270,65 +269,16 @@ export const layer = Layer.effect(
           .run()
           .pipe(Effect.orDie)
         const now = Date.now()
-        const info = SessionV1.SessionInfo.make({
+        return yield* SessionCreate.create(events, store, {
           id: sessionID,
-          slug: Slug.create(),
-          version: InstallationVersion,
           projectID: project.id,
-          directory: input.location.directory,
-          path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
-          workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
+          location: input.location,
+          subpath: RelativePath.make(path.relative(project.directory, input.location.directory).replaceAll("\\", "/")),
           title: `New session - ${new Date(now).toISOString()}`,
           agent: input.agent,
-          model: input.model
-            ? {
-                id: ModelV2.ID.make(input.model.id),
-                providerID: input.model.providerID,
-                variant: input.model.variant,
-              }
-            : undefined,
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-          time: { created: now, updated: now },
+          model: input.model,
+          runtime: input.runtime,
         })
-        const runtime = input.runtime
-        const projected = yield* events
-          .publish(
-            SessionV1.Event.Created,
-            { sessionID, info },
-            {
-              location: input.location,
-              commit:
-                runtime === undefined
-                  ? undefined
-                  : () =>
-                      db
-                        .update(SessionTable)
-                        .set({ runtime, runtime_epoch: 0, runtime_state: "ready" })
-                        .where(eq(SessionTable.id, sessionID))
-                        .run()
-                        .pipe(Effect.orDie),
-            },
-          )
-          .pipe(
-            Effect.as({ type: "created" } as const),
-            Effect.catchDefect((defect) => {
-              if (!(defect instanceof SessionProjector.SessionAlreadyProjected)) {
-                return Effect.die(defect)
-              }
-              // Concurrent creation lost the projection race. The existing Session identity wins.
-              return store
-                .get(sessionID)
-                .pipe(
-                  Effect.flatMap((session) =>
-                    session ? Effect.succeed({ type: "existing", session } as const) : Effect.die(defect),
-                  ),
-                )
-            }),
-          )
-        if (projected.type === "existing") return projected.session
-        // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
-        return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
         const session = yield* store.get(sessionID)

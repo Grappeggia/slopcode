@@ -163,6 +163,41 @@ describe("PermissionV2", () => {
     }),
   )
 
+  it.effect("enforces every persisted task ceiling deny over child rules and saved approvals", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "read", resource: "*", effect: "allow" }])
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({
+          metadata: {
+            task: {
+              version: 1,
+              parentID: SessionV2.ID.make("ses_parent"),
+              agent: AgentV2.ID.make("test"),
+              origin: { messageID: "msg_parent", callID: "call-parent" },
+              ceiling: [
+                { action: "read", resource: "secret", effect: "deny" },
+                { action: "read", resource: "*", effect: "allow" },
+              ],
+            },
+          },
+        })
+        .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      yield* (yield* PermissionSaved.Service).add({
+        projectID: Project.ID.global,
+        action: "read",
+        resources: ["secret"],
+      })
+
+      expect(yield* (yield* PermissionV2.Service).ask(assertion({ resources: ["secret"] }))).toMatchObject({
+        effect: "deny",
+      })
+    }),
+  )
+
   it.effect("allows managed output reads without granting external directory access", () =>
     Effect.gen(function* () {
       yield* setup([

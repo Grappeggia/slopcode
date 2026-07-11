@@ -141,11 +141,7 @@ export const layer = Layer.effect(
         if (message.type !== "assistant") continue
         for (const tool of message.content) {
           if (tool.type !== "tool" || (tool.state.status !== "pending" && tool.state.status !== "running")) continue
-          if (
-            tool.name === "task" &&
-            tool.state.status === "running" &&
-            !(yield* SessionTask.interrupted(db, sessionID, message.id, tool.id))
-          ) {
+          if (tool.name === "task" && !(yield* SessionTask.interrupted(db, sessionID, message.id, tool.id))) {
             const session = yield* getSession(sessionID)
             const agent = yield* agents.select(session.agent)
             const resolved = yield* models.resolve(session)
@@ -160,17 +156,33 @@ export const layer = Layer.effect(
                   }
                 : undefined,
             )
+            const call = {
+              type: "tool-call" as const,
+              id: tool.id,
+              name: tool.name,
+              input:
+                tool.state.status === "pending" && typeof tool.state.input === "string"
+                  ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(tool.state.input).pipe(
+                      Effect.orDie,
+                    )
+                  : tool.state.input,
+              ...(tool.toolType === undefined ? {} : { toolType: tool.toolType }),
+            } as ToolRegistry.ExecuteInput["call"]
+            if (tool.state.status === "pending")
+              yield* events.publish(SessionEvent.Tool.CalledV1, {
+                sessionID,
+                timestamp: yield* DateTime.now,
+                assistantMessageID: message.id,
+                callID: tool.id,
+                tool: tool.name,
+                input: call.input as Record<string, unknown>,
+                provider: { executed: false },
+              })
             const settlement = yield* materialized.settle({
               sessionID,
               agent: agent.id,
               assistantMessageID: message.id,
-              call: {
-                type: "tool-call",
-                id: tool.id,
-                name: tool.name,
-                input: tool.state.input,
-                ...(tool.toolType === undefined ? {} : { toolType: tool.toolType }),
-              } as ToolRegistry.ExecuteInput["call"],
+              call,
             })
             if (settlement.result.type === "error") {
               yield* events.publish(SessionEvent.Tool.Failed, {

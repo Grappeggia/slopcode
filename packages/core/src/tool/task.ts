@@ -3,11 +3,9 @@ export * as TaskTool from "./task"
 import { ToolFailure } from "@slopcode-ai/llm"
 import { and, eq } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
-import path from "path"
 import { AgentV2 } from "../agent"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
-import { InstallationVersion } from "../installation/version"
 import { Location } from "../location"
 import { ModelV2 } from "../model"
 import { PermissionV2 } from "../permission"
@@ -22,9 +20,7 @@ import { SessionTable } from "../session/sql"
 import { SessionStore } from "../session/store"
 import { SessionTask } from "../session/task"
 import { SessionTaskMetadata } from "../session/task-metadata"
-import { Slug } from "../util/slug"
-import { Wildcard } from "../util/wildcard"
-import { SessionV1 } from "../v1/session"
+import { SessionCreate } from "../session/create"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -127,70 +123,14 @@ export const layer = Layer.effectDiscard(
         error,
       })
 
-    const create = Effect.fn("TaskTool.createChild")(function* (input: {
-      id: SessionSchema.ID
-      parent: SessionSchema.Info
-      agent: AgentV2.Info
-      model: ModelV2.Ref
-      title: string
-      owner: SessionTaskMetadata.Owner
-    }) {
-      const recorded = yield* db
-        .select()
-        .from(SessionTable)
-        .where(eq(SessionTable.id, input.id))
-        .get()
-        .pipe(Effect.orDie)
-      if (recorded) return recorded
-      const now = Date.now()
-      const info = SessionV1.SessionInfo.make({
-        id: input.id,
-        parentID: input.parent.id,
-        slug: Slug.create(),
-        version: InstallationVersion,
-        projectID: input.parent.projectID,
-        directory: location.directory,
-        path:
-          input.parent.subpath ??
-          path.relative(input.parent.location.directory, location.directory).replaceAll("\\", "/"),
-        workspaceID: location.workspaceID,
-        title: input.title,
-        agent: input.agent.id,
-        model: input.model,
-        metadata: { task: input.owner },
-        cost: 0,
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        time: { created: now, updated: now },
-      })
-      yield* events.publish(
-        SessionV1.Event.Created,
-        { sessionID: input.id, info },
-        {
-          location,
-          commit: () =>
-            db
-              .update(SessionTable)
-              .set({ runtime: "v2", runtime_epoch: 0, runtime_state: "ready" })
-              .where(eq(SessionTable.id, input.id))
-              .run()
-              .pipe(Effect.orDie),
-        },
-      )
-      return yield* db
-        .select()
-        .from(SessionTable)
-        .where(eq(SessionTable.id, input.id))
-        .get()
-        .pipe(
-          Effect.orDie,
-          Effect.flatMap((row) => (row ? Effect.succeed(row) : Effect.die(`Child Session not found: ${input.id}`))),
-        )
-    })
-
     const validate = Effect.fn("TaskTool.validateChild")(function* (input: {
       id: string
       parent: SessionSchema.Info
       agent: AgentV2.Info
+      model?: ModelV2.Ref
+      title?: string
+      origin?: SessionTaskMetadata.Owner["origin"]
+      ceiling?: PermissionV2.Ruleset
     }) {
       if (!input.id.startsWith("ses_"))
         return yield* new ResumeConflictError({
@@ -206,10 +146,15 @@ export const layer = Layer.effectDiscard(
         row.parent_id !== input.parent.id ||
         row.project_id !== input.parent.projectID ||
         row.agent !== input.agent.id ||
+        (input.title !== undefined && row.title !== input.title) ||
+        (input.model !== undefined && !sameModel(input.model, row.model)) ||
         !sameLocation(row, location) ||
         !owner ||
         owner.parentID !== input.parent.id ||
-        owner.agent !== input.agent.id
+        owner.agent !== input.agent.id ||
+        (input.origin !== undefined &&
+          (owner.origin.messageID !== input.origin.messageID || owner.origin.callID !== input.origin.callID)) ||
+        (input.ceiling !== undefined && JSON.stringify(owner.ceiling) !== JSON.stringify(input.ceiling))
       )
         return yield* new ResumeConflictError({
           taskID: input.id,
@@ -310,17 +255,12 @@ export const layer = Layer.effectDiscard(
                 })
               const inherited = source.message.model
               const expected = selected.model ?? inherited
-              const parentAgent = yield* agents.resolve(context.agent)
-              const inheritedCeiling = (yield* store.task(context.sessionID))?.ceiling ?? []
               const ceiling = [
-                ...(parentAgent?.permissions ?? []).filter(
-                  (rule) => rule.effect === "deny" || Wildcard.match("external_directory", rule.action),
-                ),
-                ...inheritedCeiling,
-                ...(selected.permissions.some((rule) => Wildcard.match(name, rule.action))
+                ...context.permissions.filter((rule) => rule.effect === "deny"),
+                ...(selected.permissions.some((rule) => rule.action === name)
                   ? []
                   : [{ action: name, resource: "*", effect: "deny" as const }]),
-                ...(selected.permissions.some((rule) => Wildcard.match("todowrite", rule.action))
+                ...(selected.permissions.some((rule) => rule.action === "todowrite")
                   ? []
                   : [{ action: "todowrite", resource: "*", effect: "deny" as const }]),
               ]
@@ -329,22 +269,35 @@ export const layer = Layer.effectDiscard(
                 context.assistantMessageID,
                 context.toolCallID,
               )
-              const row = input.task_id
-                ? yield* validate({ id: input.task_id, parent, agent: selected })
-                : yield* create({
+              const title = `${input.description} (@${selected.id} subagent)`
+              const origin = { messageID: context.assistantMessageID, callID: context.toolCallID }
+              const owner = { version: 1 as const, parentID: context.sessionID, agent: selected.id, origin, ceiling }
+              if (!input.task_id) {
+                const existing = yield* db
+                  .select({ id: SessionTable.id })
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, deterministic))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!existing)
+                  yield* SessionCreate.create(events, store, {
                     id: deterministic,
-                    parent,
-                    agent: selected,
+                    parentID: parent.id,
+                    projectID: parent.projectID,
+                    location,
+                    subpath: parent.subpath,
+                    title,
+                    agent: selected.id,
                     model: expected,
-                    title: `${input.description} (@${selected.id} subagent)`,
-                    owner: {
-                      version: 1,
-                      parentID: context.sessionID,
-                      agent: selected.id,
-                      origin: { messageID: context.assistantMessageID, callID: context.toolCallID },
-                      ceiling,
-                    },
+                    metadata: { task: owner },
+                    runtime: "v2",
                   })
+              }
+              const row = yield* validate(
+                input.task_id
+                  ? { id: input.task_id, parent, agent: selected }
+                  : { id: deterministic, parent, agent: selected, model: expected, title, origin, ceiling },
+              )
               if (!row.model)
                 return yield* new ResumeConflictError({
                   taskID: row.id,

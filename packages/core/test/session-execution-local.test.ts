@@ -8,6 +8,7 @@ import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import * as SessionExecutionLocal from "@slopcode-ai/core/session/execution/local"
 import { SessionInput } from "@slopcode-ai/core/session/input"
+import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
@@ -16,7 +17,10 @@ import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
-import { Deferred, Effect, Fiber, Layer } from "effect"
+import { SessionTask } from "@slopcode-ai/core/session/task"
+import { ModelV2 } from "@slopcode-ai/core/model"
+import { ProviderV2 } from "@slopcode-ai/core/provider"
+import { DateTime, Deferred, Effect, Fiber, Layer } from "effect"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -341,6 +345,104 @@ describe("SessionExecutionLocal startup recovery", () => {
       expect(runs).toBe(2)
       expect(yield* SessionInput.terminalShell(db, shell.id)).toMatchObject({ status: "completed" })
       expect(yield* SessionInput.terminalCompaction(db, compaction.id)).toEqual({ type: "skipped" })
+    }),
+  )
+
+  it.effect("discovers a ready parent task request and reconnects it through the runner", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const sessionID = SessionSchema.ID.make("ses_recovered_ready_task")
+      const messageID = SessionMessage.ID.make("msg_recovered_ready_task")
+      const childID = SessionSchema.ID.make("ses_recovered_ready_task_child")
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: sessionID,
+          directory: "/project",
+          title: "Recovered ready task",
+          version: "test",
+          runtime: "v2",
+          runtime_state: "ready",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const model = {
+        providerID: ProviderV2.ID.make("fake"),
+        id: ModelV2.ID.make("fake"),
+        variant: ModelV2.VariantID.make("default"),
+      }
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        agent: "build",
+        model,
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID: "call-recovered-task",
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID: "call-recovered-task",
+        text: '{"description":"Recover","prompt":"recover","subagent_type":"general"}',
+      })
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: messageID,
+          callID: "call-recovered-task",
+          childSessionID: childID,
+          promptMessageID: SessionMessage.ID.make("msg_recovered_ready_task_prompt"),
+          description: "Recover",
+          prompt: "recover",
+          agent: "general",
+          model,
+          multiAgent: "v2",
+        },
+        { id: SessionTask.requestEventID(sessionID, messageID, "call-recovered-task") },
+      )
+      const done = yield* Deferred.make<void>()
+      const runs: SessionSchema.ID[] = []
+      const runner = Layer.succeed(
+        SessionRunner.Service,
+        SessionRunner.Service.of({
+          run: (input) =>
+            Effect.sync(() => runs.push(input.sessionID)).pipe(Effect.andThen(Deferred.succeed(done, undefined))),
+        }),
+      )
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.gen(function* () {
+        yield* SessionExecution.Service
+        yield* Deferred.await(done)
+      }).pipe(Effect.provide(execution))
+
+      expect(runs).toEqual([sessionID])
     }),
   )
 })

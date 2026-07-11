@@ -120,7 +120,7 @@ const processLayer = Layer.succeed(
         })
       })
       const execute = Effect.gen(function* () {
-        yield* (options?.launch ? options.launch(spawn) : spawn)
+        yield* options?.launch ? options.launch(spawn) : spawn
         if (shellStarted) yield* Deferred.succeed(shellStarted, undefined)
         if (shellGate) yield* Deferred.await(shellGate)
         if (shellFailure) return yield* shellFailure
@@ -2007,7 +2007,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.shell({ id: timeoutID, sessionID, command: "sleep 200", resume: false })
       expect(yield* session.message({ sessionID, messageID: timeoutID })).toMatchObject({
         status: "timed_out",
-        output: "Command exceeded timeout of 120000 ms. Retry with a larger timeout if the command is expected to take longer.",
+        output:
+          "Command exceeded timeout of 120000 ms. Retry with a larger timeout if the command is expected to take longer.",
         truncated: false,
       })
 
@@ -2244,7 +2245,9 @@ describe("SessionRunnerLLM", () => {
           ? Deferred.succeed(committed, undefined).pipe(Effect.andThen(Deferred.await(release)))
           : Effect.void,
       )
-      const shell = yield* session.shell({ id, sessionID, command: "touch marker", resume: false }).pipe(Effect.forkChild)
+      const shell = yield* session
+        .shell({ id, sessionID, command: "touch marker", resume: false })
+        .pipe(Effect.forkChild)
       yield* Deferred.await(committed)
       const request = yield* SessionInput.findShell(db, id)
       expect(request).toBeDefined()
@@ -2324,9 +2327,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(userTexts(requests[0]!)).toContain(
-        "Shell command: pwd\n\nShell did not start because ownership changed.",
-      )
+      expect(userTexts(requests[0]!)).toContain("Shell command: pwd\n\nShell did not start because ownership changed.")
       expect(yield* session.message({ sessionID, messageID: id })).toMatchObject({
         type: "shell",
         command: "pwd",
@@ -2337,52 +2338,54 @@ describe("SessionRunnerLLM", () => {
   )
 
   for (const dispatched of [false, true])
-    it.effect(`does not redispatch a continuation after its durable start marker${dispatched ? " and provider output" : ""}`, () =>
-      Effect.gen(function* () {
-        yield* setup
-        const session = yield* SessionV2.Service
-        const events = yield* EventV2.Service
-        const { db } = yield* Database.Service
-        const id = SessionMessage.ID.make(`msg_shell_continuation_started_${dispatched}`)
-        const request = yield* SessionInput.admitShell(db, events, {
-          id,
-          sessionID,
-          command: "pwd",
-          resume: true,
-        })
-        yield* SessionInput.startShell(db, events, request)
-        yield* SessionInput.endShell(db, events, request, {
-          status: "completed",
-          output: "/project",
-          exitCode: 0,
-          truncated: false,
-        })
-        yield* SessionInput.startShellContinuation(db, events, request)
-        if (dispatched) {
-          const assistantMessageID = SessionMessage.ID.make("msg_shell_dispatched_assistant")
-          yield* events.publish(SessionEvent.Step.Started, {
+    it.effect(
+      `does not redispatch a continuation after its durable start marker${dispatched ? " and provider output" : ""}`,
+      () =>
+        Effect.gen(function* () {
+          yield* setup
+          const session = yield* SessionV2.Service
+          const events = yield* EventV2.Service
+          const { db } = yield* Database.Service
+          const id = SessionMessage.ID.make(`msg_shell_continuation_started_${dispatched}`)
+          const request = yield* SessionInput.admitShell(db, events, {
+            id,
             sessionID,
-            timestamp: yield* DateTime.now,
-            assistantMessageID,
-            agent: "build",
-            model: { id: ModelV2.ID.make(model.id), providerID: ProviderV2.ID.make(model.provider) },
+            command: "pwd",
+            resume: true,
           })
-          yield* events.publish(SessionEvent.Step.Ended, {
-            sessionID,
-            timestamp: yield* DateTime.now,
-            assistantMessageID,
-            finish: "stop",
-            cost: 0,
-            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          yield* SessionInput.startShell(db, events, request)
+          yield* SessionInput.endShell(db, events, request, {
+            status: "completed",
+            output: "/project",
+            exitCode: 0,
+            truncated: false,
           })
-        }
+          yield* SessionInput.startShellContinuation(db, events, request)
+          if (dispatched) {
+            const assistantMessageID = SessionMessage.ID.make("msg_shell_dispatched_assistant")
+            yield* events.publish(SessionEvent.Step.Started, {
+              sessionID,
+              timestamp: yield* DateTime.now,
+              assistantMessageID,
+              agent: "build",
+              model: { id: ModelV2.ID.make(model.id), providerID: ProviderV2.ID.make(model.provider) },
+            })
+            yield* events.publish(SessionEvent.Step.Ended, {
+              sessionID,
+              timestamp: yield* DateTime.now,
+              assistantMessageID,
+              finish: "stop",
+              cost: 0,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            })
+          }
 
-        yield* session.resume(sessionID)
+          yield* session.resume(sessionID)
 
-        expect(requests).toEqual([])
-        expect(yield* SessionInput.unknownShellContinuation(db, id)).toBeTrue()
-        expect(yield* SessionInput.shellContinued(db, id)).toBeFalse()
-      }),
+          expect(requests).toEqual([])
+          expect(yield* SessionInput.unknownShellContinuation(db, id)).toBeTrue()
+          expect(yield* SessionInput.shellContinued(db, id)).toBeFalse()
+        }),
     )
 
   it.effect("returns at its shell terminal while a coalesced prompt runs later", () =>
@@ -2403,10 +2406,7 @@ describe("SessionRunnerLLM", () => {
 
       yield* Fiber.join(shell)
       yield* Deferred.await(streamStarted)
-      expect(userTexts(requests[0]!)).toEqual([
-        "Shell command: pwd\n\nshell output",
-        "Prompt after shell",
-      ])
+      expect(userTexts(requests[0]!)).toEqual(["Shell command: pwd\n\nshell output", "Prompt after shell"])
       yield* Deferred.succeed(streamGate, undefined)
       yield* session.wait(sessionID)
     }),
@@ -2419,7 +2419,12 @@ describe("SessionRunnerLLM", () => {
       const control = yield* SessionControl.Service
       const missing = SessionV2.ID.make("ses_missing_shell_control")
       const missingError = yield* control.shell({ sessionID: missing, command: "pwd" }).pipe(Effect.flip)
-      yield* db.update(SessionTable).set({ runtime: "v1" }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      yield* db
+        .update(SessionTable)
+        .set({ runtime: "v1" })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
       const v1 = yield* control.shell({ sessionID, command: "pwd" }).pipe(Effect.flip)
 
       expect(missingError).toMatchObject({ _tag: "SessionRuntime.NotFound", sessionID: missing })
@@ -2440,7 +2445,9 @@ describe("SessionRunnerLLM", () => {
   it.effect("manually compacts short history without starting an assistant continuation", () =>
     Effect.gen(function* () {
       const session = yield* setupManualCompaction
-      response = fragmentFixture("text", "text-manual-summary", ["## Goal\n- Preserve the short history"]).completeEvents
+      response = fragmentFixture("text", "text-manual-summary", [
+        "## Goal\n- Preserve the short history",
+      ]).completeEvents
       const id = SessionMessage.ID.make("msg_manual_short")
 
       yield* session.compact({
@@ -2720,14 +2727,12 @@ describe("SessionRunnerLLM", () => {
         session.compact({ id, sessionID }).pipe(Effect.forkChild),
       )
       while (
-        (
-          yield* db
-            .select()
-            .from(EventTable)
-            .where(eq(EventTable.type, "session.next.compaction.requested.1"))
-            .all()
-            .pipe(Effect.orDie)
-        ).length < 3
+        (yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.type, "session.next.compaction.requested.1"))
+          .all()
+          .pipe(Effect.orDie)).length < 3
       )
         yield* Effect.yieldNow
 
@@ -3913,6 +3918,90 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("reconnects pending and running tasks through the captured registry instead of failing them", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      let recovered = 0
+      yield* (yield* ToolRegistry.Service).register({
+        task: Tool.make({
+          description: "Recovered task",
+          input: Schema.Struct({ prompt: Schema.String }),
+          output: Schema.Struct({ result: Schema.String }),
+          execute: ({ prompt }) =>
+            Effect.sync(() => {
+              recovered++
+              return { result: prompt }
+            }),
+        }),
+      })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Recover pending task" }), resume: false })
+      yield* SessionInput.promoteSteers((yield* Database.Service).db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const assistantMessageID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        assistantMessageID,
+        timestamp: yield* DateTime.now,
+        agent: "build",
+        model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID: "call-task-pending",
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID: "call-task-pending",
+        text: '{"prompt":"once"}',
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID: "call-task-running",
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID: "call-task-running",
+        text: '{"prompt":"twice"}',
+      })
+      yield* events.publish(SessionEvent.Tool.CalledV1, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID: "call-task-running",
+        tool: "task",
+        input: { prompt: "twice" },
+        provider: { executed: false },
+      })
+      requests.length = 0
+      response = []
+
+      yield* session.resume(sessionID)
+
+      expect(recovered).toBe(2)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Recover pending task" },
+        {
+          type: "assistant",
+          content: [
+            { type: "tool", id: "call-task-pending", state: { status: "completed" } },
+            { type: "tool", id: "call-task-running", state: { status: "completed" } },
+          ],
+        },
+      ])
+    }),
+  )
+
   it.effect("durably fails hosted tools left running by a prior process before continuing inline", () =>
     Effect.gen(function* () {
       yield* setup
@@ -4955,6 +5044,35 @@ describe("SessionRunnerLLM", () => {
           role: "developer",
           content: request.system.map((part) => ({ type: "input_text", text: part.text })),
         })
+      }),
+    )
+  }
+
+  for (const item of [
+    { id: "gpt-5.6", api: "gpt-5.6", version: "v2" },
+    { id: "gpt-5.6-luna", api: "gpt-5.6-luna", version: "v1" },
+  ] as const) {
+    it.effect(`passes the ${item.version} multi-agent plan through ${item.id} tool settlement`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        currentCatalog = catalogModel(item.id, item.api)
+        const session = yield* SessionV2.Service
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: `Plan ${item.version}` }), resume: false })
+        authorizations.length = 0
+        responses = [
+          [
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.toolCall({ id: `call-plan-${item.version}`, name: "echo", input: { text: item.version } }),
+            LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+            LLMEvent.finish({ reason: "tool-calls" }),
+          ],
+          [],
+        ]
+
+        yield* session.resume(sessionID)
+
+        expect(authorizations).toHaveLength(1)
+        expect(authorizations[0]?.multiAgent).toBe(item.version)
       }),
     )
   }

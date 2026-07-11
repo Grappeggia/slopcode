@@ -15,6 +15,7 @@ import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
+import { SessionCreate } from "./create"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -214,6 +215,41 @@ export const layer = Layer.effectDiscard(
     const events = yield* EventV2.Service
     const { db } = yield* Database.Service
     yield* events.beforeCommit((event) => SessionInput.guardReservedID(db, event))
+    yield* events.project(SessionEvent.Created, (event) =>
+      Effect.gen(function* () {
+        const stored = yield* db
+          .insert(SessionTable)
+          .values({
+            id: event.data.sessionID,
+            parent_id: event.data.parentID,
+            project_id: event.data.projectID,
+            workspace_id: event.data.location.workspaceID,
+            slug: event.data.slug,
+            directory: event.data.location.directory,
+            path: event.data.subpath,
+            title: event.data.title,
+            version: event.data.version,
+            agent: event.data.agent,
+            model: event.data.model,
+            metadata: event.data.metadata,
+            runtime: event.data.runtime,
+            time_created: DateTime.toEpochMillis(event.data.timestamp),
+            time_updated: DateTime.toEpochMillis(event.data.timestamp),
+          })
+          .onConflictDoNothing()
+          .returning({ sessionID: SessionTable.id })
+          .get()
+          .pipe(Effect.orDie)
+        if (!stored) return yield* Effect.die(new SessionCreate.AlreadyProjected())
+        if (!event.data.location.workspaceID) return
+        yield* db
+          .update(WorkspaceTable)
+          .set({ time_used: Date.now() })
+          .where(eq(WorkspaceTable.id, event.data.location.workspaceID))
+          .run()
+          .pipe(Effect.orDie)
+      }),
+    )
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
         const stored = yield* db

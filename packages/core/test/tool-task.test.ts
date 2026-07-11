@@ -14,6 +14,7 @@ import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
+import { Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionInputTable, SessionTable } from "@slopcode-ai/core/session/sql"
@@ -23,8 +24,9 @@ import { ApplicationTools } from "@slopcode-ai/core/tool/application-tools"
 import { TaskTool } from "@slopcode-ai/core/tool/task"
 import { ToolOutputStore } from "@slopcode-ai/core/tool-output-store"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
+import { Tool } from "@slopcode-ai/core/tool/tool"
 import { and, eq } from "drizzle-orm"
-import { DateTime, Deferred, Effect, Fiber, Layer, Schema } from "effect"
+import { DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { testEffect } from "./lib/effect"
 
 const agent = (id: string, mode: "subagent" | "primary" | "all" = "subagent", hidden = false) =>
@@ -93,8 +95,18 @@ function integration() {
       { action: "edit", resource: "secret", effect: "deny" },
     ],
   })
-  const general = agent("general")
-  const modeled = new AgentV2.Info({ ...agent("modeled"), model: override })
+  const general = new AgentV2.Info({
+    ...agent("general"),
+    permissions: [{ action: "*", resource: "*", effect: "allow" }],
+  })
+  const modeled = new AgentV2.Info({
+    ...agent("modeled"),
+    model: override,
+    permissions: [
+      { action: "task", resource: "*", effect: "allow" },
+      { action: "todowrite", resource: "*", effect: "allow" },
+    ],
+  })
   const catalog = [build, general, modeled, agent("primary", "primary"), agent("hidden", "all", true)]
   const agents = Layer.mock(AgentV2.Service, {
     all: () => Effect.succeed(catalog),
@@ -108,6 +120,7 @@ function integration() {
   const assertions: PermissionV2.AssertInput[] = []
   let denied = false
   let gate: Deferred.Deferred<void> | undefined
+  let bounded = false
   const permissions = Layer.mock(PermissionV2.Service, {
     assert: (input) =>
       Effect.sync(() => assertions.push(input)).pipe(
@@ -120,7 +133,11 @@ function integration() {
     resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
   })
   const output = Layer.mock(ToolOutputStore.Service, {
-    bound: (input) => Effect.succeed({ output: input.output, outputPaths: [] }),
+    bound: (input) =>
+      Effect.succeed({
+        output: bounded ? { ...input.output, content: [{ type: "text", text: "bounded-task-output" }] } : input.output,
+        outputPaths: [],
+      }),
   })
   const registry = ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), Layer.provide(output))
   const locationLayer = Location.layer(location).pipe(Layer.provide(projects))
@@ -157,6 +174,9 @@ function integration() {
     },
     ask(value: Deferred.Deferred<void> | undefined) {
       gate = value
+    },
+    bound(value: boolean) {
+      bounded = value
     },
   }
 }
@@ -305,7 +325,16 @@ describe("TaskTool durable orchestration", () => {
         const runs: string[] = []
         yield* complete(runs)
         const input = { description: "Inspect code", prompt: "inspect", subagent_type: "general", command: "/inspect" }
-        const result = yield* settle("call-create", input, { multiAgent: "v1" })
+        const result = yield* settleWith(
+          "call-create",
+          input,
+          [
+            { action: "external_directory", resource: "/outside/*", effect: "deny" },
+            { action: "edit", resource: "snapshot-secret", effect: "deny" },
+            { action: "read", resource: "*", effect: "allow" },
+          ],
+          { multiAgent: "v1" },
+        )
         const taskID = SessionTask.childID(parentID, messageID, "call-create")
         expect(result.result).toEqual({
           type: "text",
@@ -324,12 +353,17 @@ describe("TaskTool durable orchestration", () => {
         })
         expect((yield* (yield* SessionStore.Service).task(taskID))?.ceiling).toEqual(
           expect.arrayContaining([
-            { action: "external_directory", resource: "*", effect: "ask" },
-            { action: "edit", resource: "secret", effect: "deny" },
+            { action: "external_directory", resource: "/outside/*", effect: "deny" },
+            { action: "edit", resource: "snapshot-secret", effect: "deny" },
             { action: "task", resource: "*", effect: "deny" },
             { action: "todowrite", resource: "*", effect: "deny" },
           ]),
         )
+        expect((yield* (yield* SessionStore.Service).task(taskID))?.ceiling).not.toContainEqual({
+          action: "read",
+          resource: "*",
+          effect: "allow",
+        })
         expect(yield* SessionTask.request(db, parentID, messageID, "call-create")).toMatchObject({
           childSessionID: taskID,
           model: inherited,
@@ -347,7 +381,18 @@ describe("TaskTool durable orchestration", () => {
             .pipe(Effect.orDie),
         ).toHaveLength(1)
         expect(runs).toEqual(["call-create"])
-        expect((yield* settle("call-create", input, { multiAgent: "v1" })).result.type).toBe("text")
+        expect(
+          (yield* settleWith(
+            "call-create",
+            input,
+            [
+              { action: "external_directory", resource: "/outside/*", effect: "deny" },
+              { action: "edit", resource: "snapshot-secret", effect: "deny" },
+              { action: "read", resource: "*", effect: "allow" },
+            ],
+            { multiAgent: "v1" },
+          )).result.type,
+        ).toBe("text")
         expect(runs).toEqual(["call-create"])
         expect(
           yield* db
@@ -360,6 +405,91 @@ describe("TaskTool durable orchestration", () => {
       }),
   )
 
+  fixture.it.effect("rejects an incompatible row occupying the deterministic child ID without prompting it", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const taskID = SessionTask.childID(parentID, messageID, "call-collision")
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: taskID,
+          project_id: ProjectV2.ID.global,
+          slug: taskID,
+          directory: location.directory,
+          title: "Unowned collision",
+          version: "test",
+          runtime: "v2",
+          parent_id: parentID,
+          agent: "general",
+          model: inherited,
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      expect(
+        (yield* settle("call-collision", { description: "Collision", prompt: "never", subagent_type: "general" }))
+          .result,
+      ).toMatchObject({ type: "error", value: expect.stringContaining("conflict") })
+      expect(yield* SessionInput.find(db, SessionTask.promptID(parentID, messageID, "call-collision"))).toBeUndefined()
+    }),
+  )
+
+  fixture.it.effect("rejects Location, project, agent, and task-owner resume conflicts before admission", () =>
+    Effect.gen(function* () {
+      yield* seed
+      yield* complete([])
+      const db = (yield* Database.Service).db
+      yield* settle("call-resume-owner", { description: "Owned", prompt: "first", subagent_type: "general" })
+      const taskID = SessionTask.childID(parentID, messageID, "call-resume-owner")
+      const original = (yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, taskID))
+        .get()
+        .pipe(Effect.orDie))!
+      const other = ProjectV2.ID.make("other-project")
+      yield* db.insert(ProjectTable).values({ id: other, worktree: "/other", sandboxes: [] }).run().pipe(Effect.orDie)
+      const conflicts = [
+        { directory: "/other" },
+        { project_id: other },
+        { agent: "modeled" },
+        {
+          metadata: {
+            task: {
+              ...(original.metadata!.task as object),
+              parentID: SessionSchema.ID.make("ses_other_parent"),
+            },
+          },
+        },
+      ]
+      for (const [index, conflict] of conflicts.entries()) {
+        yield* db.update(SessionTable).set(conflict).where(eq(SessionTable.id, taskID)).run().pipe(Effect.orDie)
+        const callID = `call-resume-conflict-${index}`
+        expect(
+          (yield* settle(callID, {
+            description: "Continue",
+            prompt: "never",
+            subagent_type: "general",
+            task_id: taskID,
+          })).result,
+        ).toMatchObject({ type: "error", value: expect.stringContaining("conflict") })
+        expect(yield* SessionInput.find(db, SessionTask.promptID(parentID, messageID, callID))).toBeUndefined()
+        yield* db
+          .update(SessionTable)
+          .set({
+            directory: original.directory,
+            project_id: original.project_id,
+            agent: original.agent,
+            metadata: original.metadata,
+          })
+          .where(eq(SessionTable.id, taskID))
+          .run()
+          .pipe(Effect.orDie)
+      }
+    }),
+  )
+
   fixture.it.effect("uses agent model overrides and resumes a compatible child with valid empty output", () =>
     Effect.gen(function* () {
       yield* seed
@@ -367,14 +497,20 @@ describe("TaskTool durable orchestration", () => {
       yield* complete(runs)
       yield* settle("call-modeled", { description: "Modeled", prompt: "first", subagent_type: "modeled" })
       const taskID = SessionTask.childID(parentID, messageID, "call-modeled")
-      expect(
-        yield* (yield* Database.Service).db
+        expect(
+          yield* (yield* Database.Service).db
           .select({ model: SessionTable.model })
           .from(SessionTable)
           .where(eq(SessionTable.id, taskID))
           .get()
           .pipe(Effect.orDie),
-      ).toEqual({ model: override })
+        ).toEqual({ model: override })
+        expect((yield* (yield* SessionStore.Service).task(taskID))?.ceiling).not.toEqual(
+          expect.arrayContaining([
+            { action: "task", resource: "*", effect: "deny" },
+            { action: "todowrite", resource: "*", effect: "deny" },
+          ]),
+        )
       expect(
         (yield* settle("call-resume", {
           description: "Continue",
@@ -387,6 +523,132 @@ describe("TaskTool durable orchestration", () => {
         value: `<task id="${taskID}" state="completed">\n<task_result>\n\n</task_result>\n</task>`,
       })
       expect(runs).toEqual(["call-modeled", "call-resume"])
+    }),
+  )
+
+  fixture.it.effect("recovers child creation, request, admission, and terminal boundaries without duplicate work", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const events = yield* EventV2.Service
+      const runs: string[] = []
+      yield* complete(runs)
+      for (const phase of ["child", "request", "admission"] as const) {
+        const callID = `call-restart-${phase}`
+        const taskID = SessionTask.childID(parentID, messageID, callID)
+        const promptID = SessionTask.promptID(parentID, messageID, callID)
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: taskID,
+            project_id: ProjectV2.ID.global,
+            slug: taskID,
+            directory: location.directory,
+            title: `Restart ${phase} (@general subagent)`,
+            version: "test",
+            runtime: "v2",
+            parent_id: parentID,
+            agent: "general",
+            model: inherited,
+            metadata: {
+              task: {
+                version: 1,
+                parentID,
+                agent: "general",
+                origin: { messageID, callID },
+                ceiling: [
+                  { action: "task", resource: "*", effect: "deny" },
+                  { action: "todowrite", resource: "*", effect: "deny" },
+                ],
+              },
+            },
+          })
+          .run()
+          .pipe(Effect.orDie)
+        if (phase !== "child")
+          yield* events.publish(
+            SessionEvent.Task.Requested,
+            {
+              sessionID: parentID,
+              timestamp: yield* DateTime.now,
+              assistantMessageID: messageID,
+              callID,
+              childSessionID: taskID,
+              promptMessageID: promptID,
+              description: `Restart ${phase}`,
+              prompt: phase,
+              agent: "general",
+              model: inherited,
+              multiAgent: "v2",
+            },
+            { id: SessionTask.requestEventID(parentID, messageID, callID) },
+          )
+        if (phase === "admission")
+          yield* SessionInput.admit(db, events, {
+            id: promptID,
+            sessionID: taskID,
+            prompt: new Prompt({ text: phase }),
+            delivery: "steer",
+          })
+
+        expect(
+          (yield* settle(callID, { description: `Restart ${phase}`, prompt: phase, subagent_type: "general" })).result
+            .type,
+        ).toBe("text")
+        expect(runs.filter((id) => id === callID)).toHaveLength(1)
+        expect(
+          yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, promptID)).all().pipe(Effect.orDie),
+        ).toHaveLength(1)
+      }
+
+      const terminalInput = { description: "Terminal", prompt: "terminal", subagent_type: "general" }
+      expect((yield* settle("call-restart-terminal", terminalInput)).result.type).toBe("text")
+      expect((yield* settle("call-restart-terminal", terminalInput)).result.type).toBe("text")
+      expect(runs.filter((id) => id === "call-restart-terminal")).toHaveLength(1)
+    }),
+  )
+
+  fixture.it.effect("keeps task stale registration and output bounding authoritative", () =>
+    Effect.gen(function* () {
+      yield* seed
+      yield* complete([])
+      const registry = yield* ToolRegistry.Service
+      const stale = yield* registry.materialize()
+      const scope = yield* Scope.make()
+      yield* registry
+        .register({
+          task: Tool.make({
+            description: "Replacement task",
+            input: Schema.Struct({}),
+            output: Schema.Struct({}),
+            execute: () => Effect.succeed({}),
+          }),
+        })
+        .pipe(Scope.provide(scope))
+      expect(
+        (yield* stale.settle({
+          sessionID: parentID,
+          agent: AgentV2.ID.make("build"),
+          assistantMessageID: messageID,
+          call: {
+            type: "tool-call",
+            id: "call-stale-task",
+            name: "task",
+            input: { description: "Stale", prompt: "never", subagent_type: "general" },
+          },
+        })).result,
+      ).toEqual({ type: "error", value: "Stale tool call: task" })
+      yield* Scope.close(scope, Exit.void)
+
+      fixture.bound(true)
+      expect(
+        (yield* settle("call-bounded-task", { description: "Bound", prompt: "bound", subagent_type: "general" }))
+          .result,
+      ).toEqual({
+        type: "text",
+        value: "bounded-task-output",
+      })
+      fixture.bound(false)
     }),
   )
 

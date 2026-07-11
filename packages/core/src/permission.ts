@@ -177,6 +177,17 @@ export const layer = Layer.effect(
       return input.resources.some((resource) => evaluate(input.action, resource, rules).effect === "deny")
     }
 
+    function ceilingDenied(input: AssertInput, rules: Ruleset) {
+      return input.resources.some((resource) =>
+        rules.some(
+          (rule) =>
+            rule.effect === "deny" &&
+            Wildcard.match(input.action, rule.action) &&
+            Wildcard.match(resource, rule.resource),
+        ),
+      )
+    }
+
     function relevant(input: AssertInput, rules: Ruleset) {
       return rules.filter((rule) => Wildcard.match(input.action, rule.action))
     }
@@ -184,22 +195,11 @@ export const layer = Layer.effect(
     const evaluateInput = EffectRuntime.fnUntraced(function* (input: AssertInput) {
       const configuredRules = yield* configured(input.sessionID, input.agent)
       const combined = [...configuredRules.rules, ...configuredRules.ceiling]
-      if (denied(input, configuredRules.rules) || denied(input, configuredRules.ceiling))
+      if (denied(input, configuredRules.rules) || ceilingDenied(input, configuredRules.ceiling))
         return { effect: "deny" as const, rules: combined }
       const all = [...configuredRules.rules, ...(yield* savedRules())]
       const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
-      const ceiling = input.resources.flatMap((resource) => {
-        const rule = configuredRules.ceiling.findLast(
-          (rule) => Wildcard.match(input.action, rule.action) && Wildcard.match(resource, rule.resource),
-        )
-        return rule ? [rule.effect] : []
-      })
-      const effect: Effect =
-        effects.includes("deny") || ceiling.includes("deny")
-          ? "deny"
-          : effects.includes("ask") || ceiling.includes("ask")
-            ? "ask"
-            : "allow"
+      const effect: Effect = effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow"
       return { effect, rules: [...all, ...configuredRules.ceiling] }
     })
 
@@ -306,8 +306,8 @@ export const layer = Layer.effect(
               EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
             )
             if (!configuredRules) continue
-            if (denied(input, configuredRules.rules) || denied(input, configuredRules.ceiling)) continue
-            const effective = [...configuredRules.rules, ...rememberedRules, ...configuredRules.ceiling]
+            if (denied(input, configuredRules.rules) || ceilingDenied(input, configuredRules.ceiling)) continue
+            const effective = [...configuredRules.rules, ...rememberedRules]
             if (
               !item.request.resources.every(
                 (resource) => evaluate(item.request.action, resource, effective).effect === "allow",

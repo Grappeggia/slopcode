@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { Effect, Layer, Stream } from "effect"
+import { DateTime, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { AgentV2 } from "@slopcode-ai/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
@@ -15,6 +15,7 @@ import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Prompt } from "@slopcode-ai/core/session/prompt"
+import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionInput } from "@slopcode-ai/core/session/input"
@@ -22,6 +23,7 @@ import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import { SessionTask } from "@slopcode-ai/core/session/task"
 import { WorkspaceV2 } from "@slopcode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
 import { locationServices } from "./lib/location-services"
@@ -186,7 +188,7 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("persists creation through the existing legacy created event", () =>
+  it.effect("persists creation through the V2 created event", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const { db } = yield* Database.Service
@@ -194,7 +196,7 @@ describe("SessionV2.create", () => {
 
       expect(
         yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
-      ).toMatchObject([{ type: EventV2.versionedType(SessionV1.Event.Created.type, 1) }])
+      ).toMatchObject([{ type: "session.next.created.1" }])
     }),
   )
 
@@ -236,7 +238,7 @@ describe("SessionV2.create", () => {
         .where(eq(EventTable.aggregate_id, created.id))
         .get()
         .pipe(Effect.orDie)
-      expect(event?.data).not.toHaveProperty("runtime")
+      expect(event?.data).toHaveProperty("runtime", "v2")
       expect(event?.data).not.toHaveProperty("owner")
     }),
   )
@@ -478,7 +480,7 @@ describe("SessionV2.create", () => {
             .all()
             .pipe(Effect.orDie)).map((event) => [event.seq, event.type]),
         ).toEqual([
-          [0, EventV2.versionedType(SessionV1.Event.Created.type, 1)],
+          [0, EventV2.versionedType(SessionEvent.Created.type, 1)],
           [1, EventV2.versionedType(SessionEvent.PromptLifecycle.Admitted.type, 1)],
           [2, EventV2.versionedType(SessionEvent.PromptLifecycle.Promoted.type, 1)],
         ])
@@ -491,7 +493,7 @@ describe("SessionV2.create", () => {
       const session = yield* SessionV2.Service
       const event = yield* EventV2.Service
       const defect = new Error("unrelated projector defect")
-      yield* event.project(SessionV1.Event.Created, () => Effect.die(defect))
+      yield* event.project(SessionEvent.Created, () => Effect.die(defect))
 
       expect(yield* session.create({ id, location }).pipe(Effect.catchDefect(Effect.succeed))).toBe(defect)
     }),
@@ -549,6 +551,83 @@ describe("SessionV2.create", () => {
             Effect.map((error) => error._tag),
           ),
       ).toBe("Session.NotFoundError")
+    }),
+  )
+
+  it.effect("public interruption durably cascades to the child and awaits cleanup", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const parent = yield* session.create({ id, location, runtime: "v2" })
+      const messageID = SessionMessage.ID.make("msg_public_task_interrupt")
+      const childID = SessionV2.ID.make("ses_public_task_interrupt_child")
+      const model = ModelV2.Ref.make({ id: ModelV2.ID.make("fake"), providerID: ProviderV2.ID.make("fake") })
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID: parent.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        agent: "build",
+        model,
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID: parent.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID: "call-public-task-interrupt",
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID: parent.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID: "call-public-task-interrupt",
+        text: '{"description":"Wait","prompt":"wait","subagent_type":"general"}',
+      })
+      yield* events.publish(SessionEvent.Tool.CalledV1, {
+        sessionID: parent.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID: "call-public-task-interrupt",
+        tool: "task",
+        input: { description: "Wait", prompt: "wait", subagent_type: "general" },
+        provider: { executed: false },
+      })
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        {
+          sessionID: parent.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: messageID,
+          callID: "call-public-task-interrupt",
+          childSessionID: childID,
+          promptMessageID: SessionMessage.ID.make("msg_public_task_interrupt_prompt"),
+          description: "Wait",
+          prompt: "wait",
+          agent: "general",
+          model,
+          multiAgent: "v2",
+        },
+        { id: SessionTask.requestEventID(parent.id, messageID, "call-public-task-interrupt") },
+      )
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* events.listen((event) =>
+        Schema.is(SessionEvent.Task.Interrupt)(event)
+          ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)))
+          : Effect.void,
+      )
+
+      const finished = yield* Deferred.make<void>()
+      const fiber = yield* session
+        .interrupt(parent.id)
+        .pipe(Effect.ensuring(Deferred.succeed(finished, undefined)), Effect.forkChild)
+      yield* Deferred.await(started)
+      expect(yield* Deferred.isDone(finished)).toBeFalse()
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(fiber)
+
+      expect(yield* SessionTask.interrupted(db, parent.id, messageID, "call-public-task-interrupt")).toBeTrue()
     }),
   )
 })

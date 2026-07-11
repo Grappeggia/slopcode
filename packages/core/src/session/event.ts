@@ -9,6 +9,8 @@ import { SessionSchema } from "./schema"
 import { Location } from "../location"
 import { RelativePath } from "../schema"
 import { SessionMessageID } from "./message-id"
+import { ProjectV2 } from "../project"
+import { AgentV2 } from "../agent"
 
 export { FileAttachment }
 
@@ -46,6 +48,26 @@ export const UnknownError = Schema.Struct({
   identifier: "Session.Error.Unknown",
 })
 export type UnknownError = typeof UnknownError.Type
+
+export const Created = EventV2.define({
+  type: "session.next.created",
+  ...options,
+  schema: {
+    ...Base,
+    parentID: SessionSchema.ID.pipe(Schema.optional),
+    projectID: ProjectV2.ID,
+    location: Location.RefJson,
+    subpath: RelativePath.pipe(Schema.optional),
+    title: Schema.String,
+    slug: Schema.String,
+    version: Schema.String,
+    agent: AgentV2.ID.pipe(Schema.optional),
+    model: ModelV2.Ref.pipe(Schema.optional),
+    metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(Schema.optional),
+    runtime: Schema.Literals(["v1", "v2"]),
+  },
+})
+export type Created = typeof Created.Type
 
 export const AgentSwitched = EventV2.define({
   type: "session.next.agent.switched",
@@ -670,7 +692,7 @@ const EphemeralDefinitions = [Text.Delta, Tool.Input.Delta, Reasoning.Delta, Com
 export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" }).pipe(Schema.toTaggedUnion("type"))
 export type DurableEvent = typeof Durable.Type
 
-export const All = Schema.Union([...DurableDefinitions, ...EphemeralDefinitions], { mode: "oneOf" }).pipe(
+export const All = Schema.Union([Created, ...DurableDefinitions, ...EphemeralDefinitions], { mode: "oneOf" }).pipe(
   Schema.toTaggedUnion("type"),
 )
 export type Event = typeof All.Type
