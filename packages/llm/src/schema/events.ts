@@ -184,7 +184,10 @@ type ToolResultBase = Schema.Schema.Type<typeof ToolResultBase>
 export type ToolResult = Omit<ToolResultBase, "toolType"> &
   ({ readonly toolType?: "function" } | { readonly toolType: "custom" })
 export const ToolResult = ToolResultBase.pipe(
-  Schema.refine((value): value is ToolResult => value.toolType !== "custom" || value.toolType === "custom"),
+  Schema.refine(
+    (value): value is ToolResult =>
+      value.toolType === undefined || value.toolType === "function" || value.toolType === "custom",
+  ),
 ).annotate({ identifier: "LLM.Event.ToolResult" })
 
 export const ToolError = Schema.Struct({
