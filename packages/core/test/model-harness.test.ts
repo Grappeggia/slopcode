@@ -13,7 +13,9 @@ const ids = ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const
 
 const model = (id: string, api = id) =>
   new ModelV2.Info({
-    ...ModelV2.Info.empty(ProviderV2.ID.openai, ModelV2.ID.make(id)),
+    id: ModelV2.ID.make(id),
+    providerID: ProviderV2.ID.openai,
+    name: id,
     api: {
       id: ModelV2.ID.make(api),
       type: "aisdk",
@@ -22,6 +24,12 @@ const model = (id: string, api = id) =>
       settings: {},
     },
     capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+    request: { headers: {}, body: {}, generation: {}, options: {} },
+    variants: [],
+    time: { released: DateTime.makeUnsafe(0) },
+    cost: [],
+    status: "active",
+    enabled: true,
     limit: { context: 1_050_000, input: 922_000, output: 128_000 },
   })
 
@@ -111,6 +119,12 @@ describe("ModelHarness", () => {
       })),
     )
     expect(profiles.map((profile) => profile.reasoning.default)).toEqual(["low", "low", "medium", "medium"])
+    expect(profiles.map((profile) => profile.reasoning.supported)).toEqual([
+      ["low", "medium", "high", "xhigh", "max", "ultra"],
+      ["low", "medium", "high", "xhigh", "max", "ultra"],
+      ["low", "medium", "high", "xhigh", "max", "ultra"],
+      ["low", "medium", "high", "xhigh", "max"],
+    ])
     expect(profiles.map((profile) => profile.multiAgent)).toEqual(["v2", "v2", "v2", "v1"])
     expect(profiles.map((profile) => profile.context)).toEqual(
       ids.map(() => ({
