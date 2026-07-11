@@ -269,3 +269,66 @@ Complete. Foreground V2 subagent tasks now use one Location-scoped canonical `ta
 
 - Orphan evaluation scans the parent's durable task requests because H5C1 intentionally adds no task lifecycle index or migration.
 - Remote provider work interrupted before durable response recording still cannot provide remote exactly-once proof; local admission, recovery, and terminal settlement remain deterministic.
+
+## Final Ordering Fixes
+
+### Findings Resolved
+
+- `SessionTask.cancelled` now recognizes either the deterministic task interruption marker or a parent `InterruptRequested` sequenced after the task request. Runner recovery uses this shared barrier before task rematerialization and writes the deterministic interrupted parent `Tool.Failed` terminal without dispatching the child.
+- `TaskTool` checks the canonical child orphan fence before terminal reuse/admission, immediately after admission and before `Task.Execute`, and again after the process-local execute signal. An interruption winning any boundary returns `Tool execution interrupted` instead of child output or a missing-terminal error.
+- `SessionExecutionLocal` independently rechecks the canonical orphan fence inside the live `Task.Execute` listener immediately before coordinator wake, closing the race between TaskTool's check and event delivery.
+- New task calls now persist the complete immutable `Task.Requested` snapshot before deterministic child creation. Child creation consumes request-equivalent identity, and child-only state without a durable immutable request is rejected rather than reconstructed from current mutable agent/model/harness state.
+- Recovery from request-before-child validates that the request owns the deterministic origin child, creates it exactly once from request agent/model/project/Location/title/ceiling, then uses deterministic prompt admission. Resume requests still require their existing original child.
+
+### Ordering RED Evidence
+
+- Command from `packages/core`: `bun test test/tool-task.test.ts test/session-execution-local.test.ts -t "immediately after prompt admission|live Task.Execute listener"`; `0 pass`, `2 fail`, `2 expect()` calls. TaskTool emitted through the admission-time interruption and the local listener woke an already orphaned child.
+- Command from `packages/core`: `bun test test/tool-task.test.ts -t "missing child from the immutable request"`; `0 pass`, `1 fail`, `1 expect()` call. Recovery returned an error because it assumed the child already existed.
+- Command from `packages/core`: `bun test test/session-runner.test.ts -t "settles parent interruption before recovered task"`; `0 pass`, `1 fail`, `1 expect()` call. The child provider was invoked through a durable parent interrupt barrier.
+
+### Ordering GREEN Evidence
+
+- Focused command from `packages/core`: `bun test test/permission.test.ts test/tool-task.test.ts test/session-create.test.ts test/session-runner.test.ts test/session-execution-local.test.ts test/session-runner-tool-registry.test.ts test/tool-codemode.test.ts test/model-harness.test.ts`; `252 pass`, `0 fail`, `790 expect()` calls.
+- Full Core command from `packages/core`: `bun test`; `1250 pass`, `0 fail`, `3497 expect()` calls across 140 files.
+- Full CodeMode command from `packages/codemode`: `bun test`; `254 pass`, `0 fail`, `744 expect()` calls.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `git diff --check`: passed.
+- Source check: task production files contain no `SessionV1`, `BackgroundJob`, `any`, or `never` escape.
+
+### Ordering Production Gates
+
+- A recoverable pending/running parent task with `InterruptRequested` but no `Task.Interrupted` starts through real `SessionExecutionLocal`, `SessionRunnerLLM`, and canonical `TaskTool`; the child provider count remains zero and the parent projects `Tool execution interrupted`.
+- An admission listener durably completes task cleanup immediately before `Task.Execute`; the full production stack emits no execute signal, invokes no child provider, and terminally fails the parent as interrupted.
+- Request-before-child recovery runs through the full stack after parent agent/model, reviewer permissions, and harness mutate to Luna. It creates the child from the original request snapshot, admits one prompt, executes one child provider turn, and terminally settles the parent.
+- Child-created resumed recovery repeats the same mutable parent changes and still uses the original caller permissions and `v2` plan with one child provider execution.
+- A direct local listener race publishes `Task.Execute` only after durable interruption and proves the second fence independently suppresses coordinator wake.
+
+### Ordering Files
+
+- `packages/core/src/session/execution/local.ts`
+- `packages/core/src/session/runner/llm.ts`
+- `packages/core/src/session/task.ts`
+- `packages/core/src/tool/task.ts`
+- `packages/core/test/session-execution-local.test.ts`
+- `packages/core/test/session-runner.test.ts`
+- `packages/core/test/tool-task.test.ts`
+- `.superpowers/sdd/task-h5c1-report.md`
+
+### Ordering Commit
+
+- Fixes and production-path regressions: `87ddec0a3d fix(session): close task ordering races`.
+- Report: recorded in the following documentation commit.
+- Nothing was pushed.
+
+### Ordering Self-Review
+
+- Every task-owned child wake now has both a producer-side and consumer-side durable fence.
+- Parent recovery interruption settlement uses a deterministic event ID shared with public interruption, keeping concurrent/repeated recovery idempotent.
+- Request-first creation removes the only new-child state that lacked caller permissions and tool-plan snapshots; unsupported legacy child-only state fails closed.
+- Request-before-child and child-created tests mutate all current resolution inputs and verify recovery never consults them.
+
+### Ordering Concerns
+
+- Canonical orphan evaluation still scans parent task requests because H5C1 intentionally introduces no lifecycle index or migration.
+- Remote provider execution already in flight before a durable interruption remains outside local exactly-once guarantees; all local wake and admission boundaries are now fenced.
