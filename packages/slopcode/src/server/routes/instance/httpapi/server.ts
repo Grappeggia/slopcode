@@ -60,6 +60,8 @@ import { ModelsDev } from "@slopcode-ai/core/models-dev"
 import { Npm } from "@slopcode-ai/core/npm"
 import { ProjectV2 } from "@slopcode-ai/core/project"
 import { ProjectCopy } from "@slopcode-ai/core/project/copy"
+import { LocationServiceMap, withPluginHost } from "@slopcode-ai/core/location-layer"
+import { PluginPackage } from "@slopcode-ai/core/plugin/package"
 import { PtyTicket } from "@slopcode-ai/core/pty/ticket"
 import { Ripgrep } from "@slopcode-ai/core/ripgrep"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
@@ -269,6 +271,7 @@ const app = LayerNode.group([
 
 export function createRoutes(
   corsOptions?: CorsOptions,
+  host?: Layer.Layer<PluginPackage.Host>,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
   return Layer.mergeAll(
     rootApiRoutes,
@@ -290,6 +293,7 @@ export function createRoutes(
       HttpServer.layerServices,
     ]),
     Layer.provide(LayerNode.buildLayer(app)),
+    Layer.provide(host ? withPluginHost(host) : LocationServiceMap.layer),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provide(Observability.layer),
   )
@@ -297,12 +301,14 @@ export function createRoutes(
 
 export const routes = createRoutes()
 
-export const webHandler = lazy(() =>
-  HttpRouter.toWebHandler(routes, {
+export function makeWebHandler(host?: Layer.Layer<PluginPackage.Host>) {
+  return HttpRouter.toWebHandler(createRoutes(undefined, host), {
     disableLogger: true,
     memoMap,
     middleware: disposeMiddleware,
-  }),
-)
+  })
+}
+
+export const webHandler = lazy(() => makeWebHandler())
 
 export * as HttpApiApp from "./server"

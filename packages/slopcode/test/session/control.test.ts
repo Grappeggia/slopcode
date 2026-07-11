@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Database } from "@slopcode-ai/core/database/database"
+import { SessionControl as CoreSessionControl } from "@slopcode-ai/core/session/control"
 import { Project } from "@slopcode-ai/core/project"
 import { ProjectTable } from "@slopcode-ai/core/project/sql"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
@@ -9,7 +10,8 @@ import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
-import { DateTime, Effect, Layer, Stream } from "effect"
+import { eq, sql } from "drizzle-orm"
+import { Context, DateTime, Effect, Exit, Layer, Scope, Stream } from "effect"
 import { SessionControl } from "../../src/session/control"
 import { SessionPrompt } from "../../src/session/prompt"
 import { MessageID, SessionID } from "../../src/session/schema"
@@ -20,6 +22,7 @@ const runtime = SessionRuntime.layer.pipe(Layer.provide(database))
 const sessionID = SessionID.make("ses_control_test")
 const legacyCalls: SessionPrompt.PromptInput[] = []
 const v2Calls: Array<{ readonly prompt: string; readonly resume?: boolean }> = []
+const interruptCalls: SessionID[] = []
 const legacyMessage = {
   info: {
     id: MessageID.ascending(),
@@ -60,8 +63,9 @@ const sessions = Layer.succeed(
     events: () => Stream.empty,
     switchAgent: () => Effect.die("unused"),
     switchModel: () => Effect.void,
-    prompt: (input) =>
-      Effect.sync(() => {
+    prompt: (input, commit) =>
+      Effect.gen(function* () {
+        yield* commit ?? Effect.void
         v2Calls.push({ prompt: input.prompt.text, resume: input.resume })
         return new SessionInput.Admitted({
           admittedSeq: 1,
@@ -77,20 +81,37 @@ const sessions = Layer.succeed(
     compact: () => Effect.die("unused"),
     wait: () => Effect.die("unused"),
     resume: () => Effect.void,
-    interrupt: () => Effect.void,
+    interrupt: (id, commit) =>
+      Effect.gen(function* () {
+        yield* commit ?? Effect.void
+        interruptCalls.push(SessionID.make(id))
+      }),
   }),
 )
-const control = SessionControl.layer.pipe(Layer.provide(runtime), Layer.provide(legacy), Layer.provide(sessions))
-const it = testEffect(Layer.mergeAll(database, runtime, legacy, sessions, control))
+const core = CoreSessionControl.layer.pipe(Layer.provide(runtime), Layer.provide(sessions))
+const control = SessionControl.layer.pipe(
+  Layer.provide(runtime),
+  Layer.provide(legacy),
+  Layer.provide(core),
+  Layer.provide(sessions),
+)
+const it = testEffect(Layer.mergeAll(database, runtime, legacy, sessions, core, control))
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
   legacyCalls.length = 0
   v2Calls.length = 0
+  interruptCalls.length = 0
   yield* db
     .insert(ProjectTable)
     .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
     .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .update(SessionTable)
+    .set({ runtime: "v1", runtime_state: "ready", runtime_epoch: 0 })
+    .where(eq(SessionTable.id, sessionID))
     .run()
     .pipe(Effect.orDie)
   yield* db
@@ -132,6 +153,90 @@ describe("SessionControl", () => {
       ).toMatchObject({ prompt: { text: "next" } })
       expect(legacyCalls).toEqual([])
       expect(v2Calls).toEqual([{ prompt: "next", resume: false }])
+    }),
+  )
+
+  for (const state of ["paused", "draining", "migrating"] as const) {
+    it.effect(`rejects V2 prompt and interrupt while ${state} without mutation`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const control = yield* SessionControl.Service
+        const runtime = yield* SessionRuntime.Service
+        yield* runtime.assign({ sessionID, owner: "v2", state, expectedOwner: "v1", expectedEpoch: 0 })
+
+        expect(
+          yield* control.prompt({ sessionID, parts: [{ type: "text", text: state }] }).pipe(Effect.flip),
+        ).toMatchObject({ _tag: "SessionRuntime.Mismatch", expectedState: "ready", actualState: state })
+        expect(yield* control.cancel(sessionID).pipe(Effect.flip)).toMatchObject({
+          _tag: "SessionRuntime.Mismatch",
+          expectedState: "ready",
+          actualState: state,
+        })
+        expect(v2Calls).toEqual([])
+        expect(interruptCalls).toEqual([])
+      }),
+    )
+  }
+
+  it.effect("fences V2 prompt and interrupt owner, state, and epoch races at mutation", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const runtime = yield* SessionRuntime.Service
+      yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
+      const changes = ["owner", "state", "epoch"] as const
+      let change: (typeof changes)[number] = "owner"
+      const transition = () =>
+        db
+          .update(SessionTable)
+          .set({
+            ...(change === "owner" ? { runtime: "v1" as const } : {}),
+            ...(change === "state" ? { runtime_state: "draining" as const } : {}),
+            ...(change === "epoch" ? { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } : {}),
+          })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+      const fenced = SessionRuntime.Service.of({
+        ...runtime,
+        assert: (input) =>
+          input.epoch === undefined ? runtime.assert(input).pipe(Effect.tap(transition)) : runtime.assert(input),
+      })
+      const core = CoreSessionControl.layer.pipe(
+        Layer.provide(Layer.succeed(SessionRuntime.Service, fenced)),
+        Layer.provide(sessions),
+      )
+      const layer = SessionControl.layer.pipe(
+        Layer.provide(Layer.succeed(SessionRuntime.Service, fenced)),
+        Layer.provide(legacy),
+        Layer.provide(core),
+        Layer.provide(sessions),
+      )
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
+
+      for (change of changes) {
+        for (const operation of [
+          () => control.prompt({ sessionID, parts: [{ type: "text", text: change }] }),
+          () => control.cancel(sessionID),
+        ]) {
+          expect(yield* operation().pipe(Effect.flip)).toMatchObject({
+            _tag: "SessionRuntime.Mismatch",
+            actualOwner: change === "owner" ? "v1" : "v2",
+            actualState: change === "state" ? "draining" : "ready",
+            actualEpoch: change === "epoch" ? 2 : 1,
+          })
+          yield* db
+            .update(SessionTable)
+            .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 1 })
+            .where(eq(SessionTable.id, sessionID))
+            .run()
+            .pipe(Effect.orDie)
+        }
+      }
+      expect(v2Calls).toEqual([])
+      expect(interruptCalls).toEqual([])
     }),
   )
 })
