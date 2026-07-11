@@ -169,3 +169,36 @@
 
 - `f70ffde7a1 fix(plugin): contain hostile hook inspection`
 - Report append: this document's concluding evidence commit.
+
+## Conclusive Review Fixes
+
+### Design Corrections
+
+- Captures and validates `dispose` immediately after a factory returns, before any other hook property access. If later adaptation or unsupported-key enumeration fails, the captured disposer runs exactly once; cleanup defects are logged with plugin/package/source/stage context and cannot replace the primary hook-shape event or block continuation.
+- Replaced top-level retry copying with a contained temporary Bun bundle built in a fresh Bun subprocess. The fresh process avoids poisoned resolver state; bundling includes the complete reachable relative child graph and imported installed dependencies without copying `node_modules`, generated trees, or unrelated files. The temporary output directory is always recursively removed before continuation.
+- Normalizes missing dependency subpaths to root npm identities before declared-dependency comparison: `pkg/subpath` becomes `pkg`, and `@scope/pkg/subpath` becomes `@scope/pkg`.
+- Isolates `server` membership/access and `id` membership/access per module export. Proxy/accessor defects produce one export-scoped hook-shape failure, ID validation remains before deduplication, and later exports in the same module continue.
+
+### Conclusive RED Evidence
+
+- `bun test test/plugin-package.test.ts` from `packages/core`: 16 pass, 4 fail. Child/scoped subpath imports did not retry, hostile post-factory hooks did not dispose, and the first modern export trap suppressed later aliases.
+- After initial graph bundling, both subpath tests reached the second install but no tool registered; the emitted import failure showed Bun's process-global bare-package cache still poisoning the temporary entry. Moving the bundle into a fresh subprocess and including reachable installed imports removed that lookup.
+
+### Conclusive GREEN Evidence
+
+- `bun test test/plugin-package.test.ts test/location-layer.test.ts test/plugin-tool.test.ts` from `packages/core`: 38 pass, 0 fail, 149 expectations.
+- Hostile ownKeys/getter resources dispose exactly once, including a throwing disposer; only primary hook-shape failures are published and later packages load.
+- Relative child and scoped/unscoped dependency-subpath retries install once, invoke each factory once, register tools, remove temporary artifacts, and preserve all prior ineligible boundaries.
+- Modern `in`, `server` getter, and `id` getter traps each produce one failure while a healthy same-module export loads.
+- `bun test` from `packages/core`: 1305 pass, 0 fail, 3737 expectations.
+- `bun test` from `packages/codemode`: 254 pass, 0 fail, 744 expectations.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `bun run typecheck` from `packages/cli`: passed.
+- `bun install --frozen-lockfile --ignore-scripts`: passed with no changes.
+- `git diff --check`: passed.
+
+### Conclusive Commit
+
+- `fe7b7f2bfa fix(plugin): finalize package isolation`
+- Report append: this document's conclusive evidence commit.
