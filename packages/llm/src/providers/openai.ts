@@ -5,6 +5,8 @@ import * as OpenAIChat from "../protocols/openai-chat"
 import * as OpenAIResponses from "../protocols/openai-responses"
 import { withOpenAIOptions, type OpenAIProviderOptionsInput } from "./openai-options"
 
+export { OpenAIProviderOptions } from "./openai-options"
+
 export type {
   OpenAIOptionsInput,
   OpenAIReasoningContext,

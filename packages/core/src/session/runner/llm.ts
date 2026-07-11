@@ -7,6 +7,7 @@ import {
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@slopcode-ai/llm"
+import { OpenAIProviderOptions } from "@slopcode-ai/llm/providers/openai"
 import { Cause, DateTime, Effect, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
@@ -14,6 +15,7 @@ import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
+import { ModelHarness } from "../../model-harness"
 import { ProviderV2 } from "../../provider"
 import { QuestionV2 } from "../../question"
 import { SystemContext } from "../../system-context/index"
@@ -242,12 +244,43 @@ export const layer = Layer.effect(
       const model = resolved.model
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
-      const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
+      const instructions = resolved.harness ? yield* ModelHarness.instructions(resolved.harness) : undefined
+      const toolMaterialization = yield* tools.materialize(
+        agent.info?.permissions,
+        resolved.harness
+          ? {
+              mode: resolved.harness.tools.mode,
+              shell: resolved.harness.tools.shell,
+              patch: resolved.harness.tools.patch,
+              progress: (input, progress) =>
+                Effect.gen(function* () {
+                  yield* events.publish(SessionEvent.Tool.Progress, {
+                    sessionID: input.sessionID,
+                    timestamp: yield* DateTime.now,
+                    assistantMessageID: input.assistantMessageID,
+                    callID: input.call.id,
+                    structured: progress,
+                    content: [],
+                  })
+                }),
+            }
+          : undefined,
+      )
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
         model,
-        providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline]
+        providerOptions: OpenAIProviderOptions.make(
+          resolved.harness
+            ? {
+                promptCacheKey,
+                responsesMode: "lite",
+                textVerbosity: "low",
+                reasoningEffort: resolved.reasoning,
+                reasoningSummary: "none",
+              }
+            : { promptCacheKey },
+        ),
+        system: [instructions, agent.info?.system, system.baseline]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
         messages: toLLMMessages(context, model),

@@ -419,9 +419,11 @@ const lowerToolResultOutput = Effect.fn("OpenAIResponses.lowerToolResultOutput")
   return yield* Effect.forEach(content, lowerToolResultContentItem)
 })
 
-const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest) {
+const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest, includeSystem = true) {
   const system: OpenAIResponsesInputItem[] =
-    request.system.length === 0 ? [] : [{ role: "system", content: ProviderShared.joinText(request.system) }]
+    !includeSystem || request.system.length === 0
+      ? []
+      : [{ role: "system", content: ProviderShared.joinText(request.system) }]
   const input: OpenAIResponsesInputItem[] = [...system]
   const store = OpenAIOptions.store(request)
 
@@ -544,7 +546,15 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
     ...(store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     ...(include ? { include } : {}),
-    ...(effort || summary || context ? { reasoning: { effort, summary, context } } : {}),
+    ...(effort || summary === "auto" || context
+      ? {
+          reasoning: {
+            ...(effort ? { effort: effort === "ultra" ? ("max" as const) : effort } : {}),
+            ...(summary === "auto" ? { summary } : {}),
+            ...(context ? { context } : {}),
+          },
+        }
+      : {}),
     ...(verbosity ? { text: { verbosity } } : {}),
     ...(serviceTier ? { service_tier: serviceTier } : {}),
     ...(lite
@@ -560,27 +570,30 @@ const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request:
   const generation = request.generation
   const lite = OpenAIOptions.responsesMode(request) === "lite"
   const tools = request.tools.map(lowerTool)
-  const messages = yield* lowerMessages(request)
+  const messages = yield* lowerMessages(request, !lite)
   const instructions = OpenAIOptions.instructions(request)
+  const developer = [instructions, ...request.system.map((part) => part.text)].filter(
+    (part): part is string => part !== undefined && part.length > 0,
+  )
   const options = yield* lowerOptions(request)
   return {
     model: request.model.id,
     input: lite
       ? [
           { type: "additional_tools" as const, role: "developer" as const, tools },
-          ...(instructions
+          ...(developer.length > 0
             ? [
                 {
                   type: "message" as const,
                   role: "developer" as const,
-                  content: [{ type: "input_text" as const, text: instructions }],
+                  content: developer.map((text) => ({ type: "input_text" as const, text })),
                 },
               ]
             : []),
           ...messages,
         ]
       : messages,
-    tools: !lite && tools.length > 0 ? tools : undefined,
+    ...(!lite && tools.length > 0 ? { tools } : {}),
     tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined,
     stream: true as const,
     max_output_tokens: generation?.maxTokens,
@@ -762,8 +775,7 @@ const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): Ste
       events,
     ]
   }
-  if ((item?.type !== "function_call" && item?.type !== "custom_tool_call") || !item.id)
-    return [state, NO_EVENTS]
+  if ((item?.type !== "function_call" && item?.type !== "custom_tool_call") || !item.id) return [state, NO_EVENTS]
   const providerMetadata = openaiMetadata({ itemId: item.id })
   const toolType = item.type === "custom_tool_call" ? ("custom" as const) : undefined
   const events: LLMEvent[] = []
@@ -1048,10 +1060,7 @@ const step = (state: ParserState, event: OpenAIResponsesEvent) => {
   if (event.type === "response.reasoning_summary_part.done")
     return Effect.succeed(onReasoningSummaryPartDone(state, event))
   if (event.type === "response.output_item.added") return Effect.succeed(onOutputItemAdded(state, event))
-  if (
-    event.type === "response.function_call_arguments.delta" ||
-    event.type === "response.custom_tool_call_input.delta"
-  )
+  if (event.type === "response.function_call_arguments.delta" || event.type === "response.custom_tool_call_input.delta")
     return onFunctionCallArgumentsDelta(state, event)
   if (event.type === "response.output_item.done") return onOutputItemDone(state, event)
   if (event.type === "response.completed" || event.type === "response.incomplete")
@@ -1071,6 +1080,7 @@ const step = (state: ParserState, event: OpenAIResponsesEvent) => {
  */
 export const protocol = Protocol.make({
   id: ADAPTER,
+  capabilities: ["responses-lite"],
   body: {
     schema: OpenAIResponsesBody,
     from: fromRequest,
