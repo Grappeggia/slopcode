@@ -94,3 +94,43 @@ This section supersedes the original coverage and self-review claims above where
 ### Review Concerns
 
 - No remaining H5C3A correctness concerns. One unrelated process readiness test was transient on the first full run and passed both isolated and final full-suite reruns.
+
+## Precedence Re-Review
+
+### Design
+
+- Extended `Tools.Service.register` with an optional stable `slot` token. Existing one-argument callers remain source-compatible.
+- The canonical registry assigns each active slot one monotonic source position. Replacement swaps that slot's registration identity in place; token-aware finalizers leave the replacement intact, while final removal drops the slot so a later add appends.
+- `PluginV2` now retains each active plugin's slot and hook-array index across replacement. Removing the plugin discards both, so a genuinely new add receives a later source position.
+- Replacement still installs the new registration before closing the old scope, old-only registrations disappear before slow disposal, and captured identities retain existing stale-call behavior.
+- The real `ToolOutputStore` gate now checks the visible text contains the truncation marker, differs from full output, and stays within the configured byte limit while the managed file retains all output.
+
+### RED Evidence
+
+- `bun test test/plugin-tool.test.ts -t "stable plugin precedence|bounds plugin output"`: `1 pass`, `1 fail`. Replacing A promoted `a2` over later B instead of retaining `b1`; the strengthened truncation assertions already passed.
+
+### GREEN Evidence
+
+- `bun test test/plugin-tool.test.ts test/plugin.test.ts test/tool-dynamic.test.ts test/tool-overlay.test.ts`: `24 pass`, `0 fail`, `128 expect()` calls.
+- `bun test test/location-layer.test.ts test/tool-skill.test.ts test/tool-task.test.ts`: `25 pass`, `0 fail`, `108 expect()` calls.
+- `bun test` from `packages/core`: `1283 pass`, `0 fail`, `3656 expect()` calls.
+- `bun test` from `packages/codemode`: `254 pass`, `0 fail`, `744 expect()` calls.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `git diff --check`: passed.
+
+### Added Gates
+
+- Two colliding plugins verify hook and tool order when replacing A and replacing B.
+- A replacement blocked in old A's disposer proves B stays effective and hook order remains A then B during disposal.
+- A captured B materialization remains valid across A replacement; a captured B materialization becomes stale across B replacement.
+- Removing/re-adding B appends B after A; subsequently removing/re-adding A appends A after B.
+- Visible bounded output is truncated while full output is persisted at the managed path.
+
+### Commit
+
+- `1ed3c273a4 fix(plugin): preserve replacement precedence`
+
+### Concerns
+
+- No remaining H5C3A precedence concerns.
