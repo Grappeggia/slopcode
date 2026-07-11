@@ -38,6 +38,9 @@ export const interruptedEventID = (parentID: SessionSchema.ID, messageID: Sessio
 export const interruptedToolEventID = (parentID: SessionSchema.ID, messageID: SessionMessage.ID, callID: string) =>
   EventV2.ID.make(`evt_${hash("task-tool-interrupted-v2", parentID, messageID, callID)}`)
 
+export const progressEventID = (parentID: SessionSchema.ID, messageID: SessionMessage.ID, callID: string) =>
+  EventV2.ID.make(`evt_${hash("task-progress-v2", parentID, messageID, callID)}`)
+
 const requestedType = `${SessionEvent.Task.Requested.type}.1`
 const preparedType = `${SessionEvent.Task.Prepared.type}.1`
 const interruptedType = `${SessionEvent.Task.Interrupted.type}.1`
@@ -49,6 +52,7 @@ const taskCallTypes = [
 ]
 const decodeRequest = Schema.decodeUnknownEffect(SessionEvent.Task.Requested.data)
 const decodePrepared = Schema.decodeUnknownEffect(SessionEvent.Task.Prepared.data)
+const decodeProgress = Schema.decodeUnknownEffect(SessionEvent.Tool.Progress.data)
 
 export const prepared = Effect.fn("SessionTask.prepared")(function* (
   db: DatabaseService,
@@ -65,6 +69,24 @@ export const prepared = Effect.fn("SessionTask.prepared")(function* (
   if (!row) return
   if (row.type !== preparedType) return yield* Effect.die(`Invalid task prepared event: ${row.type}`)
   return yield* decodePrepared(row.data).pipe(Effect.orDie)
+})
+
+export const progress = Effect.fn("SessionTask.progress")(function* (
+  db: DatabaseService,
+  parentID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+  callID: string,
+) {
+  const row = yield* db
+    .select()
+    .from(EventTable)
+    .where(eq(EventTable.id, progressEventID(parentID, messageID, callID)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return
+  if (row.type !== `${SessionEvent.Tool.Progress.type}.1`)
+    return yield* Effect.die(`Invalid task progress event: ${row.type}`)
+  return yield* decodeProgress(row.data).pipe(Effect.orDie)
 })
 
 export const strengthen = Effect.fn("SessionTask.strengthen")(function* (

@@ -606,7 +606,9 @@ export const layer = Layer.effect(
               const catalog = yield* agents.all()
               const available = catalog
                 .filter((item) => !item.hidden && (item.mode === "subagent" || item.mode === "all"))
-                .filter((item) => PermissionV2.evaluate("task", item.id, permissions).effect !== "deny")
+                .filter(
+                  (item) => PermissionV2.evaluate("task", item.id, toolMaterialization.permissions).effect !== "deny",
+                )
                 .map((item) => item.id)
               const selected = catalog.find((item) => item.id === selectedID)
               const modelRef =
@@ -617,7 +619,7 @@ export const layer = Layer.effect(
                   variant: ModelV2.VariantID.make(session.model?.variant ?? "default"),
                 })
               const ceiling = [
-                ...permissions.filter(
+                ...toolMaterialization.permissions.filter(
                   (rule) =>
                     rule.effect === "deny" ||
                     (rule.effect === "ask" && Wildcard.match("external_directory", rule.action)),
@@ -638,7 +640,7 @@ export const layer = Layer.effect(
                   callID: event.id,
                   input: event.input,
                   callerAgent: agent.id,
-                  permissions,
+                  permissions: toolMaterialization.permissions,
                   plan: { ...plan, multiAgent: plan.multiAgent ?? "v2" },
                   agent: selectedID,
                   available,

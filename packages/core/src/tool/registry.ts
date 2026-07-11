@@ -51,6 +51,7 @@ export interface Interface {
 
 export interface Materialization {
   readonly definitions: ReadonlyArray<AnyToolDefinition>
+  readonly permissions: PermissionV2.Ruleset
   readonly settle: (input: ExecuteInput) => Effect.Effect<Settlement, ToolOutputStore.Error>
 }
 
@@ -166,7 +167,7 @@ const registryLayer = Layer.effect(
         )
       }),
       materialize: Effect.fn("ToolRegistry.materialize")(function* (permissions = [], plan = {}) {
-        const rules = Object.freeze([...permissions])
+        const rules = Object.freeze(permissions.map((rule) => Object.freeze({ ...rule })))
         const registrations = new Map(applications.entries())
         for (const [name, entries] of local) {
           const registration = entries.at(-1)?.registration
@@ -183,7 +184,7 @@ const registryLayer = Layer.effect(
           return Effect.succeed({ result: { type: "error" as const, value: `Unknown tool: ${input.call.name}` } })
         }
         const mode = plan.mode ?? "function"
-        if (mode === "function") return { definitions, settle: settleMaterialized }
+        if (mode === "function") return { definitions, permissions: rules, settle: settleMaterialized }
 
         const catalog = Object.freeze(
           definitions
@@ -334,6 +335,7 @@ SOURCE: /[\s\S]+/
         return {
           definitions:
             mode === "code-only" ? [exec] : [exec, ...definitions.filter((definition) => definition.name !== "exec")],
+          permissions: rules,
           settle: (input) => {
             if (input.call.name !== "exec") return settleMaterialized(input)
             if (input.call.toolType === "custom") return settleExec(input)
