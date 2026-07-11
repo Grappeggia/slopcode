@@ -50,6 +50,15 @@ export interface Interface {
     readonly state?: State
     readonly epoch?: number
   }) => Effect.Effect<Info, Error>
+  readonly claim: (
+    input: {
+      readonly sessionID: SessionSchema.ID
+      readonly owner: Owner
+      readonly state?: State
+      readonly epoch?: number
+    },
+    coordinate?: Effect.Effect<void>,
+  ) => Effect.Effect<Info, Error>
   readonly assign: (input: {
     readonly sessionID: SessionSchema.ID
     readonly owner?: Owner
@@ -141,6 +150,27 @@ export const layer = Layer.effect(
           )
       }),
       assert,
+      claim: Effect.fn("SessionRuntime.claim")(function* (
+        input: {
+          readonly sessionID: SessionSchema.ID
+          readonly owner: Owner
+          readonly state?: State
+          readonly epoch?: number
+        },
+        coordinate: Effect.Effect<void> = Effect.void,
+      ) {
+        return yield* db
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                const current = yield* assert(input)
+                yield* coordinate
+                return current
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.catchTag("SqlError", Effect.die))
+      }),
       assign: Effect.fn("SessionRuntime.assign")(function* (input) {
         const updated = DateTime.toEpochMillis(yield* DateTime.now)
         const row = yield* db

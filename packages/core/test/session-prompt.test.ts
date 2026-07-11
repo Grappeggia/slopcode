@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Context, DateTime, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
+import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
@@ -248,6 +248,29 @@ describe("SessionV2.prompt", () => {
       expect(yield* session.interrupt(missing, Effect.fail("runtime changed")).pipe(Effect.flip)).toBe(
         "runtime changed",
       )
+      expect(interruptCalls).toEqual([])
+      expect(interruptSeqs).toEqual([])
+    }),
+  )
+
+  it.effect("does not interrupt execution after a successful guard when the projected Session is missing", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const missing = SessionV2.ID.make("ses_missing_guarded_race")
+      const checked = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      interruptCalls.length = 0
+      interruptSeqs.length = 0
+      const fiber = yield* session
+        .interrupt(
+          missing,
+          Deferred.succeed(checked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.await(checked)
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(fiber)
       expect(interruptCalls).toEqual([])
       expect(interruptSeqs).toEqual([])
     }),

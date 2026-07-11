@@ -142,6 +142,8 @@ export interface PublishOptions {
   readonly location?: Location.Ref
   /** Local operational projection committed atomically with a new synchronized event. Not replayed or serialized. */
   readonly commit?: (seq: number) => Effect.Effect<void>
+  /** Validation run inside the synchronized event transaction before projectors mutate durable state. */
+  readonly guard?: (seq: number) => Effect.Effect<void>
 }
 
 export interface Interface {
@@ -221,6 +223,7 @@ export const layerWith = (options?: LayerOptions) =>
           readonly strictOwner?: boolean
         },
         commit?: (seq: number) => Effect.Effect<void>,
+        guard?: (seq: number) => Effect.Effect<void>,
       ) {
         return Effect.gen(function* () {
           const definition =
@@ -336,6 +339,7 @@ export const layerWith = (options?: LayerOptions) =>
                           for (const guard of commitGuards) {
                             yield* guard(event)
                           }
+                          if (guard) yield* guard(seq)
                           for (const projector of list) {
                             yield* projector({ ...event, seq } as Payload)
                           }
@@ -385,10 +389,14 @@ export const layerWith = (options?: LayerOptions) =>
         })
       }
 
-      function publishEvent<D extends Definition>(event: Payload<D>, commit?: PublishOptions["commit"]) {
+      function publishEvent<D extends Definition>(
+        event: Payload<D>,
+        commit?: PublishOptions["commit"],
+        guard?: PublishOptions["guard"],
+      ) {
         return Effect.gen(function* () {
           const durable = registry.get(event.type)?.sync !== undefined
-          if (!durable && commit)
+          if (!durable && (commit || guard))
             return yield* Effect.die(
               new InvalidSyncEventError({
                 type: event.type,
@@ -396,7 +404,7 @@ export const layerWith = (options?: LayerOptions) =>
               }),
             )
           if (durable) {
-            const committed = yield* commitSyncEvent(event as Payload, undefined, commit)
+            const committed = yield* commitSyncEvent(event as Payload, undefined, commit, guard)
             if (committed) {
               event = { ...event, seq: committed.seq }
               yield* Effect.forEach(syncHandlers, (sync) => observe(event as Payload, "sync", sync), { discard: true })
@@ -453,6 +461,7 @@ export const layerWith = (options?: LayerOptions) =>
               data: payloadData,
             } as Payload<D>,
             options?.commit,
+            options?.guard,
           )
         })
       }

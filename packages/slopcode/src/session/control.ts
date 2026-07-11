@@ -58,7 +58,7 @@ export const layer = Layer.effect(
       const current = yield* runtime.assert({ sessionID, owner: "v1", state: "ready", epoch: info?.epoch })
       yield* legacy.cancel(
         sessionID,
-        runtime.assert({ sessionID, owner: "v1", state: "ready", epoch: current.epoch }).pipe(Effect.asVoid),
+        runtime.claim({ sessionID, owner: "v1", state: "ready", epoch: current.epoch }).pipe(Effect.asVoid),
       )
     })
 
