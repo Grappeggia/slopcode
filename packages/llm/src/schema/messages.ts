@@ -191,7 +191,10 @@ type ToolResultPartBase = Schema.Schema.Type<typeof ToolResultPartBase>
 export type ToolResultPart = Omit<ToolResultPartBase, "toolType"> &
   ({ readonly toolType?: "function" } | { readonly toolType: "custom" })
 const ToolResultPartSchema = ToolResultPartBase.pipe(
-  Schema.refine((value): value is ToolResultPart => value.toolType !== "custom" || value.toolType === "custom"),
+  Schema.refine(
+    (value): value is ToolResultPart =>
+      value.toolType === undefined || value.toolType === "function" || value.toolType === "custom",
+  ),
 ).annotate({ identifier: "LLM.Content.ToolResult" })
 
 type ToolResultPartInput = ToolResultPart extends infer Part

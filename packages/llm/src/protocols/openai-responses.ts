@@ -201,11 +201,18 @@ const OpenAIResponsesBody = Schema.Struct({
 })
 export type OpenAIResponsesBody = Schema.Schema.Type<typeof OpenAIResponsesBody>
 
-const OpenAIResponsesWebSocketMessage = Schema.Struct({
-  type: Schema.tag("response.create"),
-  ...OpenAIResponsesCoreFields,
-  client_metadata: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+const OpenAIResponsesClientMetadata = Schema.Struct({
+  ws_request_header_x_openai_internal_codex_responses_lite: Schema.Literal("true"),
 })
+
+const OpenAIResponsesWebSocketMessage = Schema.StructWithRest(
+  Schema.Struct({
+    type: Schema.tag("response.create"),
+    ...OpenAIResponsesCoreFields,
+    client_metadata: Schema.optional(OpenAIResponsesClientMetadata),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)],
+)
 type OpenAIResponsesWebSocketMessage = Schema.Schema.Type<typeof OpenAIResponsesWebSocketMessage>
 const encodeWebSocketMessage = Schema.encodeSync(Schema.fromJsonString(OpenAIResponsesWebSocketMessage))
 

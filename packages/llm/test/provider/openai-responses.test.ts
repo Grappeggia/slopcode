@@ -7,10 +7,10 @@ import {
   LLMError,
   Message,
   Model,
+  Tool,
   ToolCallPart,
   ToolResultPart,
   ToolRuntime,
-  Tool,
   Usage,
 } from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
