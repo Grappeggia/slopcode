@@ -333,6 +333,82 @@ describe("PluginTool", () => {
     }),
   )
 
+  it.effect("preserves stable plugin precedence slots across replacement and appends only after removal", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginV2.Service
+      const registry = yield* ToolRegistry.Service
+      const hooks: string[] = []
+      const definition = (value: string, dispose?: () => Promise<void>) =>
+        Effect.succeed({
+          "tool.execute.before": () => Effect.sync(() => hooks.push(value)),
+          tool: { stable_slot: { description: value, args: {}, execute: async () => value } },
+          dispose,
+        })
+      const a = PluginV2.ID.make("stable-a")
+      const b = PluginV2.ID.make("stable-b")
+      const disposeStarted = yield* Deferred.make<void>()
+      const releaseDispose = yield* Deferred.make<void>()
+      yield* plugin.add({
+        id: a,
+        effect: definition("a1", () =>
+          Effect.runPromise(
+            Deferred.succeed(disposeStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseDispose))),
+          ),
+        ),
+      })
+      yield* plugin.add({ id: b, effect: definition("b1") })
+
+      const beforeA = yield* registry.materialize()
+      expect((yield* settle(beforeA, "stable_slot")).result).toEqual({ type: "text", value: "b1" })
+      expect(hooks.splice(0)).toEqual(["a1", "b1"])
+
+      const replacingA = yield* plugin
+        .add({
+          id: a,
+          effect: definition("a2"),
+        })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(disposeStarted)
+      expect((yield* settle(yield* registry.materialize(), "stable_slot")).result).toEqual({
+        type: "text",
+        value: "b1",
+      })
+      expect(hooks.splice(0)).toEqual(["a2", "b1"])
+      expect((yield* settle(beforeA, "stable_slot")).result).toEqual({ type: "text", value: "b1" })
+      hooks.splice(0)
+      yield* Deferred.succeed(releaseDispose, undefined)
+      yield* Fiber.join(replacingA)
+
+      const beforeB = yield* registry.materialize()
+      yield* plugin.add({ id: b, effect: definition("b2") })
+      expect((yield* settle(beforeB, "stable_slot")).result).toEqual({
+        type: "error",
+        value: "Stale tool call: stable_slot",
+      })
+      expect((yield* settle(yield* registry.materialize(), "stable_slot")).result).toEqual({
+        type: "text",
+        value: "b2",
+      })
+      expect(hooks.splice(0)).toEqual(["a2", "b2"])
+
+      yield* plugin.remove(b)
+      yield* plugin.add({ id: b, effect: definition("b3") })
+      expect((yield* settle(yield* registry.materialize(), "stable_slot")).result).toEqual({
+        type: "text",
+        value: "b3",
+      })
+      expect(hooks.splice(0)).toEqual(["a2", "b3"])
+
+      yield* plugin.remove(a)
+      yield* plugin.add({ id: a, effect: definition("a3") })
+      expect((yield* settle(yield* registry.materialize(), "stable_slot")).result).toEqual({
+        type: "text",
+        value: "a3",
+      })
+      expect(hooks.splice(0)).toEqual(["b3", "a3"])
+    }),
+  )
+
   it.effect("hides removed and replaced registrations before awaiting slow disposal", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service
@@ -501,6 +577,10 @@ describe("PluginTool", () => {
       })
       const result = yield* settle(yield* registry.materialize(), "bounded")
       expect(result.outputPaths).toHaveLength(1)
+      const visible = result.output?.content.find((item) => item.type === "text")?.text
+      expect(visible).toContain("output truncated")
+      expect(visible).not.toBe("x".repeat(1_000))
+      expect(Buffer.byteLength(visible ?? "", "utf8")).toBeLessThanOrEqual(200)
       expect(yield* Context.get(context, FSUtil.Service).readFileString(result.outputPaths![0])).toBe("x".repeat(1_000))
       yield* Scope.close(scope, Exit.void)
     }),

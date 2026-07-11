@@ -32,7 +32,7 @@ import {
   type AnyTool,
   type Context as ToolContext,
 } from "./tool"
-import { Tools } from "./tools"
+import { Tools, type RegistrationOptions } from "./tools"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
@@ -49,7 +49,10 @@ export interface Interface {
     (permissions: PermissionV2.Ruleset, plan: ToolPlan, turn: TurnTools): Effect.Effect<Materialization, RegistrationError>
   }
   /** Internal registration capability exposed publicly only through Tools.Service. */
-  readonly register: (tools: Readonly<Record<string, AnyTool>>) => Effect.Effect<void, RegistrationError, Scope.Scope>
+  readonly register: (
+    tools: Readonly<Record<string, AnyTool>>,
+    options?: RegistrationOptions,
+  ) => Effect.Effect<void, RegistrationError, Scope.Scope>
 }
 
 export interface Materialization {
@@ -96,7 +99,11 @@ const registryLayer = Layer.effect(
     const resources = yield* ToolOutputStore.Service
     type Registration = { readonly identity: object; readonly tool: AnyTool }
     type Captured = { readonly registration: Registration; readonly overlay: boolean }
-    const local = new Map<string, Array<{ readonly token: object; readonly registration: Registration }>>()
+    type Local = { readonly slot: object; readonly token: object; readonly registration: Registration }
+    const local = new Map<string, Local[]>()
+    const order = new Map<object, number>()
+    const active = new Map<object, Set<object>>()
+    let sequence = 0
 
     const settleWith = Effect.fn("ToolRegistry.settle")(function* (
       input: ExecuteInput,
@@ -144,21 +151,38 @@ const registryLayer = Layer.effect(
     })
 
     return Service.of({
-      register: Effect.fn("ToolRegistry.register")(function* (tools) {
+      register: Effect.fn("ToolRegistry.register")(function* (tools, options?: RegistrationOptions) {
         const entries = Object.entries(tools)
-        if (entries.length === 0) return
         yield* Effect.forEach(entries, ([name]) => validateName(name), { discard: true })
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
             const token = {}
-            for (const [name, tool] of entries)
-              local.set(name, [...(local.get(name) ?? []), { token, registration: { identity: {}, tool } }])
+            const slot = options?.slot ?? {}
+            if (!order.has(slot)) order.set(slot, sequence++)
+            active.set(slot, new Set([...(active.get(slot) ?? []), token]))
+            for (const [name, tool] of entries) {
+              const registration = { slot, token, registration: { identity: {}, tool } }
+              const existing = local.get(name) ?? []
+              const index = existing.findIndex((item) => item.slot === slot)
+              const registrations =
+                index < 0
+                  ? [...existing, registration]
+                  : existing.map((item, current) => (current === index ? registration : item))
+              registrations.sort((left, right) => order.get(left.slot)! - order.get(right.slot)!)
+              local.set(name, registrations)
+            }
             yield* Effect.addFinalizer(() =>
               Effect.sync(() => {
                 for (const [name] of entries) {
                   const registrations = local.get(name)?.filter((registration) => registration.token !== token) ?? []
                   if (registrations.length > 0) local.set(name, registrations)
                   else local.delete(name)
+                }
+                const tokens = active.get(slot)
+                tokens?.delete(token)
+                if (tokens?.size === 0) {
+                  active.delete(slot)
+                  order.delete(slot)
                 }
               }),
             )
