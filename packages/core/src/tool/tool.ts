@@ -6,6 +6,7 @@ import type { AgentV2 } from "../agent"
 import type { PermissionV2 } from "../permission"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
+import type { SessionEvent } from "../session/event"
 
 export interface Context {
   readonly sessionID: SessionSchema.ID
@@ -14,6 +15,13 @@ export interface Context {
   readonly toolCallID: string
   readonly multiAgent?: "v1" | "v2"
   readonly permissions: PermissionV2.Ruleset
+  readonly plan: {
+    readonly mode?: "function" | "code-preferred" | "code-only"
+    readonly shell?: "shell_command"
+    readonly patch?: "freeform"
+    readonly multiAgent?: "v1" | "v2"
+  }
+  readonly task?: SessionEvent.Task.Requested["data"]
 }
 
 export type SchemaType<A> = Schema.Codec<A, any, never, never>

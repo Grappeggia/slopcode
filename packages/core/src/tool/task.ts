@@ -126,11 +126,13 @@ export const layer = Layer.effectDiscard(
     const validate = Effect.fn("TaskTool.validateChild")(function* (input: {
       id: string
       parent: SessionSchema.Info
-      agent: AgentV2.Info
+      agent: AgentV2.ID
       model?: ModelV2.Ref
       title?: string
       origin?: SessionTaskMetadata.Owner["origin"]
       ceiling?: PermissionV2.Ruleset
+      canonical?: boolean
+      request?: SessionEvent.Task.Requested["data"]
     }) {
       if (!input.id.startsWith("ses_"))
         return yield* new ResumeConflictError({
@@ -140,21 +142,59 @@ export const layer = Layer.effectDiscard(
       const id = SessionSchema.ID.make(input.id)
       const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
       const owner = SessionTaskMetadata.owner(row?.metadata)
+      const origin = owner
+        ? yield* SessionTask.request(db, owner.parentID, owner.origin.messageID, owner.origin.callID)
+        : undefined
+      const canonical =
+        input.canonical !== true ||
+        (owner !== undefined &&
+          origin !== undefined &&
+          row !== undefined &&
+          row.id === SessionTask.childID(owner.parentID, owner.origin.messageID, owner.origin.callID) &&
+          origin.sessionID === owner.parentID &&
+          origin.assistantMessageID === owner.origin.messageID &&
+          origin.callID === owner.origin.callID &&
+          origin.childSessionID === row.id &&
+          origin.promptMessageID === SessionTask.promptID(owner.parentID, owner.origin.messageID, owner.origin.callID) &&
+          origin.agent === owner.agent &&
+          origin.agent === row.agent &&
+          origin.projectID === row.project_id &&
+          origin.location.directory === row.directory &&
+          origin.location.workspaceID === (row.workspace_id ?? undefined) &&
+          origin.title === row.title &&
+          sameModel(origin.model, row.model) &&
+          JSON.stringify(origin.ceiling) === JSON.stringify(owner.ceiling))
+      const request =
+        input.request === undefined ||
+        (row !== undefined &&
+          input.request.sessionID === input.parent.id &&
+          input.request.childSessionID === row.id &&
+          input.request.promptMessageID ===
+            SessionTask.promptID(input.parent.id, input.request.assistantMessageID, input.request.callID) &&
+          input.request.agent === row.agent &&
+          input.request.projectID === row.project_id &&
+          input.request.location.directory === row.directory &&
+          input.request.location.workspaceID === (row.workspace_id ?? undefined) &&
+          input.request.title === row.title &&
+          sameModel(input.request.model, row.model) &&
+          JSON.stringify(input.request.ceiling) === JSON.stringify(owner?.ceiling))
       if (
         !row ||
         row.runtime !== "v2" ||
         row.parent_id !== input.parent.id ||
         row.project_id !== input.parent.projectID ||
-        row.agent !== input.agent.id ||
+        row.agent !== input.agent ||
         (input.title !== undefined && row.title !== input.title) ||
         (input.model !== undefined && !sameModel(input.model, row.model)) ||
         !sameLocation(row, location) ||
         !owner ||
         owner.parentID !== input.parent.id ||
-        owner.agent !== input.agent.id ||
+        owner.agent !== input.agent ||
         (input.origin !== undefined &&
           (owner.origin.messageID !== input.origin.messageID || owner.origin.callID !== input.origin.callID)) ||
-        (input.ceiling !== undefined && JSON.stringify(owner.ceiling) !== JSON.stringify(input.ceiling))
+        (input.ceiling !== undefined && JSON.stringify(owner.ceiling) !== JSON.stringify(input.ceiling)) ||
+        !canonical ||
+        !request
       )
         return yield* new ResumeConflictError({
           taskID: input.id,
@@ -188,18 +228,18 @@ export const layer = Layer.effectDiscard(
       callID: string
       childID: SessionSchema.ID
     }) {
-      if (!(yield* SessionTask.interrupted(db, input.parentID, input.messageID, input.callID)))
-        yield* events.publish(
-          SessionEvent.Task.Interrupted,
-          {
-            sessionID: input.parentID,
-            timestamp: yield* DateTime.now,
-            assistantMessageID: input.messageID,
-            callID: input.callID,
-            childSessionID: input.childID,
-          },
-          { id: SessionTask.interruptedEventID(input.parentID, input.messageID, input.callID) },
-        )
+      if (yield* SessionTask.interrupted(db, input.parentID, input.messageID, input.callID)) return
+      yield* events.publish(
+        SessionEvent.Task.Interrupted,
+        {
+          sessionID: input.parentID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: input.messageID,
+          callID: input.callID,
+          childSessionID: input.childID,
+        },
+        { id: SessionTask.interruptedEventID(input.parentID, input.messageID, input.callID) },
+      )
       yield* events.publish(SessionEvent.Task.Interrupt, {
         sessionID: input.parentID,
         timestamp: yield* DateTime.now,
@@ -207,6 +247,47 @@ export const layer = Layer.effectDiscard(
         callID: input.callID,
         childSessionID: input.childID,
       })
+    })
+
+    const run = Effect.fn("TaskTool.runChild")(function* (input: {
+      taskID: SessionSchema.ID
+      promptID: SessionMessage.ID
+      prompt: string
+      context: Tool.Context
+    }) {
+      const result = yield* terminal(input.taskID, input.promptID)
+      if (result !== undefined) return result
+      const admitted = yield* SessionInput.admit(db, events, {
+        id: input.promptID,
+        sessionID: input.taskID,
+        prompt: new Prompt({ text: input.prompt }),
+        delivery: "steer",
+      })
+      if (
+        !SessionInput.equivalent(admitted, {
+          sessionID: input.taskID,
+          prompt: new Prompt({ text: input.prompt }),
+          delivery: "steer",
+        })
+      )
+        return yield* new ResumeConflictError({
+          taskID: input.taskID,
+          message: `Task ${input.taskID} prompt identity conflicts`,
+        })
+      yield* events.publish(SessionEvent.Task.Execute, {
+        sessionID: input.context.sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: input.context.assistantMessageID,
+        callID: input.context.toolCallID,
+        childSessionID: input.taskID,
+      })
+      const completed = yield* terminal(input.taskID, input.promptID)
+      if (completed === undefined)
+        return yield* new ChildFailedError({
+          taskID: input.taskID,
+          message: `Task ${input.taskID} ended without terminal output`,
+        })
+      return completed
     })
 
     yield* tools
@@ -219,6 +300,51 @@ export const layer = Layer.effectDiscard(
           toModelOutput: ({ output }) => [{ type: "text", text: render(output) }],
           execute: (input, context) =>
             Effect.gen(function* () {
+              if (context.task) {
+                const request = context.task
+                if (
+                  request.sessionID !== context.sessionID ||
+                  request.assistantMessageID !== context.assistantMessageID ||
+                  request.callID !== context.toolCallID ||
+                  request.description !== input.description ||
+                  request.prompt !== input.prompt ||
+                  request.agent !== input.subagent_type ||
+                  request.command !== input.command
+                )
+                  return yield* new ResumeConflictError({
+                    taskID: request.childSessionID,
+                    message: `Task ${request.childSessionID} recovery identity conflicts`,
+                  })
+                const parent = yield* store.get(request.sessionID)
+                if (!parent)
+                  return yield* new ResumeConflictError({
+                    taskID: request.childSessionID,
+                    message: `Parent Session not found: ${request.sessionID}`,
+                  })
+                yield* validate({
+                  id: request.childSessionID,
+                  parent,
+                  agent: AgentV2.ID.make(request.agent),
+                  canonical: true,
+                  request,
+                })
+                const result = yield* run({
+                  taskID: request.childSessionID,
+                  promptID: request.promptMessageID,
+                  prompt: request.prompt,
+                  context,
+                }).pipe(
+                  Effect.onInterrupt(() =>
+                    interrupt({
+                      parentID: context.sessionID,
+                      messageID: context.assistantMessageID,
+                      callID: context.toolCallID,
+                      childID: request.childSessionID,
+                    }),
+                  ),
+                )
+                return { task_id: request.childSessionID, state: "completed" as const, result }
+              }
               const current = (yield* agents.all())
                 .filter(callable)
                 .filter((agent) => PermissionV2.evaluate(name, agent.id, context.permissions).effect !== "deny")
@@ -295,8 +421,8 @@ export const layer = Layer.effectDiscard(
               }
               const row = yield* validate(
                 input.task_id
-                  ? { id: input.task_id, parent, agent: selected }
-                  : { id: deterministic, parent, agent: selected, model: expected, title, origin, ceiling },
+                  ? { id: input.task_id, parent, agent: selected.id, canonical: true }
+                  : { id: deterministic, parent, agent: selected.id, model: expected, title, origin, ceiling },
               )
               if (!row.model)
                 return yield* new ResumeConflictError({
@@ -334,6 +460,13 @@ export const layer = Layer.effectDiscard(
                 model,
                 command: input.command,
                 multiAgent: context.multiAgent ?? "v2",
+                callerAgent: context.agent,
+                permissions: context.permissions,
+                plan: { ...context.plan, multiAgent: context.multiAgent ?? "v2" },
+                projectID: parent.projectID,
+                location,
+                title,
+                ceiling,
               } as const
               if (
                 recorded &&
@@ -347,6 +480,14 @@ export const layer = Layer.effectDiscard(
                   recorded.agent !== request.agent ||
                   recorded.command !== request.command ||
                   recorded.multiAgent !== request.multiAgent ||
+                  recorded.callerAgent !== request.callerAgent ||
+                  JSON.stringify(recorded.permissions) !== JSON.stringify(request.permissions) ||
+                  JSON.stringify(recorded.plan) !== JSON.stringify(request.plan) ||
+                  recorded.projectID !== request.projectID ||
+                  recorded.location.directory !== request.location.directory ||
+                  recorded.location.workspaceID !== request.location.workspaceID ||
+                  recorded.title !== request.title ||
+                  JSON.stringify(recorded.ceiling) !== JSON.stringify(request.ceiling) ||
                   recorded.model.id !== request.model.id ||
                   recorded.model.providerID !== request.model.providerID ||
                   recorded.model.variant !== request.model.variant)
@@ -368,38 +509,7 @@ export const layer = Layer.effectDiscard(
                 content: [],
               })
 
-              const run = Effect.gen(function* () {
-                const result = yield* terminal(taskID, promptID)
-                if (result !== undefined) return result
-                const admitted = yield* SessionInput.admit(db, events, {
-                  id: promptID,
-                  sessionID: taskID,
-                  prompt: new Prompt({ text: input.prompt }),
-                  delivery: "steer",
-                })
-                if (
-                  !SessionInput.equivalent(admitted, {
-                    sessionID: taskID,
-                    prompt: new Prompt({ text: input.prompt }),
-                    delivery: "steer",
-                  })
-                )
-                  return yield* new ResumeConflictError({ taskID, message: `Task ${taskID} prompt identity conflicts` })
-                yield* events.publish(SessionEvent.Task.Execute, {
-                  sessionID: context.sessionID,
-                  timestamp: yield* DateTime.now,
-                  assistantMessageID: context.assistantMessageID,
-                  callID: context.toolCallID,
-                  childSessionID: taskID,
-                })
-                const completed = yield* terminal(taskID, promptID)
-                if (completed === undefined)
-                  return yield* new ChildFailedError({
-                    taskID,
-                    message: `Task ${taskID} ended without terminal output`,
-                  })
-                return completed
-              }).pipe(
+              const result = yield* run({ taskID, promptID, prompt: input.prompt, context }).pipe(
                 Effect.onInterrupt(() =>
                   interrupt({
                     parentID: context.sessionID,
@@ -409,7 +519,7 @@ export const layer = Layer.effectDiscard(
                   }),
                 ),
               )
-              return { task_id: taskID, state: "completed" as const, result: yield* run }
+              return { task_id: taskID, state: "completed" as const, result }
             }).pipe(Effect.mapError(failure)),
         }),
       })

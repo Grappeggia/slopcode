@@ -1,6 +1,6 @@
 export * as SessionTask from "./task"
 
-import { and, eq } from "drizzle-orm"
+import { and, eq, gt } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import { createHash } from "node:crypto"
 import type { Database } from "../database/database"
@@ -32,8 +32,12 @@ export const requestEventID = (parentID: SessionSchema.ID, messageID: SessionMes
 export const interruptedEventID = (parentID: SessionSchema.ID, messageID: SessionMessage.ID, callID: string) =>
   EventV2.ID.make(`evt_${hash("task-interrupted-v2", parentID, messageID, callID)}`)
 
+export const interruptedToolEventID = (parentID: SessionSchema.ID, messageID: SessionMessage.ID, callID: string) =>
+  EventV2.ID.make(`evt_${hash("task-tool-interrupted-v2", parentID, messageID, callID)}`)
+
 const requestedType = `${SessionEvent.Task.Requested.type}.1`
 const interruptedType = `${SessionEvent.Task.Interrupted.type}.1`
+const interruptRequestedType = `${SessionEvent.InterruptRequested.type}.1`
 const decodeRequest = Schema.decodeUnknownEffect(SessionEvent.Task.Requested.data)
 
 export const request = Effect.fn("SessionTask.request")(function* (
@@ -100,17 +104,32 @@ export const orphaned = Effect.fn("SessionTask.orphaned")(function* (db: Databas
     .pipe(Effect.orDie)
   const owner = SessionTaskMetadata.owner(row?.metadata)
   if (!owner) return false
-  const terminal = yield* db
-    .select({ id: EventTable.id })
+  const request = yield* db
+    .select({ seq: EventTable.seq })
     .from(EventTable)
     .where(
       and(
         eq(EventTable.aggregate_id, owner.parentID),
-        eq(EventTable.type, interruptedType),
-        eq(EventTable.id, interruptedEventID(owner.parentID, owner.origin.messageID, owner.origin.callID)),
+        eq(EventTable.type, requestedType),
+        eq(EventTable.id, requestEventID(owner.parentID, owner.origin.messageID, owner.origin.callID)),
       ),
     )
     .get()
     .pipe(Effect.orDie)
-  return terminal !== undefined
+  if (!request) return false
+  return (
+    (yield* db
+      .select({ id: EventTable.id })
+      .from(EventTable)
+      .where(
+        and(
+          eq(EventTable.aggregate_id, owner.parentID),
+          gt(EventTable.seq, request.seq),
+          eq(EventTable.type, interruptRequestedType),
+        ),
+      )
+      .get()
+      .pipe(Effect.orDie)) !== undefined ||
+    (yield* interrupted(db, owner.parentID, owner.origin.messageID, owner.origin.callID))
+  )
 })

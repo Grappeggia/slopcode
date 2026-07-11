@@ -597,7 +597,6 @@ export const layer = Layer.effect(
             })
             if (event.seq === undefined)
               return yield* Effect.die("Interrupt request event is missing aggregate sequence")
-            yield* execution.interrupt(sessionID, event.seq)
             for (const message of yield* store.context(sessionID).pipe(Effect.orDie)) {
               if (message.type !== "assistant") continue
               for (const tool of message.content) {
@@ -608,7 +607,7 @@ export const layer = Layer.effect(
                 )
                   continue
                 const task = yield* SessionTask.request(db, sessionID, message.id, tool.id)
-                if (!task || (yield* SessionTask.interrupted(db, sessionID, message.id, tool.id))) continue
+                if (!task) continue
                 const data = {
                   sessionID,
                   timestamp: yield* DateTime.now,
@@ -616,12 +615,29 @@ export const layer = Layer.effect(
                   callID: tool.id,
                   childSessionID: task.childSessionID,
                 }
-                yield* events.publish(SessionEvent.Task.Interrupted, data, {
-                  id: SessionTask.interruptedEventID(sessionID, message.id, tool.id),
-                })
+                if (!(yield* SessionTask.interrupted(db, sessionID, message.id, tool.id)))
+                  yield* events.publish(SessionEvent.Task.Interrupted, data, {
+                    id: SessionTask.interruptedEventID(sessionID, message.id, tool.id),
+                  })
                 yield* events.publish(SessionEvent.Task.Interrupt, data)
+                yield* events.publish(
+                  SessionEvent.Tool.Failed,
+                  {
+                    sessionID,
+                    timestamp: yield* DateTime.now,
+                    assistantMessageID: message.id,
+                    callID: tool.id,
+                    error: { type: "unknown", message: "Tool execution interrupted" },
+                    provider: {
+                      executed: tool.provider?.executed === true,
+                      ...(tool.provider?.metadata === undefined ? {} : { metadata: tool.provider.metadata }),
+                    },
+                  },
+                  { id: SessionTask.interruptedToolEventID(sessionID, message.id, tool.id) },
+                )
               }
             }
+            yield* execution.interrupt(sessionID, event.seq)
             yield* Effect.forEach(
               yield* SessionInput.pendingRequestedShells(db, sessionID),
               (request) =>

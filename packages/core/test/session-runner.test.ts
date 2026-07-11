@@ -49,6 +49,7 @@ import {
   SessionTable,
 } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
+import { SessionTask } from "@slopcode-ai/core/session/task"
 import { SystemContext } from "@slopcode-ai/core/system-context"
 import { SystemContextRegistry } from "@slopcode-ai/core/system-context/registry"
 import { SkillGuidance } from "@slopcode-ai/core/skill/guidance"
@@ -3999,6 +4000,112 @@ describe("SessionRunnerLLM", () => {
           ],
         },
       ])
+    }),
+  )
+
+  it.effect("recovers a durable task with its originating immutable agent, permissions, and harness plan", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const contexts: Tool.Context[] = []
+      yield* (yield* ToolRegistry.Service).register({
+        task: Tool.make({
+          description: "Recovered immutable task",
+          input: Schema.Struct({ prompt: Schema.String }),
+          output: Schema.Struct({ result: Schema.String }),
+          execute: ({ prompt }, context) => {
+            contexts.push(context)
+            return Effect.succeed({ result: prompt })
+          },
+        }),
+      })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Recover immutable task" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const assistantMessageID = SessionMessage.ID.create()
+      const callID = "call-task-immutable"
+      const childID = SessionV2.ID.make("ses_task_immutable_child")
+      const original = [{ action: "edit", resource: "original-secret", effect: "deny" as const }]
+      const childModel = ModelV2.Ref.make({
+        providerID: ProviderV2.ID.make("fake"),
+        id: ModelV2.ID.make("fake-model"),
+      })
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        assistantMessageID,
+        timestamp: yield* DateTime.now,
+        agent: "build",
+        model: childModel,
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID,
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID,
+        text: '{"prompt":"original"}',
+      })
+      yield* events.publish(SessionEvent.Tool.CalledV1, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID,
+        tool: "task",
+        input: { prompt: "original" },
+        provider: { executed: false },
+      })
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          childSessionID: childID,
+          promptMessageID: SessionMessage.ID.make("msg_task_immutable_prompt"),
+          description: "Immutable",
+          prompt: "original",
+          agent: "general",
+          model: childModel,
+          multiAgent: "v2",
+          callerAgent: "build",
+          permissions: original,
+          plan: { mode: "code-only", multiAgent: "v2" },
+          projectID: Project.ID.global,
+          location: { directory: AbsolutePath.make("/project") },
+          title: "Immutable (@general subagent)",
+          ceiling: [],
+        },
+        { id: SessionTask.requestEventID(sessionID, assistantMessageID, callID) },
+      )
+      yield* db
+        .update(SessionTable)
+        .set({ agent: "reviewer", model: { providerID: "fake", id: "replacement" } })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* (yield* AgentV2.Service).transform((editor) =>
+        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+          agent.permissions = [{ action: "read", resource: "mutated", effect: "allow" }]
+        }),
+      )
+      currentCatalog = catalogModel("gpt-5.6-luna", "gpt-5.6-luna")
+      response = []
+
+      yield* session.resume(sessionID)
+
+      expect(contexts).toHaveLength(1)
+      expect(contexts[0]).toMatchObject({ agent: "build", multiAgent: "v2" })
+      expect(contexts[0]?.permissions).toEqual(original)
+      expect(contexts[0]?.plan).toEqual({ mode: "code-only", multiAgent: "v2", patch: undefined, shell: undefined })
+      expect(contexts[0]?.task?.childSessionID).toBe(childID)
     }),
   )
 

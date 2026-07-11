@@ -563,6 +563,31 @@ describe("SessionV2.create", () => {
       const messageID = SessionMessage.ID.make("msg_public_task_interrupt")
       const childID = SessionV2.ID.make("ses_public_task_interrupt_child")
       const model = ModelV2.Ref.make({ id: ModelV2.ID.make("fake"), providerID: ProviderV2.ID.make("fake") })
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: childID,
+          project_id: parent.projectID,
+          parent_id: parent.id,
+          slug: childID,
+          directory: location.directory,
+          title: "Wait (@general subagent)",
+          version: "test",
+          runtime: "v2",
+          agent: "general",
+          model,
+          metadata: {
+            task: {
+              version: 1,
+              parentID: parent.id,
+              agent: "general",
+              origin: { messageID, callID: "call-public-task-interrupt" },
+              ceiling: [],
+            },
+          },
+        })
+        .run()
+        .pipe(Effect.orDie)
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID: parent.id,
         timestamp: yield* DateTime.now,
@@ -607,6 +632,13 @@ describe("SessionV2.create", () => {
           agent: "general",
           model,
           multiAgent: "v2",
+          callerAgent: "build",
+          permissions: [],
+          plan: { multiAgent: "v2" },
+          projectID: parent.projectID,
+          location,
+          title: "Wait (@general subagent)",
+          ceiling: [],
         },
         { id: SessionTask.requestEventID(parent.id, messageID, "call-public-task-interrupt") },
       )
@@ -628,6 +660,82 @@ describe("SessionV2.create", () => {
       yield* Fiber.join(fiber)
 
       expect(yield* SessionTask.interrupted(db, parent.id, messageID, "call-public-task-interrupt")).toBeTrue()
+      expect(yield* SessionTask.orphaned(db, childID)).toBeTrue()
+      expect(yield* session.context(parent.id)).toMatchObject([
+        {
+          type: "assistant",
+          content: [
+            {
+              type: "tool",
+              id: "call-public-task-interrupt",
+              state: { status: "error", error: { message: "Tool execution interrupted" } },
+            },
+          ],
+        },
+      ])
+    }),
+  )
+
+  it.effect("a durable parent interrupt immediately orphans its child before task settlement", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const parent = yield* session.create({ id, location, runtime: "v2" })
+      const messageID = SessionMessage.ID.make("msg_parent_interrupt_window")
+      const callID = "call-parent-interrupt-window"
+      const childID = SessionTask.childID(parent.id, messageID, callID)
+      const model = ModelV2.Ref.make({ id: ModelV2.ID.make("fake"), providerID: ProviderV2.ID.make("fake") })
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: childID,
+          project_id: parent.projectID,
+          parent_id: parent.id,
+          slug: childID,
+          directory: location.directory,
+          title: "Window (@general subagent)",
+          version: "test",
+          runtime: "v2",
+          agent: "general",
+          model,
+          metadata: {
+            task: { version: 1, parentID: parent.id, agent: "general", origin: { messageID, callID }, ceiling: [] },
+          },
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        {
+          sessionID: parent.id,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: messageID,
+          callID,
+          childSessionID: childID,
+          promptMessageID: SessionTask.promptID(parent.id, messageID, callID),
+          description: "Window",
+          prompt: "window",
+          agent: "general",
+          model,
+          multiAgent: "v2",
+          callerAgent: "build",
+          permissions: [],
+          plan: { multiAgent: "v2" },
+          projectID: parent.projectID,
+          location,
+          title: "Window (@general subagent)",
+          ceiling: [],
+        },
+        { id: SessionTask.requestEventID(parent.id, messageID, callID) },
+      )
+      yield* events.publish(SessionEvent.InterruptRequested, {
+        sessionID: parent.id,
+        timestamp: yield* DateTime.now,
+      })
+
+      expect(yield* SessionTask.interrupted(db, parent.id, messageID, callID)).toBeFalse()
+      expect(yield* SessionTask.orphaned(db, childID)).toBeTrue()
     }),
   )
 })
