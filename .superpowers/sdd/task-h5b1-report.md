@@ -10,7 +10,7 @@ Complete. Manual V2 compaction is durably admitted, serialized through the live 
 - Manual `Compaction.Ended` is the successful checkpoint terminal. `Compaction.Skipped` is the successful empty-history terminal, and `Compaction.Failed` stores a safe typed failure without changing active context.
 - Request and terminal event IDs are deterministic from the message ID. Concurrent retries and terminal races therefore have one durable winner, and exact retries read the original result.
 - `SessionV2.compact` performs admission and wake registration uninterruptibly, then waits on EventV2's subscribe-before-replay aggregate stream for that exact terminal ID. It does not use coordinator-idle waiting or a check-then-subscribe race.
-- `SessionRunnerLLM` checks manual work before no-work return and at provider-turn boundaries. It drains manual requests under the active owner/epoch fence before later coalesced prompts, while the compact caller returns at its own terminal.
+- `SessionRunnerLLM` checks manual work before no-work return and at settled provider-activity boundaries. Required tool continuation finishes first; manual requests then drain under the active owner/epoch fence before later coalesced prompts, while the compact caller returns at its own terminal.
 - Provider execution is interruptible, but terminal failure settlement stays masked. A stale epoch cannot publish `Ended`; only a raw non-checkpoint failure terminal is allowed after the fence is lost.
 - Startup recovery unions normal runtime recovery rows with V2-owned session IDs found through unterminated `Compaction.Requested` events, including the crash window before runtime state changes from `ready`.
 
@@ -26,9 +26,8 @@ Complete. Manual V2 compaction is durably admitted, serialized through the live 
 
 - Full Core suite: `1196 pass`, `0 fail`.
 - Full SessionRunnerLLM suite: `125 pass`, `0 fail`.
-- Focused lifecycle/projector/prompt/recovery suites: `48 pass`, `0 fail` before the final added concurrency cases; all are included in the full Core result.
-- Full affected HTTP session suite: `22 pass`, `0 fail`.
-- Full affected public OpenAPI suite: `17 pass`, `0 fail`.
+- Focused compaction/runner/recovery suites: `133 pass`, `0 fail`.
+- Affected HTTP session and public OpenAPI suites: `39 pass`, `0 fail`.
 - Core typecheck: passed.
 - Server typecheck: passed.
 - Changed-file oxlint: `0 errors` (`84 warnings`, including existing warnings in the touched large files).
@@ -65,9 +64,10 @@ Complete. Manual V2 compaction is durably admitted, serialized through the live 
 - `packages/slopcode/test/server/httpapi-session.test.ts`
 - `.superpowers/sdd/task-h5b1-report.md`
 
-## Commit
+## Commits
 
-- `feat(session): add durable manual V2 compaction` (this commit)
+- `4714950e75 feat(session): add durable manual V2 compaction`
+- `d7ee142d86 fix(session): harden manual compaction ordering`
 - Nothing was pushed.
 
 ## Self-Review
@@ -76,6 +76,8 @@ Complete. Manual V2 compaction is durably admitted, serialized through the live 
 - Every admitted request has a deterministic terminal path for success, no history, provider failure, empty output, invalid budget, interruption, execution failure, or epoch loss.
 - Exact terminal waiting cannot miss a fast completion and does not wait for later prompt work.
 - Concurrent prompts and multiple manual requests remain serialized by the existing coordinator; no manual success creates a synthetic assistant continuation.
+- The shared summarizer receives the deterministic terminal ID from the durable request owner instead of constructing persistence identifiers itself.
+- `SessionV2.defaultLayer` uses a lazy `Layer.suspend` boundary to break the existing session/location default-layer TDZ without changing service ownership or runtime behavior.
 - Startup recovery does not repeat requests that already have any terminal event.
 
 ## Concerns
