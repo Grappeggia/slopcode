@@ -99,7 +99,11 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
             ),
       ),
       Effect.catchDefect((defect) =>
-        find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
+        find(db, input.id).pipe(
+          Effect.flatMap((stored) =>
+            stored ? checkCommit(db, commit).pipe(Effect.as(stored)) : Effect.die(defect),
+          ),
+        ),
       ),
     )
 })
@@ -475,7 +479,9 @@ export const admitShell = Effect.fn("SessionInput.admitShell")(function* (
       ),
       Effect.catchDefect((defect) =>
         findShell(db, input.id).pipe(
-          Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect))),
+          Effect.flatMap((stored) =>
+            stored ? checkCommit(db, commit).pipe(Effect.as(stored)) : Effect.die(defect),
+          ),
         ),
       ),
     )
@@ -816,7 +822,9 @@ export const admitCompaction = Effect.fn("SessionInput.admitCompaction")(functio
       ),
       Effect.catchDefect((defect) =>
         findCompaction(db, input.id).pipe(
-          Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect))),
+          Effect.flatMap((stored) =>
+            stored ? checkCommit(db, commit).pipe(Effect.as(stored)) : Effect.die(defect),
+          ),
         ),
       ),
     )

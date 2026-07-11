@@ -4,6 +4,7 @@ import { eq, sql } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { EventTable } from "@slopcode-ai/core/event/sql"
+import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { Project } from "@slopcode-ai/core/project"
 import { ProjectTable } from "@slopcode-ai/core/project/sql"
@@ -747,7 +748,7 @@ describe("SessionControl", () => {
           .set({
             ...(change === "owner" ? { runtime: "v1" as const } : {}),
             ...(change === "state" ? { runtime_state: "draining" as const } : {}),
-            runtime_epoch: sql`${SessionTable.runtime_epoch} + 1`,
+            ...(change === "epoch" ? { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } : {}),
           })
           .where(eq(SessionTable.id, sessionID))
           .run()
@@ -771,7 +772,7 @@ describe("SessionControl", () => {
             _tag: "SessionRuntime.Mismatch",
             actualOwner: change === "owner" ? "v1" : "v2",
             actualState: change === "state" ? "draining" : "ready",
-            actualEpoch: 2,
+            actualEpoch: change === "epoch" ? 2 : 1,
           })
           expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 1 })).toBeDefined()
         }
@@ -813,7 +814,7 @@ describe("SessionControl", () => {
           .set({
             ...(change === "owner" ? { runtime: "v1" as const } : {}),
             ...(change === "state" ? { runtime_state: "draining" as const } : {}),
-            runtime_epoch: sql`${SessionTable.runtime_epoch} + 1`,
+            ...(change === "epoch" ? { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } : {}),
           })
           .where(eq(SessionTable.id, sessionID))
           .run()
@@ -836,23 +837,119 @@ describe("SessionControl", () => {
         () => control.shell({ id: shellID, sessionID, command: "true" }),
         () => control.compact({ id: compactID, sessionID }),
       ]
-      for (const [index, operation] of operations.entries()) {
-        change = changes[index]!
-        expect(yield* operation().pipe(Effect.flip)).toMatchObject({
-          _tag: "SessionRuntime.Mismatch",
-          actualOwner: change === "owner" ? "v1" : "v2",
-          actualState: change === "state" ? "draining" : "ready",
-          actualEpoch: 2,
-        })
-        yield* db
-          .update(SessionTable)
-          .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 1 })
-          .where(eq(SessionTable.id, sessionID))
-          .run()
-          .pipe(Effect.orDie)
-      }
+      for (change of changes)
+        for (const operation of operations) {
+          expect(yield* operation().pipe(Effect.flip)).toMatchObject({
+            _tag: "SessionRuntime.Mismatch",
+            actualOwner: change === "owner" ? "v1" : "v2",
+            actualState: change === "state" ? "draining" : "ready",
+            actualEpoch: change === "epoch" ? 2 : 1,
+          })
+          yield* db
+            .update(SessionTable)
+            .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 1 })
+            .where(eq(SessionTable.id, sessionID))
+            .run()
+            .pipe(Effect.orDie)
+        }
 
       expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)).toEqual(before)
+      expect(wakeCalls).toEqual([])
+      expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 1 })).toBeDefined()
+    }),
+  )
+
+  it.effect("rechecks runtime after prompt, shell, and compaction publish collisions", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const databaseService = yield* Database.Service
+      const db = databaseService.db
+      const real = yield* EventV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const storeService = yield* SessionStore.Service
+      const executionService = yield* SessionExecution.Service
+      wakeCalls.length = 0
+      yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
+      const targets = new Set<SessionMessage.ID>()
+      let change: "owner" | "state" | "epoch" = "owner"
+      const transition = () =>
+        db
+          .update(SessionTable)
+          .set({
+            ...(change === "owner" ? { runtime: "v1" as const } : {}),
+            ...(change === "state" ? { runtime_state: "draining" as const } : {}),
+            ...(change === "epoch" ? { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } : {}),
+          })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie, Effect.asVoid)
+      const publish: EventV2.Interface["publish"] = (definition, data, options) => {
+        const id = "messageID" in data ? SessionMessage.ID.make(data.messageID) : undefined
+        if (!id || !targets.delete(id)) return real.publish(definition, data, options)
+        return real
+          .publish(definition, data, { ...options, commit: undefined })
+          .pipe(Effect.andThen(transition()), Effect.andThen(real.publish(definition, data, options)))
+      }
+      const collisionEvents = Layer.succeed(EventV2.Service, EventV2.Service.of({ ...real, publish }))
+      const collisionSessions = SessionV2.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            collisionEvents,
+            Layer.succeed(Database.Service, databaseService),
+            Layer.succeed(SessionStore.Service, storeService),
+            Layer.succeed(
+              Project.Service,
+              Project.Service.of({
+                resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
+                directories: () => Effect.succeed([]),
+                commit: () => Effect.void,
+              }),
+            ),
+            Layer.succeed(SessionExecution.Service, executionService),
+            Layer.mock(LocationServiceMap, { get: () => Layer.empty }),
+          ),
+        ),
+      )
+      const layer = SessionControl.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(collisionSessions, Layer.succeed(SessionRuntime.Service, runtime)),
+        ),
+      )
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
+      const changes = ["owner", "state", "epoch"] as const
+      const operations = [
+        (id: SessionMessage.ID) => control.prompt({ id, sessionID, prompt: new Prompt({ text: id }) }),
+        (id: SessionMessage.ID) => control.shell({ id, sessionID, command: "true", resume: false }),
+        (id: SessionMessage.ID) => control.compact({ id, sessionID }),
+      ]
+      for (change of changes)
+        for (const [index, operation] of operations.entries()) {
+          const id = SessionMessage.ID.make(`msg_collision_${change}_${index}`)
+          targets.add(id)
+          expect(yield* operation(id).pipe(Effect.flip)).toMatchObject({
+            _tag: "SessionRuntime.Mismatch",
+            actualOwner: change === "owner" ? "v1" : "v2",
+            actualState: change === "state" ? "draining" : "ready",
+            actualEpoch: change === "epoch" ? 2 : 1,
+          })
+          expect(
+            yield* (index === 0
+              ? SessionInput.find(db, id)
+              : index === 1
+                ? SessionInput.findShell(db, id)
+                : SessionInput.findCompaction(db, id)),
+          ).toBeDefined()
+          yield* db
+            .update(SessionTable)
+            .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 1 })
+            .where(eq(SessionTable.id, sessionID))
+            .run()
+            .pipe(Effect.orDie)
+        }
+
+      expect(targets.size).toBe(0)
       expect(wakeCalls).toEqual([])
       expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 1 })).toBeDefined()
     }),

@@ -457,7 +457,7 @@ describe("SessionControl", () => {
           .set({
             ...(change === "owner" ? { runtime: "v1" as const } : {}),
             ...(change === "state" ? { runtime_state: "draining" as const } : {}),
-            runtime_epoch: sql`${SessionTable.runtime_epoch} + 1`,
+            ...(change === "epoch" ? { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } : {}),
           })
           .where(eq(SessionTable.id, sessionID))
           .run()
@@ -473,7 +473,7 @@ describe("SessionControl", () => {
             _tag: "SessionRuntime.Mismatch",
             actualOwner: change === "owner" ? "v1" : "v2",
             actualState: change === "state" ? "draining" : "ready",
-            actualEpoch: 1,
+            actualEpoch: change === "epoch" ? 1 : 0,
           })
           expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 0 })).toBeDefined()
         }
@@ -505,13 +505,14 @@ describe("SessionControl", () => {
         prompt: new Prompt({ text: "Review" }),
         delivery: "steer",
       })
-      let change: "owner" | "epoch" = "epoch"
+      let change: "owner" | "state" | "epoch" = "epoch"
       const transition = () =>
         db
           .update(SessionTable)
           .set({
             ...(change === "owner" ? { runtime: "v1" as const } : {}),
-            runtime_epoch: sql`${SessionTable.runtime_epoch} + 1`,
+            ...(change === "state" ? { runtime_state: "draining" as const } : {}),
+            ...(change === "epoch" ? { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } : {}),
           })
           .where(eq(SessionTable.id, sessionID))
           .run()
@@ -529,27 +530,26 @@ describe("SessionControl", () => {
       const scope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
       const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
-      expect(yield* control.switchAgent({ sessionID, agent: "reviewer" }).pipe(Effect.flip)).toMatchObject({
-        _tag: "SessionRuntime.Mismatch",
-        actualEpoch: 1,
-      })
-      yield* db
-        .update(SessionTable)
-        .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 0 })
-        .where(eq(SessionTable.id, sessionID))
-        .run()
-        .pipe(Effect.orDie)
-      change = "owner"
-      expect(yield* control.skill({ id, sessionID, skill: "review" }).pipe(Effect.flip)).toMatchObject({
-        _tag: "SessionRuntime.Mismatch",
-        actualOwner: "v1",
-      })
-      yield* db
-        .update(SessionTable)
-        .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 0 })
-        .where(eq(SessionTable.id, sessionID))
-        .run()
-        .pipe(Effect.orDie)
+      const changes = ["owner", "state", "epoch"] as const
+      const operations = [
+        () => control.switchAgent({ sessionID, agent: "reviewer" }),
+        () => control.skill({ id, sessionID, skill: "review" }),
+      ]
+      for (change of changes)
+        for (const operation of operations) {
+          expect(yield* operation().pipe(Effect.flip)).toMatchObject({
+            _tag: "SessionRuntime.Mismatch",
+            actualOwner: change === "owner" ? "v1" : "v2",
+            actualState: change === "state" ? "draining" : "ready",
+            actualEpoch: change === "epoch" ? 1 : 0,
+          })
+          yield* db
+            .update(SessionTable)
+            .set({ runtime: "v2", runtime_state: "ready", runtime_epoch: 0 })
+            .where(eq(SessionTable.id, sessionID))
+            .run()
+            .pipe(Effect.orDie)
+        }
 
       expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)).toEqual(before)
       expect(wakes).toEqual([])
