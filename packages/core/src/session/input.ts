@@ -354,6 +354,17 @@ const shellRequests = Effect.fnUntraced(function* (db: DatabaseService, sessionI
   )
 })
 
+export const pendingRequestedShells = Effect.fn("SessionInput.pendingRequestedShells")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  return yield* Effect.filter(yield* shellRequests(db, sessionID), (request) =>
+    Effect.all([startedShell(db, request.id), terminalShell(db, request.id)]).pipe(
+      Effect.map(([started, terminal]) => !started && terminal === undefined),
+    ),
+  )
+})
+
 export const pendingShell = Effect.fn("SessionInput.pendingShell")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,

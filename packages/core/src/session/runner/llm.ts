@@ -241,6 +241,18 @@ export const layer = Layer.effect(
                       started ? Effect.void : Effect.die(new ShellStartLost()),
                     ),
                   ),
+                  (spawn) =>
+                    db.transaction(
+                      () =>
+                        assertRuntime(request.sessionID, runtimeEpoch).pipe(
+                          Effect.orDie,
+                          Effect.andThen(SessionInput.terminalShell(db, request.id)),
+                          Effect.flatMap((terminal) =>
+                            terminal ? Effect.die(new ShellStartLost()) : spawn,
+                          ),
+                        ),
+                      { behavior: "immediate" },
+                    ),
                 ).pipe(
                   Effect.provideService(Config.Service, config),
                   Effect.provideService(AppProcess.Service, appProcess),

@@ -107,8 +107,8 @@ let configuredShell: string | undefined
 const processLayer = Layer.succeed(
   AppProcess.Service,
   AppProcess.Service.of({
-    run: (command: ChildProcess.Command, options?: AppProcess.RunOptions) =>
-      Effect.gen(function* () {
+    run: (command: ChildProcess.Command, options?: AppProcess.RunOptions) => {
+      const spawn = Effect.gen(function* () {
         if (command._tag !== "StandardCommand") return yield* Effect.die("expected standard shell command")
         shellRuns.push({
           command: command.command,
@@ -118,11 +118,16 @@ const processLayer = Layer.succeed(
           detached: command.options.detached,
           options,
         })
+      })
+      const execute = Effect.gen(function* () {
+        yield* (options?.launch ? options.launch(spawn) : spawn)
         if (shellStarted) yield* Deferred.succeed(shellStarted, undefined)
         if (shellGate) yield* Deferred.await(shellGate)
         if (shellFailure) return yield* shellFailure
         return shellResult
-      }),
+      })
+      return execute
+    },
   } as unknown as AppProcess.Interface),
 )
 const client = Layer.succeed(
@@ -2221,6 +2226,113 @@ describe("SessionRunnerLLM", () => {
       expect(shellRuns).toEqual([])
       expect(yield* SessionInput.startedShell(db, id)).toBeFalse()
       expect(yield* SessionInput.terminalShell(db, id)).toMatchObject({ status: "interrupted" })
+    }),
+  )
+
+  it.effect("serializes ownership recovery and terminal before the stale process launch", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const id = SessionMessage.ID.make("msg_shell_recovery_before_launch")
+      const committed = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* events.listen((event) =>
+        Schema.is(SessionEvent.Shell.Started)(event) && event.data.messageID === id
+          ? Deferred.succeed(committed, undefined).pipe(Effect.andThen(Deferred.await(release)))
+          : Effect.void,
+      )
+      const shell = yield* session.shell({ id, sessionID, command: "touch marker", resume: false }).pipe(Effect.forkChild)
+      yield* Deferred.await(committed)
+      const request = yield* SessionInput.findShell(db, id)
+      expect(request).toBeDefined()
+
+      yield* runtime.recover()
+      yield* SessionInput.endShell(
+        db,
+        events,
+        request!,
+        {
+          status: "unknown",
+          output: "Shell command outcome is unknown because execution was interrupted by a runtime restart.",
+          truncated: false,
+        },
+        "started",
+      )
+      expect(yield* SessionInput.terminalShell(db, id)).toMatchObject({ status: "unknown" })
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(shell)
+
+      expect(shellRuns).toEqual([])
+    }),
+  )
+
+  it.effect("settles an interrupt committed after Requested but before its wake", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const id = SessionMessage.ID.make("msg_shell_interrupt_before_wake")
+      const committed = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* events.listen((event) =>
+        Schema.is(SessionEvent.Shell.Requested)(event) && event.data.messageID === id
+          ? Deferred.succeed(committed, undefined).pipe(Effect.andThen(Deferred.await(release)))
+          : Effect.void,
+      )
+      const shell = yield* session.shell({ id, sessionID, command: "pwd", resume: false }).pipe(Effect.forkChild)
+      yield* Deferred.await(committed)
+
+      yield* session.interrupt(sessionID)
+
+      expect(yield* SessionInput.terminalShell(db, id)).toMatchObject({
+        status: "interrupted",
+        output: "Shell command was interrupted before completion.",
+      })
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(shell)
+      yield* session.shell({ id, sessionID, command: "pwd", resume: false })
+      expect(shellRuns).toEqual([])
+    }),
+  )
+
+  it.effect("continues from a projected pre-start shell terminal", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const id = SessionMessage.ID.make("msg_shell_prestart_context")
+      const request = yield* SessionInput.admitShell(db, events, {
+        id,
+        sessionID,
+        command: "pwd",
+        resume: true,
+      })
+      yield* SessionInput.endShell(
+        db,
+        events,
+        request,
+        { status: "interrupted", output: "Shell did not start because ownership changed.", truncated: false },
+        "requested",
+      )
+      response = fragmentFixture("text", "text-after-prestart-shell", ["continued after failure"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toContain(
+        "Shell command: pwd\n\nShell did not start because ownership changed.",
+      )
+      expect(yield* session.message({ sessionID, messageID: id })).toMatchObject({
+        type: "shell",
+        command: "pwd",
+        status: "interrupted",
+        output: "Shell did not start because ownership changed.",
+      })
     }),
   )
 

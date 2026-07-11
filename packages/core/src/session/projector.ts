@@ -419,7 +419,7 @@ export const layer = Layer.effectDiscard(
       )
     })
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
-    yield* events.project(SessionEvent.Shell.Requested, () => Effect.void)
+    yield* events.project(SessionEvent.Shell.Requested, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Continued, () => Effect.void)
