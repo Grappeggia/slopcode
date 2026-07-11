@@ -33,6 +33,7 @@ import { SessionRuntime } from "./session/runtime"
 import { LocationServiceMap } from "./location-layer"
 import { PluginBoot } from "./plugin/boot"
 import { SkillV2 } from "./skill"
+import { SessionTask } from "./session/task"
 
 // get project -> project.locations
 //
@@ -460,7 +461,9 @@ export const layer = Layer.effect(
             const recorded = yield* SessionInput.findShell(db, id)
             if (
               !recorded &&
-              ((yield* SessionInput.find(db, id)) || (yield* SessionInput.findCompaction(db, id)) || (yield* store.message(id)))
+              ((yield* SessionInput.find(db, id)) ||
+                (yield* SessionInput.findCompaction(db, id)) ||
+                (yield* store.message(id)))
             )
               return yield* new ShellConflictError({ sessionID: input.sessionID, messageID: id })
             const admitted =
@@ -495,11 +498,13 @@ export const layer = Layer.effect(
             }
             yield* enqueueWake(admitted)
             yield* restore(
-              events.aggregateEvents({ aggregateID: input.sessionID, after: EventV2.Cursor.make(admitted.admittedSeq) }).pipe(
-                Stream.filter((event) => event.event.id === SessionInput.shellTerminalEventID(id)),
-                Stream.take(1),
-                Stream.runDrain,
-              ),
+              events
+                .aggregateEvents({ aggregateID: input.sessionID, after: EventV2.Cursor.make(admitted.admittedSeq) })
+                .pipe(
+                  Stream.filter((event) => event.event.id === SessionInput.shellTerminalEventID(id)),
+                  Stream.take(1),
+                  Stream.runDrain,
+                ),
             )
           }),
         )
@@ -534,9 +539,7 @@ export const layer = Layer.effect(
           if (agent && agent.mode !== "subagent" && !agent.hidden) return
           return yield* new AgentUnavailableError({
             agent: selected,
-            available: catalog
-              .filter((item) => item.mode !== "subagent" && !item.hidden)
-              .map((item) => item.id),
+            available: catalog.filter((item) => item.mode !== "subagent" && !item.hidden).map((item) => item.id),
           })
         }).pipe(Effect.provide(locations.get(session.location)))
         if (session.agent === selected) return
@@ -582,10 +585,7 @@ export const layer = Layer.effect(
                     : Effect.die(defect),
                 ),
               ))
-            if (
-              admitted.sessionID !== input.sessionID ||
-              admitted.instruction !== input.prompt?.text
-            )
+            if (admitted.sessionID !== input.sessionID || admitted.instruction !== input.prompt?.text)
               return yield* new CompactionConflictError({ sessionID: input.sessionID, messageID: id })
             const finish = Effect.fnUntraced(function* () {
               const terminal = yield* SessionInput.terminalCompaction(db, id)
@@ -609,19 +609,19 @@ export const layer = Layer.effect(
             }
             if (wake._tag === "Success")
               yield* restore(
-                events.aggregateEvents({ aggregateID: input.sessionID, after: EventV2.Cursor.make(admitted.admittedSeq) }).pipe(
-                  Stream.filter((event) => event.event.id === SessionInput.compactionTerminalEventID(id)),
-                  Stream.take(1),
-                  Stream.runDrain,
-                ),
+                events
+                  .aggregateEvents({ aggregateID: input.sessionID, after: EventV2.Cursor.make(admitted.admittedSeq) })
+                  .pipe(
+                    Stream.filter((event) => event.event.id === SessionInput.compactionTerminalEventID(id)),
+                    Stream.take(1),
+                    Stream.runDrain,
+                  ),
               )
             if (
-              (
-                yield* Effect.all([
-                  SessionInput.hasPending(db, input.sessionID, "steer"),
-                  SessionInput.hasPending(db, input.sessionID, "queue"),
-                ])
-              ).some(Boolean)
+              (yield* Effect.all([
+                SessionInput.hasPending(db, input.sessionID, "steer"),
+                SessionInput.hasPending(db, input.sessionID, "queue"),
+              ])).some(Boolean)
             )
               yield* execution.wake(input.sessionID).pipe(Effect.exit)
             yield* finish()
@@ -648,6 +648,30 @@ export const layer = Layer.effect(
             if (event.seq === undefined)
               return yield* Effect.die("Interrupt request event is missing aggregate sequence")
             yield* execution.interrupt(sessionID, event.seq)
+            for (const message of yield* store.context(sessionID).pipe(Effect.orDie)) {
+              if (message.type !== "assistant") continue
+              for (const tool of message.content) {
+                if (
+                  tool.type !== "tool" ||
+                  tool.name !== "task" ||
+                  (tool.state.status !== "pending" && tool.state.status !== "running")
+                )
+                  continue
+                const task = yield* SessionTask.request(db, sessionID, message.id, tool.id)
+                if (!task || (yield* SessionTask.interrupted(db, sessionID, message.id, tool.id))) continue
+                const data = {
+                  sessionID,
+                  timestamp: yield* DateTime.now,
+                  assistantMessageID: message.id,
+                  callID: tool.id,
+                  childSessionID: task.childSessionID,
+                }
+                yield* events.publish(SessionEvent.Task.Interrupted, data, {
+                  id: SessionTask.interruptedEventID(sessionID, message.id, tool.id),
+                })
+                yield* events.publish(SessionEvent.Task.Interrupt, data)
+              }
+            }
             yield* Effect.forEach(
               yield* SessionInput.pendingRequestedShells(db, sessionID),
               (request) =>

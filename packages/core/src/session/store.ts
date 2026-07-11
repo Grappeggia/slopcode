@@ -9,6 +9,7 @@ import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionMessageTable, SessionTable } from "./sql"
 import { fromRow } from "./info"
+import { SessionTaskMetadata } from "./task-metadata"
 
 export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info | undefined>
@@ -20,6 +21,7 @@ export interface Interface {
   readonly message: (
     messageID: SessionMessage.ID,
   ) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly message: SessionMessage.Message } | undefined>
+  readonly task: (sessionID: SessionSchema.ID) => Effect.Effect<SessionTaskMetadata.Owner | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/SessionStore") {}
@@ -54,6 +56,15 @@ export const layer = Layer.effect(
               message: yield* decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(Effect.orDie),
             }
           : undefined
+      }),
+      task: Effect.fn("SessionStore.task")(function* (sessionID) {
+        const row = yield* db
+          .select({ metadata: SessionTable.metadata })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        return SessionTaskMetadata.owner(row?.metadata)
       }),
     })
   }),

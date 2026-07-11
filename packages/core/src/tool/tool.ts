@@ -3,6 +3,7 @@ export * as Tool from "./tool"
 import { ToolDefinition, ToolFailure, ToolOutput, type ToolCall } from "@slopcode-ai/llm"
 import { Effect, JsonSchema, Schema } from "effect"
 import type { AgentV2 } from "../agent"
+import type { PermissionV2 } from "../permission"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
 
@@ -11,6 +12,8 @@ export interface Context {
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly toolCallID: string
+  readonly multiAgent?: "v1" | "v2"
+  readonly permissions: PermissionV2.Ruleset
 }
 
 export type SchemaType<A> = Schema.Codec<A, any, never, never>
@@ -38,13 +41,14 @@ export type Content =
   | { readonly type: "file"; readonly data: string; readonly mime: string; readonly name?: string }
 
 type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
-  readonly description: string
+  readonly description: string | ((permissions: PermissionV2.Ruleset) => string)
   readonly input: Input
   readonly output: Output
   readonly execute: (
     input: Schema.Schema.Type<Input>,
     context: Context,
   ) => Effect.Effect<Schema.Schema.Type<Output>, ToolFailure>
+  readonly validateInput?: (input: unknown) => string | undefined
   readonly toModelOutput?: (input: {
     readonly input: Schema.Schema.Type<Input>
     readonly output: Output["Encoded"]
@@ -53,7 +57,7 @@ type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
 
 type Runtime = {
   readonly permission?: string
-  readonly definition: (name: string) => ToolDefinition
+  readonly definition: (name: string, permissions: PermissionV2.Ruleset) => ToolDefinition
   readonly settle: (call: ToolCall, context: Context) => Effect.Effect<ToolOutput, ToolFailure>
 }
 
@@ -65,50 +69,56 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
   const tool = Object.freeze({}) as Definition<Input, Output>
   const definitions = new Map<string, ToolDefinition>()
   runtimes.set(tool, {
-    definition: (name) => {
-      const cached = definitions.get(name)
+    definition: (name, permissions) => {
+      const description = typeof config.description === "string" ? config.description : config.description(permissions)
+      const key = `${name}\u0000${description}`
+      const cached = definitions.get(key)
       if (cached) return cached
       const definition = new ToolDefinition({
         name,
-        description: config.description,
+        description,
         inputSchema: toJsonSchema(config.input),
         outputSchema: toJsonSchema(config.output),
       })
-      definitions.set(name, definition)
+      definitions.set(key, definition)
       return definition
     },
-    settle: (call, context) =>
-      Schema.decodeUnknownEffect(config.input)(call.input).pipe(
-        Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
-        Effect.flatMap((input) =>
-          config.execute(input, context).pipe(
-            Effect.flatMap((output) =>
-              Schema.encodeEffect(config.output)(output).pipe(
-                Effect.mapError(
-                  (error) =>
-                    new ToolFailure({
-                      message: `Tool returned an invalid value for its output schema: ${error.message}`,
-                    }),
+    settle: (call, context) => {
+      const error = config.validateInput?.(call.input)
+      return error
+        ? Effect.fail(new ToolFailure({ message: error }))
+        : Schema.decodeUnknownEffect(config.input)(call.input).pipe(
+            Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
+            Effect.flatMap((input) =>
+              config.execute(input, context).pipe(
+                Effect.flatMap((output) =>
+                  Schema.encodeEffect(config.output)(output).pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new ToolFailure({
+                          message: `Tool returned an invalid value for its output schema: ${error.message}`,
+                        }),
+                    ),
+                  ),
                 ),
+                Effect.map((output) => ({
+                  structured: output,
+                  content:
+                    config.toModelOutput?.({ input, output }).map((part) =>
+                      part.type === "text"
+                        ? { type: "text" as const, text: part.text }
+                        : {
+                            type: "file" as const,
+                            uri: `data:${part.mime};base64,${part.data}`,
+                            mime: part.mime,
+                            name: part.name,
+                          },
+                    ) ?? (typeof output === "string" ? [{ type: "text" as const, text: output }] : []),
+                })),
               ),
             ),
-            Effect.map((output) => ({
-              structured: output,
-              content:
-                config.toModelOutput?.({ input, output }).map((part) =>
-                  part.type === "text"
-                    ? { type: "text" as const, text: part.text }
-                    : {
-                        type: "file" as const,
-                        uri: `data:${part.mime};base64,${part.data}`,
-                        mime: part.mime,
-                        name: part.name,
-                      },
-                ) ?? (typeof output === "string" ? [{ type: "text" as const, text: output }] : []),
-            })),
-          ),
-        ),
-      ),
+          )
+    },
   })
   return tool
 }
@@ -128,7 +138,8 @@ export const withPermission = <Input extends SchemaType<any>, Output extends Sch
 }
 
 export const permission = (tool: AnyTool, name: string) => runtimeOf(tool).permission ?? name
-export const definition = (name: string, tool: AnyTool) => runtimeOf(tool).definition(name)
+export const definition = (name: string, tool: AnyTool, permissions: PermissionV2.Ruleset = []) =>
+  runtimeOf(tool).definition(name, permissions)
 export const settle = (tool: AnyTool, call: ToolCall, context: Context) => runtimeOf(tool).settle(call, context)
 
 function runtimeOf(tool: AnyTool) {
