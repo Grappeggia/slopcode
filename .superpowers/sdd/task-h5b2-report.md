@@ -122,3 +122,39 @@ Complete with known unrelated Slopcode typecheck failures. Foreground V2 shell c
 - Normal continuation completion, conservative unknown settlement, and duplicate continuation starts each have deterministic IDs and mutually exclusive transaction guards.
 - The original report's provider at-least-once continuation concern is superseded: H5B2 now guarantees at most one durable continuation start and no provider redispatch after that marker. Provider completion still cannot be proven externally without provider idempotency, so post-marker recovery reports unknown.
 - The canonical shell/Bash process boundary was not changed by the review fixes; its focused tests remain green.
+
+## Second Re-Review Fixes
+
+### Correctness Gaps Resolved
+
+- Post-Started ownership race: `AppProcess.RunOptions.launch` now wraps the actual `spawner.spawn` effect. Operator shell supplies a SQLite immediate transaction that checks the runtime epoch and terminal absence, then invokes the spawner before releasing the write lock. Recovery/terminal writes and launch therefore have one total order: launch invokes first, or ownership/terminal commits first and stale launch cannot invoke.
+- Requested/interruption race: after publishing the durable interrupt and stopping/suppressing the coordinator, `SessionV2.interrupt` finds all requested-only shell lifecycles and commits guarded interrupted terminals. Requests committed after that scan have aggregate sequences newer than the interrupt and their wake is accepted, so no admission can remain permanently tied to a suppressed sequence.
+- Pre-start projection: `Shell.Requested` now creates the canonical projected Shell row with deterministic call ID, command, and empty output. New `Started` observes that row instead of appending a duplicate; legacy Started-only replay still creates the old-compatible row. A pre-start terminal now updates status/output/completion and `resume: true` provider context includes that shell observation.
+
+### Second Re-Review RED Evidence
+
+- Command: `bun test test/session-shell-lifecycle.test.ts test/session-runner.test.ts --timeout 30000` from `packages/core`.
+- Result before the fixes: `141 pass`, `4 fail`.
+- Failures reproduced stale process invocation after a committed recovery terminal, an indefinitely pending request interrupted before wake, absent requested/pre-start Shell projection, and missing pre-start shell context in the provider request.
+
+### Second Re-Review GREEN Evidence
+
+- `bun test test/session-shell-lifecycle.test.ts test/session-runner.test.ts test/session-execution-local.test.ts test/session-projector.test.ts test/tool-bash.test.ts --timeout 30000` from `packages/core`: `184 pass`, `0 fail`, `601 expect()` calls.
+- `bun test --only-failures` from `packages/core`: `1218 pass`, `0 fail`, `3383 expect()` calls across `139` files.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `bun oxlint <9 second-review source/test files>` from the repository root: `0 errors`, `99 warnings` from existing warning-level rules in touched large files.
+- `git diff --check`: passed.
+
+### Second Re-Review Commit
+
+- `d2f9bfdda8 fix(session): close shell launch races`
+- Nothing was pushed.
+
+### Second Re-Review Self-Review
+
+- The launch transaction encloses only process acquisition, not stdout/stderr collection or process lifetime, so database ownership is not held while a command runs.
+- Terminal absence is checked in the same immediate transaction as epoch ownership and `spawner.spawn`; even an unexpected same-epoch terminal prevents later spawn invocation.
+- The interrupt scan and requested terminal use the existing transactionally exclusive requested/Started guard, so a concurrently won Started is never overwritten by a pre-start interruption terminal.
+- Requested projection uses the existing Shell message schema with optional terminal metadata, and old v1 Started/Ended replay remains covered through both projection and the public event stream.
+- The shared Bash path receives no launch wrapper and retains its prior process behavior; canonical Bash tests pass after the AppProcess boundary extension.
