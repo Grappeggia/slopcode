@@ -4680,6 +4680,15 @@ describe("SessionRunnerLLM", () => {
       const store = yield* SessionStore.Service
       const runtime = yield* SessionRuntime.Service
       const runner = yield* SessionRunner.Service
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) => {
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.permissions.push({ action: "task", resource: "general", effect: "allow" })
+        })
+        editor.update(AgentV2.ID.make("general"), (agent) => {
+          agent.mode = "subagent"
+        })
+      })
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Interrupted before request" }), resume: false })
       yield* SessionInput.promoteSteers(database.db, events, sessionID, Number.MAX_SAFE_INTEGER)
       const messageID = SessionMessage.ID.make("msg_e2e_interrupt_without_request")
