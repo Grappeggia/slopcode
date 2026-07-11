@@ -136,7 +136,7 @@ export const request = Effect.fn("SessionTask.request")(function* (
     .pipe(Effect.orDie)
   if (!row) return
   if (row.type !== requestedType) return yield* Effect.die(`Invalid task request event: ${row.type}`)
-  return Option.getOrUndefined(yield* decodeRequest(row.data).pipe(Effect.option))
+  return yield* decodeRequest(row.data).pipe(Effect.orDie)
 })
 
 const recoveryRequest = Effect.fnUntraced(function* (
@@ -154,6 +154,30 @@ const recoveryRequest = Effect.fnUntraced(function* (
   if (!row || row.type !== requestedType) return
   return Option.getOrUndefined(yield* decodeRequest(row.data).pipe(Effect.option))
 })
+
+const canonical = (
+  row: typeof SessionTable.$inferSelect,
+  owner: SessionTaskMetadata.Owner,
+  item: SessionEvent.Task.Requested["data"],
+  origin = true,
+) =>
+  row.id === childID(owner.parentID, owner.origin.messageID, owner.origin.callID) &&
+  row.parent_id === owner.parentID &&
+  item.sessionID === owner.parentID &&
+  (!origin ||
+    (item.assistantMessageID === owner.origin.messageID && item.callID === owner.origin.callID)) &&
+  item.childSessionID === row.id &&
+  item.promptMessageID === promptID(item.sessionID, item.assistantMessageID, item.callID) &&
+  item.agent === owner.agent &&
+  item.agent === row.agent &&
+  item.projectID === row.project_id &&
+  item.location.directory === row.directory &&
+  item.location.workspaceID === (row.workspace_id ?? undefined) &&
+  item.title === row.title &&
+  item.model.id === row.model?.id &&
+  item.model.providerID === row.model?.providerID &&
+  (item.model.variant ?? "default") === (row.model?.variant ?? "default") &&
+  item.ceiling.every((rule) => owner.ceiling.some((current) => JSON.stringify(current) === JSON.stringify(rule)))
 
 export const interrupted = Effect.fn("SessionTask.interrupted")(function* (
   db: DatabaseService,
@@ -189,7 +213,29 @@ export const cancelled = Effect.fn("SessionTask.cancelled")(function* (
     )
     .get()
     .pipe(Effect.orDie)
-  if (requested && Option.isNone(yield* decodeRequest(requested.data).pipe(Effect.option))) return true
+  const decoded = requested ? yield* decodeRequest(requested.data).pipe(Effect.option) : Option.none()
+  if (
+    requested &&
+    (Option.isNone(decoded) ||
+      decoded.value.sessionID !== parentID ||
+      decoded.value.assistantMessageID !== messageID ||
+      decoded.value.callID !== callID)
+  )
+    return true
+  if (Option.isSome(decoded)) {
+    const row = yield* db
+      .select()
+      .from(SessionTable)
+      .where(eq(SessionTable.id, decoded.value.childSessionID))
+      .get()
+      .pipe(Effect.orDie)
+    const owner = SessionTaskMetadata.owner(row?.metadata)
+    if (row) {
+      if (!owner || !canonical(row, owner, decoded.value, false)) return true
+      const origin = yield* recoveryRequest(db, owner.parentID, owner.origin.messageID, owner.origin.callID)
+      if (!origin || !canonical(row, owner, origin)) return true
+    }
+  }
   const origin = requested
     ? requested
     : (yield* db
@@ -253,22 +299,7 @@ export const orphaned = Effect.fn("SessionTask.orphaned")(function* (db: Databas
       row.parent_id !== null || (typeof row.metadata === "object" && row.metadata !== null && "task" in row.metadata)
     )
   const origin = yield* recoveryRequest(db, owner.parentID, owner.origin.messageID, owner.origin.callID)
-  const canonical = (item: SessionEvent.Task.Requested["data"]) =>
-    row.id === childID(owner.parentID, owner.origin.messageID, owner.origin.callID) &&
-    item.sessionID === owner.parentID &&
-    item.childSessionID === row.id &&
-    item.promptMessageID === promptID(item.sessionID, item.assistantMessageID, item.callID) &&
-    item.agent === owner.agent &&
-    item.agent === row.agent &&
-    item.projectID === row.project_id &&
-    item.location.directory === row.directory &&
-    item.location.workspaceID === (row.workspace_id ?? undefined) &&
-    item.title === row.title &&
-    item.model.id === row.model?.id &&
-    item.model.providerID === row.model?.providerID &&
-    (item.model.variant ?? "default") === (row.model?.variant ?? "default") &&
-    item.ceiling.every((rule) => owner.ceiling.some((current) => JSON.stringify(current) === JSON.stringify(rule)))
-  if (!origin || !canonical(origin)) return true
+  if (!origin || !canonical(row, owner, origin)) return true
   const originRow = yield* db
     .select({ seq: EventTable.seq })
     .from(EventTable)
@@ -295,7 +326,7 @@ export const orphaned = Effect.fn("SessionTask.orphaned")(function* (db: Databas
     decoded.filter(
       (item) =>
         item.id === requestEventID(owner.parentID, item.data.assistantMessageID, item.data.callID) &&
-        canonical(item.data),
+        canonical(row, owner, item.data, false),
     ),
     (item) => interrupted(db, owner.parentID, item.data.assistantMessageID, item.data.callID),
   )
