@@ -16,7 +16,7 @@ import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
-import { Deferred, Effect, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -126,4 +126,75 @@ describe("SessionExecutionLocal startup recovery", () => {
   it.effect("recovers and drains queued durable input without a new prompt", () => verify("queue"))
   it.effect("leaves recovered sessions paused when no durable input is pending", () => verify())
   it.effect("drains pending input when the previous startup stopped after pausing", () => verify("steer", true))
+})
+
+describe("SessionExecutionLocal wait", () => {
+  it.effect("waits for the active provider and its coalesced follow-up", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const sessionID = SessionSchema.ID.make("ses_execution_wait")
+      yield* database.db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      yield* database.db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: sessionID,
+          directory: "/project",
+          title: "Wait",
+          version: "test",
+          runtime: "v2",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const first = yield* Deferred.make<void>()
+      const firstGate = yield* Deferred.make<void>()
+      const second = yield* Deferred.make<void>()
+      const secondGate = yield* Deferred.make<void>()
+      const settled = yield* Deferred.make<void>()
+      let runs = 0
+      const runner = Layer.succeed(
+        SessionRunner.Service,
+        SessionRunner.Service.of({
+          run: () =>
+            Effect.sync(() => ++runs).pipe(
+              Effect.flatMap((run) =>
+                run === 1
+                  ? Deferred.succeed(first, undefined).pipe(Effect.andThen(Deferred.await(firstGate)))
+                  : Deferred.succeed(second, undefined).pipe(Effect.andThen(Deferred.await(secondGate))),
+              ),
+            ),
+        }),
+      )
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.gen(function* () {
+        const service = yield* SessionExecution.Service
+        yield* service.wake(sessionID)
+        yield* Deferred.await(first)
+        yield* service.wake(sessionID)
+        const wait = yield* service
+          .wait(sessionID)
+          .pipe(Effect.ensuring(Deferred.succeed(settled, undefined)), Effect.forkChild)
+        yield* Deferred.succeed(firstGate, undefined)
+        yield* Deferred.await(second)
+        expect(yield* Deferred.isDone(settled)).toBeFalse()
+        yield* Deferred.succeed(secondGate, undefined)
+        yield* Fiber.join(wait)
+      }).pipe(Effect.provide(execution))
+
+      expect(runs).toBe(2)
+    }),
+  )
 })

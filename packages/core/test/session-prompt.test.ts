@@ -16,6 +16,7 @@ import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionControl } from "@slopcode-ai/core/session/control"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { testEffect } from "./lib/effect"
@@ -30,6 +31,9 @@ const interruptCalls: SessionV2.ID[] = []
 const interruptSeqs: Array<number | undefined> = []
 const wakeCalls: SessionV2.ID[] = []
 const wakeSeqs: Array<number | undefined> = []
+const waitCalls: SessionV2.ID[] = []
+const executionOrder: string[] = []
+let waitFailure: SessionRunner.StepLimitExceededError | undefined
 const execution = Layer.succeed(
   SessionExecution.Service,
   SessionExecution.Service.of({
@@ -43,9 +47,22 @@ const execution = Layer.succeed(
         interruptSeqs.push(seq)
       }),
     wake: (sessionID, seq) =>
-      Effect.sync(() => {
-        wakeCalls.push(sessionID)
-        wakeSeqs.push(seq)
+      Effect.yieldNow.pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            executionOrder.push("wake")
+            wakeCalls.push(sessionID)
+            wakeSeqs.push(seq)
+          }),
+        ),
+      ),
+    wait: (sessionID) =>
+      Effect.suspend(() => {
+        executionOrder.push("wait")
+        waitCalls.push(sessionID)
+        const failure = waitFailure
+        waitFailure = undefined
+        return failure ? Effect.fail(failure) : Effect.void
       }),
   }),
 )
@@ -127,6 +144,63 @@ describe("SessionV2.prompt", () => {
       yield* session.resume(sessionID)
       expect(executionCalls).toEqual([sessionID])
       expect(wakeCalls).toEqual([])
+    }),
+  )
+
+  it.effect("registers prompt execution before an immediate wait", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      executionOrder.length = 0
+      wakeCalls.length = 0
+      waitCalls.length = 0
+
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run then wait" }) })
+      yield* session.wait(sessionID)
+
+      expect(executionOrder).toEqual(["wake", "wait"])
+      expect(wakeCalls).toEqual([sessionID])
+      expect(waitCalls).toEqual([sessionID])
+    }),
+  )
+
+  it.effect("rejects a wait for a missing Session before execution", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      waitCalls.length = 0
+
+      const failure = yield* session.wait(SessionV2.ID.make("ses_missing_wait")).pipe(Effect.flip)
+
+      expect(failure._tag).toBe("Session.NotFoundError")
+      expect(waitCalls).toEqual([])
+    }),
+  )
+
+  it.effect("returns immediately when a recorded Session is idle", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      waitCalls.length = 0
+
+      yield* session.wait(sessionID)
+
+      expect(waitCalls).toEqual([sessionID])
+    }),
+  )
+
+  it.effect("propagates the runner failure observed while waiting", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      waitFailure = new SessionRunner.StepLimitExceededError({ sessionID, limit: 25 })
+
+      const failure = yield* session.wait(sessionID).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "SessionRunner.StepLimitExceededError",
+        sessionID,
+        limit: 25,
+      })
     }),
   )
 

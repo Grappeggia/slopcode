@@ -91,7 +91,7 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ses
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
   {
-    operation: Schema.Literals(["move", "shell", "skill", "switchAgent", "compact", "wait"]),
+    operation: Schema.Literals(["move", "shell", "skill", "switchAgent", "compact"]),
   },
 ) {}
 
@@ -156,7 +156,7 @@ export interface Interface {
     resume?: boolean
   }) => Effect.Effect<void, OperationUnavailableError>
   readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
-  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
+  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
 }
@@ -173,8 +173,6 @@ export const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
-    const scope = yield* Effect.scope
-
     const enqueueWake = (admitted: SessionInput.Admitted) =>
       execution.wake(admitted.sessionID, admitted.admittedSeq).pipe(
         Effect.tapCause((cause) =>
@@ -183,7 +181,6 @@ export const layer = Layer.effect(
             : logFailure("Failed to wake Session", admitted.sessionID, cause),
         ),
         Effect.ignore,
-        Effect.forkIn(scope, { startImmediately: true }),
         Effect.asVoid,
       )
 
@@ -417,7 +414,7 @@ export const layer = Layer.effect(
       }),
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)
-        return yield* new OperationUnavailableError({ operation: "wait" })
+        yield* execution.wait(sessionID)
       }),
       resume: Effect.fn("V2Session.resume")(function* (sessionID) {
         yield* result.get(sessionID)

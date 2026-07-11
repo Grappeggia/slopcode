@@ -197,19 +197,23 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.wait",
         Effect.fn(function* (ctx) {
           yield* control.wait(ctx.params.sessionID).pipe(
+            Effect.tapError((error) =>
+              error._tag === "Session.NotFoundError" || error._tag === "SessionRuntime.NotFound"
+                ? Effect.void
+                : Effect.logError("session wait failed").pipe(
+                    Effect.annotateLogs({ sessionID: ctx.params.sessionID, error }),
+                  ),
+            ),
+            Effect.mapError((error) =>
+              error._tag === "Session.NotFoundError" || error._tag === "SessionRuntime.NotFound"
+                ? error
+                : new UnknownError({ message: "Session execution failed. Check server logs for details." }),
+            ),
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
                 new SessionNotFoundError({
                   sessionID: error.sessionID,
                   message: `Session not found: ${error.sessionID}`,
-                }),
-              ),
-            ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
-              Effect.fail(
-                new ServiceUnavailableError({
-                  message: `Session ${error.operation} is not available yet`,
-                  service: `session.${error.operation}`,
                 }),
               ),
             ),
@@ -221,7 +225,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 }),
               ),
             ),
-            Effect.catchTag("SessionRuntime.Mismatch", (error) => Effect.fail(runtimeUnavailable(error))),
           )
           return HttpApiSchema.NoContent.make()
         }),

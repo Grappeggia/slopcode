@@ -4,7 +4,7 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer } from "effect"
+import { Cause, Config, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
@@ -667,7 +667,7 @@ describe("session HttpApi", () => {
           request(`/api/session/${session.id}/prompt`, {
             method: "POST",
             headers: { ...headers, "content-type": "application/json" },
-            body: JSON.stringify({ id: "msg_http_prompt", prompt: { text: "hello" } }),
+            body: JSON.stringify({ id: "msg_http_prompt", prompt: { text: "hello" }, resume: false }),
           })
         const first = yield* recordPrompt()
         const retried = yield* recordPrompt()
@@ -730,16 +730,59 @@ describe("session HttpApi", () => {
           message: "Session compact is not available yet",
           service: "session.compact",
         })
-
-        const wait = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
-        expect(wait.status).toBe(503)
-        expect(yield* responseJson(wait)).toEqual({
-          _tag: "ServiceUnavailableError",
-          message: "Session wait is not available yet",
-          service: "session.wait",
-        })
       }),
     { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.live("runs and waits for a native v2 prompt through the shared live execution layer", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const gate = Promise.withResolvers<void>()
+      const settled = yield* Deferred.make<void>()
+      yield* llm.hold("native response", gate.promise)
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const id = SessionID.descending()
+      const headers = { "x-slopcode-directory": directory, "content-type": "application/json" }
+      const created = yield* request("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          id,
+          location: { directory },
+          model: { providerID: "test", id: "test-model" },
+        }),
+      })
+      expect(created.status).toBe(200)
+
+      const prompt = yield* request(`/api/session/${id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: { text: "execute natively" } }),
+      })
+      expect(prompt.status).toBe(200)
+
+      const waiting = yield* request(`/api/session/${id}/wait`, { method: "POST", headers }).pipe(
+        Effect.ensuring(Deferred.succeed(settled, undefined)),
+        Effect.forkChild,
+      )
+      const observed = yield* Effect.raceFirst(
+        llm.wait(1).pipe(Effect.as("provider" as const)),
+        Fiber.join(waiting).pipe(Effect.map((response) => `wait:${response.status}` as const)),
+      )
+      if (observed !== "provider") gate.resolve()
+      expect(observed).toBe("provider")
+      expect(yield* Deferred.isDone(settled)).toBeFalse()
+      gate.resolve()
+      const waited = yield* Fiber.join(waiting)
+
+      expect(waited.status).toBe(204)
+      expect(yield* llm.calls).toBe(1)
+      const messages = yield* requestJson<{ data: SessionMessage.Message[] }>(`/api/session/${id}/message`, { headers })
+      expect(messages.data).toMatchObject([
+        { type: "assistant", content: [{ type: "text", text: "native response" }] },
+        { type: "user", text: "execute natively" },
+      ])
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )
 
   it.instance(
