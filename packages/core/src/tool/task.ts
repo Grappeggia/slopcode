@@ -112,7 +112,7 @@ export const layer = Layer.effectDiscard(
     const store = yield* SessionStore.Service
     const db = (yield* Database.Service).db
 
-    yield* boot.wait()
+    yield* PluginBoot.beforeTools(boot)
     const catalog = yield* agents.all()
 
     const failure = (error: unknown) =>

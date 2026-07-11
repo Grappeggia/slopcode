@@ -82,14 +82,16 @@ export const layer = Layer.effectDiscard(
     yield* PluginV2.attachTools(
       plugin,
       Effect.fn("PluginTool.register")(function* (id, definitions) {
-        const adapted = yield* Effect.forEach(Object.entries(definitions), ([name, definition]) =>
+        const entries = yield* boundary(String(id), "read plugin tool map", () => Object.entries(definitions))
+        const adapted = yield* Effect.forEach(entries, ([name, definition]) =>
           adapt({ name, definition, plugin, permission, location, events }).pipe(
             Effect.map((tool) => [name, tool] as const),
           ),
         )
-        yield* tools.register(Object.fromEntries(adapted)).pipe(
-          Effect.mapError((error) => new LoadError({ name: error.name, message: error.message })),
-        )
+        const registered = yield* boundary(String(id), "construct plugin tool map", () => Object.fromEntries(adapted))
+        yield* tools
+          .register(registered)
+          .pipe(Effect.mapError((error) => new LoadError({ name: error.name, message: error.message })))
       }),
     )
   }),
@@ -103,18 +105,23 @@ export const discover = Effect.gen(function* () {
   const events = yield* EventV2.Service
 
   const failed = (source: string, message: string, id?: PluginV2.ID) =>
-    events
-      .publish(PluginV2.Event.Failed, { id, source, message })
-      .pipe(Effect.tap(() => Effect.logError("failed to load plugin tool", { source, message })), Effect.asVoid)
+    events.publish(PluginV2.Event.Failed, { id, source, message }).pipe(
+      Effect.tap(() => Effect.logError("failed to load plugin tool", { source, message })),
+      Effect.asVoid,
+    )
 
-  for (const directory of (yield* config.entries()).filter((entry): entry is Config.Directory => entry.type === "directory")) {
-    const matches = (
-      yield* fs
-        .glob("{tool,tools}/*.{js,ts}", { cwd: directory.path, absolute: true, include: "file", dot: true, symlink: true })
-        .pipe(
-          Effect.catch((error) => failed(directory.path, String(error)).pipe(Effect.as([] as string[]))),
-        )
-    ).toSorted()
+  for (const directory of (yield* config.entries()).filter(
+    (entry): entry is Config.Directory => entry.type === "directory",
+  )) {
+    const matches = (yield* fs
+      .glob("{tool,tools}/*.{js,ts}", {
+        cwd: directory.path,
+        absolute: true,
+        include: "file",
+        dot: true,
+        symlink: true,
+      })
+      .pipe(Effect.catch((error) => failed(directory.path, String(error)).pipe(Effect.as([] as string[]))))).toSorted()
     if (matches.length === 0) continue
     const installed = yield* npm.install(directory.path).pipe(
       Effect.as(true),
@@ -122,26 +129,62 @@ export const discover = Effect.gen(function* () {
     )
     if (!installed) continue
 
+    const found: Array<{
+      readonly file: string
+      readonly key: string
+      readonly name: string
+      readonly id: PluginV2.ID
+      readonly definition: Definition
+    }> = []
     for (const file of matches) {
       const loaded = yield* Effect.tryPromise({
         try: () => import(pathToFileURL(file).href),
-        catch: (cause) => String(cause),
+        catch: (cause) => loadError(file, "import tool file", cause),
       }).pipe(
-        Effect.tapError((message) => failed(file, message)),
+        Effect.tapError((error) => failed(file, error.message)),
         Effect.option,
       )
       if (loaded._tag === "None") continue
       const namespace = path.basename(file, path.extname(file))
-      for (const [key, value] of Object.entries(loaded.value).toSorted(([left], [right]) => left.localeCompare(right))) {
-        if (!candidate(value)) continue
-        const name = key === "default" ? namespace : `${namespace}_${key}`
+      const entries = yield* boundary(file, "read tool file exports", () =>
+        Object.entries(loaded.value).toSorted(([left], [right]) => left.localeCompare(right)),
+      ).pipe(
+        Effect.tapError((error) => failed(file, error.message)),
+        Effect.option,
+      )
+      if (entries._tag === "None") continue
+      for (const [key, value] of entries.value) {
+        const inspected = yield* boundary(file, `inspect tool export ${key}`, () => ({
+          candidate: candidate(value),
+          definition: isDefinition(value) ? value : undefined,
+        })).pipe(
+          Effect.tapError((error) => failed(file, error.message)),
+          Effect.option,
+        )
+        if (inspected._tag === "None" || !inspected.value.candidate) continue
         const id = PluginV2.ID.make(`tool:${file}#${key}`)
-        if (!isDefinition(value)) {
+        if (!inspected.value.definition) {
           yield* failed(file, `Invalid plugin tool export: ${key}`, id)
           continue
         }
-        yield* plugin.add({ id, effect: Effect.succeed({ tool: { [name]: value } }) }).pipe(Effect.catch(() => Effect.void))
+        found.push({
+          file,
+          key,
+          name: key === "default" ? namespace : `${namespace}_${key}`,
+          id,
+          definition: inspected.value.definition,
+        })
       }
+    }
+    const names = Map.groupBy(found, (item) => item.name)
+    for (const item of found) {
+      if (names.get(item.name)!.length > 1) {
+        yield* failed(item.file, `Ambiguous plugin tool name in ${directory.path}: ${item.name}`, item.id)
+        continue
+      }
+      yield* plugin
+        .add({ id: item.id, effect: Effect.succeed({ tool: { [item.name]: item.definition } }) })
+        .pipe(Effect.catch(() => Effect.void))
     }
   }
 })
@@ -161,23 +204,44 @@ function adapt(input: {
     if (!isDefinition(input.definition))
       return yield* new LoadError({ name: input.name, message: `Invalid plugin tool definition: ${input.name}` })
 
-    const entries = Object.entries(input.definition.args ?? {})
+    const entries = yield* boundary(input.name, "read plugin tool arguments", () =>
+      Object.entries(input.definition.args ?? {}),
+    )
     const zod = entries.every(([, value]) => isZod(value))
     const legacy = !zod && entries.every(([, value]) => isJson(value))
     if (!zod && !legacy)
-      return yield* new LoadError({ name: input.name, message: `Plugin tool arguments must use one schema format: ${input.name}` })
+      return yield* new LoadError({
+        name: input.name,
+        message: `Plugin tool arguments must use one schema format: ${input.name}`,
+      })
 
-    const schema = zod
-      ? zodSchema(z.object(Object.fromEntries(entries) as z.ZodRawShape))
-      : ({ type: "object", properties: Object.fromEntries(entries), required: entries.map(([name]) => name) } as Json)
+    const object = zod
+      ? yield* boundary(input.name, "construct Zod argument object", () =>
+          z.object(Object.fromEntries(entries) as z.ZodRawShape),
+        )
+      : undefined
+    const schema = object
+      ? yield* boundary(input.name, "generate Zod JSON Schema", () => zodSchema(object))
+      : yield* boundary(
+          input.name,
+          "construct legacy JSON Schema",
+          () =>
+            ({
+              type: "object",
+              properties: Object.fromEntries(entries),
+              required: entries.map(([name]) => name),
+            }) as Json,
+        )
     const validator = legacy
       ? yield* Effect.try({
           try: () => new Ajv({ allErrors: true, strict: false }).compile(schema),
           catch: (cause) =>
-            new LoadError({ name: input.name, message: `Invalid JSON Schema for plugin tool ${input.name}: ${String(cause)}` }),
+            new LoadError({
+              name: input.name,
+              message: `Invalid JSON Schema for plugin tool ${input.name}: ${String(cause)}`,
+            }),
         })
       : undefined
-    const object = zod ? z.object(Object.fromEntries(entries) as z.ZodRawShape) : undefined
     const decode = (value: unknown) => {
       if (object)
         return Effect.promise(() => object.safeParseAsync(value)).pipe(
@@ -190,95 +254,132 @@ function adapt(input: {
       return validator?.(value)
         ? Effect.succeed(value as Record<string, unknown>)
         : Effect.fail(
-            new Tool.Failure({ message: `Invalid tool input: ${input.name}: ${validator?.errors?.[0]?.message ?? "invalid"}` }),
+            new Tool.Failure({
+              message: `Invalid tool input: ${input.name}: ${validator?.errors?.[0]?.message ?? "invalid"}`,
+            }),
           )
     }
 
-    return Tool.dynamic({
-      description: input.definition.description,
-      inputSchema: schema,
-      decodeInput: decode,
-      execute: (args, context) =>
-        Effect.gen(function* () {
-          const before = yield* input.plugin.trigger("tool.execute.before", {
-            tool: input.name,
-            sessionID: context.sessionID,
-            callID: context.toolCallID,
-          }, { args })
-          const decoded = yield* decode(before.args)
-          const controller = new AbortController()
-          let progress = Promise.resolve()
-          const result = yield* wait(
-            () =>
-              input.definition
-                .execute(decoded, {
-                  sessionID: context.sessionID,
-                  messageID: context.assistantMessageID,
-                  callID: context.toolCallID,
-                  agent: context.agent,
-                  directory: input.location.directory,
-                  worktree: input.location.project.directory,
-                  abort: controller.signal,
-                  ask: (request) =>
-                    Effect.runPromise(
-                      input.permission.assert({
-                        action: request.permission,
-                        resources: request.patterns,
-                        save: request.always,
-                        metadata: request.metadata,
-                        sessionID: context.sessionID,
-                        agent: context.agent,
-                        rules: context.permissions,
-                        source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
-                      }),
-                      { signal: controller.signal },
-                    ),
-                  metadata: (update) => {
-                    progress = progress.then(() =>
+    return yield* boundary(input.name, "construct canonical tool", () =>
+      Tool.dynamic({
+        description: input.definition.description,
+        inputSchema: schema,
+        decodeInput: decode,
+        execute: (args, context) =>
+          Effect.gen(function* () {
+            const before = yield* input.plugin.trigger(
+              "tool.execute.before",
+              {
+                tool: input.name,
+                sessionID: context.sessionID,
+                callID: context.toolCallID,
+              },
+              { args },
+            )
+            const decoded = yield* decode(before.args)
+            const controller = new AbortController()
+            let progress = Promise.resolve()
+            const result = yield* wait(
+              () =>
+                input.definition
+                  .execute(decoded, {
+                    sessionID: context.sessionID,
+                    messageID: context.assistantMessageID,
+                    callID: context.toolCallID,
+                    agent: context.agent,
+                    directory: input.location.directory,
+                    worktree: input.location.project.directory,
+                    abort: controller.signal,
+                    ask: (request) =>
                       Effect.runPromise(
-                        input.events.publish(SessionEvent.Tool.Progress, {
-                          timestamp: DateTime.nowUnsafe(),
-                          sessionID: context.sessionID,
-                          assistantMessageID: context.assistantMessageID,
-                          callID: context.toolCallID,
-                          structured: update.metadata ?? {},
-                          content: update.title ? [{ type: "text", text: update.title }] : [],
-                        }),
-                      ).then(() => undefined),
-                    )
-                  },
-                })
-                .then(async (value) => {
-                  await progress
-                  return value
-                }),
-            controller,
-          )
-          const normalized = yield* normalize(result)
-          const after = yield* input.plugin.trigger(
-            "tool.execute.after",
-            { tool: input.name, sessionID: context.sessionID, callID: context.toolCallID, args: decoded },
-            {
-              title: normalized.title,
-              output: normalized.output,
-              metadata: normalized.metadata,
-              attachments: resultString(result) ? undefined : result.attachments,
-            },
-          )
-          const final = yield* normalize({
-            title: after.title,
-            output: after.output,
-            metadata: after.metadata,
-            attachments: after.attachments,
-          })
-          return normalized.string && final.title === undefined && Object.keys(final.metadata).length === 0 && final.attachments.length === 0
-            ? { ...final, string: true }
-            : final
-        }),
-      encodeOutput: (value) => Effect.succeed(value.string ? value.output : value.metadata),
-      toModelOutput: ({ value }) => [{ type: "text", text: value.output }, ...value.attachments],
-    })
+                        input.permission
+                          .assert({
+                            action: request.permission,
+                            resources: request.patterns,
+                            save: request.always,
+                            metadata: request.metadata,
+                            sessionID: context.sessionID,
+                            agent: context.agent,
+                            rules: context.permissions,
+                            source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+                          })
+                          .pipe(
+                            Effect.mapError(
+                              () => new Tool.Failure({ message: `Permission denied: ${request.permission}` }),
+                            ),
+                          ),
+                        { signal: controller.signal },
+                      ),
+                    metadata: (update) => {
+                      progress = progress.then(() =>
+                        Effect.runPromise(
+                          input.events.publish(SessionEvent.Tool.Progress, {
+                            timestamp: DateTime.nowUnsafe(),
+                            sessionID: context.sessionID,
+                            assistantMessageID: context.assistantMessageID,
+                            callID: context.toolCallID,
+                            structured: update.metadata ?? {},
+                            content: update.title ? [{ type: "text", text: update.title }] : [],
+                          }),
+                        ).then(() => undefined),
+                      )
+                    },
+                  })
+                  .then(async (value) => {
+                    await progress
+                    return value
+                  }),
+              controller,
+            )
+            const normalized = yield* normalize(result)
+            const after = yield* input.plugin.trigger(
+              "tool.execute.after",
+              { tool: input.name, sessionID: context.sessionID, callID: context.toolCallID, args: decoded },
+              {
+                title: normalized.title,
+                output: normalized.output,
+                metadata: normalized.metadata,
+                attachments: resultString(result) ? undefined : result.attachments,
+              },
+            )
+            const final = yield* normalize({
+              title: after.title,
+              output: after.output,
+              metadata: after.metadata,
+              attachments: after.attachments,
+            })
+            if (final.title)
+              yield* input.events.publish(SessionEvent.Tool.Progress, {
+                timestamp: DateTime.nowUnsafe(),
+                sessionID: context.sessionID,
+                assistantMessageID: context.assistantMessageID,
+                callID: context.toolCallID,
+                structured: final.metadata,
+                content: [{ type: "text", text: final.title }],
+              })
+            return normalized.string &&
+              final.title === undefined &&
+              Object.keys(final.metadata).length === 0 &&
+              final.attachments.length === 0
+              ? { ...final, string: true }
+              : final
+          }),
+        encodeOutput: (value) => Effect.succeed(value.string ? value.output : value.metadata),
+        toModelOutput: ({ value }) => [{ type: "text", text: value.output }, ...value.attachments],
+      }),
+    )
   })
+}
+
+function boundary<A>(name: string, action: string, run: () => A): Effect.Effect<A, LoadError> {
+  return Effect.try({
+    try: run,
+    catch: (cause) => loadError(name, action, cause),
+  })
+}
+
+function loadError(name: string, action: string, cause: unknown) {
+  return new LoadError({ name, message: `${action} failed for ${name}: ${String(cause)}` })
 }
 
 function wait<A>(run: () => Promise<A>, controller: AbortController): Effect.Effect<A, Tool.Failure> {
@@ -292,7 +393,7 @@ function wait<A>(run: () => Promise<A>, controller: AbortController): Effect.Eff
       },
       (cause) => {
         settled = true
-        resume(Effect.fail(new Tool.Failure({ message: `Plugin tool execution failed: ${String(cause)}` })))
+        resume(cause instanceof Tool.Failure ? Effect.fail(cause) : Effect.die(cause))
       },
     )
     return Effect.uninterruptible(
@@ -305,8 +406,7 @@ function wait<A>(run: () => Promise<A>, controller: AbortController): Effect.Eff
 }
 
 function normalize(result: unknown): Effect.Effect<Normalized, Tool.Failure> {
-  if (typeof result === "string")
-    return Effect.succeed({ string: true, output: result, metadata: {}, attachments: [] })
+  if (typeof result === "string") return Effect.succeed({ string: true, output: result, metadata: {}, attachments: [] })
   if (typeof result !== "object" || result === null || !("output" in result) || typeof result.output !== "string")
     return Effect.fail(new Tool.Failure({ message: "Plugin tool returned an invalid result" }))
   const value = result as {

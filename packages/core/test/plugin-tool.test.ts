@@ -2,7 +2,9 @@ import { describe, expect } from "bun:test"
 import { AgentV2 } from "@slopcode-ai/core/agent"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { Config } from "@slopcode-ai/core/config"
+import { ConfigToolOutput } from "@slopcode-ai/core/config/tool-output"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
+import { Global } from "@slopcode-ai/core/global"
 import { Location } from "@slopcode-ai/core/location"
 import { Npm } from "@slopcode-ai/core/npm"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
@@ -71,6 +73,51 @@ const settle = (materialized: ToolRegistry.Materialization, name: string, input:
   })
 
 describe("PluginTool", () => {
+  it.effect("turns every synchronous adaptation failure into a typed load error", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginV2.Service
+      const invalid = [
+        {
+          id: "zod-schema",
+          definition: { description: "zod", args: { value: z.date() }, execute: async () => "never" },
+        },
+        {
+          id: "legacy-schema",
+          definition: { description: "legacy", args: { value: { type: "not-a-type" } }, execute: async () => "never" },
+        },
+        {
+          id: "dynamic-schema",
+          definition: {
+            description: "dynamic",
+            args: { value: { type: "string", invalid: undefined } as never },
+            execute: async () => "never",
+          },
+        },
+      ]
+      for (const item of invalid) {
+        const error = yield* Effect.flip(
+          plugin.add({
+            id: PluginV2.ID.make(item.id),
+            effect: Effect.succeed({ tool: { [item.id]: item.definition } }),
+          }),
+        )
+        expect(error).toBeInstanceOf(PluginTool.LoadError)
+      }
+      yield* plugin.add({
+        id: PluginV2.ID.make("healthy-after-adaptation"),
+        effect: Effect.succeed({
+          tool: { healthy_after_adaptation: { description: "healthy", args: {}, execute: async () => "healthy" } },
+        }),
+      })
+      expect(
+        (yield* settle(yield* (yield* ToolRegistry.Service).materialize(), "healthy_after_adaptation")).result,
+      ).toEqual({
+        type: "text",
+        value: "healthy",
+      })
+    }),
+  )
+
   it.effect("adapts Zod and legacy arguments and normalizes object output", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service
@@ -132,19 +179,31 @@ describe("PluginTool", () => {
       yield* plugin.add({
         id: PluginV2.ID.make("hooks"),
         effect: Effect.succeed({
-          "tool.execute.before": (event) => Effect.sync(() => (event.args = { value: String(event.args.value).trim() })),
+          "tool.execute.before": (event) =>
+            Effect.sync(() => (event.args = { value: String(event.args.value).trim() })),
           "tool.execute.after": (event) =>
             Effect.sync(() => {
+              if (event.tool === "execute_title") return
               event.title = "after"
               event.output = event.output.toUpperCase()
               event.metadata = { ...event.metadata, after: true }
             }),
           tool: {
+            execute_title: {
+              description: "execute title",
+              args: {},
+              execute: async () => ({ title: "execute", output: "execute", metadata: { phase: "execute" } }),
+            },
             hooked: {
               description: "hooked",
               args: { value: z.string().min(2) },
               execute: async (input, context) => {
-                await context.ask({ permission: "network", patterns: ["host"], always: ["host"], metadata: { port: 443 } })
+                await context.ask({
+                  permission: "network",
+                  patterns: ["host"],
+                  always: ["host"],
+                  metadata: { port: 443 },
+                })
                 context.metadata({ title: "one", metadata: { step: 1 } })
                 context.metadata({ title: "two", metadata: { step: 2 } })
                 return { output: input.value, metadata: { original: true } }
@@ -154,6 +213,7 @@ describe("PluginTool", () => {
         }),
       })
       const tools = yield* (yield* ToolRegistry.Service).materialize()
+      yield* settle(tools, "execute_title")
       const result = yield* settle(tools, "hooked", { value: " ok " })
       expect(result.result).toEqual({ type: "text", value: "OK" })
       expect(result.output?.structured).toEqual({ original: true, after: true })
@@ -171,8 +231,18 @@ describe("PluginTool", () => {
       expect(
         published.filter((item) => item.type === SessionEvent.Tool.Progress.type).map((item) => item.data),
       ).toEqual([
+        expect.objectContaining({
+          callID: "call-execute_title",
+          structured: { phase: "execute" },
+          content: [{ type: "text", text: "execute" }],
+        }),
         expect.objectContaining({ structured: { step: 1 }, content: [{ type: "text", text: "one" }] }),
         expect.objectContaining({ structured: { step: 2 }, content: [{ type: "text", text: "two" }] }),
+        expect.objectContaining({
+          callID: "call-hooked",
+          structured: { original: true, after: true },
+          content: [{ type: "text", text: "after" }],
+        }),
       ])
     }),
   )
@@ -184,6 +254,10 @@ describe("PluginTool", () => {
         id: PluginV2.ID.make("invalid"),
         effect: Effect.succeed({
           "tool.execute.before": (event) => Effect.sync(() => (event.args = { value: 1 })),
+          "tool.execute.after": (event) =>
+            Effect.sync(() => {
+              if (event.tool === "bad_after") Reflect.set(event, "output", 1)
+            }),
           tool: {
             bad_input: { description: "bad", args: { value: z.string() }, execute: async () => "never" },
             bad_file: {
@@ -194,6 +268,12 @@ describe("PluginTool", () => {
                 attachments: [{ type: "file", mime: "text/plain", url: "data:text/plain;base64,***" }],
               }),
             },
+            bad_after: { description: "bad after", args: {}, execute: async () => "before" },
+            bad_result: {
+              description: "bad result",
+              args: {},
+              execute: async () => ({ title: "missing output" }) as never,
+            },
           },
         }),
       })
@@ -203,6 +283,30 @@ describe("PluginTool", () => {
         type: "error",
         value: expect.stringContaining("attachment"),
       })
+      expect((yield* settle(tools, "bad_after")).result).toMatchObject({ type: "error" })
+      expect((yield* settle(tools, "bad_result")).result).toMatchObject({ type: "error" })
+    }),
+  )
+
+  it.effect("preserves defects from plugin execution", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginV2.Service
+      yield* plugin.add({
+        id: PluginV2.ID.make("execution-defect"),
+        effect: Effect.succeed({
+          tool: {
+            execution_defect: {
+              description: "defect",
+              args: {},
+              execute: async () => {
+                throw new Error("plugin execution defect")
+              },
+            },
+          },
+        }),
+      })
+      const exit = yield* Effect.exit(settle(yield* (yield* ToolRegistry.Service).materialize(), "execution_defect"))
+      expect(Exit.isFailure(exit) && Cause.pretty(exit.cause)).toContain("plugin execution defect")
     }),
   )
 
@@ -229,6 +333,84 @@ describe("PluginTool", () => {
     }),
   )
 
+  it.effect("hides removed and replaced registrations before awaiting slow disposal", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginV2.Service
+      const registry = yield* ToolRegistry.Service
+      const removeStarted = yield* Deferred.make<void>()
+      const releaseRemove = yield* Deferred.make<void>()
+      yield* plugin.add({
+        id: PluginV2.ID.make("slow-remove"),
+        effect: Effect.succeed({
+          tool: { slow_remove: { description: "remove", args: {}, execute: async () => "remove" } },
+          dispose: () =>
+            Effect.runPromise(
+              Deferred.succeed(removeStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseRemove))),
+            ),
+        }),
+      })
+      const removing = yield* plugin.remove(PluginV2.ID.make("slow-remove")).pipe(Effect.forkChild)
+      yield* Deferred.await(removeStarted)
+      expect((yield* registry.materialize()).definitions.some((item) => item.name === "slow_remove")).toBe(false)
+      yield* Deferred.succeed(releaseRemove, undefined)
+      yield* Fiber.join(removing)
+
+      const replaceStarted = yield* Deferred.make<void>()
+      const releaseReplace = yield* Deferred.make<void>()
+      const id = PluginV2.ID.make("slow-replace")
+      yield* plugin.add({
+        id,
+        effect: Effect.succeed({
+          tool: {
+            old_only: { description: "old", args: {}, execute: async () => "old" },
+            replaced: { description: "old shared", args: {}, execute: async () => "old" },
+          },
+          dispose: () =>
+            Effect.runPromise(
+              Deferred.succeed(replaceStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseReplace))),
+            ),
+        }),
+      })
+      const replacing = yield* plugin
+        .add({
+          id,
+          effect: Effect.succeed({
+            tool: { replaced: { description: "new shared", args: {}, execute: async () => "new" } },
+          }),
+        })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(replaceStarted)
+      const during = yield* registry.materialize()
+      expect(during.definitions.some((item) => item.name === "old_only")).toBe(false)
+      expect((yield* settle(during, "replaced")).result).toEqual({ type: "text", value: "new" })
+      yield* Deferred.succeed(releaseReplace, undefined)
+      yield* Fiber.join(replacing)
+    }),
+  )
+
+  it.effect("disposes plugin registrations exactly once when the plugin scope shuts down", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make()
+      const context = yield* Layer.buildWithScope(Layer.fresh(layer), scope)
+      const plugin = Context.get(context, PluginV2.Service)
+      const registry = Context.get(context, ToolRegistry.Service)
+      let disposed = 0
+      yield* plugin.add({
+        id: PluginV2.ID.make("scope-dispose"),
+        effect: Effect.succeed({
+          tool: { scope_dispose: { description: "scope", args: {}, execute: async () => "scope" } },
+          dispose: () => {
+            disposed++
+          },
+        }),
+      })
+      expect((yield* registry.materialize()).definitions.some((item) => item.name === "scope_dispose")).toBe(true)
+      yield* Scope.close(scope, Exit.void)
+      expect(disposed).toBe(1)
+      expect((yield* registry.materialize()).definitions.some((item) => item.name === "scope_dispose")).toBe(false)
+    }),
+  )
+
   it.effect("aborts interrupted executions, waits for cleanup, and preserves interruption", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service
@@ -243,10 +425,12 @@ describe("PluginTool", () => {
               args: {},
               execute: (_, context) =>
                 new Promise((resolve) => {
-                  context.abort.addEventListener("abort", () => setTimeout(() => {
-                    cleaned = true
-                    resolve("stopped")
-                  }, 5))
+                  context.abort.addEventListener("abort", () =>
+                    setTimeout(() => {
+                      cleaned = true
+                      resolve("stopped")
+                    }, 5),
+                  )
                   Effect.runSync(Deferred.succeed(started, undefined))
                 }),
             },
@@ -263,11 +447,72 @@ describe("PluginTool", () => {
     }),
   )
 
+  it.effect("bounds plugin output through the real ToolOutputStore", () =>
+    Effect.gen(function* () {
+      const root = yield* Effect.promise(() => tmpdir())
+      yield* Effect.addFinalizer(() => Effect.promise(() => root[Symbol.asyncDispose]()))
+      const config = Layer.succeed(Config.Service, {
+        entries: () =>
+          Effect.succeed([
+            new Config.Document({
+              type: "document",
+              info: new Config.Info({ tool_output: new ConfigToolOutput.Info({ max_lines: 4, max_bytes: 200 }) }),
+            }),
+          ]),
+      })
+      const store = ToolOutputStore.layer.pipe(
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Global.layerWith({ data: root.path })),
+        Layer.provide(config),
+      )
+      const localRegistry = ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), Layer.provide(store))
+      const localPlugins = PluginV2.layer.pipe(Layer.provide(events))
+      const localAdapter = PluginTool.layer.pipe(
+        Layer.provide(localPlugins),
+        Layer.provide(localRegistry),
+        Layer.provide(permission),
+        Layer.provide(location),
+        Layer.provide(events),
+      )
+      const scope = yield* Scope.make()
+      const context = yield* Layer.buildWithScope(
+        Layer.fresh(
+          Layer.mergeAll(
+            localPlugins,
+            localRegistry,
+            localAdapter,
+            permission,
+            location,
+            events,
+            store,
+            FSUtil.defaultLayer,
+          ),
+        ),
+        scope,
+      )
+      const output = Context.get(context, ToolOutputStore.Service)
+      const registry = Context.get(context, ToolRegistry.Service)
+      expect(yield* output.limits()).toEqual({ maxLines: 4, maxBytes: 200 })
+      yield* Context.get(context, PluginV2.Service).add({
+        id: PluginV2.ID.make("bounded"),
+        effect: Effect.succeed({
+          tool: { bounded: { description: "bounded", args: {}, execute: async () => "x".repeat(1_000) } },
+        }),
+      })
+      const result = yield* settle(yield* registry.materialize(), "bounded")
+      expect(result.outputPaths).toHaveLength(1)
+      expect(yield* Context.get(context, FSUtil.Service).readFileString(result.outputPaths![0])).toBe("x".repeat(1_000))
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
   it.effect("discovers namespaced files in directory order and isolates load failures in CodeMode", () =>
     Effect.gen(function* () {
       published.length = 0
       const roots = yield* Effect.promise(() => Promise.all([tmpdir(), tmpdir()]))
-      yield* Effect.addFinalizer(() => Effect.promise(() => Promise.all(roots.map((root) => root[Symbol.asyncDispose]()))).pipe(Effect.asVoid))
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => Promise.all(roots.map((root) => root[Symbol.asyncDispose]()))).pipe(Effect.asVoid),
+      )
       yield* Effect.promise(async () => {
         await Promise.all([fs.mkdir(path.join(roots[0].path, "tools")), fs.mkdir(path.join(roots[1].path, "tool"))])
         await Bun.write(
@@ -279,6 +524,23 @@ export const extra = make("extra")
 export const ignored = 1
 export const invalid = { description: "invalid", args: {} }
 `,
+        )
+        await Bun.write(
+          path.join(roots[0].path, "tools/foo.ts"),
+          `export const bar = { description: "named collision", args: {}, execute: async () => "named" }`,
+        )
+        await Bun.write(
+          path.join(roots[0].path, "tools/foo_bar.ts"),
+          `export default { description: "default collision", args: {}, execute: async () => "default" }`,
+        )
+        await Bun.write(
+          path.join(roots[0].path, "tools/same.ts"),
+          `export default { description: "tools collision", args: {}, execute: async () => "tools" }`,
+        )
+        await fs.mkdir(path.join(roots[0].path, "tool"))
+        await Bun.write(
+          path.join(roots[0].path, "tool/same.ts"),
+          `export default { description: "tool collision", args: {}, execute: async () => "tool" }`,
         )
         await Bun.write(
           path.join(roots[1].path, "tool/local.ts"),
@@ -312,6 +574,8 @@ export const invalid = { description: "invalid", args: {} }
       const materialized = yield* registry.materialize([], { mode: "code-only" })
       expect(materialized.definitions[0]?.description).toContain("- local")
       expect(materialized.definitions[0]?.description).toContain("- local_extra")
+      expect(materialized.definitions[0]?.description).not.toContain("- foo_bar")
+      expect(materialized.definitions[0]?.description).not.toContain("- same")
       const result = yield* materialized.settle({
         ...identity,
         call: {
@@ -323,7 +587,14 @@ export const invalid = { description: "invalid", args: {} }
         },
       })
       expect(result.output?.structured).toMatchObject({ ok: true, value: { local: "high", extra: "extra" } })
-      expect(published.filter((item) => item.type === PluginV2.Event.Failed.type)).toHaveLength(3)
+      const failures = published.filter((item) => item.type === PluginV2.Event.Failed.type)
+      expect(failures).toHaveLength(7)
+      expect(failures.map((item) => item.data)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ message: expect.stringContaining("foo_bar") }),
+          expect.objectContaining({ message: expect.stringContaining("same") }),
+        ]),
+      )
     }),
   )
 })
