@@ -42,6 +42,7 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
@@ -183,6 +184,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Memory.defaultLayer,
     status,
     Database.defaultLayer,
+    SessionRuntime.defaultLayer,
     EventV2Bridge.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
@@ -459,6 +461,61 @@ noLLMServer.instance(
     }),
   { config: cfg },
 )
+
+for (const change of ["owner", "state", "epoch"] as const) {
+  noLLMServer.instance(
+    `prompt admission serializes ${change} transitions after validation`,
+    () =>
+      Effect.gen(function* () {
+        const { prompt, sessions, chat } = yield* boot()
+        const runtime = yield* SessionRuntime.Service
+        const checked = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        let checks = 0
+        const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(
+          Effect.tap(() =>
+            ++checks === 2
+              ? Deferred.succeed(checked, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Effect.void,
+          ),
+          Effect.asVoid,
+        )
+        const admitted = yield* prompt
+          .prompt(
+            {
+              sessionID: chat.id,
+              agent: "build",
+              noReply: true,
+              parts: [{ type: "text", text: change }],
+            },
+            guard,
+          )
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(checked)
+        const transition = yield* runtime
+          .assign({
+            sessionID: chat.id,
+            ...(change === "owner" ? { owner: "v2" as const } : {}),
+            ...(change === "state" ? { state: "migrating" as const } : {}),
+            expectedOwner: "v1",
+            expectedEpoch: 0,
+          })
+          .pipe(Effect.forkChild)
+
+        yield* Effect.sleep("20 millis")
+        expect(transition.pollUnsafe()).toBeUndefined()
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(admitted)
+        expect(yield* sessions.messages({ sessionID: chat.id })).toHaveLength(1)
+        expect(yield* Fiber.join(transition)).toMatchObject({
+          owner: change === "owner" ? "v2" : "v1",
+          state: change === "state" ? "migrating" : "ready",
+          epoch: 1,
+        })
+      }),
+    { config: cfg },
+  )
+}
 
 // Loop semantics
 

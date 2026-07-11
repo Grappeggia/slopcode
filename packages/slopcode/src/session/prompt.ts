@@ -1039,8 +1039,7 @@ export const layer = Layer.effect(
         })
       }
 
-      yield* guard
-      yield* sessions.updateMessage(info)
+      yield* sessions.updateMessage(info, guard.pipe(Effect.orDie))
       for (const part of parts) yield* sessions.updatePart(part)
       const nextPrompt = parts.reduce(
         (result, part) => {

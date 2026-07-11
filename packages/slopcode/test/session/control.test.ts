@@ -358,6 +358,28 @@ describe("SessionControl", () => {
     }),
   )
 
+  it.effect("defines the V1 cancellation claim before a runtime transition", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runtime = yield* SessionRuntime.Service
+      const order: string[] = []
+      const claimed = yield* runtime.claim(
+        { sessionID, owner: "v1", state: "ready", epoch: 0 },
+        Effect.sync(() => order.push("claim")).pipe(Effect.asVoid),
+      )
+      order.push("cancel")
+      const transition = yield* runtime.assign({
+        sessionID,
+        owner: "v2",
+        expectedOwner: "v1",
+        expectedEpoch: claimed.epoch,
+      })
+
+      expect(order).toEqual(["claim", "cancel"])
+      expect(transition).toMatchObject({ owner: "v2", epoch: 1 })
+    }),
+  )
+
   it.effect("fences missing projected V2 sessions with the real Core service before interrupting", () =>
     Effect.gen(function* () {
       yield* setup

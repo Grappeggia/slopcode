@@ -8,8 +8,9 @@ DONE_WITH_CONCERNS
 
 - Routed Slopcode V2 prompt and interrupt through Core `SessionControl`, preserving the V1 `SessionPrompt` path and Core's ready/owner/epoch commit guard.
 - Added deterministic paused, draining, migrating, and owner/state/epoch TOCTOU tests proving the guarded V2 prompt/interrupt mutations do not occur.
-- Fenced V1 prompt and cancel routing on persisted V1 ownership, ready state, and observed epoch; `SessionPrompt` now reruns a generic guard before cleanup/message persistence and immediately before cancellation.
-- Made `SessionV2.interrupt` execute its supplied guard before interrupting when projection state is absent, with real Core and Slopcode facade projector-race coverage.
+- Fenced V1 prompt routing on persisted V1 ownership, ready state, and observed epoch; the final guard now shares the synchronized first-message SQLite transaction with projection and event insertion.
+- Added an immediate-transaction `SessionRuntime.claim` as the V1 cancellation linearization point shared with runtime ownership/state/epoch transitions.
+- Made guarded missing-projection `SessionV2.interrupt` validate and return without calling execution, while preserving unguarded missing-session interruption compatibility.
 - Installed scoped `PluginPackage.Host` layers in Slopcode's in-process and listener server compositions, with configured SDK transport, actual listener URL, auth injection, and no standalone server runtime.
 - Bridged package workspace registrations into the production adapter registry with token-owned cleanup on location/host scope disposal.
 - Isolated `Server.Default()` from the shared HTTP memo map and covered direct authenticated in-process SDK requests, non-recursive package loading, production adapter registration, location invalidation, and default-scope disposal.
@@ -26,19 +27,25 @@ DONE_WITH_CONCERNS
 - Review follow-up: V1 TOCTOU tests mutated owner/state/epoch after route selection and showed legacy prompt/cancel mutation proceeding without a boundary guard.
 - Review follow-up: env-only listener auth left internal plugin SDK calls unauthorized because the host read stale `Flag` values.
 - Review follow-up: listener shutdown left the dead listener URL globally visible, and Default package inputs inherited it.
+- Final atomicity follow-up: pausing V1 prompt admission after its guard let owner/state/epoch transitions complete before the first message projection.
+- Final atomicity follow-up: the V1 cancellation regression initially failed because no transactional runtime claim API existed.
+- Final atomicity follow-up: a successful guarded missing-projection V2 interrupt still called `SessionExecution.interrupt`.
 
 ## Verification
 
 - PASS: `packages/slopcode`: `bun test test/session/control.test.ts test/control-plane/adapters.test.ts test/server/plugin-package-production.test.ts` (17 pass).
-- PASS: `packages/slopcode`: guarded persistence case in `test/session/prompt.test.ts` (1 pass); full file completed with 51 pass, 1 skip, and only 4 previously classified failures.
+- PASS: `packages/slopcode`: three atomic owner/state/epoch admission regressions in `test/session/prompt.test.ts` (3 pass); full file completed with 54 pass, 1 skip, and only 4 previously classified failures.
+- PASS: `packages/slopcode`: `bun test test/session/control.test.ts` (13 pass), including the V1 cancellation claim regression.
+- PASS: `packages/core`: guarded missing-projection V2 interrupt regression (1 pass).
+- PASS: `packages/core`: `bun test test/event.test.ts test/session-prompt.test.ts` (80 pass).
 - PASS: `packages/server`: `bun test` (4 pass).
-- PASS: `packages/core`: `bun test test/session-prompt.test.ts test/session-agent-skill.test.ts` (49 pass).
+- PASS: `packages/core`: `bun test test/session-prompt.test.ts test/session-agent-skill.test.ts` (49 pass) from the preceding host-control verification.
 - PASS: `packages/slopcode`: `bun test test/server/httpapi-listen.test.ts` (10 pass).
 - PASS: `packages/server`: `bun run typecheck`.
 - PASS: `packages/core`: `bun run typecheck`.
 - PASS: repository `git diff --check`.
 - FULL SUITE: `packages/slopcode`: `bun test` (3059 pass, 22 skip, 1 todo, 11 fail). All 11 named failures also fail at base commit `8389b8fbac`; eight reproduce with the same assertion/timeout, while the three native V2 HTTP tests fail earlier there because `LocationServiceMap` is absent. No listed pass/fail regression is caused by the host-control commits.
-- TYPECHECK: `packages/slopcode`: `bun run typecheck` reaches two existing errors in untouched files: `src/session/processor.ts:495` (`Record<string, unknown>` to `string`) and `src/session/prompt.ts:1147` (missing `actualState` in a constructed runtime mismatch).
+- TYPECHECK: `packages/slopcode`: `bun run typecheck` reaches two existing errors: `src/session/processor.ts:495` (`Record<string, unknown>` to `string`) and pre-existing runtime mismatch construction in `src/session/prompt.ts:1159` (missing `actualState`; shifted from line 1147 by these tests).
 
 ## Concerns
 

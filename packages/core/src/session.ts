@@ -686,19 +686,23 @@ export const layer = Layer.effect(
         yield* result.get(sessionID)
         yield* execution.resume(sessionID)
       }),
-      interrupt: Effect.fn("V2Session.interrupt")((sessionID, guard = Effect.void) =>
+      interrupt: Effect.fn("V2Session.interrupt")((sessionID, guard) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
             const session = yield* store.get(sessionID)
             if (!session) {
-              yield* guard
+              if (guard) {
+                yield* guard
+                return
+              }
               return yield* execution.interrupt(sessionID)
             }
+            const commit = guard ?? Effect.void
             const timestamp = yield* DateTime.now
             const event = yield* guardedCommit(
               (commit) =>
                 events.publish(SessionEvent.InterruptRequested, { sessionID, timestamp }, { commit: () => commit }),
-              guard,
+              commit,
             )
             if (event.seq === undefined)
               return yield* Effect.die("Interrupt request event is missing aggregate sequence")
