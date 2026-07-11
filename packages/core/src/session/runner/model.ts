@@ -9,6 +9,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 import { produce } from "immer"
 import { AgentV2 } from "../../agent"
 import { Catalog } from "../../catalog"
+import { ModelHarness } from "../../model-harness"
 import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
 import { PluginBoot } from "../../plugin/boot"
@@ -38,13 +39,29 @@ export type Error =
   | UnsupportedApiError
 
 export interface Interface {
-  readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>
+  readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Resolved, Error>
+}
+
+export interface Resolved {
+  readonly model: Model
+  readonly catalog: ModelV2.Info
+  readonly harness: ModelHarness.Profile | undefined
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/SessionRunnerModel") {}
 
-/** Test or embedding seam for supplying a model resolver directly. */
 export const layerWith = (resolve: Interface["resolve"]) => Layer.succeed(Service, Service.of({ resolve }))
+
+/** Test seam for callers that only need to supply an executable model. */
+export const layerWithModel = (resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>) =>
+  layerWith((session) =>
+    resolve(session).pipe(
+      Effect.map((model) => {
+        const catalog = ModelV2.Info.empty(ProviderV2.ID.make(model.provider), ModelV2.ID.make(model.id))
+        return { model, catalog, harness: ModelHarness.resolve(catalog) }
+      }),
+    ),
+  )
 
 const apiKey = (model: ModelV2.Info, provider?: ProviderV2.Info) => {
   const value = model.request.body.apiKey ?? model.api.settings?.apiKey
@@ -122,7 +139,10 @@ export const resolve = (
   model: ModelV2.Info,
   provider?: ProviderV2.Info,
   variant = session.model?.variant,
-) => fromCatalogModel(withVariant(model, variant), provider)
+) =>
+  fromCatalogModel(withVariant(model, variant), provider).pipe(
+    Effect.map((resolved) => ({ model: resolved, catalog: model, harness: ModelHarness.resolve(model) })),
+  )
 
 export const supported = (model: ModelV2.Info) =>
   model.api.type === "aisdk" &&
