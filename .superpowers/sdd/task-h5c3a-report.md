@@ -134,3 +134,38 @@ This section supersedes the original coverage and self-review claims above where
 ### Concerns
 
 - No remaining H5C3A precedence concerns.
+
+## Final Precedence Edge
+
+### Design
+
+- PluginV2 now records whether an active plugin owns a canonical reservation and invokes the attached tool adapter on every replacement, using `{}` when `tool` is omitted.
+- Adapter-enabled hook-only plugins reserve their stable slot immediately, and a plugin that previously reserved a slot keeps issuing an empty reservation on hook-only replacements.
+- Empty `Tools.Service.register` calls retain the same scoped slot/token lifecycle added by the precedence fix. The old scope removes its token and old tool names without deleting the replacement's empty reservation.
+- A true `remove` closes the reservation scope and discards PluginV2's slot; a later add receives a new appended slot.
+
+### RED Evidence
+
+- `bun test test/plugin-tool.test.ts -t "omitted and empty tool maps"`: `0 pass`, `1 fail`. After A changed from tools to hook-only and back to tools, A incorrectly appended above later B (`a2` observed instead of `b1`).
+
+### GREEN Evidence
+
+- `bun test test/plugin-tool.test.ts test/plugin.test.ts test/tool-dynamic.test.ts test/tool-overlay.test.ts`: `25 pass`, `0 fail`, `141 expect()` calls.
+- `bun test test/location-layer.test.ts test/tool-skill.test.ts test/tool-task.test.ts`: `25 pass`, `0 fail`, `108 expect()` calls.
+- `bun test` from `packages/core`: `1284 pass`, `0 fail`, `3669 expect()` calls.
+- `bun test` from `packages/codemode`: `254 pass`, `0 fail`, `744 expect()` calls.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `git diff --check`: passed.
+
+### Added Gate
+
+- Two colliding plugins cover tools -> omitted `tool` -> tools under slow disposal, tools -> `tool: {}` -> tools, stale captures before both transitions, retained hook order, and true removal/re-add append behavior.
+
+### Commit
+
+- `a0e21e5f1e fix(plugin): retain empty precedence slots`
+
+### Concerns
+
+- No remaining H5C3A stable-slot concerns.
