@@ -99,3 +99,43 @@
 
 - `98fbc56900 fix(plugin): close configured package review gaps`
 - Report append: this document's follow-up commit.
+
+## Release-Blocker Fixes
+
+### Design Corrections
+
+- Unified every local fallback behind lexical-plus-realpath containment. Relative/absolute/file-URL direct files, root indexes, nested server/main indexes, and npm fallback entrypoints all validate against their lexical package root before returning a real path.
+- Replaced the hosted fetch's nested `HttpRouter.toWebHandler` with a self-reference assigned to the one outer built handler. SDK requests now re-enter the same app runtime and LocationServiceMap; outer handler disposal owns plugin/Location disposal. The CLI serves that same web handler through `HttpEffect.fromWebHandler` and finalizes it with the listener scope while retaining the lazy actual bound URL.
+- Made retry dependency installation a gate: a failed retry install emits the configured package's `install` failure and skips both `retryImport` and a second import failure.
+- Added caller-owned PluginV2 adaptation reporting. Programmatic `PluginV2.add` keeps its default observable failure, while configured packages set `reportFailure: false` and publish exactly one package/source/stage-attributed failure themselves.
+- Added a configured-package seam test using the real PluginV2 adapter, ToolRegistry, ToolOutputStore, and Config: canonical function and nested CodeMode settlement, permission source, progress/title, bounded visible output with durable full output, removal-before-slow-dispose, and Location invalidation disposal.
+
+### Release-Blocker RED Evidence
+
+- `bun test test/plugin-package.test.ts` from `packages/core`: 13 pass, 3 fail. A relative direct-file symlink escaped, retry installation failure still produced a cache-copy import failure, and one configured adaptation produced two `plugin.failed` events.
+- `bun test test/plugin-package.test.ts` from `packages/server`: failed because the SDK's location-scoped request booted/resolved the server package Location instead of reusing the configured plugin Location, demonstrating the nested handler runtime.
+- Configured Location disposal assertion initially received `0`, proving request scope closure is not Location shutdown; the corrected gate invalidates the LayerMap entry and observes disposal exactly once.
+
+### Release-Blocker GREEN Evidence
+
+- `bun test test/plugin-package.test.ts test/location-layer.test.ts test/plugin-tool.test.ts` from `packages/core`: 35 pass, 0 fail, 139 expectations.
+- `bun test test/plugin-package.test.ts` from `packages/server`: 1 pass, 0 fail, 6 expectations; one factory invocation, same-location SDK dispatch, workspace registration, configured URL, and outer disposal.
+- `bun test` from `packages/core`: 1302 pass, 0 fail, 3727 expectations.
+- `bun test` from `packages/codemode`: 254 pass, 0 fail, 744 expectations.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `bun run typecheck` from `packages/cli`: passed.
+- `git diff --check`: passed.
+
+### Release-Blocker Coverage
+
+- Relative direct-file and root-index symlink escapes; nested directory/symlink escapes; regular absolute path and file URL success.
+- Eligible retry success/cache/count and retry-install failure with no retry import; no retry for missing source, user lookalike, or factory.
+- Exactly one attributed configured hook-shape failure and unchanged programmatic PluginV2 observability.
+- Loaded configured tool through canonical function and nested CodeMode settlement with permission action/source, progress/title, real output bounding/full-output persistence, and supported before/after hooks.
+- Tool invisibility before slow disposal completes, configured disposal completion, Location invalidation disposal, and one-runtime production SDK/workspace lifecycle.
+
+### Release-Blocker Commit
+
+- `6e55a86e25 fix(plugin): close package release blockers`
+- Report append: this document's final evidence commit.
