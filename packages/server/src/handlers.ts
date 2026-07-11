@@ -67,6 +67,5 @@ export const handlers = Layer.mergeAll(
   Layer.provide(sessions),
   Layer.provide(SessionRuntime.defaultLayer),
   Layer.provide(PermissionSaved.defaultLayer),
-  Layer.provide(LocationServiceMap.layer),
   Layer.provide(Credential.defaultLayer),
 )

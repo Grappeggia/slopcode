@@ -3,6 +3,7 @@ import { Location } from "./location"
 import { Policy } from "./policy"
 import { Config } from "./config"
 import { PluginV2 } from "./plugin"
+import { PluginPackage } from "./plugin/package"
 import { Catalog } from "./catalog"
 import { Integration } from "./integration"
 import { CommandV2 } from "./command"
@@ -50,6 +51,29 @@ import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { FetchHttpClient } from "effect/unstable/http"
+
+export const dependencies = [
+  Project.defaultLayer,
+  EventV2.defaultLayer,
+  Credential.defaultLayer,
+  Npm.defaultLayer,
+  ModelsDev.defaultLayer,
+  FSUtil.defaultLayer,
+  Git.defaultLayer,
+  AppProcess.defaultLayer,
+  Global.defaultLayer,
+  Ripgrep.defaultLayer,
+  Database.defaultLayer,
+  ProjectDirectories.defaultLayer,
+  SessionStore.layer.pipe(Layer.provide(Database.defaultLayer)),
+  SessionRuntime.layer.pipe(Layer.provide(Database.defaultLayer)),
+  PermissionSaved.defaultLayer,
+  RepositoryCache.defaultLayer,
+  LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer)),
+  FetchHttpClient.layer,
+  ToolOutputStore.defaultCleanupLayer,
+  ApplicationTools.layer,
+] as const
 
 export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("@slopcode/example/LocationServiceMap", {
   lookup: (ref: Location.Ref) => {
@@ -134,26 +158,8 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     ).pipe(Layer.fresh)
   },
   idleTimeToLive: "60 minutes",
-  dependencies: [
-    Project.defaultLayer,
-    EventV2.defaultLayer,
-    Credential.defaultLayer,
-    Npm.defaultLayer,
-    ModelsDev.defaultLayer,
-    FSUtil.defaultLayer,
-    Git.defaultLayer,
-    AppProcess.defaultLayer,
-    Global.defaultLayer,
-    Ripgrep.defaultLayer,
-    Database.defaultLayer,
-    ProjectDirectories.defaultLayer,
-    SessionStore.layer.pipe(Layer.provide(Database.defaultLayer)),
-    SessionRuntime.layer.pipe(Layer.provide(Database.defaultLayer)),
-    PermissionSaved.defaultLayer,
-    RepositoryCache.defaultLayer,
-    LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer)),
-    FetchHttpClient.layer,
-    ToolOutputStore.defaultCleanupLayer,
-    ApplicationTools.layer,
-  ],
+  dependencies,
 }) {}
+
+export const withPluginHost = (host: Layer.Layer<PluginPackage.Host>) =>
+  LocationServiceMap.layerNoDeps.pipe(Layer.provide([...dependencies, host]))
