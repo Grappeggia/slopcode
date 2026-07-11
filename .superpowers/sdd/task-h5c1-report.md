@@ -332,3 +332,63 @@ Complete. Foreground V2 subagent tasks now use one Location-scoped canonical `ta
 
 - Canonical orphan evaluation still scans parent task requests because H5C1 intentionally introduces no lifecycle index or migration.
 - Remote provider execution already in flight before a durable interruption remains outside local exactly-once guarantees; all local wake and admission boundaries are now fenced.
+
+## Final Recovery Edge Cases
+
+### Findings Resolved
+
+- `SessionTask.cancelled` now falls back from a missing `Task.Requested` to the durable parent task call's first projection sequence. A later parent `InterruptRequested` therefore terminally fails pending recovery before request creation, child creation, or dispatch.
+- Child ceilings now persist parent denies plus `external_directory` ask/deny restrictions. Ceiling denies use independent matching, and matching external-directory asks force a fresh ask before child rules or saved approvals can allow the operation.
+- Permission replies still authorize the current blocked invocation, but remembered approvals cannot auto-resolve a later invocation governed by an external-directory ask ceiling.
+- A `task_id` resume merges the persisted child ceiling with current parent restrictions, removes only exact duplicates, and persists the strengthened owner metadata before request publication or prompt admission. The resumed request snapshots that effective ceiling.
+- Canonical ownership and orphan validation now accept historical request ceilings only when they are subsets of the current persisted ceiling, preserving request-chain identity while allowing monotonic strengthening.
+- Startup recovery rechecks the canonical orphan fence after pending reads and immediately before each first or coalesced wake. The coordinator drain performs a final authoritative orphan check before invoking the runner.
+
+### Edge RED Evidence
+
+- Baseline command from `packages/core`: `bun test test/session-runner.test.ts -t "pending task interrupted before its durable request"`; `0 pass`, `1 fail`, `3 expect()` calls. Real runner recovery entered task execution and left the parent running instead of terminally settling `Tool execution interrupted`.
+- Baseline command from `packages/core`: `bun test test/permission.test.ts -t "external-directory ceiling asks"`; `0 pass`, `1 fail`, `1 expect()` call. Child allow plus a saved approval weakened the ceiling ask to allow.
+- Baseline command from `packages/core`: `bun test test/tool-task.test.ts -t "monotonically strengthens"`; `0 pass`, `1 fail`, `2 expect()` calls. Resume retained only the original task/todowrite denies and omitted the new parent external-directory ask and edit deny.
+- Baseline command from `packages/core`: `bun test test/session-execution-local.test.ts -t "between startup pending reads"`; `0 pass`, `1 fail`, `4 expect()` calls. Interruption committed during pending-state discovery still allowed the child runner wake.
+
+### Edge GREEN Evidence
+
+- Focused command from `packages/core`: `bun test test/permission.test.ts test/tool-task.test.ts test/session-create.test.ts test/session-runner.test.ts test/session-execution-local.test.ts test/session-runner-tool-registry.test.ts test/tool-codemode.test.ts test/model-harness.test.ts`; `255 pass`, `0 fail`, `801 expect()` calls.
+- Full Core command from `packages/core`: `bun test`; `1253 pass`, `0 fail`, `3508 expect()` calls across 140 files.
+- The first final full Core rerun reported one unrelated `does not bump the runtime epoch when a non-forced drain has no work` failure (`1252 pass`, `1 fail`); its isolated rerun passed (`1 pass`, `0 fail`, `2 expect()` calls), and the subsequent full rerun produced the clean result above.
+- Full CodeMode command from `packages/codemode`: `bun test`; `254 pass`, `0 fail`, `744 expect()` calls.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `git diff --check`: passed.
+
+### Edge Production Gates
+
+- Real `SessionExecutionLocal` and `SessionRunnerLLM` recovery of a callable, permitted pending task with no request observes the parent interrupt from the tool-call sequence, creates no durable request, sends no child provider request, and projects `Tool execution interrupted`.
+- A child external-directory allow and matching saved approval cannot weaken a persisted matching ask; replying `always` releases the current assertion while the next assertion asks again.
+- Resume after adding parent restrictions persists the merged child owner ceiling and current request ceiling, then replays that request through canonical `TaskTool` materialization without duplicate child provider execution.
+- Existing permission coverage independently proves a persisted child ceiling deny wins over child allow and saved approval.
+- The deterministic startup race commits `Task.Interrupted` from the final pending-state read; startup records the race and orphan state while child runner/provider count remains zero.
+
+### Edge Files
+
+- `packages/core/src/permission.ts`
+- `packages/core/src/session/execution/local.ts`
+- `packages/core/src/session/task.ts`
+- `packages/core/src/tool/task.ts`
+- `packages/core/test/permission.test.ts`
+- `packages/core/test/session-execution-local.test.ts`
+- `packages/core/test/session-runner.test.ts`
+- `packages/core/test/tool-task.test.ts`
+- `.superpowers/sdd/task-h5c1-report.md`
+
+### Edge Commits
+
+- Fixes and regressions: `dda873588f fix(session): close task recovery edge cases`.
+- Strengthened real-runner fixture: `997f14da23 test(session): exercise pre-request task dispatch`.
+- Report: recorded in the following documentation commit.
+- Nothing was pushed.
+
+### Edge Concerns
+
+- Cancellation fallback scans the parent task-call projection events only when the deterministic immutable request does not exist; normal request-based sequencing remains the primary path.
+- Ceiling revisions are monotonic restrictions by construction and intentionally have no weakening/removal path in H5C1.
