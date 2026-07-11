@@ -639,66 +639,66 @@ describe("TaskTool durable orchestration", () => {
       const events = yield* EventV2.Service
       const runs: string[] = []
       yield* complete(runs)
-      for (const phase of ["child", "request", "admission"] as const) {
+      for (const phase of ["request", "child", "admission"] as const) {
         const callID = `call-restart-${phase}`
         const taskID = SessionTask.childID(parentID, messageID, callID)
         const promptID = SessionTask.promptID(parentID, messageID, callID)
-        yield* db
-          .insert(SessionTable)
-          .values({
-            id: taskID,
-            project_id: ProjectV2.ID.global,
-            slug: taskID,
-            directory: location.directory,
-            title: `Restart ${phase} (@general subagent)`,
-            version: "test",
-            runtime: "v2",
-            parent_id: parentID,
+        yield* events.publish(
+          SessionEvent.Task.Requested,
+          {
+            sessionID: parentID,
+            timestamp: yield* DateTime.now,
+            assistantMessageID: messageID,
+            callID,
+            childSessionID: taskID,
+            promptMessageID: promptID,
+            description: `Restart ${phase}`,
+            prompt: phase,
             agent: "general",
             model: inherited,
-            metadata: {
-              task: {
-                version: 1,
-                parentID,
-                agent: "general",
-                origin: { messageID, callID },
-                ceiling: [
-                  { action: "task", resource: "*", effect: "deny" },
-                  { action: "todowrite", resource: "*", effect: "deny" },
-                ],
-              },
-            },
-          })
-          .run()
-          .pipe(Effect.orDie)
-        if (phase !== "child")
-          yield* events.publish(
-            SessionEvent.Task.Requested,
-            {
-              sessionID: parentID,
-              timestamp: yield* DateTime.now,
-              assistantMessageID: messageID,
-              callID,
-              childSessionID: taskID,
-              promptMessageID: promptID,
-              description: `Restart ${phase}`,
-              prompt: phase,
+            multiAgent: "v2",
+            callerAgent: "build",
+            permissions: [],
+            plan: { multiAgent: "v2" },
+            projectID: ProjectV2.ID.global,
+            location,
+            title: `Restart ${phase} (@general subagent)`,
+            ceiling: [
+              { action: "task", resource: "*", effect: "deny" },
+              { action: "todowrite", resource: "*", effect: "deny" },
+            ],
+          },
+          { id: SessionTask.requestEventID(parentID, messageID, callID) },
+        )
+        if (phase !== "request")
+          yield* db
+            .insert(SessionTable)
+            .values({
+              id: taskID,
+              project_id: ProjectV2.ID.global,
+              slug: taskID,
+              directory: location.directory,
+              title: `Restart ${phase} (@general subagent)`,
+              version: "test",
+              runtime: "v2",
+              parent_id: parentID,
               agent: "general",
               model: inherited,
-              multiAgent: "v2",
-              callerAgent: "build",
-              permissions: [],
-              plan: { multiAgent: "v2" },
-              projectID: ProjectV2.ID.global,
-              location,
-              title: `Restart ${phase} (@general subagent)`,
-              ceiling: [
-                { action: "task", resource: "*", effect: "deny" },
-                { action: "todowrite", resource: "*", effect: "deny" },
-              ],
-            },
-            { id: SessionTask.requestEventID(parentID, messageID, callID) },
-          )
+              metadata: {
+                task: {
+                  version: 1,
+                  parentID,
+                  agent: "general",
+                  origin: { messageID, callID },
+                  ceiling: [
+                    { action: "task", resource: "*", effect: "deny" },
+                    { action: "todowrite", resource: "*", effect: "deny" },
+                  ],
+                },
+              },
+            })
+            .run()
+            .pipe(Effect.orDie)
         if (phase === "admission")
           yield* SessionInput.admit(db, events, {
             id: promptID,
@@ -721,6 +721,73 @@ describe("TaskTool durable orchestration", () => {
       expect((yield* settle("call-restart-terminal", terminalInput)).result.type).toBe("text")
       expect((yield* settle("call-restart-terminal", terminalInput)).result.type).toBe("text")
       expect(runs.filter((id) => id === "call-restart-terminal")).toHaveLength(1)
+    }),
+  )
+
+  fixture.it.effect("creates a missing child from the immutable request snapshot after parent mutation", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const events = yield* EventV2.Service
+      const runs: string[] = []
+      yield* complete(runs)
+      const callID = "call-request-before-child"
+      const taskID = SessionTask.childID(parentID, messageID, callID)
+      const input = { description: "Snapshotted", prompt: "recover snapshot", subagent_type: "general" }
+      const request = {
+        sessionID: parentID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        childSessionID: taskID,
+        promptMessageID: SessionTask.promptID(parentID, messageID, callID),
+        description: input.description,
+        prompt: input.prompt,
+        agent: AgentV2.ID.make("general"),
+        model: inherited,
+        multiAgent: "v2" as const,
+        callerAgent: AgentV2.ID.make("build"),
+        permissions: [{ action: "edit", resource: "snapshot-only", effect: "deny" as const }],
+        plan: { mode: "code-only" as const, multiAgent: "v2" as const },
+        projectID: ProjectV2.ID.global,
+        location,
+        title: "Snapshotted (@general subagent)",
+        ceiling: [
+          { action: "task", resource: "*", effect: "deny" as const },
+          { action: "todowrite", resource: "*", effect: "deny" as const },
+        ],
+      }
+      yield* events.publish(SessionEvent.Task.Requested, request, {
+        id: SessionTask.requestEventID(parentID, messageID, callID),
+      })
+      yield* db
+        .update(SessionTable)
+        .set({ agent: "modeled", model: override })
+        .where(eq(SessionTable.id, parentID))
+        .run()
+        .pipe(Effect.orDie)
+      const materialized = yield* (yield* ToolRegistry.Service).materialize(request.permissions, request.plan)
+      expect(
+        (yield* materialized.settle({
+          sessionID: parentID,
+          agent: request.callerAgent,
+          assistantMessageID: messageID,
+          call: { type: "tool-call", id: callID, name: "task", input },
+          task: request,
+        })).result.type,
+      ).toBe("text")
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, taskID)).get().pipe(Effect.orDie)).toMatchObject(
+        {
+          agent: "general",
+          model: inherited,
+          title: request.title,
+          metadata: { task: { ceiling: request.ceiling } },
+        },
+      )
+      expect(runs).toEqual([callID])
+      expect(
+        yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, request.promptMessageID)).all().pipe(Effect.orDie),
+      ).toHaveLength(1)
     }),
   )
 
@@ -873,6 +940,45 @@ describe("TaskTool durable orchestration", () => {
       yield* Fiber.interrupt(pending)
       expect(yield* Deferred.isDone(interrupted)).toBeTrue()
       expect(yield* SessionTask.interrupted((yield* Database.Service).db, parentID, messageID, "call-ask")).toBeTrue()
+    }),
+  )
+
+  fixture.it.effect("does not emit Task.Execute when interruption wins immediately after prompt admission", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const callID = "call-interrupt-before-execute"
+      const childID = SessionTask.childID(parentID, messageID, callID)
+      let executes = 0
+      yield* events.listen((event) => {
+        if (Schema.is(SessionEvent.Task.Execute)(event)) {
+          executes++
+          return Effect.void
+        }
+        if (
+          !Schema.is(SessionEvent.PromptLifecycle.Admitted)(event) ||
+          event.data.messageID !== SessionTask.promptID(parentID, messageID, callID)
+        )
+          return Effect.void
+        return events.publish(
+          SessionEvent.Task.Interrupted,
+          {
+            sessionID: parentID,
+            timestamp: event.data.timestamp,
+            assistantMessageID: messageID,
+            callID,
+            childSessionID: childID,
+          },
+          { id: SessionTask.interruptedEventID(parentID, messageID, callID) },
+        )
+      })
+
+      expect(
+        (yield* settle(callID, { description: "Race", prompt: "never execute", subagent_type: "general" })).result,
+      ).toMatchObject({ type: "error", value: expect.stringContaining("interrupted") })
+      expect(yield* SessionTask.orphaned(db, childID)).toBeTrue()
+      expect(executes).toBe(0)
     }),
   )
 

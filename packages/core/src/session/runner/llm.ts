@@ -141,7 +141,7 @@ export const layer = Layer.effect(
         if (message.type !== "assistant") continue
         for (const tool of message.content) {
           if (tool.type !== "tool" || (tool.state.status !== "pending" && tool.state.status !== "running")) continue
-          if (tool.name === "task" && !(yield* SessionTask.interrupted(db, sessionID, message.id, tool.id))) {
+          if (tool.name === "task" && !(yield* SessionTask.cancelled(db, sessionID, message.id, tool.id))) {
             const request = yield* SessionTask.request(db, sessionID, message.id, tool.id)
             const current = request
               ? undefined
@@ -232,17 +232,21 @@ export const layer = Layer.effect(
             })
             continue
           }
-          yield* events.publish(SessionEvent.Tool.Failed, {
-            sessionID,
-            timestamp: yield* DateTime.now,
-            assistantMessageID: message.id,
-            callID: tool.id,
-            error: { type: "unknown", message: "Tool execution interrupted" },
-            provider: {
-              executed: tool.provider?.executed === true,
-              ...(tool.provider?.metadata === undefined ? {} : { metadata: tool.provider.metadata }),
+          yield* events.publish(
+            SessionEvent.Tool.Failed,
+            {
+              sessionID,
+              timestamp: yield* DateTime.now,
+              assistantMessageID: message.id,
+              callID: tool.id,
+              error: { type: "unknown", message: "Tool execution interrupted" },
+              provider: {
+                executed: tool.provider?.executed === true,
+                ...(tool.provider?.metadata === undefined ? {} : { metadata: tool.provider.metadata }),
+              },
             },
-          })
+            tool.name === "task" ? { id: SessionTask.interruptedToolEventID(sessionID, message.id, tool.id) } : undefined,
+          )
         }
       }
     })

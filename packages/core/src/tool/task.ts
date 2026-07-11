@@ -256,6 +256,8 @@ export const layer = Layer.effectDiscard(
       prompt: string
       context: Tool.Context
     }) {
+      if (yield* SessionTask.orphaned(db, input.taskID))
+        return yield* new ChildFailedError({ taskID: input.taskID, message: "Tool execution interrupted" })
       const result = yield* terminal(input.taskID, input.promptID)
       if (result !== undefined) return result
       const admitted = yield* SessionInput.admit(db, events, {
@@ -275,6 +277,8 @@ export const layer = Layer.effectDiscard(
           taskID: input.taskID,
           message: `Task ${input.taskID} prompt identity conflicts`,
         })
+      if (yield* SessionTask.orphaned(db, input.taskID))
+        return yield* new ChildFailedError({ taskID: input.taskID, message: "Tool execution interrupted" })
       yield* events.publish(SessionEvent.Task.Execute, {
         sessionID: input.context.sessionID,
         timestamp: yield* DateTime.now,
@@ -282,6 +286,8 @@ export const layer = Layer.effectDiscard(
         callID: input.context.toolCallID,
         childSessionID: input.taskID,
       })
+      if (yield* SessionTask.orphaned(db, input.taskID))
+        return yield* new ChildFailedError({ taskID: input.taskID, message: "Tool execution interrupted" })
       const completed = yield* terminal(input.taskID, input.promptID)
       if (completed === undefined)
         return yield* new ChildFailedError({
@@ -322,6 +328,42 @@ export const layer = Layer.effectDiscard(
                     taskID: request.childSessionID,
                     message: `Parent Session not found: ${request.sessionID}`,
                   })
+                const existing = yield* db
+                  .select({ id: SessionTable.id })
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, request.childSessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!existing) {
+                  if (
+                    request.childSessionID !==
+                    SessionTask.childID(request.sessionID, request.assistantMessageID, request.callID)
+                  )
+                    return yield* new ResumeConflictError({
+                      taskID: request.childSessionID,
+                      message: `Task ${request.childSessionID} recovery identity conflicts`,
+                    })
+                  yield* SessionCreate.create(events, store, {
+                    id: request.childSessionID,
+                    parentID: parent.id,
+                    projectID: request.projectID,
+                    location: request.location,
+                    subpath: parent.subpath,
+                    title: request.title,
+                    agent: AgentV2.ID.make(request.agent),
+                    model: request.model,
+                    metadata: {
+                      task: {
+                        version: 1,
+                        parentID: request.sessionID,
+                        agent: AgentV2.ID.make(request.agent),
+                        origin: { messageID: request.assistantMessageID, callID: request.callID },
+                        ceiling: request.ceiling,
+                      },
+                    },
+                    runtime: "v2",
+                  })
+                }
                 yield* validate({
                   id: request.childSessionID,
                   parent,
@@ -399,55 +441,60 @@ export const layer = Layer.effectDiscard(
               const title = `${input.description} (@${selected.id} subagent)`
               const origin = { messageID: context.assistantMessageID, callID: context.toolCallID }
               const owner = { version: 1 as const, parentID: context.sessionID, agent: selected.id, origin, ceiling: derived }
-              if (!input.task_id) {
-                const existing = yield* db
-                  .select({ id: SessionTable.id })
-                  .from(SessionTable)
-                  .where(eq(SessionTable.id, deterministic))
-                  .get()
-                  .pipe(Effect.orDie)
-                if (!existing)
-                  yield* SessionCreate.create(events, store, {
-                    id: deterministic,
-                    parentID: parent.id,
-                    projectID: parent.projectID,
-                    location,
-                    subpath: parent.subpath,
-                    title,
-                    agent: selected.id,
-                    model: expected,
-                    metadata: { task: owner },
-                    runtime: "v2",
-                  })
-              }
-              const row = yield* validate(
-                input.task_id
-                  ? { id: input.task_id, parent, agent: selected.id, canonical: true }
-                  : { id: deterministic, parent, agent: selected.id, model: expected, title, origin, ceiling: derived },
+              const recorded = yield* SessionTask.request(
+                db,
+                context.sessionID,
+                context.assistantMessageID,
+                context.toolCallID,
               )
-              if (!row.model)
+              const existing = yield* db
+                .select()
+                .from(SessionTable)
+                .where(eq(SessionTable.id, input.task_id ? SessionSchema.ID.make(input.task_id) : deterministic))
+                .get()
+                .pipe(Effect.orDie)
+              if (!input.task_id && existing && !recorded)
                 return yield* new ResumeConflictError({
-                  taskID: row.id,
-                  message: `Task ${row.id} has no persisted model`,
+                  taskID: deterministic,
+                  message: `Task resume conflict: ${deterministic} has no immutable request snapshot`,
                 })
-              const model = ModelV2.Ref.make({
-                id: ModelV2.ID.make(row.model.id),
-                providerID: ProviderV2.ID.make(row.model.providerID),
-                variant: ModelV2.VariantID.make(row.model.variant ?? "default"),
-              })
-              if (!input.task_id && !sameModel(expected, row.model))
+              const row = existing
+                ? yield* validate(
+                    input.task_id
+                      ? { id: input.task_id, parent, agent: selected.id, canonical: true }
+                      : {
+                          id: deterministic,
+                          parent,
+                          agent: selected.id,
+                          model: expected,
+                          title,
+                          origin,
+                          ceiling: derived,
+                          canonical: true,
+                          request: recorded,
+                        },
+                  )
+                : undefined
+              if (input.task_id && !row)
                 return yield* new ResumeConflictError({
-                  taskID: row.id,
-                  message: `Task ${row.id} model identity conflicts`,
+                  taskID: input.task_id,
+                  message: `Task resume conflict: ${input.task_id} is not a compatible child of this Session`,
                 })
-              const taskID = SessionSchema.ID.make(row.id)
-              const ownership = yield* store.task(taskID)
+              const model = row?.model
+                ? ModelV2.Ref.make({
+                    id: ModelV2.ID.make(row.model.id),
+                    providerID: ProviderV2.ID.make(row.model.providerID),
+                    variant: ModelV2.VariantID.make(row.model.variant ?? "default"),
+                  })
+                : expected
+              const taskID = row ? SessionSchema.ID.make(row.id) : deterministic
+              const ownership = row ? yield* store.task(taskID) : owner
               if (!ownership)
                 return yield* new ResumeConflictError({
                   taskID,
                   message: `Task resume conflict: ${taskID} has no persisted owner`,
                 })
-              const identity = input.task_id
+              const identity = input.task_id && row
                 ? {
                     projectID: row.project_id,
                     location: Location.Ref.make({
@@ -459,12 +506,6 @@ export const layer = Layer.effectDiscard(
                   }
                 : { projectID: parent.projectID, location, title, ceiling: derived }
               const promptID = SessionTask.promptID(context.sessionID, context.assistantMessageID, context.toolCallID)
-              const recorded = yield* SessionTask.request(
-                db,
-                context.sessionID,
-                context.assistantMessageID,
-                context.toolCallID,
-              )
               const request = {
                 sessionID: context.sessionID,
                 timestamp: yield* DateTime.now,
@@ -518,6 +559,30 @@ export const layer = Layer.effectDiscard(
                 yield* events.publish(SessionEvent.Task.Requested, request, {
                   id: SessionTask.requestEventID(context.sessionID, context.assistantMessageID, context.toolCallID),
                 })
+              if (!row)
+                yield* SessionCreate.create(events, store, {
+                  id: taskID,
+                  parentID: parent.id,
+                  projectID: request.projectID,
+                  location: request.location,
+                  subpath: parent.subpath,
+                  title: request.title,
+                  agent: selected.id,
+                  model: request.model,
+                  metadata: { task: owner },
+                  runtime: "v2",
+                })
+              yield* validate({
+                id: taskID,
+                parent,
+                agent: selected.id,
+                model: request.model,
+                title: request.title,
+                origin: ownership.origin,
+                ceiling: request.ceiling,
+                canonical: true,
+                request: recorded ?? request,
+              })
               yield* events.publish(SessionEvent.Tool.Progress, {
                 sessionID: context.sessionID,
                 timestamp: yield* DateTime.now,

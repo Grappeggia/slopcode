@@ -4230,6 +4230,18 @@ describe("SessionRunnerLLM", () => {
         prompt: new Prompt({ text: input.prompt }),
         delivery: "steer",
       })
+      yield* db
+        .update(SessionTable)
+        .set({ agent: "reviewer", model: { providerID: "fake", id: "replacement" } })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* (yield* AgentV2.Service).transform((editor) =>
+        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+          agent.permissions = [{ action: "read", resource: "mutated", effect: "allow" }]
+        }),
+      )
+      currentCatalog = catalogModel("gpt-5.6-luna", "gpt-5.6-luna")
       requests.length = 0
       responses = [
         fragmentFixture("text", "text-e2e-resumed-child", ["resumed result"]).completeEvents,
@@ -4267,6 +4279,389 @@ describe("SessionRunnerLLM", () => {
           },
         },
       })
+    }),
+  )
+
+  it.effect("creates a missing child from the request snapshot through the full recovery stack", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Recover request-first task" }), resume: false })
+      yield* SessionInput.promoteSteers(database.db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const messageID = SessionMessage.ID.make("msg_e2e_request_before_child")
+      const callID = "call-e2e-request-before-child"
+      const childID = SessionTask.childID(sessionID, messageID, callID)
+      const model = ModelV2.Ref.make({
+        providerID: ProviderV2.ID.make("fake"),
+        id: ModelV2.ID.make("fake-model"),
+        variant: ModelV2.VariantID.make("default"),
+      })
+      const input = { description: "Request first", prompt: "request snapshot work", subagent_type: "general" }
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        agent: "build",
+        model,
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        text: JSON.stringify(input),
+      })
+      yield* events.publish(SessionEvent.Tool.CalledV1, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        tool: "task",
+        input,
+        provider: { executed: false },
+      })
+      const request = {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        childSessionID: childID,
+        promptMessageID: SessionTask.promptID(sessionID, messageID, callID),
+        description: input.description,
+        prompt: input.prompt,
+        agent: AgentV2.ID.make("general"),
+        model,
+        multiAgent: "v2" as const,
+        callerAgent: AgentV2.ID.make("build"),
+        permissions: [{ action: "edit", resource: "snapshot-secret", effect: "deny" as const }],
+        plan: { mode: "code-only" as const, multiAgent: "v2" as const },
+        projectID: Project.ID.global,
+        location: { directory: AbsolutePath.make("/project") },
+        title: "Request first (@general subagent)",
+        ceiling: [
+          { action: "task", resource: "*", effect: "deny" as const },
+          { action: "todowrite", resource: "*", effect: "deny" as const },
+        ],
+      }
+      yield* events.publish(SessionEvent.Task.Requested, request, {
+        id: SessionTask.requestEventID(sessionID, messageID, callID),
+      })
+      yield* database.db
+        .update(SessionTable)
+        .set({ agent: "reviewer", model: { providerID: "fake", id: "replacement" } })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* (yield* AgentV2.Service).transform((editor) =>
+        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+          agent.permissions = [{ action: "read", resource: "mutated", effect: "allow" }]
+        }),
+      )
+      currentCatalog = catalogModel("gpt-5.6-luna", "gpt-5.6-luna")
+      requests.length = 0
+      responses = [
+        fragmentFixture("text", "text-e2e-request-child", ["snapshot result"]).completeEvents,
+        fragmentFixture("text", "text-e2e-request-parent", ["parent continued"]).completeEvents,
+      ]
+      const local = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(
+          Layer.mock(LocationServiceMap, {
+            get: () => Layer.succeed(SessionRunner.Service, runner),
+          }),
+        ),
+      )
+
+      yield* Effect.gen(function* () {
+        const execution = yield* SessionExecution.Service
+        yield* execution.wait(sessionID)
+      }).pipe(Effect.provide(local), Effect.provide(TaskTool.layer))
+
+      expect(requests.filter((item) => userTexts(item).includes(input.prompt))).toHaveLength(1)
+      expect(
+        yield* database.db.select().from(SessionTable).where(eq(SessionTable.id, childID)).get().pipe(Effect.orDie),
+      ).toMatchObject({
+        agent: "general",
+        model,
+        title: request.title,
+        metadata: { task: { ceiling: request.ceiling } },
+      })
+      const settled = (yield* session.context(sessionID))
+        .flatMap((message) => (message.type === "assistant" ? message.content : []))
+        .find((part) => part.type === "tool" && part.id === callID)
+      expect(settled).toMatchObject({
+        state: { status: "completed", structured: { result: "snapshot result", task_id: childID } },
+      })
+    }),
+  )
+
+  it.effect("terminally fails the parent when cleanup wins immediately before Task.Execute", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Race task cleanup" }), resume: false })
+      yield* SessionInput.promoteSteers(database.db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const messageID = SessionMessage.ID.make("msg_e2e_task_execute_race")
+      const callID = "call-e2e-task-execute-race"
+      const childID = SessionTask.childID(sessionID, messageID, callID)
+      const promptID = SessionTask.promptID(sessionID, messageID, callID)
+      const model = ModelV2.Ref.make({
+        providerID: ProviderV2.ID.make("fake"),
+        id: ModelV2.ID.make("fake-model"),
+        variant: ModelV2.VariantID.make("default"),
+      })
+      const input = { description: "Race", prompt: "never reach child provider", subagent_type: "general" }
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        agent: "build",
+        model,
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        text: JSON.stringify(input),
+      })
+      yield* events.publish(SessionEvent.Tool.CalledV1, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        tool: "task",
+        input,
+        provider: { executed: false },
+      })
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: messageID,
+          callID,
+          childSessionID: childID,
+          promptMessageID: promptID,
+          description: input.description,
+          prompt: input.prompt,
+          agent: "general",
+          model,
+          multiAgent: "v2",
+          callerAgent: AgentV2.ID.make("build"),
+          permissions: [],
+          plan: { multiAgent: "v2" },
+          projectID: Project.ID.global,
+          location: { directory: AbsolutePath.make("/project") },
+          title: "Race (@general subagent)",
+          ceiling: [],
+        },
+        { id: SessionTask.requestEventID(sessionID, messageID, callID) },
+      )
+      let executes = 0
+      yield* events.listen((event) => {
+        if (Schema.is(SessionEvent.Task.Execute)(event)) {
+          executes++
+          return Effect.void
+        }
+        if (!Schema.is(SessionEvent.PromptLifecycle.Admitted)(event) || event.data.messageID !== promptID)
+          return Effect.void
+        return events.publish(
+          SessionEvent.Task.Interrupted,
+          {
+            sessionID,
+            timestamp: event.data.timestamp,
+            assistantMessageID: messageID,
+            callID,
+            childSessionID: childID,
+          },
+          { id: SessionTask.interruptedEventID(sessionID, messageID, callID) },
+        )
+      })
+      requests.length = 0
+      responses = [fragmentFixture("text", "text-race-should-not-run", ["unexpected"]).completeEvents]
+      const local = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(
+          Layer.mock(LocationServiceMap, {
+            get: () => Layer.succeed(SessionRunner.Service, runner),
+          }),
+        ),
+      )
+
+      yield* Effect.gen(function* () {
+        const execution = yield* SessionExecution.Service
+        yield* execution.wait(sessionID)
+      }).pipe(Effect.provide(local), Effect.provide(TaskTool.layer))
+
+      expect(executes).toBe(0)
+      expect(requests.filter((item) => userTexts(item).includes(input.prompt))).toHaveLength(0)
+      const settled = (yield* session.context(sessionID))
+        .flatMap((message) => (message.type === "assistant" ? message.content : []))
+        .find((part) => part.type === "tool" && part.id === callID)
+      expect(settled).toMatchObject({
+        state: { status: "error", error: { message: "Tool execution interrupted" } },
+      })
+    }),
+  )
+
+  it.effect("settles parent interruption before recovered task execution reaches the child", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Interrupted recovery" }), resume: false })
+      yield* SessionInput.promoteSteers(database.db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const messageID = SessionMessage.ID.make("msg_e2e_parent_interrupt_barrier")
+      const callID = "call-e2e-parent-interrupt-barrier"
+      const childID = SessionTask.childID(sessionID, messageID, callID)
+      const model = ModelV2.Ref.make({
+        providerID: ProviderV2.ID.make("fake"),
+        id: ModelV2.ID.make("fake-model"),
+        variant: ModelV2.VariantID.make("default"),
+      })
+      const input = { description: "Blocked", prompt: "never reach provider", subagent_type: "general" }
+      yield* database.db
+        .insert(SessionTable)
+        .values({
+          id: childID,
+          project_id: Project.ID.global,
+          parent_id: sessionID,
+          slug: childID,
+          directory: "/project",
+          title: "Blocked (@general subagent)",
+          version: "test",
+          runtime: "v2",
+          agent: "general",
+          model,
+          metadata: {
+            task: {
+              version: 1,
+              parentID: sessionID,
+              agent: "general",
+              origin: { messageID, callID },
+              ceiling: [],
+            },
+          },
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        agent: "build",
+        model,
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        text: JSON.stringify(input),
+      })
+      yield* events.publish(SessionEvent.Tool.CalledV1, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        tool: "task",
+        input,
+        provider: { executed: false },
+      })
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: messageID,
+          callID,
+          childSessionID: childID,
+          promptMessageID: SessionTask.promptID(sessionID, messageID, callID),
+          description: input.description,
+          prompt: input.prompt,
+          agent: "general",
+          model,
+          multiAgent: "v2",
+          callerAgent: AgentV2.ID.make("build"),
+          permissions: [],
+          plan: { multiAgent: "v2" },
+          projectID: Project.ID.global,
+          location: { directory: AbsolutePath.make("/project") },
+          title: "Blocked (@general subagent)",
+          ceiling: [],
+        },
+        { id: SessionTask.requestEventID(sessionID, messageID, callID) },
+      )
+      yield* events.publish(SessionEvent.InterruptRequested, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+      })
+      requests.length = 0
+      responses = [fragmentFixture("text", "text-should-not-run", ["unexpected"]).completeEvents]
+      const local = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(
+          Layer.mock(LocationServiceMap, {
+            get: () => Layer.succeed(SessionRunner.Service, runner),
+          }),
+        ),
+      )
+
+      yield* Effect.gen(function* () {
+        const execution = yield* SessionExecution.Service
+        yield* execution.wait(sessionID)
+      }).pipe(Effect.provide(local), Effect.provide(TaskTool.layer))
+
+      expect(requests.filter((item) => userTexts(item).includes(input.prompt))).toHaveLength(0)
+      const settled = (yield* session.context(sessionID))
+        .flatMap((message) => (message.type === "assistant" ? message.content : []))
+        .find((part) => part.type === "tool" && part.id === callID)
+      expect(settled).toMatchObject({
+        state: { status: "error", error: { message: "Tool execution interrupted" } },
+      })
+      expect(yield* SessionTask.interrupted(database.db, sessionID, messageID, callID)).toBeFalse()
     }),
   )
 
