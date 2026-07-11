@@ -31,19 +31,35 @@ export const layer = Layer.effect(
 
     const prompt = Effect.fn("SessionControl.prompt")(function* (input: SessionPrompt.PromptInput) {
       const info = yield* runtime.get(input.sessionID)
-      if (info?.owner !== "v2") return yield* legacy.prompt(input)
-      return yield* control.prompt({
+      if (info?.owner === "v2")
+        return yield* control.prompt({
+          sessionID: input.sessionID,
+          id: input.messageID ? SessionMessage.ID.make(input.messageID) : undefined,
+          prompt: toPrompt(input.parts),
+          resume: input.noReply === true ? false : undefined,
+        })
+      const current = yield* runtime.assert({
         sessionID: input.sessionID,
-        id: input.messageID ? SessionMessage.ID.make(input.messageID) : undefined,
-        prompt: toPrompt(input.parts),
-        resume: input.noReply === true ? false : undefined,
+        owner: "v1",
+        state: "ready",
+        epoch: info?.epoch,
       })
+      return yield* legacy.prompt(
+        input,
+        runtime
+          .assert({ sessionID: input.sessionID, owner: "v1", state: "ready", epoch: current.epoch })
+          .pipe(Effect.asVoid),
+      )
     })
 
     const cancel = Effect.fn("SessionControl.cancel")(function* (sessionID: SessionID) {
       const info = yield* runtime.get(sessionID)
-      if (info?.owner !== "v2") return yield* legacy.cancel(sessionID)
-      yield* control.interrupt(sessionID)
+      if (info?.owner === "v2") return yield* control.interrupt(sessionID)
+      const current = yield* runtime.assert({ sessionID, owner: "v1", state: "ready", epoch: info?.epoch })
+      yield* legacy.cancel(
+        sessionID,
+        runtime.assert({ sessionID, owner: "v1", state: "ready", epoch: current.epoch }).pipe(Effect.asVoid),
+      )
     })
 
     return Service.of({ cancel, prompt })

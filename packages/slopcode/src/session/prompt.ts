@@ -86,8 +86,11 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
 }
 
 export interface Interface {
-  readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly cancel: <E = never>(sessionID: SessionID, guard?: Effect.Effect<void, E>) => Effect.Effect<void, E>
+  readonly prompt: <E = never>(
+    input: PromptInput,
+    guard?: Effect.Effect<void, E>,
+  ) => Effect.Effect<SessionV1.WithParts, Image.Error | E>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -136,8 +139,12 @@ export const layer = Layer.effect(
       } satisfies TaskPromptOps
     })
 
-    const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
+    const cancel = Effect.fn("SessionPrompt.cancel")(function* <E = never>(
+      sessionID: SessionID,
+      guard: Effect.Effect<void, E> = Effect.void,
+    ) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
+      yield* guard
       yield* state.cancel(sessionID)
     })
 
@@ -636,7 +643,10 @@ export const layer = Layer.effect(
       return yield* provider.defaultModel().pipe(Effect.orDie)
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* <E = never>(
+      input: PromptInput,
+      guard: Effect.Effect<void, E> = Effect.void,
+    ) {
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
@@ -1029,6 +1039,7 @@ export const layer = Layer.effect(
         })
       }
 
+      yield* guard
       yield* sessions.updateMessage(info)
       for (const part of parts) yield* sessions.updatePart(part)
       const nextPrompt = parts.reduce(
@@ -1105,12 +1116,14 @@ export const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
-      "SessionPrompt.prompt",
-    )(function* (input: PromptInput) {
+    const prompt: Interface["prompt"] = Effect.fn("SessionPrompt.prompt")(function* <E = never>(
+      input: PromptInput,
+      guard: Effect.Effect<void, E> = Effect.void,
+    ) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      yield* guard
       yield* revert.cleanup(session)
-      const message = yield* createUserMessage(input)
+      const message = yield* createUserMessage(input, guard)
       yield* sessions.touch(input.sessionID)
 
       const permissions: PermissionV1.Rule[] = []

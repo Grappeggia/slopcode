@@ -436,6 +436,30 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
   return { prompt, run, sessions, chat }
 })
 
+noLLMServer.instance(
+  "prompt guard rejects before persisting a user message",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, sessions, chat } = yield* boot()
+
+      expect(
+        yield* prompt
+          .prompt(
+            {
+              sessionID: chat.id,
+              agent: "build",
+              noReply: true,
+              parts: [{ type: "text", text: "must not persist" }],
+            },
+            Effect.fail("runtime changed"),
+          )
+          .pipe(Effect.flip),
+      ).toBe("runtime changed")
+      expect(yield* sessions.messages({ sessionID: chat.id })).toEqual([])
+    }),
+  { config: cfg },
+)
+
 // Loop semantics
 
 noLLMServer.instance(

@@ -50,7 +50,8 @@ async function configured(path: string, type: string) {
         })
         globalThis.__production_plugin = {
           location: location.data,
-          serverUrl: input.serverUrl.href
+          serverUrl: input.serverUrl.href,
+          derivedUrl: new URL("/api/health", input.serverUrl).href
         }
         return {}
       }`,
@@ -69,11 +70,16 @@ function authenticate() {
   process.env.SLOPCODE_SERVER_USERNAME = auth.username
 }
 
+function authenticateEnv() {
+  process.env.SLOPCODE_SERVER_PASSWORD = auth.password
+  process.env.SLOPCODE_SERVER_USERNAME = auth.username
+}
+
 test("Server.listen hosts configured packages with scoped SDK and adapter cleanup", async () => {
   await using tmp = await tmpdir()
   const type = `production-${Math.random().toString(36).slice(2)}`
   await configured(tmp.path, type)
-  authenticate()
+  authenticateEnv()
   const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
   let stopped = false
   try {
@@ -93,11 +99,13 @@ test("Server.listen hosts configured packages with scoped SDK and adapter cleanu
     expect((globalThis as { __production_plugin?: unknown }).__production_plugin).toEqual({
       location: expect.objectContaining({ directory: tmp.path }),
       serverUrl: listener.url.href,
+      derivedUrl: new URL("/api/health", listener.url).href,
     })
     expect(getAdapter(ProjectV2.ID.make(body.project.id), type)).toMatchObject({ name: "production" })
 
     await listener.stop(true)
     stopped = true
+    expect(Server.url).toBeUndefined()
     expect(() => getAdapter(ProjectV2.ID.make(body.project.id), type)).toThrow(`Unknown workspace adapter: ${type}`)
   } finally {
     if (!stopped) await listener.stop(true).catch(() => undefined)
@@ -109,6 +117,9 @@ test("Server.Default hosts packages in-process and releases adapters on location
   const type = `default-${Math.random().toString(36).slice(2)}`
   await configured(tmp.path, type)
   authenticate()
+  const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
+  await listener.stop(true)
+  expect(Server.url).toBeUndefined()
   if (Server.Default.loaded()) await Server.Default().dispose()
   Server.Default.reset()
   const server = Server.Default()
@@ -125,6 +136,8 @@ test("Server.Default hosts packages in-process and releases adapters on location
     expect((globalThis as { __production_plugin_factories?: number }).__production_plugin_factories).toBe(1)
     expect((globalThis as { __production_plugin?: unknown }).__production_plugin).toMatchObject({
       location: { directory: tmp.path },
+      serverUrl: "http://localhost:4096/",
+      derivedUrl: "http://localhost:4096/api/health",
     })
     expect(getAdapter(ProjectV2.ID.make(body.project.id), type)).toMatchObject({ name: "production" })
 

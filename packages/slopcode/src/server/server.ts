@@ -61,15 +61,13 @@ class ListenerServerService extends Context.Service<ListenerServerService, Liste
 ) {}
 
 export const Default = lazy(() => {
+  const local = new URL("http://localhost:4096")
   let handler: ReturnType<typeof HttpApiApp.makeWebHandler>["handler"] | undefined
   let locations: Context.Service.Shape<typeof LocationServiceMap> | undefined
-  const plugins = pluginHost(
-    () => url ?? new URL("http://localhost:4096"),
-    (request, init) => {
-      if (!handler) return Promise.reject(new Error("Server handler is not initialized"))
-      return handler(authenticated(request, init), HttpApiApp.context)
-    },
-  )
+  const plugins = pluginHost(local, (request, init) => {
+    if (!handler) return Promise.reject(new Error("Server handler is not initialized"))
+    return handler(authenticated(request, init), HttpApiApp.context)
+  })
   const web = HttpApiApp.makeWebHandler(plugins.layer, {
     memoMap: Layer.makeMemoMapUnsafe(),
     observe: (service) => (locations = service),
@@ -78,7 +76,7 @@ export const Default = lazy(() => {
   const app: ServerApp = {
     fetch: (request: Request) => web.handler(request, HttpApiApp.context),
     request(input, init) {
-      return app.fetch(input instanceof Request ? input : new Request(new URL(input, "http://localhost"), init))
+      return app.fetch(input instanceof Request ? input : new Request(new URL(input, local), init))
     },
   }
   return {
@@ -95,7 +93,7 @@ export async function openapi() {
   return OpenApi.fromApi(PublicApi)
 }
 
-export let url: URL
+export let url: URL | undefined
 
 export async function listen(opts: ListenOptions): Promise<Listener> {
   const listener = await Effect.runPromise(listenEffect(opts))
@@ -103,14 +101,20 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
     hostname: listener.hostname,
     port: listener.port,
     url: listener.url,
-    stop: (close?: boolean) => Effect.runPromiseExit(listener.stop(close)).then(() => undefined),
+    stop: (close?: boolean) =>
+      Effect.runPromiseExit(listener.stop(close)).then(() => {
+        if (url === listener.url) url = undefined
+      }),
   }
 }
 
 const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unknown> = Effect.fn("Server.listen")(
   function* (opts: ListenOptions) {
     const target: { url?: URL } = {}
-    const state = yield* startWithPortFallback(opts, target)
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    )
+    const state = yield* startWithPortFallback(opts, target, env)
     const address = yield* tcpAddress(state)
     const listenerUrl = makeURL(opts.hostname, address.port)
     target.url = listenerUrl
@@ -127,10 +131,11 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
   },
 )
 
-function listenerLayer(opts: ListenOptions, port: number, target: { url?: URL }) {
+function listenerLayer(opts: ListenOptions, port: number, target: { url?: URL }, env: Record<string, string>) {
+  const credentials = { password: env.SLOPCODE_SERVER_PASSWORD, username: env.SLOPCODE_SERVER_USERNAME ?? "slopcode" }
   const plugins = pluginHost(
     () => target.url ?? makeURL(opts.hostname, port),
-    (request, init) => fetch(authenticated(request, init)),
+    (request, init) => fetch(authenticated(request, init, credentials)),
   )
   return HttpRouter.serve(HttpApiApp.createRoutes(opts, plugins.layer), {
     middleware: disposeMiddleware,
@@ -144,11 +149,11 @@ function listenerLayer(opts: ListenOptions, port: number, target: { url?: URL })
     // `ConfigProvider` snapshots `process.env` on first read and caches the
     // result on a module-singleton Reference; without overriding it here,
     // every later `Server.listen()` keeps observing that initial snapshot.
-    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
   )
 }
 
-function pluginHost(baseUrl: () => URL, fetch: Parameters<typeof PluginServer.runtime>[0]["fetch"]) {
+function pluginHost(baseUrl: URL | (() => URL), fetch: Parameters<typeof PluginServer.runtime>[0]["fetch"]) {
   return PluginServer.runtime({
     baseUrl,
     fetch,
@@ -157,23 +162,27 @@ function pluginHost(baseUrl: () => URL, fetch: Parameters<typeof PluginServer.ru
   })
 }
 
-function authenticated(input: RequestInfo | URL, init?: RequestInit) {
+function authenticated(input: RequestInfo | URL, init?: RequestInit, credentials?: ServerAuth.Credentials) {
   const request = new Request(input, init)
-  const authorization = ServerAuth.header()
+  const authorization = credentials
+    ? credentials.password
+      ? ServerAuth.header(credentials)
+      : undefined
+    : ServerAuth.header()
   if (authorization) request.headers.set("authorization", authorization)
   return request
 }
 
-function startWithPortFallback(opts: ListenOptions, target: { url?: URL }) {
-  if (opts.port !== 0) return startListener(opts, opts.port, target)
+function startWithPortFallback(opts: ListenOptions, target: { url?: URL }, env: Record<string, string>) {
+  if (opts.port !== 0) return startListener(opts, opts.port, target, env)
   // Match the legacy listener port-resolution behavior: explicit `0` prefers
   // 4096 first, then any free port.
-  return startListener(opts, 4096, target).pipe(Effect.catch(() => startListener(opts, 0, target)))
+  return startListener(opts, 4096, target, env).pipe(Effect.catch(() => startListener(opts, 0, target, env)))
 }
 
-function startListener(opts: ListenOptions, port: number, target: { url?: URL }) {
+function startListener(opts: ListenOptions, port: number, target: { url?: URL }, env: Record<string, string>) {
   const scope = Scope.makeUnsafe()
-  return Layer.buildWithMemoMap(listenerLayer(opts, port, target), Layer.makeMemoMapUnsafe(), scope).pipe(
+  return Layer.buildWithMemoMap(listenerLayer(opts, port, target, env), Layer.makeMemoMapUnsafe(), scope).pipe(
     Effect.provide(HttpApiApp.context),
     Effect.onError(() => Scope.close(scope, Exit.void).pipe(Effect.ignore)),
     Effect.map(
