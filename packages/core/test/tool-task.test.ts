@@ -735,6 +735,32 @@ describe("TaskTool durable orchestration", () => {
     }),
   )
 
+  fixture.it.effect("serializes competing persisted ceiling revisions", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const runs: string[] = []
+      yield* complete(runs)
+      yield* settle("call-ceiling-atomic-origin", {
+        description: "Atomic",
+        prompt: "origin",
+        subagent_type: "general",
+      })
+      const taskID = SessionTask.childID(parentID, messageID, "call-ceiling-atomic-origin")
+      const restrictions: PermissionV2.Ruleset = [
+        { action: "edit", resource: "atomic-a", effect: "deny" },
+        { action: "read", resource: "atomic-b", effect: "deny" },
+      ]
+      yield* Effect.all(
+        restrictions.map((rule) => SessionTask.strengthen(db, taskID, [rule])),
+        { concurrency: "unbounded" },
+      )
+      expect((yield* (yield* SessionStore.Service).task(taskID))?.ceiling).toEqual(
+        expect.arrayContaining(restrictions),
+      )
+    }),
+  )
+
   fixture.it.effect("recovers child creation, request, admission, and terminal boundaries without duplicate work", () =>
     Effect.gen(function* () {
       yield* seed
