@@ -392,3 +392,67 @@ Complete. Foreground V2 subagent tasks now use one Location-scoped canonical `ta
 
 - Cancellation fallback scans the parent task-call projection events only when the deterministic immutable request does not exist; normal request-based sequencing remains the primary path.
 - Ceiling revisions are monotonic restrictions by construction and intentionally have no weakening/removal path in H5C1.
+
+## Final Durability And Concurrency Fixes
+
+### Findings Resolved
+
+- `SessionTask.strengthen` now reads, unions, and persists child owner ceilings inside an immediate database transaction. Competing resume revisions serialize against the latest committed metadata, so neither invocation can overwrite a stronger concurrent ceiling.
+- Resume requests snapshot the effective ceiling returned by their atomic revision. Canonical request-chain checks continue to accept an earlier request only when every historical rule is present in the final child ceiling.
+- The runner now durably publishes deterministic `Task.Prepared` before publishing any task input/call projection. The snapshot owns caller agent, materialized permissions, tool/multi-agent plan, selected input/agent/model/availability, parent origin, project/Location/title, and derived ceiling.
+- Startup discovery includes prepared sessions. A prepared snapshot with no projected pending/running call wakes no runner work and is harmless.
+- Pending/running task recovery without `Task.Requested` now requires and materializes only the prepared permissions and plan. It passes the prepared caller and identity into canonical TaskTool admission and never resolves the current parent agent, model, catalog, or harness.
+- Permission assertions can evaluate an invocation-owned immutable ruleset, including after the originating agent permissions mutate.
+- Parent external-directory ask extraction now uses wildcard action matching in both live preparation and direct TaskTool admission.
+
+### Durability RED Evidence
+
+- Baseline command from `packages/core`: `bun test test/tool-task.test.ts -t "serializes competing persisted ceiling revisions"`; `0 pass`, `1 fail`. The deterministic atomic revision API did not exist (`SessionTask.strengthen is not a function`).
+- Baseline command from `packages/core`: `bun test test/tool-task.test.ts -t "monotonically strengthens"`; `0 pass`, `1 fail`, `2 expect()` calls. A wildcard `*` external-directory ask was omitted from the persisted child ceiling.
+- Baseline command from `packages/core`: `bun test test/session-runner.test.ts -t "preparation before projecting a live task call"`; `0 pass`, `1 fail`. No durable prepared snapshot existed (`SessionTask.prepared is not a function`).
+- Baseline command from `packages/core`: `bun test test/session-runner.test.ts -t "pre-request task only from its immutable prepared snapshot"`; `0 pass`, `1 fail`. No deterministic prepared event identity existed (`SessionTask.preparedEventID is not a function`).
+
+### Durability GREEN Evidence
+
+- Focused command from `packages/core`: `bun test test/permission.test.ts test/tool-task.test.ts test/session-create.test.ts test/session-runner.test.ts test/session-execution-local.test.ts test/session-runner-tool-registry.test.ts test/tool-codemode.test.ts test/model-harness.test.ts`; `259 pass`, `0 fail`, `814 expect()` calls.
+- Full Core command from `packages/core`: `bun test`; `1257 pass`, `0 fail`, `3521 expect()` calls across 140 files.
+- Full CodeMode command from `packages/codemode`: `bun test`; `254 pass`, `0 fail`, `744 expect()` calls.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `git diff --check`: passed.
+
+### Durability Production Gates
+
+- Two concurrent real `task_id` settlements add distinct parent denies, preserve both in child metadata, record request ceilings that are subsets of the final union, and replay both requests through canonical TaskTool without duplicate child work.
+- Two concurrent direct persisted revisions independently prove the transaction helper converges to both restrictions.
+- A live provider task call proves the deterministic prepared event sequence precedes the first projected task input sequence.
+- Prepared-only restart recovery mutates the parent agent/model/permissions, removes the selected subagent from the current catalog, and switches the harness to Luna; recovery still creates one deterministic child and records the original caller, permissions, plan, selected agent/model, and ceiling.
+- Existing child allow and saved-approval coverage now uses a wildcard-action external-directory ask, while TaskTool resume coverage proves that wildcard restriction is persisted.
+
+### Durability Files
+
+- `packages/core/src/permission.ts`
+- `packages/core/src/session/event.ts`
+- `packages/core/src/session/message-updater.ts`
+- `packages/core/src/session/projector.ts`
+- `packages/core/src/session/runner/llm.ts`
+- `packages/core/src/session/task.ts`
+- `packages/core/src/tool/registry.ts`
+- `packages/core/src/tool/task.ts`
+- `packages/core/src/tool/tool.ts`
+- `packages/core/test/permission.test.ts`
+- `packages/core/test/session-runner.test.ts`
+- `packages/core/test/tool-task.test.ts`
+- `.superpowers/sdd/task-h5c1-report.md`
+
+### Durability Commits
+
+- Implementation and production regressions: `b9c691c875 fix(session): preserve durable task preparation`.
+- Deterministic convergence gate: `fa56416d1e test(session): lock task ceiling convergence`.
+- Report: recorded in the following documentation commit.
+- Nothing was pushed.
+
+### Durability Concerns
+
+- Prepared snapshots are durable per task call and intentionally remain harmless audit records when a crash occurs before any call projection.
+- Ceiling strengthening is monotonic by design; H5C1 provides no restriction-removal operation.
