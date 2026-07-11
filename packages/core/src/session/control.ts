@@ -8,6 +8,7 @@ import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionRuntime } from "./runtime"
 import { SessionRunner } from "./runner"
+import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 
 type PromptInput = {
@@ -76,11 +77,17 @@ export interface Interface {
   >
   readonly shell: (
     input: ShellInput,
+  ) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.ShellConflictError>
+  readonly switchModel: (
+    input: SwitchModelInput,
   ) => Effect.Effect<
     void,
-    SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.ShellConflictError
+    | SessionRuntime.Error
+    | SessionV2.NotFoundError
+    | SessionV2.MessageDecodeError
+    | SessionV2.ModelHistoryIncompatibleError
+    | SessionRunnerModel.Error
   >
-  readonly switchModel: (input: SwitchModelInput) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError>
   readonly switchAgent: (
     input: SwitchAgentInput,
   ) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.AgentUnavailableError>
@@ -88,10 +95,7 @@ export interface Interface {
     input: SkillInput,
   ) => Effect.Effect<
     SessionInput.Admitted,
-    | SessionRuntime.Error
-    | SessionV2.NotFoundError
-    | SessionV2.SkillNotFoundError
-    | SessionV2.PromptConflictError
+    SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.SkillNotFoundError | SessionV2.PromptConflictError
   >
 }
 
@@ -102,7 +106,8 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const sessions = yield* SessionV2.Service
     const runtime = yield* SessionRuntime.Service
-    const assertV2 = (sessionID: SessionSchema.ID, epoch?: number) => runtime.assert({ sessionID, owner: "v2", epoch })
+    const assertV2 = (sessionID: SessionSchema.ID, epoch?: number) =>
+      runtime.assert({ sessionID, owner: "v2", state: "ready", epoch })
 
     return Service.of({
       prompt: Effect.fn("SessionControl.prompt")(function* (input) {

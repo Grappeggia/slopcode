@@ -3296,7 +3296,9 @@ describe("SessionRunnerLLM", () => {
         .where(eq(EventTable.aggregate_id, sessionID))
         .all()
         .pipe(Effect.orDie)
-      const preparedSeq = rows.find((row) => row.id === SessionTask.preparedEventID(sessionID, messageID, "call-live-prepared"))!.seq
+      const preparedSeq = rows.find(
+        (row) => row.id === SessionTask.preparedEventID(sessionID, messageID, "call-live-prepared"),
+      )!.seq
       const projectedSeq = rows.find((row) => row.data.callID === "call-live-prepared" && row.data.name === "task")!.seq
       expect(preparedSeq).toBeLessThan(projectedSeq)
     }),
@@ -5987,7 +5989,7 @@ describe("SessionRunnerLLM", () => {
         const instructions = yield* ModelHarness.instructions(profile)
         expect(request.model.route).toMatchObject({
           protocol: "openai-responses",
-          capabilities: ["responses-lite"],
+          capabilities: ["responses-lite", "custom-tools"],
           defaults: { limits: { context: 372_000, output: 128_000 } },
         })
         expect(request.tools).toHaveLength(1)

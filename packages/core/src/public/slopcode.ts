@@ -13,6 +13,7 @@ import { ProjectV2 } from "../project"
 import { SessionV2 } from "../session"
 import * as SessionExecutionLocal from "../session/execution/local"
 import { SessionRuntime } from "../session/runtime"
+import { SessionControl } from "../session/control"
 import { SessionProjector } from "../session/projector"
 import { SessionStore } from "../session/store"
 import { ApplicationTools } from "../tool/application-tools"
@@ -137,24 +138,28 @@ const SessionModelValidationLayer = Layer.effect(
   }),
 )
 
-const SessionsLayer = Layer.merge(
-  SessionV2.layer.pipe(
-    Layer.provide(SessionProjector.layer),
-    Layer.provide(SessionExecutionLocal.layer),
-    Layer.provide(SessionRuntime.layer),
-    Layer.provide(SessionStore.layer),
-    Layer.provide(EventV2.layer),
-    Layer.provide(Database.defaultLayer),
-    Layer.provide(ProjectV2.defaultLayer),
-    Layer.orDie,
-  ),
-  SessionModelValidationLayer,
-).pipe(Layer.provide(LocationServicesLayer))
+const RuntimeLayer = SessionRuntime.layer.pipe(Layer.provide(Database.defaultLayer))
+const SessionLayer = SessionV2.layer.pipe(
+  Layer.provide(SessionProjector.layer),
+  Layer.provide(SessionExecutionLocal.layer),
+  Layer.provide(RuntimeLayer),
+  Layer.provide(SessionStore.layer),
+  Layer.provide(EventV2.layer),
+  Layer.provide(Database.defaultLayer),
+  Layer.provide(ProjectV2.defaultLayer),
+  Layer.orDie,
+)
+const ControlLayer = SessionControl.layer.pipe(Layer.provide(SessionLayer), Layer.provide(RuntimeLayer))
+const SessionsLayer = Layer.mergeAll(SessionLayer, RuntimeLayer, ControlLayer, SessionModelValidationLayer).pipe(
+  Layer.provide(LocationServicesLayer),
+)
 // TODO: Accept explicit storage so tests and embeddings can select disposable or application-owned persistence.
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const sessions = yield* SessionV2.Service
+    const control = yield* SessionControl.Service
+    const runtime = yield* SessionRuntime.Service
     const tools = yield* ApplicationTools.Service
     const validation = yield* SessionModelValidation
     return Service.of({
@@ -172,14 +177,15 @@ export const layer = Layer.effect(
         list: sessions.list,
         switchModel: Effect.fn("SlopCode.sessions.switchModel")(function* (input) {
           const session = yield* sessions.get(input.sessionID)
+          yield* runtime.assert({ sessionID: input.sessionID, owner: "v2", state: "ready" })
           yield* validation.validate({ ...input, location: session.location })
-          yield* sessions.switchModel(input)
+          yield* control.switchModel(input)
         }),
-        switchAgent: sessions.switchAgent,
-        skill: sessions.skill,
-        interrupt: sessions.interrupt,
+        switchAgent: control.switchAgent,
+        skill: control.skill,
+        interrupt: control.interrupt,
         prompt: (input) =>
-          sessions.prompt({
+          control.prompt({
             id: input.id,
             sessionID: input.sessionID,
             prompt: input.prompt,

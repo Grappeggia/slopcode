@@ -796,8 +796,8 @@ describe("OpenAI Responses route", () => {
 
   it.effect("declares Responses Lite as a typed protocol capability", () =>
     Effect.sync(() => {
-      expect(OpenAIResponses.protocol.capabilities).toEqual(["responses-lite"])
-      expect(OpenAIResponses.route.capabilities).toEqual(["responses-lite"])
+      expect(OpenAIResponses.protocol.capabilities).toEqual(["responses-lite", "custom-tools"])
+      expect(OpenAIResponses.route.capabilities).toEqual(["responses-lite", "custom-tools"])
     }),
   )
 

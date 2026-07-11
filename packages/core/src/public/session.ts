@@ -9,6 +9,8 @@ import { SessionEvent } from "../session/event"
 import { SessionInput } from "../session/input"
 import { SessionMessage } from "../session/message"
 import { Prompt } from "../session/prompt"
+import { SessionRuntime } from "../session/runtime"
+import { SessionRunnerModel } from "../session/runner/model"
 import { Agent } from "./agent"
 import { Location } from "./location"
 import { Model } from "./model"
@@ -49,6 +51,12 @@ export type AgentUnavailableError = SessionV2.AgentUnavailableError
 
 export const SkillNotFoundError = SessionV2.SkillNotFoundError
 export type SkillNotFoundError = SessionV2.SkillNotFoundError
+
+export const ModelHistoryIncompatibleError = SessionV2.ModelHistoryIncompatibleError
+export type ModelHistoryIncompatibleError = SessionV2.ModelHistoryIncompatibleError
+
+export const RuntimeMismatchError = SessionRuntime.Mismatch
+export type RuntimeMismatchError = SessionRuntime.Mismatch
 
 export class ModelUnavailableError extends Schema.TaggedErrorClass<ModelUnavailableError>()(
   "Session.ModelUnavailableError",
@@ -124,16 +132,29 @@ export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<Info>
   readonly get: (sessionID: ID) => Effect.Effect<Info, NotFoundError>
   readonly list: (input?: ListInput) => Effect.Effect<Info[]>
-  readonly prompt: (input: PromptInput) => Effect.Effect<Admission, NotFoundError | PromptConflictError>
+  readonly prompt: (
+    input: PromptInput,
+  ) => Effect.Effect<Admission, NotFoundError | PromptConflictError | SessionRuntime.Error>
   readonly switchModel: (
     input: SwitchModelInput,
-  ) => Effect.Effect<void, NotFoundError | ModelUnavailableError | VariantUnavailableError>
-  readonly switchAgent: (input: SwitchAgentInput) => Effect.Effect<void, NotFoundError | AgentUnavailableError>
+  ) => Effect.Effect<
+    void,
+    | NotFoundError
+    | MessageDecodeError
+    | ModelUnavailableError
+    | VariantUnavailableError
+    | ModelHistoryIncompatibleError
+    | SessionRunnerModel.Error
+    | SessionRuntime.Error
+  >
+  readonly switchAgent: (
+    input: SwitchAgentInput,
+  ) => Effect.Effect<void, NotFoundError | AgentUnavailableError | SessionRuntime.Error>
   readonly skill: (
     input: SkillInput,
-  ) => Effect.Effect<Admission, NotFoundError | SkillNotFoundError | PromptConflictError>
+  ) => Effect.Effect<Admission, NotFoundError | SkillNotFoundError | PromptConflictError | SessionRuntime.Error>
   /** Interrupt the active V2 execution chain for one Session on this process. Interrupting an idle or missing Session is a no-op. */
-  readonly interrupt: (sessionID: ID) => Effect.Effect<void>
+  readonly interrupt: (sessionID: ID) => Effect.Effect<void, SessionRuntime.Error>
   readonly messages: (input: MessagesInput) => Effect.Effect<Message[], NotFoundError | MessageDecodeError>
   readonly message: (input: MessageInput) => Effect.Effect<Message | undefined>
   readonly context: (sessionID: ID) => Effect.Effect<Message[], NotFoundError | MessageDecodeError>

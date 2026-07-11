@@ -535,6 +535,179 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("replays old function and new custom calls in exact durable order", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const created = yield* session.create({ location })
+      const assistantMessageID = SessionMessage.ID.make("msg_mixed_tool_replay")
+      const base = {
+        sessionID: created.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        provider: { executed: false },
+      }
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID: created.id,
+        timestamp: base.timestamp,
+        assistantMessageID,
+        agent: "build",
+        model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6-sol"), providerID: ProviderV2.ID.make("openai") }),
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID: created.id,
+        timestamp: base.timestamp,
+        assistantMessageID,
+        callID: "call-function",
+        name: "read",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID: created.id,
+        timestamp: base.timestamp,
+        assistantMessageID,
+        callID: "call-function",
+        text: '{"path":"README.md"}',
+      })
+      yield* events.publish(SessionEvent.Tool.CalledV1, {
+        ...base,
+        callID: "call-function",
+        tool: "read",
+        input: { path: "README.md" },
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID: created.id,
+        timestamp: base.timestamp,
+        assistantMessageID,
+        callID: "call-custom",
+        name: "exec",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID: created.id,
+        timestamp: base.timestamp,
+        assistantMessageID,
+        callID: "call-custom",
+        text: "return 42",
+      })
+      yield* events.publish(SessionEvent.Tool.Called, {
+        ...base,
+        callID: "call-custom",
+        tool: "exec",
+        input: "return 42",
+        toolType: "custom",
+      })
+      yield* events.publish(SessionEvent.Tool.Success, {
+        ...base,
+        callID: "call-custom",
+        structured: { value: 42 },
+        content: [{ type: "text", text: "42" }],
+      })
+
+      const replayed = Array.from(
+        yield* session.events({ sessionID: created.id }).pipe(Stream.take(8), Stream.runCollect),
+      )
+      expect(
+        replayed.map((item) => [
+          item.cursor,
+          item.event.type,
+          "callID" in item.event.data ? item.event.data.callID : undefined,
+        ]),
+      ).toEqual([
+        [1, SessionEvent.Step.Started.type, undefined],
+        [2, SessionEvent.Tool.Input.Started.type, "call-function"],
+        [3, SessionEvent.Tool.Input.Ended.type, "call-function"],
+        [4, SessionEvent.Tool.CalledV1.type, "call-function"],
+        [5, SessionEvent.Tool.Input.Started.type, "call-custom"],
+        [6, SessionEvent.Tool.Input.Ended.type, "call-custom"],
+        [7, SessionEvent.Tool.Called.type, "call-custom"],
+        [8, SessionEvent.Tool.Success.type, "call-custom"],
+      ])
+      expect((yield* session.message({ sessionID: created.id, messageID: assistantMessageID }))?.content).toMatchObject(
+        [
+          { type: "tool", id: "call-function", state: { input: { path: "README.md" } } },
+          { type: "tool", id: "call-custom", toolType: "custom", state: { input: "return 42", status: "completed" } },
+        ],
+      )
+    }),
+  )
+
+  it.effect("rejects switching custom-call history to an incompatible destination before mutation", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const created = yield* session.create({
+        location,
+        model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6-sol"), providerID: ProviderV2.ID.make("openai") }),
+      })
+      const assistantMessageID = SessionMessage.ID.make("msg_custom_switch_guard")
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID: created.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        agent: "build",
+        model: created.model!,
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID: created.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID: "call-exec",
+        name: "exec",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID: created.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID: "call-exec",
+        text: "return 42",
+      })
+      yield* events.publish(SessionEvent.Tool.Called, {
+        sessionID: created.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID: "call-exec",
+        tool: "exec",
+        input: "return 42",
+        toolType: "custom",
+        provider: { executed: false },
+      })
+      yield* events.publish(SessionEvent.Tool.Success, {
+        sessionID: created.id,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        callID: "call-exec",
+        structured: { value: 42 },
+        content: [{ type: "text", text: "42" }],
+        provider: { executed: false },
+      })
+      const incompatible = [
+        ["anthropic", "anthropic-messages"],
+        ["gemini", "gemini"],
+        ["bedrock", "bedrock-converse"],
+        ["openai-chat", "openai-chat"],
+      ] as const
+      for (const [providerID, protocol] of incompatible) {
+        const destination = ModelV2.Ref.make({
+          id: ModelV2.ID.make("destination"),
+          providerID: ProviderV2.ID.make(providerID),
+        })
+        expect(
+          yield* session.switchModel({ sessionID: created.id, model: destination }).pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "Session.ModelHistoryIncompatibleError",
+          protocol,
+        })
+        expect((yield* session.get(created.id)).model).toEqual(created.model)
+      }
+
+      const compatible = ModelV2.Ref.make({
+        id: ModelV2.ID.make("responses"),
+        providerID: ProviderV2.ID.make("openai"),
+      })
+      yield* session.switchModel({ sessionID: created.id, model: compatible })
+      expect((yield* session.get(created.id)).model).toMatchObject(compatible)
+    }),
+  )
+
   it.effect("rejects a model switch for a missing Session", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
