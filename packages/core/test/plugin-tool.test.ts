@@ -409,6 +409,90 @@ describe("PluginTool", () => {
     }),
   )
 
+  it.effect("retains precedence through omitted and empty tool maps", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginV2.Service
+      const registry = yield* ToolRegistry.Service
+      const hooks: string[] = []
+      const hook = (value: string) => ({
+        "tool.execute.before": () => Effect.sync(() => hooks.push(value)),
+      })
+      const tool = (value: string) => ({
+        ...hook(value),
+        tool: { transition_slot: { description: value, args: {}, execute: async () => value } },
+      })
+      const a = PluginV2.ID.make("transition-a")
+      const b = PluginV2.ID.make("transition-b")
+      const disposeStarted = yield* Deferred.make<void>()
+      const releaseDispose = yield* Deferred.make<void>()
+      yield* plugin.add({
+        id: a,
+        effect: Effect.succeed({
+          ...tool("a1"),
+          dispose: () =>
+            Effect.runPromise(
+              Deferred.succeed(disposeStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseDispose))),
+            ),
+        }),
+      })
+      yield* plugin.add({ id: b, effect: Effect.succeed(tool("b1")) })
+      const beforeOmitted = yield* registry.materialize()
+
+      const omitting = yield* plugin
+        .add({ id: a, effect: Effect.succeed(hook("a-hook")) })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(disposeStarted)
+      expect((yield* settle(yield* registry.materialize(), "transition_slot")).result).toEqual({
+        type: "text",
+        value: "b1",
+      })
+      expect(hooks.splice(0)).toEqual(["a-hook", "b1"])
+      yield* Deferred.succeed(releaseDispose, undefined)
+      yield* Fiber.join(omitting)
+
+      yield* plugin.add({ id: a, effect: Effect.succeed(tool("a2")) })
+      expect((yield* settle(yield* registry.materialize(), "transition_slot")).result).toEqual({
+        type: "text",
+        value: "b1",
+      })
+      expect(hooks.splice(0)).toEqual(["a2", "b1"])
+      expect((yield* settle(beforeOmitted, "transition_slot")).result).toEqual({ type: "text", value: "b1" })
+      hooks.splice(0)
+
+      const beforeEmpty = yield* registry.materialize()
+      yield* plugin.add({ id: b, effect: Effect.succeed({ ...hook("b-empty"), tool: {} }) })
+      expect((yield* settle(yield* registry.materialize(), "transition_slot")).result).toEqual({
+        type: "text",
+        value: "a2",
+      })
+      expect(hooks.splice(0)).toEqual(["a2", "b-empty"])
+      expect((yield* settle(beforeEmpty, "transition_slot")).result).toEqual({
+        type: "error",
+        value: "Stale tool call: transition_slot",
+      })
+
+      const duringEmpty = yield* registry.materialize()
+      yield* plugin.add({ id: b, effect: Effect.succeed(tool("b2")) })
+      expect((yield* settle(duringEmpty, "transition_slot")).result).toEqual({
+        type: "error",
+        value: "Stale tool call: transition_slot",
+      })
+      expect((yield* settle(yield* registry.materialize(), "transition_slot")).result).toEqual({
+        type: "text",
+        value: "b2",
+      })
+      expect(hooks.splice(0)).toEqual(["a2", "b2"])
+
+      yield* plugin.remove(a)
+      yield* plugin.add({ id: a, effect: Effect.succeed(tool("a3")) })
+      expect((yield* settle(yield* registry.materialize(), "transition_slot")).result).toEqual({
+        type: "text",
+        value: "a3",
+      })
+      expect(hooks.splice(0)).toEqual(["b2", "a3"])
+    }),
+  )
+
   it.effect("hides removed and replaced registrations before awaiting slow disposal", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service

@@ -157,6 +157,7 @@ export const layer = Layer.effect(
       hooks: HookFunctions
       scope: Scope.Closeable
       slot: object
+      reserved: boolean
     }[] = []
     const events = yield* EventV2.Service
     const scope = yield* Scope.Scope
@@ -183,11 +184,13 @@ export const layer = Layer.effect(
               yield* Effect.addFinalizer(() =>
                 Effect.promise(() => Promise.resolve(result.dispose?.())).pipe(Effect.orDie),
               ).pipe(Scope.provide(childScope))
-            if (result?.tool) {
-              yield* Deferred.await(ready)
+            const reserve =
+              adapters.get(svc)?.adapter !== undefined || existing?.reserved === true || result?.tool !== undefined
+            if (reserve) {
+              if (!adapters.get(svc)?.adapter) yield* Deferred.await(ready)
               const adapter = adapters.get(svc)?.adapter
               if (!adapter) return yield* Effect.die("Plugin tool adapter is unavailable")
-              yield* adapter(input.id, result.tool, slot).pipe(
+              yield* adapter(input.id, result?.tool ?? {}, slot).pipe(
                 Scope.provide(childScope),
                 Effect.tapError((error) =>
                   events.publish(Event.Failed, {
@@ -199,7 +202,7 @@ export const layer = Layer.effect(
                 Effect.onError((cause) => Scope.close(childScope, Exit.failCause(cause))),
               )
             }
-            const item = { id: input.id, hooks: result ?? {}, scope: childScope, slot }
+            const item = { id: input.id, hooks: result ?? {}, scope: childScope, slot, reserved: reserve }
             hooks = existing ? hooks.map((current) => (current === existing ? item : current)) : [...hooks, item]
             if (existing) yield* Scope.close(existing.scope, Exit.void).pipe(Effect.ignore)
             yield* events.publish(Event.Added, { id: input.id })
