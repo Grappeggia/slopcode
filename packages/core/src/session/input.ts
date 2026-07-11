@@ -1,6 +1,6 @@
 export * as SessionInput from "./input"
 
-import { and, asc, eq, isNull, lte } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, lte } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import type { Database } from "../database/database"
 import type { EventV2 } from "../event"
@@ -203,7 +203,7 @@ export type ShellRequest = {
   readonly resume: boolean
 }
 
-export type PendingShell = ShellRequest & { readonly phase: "execute" | "continue" }
+export type PendingShell = ShellRequest & { readonly phase: "execute" | "continue" | "settle-continuation" }
 
 export type ShellTerminal = {
   readonly status: SessionEvent.Shell.Status
@@ -218,11 +218,17 @@ export const shellRequestEventID = (id: SessionMessage.ID) => `evt_shell_request
 export const shellStartedEventID = (id: SessionMessage.ID) => `evt_shell_started_${id}` as EventV2.ID
 export const shellTerminalEventID = (id: SessionMessage.ID) => `evt_shell_terminal_${id}` as EventV2.ID
 export const shellContinuedEventID = (id: SessionMessage.ID) => `evt_shell_continued_${id}` as EventV2.ID
+export const shellContinuationStartedEventID = (id: SessionMessage.ID) =>
+  `evt_shell_continuation_started_${id}` as EventV2.ID
+export const shellContinuationUnknownEventID = (id: SessionMessage.ID) =>
+  `evt_shell_continuation_unknown_${id}` as EventV2.ID
 
 const shellRequestedType = `${SessionEvent.Shell.Requested.type}.1`
 const shellStartedType = `${SessionEvent.Shell.Started.type}.1`
 const shellEndedType = `${SessionEvent.Shell.Ended.type}.2`
 const shellContinuedType = `${SessionEvent.Shell.Continued.type}.1`
+const shellContinuationStartedType = `${SessionEvent.Shell.ContinuationStarted.type}.1`
+const shellContinuationUnknownType = `${SessionEvent.Shell.ContinuationUnknown.type}.1`
 const decodeShellRequest = Schema.decodeUnknownEffect(SessionEvent.Shell.Requested.data)
 const decodeShellTerminal = Schema.decodeUnknownEffect(SessionEvent.Shell.Ended.data)
 
@@ -293,6 +299,32 @@ export const shellContinued = Effect.fn("SessionInput.shellContinued")(function*
   return row?.type === shellContinuedType
 })
 
+export const startedShellContinuation = Effect.fn("SessionInput.startedShellContinuation")(function* (
+  db: DatabaseService,
+  id: SessionMessage.ID,
+) {
+  const row = yield* db
+    .select({ type: EventTable.type })
+    .from(EventTable)
+    .where(eq(EventTable.id, shellContinuationStartedEventID(id)))
+    .get()
+    .pipe(Effect.orDie)
+  return row?.type === shellContinuationStartedType
+})
+
+export const unknownShellContinuation = Effect.fn("SessionInput.unknownShellContinuation")(function* (
+  db: DatabaseService,
+  id: SessionMessage.ID,
+) {
+  const row = yield* db
+    .select({ type: EventTable.type })
+    .from(EventTable)
+    .where(eq(EventTable.id, shellContinuationUnknownEventID(id)))
+    .get()
+    .pipe(Effect.orDie)
+  return row?.type === shellContinuationUnknownType
+})
+
 const shellRequests = Effect.fnUntraced(function* (db: DatabaseService, sessionID?: SessionSchema.ID) {
   const rows = yield* db
     .select()
@@ -329,8 +361,11 @@ export const pendingShell = Effect.fn("SessionInput.pendingShell")(function* (
   for (const request of yield* shellRequests(db, sessionID)) {
     const terminal = yield* terminalShell(db, request.id)
     if (!terminal) return { ...request, phase: "execute" } satisfies PendingShell
-    if (request.resume && !(yield* shellContinued(db, request.id)))
-      return { ...request, phase: "continue" } satisfies PendingShell
+    if (!request.resume || (yield* shellContinued(db, request.id)) || (yield* unknownShellContinuation(db, request.id)))
+      continue
+    if (yield* startedShellContinuation(db, request.id))
+      return { ...request, phase: "settle-continuation" } satisfies PendingShell
+    return { ...request, phase: "continue" } satisfies PendingShell
   }
 })
 
@@ -343,11 +378,38 @@ export const hasPendingShell = Effect.fn("SessionInput.hasPendingShell")(functio
 
 export const pendingShellSessions = Effect.fn("SessionInput.pendingShellSessions")(function* (db: DatabaseService) {
   const requests = yield* shellRequests(db)
-  const pending = yield* Effect.filter(requests, (request) =>
-    pendingShell(db, request.sessionID).pipe(Effect.map((item) => item !== undefined)),
-  )
-  return [...new Set(pending.map((request) => request.sessionID))]
+  if (!requests.length) return []
+  const rows = yield* db
+    .select({ id: EventTable.id, type: EventTable.type })
+    .from(EventTable)
+    .where(inArray(EventTable.type, [shellEndedType, shellContinuedType, shellContinuationUnknownType]))
+    .all()
+    .pipe(Effect.orDie)
+  const ids = new Set(rows.map((row) => row.id))
+  return [
+    ...new Set(
+      requests
+        .filter(
+          (request) =>
+            !ids.has(shellTerminalEventID(request.id)) ||
+            (request.resume &&
+              !ids.has(shellContinuedEventID(request.id)) &&
+              !ids.has(shellContinuationUnknownEventID(request.id))),
+        )
+        .map((request) => request.sessionID),
+    ),
+  ]
 })
+
+class ShellLifecycleConflict extends Error {}
+
+const shellEvent = Effect.fnUntraced(function* (db: DatabaseService, id: EventV2.ID, type?: string) {
+  const row = yield* db.select({ type: EventTable.type }).from(EventTable).where(eq(EventTable.id, id)).get().pipe(Effect.orDie)
+  return row !== undefined && (type === undefined || row.type === type)
+})
+
+const shellTransition = (condition: Effect.Effect<boolean>) =>
+  condition.pipe(Effect.flatMap((allowed) => (allowed ? Effect.void : Effect.die(new ShellLifecycleConflict()))))
 
 export const admitShell = Effect.fn("SessionInput.admitShell")(function* (
   db: DatabaseService,
@@ -391,7 +453,7 @@ export const startShell = Effect.fn("SessionInput.startShell")(function* (
   events: EventV2.Interface,
   request: ShellRequest,
 ) {
-  yield* events
+  return yield* events
     .publish(
       SessionEvent.Shell.Started,
       {
@@ -401,12 +463,25 @@ export const startShell = Effect.fn("SessionInput.startShell")(function* (
         callID: request.id,
         command: request.command,
       },
-      { id: shellStartedEventID(request.id) },
+      {
+        id: shellStartedEventID(request.id),
+        commit: () =>
+          shellTransition(
+            Effect.all([
+              shellEvent(db, shellRequestEventID(request.id), shellRequestedType),
+              shellEvent(db, shellTerminalEventID(request.id)).pipe(Effect.map((exists) => !exists)),
+            ]).pipe(Effect.map((checks) => checks.every(Boolean))),
+          ),
+      },
     )
     .pipe(
-      Effect.asVoid,
+      Effect.as(true),
       Effect.catchDefect((defect) =>
-        startedShell(db, request.id).pipe(Effect.flatMap((stored) => (stored ? Effect.void : Effect.die(defect)))),
+        defect instanceof ShellLifecycleConflict
+          ? Effect.succeed(false)
+          : startedShell(db, request.id).pipe(
+              Effect.flatMap((stored) => (stored ? Effect.succeed(false) : Effect.die(defect))),
+            ),
       ),
     )
 })
@@ -416,8 +491,9 @@ export const endShell = Effect.fn("SessionInput.endShell")(function* (
   events: EventV2.Interface,
   request: ShellRequest,
   result: ShellTerminal,
+  expected: "requested" | "started" = "started",
 ) {
-  yield* events
+  return yield* events
     .publish(
       SessionEvent.Shell.Ended,
       {
@@ -427,12 +503,94 @@ export const endShell = Effect.fn("SessionInput.endShell")(function* (
         callID: request.id,
         ...result,
       },
-      { id: shellTerminalEventID(request.id) },
+      {
+        id: shellTerminalEventID(request.id),
+        commit: () =>
+          shellTransition(
+            Effect.all([
+              shellEvent(db, shellRequestEventID(request.id), shellRequestedType),
+              startedShell(db, request.id),
+            ]).pipe(
+              Effect.map(
+                ([requested, started]) => requested && (expected === "started" ? started : !started),
+              ),
+            ),
+          ),
+      },
     )
     .pipe(
-      Effect.asVoid,
+      Effect.as(true),
       Effect.catchDefect((defect) =>
-        terminalShell(db, request.id).pipe(Effect.flatMap((stored) => (stored ? Effect.void : Effect.die(defect)))),
+        defect instanceof ShellLifecycleConflict
+          ? Effect.succeed(false)
+          : terminalShell(db, request.id).pipe(
+              Effect.flatMap((stored) => (stored ? Effect.succeed(false) : Effect.die(defect))),
+            ),
+      ),
+    )
+})
+
+export const startShellContinuation = Effect.fn("SessionInput.startShellContinuation")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  request: ShellRequest,
+) {
+  return yield* events
+    .publish(
+      SessionEvent.Shell.ContinuationStarted,
+      { sessionID: request.sessionID, messageID: request.id, timestamp: yield* DateTime.now },
+      {
+        id: shellContinuationStartedEventID(request.id),
+        commit: () =>
+          shellTransition(
+            Effect.all([
+              shellEvent(db, shellTerminalEventID(request.id), shellEndedType),
+              shellEvent(db, shellContinuedEventID(request.id)).pipe(Effect.map((exists) => !exists)),
+              shellEvent(db, shellContinuationUnknownEventID(request.id)).pipe(Effect.map((exists) => !exists)),
+            ]).pipe(Effect.map((checks) => checks.every(Boolean))),
+          ),
+      },
+    )
+    .pipe(
+      Effect.as(true),
+      Effect.catchDefect((defect) =>
+        defect instanceof ShellLifecycleConflict
+          ? Effect.succeed(false)
+          : startedShellContinuation(db, request.id).pipe(
+              Effect.flatMap((stored) => (stored ? Effect.succeed(false) : Effect.die(defect))),
+            ),
+      ),
+    )
+})
+
+export const settleUnknownShellContinuation = Effect.fn("SessionInput.settleUnknownShellContinuation")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  request: ShellRequest,
+) {
+  return yield* events
+    .publish(
+      SessionEvent.Shell.ContinuationUnknown,
+      { sessionID: request.sessionID, messageID: request.id, timestamp: yield* DateTime.now },
+      {
+        id: shellContinuationUnknownEventID(request.id),
+        commit: () =>
+          shellTransition(
+            Effect.all([
+              startedShellContinuation(db, request.id),
+              shellContinued(db, request.id).pipe(Effect.map((continued) => !continued)),
+            ]).pipe(Effect.map((checks) => checks.every(Boolean))),
+          ),
+      },
+    )
+    .pipe(
+      Effect.as(true),
+      Effect.catchDefect((defect) =>
+        defect instanceof ShellLifecycleConflict
+          ? Effect.succeed(false)
+          : unknownShellContinuation(db, request.id).pipe(
+              Effect.flatMap((stored) => (stored ? Effect.succeed(false) : Effect.die(defect))),
+            ),
       ),
     )
 })
@@ -442,16 +600,29 @@ export const continueShell = Effect.fn("SessionInput.continueShell")(function* (
   events: EventV2.Interface,
   request: ShellRequest,
 ) {
-  yield* events
+  return yield* events
     .publish(
       SessionEvent.Shell.Continued,
       { sessionID: request.sessionID, messageID: request.id, timestamp: yield* DateTime.now },
-      { id: shellContinuedEventID(request.id) },
+      {
+        id: shellContinuedEventID(request.id),
+        commit: () =>
+          shellTransition(
+            Effect.all([
+              startedShellContinuation(db, request.id),
+              unknownShellContinuation(db, request.id).pipe(Effect.map((unknown) => !unknown)),
+            ]).pipe(Effect.map((checks) => checks.every(Boolean))),
+          ),
+      },
     )
     .pipe(
-      Effect.asVoid,
+      Effect.as(true),
       Effect.catchDefect((defect) =>
-        shellContinued(db, request.id).pipe(Effect.flatMap((stored) => (stored ? Effect.void : Effect.die(defect)))),
+        defect instanceof ShellLifecycleConflict
+          ? Effect.succeed(false)
+          : shellContinued(db, request.id).pipe(
+              Effect.flatMap((stored) => (stored ? Effect.succeed(false) : Effect.die(defect))),
+            ),
       ),
     )
 })

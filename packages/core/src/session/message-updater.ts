@@ -1,5 +1,5 @@
 import { castDraft, produce, type WritableDraft } from "immer"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 
@@ -181,7 +181,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
               produce(currentShell, (draft) => {
                 draft.output = event.data.output
                 draft.time.completed = event.data.timestamp
-                if (event.version === 2) {
+                if (Schema.is(SessionEvent.Shell.Ended)(event) && event.version === 2) {
                   draft.status = event.data.status
                   draft.exitCode = event.data.exitCode
                   draft.truncated = event.data.truncated
@@ -194,6 +194,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         })
       },
       "session.next.shell.continued": () => Effect.void,
+      "session.next.shell.continuation.started": () => Effect.void,
+      "session.next.shell.continuation.unknown": () => Effect.void,
       "session.next.step.started": (event) => {
         return Effect.gen(function* () {
           const currentAssistant = yield* adapter.getCurrentAssistant()

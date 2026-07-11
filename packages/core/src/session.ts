@@ -485,7 +485,12 @@ export const layer = Layer.effect(
               return yield* new ShellConflictError({ sessionID: input.sessionID, messageID: id })
             const terminal = yield* SessionInput.terminalShell(db, id)
             if (terminal) {
-              if (resume && !(yield* SessionInput.shellContinued(db, id))) yield* enqueueWake(admitted)
+              if (
+                resume &&
+                !(yield* SessionInput.shellContinued(db, id)) &&
+                !(yield* SessionInput.unknownShellContinuation(db, id))
+              )
+                yield* enqueueWake(admitted)
               return
             }
             yield* enqueueWake(admitted)

@@ -2171,6 +2171,7 @@ describe("SessionRunnerLLM", () => {
       expect(shellRuns).toEqual([])
       expect(requests).toHaveLength(1)
       expect(userTexts(requests[0]!)).toContain("Shell command: pwd\n\n/project")
+      expect(yield* SessionInput.startedShellContinuation(db, id)).toBeTrue()
       expect(yield* SessionInput.shellContinued(db, id)).toBeTrue()
     }),
   )
@@ -2197,6 +2198,80 @@ describe("SessionRunnerLLM", () => {
       })
     }),
   )
+
+  it.effect("never publishes Started or spawns after epoch loss wins before spawn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const id = SessionMessage.ID.make("msg_shell_epoch_before_spawn")
+      let armed = true
+      yield* events.beforeCommit((event) => {
+        if (!armed || !Schema.is(SessionEvent.Shell.Started)(event)) return Effect.void
+        armed = false
+        return runtime
+          .assign({ sessionID, state: "paused", expectedOwner: "v2", expectedEpoch: 1 })
+          .pipe(Effect.orDie, Effect.asVoid)
+      })
+
+      yield* session.shell({ id, sessionID, command: "touch marker", resume: false })
+
+      expect(shellRuns).toEqual([])
+      expect(yield* SessionInput.startedShell(db, id)).toBeFalse()
+      expect(yield* SessionInput.terminalShell(db, id)).toMatchObject({ status: "interrupted" })
+    }),
+  )
+
+  for (const dispatched of [false, true])
+    it.effect(`does not redispatch a continuation after its durable start marker${dispatched ? " and provider output" : ""}`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const events = yield* EventV2.Service
+        const { db } = yield* Database.Service
+        const id = SessionMessage.ID.make(`msg_shell_continuation_started_${dispatched}`)
+        const request = yield* SessionInput.admitShell(db, events, {
+          id,
+          sessionID,
+          command: "pwd",
+          resume: true,
+        })
+        yield* SessionInput.startShell(db, events, request)
+        yield* SessionInput.endShell(db, events, request, {
+          status: "completed",
+          output: "/project",
+          exitCode: 0,
+          truncated: false,
+        })
+        yield* SessionInput.startShellContinuation(db, events, request)
+        if (dispatched) {
+          const assistantMessageID = SessionMessage.ID.make("msg_shell_dispatched_assistant")
+          yield* events.publish(SessionEvent.Step.Started, {
+            sessionID,
+            timestamp: yield* DateTime.now,
+            assistantMessageID,
+            agent: "build",
+            model: { id: ModelV2.ID.make(model.id), providerID: ProviderV2.ID.make(model.provider) },
+          })
+          yield* events.publish(SessionEvent.Step.Ended, {
+            sessionID,
+            timestamp: yield* DateTime.now,
+            assistantMessageID,
+            finish: "stop",
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          })
+        }
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toEqual([])
+        expect(yield* SessionInput.unknownShellContinuation(db, id)).toBeTrue()
+        expect(yield* SessionInput.shellContinued(db, id)).toBeFalse()
+      }),
+    )
 
   it.effect("returns at its shell terminal while a coalesced prompt runs later", () =>
     Effect.gen(function* () {

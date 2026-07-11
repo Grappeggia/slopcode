@@ -196,19 +196,31 @@ export const layer = Layer.effect(
     const assertRuntime = (sessionID: SessionSchema.ID, epoch: number) =>
       runtime.assert({ sessionID, owner: "v2", epoch }).pipe(Effect.asVoid)
 
+    class ShellStartLost extends Error {}
+    class ShellContinuationStartLost extends Error {}
+
     const runShell = Effect.fn("SessionRunner.runShell")(function* (
       request: SessionInput.ShellRequest,
       runtimeEpoch: number,
     ) {
       const fenced = fencedEvents(request.sessionID, runtimeEpoch)
-      const settle = Effect.fnUntraced(function* (result: SessionInput.ShellTerminal) {
-        const published = yield* SessionInput.endShell(db, fenced, request, result).pipe(Effect.exit)
+      const settle = Effect.fnUntraced(function* (
+        result: SessionInput.ShellTerminal,
+        expected: "requested" | "started" = "started",
+      ) {
+        const published = yield* SessionInput.endShell(db, fenced, request, result, expected).pipe(Effect.exit)
         if (published._tag === "Success") return
-        yield* SessionInput.endShell(db, events, request, {
-          status: "interrupted",
-          output: "Shell command was interrupted before completion.",
-          truncated: false,
-        })
+        yield* SessionInput.endShell(
+          db,
+          events,
+          request,
+          {
+            status: "interrupted",
+            output: "Shell command was interrupted before completion.",
+            truncated: false,
+          },
+          expected,
+        )
       })
       if (yield* SessionInput.startedShell(db, request.id))
         return yield* settle({
@@ -224,7 +236,11 @@ export const layer = Layer.effect(
               Effect.andThen(
                 ShellCommand.run(
                   { command: request.command, cwd: location.directory },
-                  SessionInput.startShell(db, fenced, request),
+                  SessionInput.startShell(db, fenced, request).pipe(
+                    Effect.flatMap((started) =>
+                      started ? Effect.void : Effect.die(new ShellStartLost()),
+                    ),
+                  ),
                 ).pipe(
                   Effect.provideService(Config.Service, config),
                   Effect.provideService(AppProcess.Service, appProcess),
@@ -242,6 +258,20 @@ export const layer = Layer.effect(
               stderrTruncated: "stderrTruncated" in exit.value ? exit.value.stderrTruncated : undefined,
             })
           const failure = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+          if (exit.cause.reasons.some((reason) => Cause.isDieReason(reason) && reason.defect instanceof ShellStartLost))
+            return
+          if (!(yield* SessionInput.startedShell(db, request.id))) {
+            yield* settle(
+              {
+                status: "interrupted",
+                output: "Shell command was interrupted before completion.",
+                truncated: false,
+              },
+              "requested",
+            )
+            if (Cause.hasInterrupts(exit.cause)) return yield* Effect.interrupt
+            return
+          }
           yield* settle({
             status: Cause.hasInterrupts(exit.cause) ? "interrupted" : "failed",
             output: Cause.hasInterrupts(exit.cause)
@@ -339,6 +369,7 @@ export const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       runtimeEpoch: number,
       recoverOverflow = false,
+      beforeDispatch?: Effect.Effect<void>,
     ) {
       const events = fencedEvents(sessionID, runtimeEpoch)
       const compaction = SessionCompaction.make({ events, llm, config: documents })
@@ -446,6 +477,7 @@ export const layer = Layer.effect(
       let overflowFailure: ProviderErrorEvent | undefined
       if (!(yield* SessionContextEpoch.current(db, session.id, agent.id, system.revision)))
         return yield* Effect.die(rebuildPreparedTurn())
+      if (beforeDispatch) yield* beforeDispatch
       const providerStream = llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
@@ -547,6 +579,7 @@ export const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       runtimeEpoch: number,
+      beforeDispatch?: Effect.Effect<void>,
     ) => Effect.Effect<boolean, RunError>
 
     const runAfterOverflowCompaction: RunTurn = (sessionID, promotion, runtimeEpoch) =>
@@ -562,15 +595,15 @@ export const layer = Layer.effect(
         ),
       )
 
-    const runTurn: RunTurn = (sessionID, promotion, runtimeEpoch) =>
-      runTurnAttempt(sessionID, promotion, runtimeEpoch, true).pipe(
+    const runTurn: RunTurn = (sessionID, promotion, runtimeEpoch, beforeDispatch) =>
+      runTurnAttempt(sessionID, promotion, runtimeEpoch, true, beforeDispatch).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* runAfterOverflowCompaction(sessionID, undefined, runtimeEpoch)
-            return yield* runTurn(sessionID, defect.transition.promotion, runtimeEpoch)
+            return yield* runTurn(sessionID, defect.transition.promotion, runtimeEpoch, beforeDispatch)
           }),
         ),
       )
@@ -582,7 +615,22 @@ export const layer = Layer.effect(
       let promotion: SessionInput.Delivery | undefined
       let continuation = true
       for (let step = 0; step < MAX_STEPS && continuation; step++) {
-        continuation = yield* runTurn(request.sessionID, promotion, runtimeEpoch)
+        continuation = yield* runTurn(
+          request.sessionID,
+          promotion,
+          runtimeEpoch,
+          step === 0
+            ? SessionInput.startShellContinuation(
+                db,
+                fencedEvents(request.sessionID, runtimeEpoch),
+                request,
+              ).pipe(
+                Effect.flatMap((started) =>
+                  started ? Effect.void : Effect.die(new ShellContinuationStartLost()),
+                ),
+              )
+            : undefined,
+        )
         promotion = "steer"
         yield* assertRuntime(request.sessionID, runtimeEpoch)
         if (!continuation) continuation = yield* SessionInput.hasPending(db, request.sessionID, "steer")
@@ -599,6 +647,12 @@ export const layer = Layer.effect(
       while (request) {
         if (request.phase === "execute") yield* runShell(request, runtimeEpoch)
         if (request.phase === "continue") yield* continueShell(request, runtimeEpoch)
+        if (request.phase === "settle-continuation")
+          yield* SessionInput.settleUnknownShellContinuation(
+            db,
+            fencedEvents(request.sessionID, runtimeEpoch),
+            request,
+          )
         request = yield* SessionInput.pendingShell(db, sessionID)
       }
     })
@@ -611,11 +665,13 @@ export const layer = Layer.effect(
       const owned = yield* runtime.assert({ sessionID: input.sessionID, owner: "v2" }).pipe(Effect.exit)
       if (owned._tag === "Failure") {
         if (shell?.phase === "execute")
-          yield* SessionInput.endShell(db, events, shell, {
-            status: "failed",
-            output: "Unable to start shell command.",
-            truncated: false,
-          })
+          yield* SessionInput.endShell(
+            db,
+            events,
+            shell,
+            { status: "failed", output: "Unable to start shell command.", truncated: false },
+            "requested",
+          )
         return yield* Effect.failCause(owned.cause)
       }
       const owner = owned.value
@@ -633,11 +689,13 @@ export const layer = Layer.effect(
         .pipe(Effect.exit)
       if (assigned._tag === "Failure") {
         if (shell?.phase === "execute") {
-          yield* SessionInput.endShell(db, events, shell, {
-            status: "failed",
-            output: "Unable to start shell command.",
-            truncated: false,
-          })
+          yield* SessionInput.endShell(
+            db,
+            events,
+            shell,
+            { status: "failed", output: "Unable to start shell command.", truncated: false },
+            "requested",
+          )
         }
         if (manual)
           yield* SessionInput.failCompaction(db, events, manual, {
@@ -651,6 +709,8 @@ export const layer = Layer.effect(
         yield* failInterruptedTools(fencedEvents(input.sessionID, active.epoch), input.sessionID)
         if (shell) {
           yield* drainShells(input.sessionID, active.epoch)
+          if (yield* SessionInput.hasPendingCompaction(db, input.sessionID))
+            yield* drainManualCompactions(input.sessionID, active.epoch)
           return
         }
         if (manual) {
@@ -672,6 +732,8 @@ export const layer = Layer.effect(
             }
             if (!needsContinuation && (yield* SessionInput.hasPendingShell(db, input.sessionID))) {
               yield* drainShells(input.sessionID, active.epoch)
+              if (yield* SessionInput.hasPendingCompaction(db, input.sessionID))
+                yield* drainManualCompactions(input.sessionID, active.epoch)
               return
             }
             if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")

@@ -53,7 +53,7 @@ export const layer = Layer.effect(
         ])
         if (!pending.some(Boolean)) return
         yield* coordinator.wake(info.sessionID)
-        if (pending.slice(2).some(Boolean)) yield* coordinator.wake(info.sessionID)
+        if (pending.filter(Boolean).length > 1) yield* coordinator.wake(info.sessionID)
       }),
       { discard: true },
     )
