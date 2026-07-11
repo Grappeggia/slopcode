@@ -3,9 +3,9 @@ import { Credential } from "@slopcode-ai/core/credential"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { Context, Layer, Option } from "effect"
 import * as Effect from "effect/Effect"
-import { HttpRouter, HttpServer } from "effect/unstable/http"
+import { HttpEffect, HttpServer } from "effect/unstable/http"
 import { createServer } from "node:http"
-import { createHostedRoutes } from "@slopcode-ai/server/routes"
+import { webHandler } from "@slopcode-ai/server/routes"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Daemon } from "../../services/daemon"
@@ -34,13 +34,18 @@ function listen(hostname: string, port: Option.Option<number>, password: string)
 
 function bind(hostname: string, port: number, password: string) {
   let url: URL | undefined
+  const app = webHandler({
+    password,
+    baseUrl: () => {
+      if (!url) throw new Error("Server address is unavailable before listener startup")
+      return url
+    },
+  })
+  const cleanup = Layer.effectDiscard(Effect.addFinalizer(() => Effect.promise(() => app.dispose())))
   return Layer.build(
-    HttpRouter.serve(
-      createHostedRoutes(password, () => {
-        if (!url) throw new Error("Server address is unavailable before listener startup")
-        return url
-      }),
-      { disableListenLog: true, disableLogger: true },
+    Layer.merge(
+      HttpServer.serve()(HttpEffect.fromWebHandler((request) => app.handler(request, undefined as never))),
+      cleanup,
     ).pipe(
       Layer.provideMerge(NodeHttpServer.layer(() => createServer(), { port, host: hostname })),
       Layer.provide(Credential.defaultLayer),

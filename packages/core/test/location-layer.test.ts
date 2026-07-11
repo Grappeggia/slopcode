@@ -124,6 +124,7 @@ describe("LocationServiceMap", () => {
     ).pipe(
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
+          Object.assign(globalThis, { __h5c3b_location_disposed: 0 })
           yield* Effect.promise(() =>
             Promise.all([
               Bun.write(
@@ -134,19 +135,20 @@ describe("LocationServiceMap", () => {
               Bun.write(
                 path.join(dir.path, "healthy.ts"),
                 `export default async () => ({
-                  tool: { configured_healthy: { description: "healthy", args: {}, execute: async () => "healthy" } }
+                  tool: { configured_healthy: { description: "healthy", args: {}, execute: async () => "healthy" } },
+                  dispose: () => globalThis.__h5c3b_location_disposed++
                 })`,
               ),
             ]),
           )
+          const ref = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
           const result = yield* Effect.gen(function* () {
             yield* (yield* PluginBoot.Service).wait()
             return yield* toolDefinitions(yield* ToolRegistry.Service)
-          }).pipe(
-            Effect.scoped,
-            Effect.provide(LocationServiceMap.get(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
-          )
+          }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get(ref)))
           expect(result.some((tool) => tool.name === "configured_healthy")).toBe(true)
+          yield* LocationServiceMap.invalidate(ref)
+          expect((globalThis as { __h5c3b_location_disposed: number }).__h5c3b_location_disposed).toBe(1)
         }),
       ),
     ),
