@@ -456,3 +456,58 @@ Complete. Foreground V2 subagent tasks now use one Location-scoped canonical `ta
 
 - Prepared snapshots are durable per task call and intentionally remain harmless audit records when a crash occurs before any call projection.
 - Ceiling strengthening is monotonic by design; H5C1 provides no restriction-removal operation.
+
+## Final Localized Durability Gaps
+
+### Localized Findings Resolved
+
+- Public `SessionV2.interrupt` now recognizes a canonical prepared pending/running task even when `Task.Requested` does not exist. It publishes the deterministic parent `Tool.Failed` terminal before runner cancellation and emits no child interruption event when no child exists.
+- Repeated and concurrent public interrupts converge on the same deterministic parent tool terminal.
+- Task progress now has a deterministic event identity and request-derived payload. Normal execution and request recovery share one publisher that reuses a compatible existing linkage, verifies child/agent/model identity, tolerates a duplicate publication race, and rejects incompatible state.
+- Request-before-progress recovery restores durable child linkage before prompt execution and terminal settlement.
+- Tool materialization now clones and freezes every permission rule object plus the containing array. The exact frozen materialized snapshot is exposed through tool context and persisted by `Task.Prepared`; filtering and ceiling derivation use that same snapshot.
+
+### Localized RED Evidence
+
+- Command from `packages/core`: `bun test test/session-create.test.ts -t "prepared task before its request"`; `0 pass`, `1 fail`, `3 expect()` calls. Concurrent public interrupts left the prepared task projection pending.
+- Command from `packages/core`: `bun test test/session-runner.test.ts -t "pre-request task only from its immutable prepared snapshot"`; `0 pass`, `1 fail`, `4 expect()` calls. Request recovery had no deterministic progress event (`SessionTask.progressEventID is not a function`).
+- Command from `packages/core`: `bun test test/session-runner-tool-registry.test.ts -t "deep-freezes cloned materialized"`; `0 pass`, `1 fail`, `1 expect()` call. The malicious tool changed the captured rule from deny to allow.
+
+### Localized GREEN Evidence
+
+- Focused command from `packages/core`: `bun test test/permission.test.ts test/tool-task.test.ts test/session-create.test.ts test/session-runner.test.ts test/session-execution-local.test.ts test/session-runner-tool-registry.test.ts test/tool-codemode.test.ts test/model-harness.test.ts`; `261 pass`, `0 fail`, `822 expect()` calls.
+- Full Core command from `packages/core`: `bun test`; `1259 pass`, `0 fail`, `3529 expect()` calls across 140 files.
+- Full CodeMode command from `packages/codemode`: `bun test`; `254 pass`, `0 fail`, `744 expect()` calls.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `git diff --check`: passed.
+
+### Localized Production Gates
+
+- Two concurrent public interruption calls immediately terminally project a prepared-only task as `Tool execution interrupted`, create no `Task.Requested` or `Task.Interrupted`, and persist one deterministic `Tool.Failed` event without resume/restart.
+- Prepared-only request recovery creates the deterministic child, restores exactly one durable progress event containing child session, original agent, and original model linkage, then reaches the expected terminal child result.
+- Repeated normal and recovered TaskTool settlement reuses the compatible progress event; the full TaskTool suite proves no duplicate event conflict or duplicate child work.
+- A malicious registered tool attempts `Reflect.set` on its captured rule. Mutation returns false, the cloned rule remains deny, the caller's source rule remains deny, and later materialization still filters the denied target.
+
+### Localized Files
+
+- `packages/core/src/session.ts`
+- `packages/core/src/session/runner/llm.ts`
+- `packages/core/src/session/task.ts`
+- `packages/core/src/tool/registry.ts`
+- `packages/core/src/tool/task.ts`
+- `packages/core/test/session-create.test.ts`
+- `packages/core/test/session-runner-tool-registry.test.ts`
+- `packages/core/test/session-runner.test.ts`
+- `.superpowers/sdd/task-h5c1-report.md`
+
+### Localized Commits
+
+- Fixes and regressions: `07bcb61404 fix(session): close task durability gaps`.
+- Report: recorded in the following documentation commit.
+- Nothing was pushed.
+
+### Localized Concerns
+
+- Prepared-only interruption intentionally records only the parent terminal because no child identity has been materialized yet.
+- Progress identity is immutable per task invocation; incompatible pre-existing linkage fails closed instead of being overwritten.
