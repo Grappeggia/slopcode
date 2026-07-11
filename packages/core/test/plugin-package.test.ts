@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { Effect, Layer, Option } from "effect"
+import { pathToFileURL } from "node:url"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Scope } from "effect"
+import { AgentV2 } from "@slopcode-ai/core/agent"
 import { ApplicationTools } from "@slopcode-ai/core/tool/application-tools"
 import { Config } from "@slopcode-ai/core/config"
 import { ConfigPlugin } from "@slopcode-ai/core/config/plugin"
+import { ConfigToolOutput } from "@slopcode-ai/core/config/tool-output"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
+import { Global } from "@slopcode-ai/core/global"
 import { Location } from "@slopcode-ai/core/location"
 import { Npm } from "@slopcode-ai/core/npm"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
@@ -14,6 +18,9 @@ import { PluginV2 } from "@slopcode-ai/core/plugin"
 import { PluginPackage } from "@slopcode-ai/core/plugin/package"
 import { PluginTool } from "@slopcode-ai/core/plugin/tool"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { SessionV2 } from "@slopcode-ai/core/session"
+import { SessionMessage } from "@slopcode-ai/core/session/message"
+import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
 import { ToolOutputStore } from "@slopcode-ai/core/tool-output-store"
 import { tmpdir } from "./fixture/tmpdir"
@@ -41,6 +48,14 @@ const output = Layer.mock(ToolOutputStore.Service, {
 })
 const plugins = PluginV2.layer.pipe(Layer.provide(events))
 const registry = ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), Layer.provide(output))
+const identity = {
+  sessionID: SessionV2.ID.make("ses_configured_package"),
+  agent: AgentV2.ID.make("build"),
+  assistantMessageID: SessionMessage.ID.make("msg_configured_package"),
+}
+
+const settle = (tools: ToolRegistry.Materialization, name: string, input: unknown = {}) =>
+  tools.settle({ ...identity, call: { type: "tool-call", id: `call-${name}`, name, input } })
 
 describe("PluginPackage", () => {
   const it = testEffect(Layer.mergeAll(plugins, registry, permission, events, FSUtil.defaultLayer))
@@ -297,6 +312,29 @@ describe("PluginPackage", () => {
     expect((await resolve(server)).entry).toBe(path.join(server, "src", "index.ts"))
     expect((await resolve(main)).entry).toBe(path.join(main, "dist", "index.js"))
     await expect(resolve(escape)).rejects.toMatchObject({ stage: "entrypoint" })
+  })
+
+  test("contains direct and root-index symlinks while accepting absolute paths and file URLs", async () => {
+    await using dir = await tmpdir()
+    const config = path.join(dir.path, "config")
+    const outside = path.join(dir.path, "outside.ts")
+    const indexed = path.join(config, "indexed")
+    await fs.mkdir(config)
+    await fs.mkdir(indexed)
+    await Bun.write(outside, "export default async () => ({})")
+    await fs.symlink(outside, path.join(config, "direct.ts"))
+    await fs.symlink(outside, path.join(indexed, "index.ts"))
+    const npm = Npm.Service.of({
+      add: () => Effect.die("unused"),
+      install: () => Effect.die("unused"),
+      which: () => Effect.succeed(Option.none()),
+    })
+    const resolve = (spec: string) =>
+      PluginPackage.resolve({ spec, source: path.join(config, "slopcode.json"), directory: config, npm })
+    await expect(resolve("./direct.ts")).rejects.toMatchObject({ stage: "entrypoint" })
+    await expect(resolve("./indexed")).rejects.toMatchObject({ stage: "entrypoint" })
+    await expect(resolve(outside)).resolves.toMatchObject({ entry: outside })
+    await expect(resolve(pathToFileURL(outside).href)).resolves.toMatchObject({ entry: outside })
   })
 
   test("classifies malformed package metadata as entrypoint inspection", async () => {
@@ -559,6 +597,124 @@ describe("PluginPackage", () => {
     }),
   )
 
+  it.effect("does not retry an eligible import after retry dependency installation fails", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          published.length = 0
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(path.join(dir.path, "package.json"), JSON.stringify({ dependencies: { absent: "1" } })),
+              Bun.write(path.join(dir.path, "plugin.ts"), `import "absent"; export default async () => ({})`),
+            ]),
+          )
+          let installs = 0
+          yield* PluginPackage.load.pipe(
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({ plugins: ["./plugin.ts"] }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, {
+              directory: AbsolutePath.make(dir.path),
+              project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+            }),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () => {
+                  installs++
+                  return installs === 1 ? Effect.void : Effect.fail(new Npm.InstallFailedError({ dir: dir.path }))
+                },
+                add: () => Effect.die("unused"),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+          )
+          expect(installs).toBe(2)
+          expect(published.filter((item) => item.type === PluginV2.Event.Failed.type).map((item) => item.data)).toEqual(
+            [expect.objectContaining({ package: "./plugin.ts", stage: "install" })],
+          )
+        }),
+      ),
+    ),
+  )
+
+  it.effect("publishes one attributed configured registration failure", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          published.length = 0
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir.path, "plugin.ts"),
+              `export default async () => ({ tool: { "bad name": { description: "bad", args: {}, execute: async () => "bad" } } })`,
+            ),
+          )
+          const location = Location.Service.of({
+            directory: AbsolutePath.make(dir.path),
+            project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+          })
+          const adapter = PluginTool.layer.pipe(
+            Layer.provide(plugins),
+            Layer.provide(registry),
+            Layer.provide(permission),
+            Layer.provide(Layer.succeed(Location.Service, location)),
+            Layer.provide(events),
+          )
+          yield* PluginPackage.load.pipe(
+            Effect.provide(adapter),
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({ plugins: ["./plugin.ts"] }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () => Effect.void,
+                add: () => Effect.die("unused"),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+          )
+          expect(published.filter((item) => item.type === PluginV2.Event.Failed.type)).toEqual([
+            expect.objectContaining({
+              data: expect.objectContaining({
+                package: "./plugin.ts",
+                source: path.join(dir.path, "slopcode.json"),
+                stage: "hook-shape",
+              }),
+            }),
+          ])
+        }),
+      ),
+    ),
+  )
+
   it.effect("loads npm packages with stable IDs, replacement order, hooks, and configured disposal", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -687,6 +843,158 @@ describe("PluginPackage", () => {
         }),
       ),
     ),
+  )
+
+  it.effect(
+    "runs configured tools through function and nested CodeMode with lifecycle, permission, progress, and bounding",
+    () =>
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((dir) =>
+          Effect.gen(function* () {
+            published.length = 0
+            const asked: PermissionV2.AssertInput[] = []
+            const started = yield* Deferred.make<void>()
+            const release = yield* Deferred.make<void>()
+            Object.assign(globalThis, {
+              __h5c3b_dispose: () =>
+                Effect.runPromise(Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)))),
+            })
+            yield* Effect.promise(() =>
+              Bun.write(
+                path.join(dir.path, "plugin.ts"),
+                `export default { id: "configured-seam", server: async () => ({
+                tool: { configured_seam: {
+                  description: "configured seam",
+                  args: { value: { type: "string" } },
+                  execute: async (args, context) => {
+                    await context.ask({ permission: "network", patterns: ["host"], always: ["host"], metadata: {} })
+                    context.metadata({ title: "working", metadata: { phase: "work" } })
+                    return { output: args.value.repeat(500), metadata: { complete: true } }
+                  }
+                } },
+                "tool.execute.before": async (_input, output) => { output.args.value = output.args.value.trim() },
+                "tool.execute.after": async (_input, output) => { output.title = "finished" },
+                dispose: () => globalThis.__h5c3b_dispose()
+              }) }`,
+              ),
+            )
+            const config = Layer.succeed(Config.Service, {
+              entries: () =>
+                Effect.succeed([
+                  new Config.Document({
+                    type: "document",
+                    path: path.join(dir.path, "slopcode.json"),
+                    info: new Config.Info({
+                      plugins: ["./plugin.ts"],
+                      tool_output: new ConfigToolOutput.Info({ max_lines: 4, max_bytes: 200 }),
+                    }),
+                  }),
+                ]),
+            })
+            const localPermission = Layer.mock(PermissionV2.Service, {
+              assert: (input) => Effect.sync(() => asked.push(input)),
+              ask: () => Effect.die("unused"),
+              reply: () => Effect.die("unused"),
+              get: () => Effect.die("unused"),
+              forSession: () => Effect.die("unused"),
+              list: () => Effect.die("unused"),
+            })
+            const store = ToolOutputStore.layer.pipe(
+              Layer.provide(FSUtil.defaultLayer),
+              Layer.provide(Global.layerWith({ data: dir.path })),
+              Layer.provide(config),
+            )
+            const localRegistry = ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), Layer.provide(store))
+            const localPlugins = PluginV2.layer.pipe(Layer.provide(events))
+            const localLocation = Layer.succeed(Location.Service, {
+              directory: AbsolutePath.make(dir.path),
+              project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+            })
+            const localAdapter = PluginTool.layer.pipe(
+              Layer.provide(localPlugins),
+              Layer.provide(localRegistry),
+              Layer.provide(localPermission),
+              Layer.provide(localLocation),
+              Layer.provide(events),
+            )
+            const scope = yield* Scope.make()
+            const context = yield* Layer.buildWithScope(
+              Layer.fresh(
+                Layer.mergeAll(
+                  localPlugins,
+                  localRegistry,
+                  localAdapter,
+                  localPermission,
+                  localLocation,
+                  events,
+                  store,
+                  config,
+                  FSUtil.defaultLayer,
+                ),
+              ),
+              scope,
+            )
+            const plugin = Context.get(context, PluginV2.Service)
+            const tools = Context.get(context, ToolRegistry.Service)
+            yield* PluginPackage.load.pipe(
+              Effect.provideService(PluginV2.Service, plugin),
+              Effect.provideService(EventV2.Service, Context.get(context, EventV2.Service)),
+              Effect.provideService(Config.Service, Context.get(context, Config.Service)),
+              Effect.provideService(Location.Service, Context.get(context, Location.Service)),
+              Effect.provideService(
+                Npm.Service,
+                Npm.Service.of({
+                  install: () => Effect.void,
+                  add: () => Effect.die("unused"),
+                  which: () => Effect.die("unused"),
+                }),
+              ),
+            )
+            const direct = yield* settle(yield* tools.materialize(), "configured_seam", { value: " x " })
+            expect(direct.outputPaths).toHaveLength(1)
+            expect(direct.output?.content[0]).toMatchObject({
+              type: "text",
+              text: expect.stringContaining("truncated"),
+            })
+            expect(yield* Context.get(context, FSUtil.Service).readFileString(direct.outputPaths![0])).toBe(
+              "x".repeat(500),
+            )
+            const code = yield* (yield* tools.materialize([], { mode: "code-only" })).settle({
+              ...identity,
+              call: {
+                type: "tool-call",
+                toolType: "custom",
+                id: "call-code",
+                name: "exec",
+                input: `return await tools.configured_seam({ value: " y " })`,
+              },
+            })
+            expect(code.output?.structured).toMatchObject({ ok: true })
+            expect(asked).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  action: "network",
+                  source: expect.objectContaining({ type: "tool" }),
+                }),
+              ]),
+            )
+            expect(
+              published.filter((item) => item.type === SessionEvent.Tool.Progress.type).map((item) => item.data),
+            ).toEqual(
+              expect.arrayContaining([expect.objectContaining({ content: [{ type: "text", text: "working" }] })]),
+            )
+            const removing = yield* plugin.remove(PluginV2.ID.make("configured-seam")).pipe(Effect.forkChild)
+            yield* Deferred.await(started)
+            expect((yield* tools.materialize()).definitions.some((item) => item.name === "configured_seam")).toBe(false)
+            yield* Deferred.succeed(release, undefined)
+            yield* Fiber.join(removing)
+            yield* Scope.close(scope, Exit.void)
+          }),
+        ),
+      ),
   )
 
   test("uses a typed unavailable transport instead of ambient network fetch", async () => {

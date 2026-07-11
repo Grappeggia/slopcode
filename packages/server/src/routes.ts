@@ -31,30 +31,24 @@ export function createRoutes(password?: string, host?: Layer.Layer<PluginPackage
 
 export const routes = createRoutes()
 
-export function createHostedRoutes(password: string | undefined, baseUrl: URL | (() => URL)) {
+export function webHandler(options?: { readonly baseUrl?: URL | (() => URL); readonly password?: string }) {
   let handler: ReturnType<typeof HttpRouter.toWebHandler>["handler"] | undefined
-  const hosted = createRoutes(
-    password,
+  const routes = createRoutes(
+    options?.password,
     PluginServer.layer({
-      baseUrl,
+      baseUrl: options?.baseUrl ?? new URL("http://localhost"),
       fetch: (request) => {
-        handler ??= HttpRouter.toWebHandler(hosted.pipe(Layer.provide(HttpServer.layerServices)), {
-          disableLogger: true,
-        }).handler
+        if (!handler) return Promise.reject(new Error("Server handler is not initialized"))
         const next = request instanceof Request ? new Request(request) : new Request(request)
-        const authorization = ServerAuth.header(password ? { username: "slopcode", password } : undefined)
+        const authorization = ServerAuth.header(
+          options?.password ? { username: "slopcode", password: options.password } : undefined,
+        )
         if (authorization) next.headers.set("authorization", authorization)
         return handler(next, undefined as never)
       },
     }),
   )
-  return hosted
+  const app = HttpRouter.toWebHandler(routes.pipe(Layer.provide(HttpServer.layerServices)), { disableLogger: true })
+  handler = app.handler
+  return app
 }
-
-export const webHandler = (options?: { readonly baseUrl?: URL; readonly password?: string }) =>
-  HttpRouter.toWebHandler(
-    createHostedRoutes(options?.password, options?.baseUrl ?? new URL("http://localhost")).pipe(
-      Layer.provide(HttpServer.layerServices),
-    ),
-    { disableLogger: true },
-  )

@@ -146,6 +146,7 @@ export interface Interface {
   readonly add: (input: {
     id: ID
     effect: Effect.Effect<void | Registration, never, Scope.Scope>
+    reportFailure?: boolean
   }) => Effect.Effect<void, PluginTool.LoadError, never>
   readonly remove: (id: ID) => Effect.Effect<void>
   readonly triggerFor: <Name extends keyof Hooks>(
@@ -207,11 +208,13 @@ export const layer = Layer.effect(
               yield* adapter(input.id, result?.tool ?? {}, slot).pipe(
                 Scope.provide(childScope),
                 Effect.tapError((error) =>
-                  events.publish(Event.Failed, {
-                    id: input.id,
-                    source: `plugin:${input.id}`,
-                    message: error.message,
-                  }),
+                  input.reportFailure === false
+                    ? Effect.void
+                    : events.publish(Event.Failed, {
+                        id: input.id,
+                        source: `plugin:${input.id}`,
+                        message: error.message,
+                      }),
                 ),
                 Effect.onError((cause) => Scope.close(childScope, Exit.failCause(cause))),
               )

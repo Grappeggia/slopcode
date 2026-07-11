@@ -15,6 +15,7 @@ test("configured plugins use the in-process server client and register workspace
       Bun.write(
         path.join(directory, "plugin.ts"),
         `export default async (input) => {
+          globalThis.__h5c3b_factories = (globalThis.__h5c3b_factories || 0) + 1
           const health = await input.client._client.get({ url: "/api/health" })
           input.experimental_workspace.register("server-test", {
             name: "server-test",
@@ -25,7 +26,12 @@ test("configured plugins use the in-process server client and register workspace
             target: async () => ({ type: "local", directory: input.directory })
           })
           globalThis.__h5c3b_server = { health: health.data, url: input.serverUrl.href }
-          return {}
+          globalThis.__h5c3b_location = new Promise((resolve) => setTimeout(async () => {
+            resolve(await input.client._client.get({
+              url: "/api/location?location[directory]=" + encodeURIComponent(input.directory)
+            }))
+          }, 0))
+          return { dispose: () => { globalThis.__h5c3b_disposed = (globalThis.__h5c3b_disposed || 0) + 1 } }
         }`,
       ),
     ])
@@ -44,7 +50,16 @@ test("configured plugins use the in-process server client and register workspace
       url: "http://configured.test:7777/",
     })
     expect(PluginServer.workspace(body.project.id, "server-test")).toBeDefined()
+    const state = globalThis as typeof globalThis & {
+      __h5c3b_location: Promise<{ data: unknown }>
+      __h5c3b_factories: number
+      __h5c3b_disposed: number
+    }
+    const location = await state.__h5c3b_location
+    expect(location.data).toMatchObject({ directory })
+    expect(state.__h5c3b_factories).toBe(1)
     await app.dispose()
+    expect(state.__h5c3b_disposed).toBe(1)
   } finally {
     await fs.rm(directory, { recursive: true, force: true })
   }

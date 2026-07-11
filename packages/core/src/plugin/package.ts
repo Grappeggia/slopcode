@@ -103,27 +103,35 @@ async function pkg(root: string) {
   return { root, json: JSON.parse(await fs.readFile(file, "utf8")) as Record<string, unknown> } satisfies Package
 }
 
+async function contained(root: string, target: string, spec: string) {
+  const lexicalRoot = path.resolve(root)
+  const lexicalTarget = path.resolve(target)
+  if (!contains(lexicalRoot, lexicalTarget)) throw new Error(`Plugin ${spec} entrypoint escapes its package root`)
+  const realRoot = await fs.realpath(lexicalRoot)
+  const realTarget = await fs.realpath(lexicalTarget)
+  if (!contains(realRoot, realTarget)) throw new Error(`Plugin ${spec} entrypoint escapes its package root`)
+  return realTarget
+}
+
 async function safe(root: string, raw: string, spec: string) {
   if (raw.startsWith("file://") || path.isAbsolute(raw))
     throw new Error(`Plugin ${spec} entrypoint must be relative to its package root`)
   const target = path.resolve(root, raw)
-  if (!contains(path.resolve(root), target)) throw new Error(`Plugin ${spec} entrypoint escapes its package root`)
   const realRoot = await fs.realpath(root)
-  const realTarget = await fs.realpath(target)
-  if (!contains(realRoot, realTarget)) throw new Error(`Plugin ${spec} entrypoint escapes its package root`)
+  const realTarget = await contained(root, target, spec)
   const stat = await fs.stat(realTarget)
   if (stat.isFile()) return realTarget
   if (stat.isDirectory()) {
-    const nested = await index(realTarget)
-    if (nested && contains(realRoot, nested)) return nested
+    const nested = await index(realTarget, realRoot, spec)
+    if (nested) return nested
   }
   throw new Error(`Plugin ${spec} entrypoint is not a supported file or directory`)
 }
 
-async function index(root: string) {
+async function index(root: string, packageRoot = root, spec = root) {
   for (const name of indexes) {
     const file = path.join(root, name)
-    if ((await exists(file))?.isFile()) return fs.realpath(file)
+    if ((await exists(file))?.isFile()) return contained(packageRoot, file, spec)
   }
 }
 
@@ -134,14 +142,11 @@ async function entry(spec: string, root: string, info?: Package, fallback?: stri
     if (server) return safe(root, server, spec)
     if (typeof info.json.main === "string" && info.json.main.trim()) return safe(root, info.json.main, spec)
   }
-  const direct = await index(root)
+  const direct = await index(root, root, spec)
   if (direct) return direct
   if (fallback) {
     const file = fallback.startsWith("file://") ? fileURLToPath(fallback) : fallback
-    const target = await fs.realpath(file)
-    const base = await fs.realpath(root)
-    if (!contains(base, target)) throw new Error(`Plugin ${spec} entrypoint escapes its package root`)
-    return target
+    return contained(root, file, spec)
   }
   throw new Error(`Plugin ${spec} does not expose a server entrypoint`)
 }
@@ -154,7 +159,17 @@ export async function resolve(
     const target = path.isAbsolute(raw) ? raw : path.resolve(input.directory, raw)
     const stat = await exists(target)
     if (!stat) throw new ResolveError("entrypoint", new Error(`Plugin ${input.spec} does not exist`))
-    if (stat.isFile()) return { ...input, local: true, root: path.dirname(target), entry: await fs.realpath(target) }
+    if (stat.isFile()) {
+      const root = path.dirname(target)
+      return {
+        ...input,
+        local: true,
+        root: await fs.realpath(root),
+        entry: await contained(root, target, input.spec).catch((cause) => {
+          throw new ResolveError("entrypoint", cause)
+        }),
+      }
+    }
     if (!stat.isDirectory())
       throw new ResolveError("entrypoint", new Error(`Plugin ${input.spec} is not a file or directory`))
     const root = await fs.realpath(target)
@@ -402,13 +417,21 @@ export const load = Effect.gen(function* () {
     const first = yield* attempt(
       Effect.tryPromise({ try: () => import(pathToFileURL(row.entry).href), catch: (cause) => cause }),
     )
+    let retryInstallFailed = false
     const imported = first.ok
       ? first
       : row.local && prepared && retryable(first.error)
         ? yield* Effect.gen(function* () {
-            yield* npm
-              .install(directory)
-              .pipe(Effect.catch((cause) => fail(item, "install", cause).pipe(Effect.asVoid)))
+            const installed = yield* npm.install(directory).pipe(
+              Effect.as(true),
+              Effect.catch((cause) =>
+                fail(item, "install", cause).pipe(
+                  Effect.as(false),
+                  Effect.tap(() => Effect.sync(() => (retryInstallFailed = true))),
+                ),
+              ),
+            )
+            if (!installed) return first
             return yield* attempt(
               Effect.tryPromise({
                 try: () => retryImport(row.entry),
@@ -418,6 +441,7 @@ export const load = Effect.gen(function* () {
           })
         : first
     if (!imported.ok) {
+      if (retryInstallFailed) continue
       yield* fail(item, "import", imported.error)
       continue
     }
@@ -459,7 +483,7 @@ export const load = Effect.gen(function* () {
         if (!supported.has(name)) yield* warn(item, `Plugin ${item.spec} returned unsupported hook ${name}`, id)
       }
       yield* plugin
-        .add({ id, effect: Effect.succeed(adapted.value) })
+        .add({ id, effect: Effect.succeed(adapted.value), reportFailure: false })
         .pipe(Effect.catch((cause) => fail(item, "hook-shape", cause, id).pipe(Effect.asVoid)))
     }
   }
