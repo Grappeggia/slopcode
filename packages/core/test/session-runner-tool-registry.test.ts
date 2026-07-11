@@ -237,6 +237,7 @@ describe("ToolRegistry", () => {
         call: { type: "tool-call", id: "call-context", name: "context", input: {} },
       })
       expect(contexts).toEqual([{ sessionID, ...identity, toolCallID: "call-context" }])
+      expect(contexts[0]?.permissions).toEqual([])
     }),
   )
 

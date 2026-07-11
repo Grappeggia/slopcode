@@ -354,7 +354,12 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
               new SessionMessage.ToolStateError({
                 status: "error",
                 error: event.data.error,
-                input: match.toolType === "custom" ? match.state.input : typeof match.state.input === "string" ? {} : match.state.input,
+                input:
+                  match.toolType === "custom"
+                    ? match.state.input
+                    : typeof match.state.input === "string"
+                      ? {}
+                      : match.state.input,
                 structured: match.state.status === "running" ? match.state.structured : {},
                 content: match.state.status === "running" ? match.state.content : [],
                 result: event.data.result,
@@ -363,6 +368,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }
         })
       },
+      "session.next.task.requested": () => Effect.void,
+      "session.next.task.interrupted": () => Effect.void,
       "session.next.reasoning.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(

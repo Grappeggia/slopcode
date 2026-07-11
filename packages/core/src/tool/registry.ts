@@ -22,7 +22,15 @@ import { SessionSchema } from "../session/schema"
 import { ToolOutputStore } from "../tool-output-store"
 import { Wildcard } from "../util/wildcard"
 import { ApplicationTools } from "./application-tools"
-import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
+import {
+  definition,
+  permission,
+  settle,
+  validateName,
+  type AnyTool,
+  type Context as ToolContext,
+  type RegistrationError,
+} from "./tool"
 import { Tools } from "./tools"
 
 export type ExecuteInput = {
@@ -56,6 +64,7 @@ export interface ToolPlan {
   readonly mode?: "function" | "code-preferred" | "code-only"
   readonly shell?: "shell_command"
   readonly patch?: "freeform"
+  readonly multiAgent?: "v1" | "v2"
   readonly progress?: (input: ExecuteInput, progress: ChildProgress) => Effect.Effect<void>
 }
 
@@ -75,7 +84,12 @@ const registryLayer = Layer.effect(
     type Registration = { readonly identity: object; readonly tool: AnyTool }
     const local = new Map<string, Array<{ readonly token: object; readonly registration: Registration }>>()
 
-    const settleWith = Effect.fn("ToolRegistry.settle")(function* (input: ExecuteInput, advertised?: object) {
+    const settleWith = Effect.fn("ToolRegistry.settle")(function* (
+      input: ExecuteInput,
+      advertised?: object,
+      multiAgent?: "v1" | "v2",
+      permissions: PermissionV2.Ruleset = [],
+    ) {
       const registration =
         local.get(input.call.name)?.at(-1)?.registration ?? applications.entries().get(input.call.name)
       if (!registration)
@@ -87,12 +101,18 @@ const registryLayer = Layer.effect(
         }
       if (advertised && registration.identity !== advertised)
         return { result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } }
-      const pending = yield* settle(registration.tool, input.call, {
-        sessionID: input.sessionID,
-        agent: input.agent,
-        assistantMessageID: input.assistantMessageID,
-        toolCallID: input.call.id,
-      }).pipe(
+      const context = Object.defineProperty(
+        {
+          sessionID: input.sessionID,
+          agent: input.agent,
+          assistantMessageID: input.assistantMessageID,
+          toolCallID: input.call.id,
+          ...(multiAgent === undefined ? {} : { multiAgent }),
+        },
+        "permissions",
+        { value: permissions },
+      ) as ToolContext
+      const pending = yield* settle(registration.tool, input.call, context).pipe(
         Effect.map((output) => ({ output })),
         Effect.catchTag("LLM.ToolFailure", (failure) =>
           Effect.succeed({ result: { type: "error" as const, value: failure.message } }),
@@ -132,19 +152,20 @@ const registryLayer = Layer.effect(
         )
       }),
       materialize: Effect.fn("ToolRegistry.materialize")(function* (permissions = [], plan = {}) {
+        const rules = Object.freeze([...permissions])
         const registrations = new Map(applications.entries())
         for (const [name, entries] of local) {
           const registration = entries.at(-1)?.registration
           if (registration) registrations.set(name, registration)
         }
         for (const [name, registration] of registrations)
-          if (whollyDisabled(permission(registration.tool, name), permissions)) registrations.delete(name)
+          if (whollyDisabled(permission(registration.tool, name), rules)) registrations.delete(name)
         const definitions = Object.freeze(
-          Array.from(registrations, ([name, registration]) => definition(name, registration.tool)),
+          Array.from(registrations, ([name, registration]) => definition(name, registration.tool, rules)),
         )
         const settleMaterialized = (input: ExecuteInput): Effect.Effect<Settlement, ToolOutputStore.Error> => {
           const registration = registrations.get(input.call.name)
-          if (registration) return settleWith(input, registration.identity)
+          if (registration) return settleWith(input, registration.identity, plan.multiAgent, rules)
           return Effect.succeed({ result: { type: "error" as const, value: `Unknown tool: ${input.call.name}` } })
         }
         const mode = plan.mode ?? "function"
@@ -285,9 +306,7 @@ SOURCE: /[\s\S]+/
               const output = {
                 structured: audited,
                 content:
-                  content.length === 0
-                    ? []
-                    : [{ type: "text" as const, text: JSON.stringify(audited) }, ...content],
+                  content.length === 0 ? [] : [{ type: "text" as const, text: JSON.stringify(audited) }, ...content],
               }
               const bounded = yield* resources.bound({ sessionID: input.sessionID, toolCallID: input.call.id, output })
               const paths = [...new Set([...outputPaths, ...bounded.outputPaths])]

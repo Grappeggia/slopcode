@@ -1,5 +1,6 @@
 import { Effect, Layer } from "effect"
 import { Database } from "../../database/database"
+import { EventV2 } from "../../event"
 import { LocationServiceMap } from "../../location-layer"
 import { SessionInput } from "../input"
 import { SessionRunCoordinator } from "../run-coordinator"
@@ -9,6 +10,9 @@ import { SessionStore } from "../store"
 import { SessionExecution } from "../execution"
 import { logFailure } from "../logging"
 import { SessionRuntime } from "../runtime"
+import { SessionEvent } from "../event"
+import { SessionTask } from "../task"
+import { Schema } from "effect"
 
 /** Current-process routing for implicit-local Locations. Future remote placement belongs here. */
 export const layer = Layer.effect(
@@ -16,6 +20,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const store = yield* SessionStore.Service
+    const events = yield* EventV2.Service
     const locations = yield* LocationServiceMap
     const runtime = yield* SessionRuntime.Service
     const recovered = yield* runtime.recover()
@@ -24,6 +29,7 @@ export const layer = Layer.effect(
       [
         ...(yield* SessionInput.pendingCompactionSessions(db)),
         ...(yield* SessionInput.pendingShellSessions(db)),
+        ...(yield* SessionTask.requestedSessions(db)),
       ].filter((sessionID, index, sessions) => sessions.indexOf(sessionID) === index),
       Effect.fnUntraced(function* (sessionID) {
         if (recovery.has(sessionID)) return
@@ -42,14 +48,28 @@ export const layer = Layer.effect(
       }),
       onFailure: (sessionID, cause) => logFailure("Failed to drain Session", sessionID, cause),
     })
+    yield* events.listen((event) => {
+      if (Schema.is(SessionEvent.Task.Execute)(event))
+        return coordinator
+          .wake(event.data.childSessionID)
+          .pipe(Effect.andThen(coordinator.awaitIdle(event.data.childSessionID)), Effect.orDie)
+      if (Schema.is(SessionEvent.Task.Interrupt)(event))
+        return coordinator.interrupt(event.data.childSessionID).pipe(
+          Effect.andThen(coordinator.awaitIdle(event.data.childSessionID)),
+          Effect.catch(() => Effect.void),
+        )
+      return Effect.void
+    })
     yield* Effect.forEach(
       recovery.values(),
       Effect.fnUntraced(function* (info) {
+        if (yield* SessionTask.orphaned(db, info.sessionID)) return
         const pending = yield* Effect.all([
           SessionInput.hasPendingShell(db, info.sessionID),
           SessionInput.hasPendingCompaction(db, info.sessionID),
           SessionInput.hasPending(db, info.sessionID, "steer"),
           SessionInput.hasPending(db, info.sessionID, "queue"),
+          SessionTask.hasPending(store, info.sessionID),
         ])
         if (!pending.some(Boolean)) return
         yield* coordinator.wake(info.sessionID)

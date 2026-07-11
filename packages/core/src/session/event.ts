@@ -476,6 +476,50 @@ export namespace Tool {
   export type Failed = typeof Failed.Type
 }
 
+export namespace Task {
+  const TaskBase = {
+    ...Base,
+    assistantMessageID: SessionMessageID.ID,
+    callID: Schema.String,
+    childSessionID: SessionSchema.ID,
+  }
+
+  export const Requested = EventV2.define({
+    type: "session.next.task.requested",
+    ...options,
+    schema: {
+      ...TaskBase,
+      promptMessageID: SessionMessageID.ID,
+      description: Schema.String,
+      prompt: Schema.String,
+      agent: Schema.String,
+      model: ModelV2.Ref,
+      command: Schema.String.pipe(Schema.optional),
+      multiAgent: Schema.Literals(["v1", "v2"]),
+    },
+  })
+  export type Requested = typeof Requested.Type
+
+  export const Interrupted = EventV2.define({
+    type: "session.next.task.interrupted",
+    ...options,
+    schema: TaskBase,
+  })
+  export type Interrupted = typeof Interrupted.Type
+
+  /** Process-local execution signal backed by the authoritative Session lane. */
+  export const Execute = EventV2.define({
+    type: "session.next.task.execute",
+    schema: TaskBase,
+  })
+
+  /** Process-local cascade signal emitted only after interruption is durable. */
+  export const Interrupt = EventV2.define({
+    type: "session.next.task.interrupt",
+    schema: TaskBase,
+  })
+}
+
 export const RetryError = Schema.Struct({
   message: Schema.String,
   statusCode: Schema.Finite.pipe(Schema.optional),
@@ -610,6 +654,8 @@ const DurableDefinitions = [
   Tool.Progress,
   Tool.Success,
   Tool.Failed,
+  Task.Requested,
+  Task.Interrupted,
   Reasoning.Started,
   Reasoning.Ended,
   Retried,

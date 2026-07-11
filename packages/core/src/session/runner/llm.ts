@@ -34,6 +34,7 @@ import { SessionInput } from "../input"
 import { SessionRuntime } from "../runtime"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
+import { SessionTask } from "../task"
 import { type RunError, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
@@ -140,6 +141,74 @@ export const layer = Layer.effect(
         if (message.type !== "assistant") continue
         for (const tool of message.content) {
           if (tool.type !== "tool" || (tool.state.status !== "pending" && tool.state.status !== "running")) continue
+          if (
+            tool.name === "task" &&
+            tool.state.status === "running" &&
+            !(yield* SessionTask.interrupted(db, sessionID, message.id, tool.id))
+          ) {
+            const session = yield* getSession(sessionID)
+            const agent = yield* agents.select(session.agent)
+            const resolved = yield* models.resolve(session)
+            const materialized = yield* tools.materialize(
+              [...(agent.info?.permissions ?? []), ...((yield* store.task(sessionID))?.ceiling ?? [])],
+              resolved.harness
+                ? {
+                    mode: resolved.harness.tools.mode,
+                    shell: resolved.harness.tools.shell,
+                    patch: resolved.harness.tools.patch,
+                    multiAgent: resolved.harness.multiAgent,
+                  }
+                : undefined,
+            )
+            const settlement = yield* materialized.settle({
+              sessionID,
+              agent: agent.id,
+              assistantMessageID: message.id,
+              call: {
+                type: "tool-call",
+                id: tool.id,
+                name: tool.name,
+                input: tool.state.input,
+                ...(tool.toolType === undefined ? {} : { toolType: tool.toolType }),
+              } as ToolRegistry.ExecuteInput["call"],
+            })
+            if (settlement.result.type === "error") {
+              yield* events.publish(SessionEvent.Tool.Failed, {
+                sessionID,
+                timestamp: yield* DateTime.now,
+                assistantMessageID: message.id,
+                callID: tool.id,
+                error: {
+                  type: "unknown",
+                  message:
+                    typeof settlement.result.value === "string"
+                      ? settlement.result.value
+                      : (JSON.stringify(settlement.result.value) ?? "Task execution failed"),
+                },
+                result: settlement.result.value,
+                provider: {
+                  executed: tool.provider?.executed === true,
+                  ...(tool.provider?.metadata === undefined ? {} : { metadata: tool.provider.metadata }),
+                },
+              })
+              continue
+            }
+            yield* events.publish(SessionEvent.Tool.Success, {
+              sessionID,
+              timestamp: yield* DateTime.now,
+              assistantMessageID: message.id,
+              callID: tool.id,
+              structured: settlement.output?.structured ?? {},
+              content: settlement.output?.content ?? [],
+              outputPaths: settlement.outputPaths,
+              result: settlement.result.value,
+              provider: {
+                executed: tool.provider?.executed === true,
+                ...(tool.provider?.metadata === undefined ? {} : { metadata: tool.provider.metadata }),
+              },
+            })
+            continue
+          }
           yield* events.publish(SessionEvent.Tool.Failed, {
             sessionID,
             timestamp: yield* DateTime.now,
@@ -237,9 +306,7 @@ export const layer = Layer.effect(
                 ShellCommand.run(
                   { command: request.command, cwd: location.directory },
                   SessionInput.startShell(db, fenced, request).pipe(
-                    Effect.flatMap((started) =>
-                      started ? Effect.void : Effect.die(new ShellStartLost()),
-                    ),
+                    Effect.flatMap((started) => (started ? Effect.void : Effect.die(new ShellStartLost()))),
                   ),
                   (spawn) =>
                     db.transaction(
@@ -247,9 +314,7 @@ export const layer = Layer.effect(
                         assertRuntime(request.sessionID, runtimeEpoch).pipe(
                           Effect.orDie,
                           Effect.andThen(SessionInput.terminalShell(db, request.id)),
-                          Effect.flatMap((terminal) =>
-                            terminal ? Effect.die(new ShellStartLost()) : spawn,
-                          ),
+                          Effect.flatMap((terminal) => (terminal ? Effect.die(new ShellStartLost()) : spawn)),
                         ),
                       { behavior: "immediate" },
                     ),
@@ -430,12 +495,13 @@ export const layer = Layer.effect(
       const context = entries.map((entry) => entry.message)
       const instructions = resolved.harness ? yield* ModelHarness.instructions(resolved.harness) : undefined
       const toolMaterialization = yield* tools.materialize(
-        agent.info?.permissions,
+        [...(agent.info?.permissions ?? []), ...((yield* store.task(session.id))?.ceiling ?? [])],
         resolved.harness
           ? {
               mode: resolved.harness.tools.mode,
               shell: resolved.harness.tools.shell,
               patch: resolved.harness.tools.patch,
+              multiAgent: resolved.harness.multiAgent,
               progress: (input, progress) =>
                 Effect.gen(function* () {
                   yield* events.publish(SessionEvent.Tool.Progress, {
@@ -632,14 +698,8 @@ export const layer = Layer.effect(
           promotion,
           runtimeEpoch,
           step === 0
-            ? SessionInput.startShellContinuation(
-                db,
-                fencedEvents(request.sessionID, runtimeEpoch),
-                request,
-              ).pipe(
-                Effect.flatMap((started) =>
-                  started ? Effect.void : Effect.die(new ShellContinuationStartLost()),
-                ),
+            ? SessionInput.startShellContinuation(db, fencedEvents(request.sessionID, runtimeEpoch), request).pipe(
+                Effect.flatMap((started) => (started ? Effect.void : Effect.die(new ShellContinuationStartLost()))),
               )
             : undefined,
         )
@@ -660,11 +720,7 @@ export const layer = Layer.effect(
         if (request.phase === "execute") yield* runShell(request, runtimeEpoch)
         if (request.phase === "continue") yield* continueShell(request, runtimeEpoch)
         if (request.phase === "settle-continuation")
-          yield* SessionInput.settleUnknownShellContinuation(
-            db,
-            fencedEvents(request.sessionID, runtimeEpoch),
-            request,
-          )
+          yield* SessionInput.settleUnknownShellContinuation(db, fencedEvents(request.sessionID, runtimeEpoch), request)
         request = yield* SessionInput.pendingShell(db, sessionID)
       }
     })
@@ -690,7 +746,8 @@ export const layer = Layer.effect(
       const manual = yield* SessionInput.pendingCompaction(db, input.sessionID)
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
-      if (input.force !== true && !shell && !manual && !hasSteer && !hasQueue) return
+      const task = input.force === true ? false : yield* SessionTask.hasPending(store, input.sessionID)
+      if (input.force !== true && !shell && !manual && !hasSteer && !hasQueue && !task) return
       const assigned = yield* runtime
         .assign({
           sessionID: input.sessionID,
@@ -730,7 +787,7 @@ export const layer = Layer.effect(
           return
         }
         let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
-        let openActivity = input.force === true || hasSteer || hasQueue
+        let openActivity = input.force === true || hasSteer || hasQueue || task
         while (openActivity) {
           yield* assertRuntime(input.sessionID, active.epoch)
           let needsContinuation = true
