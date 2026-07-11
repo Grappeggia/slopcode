@@ -223,7 +223,10 @@ export const layerWith = (options?: LayerOptions) =>
         commit?: (seq: number) => Effect.Effect<void>,
       ) {
         return Effect.gen(function* () {
-          const definition = registry.get(event.type)
+          const definition =
+            event.version === undefined
+              ? registry.get(event.type)
+              : syncRegistry.get(versionedType(event.type, event.version))
           const sync = definition?.sync
           if (sync) {
             if (event.version !== sync.version) {

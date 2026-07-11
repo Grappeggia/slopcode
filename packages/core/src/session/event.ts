@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { ProviderMetadata, ToolContent, ToolType } from "@slopcode-ai/llm"
+import { ProviderMetadata, ToolContent } from "@slopcode-ai/llm"
 import { EventV2 } from "../event"
 import { ModelV2 } from "../model"
 import { NonNegativeInt } from "../schema"
@@ -310,7 +310,6 @@ export namespace Tool {
       schema: {
         ...ToolBase,
         name: Schema.String,
-        toolType: ToolType.pipe(Schema.optional),
       },
     })
     export type Started = typeof Started.Type
@@ -336,14 +335,29 @@ export namespace Tool {
     export type Ended = typeof Ended.Type
   }
 
-  export const Called = EventV2.define({
+  // Retain the V1 decoder so stored function-tool calls remain replayable.
+  export const CalledV1 = EventV2.define({
     type: "session.next.tool.called",
     ...options,
     schema: {
       ...ToolBase,
       tool: Schema.String,
-      input: Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.String]),
-      toolType: ToolType.pipe(Schema.optional),
+      input: Schema.Record(Schema.String, Schema.Unknown),
+      provider: Schema.Struct({
+        executed: Schema.Boolean,
+        metadata: ProviderMetadata.pipe(Schema.optional),
+      }),
+    },
+  })
+
+  export const Called = EventV2.define({
+    type: "session.next.tool.called",
+    sync: { aggregate: "sessionID", version: 2 },
+    schema: {
+      ...ToolBase,
+      tool: Schema.String,
+      input: Schema.String,
+      toolType: Schema.Literal("custom"),
       provider: Schema.Struct({
         executed: Schema.Boolean,
         metadata: ProviderMetadata.pipe(Schema.optional),

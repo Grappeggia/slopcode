@@ -124,10 +124,10 @@ SOURCE: /[\s\S]+/
       })
       expect(yield* Ref.get(peak)).toBe(2)
       expect(ids).toEqual([
-        "call-sequential:codemode:0",
-        "call-sequential:codemode:1",
-        "call-parallel:codemode:0",
-        "call-parallel:codemode:1",
+        "call-sequential/0",
+        "call-sequential/1",
+        "call-parallel/0",
+        "call-parallel/1",
       ])
     }),
   )
@@ -153,6 +153,17 @@ SOURCE: /[\s\S]+/
       expect((yield* materialized.settle(call({ code: "not raw" }))).result).toEqual({
         type: "error",
         value: "Invalid exec input: expected raw source text",
+      })
+      expect(
+        (
+          yield* materialized.settle({
+            ...identity,
+            call: { type: "tool-call", id: "call-function-exec", name: "exec", input: "return 42" },
+          })
+        ).result,
+      ).toEqual({
+        type: "error",
+        value: "Invalid exec call: expected a raw custom tool call",
       })
       expect((yield* materialized.settle(call("return await tools.denied({})"))).output?.structured).toMatchObject({
         ok: false,
@@ -215,17 +226,18 @@ SOURCE: /[\s\S]+/
       expect(progress.every((event) => Object.keys(event.latest).toSorted().join(",") === "name,outcome")).toBe(true)
       expect(new Set(parents)).toEqual(new Set(["call-exec"]))
 
-      const bounded = yield* materialized.settle(call('return "x".repeat(70000)', "call-output-limit"))
+      const bounded = yield* materialized.settle(call('return "x".repeat(1048577)', "call-output-limit"))
       expect(bounded.output?.structured).toMatchObject({ ok: true, truncated: true })
+      expect(JSON.stringify(bounded.output?.structured)).toContain("1048576-byte output limit")
 
       const timeout = yield* materialized
         .settle(call("return await tools.never({})", "call-timeout"))
         .pipe(Effect.forkChild)
       yield* Effect.yieldNow
-      yield* TestClock.adjust("60 seconds")
+      yield* TestClock.adjust("120 seconds")
       expect((yield* Fiber.join(timeout)).output?.structured).toMatchObject({
         ok: false,
-        error: { kind: "TimeoutExceeded", message: "Execution timed out after 60000ms." },
+        error: { kind: "TimeoutExceeded", message: "Execution timed out after 120000ms." },
       })
     }),
   )

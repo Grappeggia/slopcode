@@ -145,10 +145,41 @@ test("custom tool events preserve raw input and tool kind", async () => {
     ),
   )
 
-  expect(published.find((event) => event.type === "session.next.tool.called.1")?.data).toMatchObject({
+  expect(published.find((event) => event.type === "session.next.tool.called.2")?.data).toMatchObject({
     toolType: "custom",
     input: "return 42",
   })
+})
+
+test("function tool calls retain the V1 persisted shape", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(publisher.publish(call))
+
+  const called = published.find((event) => event.type === "session.next.tool.called.1")
+  expect(called?.data).toMatchObject({ input: { path: "pixel.png" } })
+  expect(called?.data).not.toHaveProperty("toolType")
+  expect(published.some((event) => event.type === "session.next.tool.called.2")).toBe(false)
+})
+
+test("Tool.Called V2 only decodes raw custom calls", () => {
+  const base = {
+    sessionID,
+    timestamp: Date.now(),
+    assistantMessageID: SessionMessage.ID.create(),
+    callID: "call-exec",
+    tool: "exec",
+    provider: { executed: false },
+  }
+
+  expect(Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)({ ...base, toolType: "custom", input: "return 42" })._tag).toBe(
+    "Some",
+  )
+  expect(Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)({ ...base, toolType: "custom", input: {} })._tag).toBe(
+    "None",
+  )
+  expect(Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)({ ...base, toolType: "function", input: {} })._tag).toBe(
+    "None",
+  )
 })
 
 test("custom tool results cannot change kind", async () => {
