@@ -3,8 +3,10 @@ export * as PluginPackage from "./package"
 import { createSlopcodeClient } from "@slopcode-ai/sdk"
 import { Context, Effect, Option, Schema } from "effect"
 import fs from "node:fs/promises"
+import crypto from "node:crypto"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import npa from "npm-package-arg"
 import semver from "semver"
 import { Config } from "../config"
 import { EventV2 } from "../event"
@@ -25,9 +27,9 @@ export class ClientUnavailableError extends Schema.TaggedErrorClass<ClientUnavai
 export type Fetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 export interface HostInfo {
-  readonly baseUrl: URL
+  readonly baseUrl: URL | (() => URL)
   readonly fetch: Fetch
-  readonly register: (type: string, adapter: unknown) => void
+  readonly register: (projectID: string, type: string, adapter: unknown) => void
 }
 
 export class Host extends Context.Service<Host, HostInfo>()("@slopcode/v2/PluginPackage/Host") {}
@@ -72,6 +74,17 @@ const contains = (root: string, target: string) => {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 }
 
+export function isDeprecated(spec: string) {
+  if (isPath(spec)) return false
+  try {
+    const parsed = npa(spec)
+    const name = parsed.type === "alias" ? (parsed as npa.AliasResult).subSpec.name : parsed.name
+    return typeof name === "string" && deprecated.has(name)
+  } catch {
+    return false
+  }
+}
+
 function value(input: unknown): string | undefined {
   if (typeof input === "string") return input
   if (!isRecord(input)) return
@@ -98,7 +111,13 @@ async function safe(root: string, raw: string, spec: string) {
   const realRoot = await fs.realpath(root)
   const realTarget = await fs.realpath(target)
   if (!contains(realRoot, realTarget)) throw new Error(`Plugin ${spec} entrypoint escapes its package root`)
-  return realTarget
+  const stat = await fs.stat(realTarget)
+  if (stat.isFile()) return realTarget
+  if (stat.isDirectory()) {
+    const nested = await index(realTarget)
+    if (nested && contains(realRoot, nested)) return nested
+  }
+  throw new Error(`Plugin ${spec} entrypoint is not a supported file or directory`)
 }
 
 async function index(root: string) {
@@ -139,11 +158,14 @@ export async function resolve(
     if (!stat.isDirectory())
       throw new ResolveError("entrypoint", new Error(`Plugin ${input.spec} is not a file or directory`))
     const root = await fs.realpath(target)
+    const info = await pkg(root).catch((cause) => {
+      throw new ResolveError("entrypoint", cause)
+    })
     return {
       ...input,
       local: true,
       root,
-      entry: await entry(input.spec, root, await pkg(root)).catch((cause) => {
+      entry: await entry(input.spec, root, info).catch((cause) => {
         throw new ResolveError("entrypoint", cause)
       }),
     }
@@ -152,8 +174,12 @@ export async function resolve(
   const added = await Effect.runPromise(input.npm.add(input.spec)).catch((cause) => {
     throw new ResolveError("install", cause)
   })
-  const root = await fs.realpath(added.directory)
-  const info = await pkg(root)
+  const root = await fs.realpath(added.directory).catch((cause) => {
+    throw new ResolveError("entrypoint", cause)
+  })
+  const info = await pkg(root).catch((cause) => {
+    throw new ResolveError("entrypoint", cause)
+  })
   if (!info) throw new ResolveError("entrypoint", new Error(`Plugin ${input.spec} package.json is missing`))
   const version = input.version ?? InstallationVersion
   if (semver.valid(version) && semver.prerelease(version) === null) {
@@ -182,13 +208,13 @@ function factories(mod: Record<string, unknown>, spec: string) {
       result.push({ ok: false, name, error: new TypeError(`Plugin ${spec} export ${name} is not a server plugin`) })
       continue
     }
-    if (seen.has(factory)) continue
-    seen.add(factory)
     const id = modern && "id" in item ? item.id : undefined
     if (id !== undefined && (typeof id !== "string" || !id.trim())) {
       result.push({ ok: false, name, error: new TypeError(`Plugin ${spec} export ${name} has an invalid id`) })
       continue
     }
+    if (seen.has(factory)) continue
+    seen.add(factory)
     result.push({
       ok: true,
       factory: { name, id: typeof id === "string" ? id.trim() : undefined, value: factory as Factory["value"] },
@@ -262,6 +288,7 @@ export const load = Effect.gen(function* () {
   const plugin = yield* PluginV2.Service
   const events = yield* EventV2.Service
   const host = Option.getOrUndefined(yield* Effect.serviceOption(Host))
+  const baseUrl = host ? (typeof host.baseUrl === "function" ? host.baseUrl() : host.baseUrl) : undefined
   const documents = (yield* config.entries()).filter((item): item is Config.Document => item.type === "document")
   const document = documents.findLast((item) => item.info.plugins !== undefined)
   if (!document?.info.plugins?.length) return
@@ -293,10 +320,53 @@ export const load = Effect.gen(function* () {
       }),
     )
 
-  yield* npm.install(directory).pipe(Effect.catch((cause) => fail(candidates[0], "install", cause).pipe(Effect.asVoid)))
+  const dependencies = yield* Effect.promise(async () => {
+    const json = await pkg(directory).catch(() => undefined)
+    if (!json) return new Set<string>()
+    return new Set(
+      ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"].flatMap((field) =>
+        isRecord(json.json[field]) ? Object.keys(json.json[field]) : [],
+      ),
+    )
+  })
+  const retryable = (cause: unknown) => {
+    if (!isRecord(cause)) return false
+    if (cause.code !== "ERR_MODULE_NOT_FOUND" && cause.code !== "MODULE_NOT_FOUND") return false
+    const specifier =
+      typeof cause.specifier === "string"
+        ? cause.specifier
+        : message(cause).match(/Cannot find (?:package|module) ['"]([^'"]+)['"]/)?.[1]
+    if (!specifier) return false
+    try {
+      const name = npa(specifier).name
+      return typeof name === "string" && dependencies.has(name)
+    } catch {
+      return false
+    }
+  }
+  const retryImport = async (file: string) => {
+    const parsed = path.parse(file)
+    const retry = path.join(parsed.dir, `.${parsed.name}.slopcode-retry-${crypto.randomUUID()}${parsed.ext}`)
+    await fs.copyFile(file, retry)
+    return import(pathToFileURL(retry).href).finally(() => fs.rm(retry, { force: true }))
+  }
+
+  const prepared = yield* npm.install(directory).pipe(
+    Effect.as(true),
+    Effect.catch((cause) =>
+      events
+        .publish(PluginV2.Event.Failed, {
+          package: source,
+          source,
+          stage: "install",
+          message: message(cause),
+        })
+        .pipe(Effect.as(false)),
+    ),
+  )
   const input = {
     client: createSlopcodeClient({
-      baseUrl: (host?.baseUrl ?? new URL("http://unavailable.invalid")).href,
+      baseUrl: (baseUrl ?? new URL("http://unavailable.invalid")).href,
       directory: location.directory,
       fetch: host?.fetch ?? unavailable,
     }),
@@ -308,13 +378,15 @@ export const load = Effect.gen(function* () {
     },
     directory: location.directory,
     worktree: location.project.directory,
-    experimental_workspace: { register: host?.register ?? (() => {}) },
-    serverUrl: host?.baseUrl ?? new URL("http://unavailable.invalid"),
+    experimental_workspace: {
+      register: (type: string, adapter: unknown) => host?.register(String(location.project.id), type, adapter),
+    },
+    serverUrl: baseUrl ?? new URL("http://unavailable.invalid"),
     $: typeof Bun === "undefined" ? undefined : Bun.$,
   }
 
   for (const item of candidates) {
-    if ([...deprecated].some((name) => item.spec.includes(name))) {
+    if (isDeprecated(item.spec)) {
       yield* warn(item, `Skipping deprecated built-in plugin package ${item.spec}`)
       continue
     }
@@ -332,14 +404,14 @@ export const load = Effect.gen(function* () {
     )
     const imported = first.ok
       ? first
-      : row.local && /Cannot find (package|module)|ModuleNotFound/i.test(message(first.error))
+      : row.local && prepared && retryable(first.error)
         ? yield* Effect.gen(function* () {
             yield* npm
               .install(directory)
               .pipe(Effect.catch((cause) => fail(item, "install", cause).pipe(Effect.asVoid)))
             return yield* attempt(
               Effect.tryPromise({
-                try: () => import(`${pathToFileURL(row.entry).href}?slopcode-retry=1`),
+                try: () => retryImport(row.entry),
                 catch: (cause) => cause,
               }),
             )

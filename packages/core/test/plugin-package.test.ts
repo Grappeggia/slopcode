@@ -268,6 +268,50 @@ describe("PluginPackage", () => {
     await expect(resolve(roots[3])).rejects.toMatchObject({ stage: "entrypoint" })
   })
 
+  test("resolves nested directory entrypoints and rejects symlink directory escapes", async () => {
+    await using dir = await tmpdir()
+    const server = path.join(dir.path, "server")
+    const main = path.join(dir.path, "main")
+    const escape = path.join(dir.path, "escape")
+    const outside = path.join(dir.path, "outside")
+    await Promise.all([server, main, escape, outside].map((item) => fs.mkdir(item)))
+    await Promise.all([
+      fs.mkdir(path.join(server, "src")),
+      fs.mkdir(path.join(main, "dist")),
+      Bun.write(path.join(server, "package.json"), JSON.stringify({ exports: { "./server": "./src" } })),
+      Bun.write(path.join(main, "package.json"), JSON.stringify({ main: "./dist" })),
+      Bun.write(path.join(escape, "package.json"), JSON.stringify({ main: "./linked" })),
+      Bun.write(path.join(outside, "index.ts"), "export default async () => ({})"),
+    ])
+    await Promise.all([
+      Bun.write(path.join(server, "src", "index.ts"), "export default async () => ({})"),
+      Bun.write(path.join(main, "dist", "index.js"), "export default async () => ({})"),
+      fs.symlink(outside, path.join(escape, "linked")),
+    ])
+    const npm = Npm.Service.of({
+      add: () => Effect.die("unused"),
+      install: () => Effect.die("unused"),
+      which: () => Effect.succeed(Option.none()),
+    })
+    const resolve = (root: string) => PluginPackage.resolve({ spec: root, source: "config", directory: dir.path, npm })
+    expect((await resolve(server)).entry).toBe(path.join(server, "src", "index.ts"))
+    expect((await resolve(main)).entry).toBe(path.join(main, "dist", "index.js"))
+    await expect(resolve(escape)).rejects.toMatchObject({ stage: "entrypoint" })
+  })
+
+  test("classifies malformed package metadata as entrypoint inspection", async () => {
+    await using dir = await tmpdir()
+    await Bun.write(path.join(dir.path, "package.json"), "{")
+    const npm = Npm.Service.of({
+      add: () => Effect.die("unused"),
+      install: () => Effect.die("unused"),
+      which: () => Effect.succeed(Option.none()),
+    })
+    await expect(
+      PluginPackage.resolve({ spec: dir.path, source: "/config/slopcode.json", directory: dir.path, npm }),
+    ).rejects.toMatchObject({ stage: "entrypoint" })
+  })
+
   test("checks stable npm engine compatibility but skips local compatibility", async () => {
     await using dir = await tmpdir()
     await Bun.write(
@@ -294,11 +338,417 @@ describe("PluginPackage", () => {
         })
       ).local,
     ).toBe(true)
+    await expect(
+      PluginPackage.resolve({
+        spec: "test-plugin",
+        source: "config",
+        directory: dir.path,
+        npm,
+        version: "2.0.0-beta.1",
+      }),
+    ).resolves.toMatchObject({ local: false })
+    await expect(
+      PluginPackage.resolve({ spec: "test-plugin", source: "config", directory: dir.path, npm, version: "3.0.0" }),
+    ).resolves.toMatchObject({ local: false })
   })
+
+  test("matches deprecated npm identities exactly", () => {
+    expect(PluginPackage.isDeprecated("slopcode-openai-codex-auth")).toBe(true)
+    expect(PluginPackage.isDeprecated("slopcode-openai-codex-auth@1.2.3")).toBe(true)
+    expect(PluginPackage.isDeprecated("alias@npm:slopcode-openai-codex-auth@1.2.3")).toBe(true)
+    expect(PluginPackage.isDeprecated("not-slopcode-openai-codex-auth")).toBe(false)
+    expect(PluginPackage.isDeprecated("./slopcode-openai-codex-auth.ts")).toBe(false)
+  })
+
+  it.effect("does not let an invalid modern alias suppress a later valid alias", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir.path, "aliases.ts"),
+              `const server = async () => ({
+                tool: { alias_tool: { description: "alias", args: {}, execute: async () => "ok" } }
+              })
+              export const invalid = { id: "", server }
+              export const valid = { id: "valid-alias", server }`,
+            ),
+          )
+          const location = Location.Service.of({
+            directory: AbsolutePath.make(dir.path),
+            project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+          })
+          const adapter = PluginTool.layer.pipe(
+            Layer.provide(plugins),
+            Layer.provide(registry),
+            Layer.provide(permission),
+            Layer.provide(Layer.succeed(Location.Service, location)),
+            Layer.provide(events),
+          )
+          yield* PluginPackage.load.pipe(
+            Effect.provide(adapter),
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({ plugins: ["./aliases.ts"] }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () => Effect.void,
+                add: () => Effect.die("unused"),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+          )
+          expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toContain(
+            "alias_tool",
+          )
+        }),
+      ),
+    ),
+  )
+
+  it.effect("retries one declared dependency import only and never retries sources, user errors, or factories", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          published.length = 0
+          Object.assign(globalThis, { __h5c3b_factory: 0 })
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(dir.path, "package.json"),
+                JSON.stringify({ dependencies: { "retry-dep": "1.0.0" } }),
+              ),
+              Bun.write(
+                path.join(dir.path, "lookalike.ts"),
+                `throw Object.assign(new Error("Cannot find package 'retry-dep'"), { code: "USER_ERROR" })`,
+              ),
+              Bun.write(
+                path.join(dir.path, "factory-once.ts"),
+                `export default async () => {
+                  globalThis.__h5c3b_factory++
+                  throw new Error("Cannot find package 'retry-dep'")
+                }`,
+              ),
+              Bun.write(
+                path.join(dir.path, "dependency.ts"),
+                `import value from "retry-dep"
+                 export default async () => ({
+                   tool: { retry_tool: { description: "retry", args: {}, execute: async () => value } }
+                 })`,
+              ),
+            ]),
+          )
+          const location = Location.Service.of({
+            directory: AbsolutePath.make(dir.path),
+            project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+          })
+          const adapter = PluginTool.layer.pipe(
+            Layer.provide(plugins),
+            Layer.provide(registry),
+            Layer.provide(permission),
+            Layer.provide(Layer.succeed(Location.Service, location)),
+            Layer.provide(events),
+          )
+          let installs = 0
+          yield* PluginPackage.load.pipe(
+            Effect.provide(adapter),
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({
+                        plugins: ["./missing.ts", "./lookalike.ts", "./factory-once.ts", "./dependency.ts"],
+                      }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () =>
+                  Effect.promise(async () => {
+                    installs++
+                    if (installs !== 2) return
+                    const root = path.join(dir.path, "node_modules", "retry-dep")
+                    await fs.mkdir(root, { recursive: true })
+                    await Bun.write(
+                      path.join(root, "package.json"),
+                      JSON.stringify({ type: "module", main: "index.js" }),
+                    )
+                    await Bun.write(path.join(root, "index.js"), `export default "retried"`)
+                  }),
+                add: () => Effect.die("unused"),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+          )
+          expect(installs).toBe(2)
+          expect((globalThis as { __h5c3b_factory: number }).__h5c3b_factory).toBe(1)
+          expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toContain(
+            "retry_tool",
+          )
+          expect(
+            published
+              .filter((item) => item.type === PluginV2.Event.Failed.type)
+              .map((item) => (item.data as { package: string; stage: string }).package),
+          ).toEqual(["./missing.ts", "./lookalike.ts", "./factory-once.ts"])
+        }),
+      ),
+    ),
+  )
+
+  it.effect("reports dependency preparation against the declaring config source", () =>
+    Effect.gen(function* () {
+      published.length = 0
+      const source = "/config/slopcode.json"
+      yield* PluginPackage.load.pipe(
+        Effect.provideService(
+          Config.Service,
+          Config.Service.of({
+            entries: () =>
+              Effect.succeed([
+                new Config.Document({
+                  type: "document",
+                  path: source,
+                  info: new Config.Info({ plugins: ["slopcode-openai-codex-auth"] }),
+                }),
+              ]),
+          }),
+        ),
+        Effect.provideService(Location.Service, {
+          directory: AbsolutePath.make("/project"),
+          project: { id: "project" as never, directory: AbsolutePath.make("/project") },
+        }),
+        Effect.provideService(
+          Npm.Service,
+          Npm.Service.of({
+            install: () => Effect.fail(new Npm.InstallFailedError({ dir: "/config" })),
+            add: () => Effect.die("unused"),
+            which: () => Effect.die("unused"),
+          }),
+        ),
+      )
+      expect(published[0]).toEqual({
+        type: PluginV2.Event.Failed.type,
+        data: expect.objectContaining({ package: source, source, stage: "install" }),
+      })
+    }),
+  )
+
+  it.effect("loads npm packages with stable IDs, replacement order, hooks, and configured disposal", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          published.length = 0
+          Object.assign(globalThis, { __h5c3b_npm: [] as string[] })
+          const roots = Object.fromEntries(
+            ["first-plugin", "second-plugin", "default-plugin"].map((name) => [name, path.join(dir.path, name)]),
+          )
+          yield* Effect.promise(() => Promise.all(Object.values(roots).map((root) => fs.mkdir(root))))
+          yield* Effect.promise(() =>
+            Promise.all([
+              ...Object.entries(roots).map(([name, root]) =>
+                Bun.write(path.join(root, "package.json"), JSON.stringify({ name, main: "index.ts" })),
+              ),
+              Bun.write(
+                path.join(roots["first-plugin"], "index.ts"),
+                `export default { id: "shared-npm", server: async () => {
+                  globalThis.__h5c3b_npm.push("first")
+                  return {
+                    tool: { npm_tool: { description: "first", args: {}, execute: async () => "first" } },
+                    dispose: () => globalThis.__h5c3b_npm.push("dispose-first")
+                  }
+                } }`,
+              ),
+              Bun.write(
+                path.join(roots["second-plugin"], "index.ts"),
+                `export default { id: "shared-npm", server: async () => {
+                  globalThis.__h5c3b_npm.push("second")
+                  return {
+                    tool: { npm_tool: { description: "second", args: {}, execute: async () => "second" } },
+                    "tool.execute.before": async (_input, output) => { output.args = { changed: true } },
+                    "tool.execute.after": async (_input, output) => { output.output += ":after" },
+                    dispose: () => globalThis.__h5c3b_npm.push("dispose-second")
+                  }
+                } }`,
+              ),
+              Bun.write(
+                path.join(roots["default-plugin"], "index.ts"),
+                `export default async () => {
+                  globalThis.__h5c3b_npm.push("default")
+                  return {}
+                }`,
+              ),
+            ]),
+          )
+          const location = Location.Service.of({
+            directory: AbsolutePath.make(dir.path),
+            project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+          })
+          const adapter = PluginTool.layer.pipe(
+            Layer.provide(plugins),
+            Layer.provide(registry),
+            Layer.provide(permission),
+            Layer.provide(Layer.succeed(Location.Service, location)),
+            Layer.provide(events),
+          )
+          const added: string[] = []
+          yield* PluginPackage.load.pipe(
+            Effect.provide(adapter),
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({ plugins: ["first-plugin", "second-plugin", "default-plugin"] }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () => Effect.void,
+                add: (spec) =>
+                  Effect.sync(() => {
+                    added.push(spec)
+                    return { directory: roots[spec], entrypoint: Option.none<string>() }
+                  }),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+          )
+          const plugin = yield* PluginV2.Service
+          expect(added).toEqual(["first-plugin", "second-plugin", "default-plugin"])
+          expect((globalThis as { __h5c3b_npm: string[] }).__h5c3b_npm).toEqual([
+            "first",
+            "second",
+            "dispose-first",
+            "default",
+          ])
+          expect(
+            (yield* (yield* ToolRegistry.Service).materialize()).definitions.find((item) => item.name === "npm_tool")
+              ?.description,
+          ).toBe("second")
+          expect(
+            yield* plugin.triggerFor(
+              PluginV2.ID.make("shared-npm"),
+              "tool.execute.before",
+              { tool: "npm_tool", sessionID: "session", callID: "call" },
+              { args: {} },
+            ),
+          ).toMatchObject({ args: { changed: true } })
+          expect(
+            yield* plugin.triggerFor(
+              PluginV2.ID.make("shared-npm"),
+              "tool.execute.after",
+              { tool: "npm_tool", sessionID: "session", callID: "call", args: {} },
+              { output: "result" },
+            ),
+          ).toMatchObject({ output: "result:after" })
+          expect(published.filter((item) => item.type === PluginV2.Event.Added.type).map((item) => item.data)).toEqual([
+            { id: PluginV2.ID.make("shared-npm") },
+            { id: PluginV2.ID.make("shared-npm") },
+            { id: PluginV2.ID.make("default-plugin#default") },
+          ])
+          yield* plugin.remove(PluginV2.ID.make("shared-npm"))
+          expect((globalThis as { __h5c3b_npm: string[] }).__h5c3b_npm).toContain("dispose-second")
+        }),
+      ),
+    ),
+  )
 
   test("uses a typed unavailable transport instead of ambient network fetch", async () => {
     await expect(PluginPackage.unavailable(new Request("http://unavailable.invalid/project"))).rejects.toBeInstanceOf(
       PluginPackage.ClientUnavailableError,
     )
   })
+
+  it.effect("fails an actual embedded SDK client call through the typed unavailable transport", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          published.length = 0
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir.path, "client.ts"),
+              `export default async (input) => {
+                await input.client.project.list()
+                return {}
+              }`,
+            ),
+          )
+          yield* PluginPackage.load.pipe(
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({ plugins: ["./client.ts"] }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, {
+              directory: AbsolutePath.make(dir.path),
+              project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+            }),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () => Effect.void,
+                add: () => Effect.die("unused"),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+          )
+          expect(published).toContainEqual({
+            type: PluginV2.Event.Failed.type,
+            data: expect.objectContaining({
+              package: "./client.ts",
+              stage: "factory",
+              message: expect.stringContaining("No local plugin SDK transport is installed"),
+            }),
+          })
+        }),
+      ),
+    ),
+  )
 })
