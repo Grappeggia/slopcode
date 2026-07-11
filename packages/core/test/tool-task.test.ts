@@ -610,7 +610,7 @@ describe("TaskTool durable orchestration", () => {
         const request = yield* SessionTask.request(db, parentID, messageID, item.callID)
         expect(request).toMatchObject({
           title: "Modeled (@modeled subagent)",
-          ceiling: [],
+          ceiling: item.permissions,
           permissions: item.permissions,
         })
         const materialized = yield* (yield* ToolRegistry.Service).materialize(request!.permissions, request!.plan)
@@ -629,6 +629,53 @@ describe("TaskTool durable orchestration", () => {
         "call-resume-description-recovery",
         "call-resume-permission-recovery",
       ])
+    }),
+  )
+
+  fixture.it.effect("monotonically strengthens a resumed child ceiling and recovers the revised request", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const runs: string[] = []
+      yield* complete(runs)
+      yield* settleWith(
+        "call-ceiling-origin",
+        { description: "Ceiling", prompt: "origin", subagent_type: "general" },
+        [{ action: "external_directory", resource: "/outside/*", effect: "ask" }],
+      )
+      const taskID = SessionTask.childID(parentID, messageID, "call-ceiling-origin")
+      const callID = "call-ceiling-resume"
+      const permissions: PermissionV2.Ruleset = [
+        { action: "external_directory", resource: "/outside/*", effect: "ask" },
+        { action: "edit", resource: "new-secret", effect: "deny" },
+      ]
+      const input = {
+        description: "Continue ceiling",
+        prompt: "resume",
+        subagent_type: "general",
+        task_id: taskID,
+      }
+      expect((yield* settleWith(callID, input, permissions)).result.type).toBe("text")
+      const expected = expect.arrayContaining([
+        { action: "external_directory", resource: "/outside/*", effect: "ask" },
+        { action: "edit", resource: "new-secret", effect: "deny" },
+        { action: "task", resource: "*", effect: "deny" },
+        { action: "todowrite", resource: "*", effect: "deny" },
+      ])
+      expect((yield* (yield* SessionStore.Service).task(taskID))?.ceiling).toEqual(expected)
+      const request = yield* SessionTask.request(db, parentID, messageID, callID)
+      expect(request?.ceiling).toEqual(expected)
+      const materialized = yield* (yield* ToolRegistry.Service).materialize(request!.permissions, request!.plan)
+      expect(
+        (yield* materialized.settle({
+          sessionID: parentID,
+          agent: request!.callerAgent,
+          assistantMessageID: messageID,
+          call: { type: "tool-call", id: callID, name: "task", input },
+          task: request,
+        })).result.type,
+      ).toBe("text")
+      expect(runs).toEqual(["call-ceiling-origin", callID])
     }),
   )
 

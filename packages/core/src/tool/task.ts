@@ -92,6 +92,12 @@ const sameModel = (left: ModelV2.Ref, right: typeof SessionTable.$inferSelect.mo
   left.providerID === right.providerID &&
   left.variant === ModelV2.VariantID.make(right.variant ?? "default")
 
+const contains = (ceiling: PermissionV2.Ruleset, prior: PermissionV2.Ruleset) =>
+  prior.every((rule) => ceiling.some((current) => JSON.stringify(current) === JSON.stringify(rule)))
+
+const merge = (...ceilings: ReadonlyArray<PermissionV2.Ruleset>) =>
+  ceilings.flat().filter((rule, index, rules) => rules.findIndex((item) => JSON.stringify(item) === JSON.stringify(rule)) === index)
+
 const render = (output: { readonly task_id: string; readonly state: "completed"; readonly result: string }) =>
   [`<task id="${output.task_id}" state="completed">`, "<task_result>", output.result, "</task_result>", "</task>"].join(
     "\n",
@@ -164,7 +170,7 @@ export const layer = Layer.effectDiscard(
           origin.location.workspaceID === (row.workspace_id ?? undefined) &&
           origin.title === row.title &&
           sameModel(origin.model, row.model) &&
-          JSON.stringify(origin.ceiling) === JSON.stringify(owner.ceiling))
+          contains(owner.ceiling, origin.ceiling))
       const request =
         input.request === undefined ||
         (row !== undefined &&
@@ -178,7 +184,8 @@ export const layer = Layer.effectDiscard(
           input.request.location.workspaceID === (row.workspace_id ?? undefined) &&
           input.request.title === row.title &&
           sameModel(input.request.model, row.model) &&
-          JSON.stringify(input.request.ceiling) === JSON.stringify(owner?.ceiling))
+          owner !== undefined &&
+          contains(owner.ceiling, input.request.ceiling))
       if (
         !row ||
         row.runtime !== "v2" ||
@@ -193,7 +200,7 @@ export const layer = Layer.effectDiscard(
         owner.agent !== input.agent ||
         (input.origin !== undefined &&
           (owner.origin.messageID !== input.origin.messageID || owner.origin.callID !== input.origin.callID)) ||
-        (input.ceiling !== undefined && JSON.stringify(owner.ceiling) !== JSON.stringify(input.ceiling)) ||
+        (input.ceiling !== undefined && !contains(owner.ceiling, input.ceiling)) ||
         !canonical ||
         !request
       )
@@ -425,7 +432,9 @@ export const layer = Layer.effectDiscard(
               const inherited = source.message.model
               const expected = selected.model ?? inherited
               const derived = [
-                ...context.permissions.filter((rule) => rule.effect === "deny"),
+                ...context.permissions.filter(
+                  (rule) => rule.effect === "deny" || (rule.action === "external_directory" && rule.effect === "ask"),
+                ),
                 ...(selected.permissions.some((rule) => rule.action === name)
                   ? []
                   : [{ action: name, resource: "*", effect: "deny" as const }]),
@@ -488,12 +497,21 @@ export const layer = Layer.effectDiscard(
                   })
                 : expected
               const taskID = row ? SessionSchema.ID.make(row.id) : deterministic
-              const ownership = row ? yield* store.task(taskID) : owner
-              if (!ownership)
+              const persisted = row ? yield* store.task(taskID) : owner
+              if (!persisted)
                 return yield* new ResumeConflictError({
                   taskID,
                   message: `Task resume conflict: ${taskID} has no persisted owner`,
                 })
+              const ceiling = input.task_id ? merge(persisted.ceiling, derived) : derived
+              const ownership = { ...persisted, ceiling }
+              if (input.task_id && JSON.stringify(persisted.ceiling) !== JSON.stringify(ceiling))
+                yield* db
+                  .update(SessionTable)
+                  .set({ metadata: { ...(row?.metadata ?? {}), task: ownership } })
+                  .where(eq(SessionTable.id, taskID))
+                  .run()
+                  .pipe(Effect.orDie)
               const identity = input.task_id && row
                 ? {
                     projectID: row.project_id,
@@ -502,7 +520,7 @@ export const layer = Layer.effectDiscard(
                       workspaceID: row.workspace_id ?? undefined,
                     }),
                     title: row.title,
-                    ceiling: ownership.ceiling,
+                    ceiling,
                   }
                 : { projectID: parent.projectID, location, title, ceiling: derived }
               const promptID = SessionTask.promptID(context.sessionID, context.assistantMessageID, context.toolCallID)

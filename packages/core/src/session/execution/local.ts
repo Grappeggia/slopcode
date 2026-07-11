@@ -42,6 +42,7 @@ export const layer = Layer.effect(
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, mode) {
         const session = yield* store.get(sessionID)
         if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
+        if (yield* SessionTask.orphaned(db, sessionID)) return
         return yield* SessionRunner.Service.use((runner) => runner.run({ sessionID, force: mode === "run" })).pipe(
           Effect.provide(locations.get(session.location)),
         )
@@ -79,8 +80,10 @@ export const layer = Layer.effect(
           SessionTask.hasPending(store, info.sessionID),
         ])
         if (!pending.some(Boolean)) return
+        if (yield* SessionTask.orphaned(db, info.sessionID)) return
         yield* coordinator.wake(info.sessionID)
-        if (pending.filter(Boolean).length > 1) yield* coordinator.wake(info.sessionID)
+        if (pending.filter(Boolean).length > 1 && !(yield* SessionTask.orphaned(db, info.sessionID)))
+          yield* coordinator.wake(info.sessionID)
       }),
       { discard: true },
     )

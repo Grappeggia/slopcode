@@ -188,6 +188,20 @@ export const layer = Layer.effect(
       )
     }
 
+    function ceilingAsks(input: AssertInput, rules: Ruleset) {
+      return (
+        input.action === "external_directory" &&
+        input.resources.some((resource) =>
+          rules.some(
+            (rule) =>
+              rule.effect === "ask" &&
+              Wildcard.match(input.action, rule.action) &&
+              Wildcard.match(resource, rule.resource),
+          ),
+        )
+      )
+    }
+
     function relevant(input: AssertInput, rules: Ruleset) {
       return rules.filter((rule) => Wildcard.match(input.action, rule.action))
     }
@@ -197,6 +211,7 @@ export const layer = Layer.effect(
       const combined = [...configuredRules.rules, ...configuredRules.ceiling]
       if (denied(input, configuredRules.rules) || ceilingDenied(input, configuredRules.ceiling))
         return { effect: "deny" as const, rules: combined }
+      if (ceilingAsks(input, configuredRules.ceiling)) return { effect: "ask" as const, rules: combined }
       const all = [...configuredRules.rules, ...(yield* savedRules())]
       const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
       const effect: Effect = effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow"
@@ -306,7 +321,12 @@ export const layer = Layer.effect(
               EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
             )
             if (!configuredRules) continue
-            if (denied(input, configuredRules.rules) || ceilingDenied(input, configuredRules.ceiling)) continue
+            if (
+              denied(input, configuredRules.rules) ||
+              ceilingDenied(input, configuredRules.ceiling) ||
+              ceilingAsks(input, configuredRules.ceiling)
+            )
+              continue
             const effective = [...configuredRules.rules, ...rememberedRules]
             if (
               !item.request.resources.every(

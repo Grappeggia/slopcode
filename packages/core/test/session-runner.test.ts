@@ -4636,6 +4636,12 @@ describe("SessionRunnerLLM", () => {
         sessionID,
         timestamp: yield* DateTime.now,
       })
+      yield* database.db
+        .update(SessionTable)
+        .set({ runtime_state: "draining" })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
       requests.length = 0
       responses = [fragmentFixture("text", "text-should-not-run", ["unexpected"]).completeEvents]
       const local = SessionExecutionLocal.layer.pipe(
@@ -4662,6 +4668,85 @@ describe("SessionRunnerLLM", () => {
         state: { status: "error", error: { message: "Tool execution interrupted" } },
       })
       expect(yield* SessionTask.interrupted(database.db, sessionID, messageID, callID)).toBeFalse()
+    }),
+  )
+
+  it.effect("settles a pending task interrupted before its durable request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Interrupted before request" }), resume: false })
+      yield* SessionInput.promoteSteers(database.db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const messageID = SessionMessage.ID.make("msg_e2e_interrupt_without_request")
+      const callID = "call-e2e-interrupt-without-request"
+      const model = ModelV2.Ref.make({
+        providerID: ProviderV2.ID.make("fake"),
+        id: ModelV2.ID.make("fake-model"),
+        variant: ModelV2.VariantID.make("default"),
+      })
+      const input = { description: "Never create", prompt: "never dispatch", subagent_type: "general" }
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        agent: "build",
+        model,
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        name: "task",
+      })
+      yield* events.publish(SessionEvent.Tool.Input.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID: messageID,
+        callID,
+        text: JSON.stringify(input),
+      })
+      yield* events.publish(SessionEvent.InterruptRequested, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+      })
+      yield* database.db
+        .update(SessionTable)
+        .set({ runtime_state: "draining" })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      requests.length = 0
+      responses = [fragmentFixture("text", "text-without-request-should-not-run", ["unexpected"]).completeEvents]
+      const local = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(
+          Layer.mock(LocationServiceMap, {
+            get: () => Layer.succeed(SessionRunner.Service, runner),
+          }),
+        ),
+      )
+
+      yield* Effect.gen(function* () {
+        const execution = yield* SessionExecution.Service
+        yield* execution.wait(sessionID)
+      }).pipe(Effect.provide(local), Effect.provide(TaskTool.layer))
+
+      expect(yield* SessionTask.request(database.db, sessionID, messageID, callID)).toBeUndefined()
+      expect(requests.filter((item) => userTexts(item).includes(input.prompt))).toHaveLength(0)
+      const settled = (yield* session.context(sessionID))
+        .flatMap((message) => (message.type === "assistant" ? message.content : []))
+        .find((part) => part.type === "tool" && part.id === callID)
+      expect(settled).toMatchObject({
+        state: { status: "error", error: { message: "Tool execution interrupted" } },
+      })
     }),
   )
 
