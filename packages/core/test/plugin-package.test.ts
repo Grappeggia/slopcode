@@ -467,7 +467,7 @@ describe("PluginPackage", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           published.length = 0
-          Object.assign(globalThis, { __h5c3b_factory: 0 })
+          Object.assign(globalThis, { __h5c3b_factory: 0, __h5c3b_retry_factory: 0 })
           yield* Effect.promise(() =>
             Promise.all([
               Bun.write(
@@ -487,11 +487,13 @@ describe("PluginPackage", () => {
               ),
               Bun.write(
                 path.join(dir.path, "dependency.ts"),
-                `import value from "retry-dep"
-                 export default async () => ({
-                   tool: { retry_tool: { description: "retry", args: {}, execute: async () => value } }
-                 })`,
+                `import value from "./dependency-child"
+                 export default async () => {
+                   globalThis.__h5c3b_retry_factory++
+                   return { tool: { retry_tool: { description: "retry", args: {}, execute: async () => value } } }
+                 }`,
               ),
+              Bun.write(path.join(dir.path, "dependency-child.ts"), `export { default } from "retry-dep/subpath"`),
             ]),
           )
           const location = Location.Service.of({
@@ -535,9 +537,9 @@ describe("PluginPackage", () => {
                     await fs.mkdir(root, { recursive: true })
                     await Bun.write(
                       path.join(root, "package.json"),
-                      JSON.stringify({ type: "module", main: "index.js" }),
+                      JSON.stringify({ type: "module", exports: { "./subpath": "./subpath.js" } }),
                     )
-                    await Bun.write(path.join(root, "index.js"), `export default "retried"`)
+                    await Bun.write(path.join(root, "subpath.js"), `export default "retried"`)
                   }),
                 add: () => Effect.die("unused"),
                 which: () => Effect.die("unused"),
@@ -546,14 +548,96 @@ describe("PluginPackage", () => {
           )
           expect(installs).toBe(2)
           expect((globalThis as { __h5c3b_factory: number }).__h5c3b_factory).toBe(1)
+          expect((globalThis as { __h5c3b_retry_factory: number }).__h5c3b_retry_factory).toBe(1)
           expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toContain(
             "retry_tool",
           )
+          expect(
+            (yield* Effect.promise(() => fs.readdir(dir.path))).some((name) => name.includes("slopcode-retry")),
+          ).toBe(false)
           expect(
             published
               .filter((item) => item.type === PluginV2.Event.Failed.type)
               .map((item) => (item.data as { package: string; stage: string }).package),
           ).toEqual(["./missing.ts", "./lookalike.ts", "./factory-once.ts"])
+        }),
+      ),
+    ),
+  )
+
+  it.effect("retries scoped dependency subpaths by root package identity", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(dir.path, "package.json"),
+                JSON.stringify({ dependencies: { "@scope/retry": "1.0.0" } }),
+              ),
+              Bun.write(path.join(dir.path, "plugin.ts"), `export { default } from "./child"`),
+              Bun.write(
+                path.join(dir.path, "child.ts"),
+                `import value from "@scope/retry/subpath"
+                 export default async () => ({ tool: { scoped_retry: { description: "scoped", args: {}, execute: async () => value } } })`,
+              ),
+            ]),
+          )
+          const location = Location.Service.of({
+            directory: AbsolutePath.make(dir.path),
+            project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+          })
+          const adapter = PluginTool.layer.pipe(
+            Layer.provide(plugins),
+            Layer.provide(registry),
+            Layer.provide(permission),
+            Layer.provide(Layer.succeed(Location.Service, location)),
+            Layer.provide(events),
+          )
+          let installs = 0
+          yield* PluginPackage.load.pipe(
+            Effect.provide(adapter),
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({ plugins: ["./plugin.ts"] }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () =>
+                  Effect.promise(async () => {
+                    installs++
+                    if (installs !== 2) return
+                    const root = path.join(dir.path, "node_modules", "@scope", "retry")
+                    await fs.mkdir(root, { recursive: true })
+                    await Bun.write(
+                      path.join(root, "package.json"),
+                      JSON.stringify({ type: "module", exports: { "./subpath": "./subpath.js" } }),
+                    )
+                    await Bun.write(path.join(root, "subpath.js"), `export default "scoped"`)
+                  }),
+                add: () => Effect.die("unused"),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+          )
+          expect(installs).toBe(2)
+          expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toContain(
+            "scoped_retry",
+          )
         }),
       ),
     ),
@@ -723,11 +807,20 @@ describe("PluginPackage", () => {
       Effect.flatMap((dir) =>
         Effect.gen(function* () {
           published.length = 0
+          Object.assign(globalThis, { __h5c3b_hostile_dispose: [] as string[] })
           yield* Effect.promise(() =>
             Promise.all([
               Bun.write(
                 path.join(dir.path, "hostile.ts"),
-                `export default async () => new Proxy({}, { ownKeys() { throw new Error("hostile ownKeys") } })`,
+                `export default async () => new Proxy({
+                  dispose() { globalThis.__h5c3b_hostile_dispose.push("ownKeys"); throw new Error("cleanup defect") }
+                }, { ownKeys() { throw new Error("hostile ownKeys") } })`,
+              ),
+              Bun.write(
+                path.join(dir.path, "getter.ts"),
+                `export default async () => new Proxy({
+                  dispose() { globalThis.__h5c3b_hostile_dispose.push("getter") }
+                }, { get(target, key) { if (key === "tool") throw new Error("hostile getter"); return Reflect.get(target, key) } })`,
               ),
               Bun.write(
                 path.join(dir.path, "healthy.ts"),
@@ -756,7 +849,7 @@ describe("PluginPackage", () => {
                     new Config.Document({
                       type: "document",
                       path: path.join(dir.path, "slopcode.json"),
-                      info: new Config.Info({ plugins: ["./hostile.ts", "./healthy.ts"] }),
+                      info: new Config.Info({ plugins: ["./hostile.ts", "./getter.ts", "./healthy.ts"] }),
                     }),
                   ]),
               }),
@@ -775,14 +868,87 @@ describe("PluginPackage", () => {
             expect.objectContaining({
               data: expect.objectContaining({
                 package: "./hostile.ts",
-                source: path.join(dir.path, "slopcode.json"),
                 stage: "hook-shape",
                 message: "hostile ownKeys",
               }),
             }),
+            expect.objectContaining({
+              data: expect.objectContaining({ package: "./getter.ts", stage: "hook-shape", message: "hostile getter" }),
+            }),
+          ])
+          expect((globalThis as { __h5c3b_hostile_dispose: string[] }).__h5c3b_hostile_dispose).toEqual([
+            "ownKeys",
+            "getter",
           ])
           expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toContain(
             "proxy_healthy",
+          )
+        }),
+      ),
+    ),
+  )
+
+  it.effect("isolates modern export inspection traps and loads later aliases in the same module", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          published.length = 0
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir.path, "exports.ts"),
+              `const server = async () => ({ tool: { export_healthy: { description: "healthy", args: {}, execute: async () => "ok" } } })
+               export const inTrap = new Proxy({}, { has() { throw new Error("server in trap") } })
+               export const getTrap = new Proxy({}, { has(_target, key) { return key === "server" }, get() { throw new Error("server get trap") } })
+               export const idTrap = { server, get id() { throw new Error("id get trap") } }
+               export const healthy = { id: "export-healthy", server }`,
+            ),
+          )
+          const location = Location.Service.of({
+            directory: AbsolutePath.make(dir.path),
+            project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+          })
+          const adapter = PluginTool.layer.pipe(
+            Layer.provide(plugins),
+            Layer.provide(registry),
+            Layer.provide(permission),
+            Layer.provide(Layer.succeed(Location.Service, location)),
+            Layer.provide(events),
+          )
+          yield* PluginPackage.load.pipe(
+            Effect.provide(adapter),
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({ plugins: ["./exports.ts"] }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () => Effect.void,
+                add: () => Effect.die("unused"),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+          )
+          expect(
+            published
+              .filter((item) => item.type === PluginV2.Event.Failed.type)
+              .map((item) => (item.data as { message: string }).message),
+          ).toEqual(["server get trap", "id get trap", "server in trap"])
+          expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toContain(
+            "export_healthy",
           )
         }),
       ),

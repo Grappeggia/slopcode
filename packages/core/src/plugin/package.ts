@@ -217,13 +217,24 @@ function factories(mod: Record<string, unknown>, spec: string) {
   const seen = new Set<unknown>()
   const result: Export[] = []
   for (const [name, item] of Object.entries(mod)) {
-    const modern = isRecord(item) && "server" in item
-    const factory = modern ? item.server : item
+    let factory: unknown
+    let id: unknown
+    try {
+      if (isRecord(item) && "server" in item) {
+        factory = item.server
+        id = "id" in item ? item.id : undefined
+      } else {
+        factory = item
+        id = undefined
+      }
+    } catch (error) {
+      result.push({ ok: false, name, error: error instanceof Error ? error : new Error(String(error)) })
+      continue
+    }
     if (typeof factory !== "function") {
       result.push({ ok: false, name, error: new TypeError(`Plugin ${spec} export ${name} is not a server plugin`) })
       continue
     }
-    const id = modern && "id" in item ? item.id : undefined
     if (id !== undefined && (typeof id !== "string" || !id.trim())) {
       result.push({ ok: false, name, error: new TypeError(`Plugin ${spec} export ${name} has an invalid id`) })
       continue
@@ -240,11 +251,11 @@ function factories(mod: Record<string, unknown>, spec: string) {
   return result
 }
 
-function registration(hooks: unknown, spec: string) {
+function registration(hooks: unknown, spec: string, dispose: (() => void | Promise<void>) | undefined) {
   if (!isRecord(hooks)) throw new TypeError(`Plugin ${spec} factory must return a hook object`)
   if (hooks.tool !== undefined && !isRecord(hooks.tool))
     throw new TypeError(`Plugin ${spec} tool hook must be an object`)
-  for (const name of ["tool.execute.before", "tool.execute.after", "dispose"] as const) {
+  for (const name of ["tool.execute.before", "tool.execute.after"] as const) {
     if (hooks[name] !== undefined && typeof hooks[name] !== "function")
       throw new TypeError(`Plugin ${spec} hook ${name} must be a function`)
   }
@@ -292,7 +303,7 @@ function registration(hooks: unknown, spec: string) {
               if (Array.isArray(output.attachments)) event.attachments = output.attachments as never
             }),
         }),
-    ...(hooks.dispose === undefined ? {} : { dispose: hooks.dispose as () => void | Promise<void> }),
+    ...(dispose === undefined ? {} : { dispose }),
   } satisfies PluginV2.Registration
 }
 
@@ -352,18 +363,25 @@ export const load = Effect.gen(function* () {
         ? cause.specifier
         : message(cause).match(/Cannot find (?:package|module) ['"]([^'"]+)['"]/)?.[1]
     if (!specifier) return false
-    try {
-      const name = npa(specifier).name
-      return typeof name === "string" && dependencies.has(name)
-    } catch {
-      return false
-    }
+    const parts = specifier.split("/")
+    const name = specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]
+    return dependencies.has(name)
   }
-  const retryImport = async (file: string) => {
-    const parsed = path.parse(file)
-    const retry = path.join(parsed.dir, `.${parsed.name}.slopcode-retry-${crypto.randomUUID()}${parsed.ext}`)
-    await fs.copyFile(file, retry)
-    return import(pathToFileURL(retry).href).finally(() => fs.rm(retry, { force: true }))
+  const retryImport = async (row: Resolved) => {
+    const retry = path.join(row.root, `.slopcode-retry-${crypto.randomUUID()}`)
+    try {
+      const build = Bun.spawn({
+        cmd: [process.execPath, "build", row.entry, "--outdir", retry, "--target", "bun", "--format", "esm"],
+        stdout: "ignore",
+        stderr: "pipe",
+      })
+      if ((await build.exited) !== 0) throw new Error(await new Response(build.stderr).text())
+      const output = (await fs.readdir(retry, { recursive: true })).find((file) => /\.(?:js|mjs|cjs)$/.test(file))
+      if (!output) throw new Error(`Plugin ${row.spec} retry build produced no entrypoint`)
+      return await import(pathToFileURL(path.join(retry, output)).href)
+    } finally {
+      await fs.rm(retry, { recursive: true, force: true })
+    }
   }
 
   const prepared = yield* npm.install(directory).pipe(
@@ -434,7 +452,7 @@ export const load = Effect.gen(function* () {
             if (!installed) return first
             return yield* attempt(
               Effect.tryPromise({
-                try: () => retryImport(row.entry),
+                try: () => retryImport(row),
                 catch: (cause) => cause,
               }),
             )
@@ -472,10 +490,41 @@ export const load = Effect.gen(function* () {
         yield* fail(item, "factory", hooks.error, id)
         continue
       }
+      const resource = yield* attempt(
+        Effect.try({
+          try: () => {
+            if (!isRecord(hooks.value)) throw new TypeError(`Plugin ${item.spec} factory must return a hook object`)
+            const dispose = hooks.value.dispose
+            if (dispose !== undefined && typeof dispose !== "function")
+              throw new TypeError(`Plugin ${item.spec} hook dispose must be a function`)
+            return dispose as (() => void | Promise<void>) | undefined
+          },
+          catch: (cause) => cause,
+        }),
+      )
+      if (!resource.ok) {
+        yield* fail(item, "hook-shape", resource.error, id)
+        continue
+      }
+      const cleanup = () =>
+        resource.value
+          ? Effect.tryPromise({ try: () => Promise.resolve(resource.value?.()), catch: (cause) => cause }).pipe(
+              Effect.tapError((cause) =>
+                Effect.logError("failed to dispose rejected configured plugin", {
+                  id,
+                  package: item.spec,
+                  source: item.source,
+                  stage: "hook-shape",
+                  cause,
+                }),
+              ),
+              Effect.ignore,
+            )
+          : Effect.void
       const inspected = yield* attempt(
         Effect.try({
           try: () => ({
-            adapted: registration(hooks.value, item.spec),
+            adapted: registration(hooks.value, item.spec, resource.value),
             names: Object.keys(hooks.value as Record<string, unknown>),
           }),
           catch: (cause) => cause,
@@ -483,6 +532,7 @@ export const load = Effect.gen(function* () {
       )
       if (!inspected.ok) {
         yield* fail(item, "hook-shape", inspected.error, id)
+        yield* cleanup()
         continue
       }
       for (const name of inspected.value.names) {
