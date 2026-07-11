@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { ProviderMetadata, ToolContent } from "@slopcode-ai/llm"
+import { ProviderMetadata, ToolContent, ToolType } from "@slopcode-ai/llm"
 import { EventV2 } from "../event"
 import { ModelV2 } from "../model"
 import { NonNegativeInt } from "../schema"
@@ -310,6 +310,7 @@ export namespace Tool {
       schema: {
         ...ToolBase,
         name: Schema.String,
+        toolType: ToolType.pipe(Schema.optional),
       },
     })
     export type Started = typeof Started.Type
@@ -341,7 +342,8 @@ export namespace Tool {
     schema: {
       ...ToolBase,
       tool: Schema.String,
-      input: Schema.Record(Schema.String, Schema.Unknown),
+      input: Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.String]),
+      toolType: ToolType.pipe(Schema.optional),
       provider: Schema.Struct({
         executed: Schema.Boolean,
         metadata: ProviderMetadata.pipe(Schema.optional),

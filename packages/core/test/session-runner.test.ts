@@ -32,6 +32,7 @@ import { SessionRunCoordinator } from "@slopcode-ai/core/session/run-coordinator
 import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import * as SessionRunnerLLM from "@slopcode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@slopcode-ai/core/session/runner/model"
+import { createLLMEventPublisher } from "@slopcode-ai/core/session/runner/publish-llm-event"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
 import { ToolOutputStore } from "@slopcode-ai/core/tool-output-store"
 import { ApplicationTools } from "@slopcode-ai/core/tool/application-tools"
@@ -2278,6 +2279,57 @@ describe("SessionRunnerLLM", () => {
           result: { type: "json", value: [{ title: "Effect" }] },
           providerExecuted: true,
           providerMetadata: { anthropic: { blockType: "web_search_tool_result" } },
+        },
+      ])
+    }),
+  )
+
+  it.effect("replays durable custom tool calls and results with raw source", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      const events = yield* EventV2.Service
+      const session = yield* SessionV2.Service
+      const publisher = createLLMEventPublisher(events, {
+        sessionID,
+        agent: "build",
+        model: { id: ModelV2.ID.make(model.id), providerID: ProviderV2.ID.make(model.provider) },
+      })
+      yield* publisher.publish(
+        LLMEvent.toolCall({ id: "call-exec", name: "exec", toolType: "custom", input: "return 42" }),
+      )
+      yield* publisher.publish(
+        LLMEvent.toolResult({
+          id: "call-exec",
+          name: "exec",
+          toolType: "custom",
+          result: { type: "json", value: { ok: true, value: 42 } },
+          output: { structured: { ok: true, value: 42 }, content: [] },
+        }),
+      )
+      yield* replaySessionProjection(sessionID)
+
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue" }), resume: false })
+      response = []
+      yield* session.resume(sessionID)
+
+      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["assistant", "tool", "user"])
+      expect(requests[0]?.messages[0]?.content).toMatchObject([
+        {
+          type: "tool-call",
+          toolType: "custom",
+          id: "call-exec",
+          name: "exec",
+          input: "return 42",
+        },
+      ])
+      expect(requests[0]?.messages[1]?.content).toMatchObject([
+        {
+          type: "tool-result",
+          toolType: "custom",
+          id: "call-exec",
+          name: "exec",
+          result: { type: "json", value: { ok: true, value: 42 } },
         },
       ])
     }),

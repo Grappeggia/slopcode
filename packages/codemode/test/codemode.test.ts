@@ -154,11 +154,12 @@ describe("CodeMode host failure boundary", () => {
 describe("CodeMode tool-call observation", () => {
   test("reports the tools actually invoked with decoded input", async () => {
     const calls: Array<unknown> = []
+    const contexts: Array<unknown> = []
     const lookup = Tool.make({
       description: "Look up a value",
       input: Schema.Struct({ query: Schema.String }),
       output: Schema.String,
-      run: ({ query }) => Effect.succeed(query),
+      run: ({ query }, context) => Effect.sync(() => contexts.push(context)).pipe(Effect.as(query)),
     })
 
     const result = await Effect.runPromise(
@@ -173,6 +174,7 @@ describe("CodeMode tool-call observation", () => {
 
     expect(result.ok).toBe(true)
     expect(calls).toStrictEqual([{ index: 0, name: "context.lookup", input: { query: "deployment failure" } }])
+    expect(contexts).toStrictEqual([{ index: 0, name: "context.lookup" }])
   })
 
   test("observes settled calls with outcome and duration", async () => {
