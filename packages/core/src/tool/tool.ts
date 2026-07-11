@@ -64,6 +64,16 @@ type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
   }) => ReadonlyArray<Content>
 }
 
+type DynamicConfig<Input, Output, Encoded> = {
+  readonly description: string | ((permissions: PermissionV2.Ruleset) => string)
+  readonly inputSchema: JsonSchema.JsonSchema
+  readonly outputSchema?: JsonSchema.JsonSchema
+  readonly decodeInput: (input: unknown) => Effect.Effect<Input, ToolFailure>
+  readonly encodeOutput: (output: Output) => Effect.Effect<Encoded, ToolFailure>
+  readonly execute: (input: Input, context: Context) => Effect.Effect<Output, ToolFailure>
+  readonly toModelOutput?: (input: { readonly input: Input; readonly output: Encoded }) => ReadonlyArray<Content>
+}
+
 type Runtime = {
   readonly permission?: string
   readonly definition: (name: string, permissions: PermissionV2.Ruleset) => ToolDefinition
@@ -132,6 +142,72 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
   return tool
 }
 
+export function dynamic<Input, Output, Encoded>(
+  config: DynamicConfig<Input, Output, Encoded>,
+): Definition<SchemaType<Input>, SchemaType<Output>> {
+  const description = config.description
+  const decode = config.decodeInput
+  const encode = config.encodeOutput
+  const execute = config.execute
+  const project = config.toModelOutput
+  const inputSchema = jsonSchema(config.inputSchema, "inputSchema")
+  const outputSchema = config.outputSchema === undefined ? undefined : jsonSchema(config.outputSchema, "outputSchema")
+  const tool = Object.freeze({}) as Definition<SchemaType<Input>, SchemaType<Output>>
+  const definitions = new Map<string, ToolDefinition>()
+  runtimes.set(tool, {
+    definition: (name, permissions) => {
+      const detail = typeof description === "string" ? description : description(permissions)
+      const key = `${name}\u0000${detail}`
+      const cached = definitions.get(key)
+      if (cached) return cached
+      const value = new ToolDefinition({
+        name,
+        description: detail,
+        inputSchema,
+        outputSchema,
+      })
+      freeze(value.inputSchema)
+      if (value.outputSchema) freeze(value.outputSchema)
+      Object.freeze(value)
+      definitions.set(key, value)
+      return value
+    },
+    settle: (call, context) =>
+      decode(call.input).pipe(
+        Effect.flatMap((input) =>
+          execute(input, context).pipe(
+            Effect.flatMap(encode),
+            Effect.map((output) => ({
+              structured: output,
+              content:
+                project?.({ input, output }).map((part) =>
+                  part.type === "text"
+                    ? { type: "text" as const, text: part.text }
+                    : {
+                        type: "file" as const,
+                        uri: `data:${part.mime};base64,${part.data}`,
+                        mime: part.mime,
+                        name: part.name,
+                      },
+                ) ?? (typeof output === "string" ? [{ type: "text" as const, text: output }] : []),
+            })),
+            Effect.flatMap(Schema.decodeUnknownEffect(ToolOutput)),
+            Effect.mapError(
+              (error) =>
+                new ToolFailure({
+                  message:
+                    error instanceof ToolFailure
+                      ? error.message
+                      : `Tool returned an invalid ToolOutput: ${error.message}`,
+                }),
+            ),
+          ),
+        ),
+      ),
+  })
+  return tool
+}
+
 export const validateName = (name: string) =>
   /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)
     ? Effect.void
@@ -161,4 +237,37 @@ function toJsonSchema(schema: Schema.Top): JsonSchema.JsonSchema {
   const document = Schema.toJsonSchemaDocument(schema)
   if (Object.keys(document.definitions).length === 0) return document.schema
   return { ...document.schema, $defs: document.definitions }
+}
+
+function jsonSchema(value: JsonSchema.JsonSchema, name: string): JsonSchema.JsonSchema {
+  const clone = json(value, name, new Set())
+  if (typeof clone !== "object" || clone === null || Array.isArray(clone))
+    throw new TypeError(`${name} must be a JSON Schema object`)
+  return clone as JsonSchema.JsonSchema
+}
+
+function json(value: unknown, name: string, seen: Set<object>): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value !== "object") throw new TypeError(`${name} must be a JSON Schema object`)
+  if (seen.has(value)) throw new TypeError(`${name} must be a JSON Schema object`)
+  seen.add(value)
+  if (Array.isArray(value)) {
+    const clone = Object.freeze(value.map((item) => json(item, name, seen)))
+    seen.delete(value)
+    return clone
+  }
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
+    throw new TypeError(`${name} must be a JSON Schema object`)
+  const clone = Object.freeze(
+    Object.fromEntries(Object.entries(value).map(([key, item]) => [key, json(item, name, seen)])),
+  )
+  seen.delete(value)
+  return clone
+}
+
+function freeze(value: unknown): void {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return
+  Object.values(value).forEach(freeze)
+  Object.freeze(value)
 }

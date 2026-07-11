@@ -28,9 +28,9 @@ import {
   permission,
   settle,
   validateName,
+  RegistrationError,
   type AnyTool,
   type Context as ToolContext,
-  type RegistrationError,
 } from "./tool"
 import { Tools } from "./tools"
 
@@ -44,7 +44,10 @@ export type ExecuteInput = {
 }
 
 export interface Interface {
-  readonly materialize: (permissions?: PermissionV2.Ruleset, plan?: ToolPlan) => Effect.Effect<Materialization>
+  readonly materialize: {
+    (permissions?: PermissionV2.Ruleset, plan?: ToolPlan): Effect.Effect<Materialization>
+    (permissions: PermissionV2.Ruleset, plan: ToolPlan, turn: TurnTools): Effect.Effect<Materialization, RegistrationError>
+  }
   /** Internal registration capability exposed publicly only through Tools.Service. */
   readonly register: (tools: Readonly<Record<string, AnyTool>>) => Effect.Effect<void, RegistrationError, Scope.Scope>
 }
@@ -72,6 +75,12 @@ export interface ToolPlan {
   readonly progress?: (input: ExecuteInput, progress: ChildProgress) => Effect.Effect<void>
 }
 
+export interface TurnTools {
+  /** Ordered records permit adapters to compose overlays while detecting duplicate names. */
+  readonly tools: Readonly<Record<string, AnyTool>> | ReadonlyArray<Readonly<Record<string, AnyTool>>>
+  readonly direct?: ReadonlySet<string>
+}
+
 export interface Settlement {
   readonly result: ToolResultValue
   readonly output?: ToolOutput
@@ -86,25 +95,15 @@ const registryLayer = Layer.effect(
     const applications = yield* ApplicationTools.Service
     const resources = yield* ToolOutputStore.Service
     type Registration = { readonly identity: object; readonly tool: AnyTool }
+    type Captured = { readonly registration: Registration; readonly overlay: boolean }
     const local = new Map<string, Array<{ readonly token: object; readonly registration: Registration }>>()
 
     const settleWith = Effect.fn("ToolRegistry.settle")(function* (
       input: ExecuteInput,
-      advertised?: object,
+      registration: Registration,
       plan: ToolPlan = {},
       permissions: PermissionV2.Ruleset = [],
     ) {
-      const registration =
-        local.get(input.call.name)?.at(-1)?.registration ?? applications.entries().get(input.call.name)
-      if (!registration)
-        return {
-          result: {
-            type: "error" as const,
-            value: advertised ? `Stale tool call: ${input.call.name}` : `Unknown tool: ${input.call.name}`,
-          },
-        }
-      if (advertised && registration.identity !== advertised)
-        return { result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } }
       const context = Object.defineProperties(
         {
           sessionID: input.sessionID,
@@ -166,36 +165,77 @@ const registryLayer = Layer.effect(
           }),
         )
       }),
-      materialize: Effect.fn("ToolRegistry.materialize")(function* (permissions = [], plan = {}) {
+      materialize: Effect.fn("ToolRegistry.materialize")(function* (
+        permissions: PermissionV2.Ruleset = [],
+        plan: ToolPlan = {},
+        turn?: TurnTools,
+      ) {
         const rules = Object.freeze(permissions.map((rule) => Object.freeze({ ...rule })))
-        const registrations = new Map(applications.entries())
+        const captured = Object.freeze({
+          mode: plan.mode,
+          shell: plan.shell,
+          patch: plan.patch,
+          multiAgent: plan.multiAgent,
+          progress: plan.progress,
+        })
+        const registrations = new Map<string, Captured>(
+          Array.from(applications.entries(), ([name, registration]) => [name, { registration, overlay: false }] as const),
+        )
         for (const [name, entries] of local) {
           const registration = entries.at(-1)?.registration
-          if (registration) registrations.set(name, registration)
+          if (registration) registrations.set(name, { registration, overlay: false })
         }
-        for (const [name, registration] of registrations)
-          if (whollyDisabled(permission(registration.tool, name), rules)) registrations.delete(name)
+        const groups: ReadonlyArray<Readonly<Record<string, AnyTool>>> = turn
+          ? Array.isArray(turn.tools)
+            ? turn.tools
+            : [turn.tools as Readonly<Record<string, AnyTool>>]
+          : []
+        const overlays = groups.flatMap((tools) => Object.entries(tools))
+        yield* Effect.forEach(overlays, ([name]) => validateName(name), { discard: true })
+        const names = new Set<string>()
+        for (const [name, tool] of overlays) {
+          if (names.has(name))
+            return yield* Effect.fail(
+              new RegistrationError({ name, message: `Duplicate turn-local tool name: ${name}` }),
+            )
+          names.add(name)
+          registrations.set(name, { registration: { identity: {}, tool }, overlay: true })
+        }
+        const direct = new Set(turn?.direct ?? [])
+        yield* Effect.forEach(direct, validateName, { discard: true })
+        for (const name of direct)
+          if (!registrations.has(name))
+            return yield* Effect.fail(new RegistrationError({ name, message: `Unknown direct tool name: ${name}` }))
+        for (const [name, entry] of registrations)
+          if (whollyDisabled(permission(entry.registration.tool, name), rules)) registrations.delete(name)
         const definitions = Object.freeze(
-          Array.from(registrations, ([name, registration]) => definition(name, registration.tool, rules)),
+          Array.from(registrations, ([name, entry]) => definition(name, entry.registration.tool, rules)),
         )
         const settleMaterialized = (input: ExecuteInput): Effect.Effect<Settlement, ToolOutputStore.Error> => {
-          const registration = registrations.get(input.call.name)
-          if (registration) return settleWith(input, registration.identity, plan, rules)
+          const entry = registrations.get(input.call.name)
+          if (entry?.overlay) return settleWith(input, entry.registration, captured, rules)
+          if (entry) {
+            const current = local.get(input.call.name)?.at(-1)?.registration ?? applications.entries().get(input.call.name)
+            if (current?.identity !== entry.registration.identity)
+              return Effect.succeed({ result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } })
+            return settleWith(input, entry.registration, captured, rules)
+          }
           return Effect.succeed({ result: { type: "error" as const, value: `Unknown tool: ${input.call.name}` } })
         }
-        const mode = plan.mode ?? "function"
+        const mode = captured.mode ?? "function"
         if (mode === "function") return { definitions, permissions: rules, settle: settleMaterialized }
 
         const catalog = Object.freeze(
           definitions
             .filter((item) => item.name !== "exec")
-            .filter((item) => !(plan.shell === "shell_command" && item.name === "shell_command"))
+            .filter((item) => !direct.has(item.name))
+            .filter((item) => !(captured.shell === "shell_command" && item.name === "shell_command"))
             .map((item) => ({
-              name: plan.shell === "shell_command" && item.name === "bash" ? "shell_command" : item.name,
+              name: captured.shell === "shell_command" && item.name === "bash" ? "shell_command" : item.name,
               target: item.name,
               description: item.description,
               input:
-                plan.patch === "freeform" && item.name === "apply_patch"
+                captured.patch === "freeform" && item.name === "apply_patch"
                   ? ({ type: "string" } as const)
                   : (item.inputSchema as CodeModeJsonSchema),
               output: item.outputSchema as CodeModeJsonSchema | undefined,
@@ -217,7 +257,7 @@ const registryLayer = Layer.effect(
                     if (!context) return Effect.die("CodeMode invocation context is required")
                     return run(
                       item.target,
-                      plan.patch === "freeform" && item.target === "apply_patch" ? { patchText: value } : value,
+                      captured.patch === "freeform" && item.target === "apply_patch" ? { patchText: value } : value,
                       context.index,
                     )
                   },
@@ -262,7 +302,7 @@ SOURCE: /[\s\S]+/
               >()
               let started = 0
               let settled = 0
-              const progress = (event: ChildProgress) => plan.progress?.(input, event) ?? Effect.void
+              const progress = (event: ChildProgress) => captured.progress?.(input, event) ?? Effect.void
               const runtime = CodeMode.make({
                 tools: codeTools((target, value, index) =>
                   settleMaterialized({
@@ -334,7 +374,9 @@ SOURCE: /[\s\S]+/
         }
         return {
           definitions:
-            mode === "code-only" ? [exec] : [exec, ...definitions.filter((definition) => definition.name !== "exec")],
+            mode === "code-only"
+              ? [exec, ...definitions.filter((definition) => direct.has(definition.name))]
+              : [exec, ...definitions.filter((definition) => definition.name !== "exec")],
           permissions: rules,
           settle: (input) => {
             if (input.call.name !== "exec") return settleMaterialized(input)
@@ -344,7 +386,7 @@ SOURCE: /[\s\S]+/
             })
           },
         }
-      }),
+      }) as Interface["materialize"],
     })
   }),
 )
