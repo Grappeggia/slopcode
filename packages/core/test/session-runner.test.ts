@@ -25,7 +25,7 @@ import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
-import { Prompt } from "@slopcode-ai/core/session/prompt"
+import { FileAttachment, Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionContextEpoch } from "@slopcode-ai/core/session/context-epoch"
@@ -398,6 +398,21 @@ const setupOverflowRecovery = Effect.gen(function* () {
   return session
 })
 
+const setupManualCompaction = Effect.gen(function* () {
+  yield* setup
+  currentModel = recoveryModel
+  const session = yield* SessionV2.Service
+  response = fragmentFixture("text", "text-before-manual", ["Earlier answer"]).completeEvents
+  yield* session.prompt({
+    sessionID,
+    prompt: new Prompt({ text: "Short history to preserve" }),
+    resume: false,
+  })
+  yield* session.resume(sessionID)
+  requests.length = 0
+  return session
+})
+
 const userTexts = (request: LLMRequest) =>
   request.messages.flatMap((message) =>
     message.role === "user"
@@ -734,7 +749,8 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       const runtime = yield* SessionRuntime.Service
-      streamGate = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      streamGate = gate
       streamStarted = yield* Deferred.make<void>()
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Observe activity" }), resume: false })
 
@@ -1862,6 +1878,312 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         summary: "## Goal\n- Preserve the updated task",
       })
+    }),
+  )
+
+  it.effect("manually compacts short history without starting an assistant continuation", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualCompaction
+      response = fragmentFixture("text", "text-manual-summary", ["## Goal\n- Preserve the short history"]).completeEvents
+      const id = SessionMessage.ID.make("msg_manual_short")
+
+      yield* session.compact({
+        id,
+        sessionID,
+        prompt: new Prompt({ text: "Emphasize unresolved test failures" }),
+      })
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)[0]).toContain("Short history to preserve")
+      expect(userTexts(requests[0]!)[0]).toContain("Additional summary instruction")
+      expect(userTexts(requests[0]!)[0]).toContain("Emphasize unresolved test failures")
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { id, type: "compaction", reason: "manual", summary: "## Goal\n- Preserve the short history", recent: "" },
+      ])
+    }),
+  )
+
+  it.effect("treats manual compaction of empty history as a durable successful no-op", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+
+      yield* session.compact({ id: SessionMessage.ID.make("msg_manual_empty"), sessionID })
+
+      expect(requests).toEqual([])
+      expect(yield* session.context(sessionID)).toEqual([])
+    }),
+  )
+
+  it.effect("makes exact manual retries idempotent and conflicting instructions typed", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualCompaction
+      const id = SessionMessage.ID.make("msg_manual_retry")
+      const input = { id, sessionID, prompt: new Prompt({ text: "Keep decisions" }) }
+      response = fragmentFixture("text", "text-manual-retry", ["## Goal\n- Keep decisions"]).completeEvents
+      yield* session.compact(input)
+      requests.length = 0
+
+      yield* session.compact(input)
+      const conflict = yield* session
+        .compact({ id, sessionID, prompt: new Prompt({ text: "Drop decisions" }) })
+        .pipe(Effect.flip)
+
+      expect(requests).toEqual([])
+      expect(conflict).toMatchObject({
+        _tag: "Session.CompactionConflictError",
+        sessionID,
+        messageID: id,
+      })
+    }),
+  )
+
+  it.effect("rejects non-text manual compaction instructions before admission", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const failure = yield* session
+        .compact({
+          sessionID,
+          prompt: new Prompt({
+            text: "Summarize",
+            files: [new FileAttachment({ uri: "file:///tmp/input.txt", mime: "text/plain" })],
+          }),
+        })
+        .pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "Session.CompactionPromptUnsupportedError",
+        message: "Manual compaction instructions support text only",
+      })
+      expect(requests).toEqual([])
+    }),
+  )
+
+  for (const fixture of [
+    { name: "provider failures", response: "provider" as const, reason: "provider" },
+    { name: "empty summaries", response: "empty" as const, reason: "empty" },
+  ])
+    it.effect(`settles ${fixture.name} as a durable typed manual failure`, () =>
+      Effect.gen(function* () {
+        const session = yield* setupManualCompaction
+        if (fixture.response === "provider") streamFailure = providerUnavailable()
+        if (fixture.response === "empty") response = []
+        const id = SessionMessage.ID.make(`msg_manual_${fixture.response}`)
+
+        const failure = yield* session.compact({ id, sessionID }).pipe(Effect.flip)
+        requests.length = 0
+        const retried = yield* session.compact({ id, sessionID }).pipe(Effect.flip)
+
+        expect(failure).toMatchObject({
+          _tag: "Session.CompactionFailedError",
+          sessionID,
+          messageID: id,
+          reason: fixture.reason,
+        })
+        expect(retried).toEqual(failure)
+        expect(requests).toEqual([])
+        expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBe(false)
+      }),
+    )
+
+  it.effect("durably fails a manual request interrupted during provider execution", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualCompaction
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      const compact = yield* session
+        .compact({ id: SessionMessage.ID.make("msg_manual_interrupted"), sessionID })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+
+      yield* session.interrupt(sessionID)
+      const failure = yield* Fiber.join(compact).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "Session.CompactionFailedError",
+        reason: "interrupted",
+        message: "Compaction was interrupted",
+      })
+      expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBe(false)
+    }),
+  )
+
+  it.effect("durably fails when the runtime epoch changes before checkpoint publication", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualCompaction
+      const runtime = yield* SessionRuntime.Service
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      response = fragmentFixture("text", "text-stale-summary", ["stale summary"]).completeEvents
+      const compact = yield* session
+        .compact({ id: SessionMessage.ID.make("msg_manual_epoch"), sessionID })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      const active = yield* runtime.assert({ sessionID, owner: "v2" })
+      yield* runtime.assign({
+        sessionID,
+        state: "paused",
+        expectedOwner: "v2",
+        expectedEpoch: active.epoch,
+      })
+      yield* Deferred.succeed(streamGate, undefined)
+
+      const failure = yield* Fiber.join(compact).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({ _tag: "Session.CompactionFailedError", reason: "runtime" })
+      expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBe(false)
+    }),
+  )
+
+  it.effect("updates a previous manual summary with later history", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualCompaction
+      response = fragmentFixture("text", "text-first-summary", ["## Goal\n- First summary"]).completeEvents
+      yield* session.compact({ id: SessionMessage.ID.make("msg_manual_first"), sessionID })
+      response = fragmentFixture("text", "text-after-summary", ["Later answer"]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Later history" }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+      requests.length = 0
+      response = fragmentFixture("text", "text-second-summary", ["## Goal\n- Updated summary"]).completeEvents
+
+      yield* session.compact({ id: SessionMessage.ID.make("msg_manual_second"), sessionID })
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)[0]).toContain("<previous-summary>\n## Goal\n- First summary")
+      expect(userTexts(requests[0]!)[0]).toContain("[User]: Later history")
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "compaction", reason: "manual", summary: "## Goal\n- Updated summary", recent: "" },
+      ])
+    }),
+  )
+
+  it.effect("settles an invalid manual context budget without calling the provider", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualCompaction
+      currentModel = model
+      const id = SessionMessage.ID.make("msg_manual_context")
+
+      const failure = yield* session.compact({ id, sessionID }).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "Session.CompactionFailedError",
+        messageID: id,
+        reason: "context",
+      })
+      expect(requests).toEqual([])
+    }),
+  )
+
+  it.effect("returns after manual settlement while a separately queued prompt runs later", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualCompaction
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Queued after the checkpoint" }),
+        delivery: "queue",
+        resume: false,
+      })
+      responseStream = Stream.fromIterable(
+        fragmentFixture("text", "text-ordered-summary", ["## Goal\n- Ordered summary"]).completeEvents,
+      )
+      response = fragmentFixture("text", "text-queued-answer", ["Queued answer"]).completeEvents
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+
+      yield* session.compact({ id: SessionMessage.ID.make("msg_manual_ordered"), sessionID })
+      yield* Deferred.await(streamStarted)
+
+      expect(requests).toHaveLength(2)
+      expect(userTexts(requests[0]!)[0]).toContain("Short history to preserve")
+      expect(userTexts(requests[1]!)).toContain("Queued after the checkpoint")
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* session.wait(sessionID)
+    }),
+  )
+
+  it.effect("runs manual compaction before prompts coalesced into an active normal drain", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualCompaction
+      const { db } = yield* Database.Service
+      const gate = yield* Deferred.make<void>()
+      streamGate = gate
+      streamStarted = yield* Deferred.make<void>()
+      response = fragmentFixture("text", "text-active-before-manual", ["Active answer"]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Active turn before compaction" }),
+        resume: false,
+      })
+      const active = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      streamGate = undefined
+      streamStarted = undefined
+      responses = [
+        fragmentFixture("text", "text-coalesced-summary", ["## Goal\n- Coalesced summary"]).completeEvents,
+        fragmentFixture("text", "text-coalesced-queued", ["Queued answer"]).completeEvents,
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Queued after active turn" }),
+        delivery: "queue",
+        resume: false,
+      })
+      const compact = yield* session
+        .compact({ id: SessionMessage.ID.make("msg_manual_coalesced"), sessionID })
+        .pipe(Effect.forkChild)
+      while (!(yield* SessionInput.pendingCompaction(db, sessionID))) yield* Effect.yieldNow
+
+      yield* Deferred.succeed(gate, undefined)
+      yield* Fiber.join(compact)
+      yield* Fiber.join(active)
+      yield* session.wait(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(userTexts(requests[1]!)[0]).toContain("Create a new anchored summary")
+      expect(userTexts(requests[2]!)).toContain("Queued after active turn")
+    }),
+  )
+
+  it.effect("settles every manual request admitted while one compaction is active", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualCompaction
+      const { db } = yield* Database.Service
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      response = fragmentFixture("text", "text-first-coalesced-summary", ["## Goal\n- First summary"]).completeEvents
+      const ids = ["one", "two", "three"].map((suffix) => SessionMessage.ID.make(`msg_manual_${suffix}`))
+      const first = yield* session.compact({ id: ids[0], sessionID }).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+      const rest = yield* Effect.forEach(ids.slice(1), (id) =>
+        session.compact({ id, sessionID }).pipe(Effect.forkChild),
+      )
+      while (
+        (
+          yield* db
+            .select()
+            .from(EventTable)
+            .where(eq(EventTable.type, "session.next.compaction.requested.1"))
+            .all()
+            .pipe(Effect.orDie)
+        ).length < 3
+      )
+        yield* Effect.yieldNow
+
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(first)
+      yield* Effect.forEach(rest, Fiber.join)
+
+      expect(requests).toHaveLength(1)
+      expect(yield* Effect.forEach(ids, (id) => SessionInput.terminalCompaction(db, id))).toEqual([
+        { type: "ended" },
+        { type: "skipped" },
+        { type: "skipped" },
+      ])
     }),
   )
 

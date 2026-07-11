@@ -193,6 +193,83 @@ export const layer = Layer.effect(
     const assertRuntime = (sessionID: SessionSchema.ID, epoch: number) =>
       runtime.assert({ sessionID, owner: "v2", epoch }).pipe(Effect.asVoid)
 
+    const runManualCompaction = Effect.fn("SessionRunner.runManualCompaction")(function* (
+      request: SessionInput.CompactionRequest,
+      runtimeEpoch: number,
+    ) {
+      const fenced = fencedEvents(request.sessionID, runtimeEpoch)
+      const attempt = Effect.gen(function* () {
+        yield* assertRuntime(request.sessionID, runtimeEpoch)
+        const session = yield* getSession(request.sessionID)
+        if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
+          return yield* Effect.interrupt
+        const agent = yield* agents.select(session.agent)
+        const guard = () => assertRuntime(request.sessionID, runtimeEpoch).pipe(Effect.orDie)
+        const system =
+          (yield* SessionContextEpoch.initialize(
+            db,
+            loadSystemContext(agent),
+            session.id,
+            session.location,
+            agent.id,
+            guard,
+          )) ??
+          (yield* SessionContextEpoch.prepare(
+            db,
+            fenced,
+            loadSystemContext(agent),
+            session.id,
+            session.location,
+            agent.id,
+            guard,
+          ))
+        const resolved = yield* models.resolve(session)
+        const result = yield* SessionCompaction.make({ events: fenced, llm, config: documents }).compactManual({
+          sessionID: session.id,
+          entries: yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq),
+          model: resolved.model,
+          request: LLM.request({ model: resolved.model, messages: [], tools: [] }),
+          messageID: request.id,
+          instruction: request.instruction,
+        })
+        if (result.type === "skipped") return yield* SessionInput.skipCompaction(db, fenced, request)
+        if (result.type === "failed") return yield* SessionInput.failCompaction(db, fenced, request, result)
+      })
+
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const exit = yield* restore(attempt).pipe(Effect.exit)
+          if (exit._tag === "Success") return
+          if ((yield* SessionInput.terminalCompaction(db, request.id)) === undefined) {
+            const current = yield* runtime
+              .assert({ sessionID: request.sessionID, owner: "v2", epoch: runtimeEpoch })
+              .pipe(Effect.exit)
+            const interrupted = Cause.hasInterrupts(exit.cause)
+            yield* SessionInput.failCompaction(db, events, request, {
+              reason: interrupted ? "interrupted" : current._tag === "Failure" ? "runtime" : "execution",
+              message: interrupted
+                ? "Compaction was interrupted"
+                : current._tag === "Failure"
+                  ? "Session runtime changed during compaction"
+                  : "Compaction execution failed",
+            })
+          }
+          return yield* Effect.failCause(exit.cause)
+        }),
+      )
+    })
+
+    const drainManualCompactions = Effect.fn("SessionRunner.drainManualCompactions")(function* (
+      sessionID: SessionSchema.ID,
+      runtimeEpoch: number,
+    ) {
+      let request = yield* SessionInput.pendingCompaction(db, sessionID)
+      while (request) {
+        yield* runManualCompaction(request, runtimeEpoch)
+        request = yield* SessionInput.pendingCompaction(db, sessionID)
+      }
+    })
+
     const runTurnAttempt = Effect.fn("SessionRunner.runTurn")(function* (
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
@@ -439,17 +516,33 @@ export const layer = Layer.effect(
       readonly force?: boolean
     }) {
       const owner = yield* runtime.assert({ sessionID: input.sessionID, owner: "v2" })
+      const manual = yield* SessionInput.pendingCompaction(db, input.sessionID)
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
-      if (input.force !== true && !hasSteer && !hasQueue) return
-      const active = yield* runtime.assign({
-        sessionID: input.sessionID,
-        state: "draining",
-        expectedOwner: "v2",
-        expectedEpoch: owner.epoch,
-      })
+      if (input.force !== true && !manual && !hasSteer && !hasQueue) return
+      const assigned = yield* runtime
+        .assign({
+          sessionID: input.sessionID,
+          state: "draining",
+          expectedOwner: "v2",
+          expectedEpoch: owner.epoch,
+        })
+        .pipe(Effect.exit)
+      if (assigned._tag === "Failure") {
+        if (manual)
+          yield* SessionInput.failCompaction(db, events, manual, {
+            reason: "runtime",
+            message: "Session runtime changed before compaction started",
+          })
+        return yield* Effect.failCause(assigned.cause)
+      }
+      const active = assigned.value
       yield* Effect.gen(function* () {
         yield* failInterruptedTools(fencedEvents(input.sessionID, active.epoch), input.sessionID)
+        if (manual) {
+          yield* drainManualCompactions(input.sessionID, active.epoch)
+          return
+        }
         let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
         let openActivity = input.force === true || hasSteer || hasQueue
         while (openActivity) {
@@ -459,6 +552,7 @@ export const layer = Layer.effect(
             needsContinuation = yield* runTurn(input.sessionID, promotion, active.epoch)
             promotion = "steer"
             yield* assertRuntime(input.sessionID, active.epoch)
+            yield* drainManualCompactions(input.sessionID, active.epoch)
             if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
             if (!needsContinuation) break
           }

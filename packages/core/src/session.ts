@@ -82,7 +82,8 @@ type CreateInput = {
   runtime?: SessionRuntime.Owner
 }
 
-type CompactInput = {
+export type CompactInput = {
+  id?: SessionMessage.ID
   sessionID: SessionSchema.ID
   prompt?: Prompt
 }
@@ -94,7 +95,7 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ses
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
   {
-    operation: Schema.Literals(["move", "shell", "compact"]),
+    operation: Schema.Literals(["move", "shell"]),
   },
 ) {}
 
@@ -104,6 +105,31 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
   sessionID: SessionSchema.ID,
   messageID: SessionMessage.ID,
 }) {}
+
+export class CompactionConflictError extends Schema.TaggedErrorClass<CompactionConflictError>()(
+  "Session.CompactionConflictError",
+  {
+    sessionID: SessionSchema.ID,
+    messageID: SessionMessage.ID,
+  },
+) {}
+
+export class CompactionPromptUnsupportedError extends Schema.TaggedErrorClass<CompactionPromptUnsupportedError>()(
+  "Session.CompactionPromptUnsupportedError",
+  {
+    message: Schema.String,
+  },
+) {}
+
+export class CompactionFailedError extends Schema.TaggedErrorClass<CompactionFailedError>()(
+  "Session.CompactionFailedError",
+  {
+    sessionID: SessionSchema.ID,
+    messageID: SessionMessage.ID,
+    reason: SessionEvent.Compaction.Failed.data.fields.reason,
+    message: Schema.String,
+  },
+) {}
 
 export class AgentUnavailableError extends Schema.TaggedErrorClass<AgentUnavailableError>()(
   "Session.AgentUnavailableError",
@@ -123,6 +149,9 @@ export type Error =
   | MessageDecodeError
   | OperationUnavailableError
   | PromptConflictError
+  | CompactionConflictError
+  | CompactionPromptUnsupportedError
+  | CompactionFailedError
   | AgentUnavailableError
   | SkillNotFoundError
 
@@ -183,7 +212,12 @@ export interface Interface {
     },
     guard?: Effect.Effect<void, E>,
   ) => Effect.Effect<SessionInput.Admitted, NotFoundError | SkillNotFoundError | PromptConflictError | E>
-  readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
+  readonly compact: (
+    input: CompactInput,
+  ) => Effect.Effect<
+    void,
+    NotFoundError | CompactionConflictError | CompactionPromptUnsupportedError | CompactionFailedError
+  >
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
@@ -476,8 +510,71 @@ export const layer = Layer.effect(
         })
       }),
       compact: Effect.fn("V2Session.compact")(function* (input) {
-        yield* result.get(input.sessionID)
-        return yield* new OperationUnavailableError({ operation: "compact" })
+        return yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            yield* result.get(input.sessionID)
+            if ((input.prompt?.files?.length ?? 0) > 0 || (input.prompt?.agents?.length ?? 0) > 0)
+              return yield* new CompactionPromptUnsupportedError({
+                message: "Manual compaction instructions support text only",
+              })
+            const id = input.id ?? SessionMessage.ID.create()
+            const recorded = yield* SessionInput.findCompaction(db, id)
+            if (!recorded && ((yield* SessionInput.find(db, id)) || (yield* store.message(id))))
+              return yield* new CompactionConflictError({ sessionID: input.sessionID, messageID: id })
+            const admitted =
+              recorded ??
+              (yield* SessionInput.admitCompaction(db, events, {
+                id,
+                sessionID: input.sessionID,
+                instruction: input.prompt?.text,
+              }).pipe(
+                Effect.catchDefect((defect) =>
+                  defect instanceof SessionInput.LifecycleConflict
+                    ? new CompactionConflictError({ sessionID: input.sessionID, messageID: id })
+                    : Effect.die(defect),
+                ),
+              ))
+            if (
+              admitted.sessionID !== input.sessionID ||
+              admitted.instruction !== input.prompt?.text
+            )
+              return yield* new CompactionConflictError({ sessionID: input.sessionID, messageID: id })
+            const finish = Effect.fnUntraced(function* () {
+              const terminal = yield* SessionInput.terminalCompaction(db, id)
+              if (!terminal) return false
+              if (terminal.type === "failed")
+                return yield* new CompactionFailedError({
+                  sessionID: input.sessionID,
+                  messageID: id,
+                  reason: terminal.reason,
+                  message: terminal.message,
+                })
+              return true
+            })
+            if (yield* finish()) return
+            const wake = yield* execution.wake(input.sessionID, admitted.admittedSeq).pipe(Effect.exit)
+            if (wake._tag === "Failure") {
+              yield* SessionInput.failCompaction(db, events, admitted, {
+                reason: "execution",
+                message: "Compaction execution could not be scheduled",
+              })
+              return yield* finish()
+            }
+            const pending = yield* Effect.all([
+              SessionInput.hasPending(db, input.sessionID, "steer"),
+              SessionInput.hasPending(db, input.sessionID, "queue"),
+            ])
+            if (pending.some(Boolean)) yield* execution.wake(input.sessionID).pipe(Effect.exit)
+            yield* restore(
+              events.aggregateEvents({ aggregateID: input.sessionID, after: EventV2.Cursor.make(admitted.admittedSeq) }).pipe(
+                Stream.filter((event) => event.event.id === SessionInput.compactionTerminalEventID(id)),
+                Stream.take(1),
+                Stream.runDrain,
+              ),
+            )
+            yield* finish()
+          }).pipe(Effect.asVoid),
+        )
       }),
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)
@@ -508,13 +605,15 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(
-  Layer.provide(LocationServiceMap.layer),
-  Layer.provide(SessionExecution.noopLayer),
-  Layer.provide(SessionStore.defaultLayer),
-  Layer.provide(SessionProjector.defaultLayer),
-  Layer.provide(EventV2.defaultLayer),
-  Layer.provide(Database.defaultLayer),
-  Layer.provide(ProjectV2.defaultLayer),
-  Layer.orDie,
+export const defaultLayer = Layer.suspend(() =>
+  layer.pipe(
+    Layer.provide(LocationServiceMap.layer),
+    Layer.provide(SessionExecution.noopLayer),
+    Layer.provide(SessionStore.defaultLayer),
+    Layer.provide(SessionProjector.defaultLayer),
+    Layer.provide(EventV2.defaultLayer),
+    Layer.provide(Database.defaultLayer),
+    Layer.provide(ProjectV2.defaultLayer),
+    Layer.orDie,
+  ),
 )

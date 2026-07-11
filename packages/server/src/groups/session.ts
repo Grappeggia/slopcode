@@ -180,15 +180,19 @@ export const SessionGroup = HttpApiGroup.make("server.session")
   .add(
     HttpApiEndpoint.post("session.compact", "/api/session/:sessionID/compact", {
       params: { sessionID: SessionV2.ID },
+      payload: Schema.Struct({
+        id: SessionMessage.ID.pipe(Schema.optional),
+        prompt: Prompt.pipe(Schema.optional),
+      }),
       success: HttpApiSchema.NoContent,
-      error: [SessionNotFoundError, ServiceUnavailableError],
+      error: [ConflictError, InvalidRequestError, SessionNotFoundError, UnknownError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(
         OpenApi.annotations({
           identifier: "v2.session.compact",
           summary: "Compact session",
-          description: "Compact a session conversation.",
+          description: "Durably compact a session conversation with an optional text-only summary instruction.",
         }),
       ),
   )
