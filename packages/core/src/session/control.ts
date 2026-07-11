@@ -26,6 +26,15 @@ type SwitchModelInput = {
 type SwitchAgentInput = {
   readonly sessionID: SessionSchema.ID
   readonly agent: string
+  readonly epoch?: number
+}
+
+type SkillInput = {
+  readonly id?: SessionMessage.ID
+  readonly sessionID: SessionSchema.ID
+  readonly skill: string
+  readonly resume?: boolean
+  readonly epoch?: number
 }
 
 type CompactInput = {
@@ -53,7 +62,16 @@ export interface Interface {
   readonly switchModel: (input: SwitchModelInput) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError>
   readonly switchAgent: (
     input: SwitchAgentInput,
-  ) => Effect.Effect<void, SessionRuntime.Error | SessionV2.OperationUnavailableError>
+  ) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.AgentUnavailableError>
+  readonly skill: (
+    input: SkillInput,
+  ) => Effect.Effect<
+    SessionInput.Admitted,
+    | SessionRuntime.Error
+    | SessionV2.NotFoundError
+    | SessionV2.SkillNotFoundError
+    | SessionV2.PromptConflictError
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/SessionControl") {}
@@ -63,7 +81,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const sessions = yield* SessionV2.Service
     const runtime = yield* SessionRuntime.Service
-    const assertV2 = (sessionID: SessionSchema.ID) => runtime.assert({ sessionID, owner: "v2" }).pipe(Effect.asVoid)
+    const assertV2 = (sessionID: SessionSchema.ID, epoch?: number) => runtime.assert({ sessionID, owner: "v2", epoch })
 
     return Service.of({
       prompt: Effect.fn("SessionControl.prompt")(function* (input) {
@@ -91,8 +109,12 @@ export const layer = Layer.effect(
         yield* sessions.switchModel(input)
       }),
       switchAgent: Effect.fn("SessionControl.switchAgent")(function* (input) {
-        yield* assertV2(input.sessionID)
-        yield* sessions.switchAgent(input)
+        const runtime = yield* assertV2(input.sessionID, input.epoch)
+        yield* sessions.switchAgent(input, assertV2(input.sessionID, runtime.epoch).pipe(Effect.asVoid))
+      }),
+      skill: Effect.fn("SessionControl.skill")(function* (input) {
+        const runtime = yield* assertV2(input.sessionID, input.epoch)
+        return yield* sessions.skill(input, assertV2(input.sessionID, runtime.epoch).pipe(Effect.asVoid))
       }),
     })
   }),

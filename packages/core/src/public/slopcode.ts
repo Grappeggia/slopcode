@@ -175,6 +175,8 @@ export const layer = Layer.effect(
           yield* validation.validate({ ...input, location: session.location })
           yield* sessions.switchModel(input)
         }),
+        switchAgent: sessions.switchAgent,
+        skill: sessions.skill,
         interrupt: sessions.interrupt,
         prompt: (input) =>
           sessions.prompt({

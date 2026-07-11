@@ -55,7 +55,10 @@ import { ReferenceGuidance } from "@slopcode-ai/core/reference/guidance"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { ModelHarness } from "@slopcode-ai/core/model-harness"
 import { Location } from "@slopcode-ai/core/location"
+import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
+import { PluginBoot } from "@slopcode-ai/core/plugin/boot"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
+import { SkillV2 } from "@slopcode-ai/core/skill"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -135,6 +138,9 @@ const registry = ToolRegistry.layer.pipe(
   Layer.provide(ToolOutputStore.defaultLayer),
 )
 const agents = AgentV2.layer
+const skills = Layer.mock(SkillV2.Service, { list: () => Effect.succeed([]) })
+const boot = Layer.mock(PluginBoot.Service, { wait: () => Effect.void })
+const locations = Layer.mock(LocationServiceMap, { get: () => Layer.mergeAll(agents, skills, boot) })
 const echo = Layer.effectDiscard(
   ToolRegistry.Service.use((registry) =>
     registry.register({
@@ -286,6 +292,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(store),
   Layer.provide(Project.defaultLayer),
   Layer.provide(execution),
+  Layer.provide(locations),
 )
 const it = testEffect(
   Layer.mergeAll(
@@ -298,6 +305,9 @@ const it = testEffect(
     permission,
     applications,
     agents,
+    skills,
+    boot,
+    locations,
     registry,
     echo,
     models,
@@ -1272,7 +1282,13 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      yield* (yield* AgentV2.Service).transform((editor) =>
+        [AgentV2.defaultID, AgentV2.ID.make("reviewer")].forEach((id) =>
+          editor.update(id, (agent) => {
+            agent.mode = "primary"
+          }),
+        ),
+      )
       skillBaselines.set(AgentV2.ID.make("build"), "Build skills")
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
@@ -1280,12 +1296,7 @@ describe("SessionRunnerLLM", () => {
       response = []
       yield* session.resume(sessionID)
       skillBaselines.set(AgentV2.ID.make("reviewer"), "Reviewer skills")
-      yield* events.publish(SessionEvent.AgentSwitched, {
-        sessionID,
-        messageID: SessionMessage.ID.create(),
-        timestamp: DateTime.makeUnsafe(1),
-        agent: "reviewer",
-      })
+      yield* session.switchAgent({ sessionID, agent: "reviewer" })
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second" }), resume: false })
       yield* session.resume(sessionID)
 
@@ -1300,21 +1311,18 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      yield* (yield* AgentV2.Service).transform((editor) =>
+        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+          agent.mode = "primary"
+        }),
+      )
       skillBaselines.set(AgentV2.ID.make("build"), "Build skills")
       skillBaselines.set(AgentV2.ID.make("reviewer"), "Reviewer skills")
       let switched = false
       systemLoadHook = Effect.suspend(() => {
         if (switched) return Effect.void
         switched = true
-        return events
-          .publish(SessionEvent.AgentSwitched, {
-            sessionID,
-            messageID: SessionMessage.ID.create(),
-            timestamp: DateTime.makeUnsafe(1),
-            agent: "reviewer",
-          })
-          .pipe(Effect.asVoid)
+        return session.switchAgent({ sessionID, agent: "reviewer" })
       })
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
@@ -1368,7 +1376,11 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      const events = yield* EventV2.Service
+      yield* (yield* AgentV2.Service).transform((editor) =>
+        editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+          agent.mode = "primary"
+        }),
+      )
       const { db } = yield* Database.Service
       skillBaselines.set(AgentV2.ID.make("build"), "Build skills")
       skillBaselines.set(AgentV2.ID.make("reviewer"), "Reviewer skills")
@@ -1376,14 +1388,7 @@ describe("SessionRunnerLLM", () => {
       modelResolveHook = Effect.suspend(() => {
         if (switched) return Effect.void
         switched = true
-        return events
-          .publish(SessionEvent.AgentSwitched, {
-            sessionID,
-            messageID: SessionMessage.ID.create(),
-            timestamp: DateTime.makeUnsafe(1),
-            agent: "reviewer",
-          })
-          .pipe(Effect.asVoid)
+        return session.switchAgent({ sessionID, agent: "reviewer" })
       })
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 

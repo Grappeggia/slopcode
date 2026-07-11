@@ -24,6 +24,7 @@ import { SessionStore } from "@slopcode-ai/core/session/store"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { WorkspaceV2 } from "@slopcode-ai/core/workspace"
 import { testEffect } from "./lib/effect"
+import { locationServices } from "./lib/location-services"
 import { tmpdir } from "./fixture/tmpdir"
 
 const database = Database.layerFromPath(":memory:")
@@ -45,6 +46,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(store),
   Layer.provide(projects),
   Layer.provide(SessionExecution.noopLayer),
+  Layer.provide(locationServices),
 )
 const it = testEffect(
   Layer.mergeAll(database, events, projects, projector, store, runtime, SessionExecution.noopLayer, sessions),
@@ -508,8 +510,6 @@ describe("SessionV2.create", () => {
         )
 
       expect(yield* unavailable(session.shell({ sessionID: created.id, command: "pwd" }))).toBe("shell")
-      expect(yield* unavailable(session.skill({ sessionID: created.id, skill: "review" }))).toBe("skill")
-      expect(yield* unavailable(session.switchAgent({ sessionID: created.id, agent: "build" }))).toBe("switchAgent")
     }),
   )
 

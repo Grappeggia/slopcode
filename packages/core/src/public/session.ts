@@ -44,6 +44,12 @@ export type NotFoundError = SessionV2.NotFoundError
 export const PromptConflictError = SessionV2.PromptConflictError
 export type PromptConflictError = SessionV2.PromptConflictError
 
+export const AgentUnavailableError = SessionV2.AgentUnavailableError
+export type AgentUnavailableError = SessionV2.AgentUnavailableError
+
+export const SkillNotFoundError = SessionV2.SkillNotFoundError
+export type SkillNotFoundError = SessionV2.SkillNotFoundError
+
 export class ModelUnavailableError extends Schema.TaggedErrorClass<ModelUnavailableError>()(
   "Session.ModelUnavailableError",
   {
@@ -82,6 +88,18 @@ export interface SwitchModelInput {
   readonly model: Model.Ref
 }
 
+export interface SwitchAgentInput {
+  readonly sessionID: ID
+  readonly agent: Agent.ID
+}
+
+export interface SkillInput {
+  readonly id?: MessageID
+  readonly sessionID: ID
+  readonly skill: string
+  readonly resume?: boolean
+}
+
 export interface MessagesInput {
   readonly sessionID: ID
   readonly limit?: number
@@ -110,6 +128,10 @@ export interface Interface {
   readonly switchModel: (
     input: SwitchModelInput,
   ) => Effect.Effect<void, NotFoundError | ModelUnavailableError | VariantUnavailableError>
+  readonly switchAgent: (input: SwitchAgentInput) => Effect.Effect<void, NotFoundError | AgentUnavailableError>
+  readonly skill: (
+    input: SkillInput,
+  ) => Effect.Effect<Admission, NotFoundError | SkillNotFoundError | PromptConflictError>
   /** Interrupt the active V2 execution chain for one Session on this process. Interrupting an idle or missing Session is a no-op. */
   readonly interrupt: (sessionID: ID) => Effect.Effect<void>
   readonly messages: (input: MessagesInput) => Effect.Effect<Message[], NotFoundError | MessageDecodeError>

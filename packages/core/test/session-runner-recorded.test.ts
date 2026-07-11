@@ -32,6 +32,7 @@ import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import path from "node:path"
 import { testEffect } from "./lib/effect"
+import { locationServices } from "./lib/location-services"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
@@ -110,6 +111,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(store),
   Layer.provide(Project.defaultLayer),
   Layer.provide(execution),
+  Layer.provide(locationServices),
 )
 const it = testEffect(
   Layer.mergeAll(

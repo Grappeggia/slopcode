@@ -30,6 +30,9 @@ import { MessageDecodeError } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
 import { SessionRuntime } from "./session/runtime"
+import { LocationServiceMap } from "./location-layer"
+import { PluginBoot } from "./plugin/boot"
+import { SkillV2 } from "./skill"
 
 // get project -> project.locations
 //
@@ -91,7 +94,7 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ses
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
   {
-    operation: Schema.Literals(["move", "shell", "skill", "switchAgent", "compact"]),
+    operation: Schema.Literals(["move", "shell", "compact"]),
   },
 ) {}
 
@@ -102,7 +105,26 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
   messageID: SessionMessage.ID,
 }) {}
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError
+export class AgentUnavailableError extends Schema.TaggedErrorClass<AgentUnavailableError>()(
+  "Session.AgentUnavailableError",
+  {
+    agent: AgentV2.ID,
+    available: Schema.Array(AgentV2.ID),
+  },
+) {}
+
+export class SkillNotFoundError extends Schema.TaggedErrorClass<SkillNotFoundError>()("Session.SkillNotFoundError", {
+  skill: Schema.String,
+  available: Schema.Array(Schema.String),
+}) {}
+
+export type Error =
+  | NotFoundError
+  | MessageDecodeError
+  | OperationUnavailableError
+  | PromptConflictError
+  | AgentUnavailableError
+  | SkillNotFoundError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
@@ -128,10 +150,13 @@ export interface Interface {
     sessionID: SessionSchema.ID
     after?: EventV2.Cursor
   }) => Stream.Stream<EventV2.CursorEvent<SessionEvent.DurableEvent>, NotFoundError>
-  readonly switchAgent: (input: {
-    sessionID: SessionSchema.ID
-    agent: string
-  }) => Effect.Effect<void, OperationUnavailableError>
+  readonly switchAgent: <E = never>(
+    input: {
+      sessionID: SessionSchema.ID
+      agent: string
+    },
+    guard?: Effect.Effect<void, E>,
+  ) => Effect.Effect<void, NotFoundError | AgentUnavailableError | E>
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
@@ -149,12 +174,15 @@ export interface Interface {
     command: string
     resume?: boolean
   }) => Effect.Effect<void, OperationUnavailableError>
-  readonly skill: (input: {
-    id?: EventV2.ID
-    sessionID: SessionSchema.ID
-    skill: string
-    resume?: boolean
-  }) => Effect.Effect<void, OperationUnavailableError>
+  readonly skill: <E = never>(
+    input: {
+      id?: SessionMessage.ID
+      sessionID: SessionSchema.ID
+      skill: string
+      resume?: boolean
+    },
+    guard?: Effect.Effect<void, E>,
+  ) => Effect.Effect<SessionInput.Admitted, NotFoundError | SkillNotFoundError | PromptConflictError | E>
   readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
@@ -171,6 +199,7 @@ export const layer = Layer.effect(
     const projects = yield* ProjectV2.Service
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
+    const locations = yield* LocationServiceMap
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const enqueueWake = (admitted: SessionInput.Admitted) =>
@@ -393,11 +422,49 @@ export const layer = Layer.effect(
       shell: Effect.fn("V2Session.shell")(function* () {
         return yield* new OperationUnavailableError({ operation: "shell" })
       }),
-      skill: Effect.fn("V2Session.skill")(function* () {
-        return yield* new OperationUnavailableError({ operation: "skill" })
+      skill: Effect.fn("V2Session.skill")(function* (input, guard = Effect.void) {
+        const session = yield* result.get(input.sessionID)
+        const skill = yield* Effect.gen(function* () {
+          yield* (yield* PluginBoot.Service).wait()
+          const catalog = yield* (yield* SkillV2.Service).list()
+          const selected = catalog.find((item) => item.name === input.skill)
+          if (selected) return selected
+          return yield* new SkillNotFoundError({
+            skill: input.skill,
+            available: catalog.map((item) => item.name),
+          })
+        }).pipe(Effect.provide(locations.get(session.location)))
+        yield* guard
+        return yield* result.prompt({
+          id: input.id,
+          sessionID: input.sessionID,
+          prompt: new Prompt({ text: skill.content }),
+          resume: input.resume,
+        })
       }),
-      switchAgent: Effect.fn("V2Session.switchAgent")(function* () {
-        return yield* new OperationUnavailableError({ operation: "switchAgent" })
+      switchAgent: Effect.fn("V2Session.switchAgent")(function* (input, guard = Effect.void) {
+        const session = yield* result.get(input.sessionID)
+        const selected = AgentV2.ID.make(input.agent)
+        yield* Effect.gen(function* () {
+          yield* (yield* PluginBoot.Service).wait()
+          const catalog = yield* (yield* AgentV2.Service).all()
+          const agent = catalog.find((item) => item.id === selected)
+          if (agent && agent.mode !== "subagent" && !agent.hidden) return
+          return yield* new AgentUnavailableError({
+            agent: selected,
+            available: catalog
+              .filter((item) => item.mode !== "subagent" && !item.hidden)
+              .map((item) => item.id),
+          })
+        }).pipe(Effect.provide(locations.get(session.location)))
+        if (session.agent === selected) return
+        yield* guard
+        yield* events.publish(SessionEvent.AgentSwitched, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.create(),
+          timestamp: yield* DateTime.now,
+          agent: selected,
+        })
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
         yield* result.get(input.sessionID)
@@ -442,6 +509,7 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(
+  Layer.provide(LocationServiceMap.layer),
   Layer.provide(SessionExecution.noopLayer),
   Layer.provide(SessionStore.defaultLayer),
   Layer.provide(SessionProjector.defaultLayer),
