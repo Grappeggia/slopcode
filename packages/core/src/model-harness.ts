@@ -1,7 +1,10 @@
 export * as ModelHarness from "./model-harness"
 
 import { Effect, Schema } from "effect"
+import { createHash } from "node:crypto"
 import { ModelV2 } from "./model"
+import general from "./model-harness-gpt-5.6-general-v1.txt"
+import sol from "./model-harness-gpt-5.6-sol-v1.txt"
 
 export const ID = Schema.Literals(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
 export type ID = typeof ID.Type
@@ -139,6 +142,15 @@ export class IncompatibilityError extends Schema.TaggedErrorClass<Incompatibilit
   },
 ) {}
 
+export class UnsupportedReasoningError extends Schema.TaggedErrorClass<UnsupportedReasoningError>()(
+  "ModelHarness.UnsupportedReasoningError",
+  {
+    profileID: ID,
+    variant: Schema.String,
+    supported: Schema.Array(Schema.Literals(all)),
+  },
+) {}
+
 const isID = Schema.is(ID)
 
 export const resolve = (model: ModelV2.Info): Profile | undefined => {
@@ -152,4 +164,33 @@ export const validate = (profile: Profile, capabilities: readonly Capability[]) 
   const missing = profile.transport.required.filter((capability) => !available.has(capability))
   if (missing.length > 0) return Effect.fail(new IncompatibilityError({ profileID: profile.id, missing }))
   return Effect.void
+}
+
+const content: Readonly<Record<Template["id"], string>> = {
+  "gpt-5.6-sol-v1": sol,
+  "gpt-5.6-general-v1": general,
+}
+
+export const instructions = (profile: Profile) =>
+  Effect.sync(() => {
+    const value = content[profile.instruction.id]
+    if (value === undefined) throw new Error(`Missing model harness instructions: ${profile.instruction.id}`)
+    const hash = `sha256:${createHash("sha256").update(value).digest("hex")}`
+    if (hash !== profile.instruction.contentHash)
+      throw new Error(
+        `Invalid model harness instructions hash for ${profile.instruction.id}: expected ${profile.instruction.contentHash}, received ${hash}`,
+      )
+    return value
+  })
+
+export const reasoning = (profile: Profile, variant?: string) => {
+  if (variant === undefined || variant === "default") return Effect.succeed(profile.reasoning.default)
+  if (profile.reasoning.supported.some((effort) => effort === variant)) return Effect.succeed(variant as Reasoning)
+  return Effect.fail(
+    new UnsupportedReasoningError({
+      profileID: profile.id,
+      variant,
+      supported: [...profile.reasoning.supported],
+    }),
+  )
 }

@@ -22,7 +22,7 @@ export interface OpenAIOptionsInput {
   readonly promptCacheKey?: string
   readonly instructions?: string
   readonly reasoningEffort?: ReasoningEffort
-  readonly reasoningSummary?: "auto"
+  readonly reasoningSummary?: "auto" | "none"
   readonly reasoningContext?: OpenAIReasoningContext
   // OpenAI Responses `include` wire field. Mirrors the official SDK's
   // `ResponseIncludable[]` union exactly so AI SDK callers and direct
@@ -42,7 +42,7 @@ export type OpenAIProviderOptionsInput = ProviderOptions & {
 const definedEntries = (input: Record<string, unknown>) =>
   Object.entries(input).filter((entry) => entry[1] !== undefined)
 
-const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): ProviderOptions | undefined => {
+export const make = (options: OpenAIOptionsInput | undefined): ProviderOptions | undefined => {
   const openai = Object.fromEntries(
     definedEntries({
       store: options?.store,
@@ -69,7 +69,7 @@ export const gpt5DefaultOptions = (
 ): ProviderOptions | undefined => {
   const id = modelID.toLowerCase()
   if (!id.includes("gpt-5") || id.includes("gpt-5-chat") || id.includes("gpt-5-pro")) return undefined
-  return openAIProviderOptions({
+  return make({
     reasoningEffort: "medium",
     reasoningSummary: "auto",
     // GPT-5 reasoning models are configured stateless (`store: false`) by
@@ -88,8 +88,7 @@ export const gpt5DefaultOptions = (
 export const openAIDefaultOptions = (
   modelID: string,
   options: { readonly textVerbosity?: boolean } = {},
-): ProviderOptions | undefined =>
-  mergeProviderOptions(openAIProviderOptions({ store: false }), gpt5DefaultOptions(modelID, options))
+): ProviderOptions | undefined => mergeProviderOptions(make({ store: false }), gpt5DefaultOptions(modelID, options))
 
 export const withOpenAIOptions = <Options extends { readonly providerOptions?: OpenAIProviderOptionsInput }>(
   modelID: string,

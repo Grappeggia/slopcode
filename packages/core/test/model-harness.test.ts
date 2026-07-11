@@ -105,6 +105,23 @@ describe("ModelHarness", () => {
     }
   })
 
+  effectIt.effect("resolves versioned local instructions with their pinned hashes", () =>
+    Effect.gen(function* () {
+      const sol = yield* ModelHarness.instructions(ModelHarness.profiles["gpt-5.6-sol"])
+      const terra = yield* ModelHarness.instructions(ModelHarness.profiles["gpt-5.6-terra"])
+      const luna = yield* ModelHarness.instructions(ModelHarness.profiles["gpt-5.6-luna"])
+
+      expect(Bun.CryptoHasher.hash("sha256", sol, "hex")).toBe(
+        ModelHarness.templates["gpt-5.6-sol-v1"].contentHash.slice(7),
+      )
+      expect(Bun.CryptoHasher.hash("sha256", terra, "hex")).toBe(
+        ModelHarness.templates["gpt-5.6-general-v1"].contentHash.slice(7),
+      )
+      expect(luna).toBe(terra)
+      expect(sol).not.toBe(terra)
+    }),
+  )
+
   it("represents the pinned model-visible behavior", () => {
     const profiles = ids.map((id) => ModelHarness.resolve(model(id))!)
 
@@ -150,6 +167,23 @@ describe("ModelHarness", () => {
         }),
       )
       yield* ModelHarness.validate(profile, ["code-mode", "responses-lite"])
+    }),
+  )
+
+  effectIt.effect("resolves defaults and validates explicit reasoning variants", () =>
+    Effect.gen(function* () {
+      expect(yield* ModelHarness.reasoning(ModelHarness.profiles["gpt-5.6-sol"])).toBe("low")
+      expect(yield* ModelHarness.reasoning(ModelHarness.profiles["gpt-5.6-terra"], "xhigh")).toBe("xhigh")
+      expect(yield* ModelHarness.reasoning(ModelHarness.profiles["gpt-5.6-sol"], "ultra")).toBe("ultra")
+
+      const failure = yield* ModelHarness.reasoning(ModelHarness.profiles["gpt-5.6-luna"], "ultra").pipe(Effect.flip)
+      expect(failure).toEqual(
+        new ModelHarness.UnsupportedReasoningError({
+          profileID: "gpt-5.6-luna",
+          variant: "ultra",
+          supported: ["low", "medium", "high", "xhigh", "max"],
+        }),
+      )
     }),
   )
 

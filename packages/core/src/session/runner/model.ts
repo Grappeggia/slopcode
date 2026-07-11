@@ -37,6 +37,8 @@ export type Error =
   | Catalog.ModelNotFoundError
   | ModelNotSelectedError
   | UnsupportedApiError
+  | ModelHarness.IncompatibilityError
+  | ModelHarness.UnsupportedReasoningError
 
 export interface Interface {
   readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Resolved, Error>
@@ -46,6 +48,7 @@ export interface Resolved {
   readonly model: Model
   readonly catalog: ModelV2.Info
   readonly harness: ModelHarness.Profile | undefined
+  readonly reasoning: ModelHarness.Reasoning | undefined
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/SessionRunnerModel") {}
@@ -58,7 +61,7 @@ export const layerWithModel = (resolve: (session: SessionSchema.Info) => Effect.
     resolve(session).pipe(
       Effect.map((model) => {
         const catalog = ModelV2.Info.empty(ProviderV2.ID.make(model.provider), ModelV2.ID.make(model.id))
-        return { model, catalog, harness: ModelHarness.resolve(catalog) }
+        return { model, catalog, harness: ModelHarness.resolve(catalog), reasoning: undefined }
       }),
     ),
   )
@@ -83,7 +86,7 @@ const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {
     generation: model.request.generation,
     providerOptions: namespace && Object.keys(options).length > 0 ? { [namespace]: options } : undefined,
     http: { body: httpBody },
-    limits: { context: model.limit.context, output: model.limit.output },
+    limits: { context: ModelHarness.resolve(model)?.context.limit ?? model.limit.context, output: model.limit.output },
   })
 }
 
@@ -140,9 +143,18 @@ export const resolve = (
   provider?: ProviderV2.Info,
   variant = session.model?.variant,
 ) =>
-  fromCatalogModel(withVariant(model, variant), provider).pipe(
-    Effect.map((resolved) => ({ model: resolved, catalog: model, harness: ModelHarness.resolve(model) })),
-  )
+  Effect.gen(function* () {
+    const harness = ModelHarness.resolve(model)
+    const resolved = yield* fromCatalogModel(withVariant(model, variant), provider)
+    if (!harness) return { model: resolved, catalog: model, harness, reasoning: undefined }
+    yield* ModelHarness.validate(harness, ["code-mode", ...resolved.route.capabilities])
+    return {
+      model: resolved,
+      catalog: model,
+      harness,
+      reasoning: yield* ModelHarness.reasoning(harness, variant),
+    }
+  })
 
 export const supported = (model: ModelV2.Info) =>
   model.api.type === "aisdk" &&

@@ -10,6 +10,7 @@ import {
   type LLMRequest,
 } from "@slopcode-ai/llm"
 import * as OpenAIChat from "@slopcode-ai/llm/protocols/openai-chat"
+import * as OpenAIResponses from "@slopcode-ai/llm/protocols/openai-responses"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
@@ -52,6 +53,7 @@ import { SystemContextRegistry } from "@slopcode-ai/core/system-context/registry
 import { SkillGuidance } from "@slopcode-ai/core/skill/guidance"
 import { ReferenceGuidance } from "@slopcode-ai/core/reference/guidance"
 import { ModelV2 } from "@slopcode-ai/core/model"
+import { ModelHarness } from "@slopcode-ai/core/model-harness"
 import { Location } from "@slopcode-ai/core/location"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
@@ -165,8 +167,20 @@ const echo = Layer.effectDiscard(
 ).pipe(Layer.provide(registry))
 let modelResolveHook = Effect.void
 let currentModel = model
-const models = SessionRunnerModel.layerWithModel((session) =>
-  modelResolveHook.pipe(Effect.as(session.model?.id === "replacement" ? replacementModel : currentModel)),
+let currentCatalog: ModelV2.Info | undefined
+const models = SessionRunnerModel.layerWith((session) =>
+  modelResolveHook.pipe(
+    Effect.andThen(
+      currentCatalog
+        ? SessionRunnerModel.resolve(session, currentCatalog)
+        : Effect.succeed({
+            model: session.model?.id === "replacement" ? replacementModel : currentModel,
+            catalog: ModelV2.Info.empty(ProviderV2.ID.make(currentModel.provider), ModelV2.ID.make(currentModel.id)),
+            harness: undefined,
+            reasoning: undefined,
+          }),
+    ),
+  ),
 )
 const systemContextKey = SystemContext.Key.make("test/context")
 let systemBaseline = "Initial context"
@@ -321,6 +335,8 @@ const insertSession = (id: SessionV2.ID) =>
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
+  requests.length = 0
+  requests.length = 0
   response = []
   systemBaseline = "Initial context"
   systemRemoved = false
@@ -328,6 +344,7 @@ const setup = Effect.gen(function* () {
   systemLoadHook = Effect.void
   modelResolveHook = Effect.void
   currentModel = model
+  currentCatalog = undefined
   skillBaselines.clear()
   responses = undefined
   streamFailure = undefined
@@ -562,7 +579,185 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
     ])
   })
 
+const catalogModel = (
+  id: string,
+  api = id,
+  packageName = "@ai-sdk/openai",
+  efforts: ReadonlyArray<string> = ["low", "medium", "high", "xhigh", "max", "ultra"],
+) =>
+  new ModelV2.Info({
+    id: ModelV2.ID.make(id),
+    providerID: ProviderV2.ID.openai,
+    name: id,
+    api: {
+      id: ModelV2.ID.make(api),
+      type: "aisdk",
+      package: packageName,
+      url: packageName === "@ai-sdk/openai-compatible" ? "https://compatible.example/v1" : "https://api.openai.com/v1",
+      settings: {},
+    },
+    capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+    request: {
+      headers: {},
+      body: {},
+      generation: {},
+      options: {
+        store: false,
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+      },
+    },
+    variants: efforts.map((effort) => ({
+      id: ModelV2.VariantID.make(effort),
+      headers: {},
+      body: {},
+      generation: {},
+      options: { reasoningEffort: effort },
+    })),
+    time: { released: DateTime.makeUnsafe(0) },
+    cost: [],
+    status: "active",
+    enabled: true,
+    limit: { context: 1_050_000, input: 922_000, output: 128_000 },
+  })
 describe("SessionRunnerLLM", () => {
+  it.effect("keeps unrelated models on full Responses with function tools and legacy system order", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentCatalog = catalogModel("gpt-4.1")
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) =>
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.system = "Explicit agent instructions"
+        }),
+      )
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Use functions" }), resume: false })
+      response = fragmentFixture("text", "text-unrelated", ["Done"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      const request = requests.at(-1)!
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(request)
+      expect(request.system.map((part) => part.text)).toEqual(["Explicit agent instructions", "Initial context"])
+      expect(request.tools.map((tool) => ({ type: tool.type, name: tool.name }))).toEqual([
+        { type: undefined, name: "echo" },
+        { type: undefined, name: "defect" },
+      ])
+      expect(request.providerOptions).toEqual({ openai: { promptCacheKey: sessionID } })
+      expect(prepared.body.tools?.map((tool) => tool.name)).toEqual(["echo", "defect"])
+      expect(prepared.body.input[0]).toEqual({
+        role: "system",
+        content: "Explicit agent instructions\nInitial context",
+      })
+      expect(prepared.body.input.some((item) => "type" in item && item.type === "additional_tools")).toBe(false)
+      expect(prepared.body).not.toHaveProperty("instructions")
+    }),
+  )
+  it.effect("preserves explicit efforts, maps ultra to max, and rejects unsupported Luna ultra", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      currentCatalog = catalogModel("gpt-5.6-sol")
+      yield* db
+        .update(SessionTable)
+        .set({ model: { id: "gpt-5.6-sol", providerID: "openai", variant: "ultra" } })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Think deeply" }), resume: false })
+      response = fragmentFixture("text", "text-ultra", ["Done"]).completeEvents
+
+      yield* session.resume(sessionID)
+
+      const request = requests.at(-1)!
+      expect(request.providerOptions?.openai?.reasoningEffort).toBe("ultra")
+      expect((yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(request)).body.reasoning).toEqual({
+        effort: "max",
+        context: "all_turns",
+      })
+
+      yield* setup
+      currentCatalog = catalogModel("gpt-5.6-luna")
+      yield* db
+        .update(SessionTable)
+        .set({ model: { id: "gpt-5.6-luna", providerID: "openai", variant: "ultra" } })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Unsupported" }), resume: false })
+
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({ _tag: "ModelHarness.UnsupportedReasoningError", variant: "ultra" })
+      expect(requests).toEqual([])
+    }),
+  )
+
+  it.effect("fails closed when the selected route cannot provide Responses Lite", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentCatalog = catalogModel("compatible-sol", "gpt-5.6-sol", "@ai-sdk/openai-compatible")
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Unsupported route" }), resume: false })
+
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+
+      expect(failure).toEqual(
+        new ModelHarness.IncompatibilityError({ profileID: "gpt-5.6-sol", missing: ["responses-lite"] }),
+      )
+      expect(requests).toEqual([])
+    }),
+  )
+
+  it.effect("persists bounded input-free child progress under the fenced outer exec call", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      currentCatalog = catalogModel("gpt-5.6-sol")
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run echo" }), resume: false })
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({
+            id: "call-harness-exec",
+            name: "exec",
+            toolType: "custom",
+            input: 'return await tools.echo({ text: "sensitive child input" })',
+          }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        fragmentFixture("text", "text-after-exec", ["Done"]).completeEvents,
+      ]
+
+      yield* session.resume(sessionID)
+
+      const progress = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Tool.Progress.type, 1)))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      expect(progress.map((event) => event.data)).toMatchObject([
+        {
+          callID: "call-harness-exec",
+          structured: { started: 1, settled: 0, latest: { name: "echo", outcome: "started" } },
+          content: [],
+        },
+        {
+          callID: "call-harness-exec",
+          structured: { started: 1, settled: 1, latest: { name: "echo", outcome: "success" } },
+          content: [],
+        },
+      ])
+      expect(JSON.stringify(progress)).not.toContain("sensitive child input")
+    }),
+  )
+
   it.effect("advertises and executes a globally attached application tool", () =>
     Effect.gen(function* () {
       yield* setup
@@ -3922,6 +4117,259 @@ describe("SessionRunnerLLM", () => {
           content: [{ type: "tool", id: "call-parsed", state: { status: "error", input: { query: "hello" } } }],
         },
       ])
+    }),
+  )
+
+  const harnessCasesDuplicate = [
+    { id: "gpt-5.6", api: "gpt-5.6", profile: "gpt-5.6", effort: "low" },
+    { id: "gpt-5.6-sol", api: "gpt-5.6-sol", profile: "gpt-5.6-sol", effort: "low" },
+    { id: "gpt-5.6-terra", api: "gpt-5.6-terra", profile: "gpt-5.6-terra", effort: "medium" },
+    {
+      id: "gpt-5.6-luna",
+      api: "gpt-5.6-luna",
+      profile: "gpt-5.6-luna",
+      effort: "medium",
+      efforts: ["low", "medium", "high", "xhigh", "max"],
+    },
+    { id: "gpt-5.6-sol-fast", api: "gpt-5.6-sol", profile: "gpt-5.6-sol", effort: "low" },
+  ] as const
+
+  for (const item of harnessCasesDuplicate) {
+    it.effect(`activates the golden V2 harness for ${item.id}`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        currentCatalog = catalogModel(item.id, item.api, "@ai-sdk/openai", item.efforts)
+        const agents = yield* AgentV2.Service
+        yield* agents.transform((editor) =>
+          editor.update(AgentV2.ID.make("build"), (agent) => {
+            agent.system = "Explicit agent addition"
+            agent.mode = "primary"
+          }),
+        )
+        const session = yield* SessionV2.Service
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: `Run ${item.id}` }), resume: false })
+        requests.length = 0
+        response = [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(1)
+        const request = requests[0]!
+        const profile = ModelHarness.profiles[item.profile]
+        const instructions = yield* ModelHarness.instructions(profile)
+        expect(request.model.route).toMatchObject({
+          protocol: "openai-responses",
+          capabilities: ["responses-lite"],
+          defaults: { limits: { context: 372_000, output: 128_000 } },
+        })
+        expect(request.tools).toHaveLength(1)
+        expect(request.tools[0]).toMatchObject({ type: "custom", name: "exec" })
+        expect(request.system.map((part) => part.text)).toEqual([
+          instructions,
+          "Explicit agent addition",
+          "Initial context",
+        ])
+        expect(Bun.CryptoHasher.hash("sha256", request.system[0]!.text, "hex")).toBe(
+          profile.instruction.contentHash.slice(7),
+        )
+        expect(request.providerOptions?.openai).toEqual({
+          promptCacheKey: sessionID,
+          reasoningEffort: item.effort,
+          reasoningSummary: "none",
+          responsesMode: "lite",
+          textVerbosity: "low",
+        })
+
+        const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(request)
+        expect(prepared.body).toMatchObject({
+          model: item.api,
+          instructions: "",
+          parallel_tool_calls: false,
+          prompt_cache_key: sessionID,
+          store: false,
+          include: ["reasoning.encrypted_content"],
+          reasoning: { effort: item.effort, context: "all_turns" },
+          text: { verbosity: "low" },
+        })
+        expect(JSON.parse(JSON.stringify(prepared.body))).not.toHaveProperty("tools")
+        expect(JSON.parse(JSON.stringify(prepared.body.reasoning))).not.toHaveProperty("summary")
+        expect(prepared.body.input[0]).toMatchObject({
+          type: "additional_tools",
+          role: "developer",
+          tools: [{ type: "custom", name: "exec" }],
+        })
+        expect(prepared.body.input[1]).toEqual({
+          type: "message",
+          role: "developer",
+          content: request.system.map((part) => ({ type: "input_text", text: part.text })),
+        })
+      }),
+    )
+  }
+
+  it.effect("leaves unrelated models in full Responses and function-tool mode", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentCatalog = catalogModel("gpt-5.5")
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) =>
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.system = "Unprofiled agent addition"
+          agent.mode = "primary"
+        }),
+      )
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run unrelated model" }), resume: false })
+      requests.length = 0
+
+      yield* session.resume(sessionID)
+
+      const request = requests[0]!
+      expect(request.system.map((part) => part.text)).toEqual(["Unprofiled agent addition", "Initial context"])
+      expect(request.tools).toHaveLength(2)
+      expect(request.tools.every((tool) => !("type" in tool))).toBe(true)
+      expect(request.providerOptions?.openai).toEqual({ promptCacheKey: sessionID })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(request)
+      expect(prepared.body.tools).toHaveLength(2)
+      expect(prepared.body.input[0]).toEqual({
+        role: "system",
+        content: "Unprofiled agent addition\nInitial context",
+      })
+      expect(prepared.body.input.some((item) => "type" in item && item.type === "additional_tools")).toBe(false)
+      expect(prepared.body).not.toHaveProperty("instructions")
+      expect(prepared.body).not.toHaveProperty("parallel_tool_calls")
+    }),
+  )
+
+  it.effect("preserves supported explicit effort variants and maps ultra to max on the wire", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      currentCatalog = catalogModel("gpt-5.6-sol")
+      yield* db
+        .update(SessionTable)
+        .set({ model: { id: "gpt-5.6-sol", providerID: "openai", variant: "ultra" } })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Use explicit ultra" }), resume: false })
+      requests.length = 0
+
+      yield* session.resume(sessionID)
+
+      expect(requests[0]?.providerOptions?.openai?.reasoningEffort).toBe("ultra")
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(requests[0]!)
+      expect(prepared.body.reasoning).toEqual({ effort: "max", context: "all_turns" })
+    }),
+  )
+
+  it.effect("rejects unsupported profile effort variants before provider execution", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      currentCatalog = catalogModel("gpt-5.6-luna", "gpt-5.6-luna", "@ai-sdk/openai", [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+      ])
+      yield* db
+        .update(SessionTable)
+        .set({ model: { id: "gpt-5.6-luna", providerID: "openai", variant: "ultra" } })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Reject ultra" }), resume: false })
+      requests.length = 0
+
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+
+      expect(failure).toEqual(
+        new ModelHarness.UnsupportedReasoningError({
+          profileID: "gpt-5.6-luna",
+          variant: "ultra",
+          supported: ["low", "medium", "high", "xhigh", "max"],
+        }),
+      )
+      expect(requests).toEqual([])
+    }),
+  )
+
+  it.effect("fails closed on harness routes without typed Responses Lite support", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentCatalog = catalogModel("gpt-5.6-sol", "gpt-5.6-sol", "@ai-sdk/openai-compatible")
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Reject classic transport" }), resume: false })
+      requests.length = 0
+
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+
+      expect(failure).toEqual(
+        new ModelHarness.IncompatibilityError({ profileID: "gpt-5.6-sol", missing: ["responses-lite"] }),
+      )
+      expect(requests).toEqual([])
+    }),
+  )
+
+  it.effect("persists fenced bounded child progress under the outer exec call without child inputs", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentCatalog = catalogModel("gpt-5.6-sol")
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run nested echo" }), resume: false })
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({
+            id: "call-exec-progress",
+            name: "exec",
+            toolType: "custom",
+            input: 'return await tools.echo({ text: "child-secret" })',
+          }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      const rows = (yield* (yield* Database.Service).db
+        .select({ type: EventTable.type, data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie))
+        .filter((row) => row.type === EventV2.versionedType(SessionEvent.Tool.Progress.type, 1))
+        .map((row) => row.data)
+      expect(rows).toMatchObject([
+        {
+          callID: "call-exec-progress",
+          structured: { started: 1, settled: 0, latest: { name: "echo", outcome: "started" } },
+          content: [],
+        },
+        {
+          callID: "call-exec-progress",
+          structured: { started: 1, settled: 1, latest: { name: "echo", outcome: "success" } },
+          content: [],
+        },
+      ])
+      expect(JSON.stringify(rows)).not.toContain("child-secret")
+      expect(requests).toHaveLength(2)
     }),
   )
 

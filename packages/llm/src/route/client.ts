@@ -7,7 +7,7 @@ import type { Framing } from "./framing"
 import { HttpTransport } from "./transport"
 import type { Transport, TransportRuntime } from "./transport"
 import { WebSocketExecutor } from "./transport"
-import type { Protocol } from "./protocol"
+import type { Protocol, ProtocolCapability } from "./protocol"
 import { applyCachePolicy } from "../cache-policy"
 import * as ProviderShared from "../protocols/shared"
 import type { LLMError, LLMEvent, PreparedRequestOf, ProtocolID, ProviderOptions } from "../schema"
@@ -37,6 +37,7 @@ export interface Route<Body, Prepared = unknown> {
   readonly id: string
   readonly provider?: ProviderID
   readonly protocol: ProtocolID
+  readonly capabilities: ReadonlyArray<ProtocolCapability>
   readonly endpoint: Endpoint<Body>
   readonly auth: AuthDef
   readonly transport: Transport<Body, Prepared, unknown>
@@ -242,6 +243,7 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
       id: routeInput.id,
       provider: routeInput.provider === undefined ? undefined : ProviderID.make(routeInput.provider),
       protocol: protocol.id,
+      capabilities: protocol.capabilities ?? [],
       endpoint: routeInput.endpoint,
       auth: routeInput.auth ?? Auth.none,
       transport: routeInput.transport,

@@ -150,10 +150,7 @@ describe("OpenAI Responses route", () => {
       })
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.updateRequest(request, {
-          tools: [
-            { name: "lookup", description: "Lookup data.", inputSchema: { type: "object" } },
-            custom,
-          ],
+          tools: [{ name: "lookup", description: "Lookup data.", inputSchema: { type: "object" } }, custom],
           toolChoice: custom,
         }),
       )
@@ -633,8 +630,35 @@ describe("OpenAI Responses route", () => {
       expect(prepared.body).toMatchObject({
         parallel_tool_calls: false,
         truncation: "auto",
-        reasoning: { effort: "ultra" },
+        reasoning: { effort: "max" },
       })
+    }),
+  )
+
+  it.effect("uses none to replace an inherited reasoning summary without changing continuation defaults", () =>
+    Effect.gen(function* () {
+      const configured = Model.update(model, {
+        route: model.route.with({
+          providerOptions: {
+            openai: {
+              store: false,
+              include: ["reasoning.encrypted_content"],
+              reasoningSummary: "auto",
+            },
+          },
+        }),
+      })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: configured,
+          prompt: "think",
+          providerOptions: { openai: { reasoningEffort: "low", reasoningSummary: "none" } },
+        }),
+      )
+
+      expect(prepared.body.reasoning).toEqual({ effort: "low" })
+      expect(prepared.body.store).toBe(false)
+      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
     }),
   )
 
@@ -674,7 +698,7 @@ describe("OpenAI Responses route", () => {
         tools: [{ type: "custom", name: "shell", description: "Run shell text." }],
         parallel_tool_calls: true,
         truncation: "disabled",
-        reasoning: { effort: "ultra" },
+        reasoning: { effort: "max" },
       })
     }),
   )
@@ -724,9 +748,11 @@ describe("OpenAI Responses route", () => {
                   {
                     type: "message",
                     role: "developer",
-                    content: [{ type: "input_text", text: "Base instructions." }],
+                    content: [
+                      { type: "input_text", text: "Base instructions." },
+                      { type: "input_text", text: "Conversation policy." },
+                    ],
                   },
-                  { role: "system", content: "Conversation policy." },
                   { role: "user", content: [{ type: "input_text", text: "Apply the change." }] },
                 ],
                 instructions: "",
@@ -765,6 +791,13 @@ describe("OpenAI Responses route", () => {
         reasoning: { context: "all_turns" },
         stream: true,
       })
+    }),
+  )
+
+  it.effect("declares Responses Lite as a typed protocol capability", () =>
+    Effect.sync(() => {
+      expect(OpenAIResponses.protocol.capabilities).toEqual(["responses-lite"])
+      expect(OpenAIResponses.route.capabilities).toEqual(["responses-lite"])
     }),
   )
 
