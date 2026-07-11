@@ -715,6 +715,80 @@ describe("PluginPackage", () => {
     ),
   )
 
+  it.effect("contains hostile hook enumeration as one attributed failure and continues", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          published.length = 0
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(dir.path, "hostile.ts"),
+                `export default async () => new Proxy({}, { ownKeys() { throw new Error("hostile ownKeys") } })`,
+              ),
+              Bun.write(
+                path.join(dir.path, "healthy.ts"),
+                `export default async () => ({ tool: { proxy_healthy: { description: "healthy", args: {}, execute: async () => "healthy" } } })`,
+              ),
+            ]),
+          )
+          const location = Location.Service.of({
+            directory: AbsolutePath.make(dir.path),
+            project: { id: "project" as never, directory: AbsolutePath.make(dir.path) },
+          })
+          const adapter = PluginTool.layer.pipe(
+            Layer.provide(plugins),
+            Layer.provide(registry),
+            Layer.provide(permission),
+            Layer.provide(Layer.succeed(Location.Service, location)),
+            Layer.provide(events),
+          )
+          yield* PluginPackage.load.pipe(
+            Effect.provide(adapter),
+            Effect.provideService(
+              Config.Service,
+              Config.Service.of({
+                entries: () =>
+                  Effect.succeed([
+                    new Config.Document({
+                      type: "document",
+                      path: path.join(dir.path, "slopcode.json"),
+                      info: new Config.Info({ plugins: ["./hostile.ts", "./healthy.ts"] }),
+                    }),
+                  ]),
+              }),
+            ),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(
+              Npm.Service,
+              Npm.Service.of({
+                install: () => Effect.void,
+                add: () => Effect.die("unused"),
+                which: () => Effect.die("unused"),
+              }),
+            ),
+          )
+          expect(published.filter((item) => item.type === PluginV2.Event.Failed.type)).toEqual([
+            expect.objectContaining({
+              data: expect.objectContaining({
+                package: "./hostile.ts",
+                source: path.join(dir.path, "slopcode.json"),
+                stage: "hook-shape",
+                message: "hostile ownKeys",
+              }),
+            }),
+          ])
+          expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toContain(
+            "proxy_healthy",
+          )
+        }),
+      ),
+    ),
+  )
+
   it.effect("loads npm packages with stable IDs, replacement order, hooks, and configured disposal", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
