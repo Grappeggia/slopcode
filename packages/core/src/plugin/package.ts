@@ -520,6 +520,22 @@ export const load = Effect.gen(function* () {
         disposed = true
         await dispose()
       }
+      const close = () => {
+        owner.close()
+        if (!hooks || disposed) return Effect.void
+        return Effect.tryPromise({ try: cleanup, catch: (cause) => cause }).pipe(
+          Effect.tapError((cause) =>
+            Effect.logError("failed to dispose rejected configured plugin", {
+              id,
+              package: item.spec,
+              source: item.source,
+              stage: "hook-shape",
+              cause,
+            }),
+          ),
+          Effect.ignore,
+        )
+      }
       yield* Effect.gen(function* () {
         const loaded = yield* attempt(
           Effect.tryPromise({
@@ -546,6 +562,8 @@ export const load = Effect.gen(function* () {
           }),
         )
         if (!loaded.ok) {
+          owner.close()
+          yield* close()
           yield* fail(item, "factory", loaded.error, id)
           return
         }
@@ -562,6 +580,8 @@ export const load = Effect.gen(function* () {
           }),
         )
         if (!resource.ok) {
+          owner.close()
+          yield* close()
           yield* fail(item, "hook-shape", resource.error, id)
           return
         }
@@ -575,36 +595,31 @@ export const load = Effect.gen(function* () {
           }),
         )
         if (!inspected.ok) {
+          owner.close()
+          yield* close()
           yield* fail(item, "hook-shape", inspected.error, id)
           return
         }
         for (const name of inspected.value.names) {
           if (!supported.has(name)) yield* warn(item, `Plugin ${item.spec} returned unsupported hook ${name}`, id)
         }
-        transferred = yield* plugin
-          .add({ id, effect: Effect.succeed(inspected.value.adapted), reportFailure: false })
-          .pipe(
-            Effect.as(true),
-            Effect.catch((cause) => fail(item, "hook-shape", cause, id).pipe(Effect.as(false))),
-          )
+        const added = yield* attempt(
+          plugin.add({
+            id,
+            effect: Effect.succeed(inspected.value.adapted),
+            reportFailure: false,
+            transfer: () => (transferred = true),
+          }),
+        )
+        if (added.ok) return
+        owner.close()
+        yield* close()
+        yield* fail(item, "hook-shape", added.error, id)
       }).pipe(
         Effect.ensuring(
           Effect.suspend(() => {
             if (transferred) return Effect.void
-            owner.close()
-            if (!hooks || disposed) return Effect.void
-            return Effect.tryPromise({ try: cleanup, catch: (cause) => cause }).pipe(
-              Effect.tapError((cause) =>
-                Effect.logError("failed to dispose rejected configured plugin", {
-                  id,
-                  package: item.spec,
-                  source: item.source,
-                  stage: "hook-shape",
-                  cause,
-                }),
-              ),
-              Effect.ignore,
-            )
+            return close()
           }),
         ),
       )

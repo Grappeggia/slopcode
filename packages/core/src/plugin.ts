@@ -147,6 +147,7 @@ export interface Interface {
     id: ID
     effect: Effect.Effect<void | Registration, never, Scope.Scope>
     reportFailure?: boolean
+    transfer?: () => void
   }) => Effect.Effect<void, PluginTool.LoadError, never>
   readonly remove: (id: ID) => Effect.Effect<void>
   readonly triggerFor: <Name extends keyof Hooks>(
@@ -182,48 +183,63 @@ export const layer = Layer.effect(
     const svc = Service.of({
       add: Effect.fn("Plugin.add")(function* (input) {
         yield* locks.withLock(input.id)(
-          Effect.gen(function* () {
-            const existing = hooks.find((item) => item.id === input.id)
-            const slot = existing?.slot ?? {}
-            const childScope = yield* Scope.fork(scope)
-            const result = yield* input.effect.pipe(
-              Scope.provide(childScope),
-              Effect.withSpan("Plugin.load", {
-                attributes: {
-                  "plugin.id": input.id,
-                },
-              }),
-              Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(childScope, exit) : Effect.void)),
-            )
-            if (result?.dispose)
-              yield* Effect.addFinalizer(() =>
-                Effect.promise(() => Promise.resolve(result.dispose?.())).pipe(Effect.orDie),
-              ).pipe(Scope.provide(childScope))
-            const reserve =
-              adapters.get(svc)?.adapter !== undefined || existing?.reserved === true || result?.tool !== undefined
-            if (reserve) {
-              if (!adapters.get(svc)?.adapter) yield* Deferred.await(ready)
-              const adapter = adapters.get(svc)?.adapter
-              if (!adapter) return yield* Effect.die("Plugin tool adapter is unavailable")
-              yield* adapter(input.id, result?.tool ?? {}, slot).pipe(
-                Scope.provide(childScope),
-                Effect.tapError((error) =>
-                  input.reportFailure === false
-                    ? Effect.void
-                    : events.publish(Event.Failed, {
-                        id: input.id,
-                        source: `plugin:${input.id}`,
-                        message: error.message,
-                      }),
+          Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const existing = hooks.find((item) => item.id === input.id)
+              const slot = existing?.slot ?? {}
+              const childScope = yield* Scope.fork(scope)
+              let installed = false
+              yield* Effect.gen(function* () {
+                const result = yield* restore(
+                  input.effect.pipe(
+                    Scope.provide(childScope),
+                    Effect.withSpan("Plugin.load", {
+                      attributes: {
+                        "plugin.id": input.id,
+                      },
+                    }),
+                  ),
+                )
+                if (result?.dispose)
+                  yield* Effect.addFinalizer(() =>
+                    Effect.promise(() => Promise.resolve(result.dispose?.())).pipe(Effect.orDie),
+                  ).pipe(Scope.provide(childScope))
+                const reserve =
+                  adapters.get(svc)?.adapter !== undefined || existing?.reserved === true || result?.tool !== undefined
+                if (reserve) {
+                  if (!adapters.get(svc)?.adapter) yield* restore(Deferred.await(ready))
+                  const adapter = adapters.get(svc)?.adapter
+                  if (!adapter) return yield* Effect.die("Plugin tool adapter is unavailable")
+                  yield* restore(
+                    adapter(input.id, result?.tool ?? {}, slot).pipe(
+                      Scope.provide(childScope),
+                      Effect.tapError((error) =>
+                        input.reportFailure === false
+                          ? Effect.void
+                          : events.publish(Event.Failed, {
+                              id: input.id,
+                              source: `plugin:${input.id}`,
+                              message: error.message,
+                            }),
+                      ),
+                    ),
+                  )
+                }
+                const item = { id: input.id, hooks: result ?? {}, scope: childScope, slot, reserved: reserve }
+                yield* Effect.sync(() => {
+                  input.transfer?.()
+                  hooks = existing ? hooks.map((current) => (current === existing ? item : current)) : [...hooks, item]
+                  installed = true
+                })
+                if (existing) yield* restore(Scope.close(existing.scope, Exit.void).pipe(Effect.ignore))
+                yield* restore(events.publish(Event.Added, { id: input.id }))
+              }).pipe(
+                Effect.onExit((exit) =>
+                  Exit.isFailure(exit) && !installed ? Scope.close(childScope, exit) : Effect.void,
                 ),
-                Effect.onError((cause) => Scope.close(childScope, Exit.failCause(cause))),
               )
-            }
-            const item = { id: input.id, hooks: result ?? {}, scope: childScope, slot, reserved: reserve }
-            hooks = existing ? hooks.map((current) => (current === existing ? item : current)) : [...hooks, item]
-            if (existing) yield* Scope.close(existing.scope, Exit.void).pipe(Effect.ignore)
-            yield* events.publish(Event.Added, { id: input.id })
-          }),
+            }),
+          ),
         )
       }),
       trigger: Effect.fn("Plugin.trigger")(function* (name, input, output) {

@@ -1569,4 +1569,110 @@ describe("PluginPackage", () => {
       ),
     ),
   )
+
+  it.effect("cleans workspace ownership before blocked factory and hook-shape failure publication", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(dir.path, "factory-failure.ts"),
+                `export default { id: "factory-failure", server: async (input) => {
+                  input.experimental_workspace.register("factory", { name: "factory" })
+                  setTimeout(() => input.experimental_workspace.register("factory-late", { name: "factory-late" }), 0)
+                  throw new Error("factory failure")
+                } }`,
+              ),
+              Bun.write(
+                path.join(dir.path, "shape-failure.ts"),
+                `export default { id: "shape-failure", server: async (input) => {
+                  input.experimental_workspace.register("shape", { name: "shape" })
+                  return { dispose: () => globalThis.__shape_disposed(), "tool.execute.before": "invalid" }
+                } }`,
+              ),
+            ]),
+          )
+          const active = new Map<string, unknown>()
+          const npm = Npm.Service.of({
+            install: () => Effect.void,
+            add: () => Effect.die("unused"),
+            which: () => Effect.die("unused"),
+          })
+          const host = PluginPackage.Host.of({
+            baseUrl: new URL("http://adapter.test"),
+            fetch: async () => Response.json([]),
+            register: (_projectID, type, adapter) => {
+              active.set(type, adapter)
+              return () => active.delete(type)
+            },
+          })
+          const load = (spec: string, service: EventV2.Service) =>
+            PluginPackage.load.pipe(
+              Effect.provideService(
+                Config.Service,
+                Config.Service.of({
+                  entries: () =>
+                    Effect.succeed([
+                      new Config.Document({
+                        type: "document",
+                        path: path.join(dir.path, "slopcode.json"),
+                        info: new Config.Info({ plugins: [spec] }),
+                      }),
+                    ]),
+                }),
+              ),
+              Effect.provideService(Location.Service, {
+                directory: AbsolutePath.make(dir.path),
+                project: { id: "failure-project" as never, directory: AbsolutePath.make(dir.path) },
+              }),
+              Effect.provideService(Npm.Service, npm),
+              Effect.provideService(PluginPackage.Host, host),
+              Effect.provideService(EventV2.Service, service),
+            )
+          for (const spec of ["./factory-failure.ts", "./shape-failure.ts"]) {
+            const started = yield* Deferred.make<void>()
+            const release = yield* Deferred.make<void>()
+            let failures = 0
+            let disposed = 0
+            Object.assign(globalThis, { __shape_disposed: () => disposed++ })
+            const service = Context.get(
+              yield* Layer.build(
+                Layer.mock(EventV2.Service, {
+                  publish: (definition, data) => {
+                    if (definition.type !== PluginV2.Event.Failed.type)
+                      return Effect.succeed({ id: EventV2.ID.make("evt_failure_test"), type: definition.type, data })
+                    failures++
+                    return Deferred.succeed(started, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                      Effect.as({ id: EventV2.ID.make("evt_failure_test"), type: definition.type, data }),
+                    )
+                  },
+                }),
+              ),
+              EventV2.Service,
+            )
+            const fiber = yield* load(spec, service).pipe(Effect.forkChild)
+            yield* Deferred.await(started).pipe(
+              Effect.timeout("1 second"),
+              Effect.tapError(() => Deferred.succeed(release, undefined)),
+            )
+            yield* Effect.promise(() => Bun.sleep(10))
+            const visible = active.size
+            const cleaned = disposed
+            const reported = failures
+            yield* Deferred.succeed(release, undefined)
+            yield* Fiber.join(fiber).pipe(Effect.timeout("1 second"))
+            expect(visible).toBe(0)
+            expect(cleaned).toBe(spec.includes("shape") ? 1 : 0)
+            expect(reported).toBe(1)
+            expect(failures).toBe(1)
+          }
+        }),
+      ),
+    ),
+  )
 })
