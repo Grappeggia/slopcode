@@ -839,11 +839,43 @@ describe("SessionExecutionLocal startup recovery", () => {
       const damagedMessage = SessionMessage.ID.make("msg_damaged_task_origin")
       const wrongTypeMessage = SessionMessage.ID.make("msg_wrong_type_task_origin")
       const corruptMessage = SessionMessage.ID.make("msg_corrupt_task_origin")
+      const parentMismatchMessage = SessionMessage.ID.make("msg_parent_mismatch_task_origin")
+      const originOwnerMessage = SessionMessage.ID.make("msg_owner_task_origin")
+      const originPayloadMessage = SessionMessage.ID.make("msg_payload_task_origin")
       const fabricated = SessionTask.childID(parentID, fabricatedMessage, "call-fabricated")
       const damaged = SessionTask.childID(parentID, damagedMessage, "call-damaged")
       const wrongType = SessionTask.childID(parentID, wrongTypeMessage, "call-wrong-type")
       const corrupt = SessionTask.childID(parentID, corruptMessage, "call-corrupt")
+      const parentMismatch = SessionTask.childID(parentID, parentMismatchMessage, "call-parent-mismatch")
+      const originMismatch = SessionTask.childID(parentID, originOwnerMessage, "call-owner-origin")
+      const otherParent = SessionSchema.ID.make("ses_other_damaged_task_parent")
       const model = ModelV2.Ref.make({ providerID: ProviderV2.ID.make("fake"), id: ModelV2.ID.make("fake") })
+      const timestamp = yield* DateTime.now
+      const request = (
+        messageID: SessionMessage.ID,
+        callID: string,
+        childSessionID: SessionSchema.ID,
+        title: string,
+      ) => ({
+        sessionID: parentID,
+        timestamp,
+        assistantMessageID: messageID,
+        callID,
+        childSessionID,
+        promptMessageID: SessionTask.promptID(parentID, messageID, callID),
+        description: title,
+        prompt: "must not execute",
+        agent: "general" as const,
+        model,
+        multiAgent: "v2" as const,
+        callerAgent: AgentV2.ID.make("build"),
+        permissions: [],
+        plan: { multiAgent: "v2" as const },
+        projectID: Project.ID.global,
+        location: { directory: AbsolutePath.make("/project") },
+        title,
+        ceiling: [],
+      })
       yield* db
         .insert(ProjectTable)
         .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -859,6 +891,15 @@ describe("SessionExecutionLocal startup recovery", () => {
             slug: parentID,
             directory: "/project",
             title: "Damaged task parent",
+            version: "test",
+            runtime: "v2" as const,
+          },
+          {
+            id: otherParent,
+            project_id: Project.ID.global,
+            slug: otherParent,
+            directory: "/project",
+            title: "Other damaged task parent",
             version: "test",
             runtime: "v2" as const,
           },
@@ -942,6 +983,50 @@ describe("SessionExecutionLocal startup recovery", () => {
               },
             },
           },
+          {
+            id: parentMismatch,
+            project_id: Project.ID.global,
+            parent_id: otherParent,
+            slug: parentMismatch,
+            directory: "/project",
+            title: "Parent mismatch (@general subagent)",
+            version: "test",
+            runtime: "v2" as const,
+            runtime_state: "draining" as const,
+            agent: "general",
+            model,
+            metadata: {
+              task: {
+                version: 1,
+                parentID,
+                agent: "general",
+                origin: { messageID: parentMismatchMessage, callID: "call-parent-mismatch" },
+                ceiling: [],
+              },
+            },
+          },
+          {
+            id: originMismatch,
+            project_id: Project.ID.global,
+            parent_id: parentID,
+            slug: originMismatch,
+            directory: "/project",
+            title: "Origin mismatch (@general subagent)",
+            version: "test",
+            runtime: "v2" as const,
+            runtime_state: "draining" as const,
+            agent: "general",
+            model,
+            metadata: {
+              task: {
+                version: 1,
+                parentID,
+                agent: "general",
+                origin: { messageID: originOwnerMessage, callID: "call-owner-origin" },
+                ceiling: [],
+              },
+            },
+          },
         ])
         .run()
         .pipe(Effect.orDie)
@@ -980,8 +1065,28 @@ describe("SessionExecutionLocal startup recovery", () => {
         .where(eq(EventTable.id, SessionTask.requestEventID(parentID, corruptMessage, "call-corrupt")))
         .run()
         .pipe(Effect.orDie)
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        request(
+          parentMismatchMessage,
+          "call-parent-mismatch",
+          parentMismatch,
+          "Parent mismatch (@general subagent)",
+        ),
+        { id: SessionTask.requestEventID(parentID, parentMismatchMessage, "call-parent-mismatch") },
+      )
+      yield* events.publish(
+        SessionEvent.Task.Requested,
+        request(
+          originPayloadMessage,
+          "call-payload-origin",
+          originMismatch,
+          "Origin mismatch (@general subagent)",
+        ),
+        { id: SessionTask.requestEventID(parentID, originOwnerMessage, "call-owner-origin") },
+      )
       yield* Effect.forEach(
-        [fabricated, damaged, wrongType, corrupt],
+        [fabricated, damaged, wrongType, corrupt, parentMismatch, originMismatch],
         (sessionID) =>
           SessionInput.admit(db, events, {
             id: SessionMessage.ID.create(),
@@ -1010,6 +1115,9 @@ describe("SessionExecutionLocal startup recovery", () => {
       expect(
         (yield* SessionTask.request(db, parentID, wrongTypeMessage, "call-wrong-type").pipe(Effect.exit))._tag,
       ).toBe("Failure")
+      expect(
+        (yield* SessionTask.request(db, parentID, corruptMessage, "call-corrupt").pipe(Effect.exit))._tag,
+      ).toBe("Failure")
       yield* Effect.gen(function* () {
         yield* SessionExecution.Service
         yield* events.publish(SessionEvent.Task.Execute, {
@@ -1026,6 +1134,20 @@ describe("SessionExecutionLocal startup recovery", () => {
           callID: "call-corrupt",
           childSessionID: corrupt,
         })
+        yield* events.publish(SessionEvent.Task.Execute, {
+          sessionID: parentID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: parentMismatchMessage,
+          callID: "call-parent-mismatch",
+          childSessionID: parentMismatch,
+        })
+        yield* events.publish(SessionEvent.Task.Execute, {
+          sessionID: parentID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID: originOwnerMessage,
+          callID: "call-owner-origin",
+          childSessionID: originMismatch,
+        })
         yield* Effect.yieldNow
       }).pipe(Effect.provide(execution))
 
@@ -1033,6 +1155,10 @@ describe("SessionExecutionLocal startup recovery", () => {
       expect(yield* SessionTask.orphaned(db, damaged)).toBeTrue()
       expect(yield* SessionTask.orphaned(db, wrongType)).toBeTrue()
       expect(yield* SessionTask.orphaned(db, corrupt)).toBeTrue()
+      expect(yield* SessionTask.orphaned(db, parentMismatch)).toBeTrue()
+      expect(yield* SessionTask.orphaned(db, originMismatch)).toBeTrue()
+      expect(yield* SessionTask.cancelled(db, parentID, parentMismatchMessage, "call-parent-mismatch")).toBeTrue()
+      expect(yield* SessionTask.cancelled(db, parentID, originOwnerMessage, "call-owner-origin")).toBeTrue()
       expect(runs).toEqual([])
     }),
   )
