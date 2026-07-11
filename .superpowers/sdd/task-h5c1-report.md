@@ -145,3 +145,69 @@ Complete. Foreground V2 subagent tasks now use one Location-scoped canonical `ta
 
 - Durable task discovery still scans synchronized request events; this remains the intentional no-migration tradeoff from H5C1.
 - Remote provider execution cannot be proven exactly once if the process dies while the request is in flight. Locally durable prompt admission and terminal recovery are exactly-once/idempotent, and no terminal child is redispatched.
+
+## Re-Review Correctness Fixes
+
+### Findings Resolved
+
+- Public interruption now persists the parent interrupt barrier, durably marks each active task interrupted, routes and awaits child cleanup, and records one deterministic parent `Tool.Failed` terminal before cancelling the parent lane. Fiber cleanup observes the same durable marker and does not emit a second child signal.
+- Child orphan detection now treats a parent `InterruptRequested` sequenced after the task's canonical origin request as an immediate recovery fence. Startup recovery therefore cannot execute a pending child in the crash window before `Task.Interrupted` is written.
+- `Task.Requested` now persists the originating caller agent, immutable permission snapshot, complete materialized tool plan, project, Location, title, and ceiling. Runner recovery rematerializes and settles from that snapshot instead of mutable Session agent/model/harness state.
+- Explicit `task_id` resume and recovered execution now require a deterministic child ID backed by the owner's canonical origin request and matching child, prompt, agent, model, project, Location, title, and ceiling identity. Schema-valid fabricated ownership metadata without that request is rejected before prompt admission.
+- Recovery reconnects through the canonical `ToolRegistry` and `TaskTool` registration. Internal immutable plan/request context remains non-enumerable, preserving application-tool context shape, stale registration checks, generic output bounding, and CodeMode behavior.
+
+### Re-Review RED Evidence
+
+- Command from `packages/core`: `bun test test/session-create.test.ts test/session-execution-local.test.ts test/session-runner.test.ts test/tool-task.test.ts`.
+- Before the fixes, regressions showed four expected failures: public interruption left the parent task running, a parent-only durable interrupt did not orphan the child, fabricated task metadata resumed without origin proof, and recovery used the mutated reviewer permissions and Luna `v1` plan instead of the originating snapshot.
+
+### Re-Review GREEN Evidence
+
+- Focused command from `packages/core`: `bun test test/permission.test.ts test/tool-task.test.ts test/session-create.test.ts test/session-runner.test.ts test/session-execution-local.test.ts test/session-runner-tool-registry.test.ts test/tool-codemode.test.ts test/model-harness.test.ts`; `243 pass`, `0 fail`, `761 expect()` calls.
+- Full Core command from `packages/core`: `bun test`; `1241 pass`, `0 fail`, `3468 expect()` calls across 140 files.
+- Full CodeMode command from `packages/codemode`: `bun test`; `254 pass`, `0 fail`, `744 expect()` calls.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `git diff --check`: passed.
+- Source check: `packages/core/src/tool/task.ts` contains no `SessionV1` or `BackgroundJob` reference.
+
+### Re-Review Production Gates
+
+- Public `SessionV2.interrupt` tests prove child cleanup is awaited, the child is durably orphaned, and the parent tool projects `Tool execution interrupted` terminally.
+- `SessionExecutionLocal` starts with a recoverable pending child input behind only the parent interrupt barrier and proves the child runner is never invoked.
+- `SessionRunnerLLM` proves a durable task rematerializes with the original caller agent, permissions, GPT-5.6 `v2` plan, and request identity after the parent Session and model catalog are changed to reviewer/Luna.
+- Canonical `ToolRegistry` plus the real `TaskTool` reconnects a persisted request without another permission admission, prompt, or child execution.
+- Resume validation rejects deterministic, schema-valid task metadata when its canonical origin request is absent.
+
+### Re-Review Files
+
+- `packages/core/src/session.ts`
+- `packages/core/src/session/event.ts`
+- `packages/core/src/session/runner/llm.ts`
+- `packages/core/src/session/task.ts`
+- `packages/core/src/tool/registry.ts`
+- `packages/core/src/tool/task.ts`
+- `packages/core/src/tool/tool.ts`
+- `packages/core/test/session-create.test.ts`
+- `packages/core/test/session-execution-local.test.ts`
+- `packages/core/test/session-runner.test.ts`
+- `packages/core/test/tool-task.test.ts`
+- `.superpowers/sdd/task-h5c1-report.md`
+
+### Re-Review Commit
+
+- Fixes and production-path regressions: `10388db57b fix(session): close durable task recovery gaps`.
+- Report: recorded in the following documentation commit.
+- Nothing was pushed.
+
+### Re-Review Self-Review
+
+- Recovery does not consult the current parent agent, current permissions, or current model harness when a durable request snapshot exists.
+- Parent interruption establishes the durable child recovery fence before any cancellation can trigger task-fiber cleanup, and parent terminal settlement follows awaited child cleanup.
+- Origin proof is tied to deterministic parent/message/call IDs and all persisted child identity fields; arbitrary Session IDs and fabricated metadata remain model-facing conflicts.
+- Task recovery still uses one captured registry registration and the authoritative child Session lane; no alternate provider or tool executor was introduced.
+
+### Re-Review Concerns
+
+- Durable task discovery and parent interrupt checks query synchronized events because H5C1 intentionally adds no lifecycle table or migration.
+- A remote provider request interrupted before its response is durably recorded still cannot provide remote exactly-once proof; deterministic local admission and terminal recovery remain idempotent.
