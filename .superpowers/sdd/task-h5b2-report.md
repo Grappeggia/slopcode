@@ -81,3 +81,44 @@ Complete with known unrelated Slopcode typecheck failures. Foreground V2 shell c
 - Pending shell lifecycle discovery scans synchronized shell request events because H5B2 does not add a migration/projection table. Deterministic IDs and existing event indexes bound individual lookups, but a future migration may be warranted at high history volume.
 - Shell spawn is exactly-once-conservative; provider continuation remains recoverable/at-least-once. A crash after provider dispatch but before `Shell.Continued` can retry the provider continuation, but never the shell command.
 - Slopcode typecheck still has the two unrelated pre-existing failures listed above.
+
+## Review Fixes
+
+### Findings Resolved
+
+- Started/terminal race: shell admission is still committed by EventV2's immediate transaction, while `Started` and `Ended` now add expected-state commit guards inside that same transaction. A pre-start terminal requires no `Started`; `Started` requires no terminal; a post-start terminal requires `Started`. A losing `startShell` returns `false`, and the canonical process callback treats that as a lost claim without spawning.
+- Epoch loss before spawn: failure of the fenced `Started` commit settles only through the guarded requested-state terminal. If another runner won `Started`, that terminal loses instead, so no terminal can precede a later `Started`/spawn.
+- Continuation redispatch: `Shell.ContinuationStarted` is durably fenced immediately before `llm.stream`. It is a one-winner transition. Recovery of a started continuation writes `Shell.ContinuationUnknown` and never calls the provider again; `Shell.Continued` and unknown settlement are transactionally exclusive.
+- Mixed recovery: startup now emits a coalesced successor wake whenever more than one durable work class is pending. The real runner also drains pending compaction after recovered shell work before returning.
+- Legacy events: version-refined v1 and v2 `Shell.Ended` schemas are both included in `SessionEvent.Durable`/`All`, restoring v1 rows to `SessionV2.events()` while retaining typed v2 metadata.
+- Startup scan: `pendingShellSessions()` now reads requests once, reads relevant terminal lifecycle events once, and groups pending Session IDs in memory instead of rereading complete Session history for every request.
+
+### Review RED Evidence
+
+- Command: `bun test test/session-shell-lifecycle.test.ts test/session-runner.test.ts test/session-execution-local.test.ts test/session-projector.test.ts --timeout 30000` from `packages/core`.
+- Result before review fixes: `155 pass`, `6 fail`.
+- The failures reproduced the terminal-plus-Started double commit, duplicate continuation dispatch gap, shell-plus-compaction single-wake strand, missing v1 terminal in the public event stream, and epoch-loss-before-spawn settlement mismatch.
+
+### Review GREEN Evidence
+
+- `bun test test/session-shell-lifecycle.test.ts test/session-runner.test.ts test/session-execution-local.test.ts test/session-projector.test.ts test/session-create.test.ts test/session-runner-recorded.test.ts test/tool-bash.test.ts --timeout 30000` from `packages/core`: `204 pass`, `0 fail`, `651 expect()` calls.
+- `bun test --only-failures` from `packages/core`: `1214 pass`, `0 fail`, `3372 expect()` calls across `139` files.
+- `bun run typecheck` from `packages/core`: passed.
+- `bun run typecheck` from `packages/server`: passed.
+- `bun run typecheck` from `packages/slopcode`: only the two pre-existing unrelated failures remain at `src/session/processor.ts:495` and `test/v2/session-message-updater.test.ts:168`.
+- `bun oxlint <11 review-fix source/test files>` from the repository root: `0 errors`, `96 warnings` from existing warning-level rules in the touched large files.
+- `git diff --check`: passed.
+
+### Review Commit
+
+- `f0e668afc8 fix(session): harden durable shell recovery`
+- Nothing was pushed.
+
+### Review Self-Review
+
+- The transition guards run after projection but before event insertion inside one immediate transaction; any failed guard rolls back both projection and lifecycle event.
+- A terminal already committed before `Started` makes the start claim fail, and `ShellCommand.run` never reaches `AppProcess.run`. A committed `Started` makes requested-state failure settlement lose.
+- The continuation marker is after all rebuildable context/model preparation and immediately before provider stream construction. Crashes on either side of dispatch are deliberately indistinguishable after the marker and settle unknown without redispatch.
+- Normal continuation completion, conservative unknown settlement, and duplicate continuation starts each have deterministic IDs and mutually exclusive transaction guards.
+- The original report's provider at-least-once continuation concern is superseded: H5B2 now guarantees at most one durable continuation start and no provider redispatch after that marker. Provider completion still cannot be proven externally without provider idempotency, so post-marker recovery reports unknown.
+- The canonical shell/Bash process boundary was not changed by the review fixes; its focused tests remain green.
