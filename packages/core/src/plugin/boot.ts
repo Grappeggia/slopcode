@@ -56,6 +56,11 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/PluginBoot") {}
 
+const phases = new WeakMap<Interface, Deferred.Deferred<void>>()
+
+/** Waits for configured plugins without waiting for custom tools that overlay built-ins. */
+export const beforeTools = (service: Interface) => phases.get(service)?.pipe(Deferred.await) ?? service.wait()
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -75,6 +80,7 @@ export const layer = Layer.effect(
     const skill = yield* SkillV2.Service
     const references = yield* Reference.Service
     const done = yield* Deferred.make<void>()
+    const configured = yield* Deferred.make<void>()
 
     const add = Effect.fn("PluginBoot.add")(function* (input: Plugin) {
       yield* plugin
@@ -115,8 +121,12 @@ export const layer = Layer.effect(
       yield* add(ConfigCommandPlugin.Plugin)
       yield* add(ConfigSkillPlugin.Plugin)
       yield* add(ConfigReferencePlugin.Plugin)
+      yield* Deferred.succeed(configured, undefined)
       yield* PluginTool.discover
-    }).pipe(Effect.withSpan("PluginBoot.boot"))
+    }).pipe(
+      Effect.withSpan("PluginBoot.boot"),
+      Effect.onExit((exit) => Deferred.done(configured, exit).pipe(Effect.ignore)),
+    )
 
     yield* boot.pipe(
       Effect.exit,
@@ -124,9 +134,11 @@ export const layer = Layer.effect(
       Effect.forkScoped,
     )
 
-    return Service.of({
+    const service = Service.of({
       wait: () => Deferred.await(done),
     })
+    phases.set(service, configured)
+    return service
   }),
 )
 

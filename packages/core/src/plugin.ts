@@ -175,6 +175,10 @@ export const layer = Layer.effect(
               }),
               Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(childScope, exit) : Effect.void)),
             )
+            if (result?.dispose)
+              yield* Effect.addFinalizer(() =>
+                Effect.promise(() => Promise.resolve(result.dispose?.())).pipe(Effect.orDie),
+              ).pipe(Scope.provide(childScope))
             if (result?.tool) {
               yield* Deferred.await(ready)
               const adapter = adapters.get(svc)?.adapter
@@ -191,10 +195,6 @@ export const layer = Layer.effect(
                 Effect.onError((cause) => Scope.close(childScope, Exit.failCause(cause))),
               )
             }
-            if (result?.dispose)
-              yield* Effect.addFinalizer(() => Effect.promise(() => Promise.resolve(result.dispose?.())).pipe(Effect.orDie)).pipe(
-                Scope.provide(childScope),
-              )
             const existing = hooks.find((item) => item.id === input.id)
             hooks = [
               ...hooks.filter((item) => item.id !== input.id),
