@@ -27,6 +27,7 @@ import { ModelsDevPlugin } from "./models-dev"
 import { ProviderPlugins } from "./provider"
 import { SkillV2 } from "../skill"
 import { Reference } from "../reference"
+import { PluginTool } from "./tool"
 
 type Plugin = {
   id: PluginV2.ID
@@ -76,26 +77,28 @@ export const layer = Layer.effect(
     const done = yield* Deferred.make<void>()
 
     const add = Effect.fn("PluginBoot.add")(function* (input: Plugin) {
-      yield* plugin.add({
-        id: input.id,
-        effect: input.effect.pipe(
-          Effect.provideService(Catalog.Service, catalog),
-          Effect.provideService(CommandV2.Service, commands),
-          Effect.provideService(Credential.Service, credentials),
-          Effect.provideService(Integration.Service, integrations),
-          Effect.provideService(AgentV2.Service, agents),
-          Effect.provideService(Config.Service, config),
-          Effect.provideService(Location.Service, location),
-          Effect.provideService(ModelsDev.Service, modelsDev),
-          Effect.provideService(Npm.Service, npm),
-          Effect.provideService(EventV2.Service, events),
-          Effect.provideService(FSUtil.Service, fs),
-          Effect.provideService(Global.Service, global),
-          Effect.provideService(SkillV2.Service, skill),
-          Effect.provideService(Reference.Service, references),
-          Effect.provideService(PluginV2.Service, plugin),
-        ),
-      })
+      yield* plugin
+        .add({
+          id: input.id,
+          effect: input.effect.pipe(
+            Effect.provideService(Catalog.Service, catalog),
+            Effect.provideService(CommandV2.Service, commands),
+            Effect.provideService(Credential.Service, credentials),
+            Effect.provideService(Integration.Service, integrations),
+            Effect.provideService(AgentV2.Service, agents),
+            Effect.provideService(Config.Service, config),
+            Effect.provideService(Location.Service, location),
+            Effect.provideService(ModelsDev.Service, modelsDev),
+            Effect.provideService(Npm.Service, npm),
+            Effect.provideService(EventV2.Service, events),
+            Effect.provideService(FSUtil.Service, fs),
+            Effect.provideService(Global.Service, global),
+            Effect.provideService(SkillV2.Service, skill),
+            Effect.provideService(Reference.Service, references),
+            Effect.provideService(PluginV2.Service, plugin),
+          ),
+        })
+        .pipe(Effect.tapError((error) => Effect.logError("failed to load plugin", { id: input.id, error })), Effect.ignore)
     })
 
     const boot = Effect.gen(function* () {
@@ -112,6 +115,7 @@ export const layer = Layer.effect(
       yield* add(ConfigCommandPlugin.Plugin)
       yield* add(ConfigSkillPlugin.Plugin)
       yield* add(ConfigReferencePlugin.Plugin)
+      yield* PluginTool.discover
     }).pipe(Effect.withSpan("PluginBoot.boot"))
 
     yield* boot.pipe(

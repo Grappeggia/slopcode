@@ -83,7 +83,11 @@ type DynamicConfig<Input, Output, Encoded> = {
   readonly decodeInput: (input: unknown) => Effect.Effect<Input, ToolFailure>
   readonly encodeOutput: (output: Output) => Effect.Effect<Encoded, ToolFailure>
   readonly execute: (input: Input, context: Context) => Effect.Effect<Output, ToolFailure>
-  readonly toModelOutput?: (input: { readonly input: Input; readonly output: Encoded }) => ReadonlyArray<Content>
+  readonly toModelOutput?: (input: {
+    readonly input: Input
+    readonly value: Output
+    readonly output: Encoded
+  }) => ReadonlyArray<Content>
 }
 
 type Runtime = {
@@ -188,10 +192,10 @@ export function dynamic<Input, Output, Encoded>(
       decode(call.input).pipe(
         Effect.flatMap((input) =>
           execute(input, context).pipe(
-            Effect.flatMap(encode),
-            Effect.flatMap((output) => {
+            Effect.flatMap((value) => encode(value).pipe(Effect.map((output) => ({ value, output })))),
+            Effect.flatMap(({ value, output }) => {
               const content: Effect.Effect<ToolOutput["content"], ToolFailure> = project
-                ? Schema.decodeUnknownEffect(DynamicContent)(project({ input, output })).pipe(
+                ? Schema.decodeUnknownEffect(DynamicContent)(project({ input, value, output })).pipe(
                     Effect.mapError(
                       (error) => new ToolFailure({ message: `Tool returned an invalid ToolOutput: ${error.message}` }),
                     ),
@@ -228,7 +232,7 @@ export function dynamic<Input, Output, Encoded>(
   return tool
 }
 
-export const validateName = (name: string) =>
+export const validateName = (name: string): Effect.Effect<void, RegistrationError> =>
   /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)
     ? Effect.void
     : Effect.fail(new RegistrationError({ name, message: `Invalid tool name: ${name}` }))

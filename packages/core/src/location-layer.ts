@@ -8,6 +8,7 @@ import { Integration } from "./integration"
 import { CommandV2 } from "./command"
 import { AgentV2 } from "./agent"
 import { PluginBoot } from "./plugin/boot"
+import { PluginTool } from "./plugin/tool"
 import { Project } from "./project"
 import { ProjectCopy } from "./project/copy"
 import { ProjectDirectories } from "./project/directories"
@@ -98,6 +99,11 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       Layer.provide(questions),
       Layer.provide(image),
     )
+    const pluginTools = PluginTool.layer.pipe(
+      Layer.provide(services),
+      // Discovery starts only after application/built-in Location tools exist.
+      Layer.provide(builtInTools),
+    )
     const model = SessionRunnerModel.locationLayer.pipe(Layer.provide(services))
     const runner = SessionRunnerLLM.defaultLayer.pipe(
       Layer.provide(services),
@@ -122,6 +128,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       model,
       runner,
       builtInTools,
+      pluginTools,
       referenceGuidance,
       projectCopyRefresh,
     ).pipe(Layer.fresh)
