@@ -7,6 +7,8 @@ export type ClientOptions = {
 export type Event =
   | EventModelsDevRefreshed
   | EventPluginAdded
+  | EventPluginFailed
+  | EventPluginWarning
   | EventCatalogModelUpdated
   | EventSessionCreated
   | EventSessionUpdated
@@ -15,6 +17,7 @@ export type Event =
   | EventMessageRemoved
   | EventMessagePartUpdated
   | EventMessagePartRemoved
+  | EventSessionNextCreated
   | EventSessionNextAgentSwitched
   | EventSessionNextModelSwitched
   | EventSessionNextMoved
@@ -24,8 +27,12 @@ export type Event =
   | EventSessionNextInterruptRequested
   | EventSessionNextContextUpdated
   | EventSessionNextSynthetic
+  | EventSessionNextShellRequested
   | EventSessionNextShellStarted
   | EventSessionNextShellEnded
+  | EventSessionNextShellContinued
+  | EventSessionNextShellContinuationStarted
+  | EventSessionNextShellContinuationUnknown
   | EventSessionNextStepStarted
   | EventSessionNextStepEnded
   | EventSessionNextStepFailed
@@ -42,21 +49,24 @@ export type Event =
   | EventSessionNextToolProgress
   | EventSessionNextToolSuccess
   | EventSessionNextToolFailed
+  | EventSessionNextTaskPrepared
+  | EventSessionNextTaskRequested
+  | EventSessionNextTaskInterrupted
+  | EventSessionNextTaskExecute
+  | EventSessionNextTaskInterrupt
   | EventSessionNextRetried
+  | EventSessionNextCompactionRequested
+  | EventSessionNextCompactionSkipped
+  | EventSessionNextCompactionFailed
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
-  | EventMessagePartDelta
-  | EventSessionDiff
-  | EventSessionError
-  | EventInstallationUpdated
-  | EventInstallationUpdateAvailable
-  | EventReferenceUpdated
-  | EventFileEdited
   | EventIntegrationUpdated
   | EventPermissionV2Asked
   | EventPermissionV2Replied
+  | EventReferenceUpdated
   | EventProjectDirectoriesUpdated
+  | EventFileEdited
   | EventFileWatcherUpdated
   | EventPtyCreated
   | EventPtyUpdated
@@ -66,6 +76,11 @@ export type Event =
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
   | EventTodoUpdated
+  | EventMessagePartDelta
+  | EventSessionDiff
+  | EventSessionError
+  | EventInstallationUpdated
+  | EventInstallationUpdateAvailable
   | EventLspUpdated
   | EventPermissionAsked
   | EventPermissionReplied
@@ -745,6 +760,27 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "plugin.failed"
+        properties: {
+          id?: string
+          source: string
+          package?: string
+          stage?: "install" | "entrypoint" | "compatibility" | "import" | "factory" | "hook-shape"
+          message: string
+        }
+      }
+    | {
+        id: string
+        type: "plugin.warning"
+        properties: {
+          id?: string
+          source: string
+          package: string
+          message: string
+        }
+      }
+    | {
+        id: string
         type: "catalog.model.updated"
         properties: {
           model: ModelV2Info
@@ -806,6 +842,31 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           partID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.created"
+        properties: {
+          timestamp: number
+          sessionID: string
+          parentID?: string
+          projectID: string
+          location: LocationRef
+          subpath?: string
+          title: string
+          slug: string
+          version: string
+          agent?: string
+          model?: {
+            id: string
+            providerID: string
+            variant?: string
+          }
+          metadata?: {
+            [key: string]: unknown
+          }
+          runtime: "v1" | "v2"
         }
       }
     | {
@@ -905,6 +966,17 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.shell.requested"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          command: string
+          resume: boolean
+        }
+      }
+    | {
+        id: string
         type: "session.next.shell.started"
         properties: {
           timestamp: number
@@ -920,8 +992,41 @@ export type GlobalEvent = {
         properties: {
           timestamp: number
           sessionID: string
+          messageID: string
           callID: string
           output: string
+          status: "completed" | "timed_out" | "failed" | "interrupted" | "unknown"
+          exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          truncated: boolean
+          stdoutTruncated?: boolean
+          stderrTruncated?: boolean
+        }
+      }
+    | {
+        id: string
+        type: "session.next.shell.continued"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.shell.continuation.started"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.shell.continuation.unknown"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
         }
       }
     | {
@@ -1087,9 +1192,8 @@ export type GlobalEvent = {
           assistantMessageID: string
           callID: string
           tool: string
-          input: {
-            [key: string]: unknown
-          }
+          input: string
+          toolType: "custom"
           provider: {
             executed: boolean
             metadata?: {
@@ -1160,12 +1264,139 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.task.prepared"
+        properties: {
+          timestamp: number
+          sessionID: string
+          assistantMessageID: string
+          callID: string
+          input: unknown
+          callerAgent: string
+          permissions: PermissionV2Ruleset
+          plan: {
+            mode?: "function" | "code-preferred" | "code-only"
+            shell?: "shell_command"
+            patch?: "freeform"
+            multiAgent: "v1" | "v2"
+          }
+          agent: string
+          available: Array<string>
+          model: {
+            id: string
+            providerID: string
+            variant?: string
+          }
+          projectID: string
+          location: LocationRef
+          title: string
+          ceiling: PermissionV2Ruleset
+        }
+      }
+    | {
+        id: string
+        type: "session.next.task.requested"
+        properties: {
+          timestamp: number
+          sessionID: string
+          assistantMessageID: string
+          callID: string
+          childSessionID: string
+          promptMessageID: string
+          description: string
+          prompt: string
+          agent: string
+          model: {
+            id: string
+            providerID: string
+            variant?: string
+          }
+          command?: string
+          multiAgent: "v1" | "v2"
+          callerAgent: string
+          permissions: PermissionV2Ruleset
+          plan: {
+            mode?: "function" | "code-preferred" | "code-only"
+            shell?: "shell_command"
+            patch?: "freeform"
+            multiAgent: "v1" | "v2"
+          }
+          projectID: string
+          location: LocationRef
+          title: string
+          ceiling: PermissionV2Ruleset
+        }
+      }
+    | {
+        id: string
+        type: "session.next.task.interrupted"
+        properties: {
+          timestamp: number
+          sessionID: string
+          assistantMessageID: string
+          callID: string
+          childSessionID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.task.execute"
+        properties: {
+          timestamp: number
+          sessionID: string
+          assistantMessageID: string
+          callID: string
+          childSessionID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.task.interrupt"
+        properties: {
+          timestamp: number
+          sessionID: string
+          assistantMessageID: string
+          callID: string
+          childSessionID: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.retried"
         properties: {
           timestamp: number
           sessionID: string
           attempt: number
           error: SessionNextRetryError
+        }
+      }
+    | {
+        id: string
+        type: "session.next.compaction.requested"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          instruction?: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.compaction.skipped"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.compaction.failed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          messageID: string
+          reason: "provider" | "empty" | "context" | "interrupted" | "runtime" | "execution"
+          message: string
         }
       }
     | {
@@ -1202,69 +1433,6 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "message.part.delta"
-        properties: {
-          sessionID: string
-          messageID: string
-          partID: string
-          field: string
-          delta: string
-        }
-      }
-    | {
-        id: string
-        type: "session.diff"
-        properties: {
-          sessionID: string
-          diff: Array<SnapshotFileDiff>
-        }
-      }
-    | {
-        id: string
-        type: "session.error"
-        properties: {
-          sessionID?: string
-          error?:
-            | ProviderAuthError
-            | UnknownError
-            | MessageOutputLengthError
-            | MessageAbortedError
-            | StructuredOutputError
-            | ContextOverflowError
-            | ContentFilterError
-            | ApiError
-        }
-      }
-    | {
-        id: string
-        type: "installation.updated"
-        properties: {
-          version: string
-        }
-      }
-    | {
-        id: string
-        type: "installation.update-available"
-        properties: {
-          version: string
-        }
-      }
-    | {
-        id: string
-        type: "reference.updated"
-        properties: {
-          [key: string]: unknown
-        }
-      }
-    | {
-        id: string
-        type: "file.edited"
-        properties: {
-          file: string
-        }
-      }
-    | {
-        id: string
         type: "integration.updated"
         properties: {
           [key: string]: unknown
@@ -1296,9 +1464,23 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "reference.updated"
+        properties: {
+          [key: string]: unknown
+        }
+      }
+    | {
+        id: string
         type: "project.directories.updated"
         properties: {
           projectID: string
+        }
+      }
+    | {
+        id: string
+        type: "file.edited"
+        properties: {
+          file: string
         }
       }
     | {
@@ -1374,6 +1556,55 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           todos: Array<Todo>
+        }
+      }
+    | {
+        id: string
+        type: "message.part.delta"
+        properties: {
+          sessionID: string
+          messageID: string
+          partID: string
+          field: string
+          delta: string
+        }
+      }
+    | {
+        id: string
+        type: "session.diff"
+        properties: {
+          sessionID: string
+          diff: Array<SnapshotFileDiff>
+        }
+      }
+    | {
+        id: string
+        type: "session.error"
+        properties: {
+          sessionID?: string
+          error?:
+            | ProviderAuthError
+            | UnknownError
+            | MessageOutputLengthError
+            | MessageAbortedError
+            | StructuredOutputError
+            | ContextOverflowError
+            | ContentFilterError
+            | ApiError
+        }
+      }
+    | {
+        id: string
+        type: "installation.updated"
+        properties: {
+          version: string
+        }
+      }
+    | {
+        id: string
+        type: "installation.update-available"
+        properties: {
+          version: string
         }
       }
     | {
@@ -1631,6 +1862,7 @@ export type GlobalEvent = {
     | SyncEventMessageRemoved
     | SyncEventMessagePartUpdated
     | SyncEventMessagePartRemoved
+    | SyncEventSessionNextCreated
     | SyncEventSessionNextAgentSwitched
     | SyncEventSessionNextModelSwitched
     | SyncEventSessionNextMoved
@@ -1640,8 +1872,12 @@ export type GlobalEvent = {
     | SyncEventSessionNextInterruptRequested
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionNextSynthetic
+    | SyncEventSessionNextShellRequested
     | SyncEventSessionNextShellStarted
     | SyncEventSessionNextShellEnded
+    | SyncEventSessionNextShellContinued
+    | SyncEventSessionNextShellContinuationStarted
+    | SyncEventSessionNextShellContinuationUnknown
     | SyncEventSessionNextStepStarted
     | SyncEventSessionNextStepEnded
     | SyncEventSessionNextStepFailed
@@ -1655,7 +1891,13 @@ export type GlobalEvent = {
     | SyncEventSessionNextToolProgress
     | SyncEventSessionNextToolSuccess
     | SyncEventSessionNextToolFailed
+    | SyncEventSessionNextTaskPrepared
+    | SyncEventSessionNextTaskRequested
+    | SyncEventSessionNextTaskInterrupted
     | SyncEventSessionNextRetried
+    | SyncEventSessionNextCompactionRequested
+    | SyncEventSessionNextCompactionSkipped
+    | SyncEventSessionNextCompactionFailed
     | SyncEventSessionNextCompactionStarted
     | SyncEventSessionNextCompactionEnded
 }
@@ -2987,6 +3229,16 @@ export type ToolFileContent = {
   name?: string
 }
 
+export type PermissionV2Effect = "allow" | "deny" | "ask"
+
+export type PermissionV2Rule = {
+  action: string
+  resource: string
+  effect: PermissionV2Effect
+}
+
+export type PermissionV2Ruleset = Array<PermissionV2Rule>
+
 export type SessionNextRetryError = {
   message: string
   statusCode?: number
@@ -3158,6 +3410,38 @@ export type SyncEventMessagePartRemoved = {
   }
 }
 
+export type SyncEventSessionNextCreated = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.created.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      parentID?: string
+      projectID: string
+      location: LocationRef
+      subpath?: string
+      title: string
+      slug: string
+      version: string
+      agent?: string
+      model?: {
+        id: string
+        providerID: string
+        variant?: string
+      }
+      metadata?: {
+        [key: string]: unknown
+      }
+      runtime: "v1" | "v2"
+    }
+  }
+}
+
 export type SyncEventSessionNextAgentSwitched = {
   type: "sync"
   id: string
@@ -3316,6 +3600,24 @@ export type SyncEventSessionNextSynthetic = {
   }
 }
 
+export type SyncEventSessionNextShellRequested = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.shell.requested.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      command: string
+      resume: boolean
+    }
+  }
+}
+
 export type SyncEventSessionNextShellStarted = {
   type: "sync"
   id: string
@@ -3338,15 +3640,69 @@ export type SyncEventSessionNextShellEnded = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.shell.ended.1"
+    type: "session.next.shell.ended.2"
     id: string
     seq: number
     aggregateID: string
     data: {
       timestamp: number
       sessionID: string
+      messageID: string
       callID: string
       output: string
+      status: "completed" | "timed_out" | "failed" | "interrupted" | "unknown"
+      exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      truncated: boolean
+      stdoutTruncated?: boolean
+      stderrTruncated?: boolean
+    }
+  }
+}
+
+export type SyncEventSessionNextShellContinued = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.shell.continued.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+    }
+  }
+}
+
+export type SyncEventSessionNextShellContinuationStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.shell.continuation.started.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+    }
+  }
+}
+
+export type SyncEventSessionNextShellContinuationUnknown = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.shell.continuation.unknown.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
     }
   }
 }
@@ -3539,7 +3895,7 @@ export type SyncEventSessionNextToolCalled = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.tool.called.1"
+    type: "session.next.tool.called.2"
     id: string
     seq: number
     aggregateID: string
@@ -3549,9 +3905,8 @@ export type SyncEventSessionNextToolCalled = {
       assistantMessageID: string
       callID: string
       tool: string
-      input: {
-        [key: string]: unknown
-      }
+      input: string
+      toolType: "custom"
       provider: {
         executed: boolean
         metadata?: {
@@ -3643,6 +3998,102 @@ export type SyncEventSessionNextToolFailed = {
   }
 }
 
+export type SyncEventSessionNextTaskPrepared = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.task.prepared.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      assistantMessageID: string
+      callID: string
+      input: unknown
+      callerAgent: string
+      permissions: PermissionV2Ruleset
+      plan: {
+        mode?: "function" | "code-preferred" | "code-only"
+        shell?: "shell_command"
+        patch?: "freeform"
+        multiAgent: "v1" | "v2"
+      }
+      agent: string
+      available: Array<string>
+      model: {
+        id: string
+        providerID: string
+        variant?: string
+      }
+      projectID: string
+      location: LocationRef
+      title: string
+      ceiling: PermissionV2Ruleset
+    }
+  }
+}
+
+export type SyncEventSessionNextTaskRequested = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.task.requested.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      assistantMessageID: string
+      callID: string
+      childSessionID: string
+      promptMessageID: string
+      description: string
+      prompt: string
+      agent: string
+      model: {
+        id: string
+        providerID: string
+        variant?: string
+      }
+      command?: string
+      multiAgent: "v1" | "v2"
+      callerAgent: string
+      permissions: PermissionV2Ruleset
+      plan: {
+        mode?: "function" | "code-preferred" | "code-only"
+        shell?: "shell_command"
+        patch?: "freeform"
+        multiAgent: "v1" | "v2"
+      }
+      projectID: string
+      location: LocationRef
+      title: string
+      ceiling: PermissionV2Ruleset
+    }
+  }
+}
+
+export type SyncEventSessionNextTaskInterrupted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.task.interrupted.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      assistantMessageID: string
+      callID: string
+      childSessionID: string
+    }
+  }
+}
+
 export type SyncEventSessionNextRetried = {
   type: "sync"
   id: string
@@ -3656,6 +4107,57 @@ export type SyncEventSessionNextRetried = {
       sessionID: string
       attempt: number
       error: SessionNextRetryError
+    }
+  }
+}
+
+export type SyncEventSessionNextCompactionRequested = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.compaction.requested.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      instruction?: string
+    }
+  }
+}
+
+export type SyncEventSessionNextCompactionSkipped = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.compaction.skipped.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+    }
+  }
+}
+
+export type SyncEventSessionNextCompactionFailed = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.compaction.failed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      messageID: string
+      reason: "provider" | "empty" | "context" | "interrupted" | "runtime" | "execution"
+      message: string
     }
   }
 }
@@ -3743,16 +4245,6 @@ export type LocationInfo = {
     directory: string
   }
 }
-
-export type PermissionV2Effect = "allow" | "deny" | "ask"
-
-export type PermissionV2Rule = {
-  action: string
-  resource: string
-  effect: PermissionV2Effect
-}
-
-export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
 export type AgentV2Info = {
   id: string
@@ -3908,6 +4400,11 @@ export type SessionMessageShell = {
   callID: string
   command: string
   output: string
+  status?: "completed" | "timed_out" | "failed" | "interrupted" | "unknown"
+  exitCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  truncated?: boolean
+  stdoutTruncated?: boolean
+  stderrTruncated?: boolean
 }
 
 export type SessionMessageAssistantText = {
@@ -3934,9 +4431,11 @@ export type SessionMessageToolStatePending = {
 
 export type SessionMessageToolStateRunning = {
   status: "running"
-  input: {
-    [key: string]: unknown
-  }
+  input:
+    | {
+        [key: string]: unknown
+      }
+    | string
   structured: {
     [key: string]: unknown
   }
@@ -3945,9 +4444,11 @@ export type SessionMessageToolStateRunning = {
 
 export type SessionMessageToolStateCompleted = {
   status: "completed"
-  input: {
-    [key: string]: unknown
-  }
+  input:
+    | {
+        [key: string]: unknown
+      }
+    | string
   attachments?: Array<PromptFileAttachment>
   content: Array<ToolTextContent | ToolFileContent>
   outputPaths?: Array<string>
@@ -3959,9 +4460,11 @@ export type SessionMessageToolStateCompleted = {
 
 export type SessionMessageToolStateError = {
   status: "error"
-  input: {
-    [key: string]: unknown
-  }
+  input:
+    | {
+        [key: string]: unknown
+      }
+    | string
   content: Array<ToolTextContent | ToolFileContent>
   structured: {
     [key: string]: unknown
@@ -3972,6 +4475,7 @@ export type SessionMessageToolStateError = {
 
 export type SessionMessageAssistantTool = {
   type: "tool"
+  toolType?: "function" | "custom"
   id: string
   name: string
   provider?: {
@@ -4285,6 +4789,29 @@ export type EventPluginAdded = {
   }
 }
 
+export type EventPluginFailed = {
+  id: string
+  type: "plugin.failed"
+  properties: {
+    id?: string
+    source: string
+    package?: string
+    stage?: "install" | "entrypoint" | "compatibility" | "import" | "factory" | "hook-shape"
+    message: string
+  }
+}
+
+export type EventPluginWarning = {
+  id: string
+  type: "plugin.warning"
+  properties: {
+    id?: string
+    source: string
+    package: string
+    message: string
+  }
+}
+
 export type ModelV2Info1 = {
   id: string
   providerID: string
@@ -4454,6 +4981,32 @@ export type EventMessagePartRemoved = {
   }
 }
 
+export type EventSessionNextCreated = {
+  id: string
+  type: "session.next.created"
+  properties: {
+    timestamp: number
+    sessionID: string
+    parentID?: string
+    projectID: string
+    location: LocationRef
+    subpath?: string
+    title: string
+    slug: string
+    version: string
+    agent?: string
+    model?: {
+      id: string
+      providerID: string
+      variant?: string
+    }
+    metadata?: {
+      [key: string]: unknown
+    }
+    runtime: "v1" | "v2"
+  }
+}
+
 export type EventSessionNextAgentSwitched = {
   id: string
   type: "session.next.agent.switched"
@@ -4558,6 +5111,18 @@ export type EventSessionNextSynthetic = {
   }
 }
 
+export type EventSessionNextShellRequested = {
+  id: string
+  type: "session.next.shell.requested"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    command: string
+    resume: boolean
+  }
+}
+
 export type EventSessionNextShellStarted = {
   id: string
   type: "session.next.shell.started"
@@ -4576,8 +5141,44 @@ export type EventSessionNextShellEnded = {
   properties: {
     timestamp: number
     sessionID: string
+    messageID: string
     callID: string
     output: string
+    status: "completed" | "timed_out" | "failed" | "interrupted" | "unknown"
+    exitCode?: number | "NaN" | "Infinity" | "-Infinity"
+    truncated: boolean
+    stdoutTruncated?: boolean
+    stderrTruncated?: boolean
+  }
+}
+
+export type EventSessionNextShellContinued = {
+  id: string
+  type: "session.next.shell.continued"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+  }
+}
+
+export type EventSessionNextShellContinuationStarted = {
+  id: string
+  type: "session.next.shell.continuation.started"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+  }
+}
+
+export type EventSessionNextShellContinuationUnknown = {
+  id: string
+  type: "session.next.shell.continuation.unknown"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
   }
 }
 
@@ -4756,9 +5357,8 @@ export type EventSessionNextToolCalled = {
     assistantMessageID: string
     callID: string
     tool: string
-    input: {
-      [key: string]: unknown
-    }
+    input: string
+    toolType: "custom"
     provider: {
       executed: boolean
       metadata?: {
@@ -4831,6 +5431,108 @@ export type EventSessionNextToolFailed = {
   }
 }
 
+export type EventSessionNextTaskPrepared = {
+  id: string
+  type: "session.next.task.prepared"
+  properties: {
+    timestamp: number
+    sessionID: string
+    assistantMessageID: string
+    callID: string
+    input: unknown
+    callerAgent: string
+    permissions: PermissionV2Ruleset
+    plan: {
+      mode?: "function" | "code-preferred" | "code-only"
+      shell?: "shell_command"
+      patch?: "freeform"
+      multiAgent: "v1" | "v2"
+    }
+    agent: string
+    available: Array<string>
+    model: {
+      id: string
+      providerID: string
+      variant?: string
+    }
+    projectID: string
+    location: LocationRef
+    title: string
+    ceiling: PermissionV2Ruleset
+  }
+}
+
+export type EventSessionNextTaskRequested = {
+  id: string
+  type: "session.next.task.requested"
+  properties: {
+    timestamp: number
+    sessionID: string
+    assistantMessageID: string
+    callID: string
+    childSessionID: string
+    promptMessageID: string
+    description: string
+    prompt: string
+    agent: string
+    model: {
+      id: string
+      providerID: string
+      variant?: string
+    }
+    command?: string
+    multiAgent: "v1" | "v2"
+    callerAgent: string
+    permissions: PermissionV2Ruleset
+    plan: {
+      mode?: "function" | "code-preferred" | "code-only"
+      shell?: "shell_command"
+      patch?: "freeform"
+      multiAgent: "v1" | "v2"
+    }
+    projectID: string
+    location: LocationRef
+    title: string
+    ceiling: PermissionV2Ruleset
+  }
+}
+
+export type EventSessionNextTaskInterrupted = {
+  id: string
+  type: "session.next.task.interrupted"
+  properties: {
+    timestamp: number
+    sessionID: string
+    assistantMessageID: string
+    callID: string
+    childSessionID: string
+  }
+}
+
+export type EventSessionNextTaskExecute = {
+  id: string
+  type: "session.next.task.execute"
+  properties: {
+    timestamp: number
+    sessionID: string
+    assistantMessageID: string
+    callID: string
+    childSessionID: string
+  }
+}
+
+export type EventSessionNextTaskInterrupt = {
+  id: string
+  type: "session.next.task.interrupt"
+  properties: {
+    timestamp: number
+    sessionID: string
+    assistantMessageID: string
+    callID: string
+    childSessionID: string
+  }
+}
+
 export type EventSessionNextRetried = {
   id: string
   type: "session.next.retried"
@@ -4839,6 +5541,39 @@ export type EventSessionNextRetried = {
     sessionID: string
     attempt: number
     error: SessionNextRetryError
+  }
+}
+
+export type EventSessionNextCompactionRequested = {
+  id: string
+  type: "session.next.compaction.requested"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    instruction?: string
+  }
+}
+
+export type EventSessionNextCompactionSkipped = {
+  id: string
+  type: "session.next.compaction.skipped"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+  }
+}
+
+export type EventSessionNextCompactionFailed = {
+  id: string
+  type: "session.next.compaction.failed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    messageID: string
+    reason: "provider" | "empty" | "context" | "interrupted" | "runtime" | "execution"
+    message: string
   }
 }
 
@@ -4877,76 +5612,6 @@ export type EventSessionNextCompactionEnded = {
   }
 }
 
-export type EventMessagePartDelta = {
-  id: string
-  type: "message.part.delta"
-  properties: {
-    sessionID: string
-    messageID: string
-    partID: string
-    field: string
-    delta: string
-  }
-}
-
-export type EventSessionDiff = {
-  id: string
-  type: "session.diff"
-  properties: {
-    sessionID: string
-    diff: Array<SnapshotFileDiff>
-  }
-}
-
-export type EventSessionError = {
-  id: string
-  type: "session.error"
-  properties: {
-    sessionID?: string
-    error?:
-      | ProviderAuthError
-      | UnknownError
-      | MessageOutputLengthError
-      | MessageAbortedError
-      | StructuredOutputError
-      | ContextOverflowError
-      | ContentFilterError
-      | ApiError
-  }
-}
-
-export type EventInstallationUpdated = {
-  id: string
-  type: "installation.updated"
-  properties: {
-    version: string
-  }
-}
-
-export type EventInstallationUpdateAvailable = {
-  id: string
-  type: "installation.update-available"
-  properties: {
-    version: string
-  }
-}
-
-export type EventReferenceUpdated = {
-  id: string
-  type: "reference.updated"
-  properties: {
-    [key: string]: unknown
-  }
-}
-
-export type EventFileEdited = {
-  id: string
-  type: "file.edited"
-  properties: {
-    file: string
-  }
-}
-
 export type EventIntegrationUpdated = {
   id: string
   type: "integration.updated"
@@ -4981,11 +5646,27 @@ export type EventPermissionV2Replied = {
   }
 }
 
+export type EventReferenceUpdated = {
+  id: string
+  type: "reference.updated"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
 export type EventProjectDirectoriesUpdated = {
   id: string
   type: "project.directories.updated"
   properties: {
     projectID: string
+  }
+}
+
+export type EventFileEdited = {
+  id: string
+  type: "file.edited"
+  properties: {
+    file: string
   }
 }
 
@@ -5070,6 +5751,60 @@ export type EventTodoUpdated = {
   properties: {
     sessionID: string
     todos: Array<Todo>
+  }
+}
+
+export type EventMessagePartDelta = {
+  id: string
+  type: "message.part.delta"
+  properties: {
+    sessionID: string
+    messageID: string
+    partID: string
+    field: string
+    delta: string
+  }
+}
+
+export type EventSessionDiff = {
+  id: string
+  type: "session.diff"
+  properties: {
+    sessionID: string
+    diff: Array<SnapshotFileDiff>
+  }
+}
+
+export type EventSessionError = {
+  id: string
+  type: "session.error"
+  properties: {
+    sessionID?: string
+    error?:
+      | ProviderAuthError
+      | UnknownError
+      | MessageOutputLengthError
+      | MessageAbortedError
+      | StructuredOutputError
+      | ContextOverflowError
+      | ContentFilterError
+      | ApiError
+  }
+}
+
+export type EventInstallationUpdated = {
+  id: string
+  type: "installation.updated"
+  properties: {
+    version: string
+  }
+}
+
+export type EventInstallationUpdateAvailable = {
+  id: string
+  type: "installation.update-available"
+  properties: {
+    version: string
   }
 }
 
@@ -9883,7 +10618,10 @@ export type V2SessionPromptResponses = {
 export type V2SessionPromptResponse = V2SessionPromptResponses[keyof V2SessionPromptResponses]
 
 export type V2SessionCompactData = {
-  body?: never
+  body: {
+    id?: string
+    prompt?: Prompt
+  }
   path: {
     sessionID: string
   }
@@ -9905,9 +10643,13 @@ export type V2SessionCompactErrors = {
    */
   404: SessionNotFoundError
   /**
-   * ServiceUnavailableError
+   * ConflictError
    */
-  503: ServiceUnavailableError
+  409: ConflictError
+  /**
+   * UnknownError
+   */
+  500: UnknownError1
 }
 
 export type V2SessionCompactError = V2SessionCompactErrors[keyof V2SessionCompactErrors]
@@ -9944,9 +10686,9 @@ export type V2SessionWaitErrors = {
    */
   404: SessionNotFoundError
   /**
-   * ServiceUnavailableError
+   * UnknownError
    */
-  503: ServiceUnavailableError
+  500: UnknownError1
 }
 
 export type V2SessionWaitError = V2SessionWaitErrors[keyof V2SessionWaitErrors]
