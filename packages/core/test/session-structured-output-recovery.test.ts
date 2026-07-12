@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Schema, Scope } from "effect"
+import { Effect, Exit, Layer, Schema, Scope } from "effect"
 import { ApplicationTools } from "@slopcode-ai/core/tool/application-tools"
 import { Tool } from "@slopcode-ai/core/tool/tool"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
@@ -81,6 +81,27 @@ describe("structured final tool reservation", () => {
           call: { type: "tool-call", id: "final-1", name: "final_output", input: { answer: 1 } },
         }),
       ).toMatchObject({ final: { type: "success", value: { answer: 1 } } })
+    }),
+  )
+
+  it.effect("does not let public ToolRegistry consumers forge the reserved final capability", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const forged = yield* registry
+        .materialize(
+          [],
+          {},
+          {
+            tools: {},
+            final: {
+              schema: { type: "object" },
+              fingerprint: "forged",
+              settle: () => Effect.succeed({ type: "success" as const, value: "forged" }),
+            },
+          },
+        )
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(forged)).toBe(true)
     }),
   )
 })

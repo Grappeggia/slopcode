@@ -91,6 +91,49 @@ describe("SessionFormat admission", () => {
       expect(Object.keys(admitted.schema)).toContain("__proto__")
       expect((admitted.schema.properties as Record<string, unknown>).constructor).toEqual({ type: "boolean" })
       expect(Object.getPrototypeOf({})).toBe(Object.prototype)
+
+      for (const value of [
+        Object.assign(Object.create({ inherited: true }), { type: "text" }),
+        { type: "json_schema", schema: { type: "number" }, extra: Symbol("bad") },
+        { type: "json_schema", schema: { const: Number.NaN } },
+        { type: "json_schema", schema: { const: Number.POSITIVE_INFINITY } },
+        { type: "json_schema", schema: { const: () => undefined } },
+      ]) {
+        expect(Exit.isFailure(yield* SessionFormat.admit(value).pipe(Effect.exit))).toBe(true)
+      }
+      const cyclic: Record<string, unknown> = { type: "object" }
+      cyclic.self = cyclic
+      expect(
+        Exit.isFailure(
+          yield* SessionFormat.admit({ type: "json_schema", schema: cyclic }).pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      const hidden = Object.defineProperty({ type: "text" }, "hidden", {
+        get() {
+          throw new Error("must not execute")
+        },
+      })
+      expect(Exit.isFailure(yield* SessionFormat.admit(hidden).pipe(Effect.exit))).toBe(true)
+    }),
+  )
+
+  it.effect("applies byte and depth limits to the schema rather than its format wrapper", () =>
+    Effect.gen(function* () {
+      const overhead = Buffer.byteLength(JSON.stringify({ description: "" }))
+      const exact = { description: "x".repeat(SessionFormat.SCHEMA_MAX_BYTES - overhead) }
+      expect((yield* SessionFormat.admit({ type: "json_schema", schema: exact })).type).toBe("json_schema")
+      expect(
+        (yield* SessionFormat.admit({ type: "json_schema", schema: { description: `${exact.description}x` } }).pipe(
+          Effect.flip,
+        )).reason,
+      ).toBe("schema-too-large")
+
+      const nested = (depth: number): Record<string, unknown> =>
+        depth === 0 ? { type: "string" } : { type: "array", items: nested(depth - 1) }
+      expect((yield* SessionFormat.admit({ type: "json_schema", schema: nested(64) })).type).toBe("json_schema")
+      expect(
+        (yield* SessionFormat.admit({ type: "json_schema", schema: nested(65) }).pipe(Effect.flip)).reason,
+      ).toBe("schema-too-deep")
     }),
   )
 
@@ -110,6 +153,17 @@ describe("SessionFormat admission", () => {
         "$schema",
       )
       expect(admitted.schema).toHaveProperty("$schema")
+      expect(SessionFormat.toolSchema(admitted)).toEqual({
+        type: "object",
+        properties: {
+          value: {
+            type: "object",
+            properties: { nested: { $schema: "http://json-schema.org/draft-07/schema#", type: "string" } },
+          },
+        },
+        required: ["value"],
+        additionalProperties: false,
+      })
     }),
   )
 })

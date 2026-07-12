@@ -768,6 +768,37 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  for (const [name, schema, value] of [
+    ["scalar", { type: "number" }, 42],
+    ["array", { type: "array", items: { type: "number" } }, [1, 2]],
+    ["object", { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] }, { answer: 42 }],
+  ] as const) {
+    it.effect(`wraps and unwraps ${name} structured finals through a portable function schema`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        responses = [[LLMEvent.toolCall({ id: `final-${name}`, name: "final_output", input: { value } })]]
+        yield* session.prompt({
+          sessionID,
+          prompt: new Prompt({ text: `Return ${name}`, format: { type: "json_schema", schema, retry_count: 0 } }),
+          resume: false,
+        })
+
+        yield* session.resume(sessionID)
+
+        expect(requests[0]?.tools.find((tool) => tool.name === "final_output")?.inputSchema).toEqual({
+          type: "object",
+          properties: { value: schema },
+          required: ["value"],
+          additionalProperties: false,
+        })
+        expect((yield* session.messages({ sessionID })).find((message) => message.type === "assistant")).toMatchObject({
+          structured: value,
+        })
+      }),
+    )
+  }
+
   it.effect("uses exactly the configured additional structured attempts", () =>
     Effect.gen(function* () {
       yield* setup
