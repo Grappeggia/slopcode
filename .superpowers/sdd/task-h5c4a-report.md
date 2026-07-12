@@ -64,7 +64,7 @@ The default 5-second full Core run had one unrelated public API test time out at
 ## Commits
 
 - `29f370ab81 feat(core): add location MCP runtime`
-- Report commit: this file's commit.
+- `8bfdedd188 docs: report H5C4A implementation`
 
 ## Self-Review
 
@@ -79,3 +79,38 @@ The default 5-second full Core run had one unrelated public API test time out at
 ## Concerns
 
 - No known H5C4A correctness concerns. OAuth and public control surfaces are intentionally deferred to H5C4B/H8.
+
+## Review Corrections
+
+### Implementation
+
+- Added an interruptible SDK acquisition boundary that forwards an `AbortSignal` to `Client.connect`, waits for an interrupted acquisition to settle, and idempotently closes a late successful result. Per-server pending ownership also lets Location finalization close a client that completed discovery but was not yet activated.
+- Reworked MCP after-hook projection so original `isError`, `_meta`, `structuredContent`, content, and canonical output keys survive text/title/metadata edits. Reserved fields are validated before explicit replacement, metadata additions merge without nesting structured output, and hooks cannot change MCP error state.
+- Replaced best-effort stdio termination with awaited, idempotent cleanup. It scans descendants before, during, and after SDK close; runs cleanup after close rejection; sends POSIX SIGTERM, waits 500 ms, escalates survivors with SIGKILL, and awaits Windows `taskkill /T /F`.
+- Added one operation semaphore around all public state changes and retained each server semaphore for all-server connect, per-server connect/refresh/disconnect/reconnect, notifications, reload, spontaneous close, and finalization. Adapted tools capture the client that discovered them instead of dereferencing mutable server state.
+- Added internal `MCP.reload()` reconciliation over mutable `Config.Service`: removed/replaced tools hide before slow closure, existing server slots remain stable, new slots append, and add/replace/remove operations reconnect through the same locks.
+- Moved synchronous MCP call adapter invocation into an `Effect.callback` boundary so synchronous invariant throws remain defects while asynchronous promise rejection maps to `Tool.Failure` and interruption still aborts/awaits the request.
+- SSE EventSource fetch now merges transport-generated headers through `Headers`, preserving generated `Accept` and `Last-Event-ID` while configured values override only matching names.
+- Added focused coverage for page overflow, sanitized and overlength names, failed refresh preservation/events, status replay/redaction, permission denial, Location shutdown, reconnect/refresh serialization, client identity, malformed hook replacements, process adapters, close rejection, interruption, and a real stubborn grandchild.
+
+### RED Evidence
+
+- `bun test test/mcp-review.test.ts` from `packages/core`: 0 pass, 4 fail. Failures were `MCPClient.interruptible is not a function` twice, `MCPClient.cleanup is not a function`, and missing cleanup/header behavior.
+- `bun test test/mcp-service-review.test.ts` from `packages/core`: 3 pass, 4 fail. The failures demonstrated MCP `isError` changing from error to text after a hook, synchronous call exceptions being settled instead of defecting, missing explicit refresh failure publication, and absent `reload` reconciliation timing out while waiting for removal cleanup.
+
+### GREEN Evidence
+
+- `bun test test/mcp-review.test.ts test/mcp-service-review.test.ts test/mcp.test.ts test/mcp-client.test.ts test/location-layer.test.ts` from `packages/core`: 32 pass, 0 fail, 94 assertions.
+- `bun test --timeout 10000` from `packages/core`: 1352 pass, 0 fail, 4007 assertions across 148 files.
+- `bun test` from `packages/codemode`: 254 pass, 0 fail, 744 assertions.
+- `bun run typecheck` from `packages/core`: pass.
+- `bun run typecheck` from `packages/server`: pass.
+- `bun install --frozen-lockfile` from the repository root: pass, 2372 installs checked, no changes.
+- `bunx prettier --check packages/core/src/mcp.ts packages/core/src/mcp/client.ts packages/core/test/mcp-review.test.ts packages/core/test/mcp-service-review.test.ts packages/core/test/mcp-client.test.ts packages/core/test/fixture/mcp-stubborn-server.ts`: pass.
+- `git diff --check`: pass.
+
+The first full Core attempt was run concurrently with the other verification jobs and exceeded the shell's 120-second command limit without reporting a test failure. The required standalone rerun completed in 64.73 seconds with 1352 passing tests. An intermediate typecheck exposed an `Effect.fnUntraced` overload error in the uninterruptible close wrapper; replacing it with an explicitly typed plain Effect function produced the final passing Core and server typechecks above.
+
+### Review Commit
+
+- `aed9dd7660 fix(core): harden MCP runtime lifecycle`
