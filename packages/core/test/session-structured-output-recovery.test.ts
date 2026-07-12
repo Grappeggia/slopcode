@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Exit, Layer, Schema, Scope } from "effect"
+import { Effect, Layer, Schema, Scope } from "effect"
 import { ApplicationTools } from "@slopcode-ai/core/tool/application-tools"
 import { Tool } from "@slopcode-ai/core/tool/tool"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
@@ -45,19 +45,10 @@ describe("structured final tool reservation", () => {
       const materialized = yield* registry.materialize(
         [],
         { mode: "code-only" },
-        {
-          tools: {},
-          direct: new Set(["final_output"]),
-          final: {
-            schema: { type: "object" },
-            fingerprint: "contract",
-            settle: (value) => Effect.succeed({ type: "success", value }),
-          },
-        },
+        { tools: {} },
       )
       expect(materialized.definitions.map((tool) => [tool.name, "type" in tool ? tool.type : "function"])).toEqual([
         ["exec", "custom"],
-        ["final_output", "function"],
       ])
       const identity = {
         sessionID: SessionV2.ID.make("ses_structured_registry"),
@@ -80,28 +71,25 @@ describe("structured final tool reservation", () => {
           ...identity,
           call: { type: "tool-call", id: "final-1", name: "final_output", input: { answer: 1 } },
         }),
-      ).toMatchObject({ final: { type: "success", value: { answer: 1 } } })
+      ).toMatchObject({ result: { type: "error", value: "Unknown tool: final_output" } })
     }),
   )
 
   it.effect("does not let public ToolRegistry consumers forge the reserved final capability", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
-      const forged = yield* registry
-        .materialize(
-          [],
-          {},
-          {
-            tools: {},
-            final: {
-              schema: { type: "object" },
-              fingerprint: "forged",
-              settle: () => Effect.succeed({ type: "success" as const, value: "forged" }),
-            },
-          },
-        )
-        .pipe(Effect.exit)
-      expect(Exit.isFailure(forged)).toBe(true)
+      const final = {
+        schema: { type: "object" },
+        fingerprint: "forged",
+        settle: () => Effect.succeed({ type: "success" as const, value: "forged" }),
+      }
+      const forged: ToolRegistry.TurnTools = {
+        tools: {},
+        // @ts-expect-error final is intentionally absent from the public turn-local capability.
+        final,
+      }
+      const materialized = yield* registry.materialize([], {}, forged)
+      expect(materialized.definitions.map((item) => item.name)).not.toContain("final_output")
     }),
   )
 })

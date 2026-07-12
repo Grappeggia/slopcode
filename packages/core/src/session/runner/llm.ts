@@ -4,6 +4,7 @@ import {
   LLMError,
   LLMEvent,
   SystemPart,
+  ToolDefinition,
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@slopcode-ai/llm"
@@ -564,23 +565,6 @@ export const layer = Layer.effect(
             multiAgent: resolved.harness.multiAgent,
           }
         : {}
-      const final = format
-        ? {
-            schema: SessionFormat.toolSchema(format),
-            fingerprint: SessionFormat.fingerprint(format),
-            settle: (value: unknown) =>
-              SessionFormat.safeValue(value).pipe(
-                Effect.map((value) =>
-                  SessionFormat.validate(format, value)
-                    ? ({ type: "success" as const, value })
-                    : ({ type: "failure" as const, reason: "schema" as const }),
-                ),
-                Effect.catch(() =>
-                  Effect.succeed({ type: "failure" as const, reason: "value-limit" as const }),
-                ),
-              ),
-          }
-        : undefined
       const toolMaterialization = yield* tools.materialize(permissions, {
         ...plan,
         ...(resolved.harness
@@ -598,7 +582,18 @@ export const layer = Layer.effect(
                 }),
             }
           : {}),
-      }, final ? { tools: {}, direct: new Set([FINAL_OUTPUT]), final } : { tools: {} }).pipe(Effect.orDie)
+      })
+      const definitions = format
+        ? [
+            ...toolMaterialization.definitions,
+            new ToolDefinition({
+              name: FINAL_OUTPUT,
+              description: "Return the final schema-valid response exactly once after all other work is complete.",
+              inputSchema: SessionFormat.toolSchema(format),
+              metadata: { fingerprint: SessionFormat.fingerprint(format) },
+            }),
+          ]
+        : toolMaterialization.definitions
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
         model,
@@ -624,7 +619,7 @@ export const layer = Layer.effect(
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
         messages: toLLMMessages(context, model),
-        tools: toolMaterialization.definitions,
+        tools: definitions,
         toolChoice: format ? "required" : undefined,
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
@@ -780,7 +775,7 @@ export const layer = Layer.effect(
             if (overflowFailure || publisher.hasProviderError()) return
             if (format && root && event.type === "tool-call" && event.name === FINAL_OUTPUT) {
               const assistantMessageID = yield* publisher.startAssistant()
-              const candidate = yield* SessionFormat.safeValue(event.input).pipe(Effect.option)
+              const candidate = yield* SessionFormat.toolValue(event.input).pipe(Effect.option)
               yield* events.publish(
                 SessionEvent.Structured.Candidate,
                 {
@@ -795,13 +790,7 @@ export const layer = Layer.effect(
                 },
                 { id: SessionFormat.candidateID(session.id, root.id, attempt) },
               )
-              const settlement = yield* toolMaterialization.settle({
-                sessionID: session.id,
-                agent: agent.id,
-                assistantMessageID,
-                call: event,
-              })
-              if (settlement.final?.type === "success") {
+              if (Option.isSome(candidate) && SessionFormat.validate(format, candidate.value)) {
                 yield* FiberSet.clear(toolFibers)
                 yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
                 yield* events.publish(
@@ -811,7 +800,7 @@ export const layer = Layer.effect(
                     timestamp: yield* DateTime.now,
                     rootUserID: root.id,
                     assistantMessageID,
-                    value: settlement.final.value,
+                    value: candidate.value,
                     attempts: attempt,
                     retryCount: format.retry_count,
                   },
@@ -826,8 +815,7 @@ export const layer = Layer.effect(
                 )
                 structuredValid = true
               } else {
-                const reason =
-                  settlement.final?.type === "failure" ? settlement.final.reason : "stale"
+                const reason = Option.isNone(candidate) ? "value-limit" : "schema"
                 yield* settleStructured(assistantMessageID, reason)
               }
               structuredSettled = true

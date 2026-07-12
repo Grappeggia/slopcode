@@ -727,7 +727,7 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.textStart({ id: "ignored" }),
           LLMEvent.textDelta({ id: "ignored", text: "must not project" }),
           LLMEvent.textEnd({ id: "ignored" }),
-          LLMEvent.toolCall({ id: "final-1", name: "final_output", input: { answer: 42 } }),
+          LLMEvent.toolCall({ id: "final-1", name: "final_output", input: { value: { answer: 42 } } }),
           LLMEvent.textStart({ id: "late" }),
           LLMEvent.textDelta({ id: "late", text: "late text" }),
         ],
@@ -804,8 +804,8 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       responses = [
-        [LLMEvent.toolCall({ id: "final-bad", name: "final_output", input: { answer: "wrong" } })],
-        [LLMEvent.toolCall({ id: "final-good", name: "final_output", input: { answer: 7 } })],
+        [LLMEvent.toolCall({ id: "final-bad", name: "final_output", input: { value: { answer: "wrong" } } })],
+        [LLMEvent.toolCall({ id: "final-good", name: "final_output", input: { value: { answer: 7 } } })],
       ]
       yield* session.prompt({
         sessionID,

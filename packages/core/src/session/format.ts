@@ -50,30 +50,38 @@ const fail = (reason: typeof AdmissionReason.Type, message: string) =>
 
 export const admit = Effect.fn("SessionFormat.admit")(function* (input: unknown) {
   if (input === undefined) return Object.freeze({ type: "text" as const })
-  const format = yield* clone(input, "format", SCHEMA_MAX_BYTES, MAX_DEPTH).pipe(
-    Effect.mapError((error) =>
-      new AdmissionError({
-        reason: error === "too-large" ? "schema-too-large" : error === "too-deep" ? "schema-too-deep" : "invalid-format",
-        message: "Structured output format must be a closed JSON value",
-      }),
-    ),
+  if (!record(input) || !plain(input)) return yield* fail("invalid-format", "Structured output format must be an object")
+  const descriptors = Object.getOwnPropertyDescriptors(input)
+  if (
+    Object.getOwnPropertySymbols(input).length > 0 ||
+    Object.values(descriptors).some((descriptor) => !("value" in descriptor) || !descriptor.enumerable)
   )
-  if (!record(format)) return yield* fail("invalid-format", "Structured output format must be an object")
-  if (format.type === "text") {
-    if (!keys(format, ["type"])) return yield* fail("invalid-format", "Text format contains unknown fields")
+    return yield* fail("invalid-format", "Structured output format must be a closed JSON object")
+  if (descriptors.type?.value === "text") {
+    if (!keys(input, ["type"])) return yield* fail("invalid-format", "Text format contains unknown fields")
     return Object.freeze({ type: "text" as const })
   }
-  if (format.type !== "json_schema" || !keys(format, ["type", "schema", "retry_count"]))
+  if (descriptors.type?.value !== "json_schema" || !keys(input, ["type", "schema", "retry_count"]))
     return yield* fail("invalid-format", "Structured output format is invalid")
-  if (!("schema" in format) || !record(format.schema))
+  if (!descriptors.schema || !("value" in descriptors.schema) || !record(descriptors.schema.value))
     return yield* fail("invalid-schema", "Structured output schema must be an object")
-  const retry = format.retry_count ?? 2
+  const retry = descriptors.retry_count && "value" in descriptors.retry_count ? descriptors.retry_count.value : 2
   if (!Number.isInteger(retry) || typeof retry !== "number" || retry < 0 || retry > 5)
     return yield* fail("invalid-format", "retry_count must be an integer from 0 through 5")
-  const schema = format.schema as JsonSchema.JsonSchema
-  const encoded = JSON.stringify(schema)
-  if (Buffer.byteLength(encoded) > SCHEMA_MAX_BYTES)
-    return yield* fail("schema-too-large", "Structured output schema exceeds 256 KiB")
+  const schema = (yield* clone(descriptors.schema.value, "schema", SCHEMA_MAX_BYTES, MAX_DEPTH).pipe(
+    Effect.mapError(
+      (error) =>
+        new AdmissionError({
+          reason: error === "too-large" ? "schema-too-large" : error === "too-deep" ? "schema-too-deep" : "invalid-schema",
+          message:
+            error === "too-large"
+              ? "Structured output schema exceeds 256 KiB"
+              : error === "too-deep"
+                ? "Structured output schema exceeds depth 64"
+                : "Structured output schema must be a JSON object",
+        }),
+    ),
+  )) as JsonSchema.JsonSchema
   const draft = Object.hasOwn(schema, "$schema") ? schema.$schema : Draft2020
   if (draft !== Draft7 && draft !== Draft2020)
     return yield* fail("unsupported-schema", "Structured output schema draft is unsupported")
@@ -113,8 +121,20 @@ export const validator = (format: JsonFormat) => {
 
 export const toolSchema = (format: JsonFormat) => {
   const schema = Object.fromEntries(Object.entries(format.schema).filter(([key]) => key !== "$schema"))
-  return deepFreeze(schema) as JsonSchema.JsonSchema
+  return deepFreeze({
+    type: "object",
+    properties: { value: schema },
+    required: ["value"],
+    additionalProperties: false,
+  }) as JsonSchema.JsonSchema
 }
+
+export const toolValue = Effect.fn("SessionFormat.toolValue")(function* (input: unknown) {
+  const value = yield* safeValue(input)
+  if (!record(value) || Object.keys(value).length !== 1 || !Object.hasOwn(value, "value"))
+    return yield* Effect.fail(new Error("Structured final tool input must contain exactly one value field"))
+  return yield* safeValue(value.value)
+})
 
 export const fingerprint = (format: JsonFormat) =>
   createHash("sha256").update(JSON.stringify({ schema: format.schema, retry_count: format.retry_count })).digest("hex")
@@ -147,10 +167,10 @@ const clone = (value: unknown, _name: string, max: number, limit: number): Effec
   Effect.sync(() => {
     const seen = new Set<object>()
     const copy = (item: unknown, depth: number): unknown => {
-      if (depth > limit) throw "too-deep" satisfies CloneError
       if (item === null || typeof item === "string" || typeof item === "boolean") return item
       if (typeof item === "number" && Number.isFinite(item)) return item
       if (typeof item !== "object") throw "invalid" satisfies CloneError
+      if (depth > limit) throw "too-deep" satisfies CloneError
       if (seen.has(item)) throw "invalid" satisfies CloneError
       const proto = Object.getPrototypeOf(item)
       if (proto !== Object.prototype && proto !== null && !Array.isArray(item)) throw "invalid" satisfies CloneError
@@ -189,6 +209,11 @@ const clone = (value: unknown, _name: string, max: number, limit: number): Effec
 
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+const plain = (value: object) => {
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
 
 const keys = (value: Record<string, unknown>, allowed: readonly string[]) =>
   Object.keys(value).every((key) => allowed.includes(key))
