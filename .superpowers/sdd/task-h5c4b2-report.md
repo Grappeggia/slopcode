@@ -10,11 +10,11 @@ H5C4B2 is implemented in V2 Core. Remote MCP OAuth now has Location/workspace-sc
 - Every store read-modify-write takes one `Flock`, rereads while held, validates the complete nested document, writes and fsyncs a CSPRNG-named `wx` temporary file, atomically renames it, fsyncs the directory, and removes any temporary file. Symlinks and non-regular paths fail with typed safe errors; malformed data is not reset.
 - Credential identity is the exact `(Location.directory, workspaceID, effective server name, normalized endpoint)` tuple. `normalizeEndpoint` uses `URL`, permits only credential-free fragment-free HTTP(S), canonicalizes URL serialization, and preserves path, trailing slash, and query distinctions.
 - Store entries contain only tokens with absolute expiry, full SDK client registration, SDK discovery state, a non-secret SHA-256 compatibility marker, exact attempt records, and an optional non-secret V1 claim marker.
-- The isolated V1 compatibility path reads but never writes `Global.data/mcp-auth.json`. It claims only exact version-2 stable token/client fields into an empty, workspace-less destination with matching directory, name, and normalized endpoint. It never claims verifier/state/transient fields or ambiguous records.
+- The isolated V1 compatibility path reads but never writes `Global.data/mcp-auth.json`. Plain reads never claim. Recovery/connect explicitly and atomically claim only exact version-2 stable token/client fields into an empty, workspace-less destination after exact target, current compatibility, static client/secret, and requested-scope validation. Failed claims write nothing and remain retryable.
 - `MCPOAuthProvider` implements the SDK `OAuthClientProvider` only for interactive initialization/exchange and explicit noninteractive refresh. Static client configuration is authoritative; expired dynamic secrets are unavailable only when expiry is finite, positive, and elapsed. Token writes preserve omitted refresh token/scope and clear stale expiry when `expires_in` is omitted. All five SDK invalidation scopes are implemented.
 - `MCPOAuth` owns attempt coordination. IDs use 128 CSPRNG bits with an `mcp_auth_` prefix; state uses 256 bits. Attempts persist ten-minute wall-clock expiry and transition `initializing -> pending -> received -> exchanging -> complete|failed`, with cancellation/expiry terminals erasing state, verifier, code, and authorization URL. `pending` is published only after the verifier and exact authorization URL are durable.
 - Exchange and proactive 60-second-skew refresh use identity-keyed inter-process single-flight locks and reread persisted state after lock acquisition. Active callback exchanges are tracked by attempt with an abort controller and settlement promise. Remove, reset, stop, reload, disable, replacement, and Location shutdown abort exchanges, await settlement, terminalize once, then close listeners.
-- Every owned initializing/pending attempt has a wall-clock expiry timer derived from its persisted expiry. Startup enumerates stored buckets, cancels stale/disabled/non-OAuth targets, and recovers only an exact endpoint/client/scope/redirect/callback compatibility match. Compatible recovery terminalizes `initializing` and indeterminate `exchanging`, re-registers unexpired auto callbacks, schedules their remaining duration, and resumes durable `received` records.
+- Every owned active attempt has a scoped durable-terminal observer, and initializing/pending attempts also have a wall-clock expiry timer. Startup enumerates stored buckets, cancels stale/disabled/non-OAuth targets, and recovers only an exact endpoint/client/scope/redirect/callback compatibility match. Local observers close ownership promptly when another process persists a terminal phase without writing another terminal or event.
 - `MCPOAuthCallback` binds explicit literal loopback addresses only, registers exact paths and states, accepts GET only, rejects duplicate/missing/unknown/replayed parameters, and returns fixed non-reflective pages with no-store, CSP, nosniff, and no-referrer headers. HTTPS and non-loopback redirects become manual mode.
 - `MCPClient` passes no OAuth provider to Streamable HTTP or SSE. After explicit proactive refresh, it snapshots only the access token and injects bearer authorization at the resource fetch boundary. Refresh interaction maps to typed `auth-required`; other refresh failures map to bounded `refresh`. Normal connect cannot create an attempt, listener, authorization result, or browser action. Auth failures do not fall back; SSE fallback is limited to Streamable HTTP compatibility codes.
 - The remote fetch boundary adds configured headers only on the MCP resource origin, removes configured `Authorization` when OAuth is enabled, then overlays generated headers. Bearer, Accept, Content-Type, Last-Event-ID, session, and protocol headers therefore win. `oauth: false` retains prior explicit-header behavior.
@@ -417,6 +417,52 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 - `6e10fed65b` `test(core): tighten final MCP OAuth evidence`
 - `bc26926484` `fix(core): finalize MCP OAuth terminal lifecycle`
 - `18d94420f7` `test(core): integrate real MCP OAuth failure event`
+- Final report evidence: the following `docs:` commit.
+
+## Final Claim And Observer Settlement
+
+### Claim And Observer RED Evidence
+
+- Exact V1 claim command: `0 pass`, `1 fail`, `1 expect() call`. Plain `get(target)` immediately copied stable V1 credentials into V2 with no current compatibility, causing later recovery/connect compatibility rejection and consuming the destination before a safe retry.
+- Cross-service sibling command: `0 pass`, `1 fail`, `4 expect() calls`. A second service won and durably cancelled the first service's sibling, but that remote owner kept its registration bound and prevented immediate port reuse.
+- `e84e46090c` committed both failing contracts before implementation.
+
+### Claim And Observer Repairs
+
+- Removed ambient V1 claim behavior from `get`. `claimLegacy` is now the sole explicit atomic boundary and accepts the exact target, current compatibility hash, static client ID/secret, and scope.
+- A claim requires one exact closed V1 source, no workspace, stable access token plus client registration, exact static client ID/secret equality, and exact requested scope when present. Only then does one transaction write tokens/client, `claim: v1-version-2`, and the current compatibility.
+- Failed compatibility writes nothing to V2 and leaves the V1 source byte-for-byte unchanged, so a later exact configuration retries safely. Existing compatible claims are idempotent; unknown or broadly matched data is never blessed.
+- Both MCP OAuth recovery and normal MCP resource connect invoke the target-aware claim boundary before reading credentials. A claimed token therefore survives startup compatibility validation and is used by the provider-free authenticated transport.
+- Every locally owned active attempt now has a scoped durable terminal observer. At a bounded interval it rereads only that attempt; externally persisted complete/cancelled/expired/failed state triggers local abort/settlement/listener close and timer/observer/ownership removal.
+- Observer cleanup performs no store mutation and emits no event, so the process that wins the atomic terminal CAS remains the sole event publisher. Local close clears the interval before awaiting listener shutdown, and Location finalization retains interruption-safe exchange settlement.
+
+### Claim And Observer Coverage
+
+- Store evidence first performs an incompatible static-client claim, verifies no destination entry, then retries exact client/secret compatibility successfully. It verifies compatibility binding, stable credentials, no transient fields, unchanged V1 source, and no workspace claim.
+- Real authenticated transport evidence seeds exact V1 stable tokens/client, performs the explicit claim through normal connect, lists tools over Streamable HTTP with `Bearer claimed-access`, verifies the claim marker, and confirms the source file is unchanged.
+- Two independently scoped OAuth service instances share the durable store/callback host. One owns the sibling listener and unrelated target; the other wins. The remote observer promptly closes the cancelled sibling registration, releases the shared port, rejects replay, removes its expiry path, and leaves the unrelated target live until its own expiry.
+- Existing same-process, recovered, spawned-process exchange winner, timer, shutdown, and event tests remain green.
+
+### Claim And Observer Results
+
+- Exact V1 claim subset: `1 pass`, `0 fail`, `10 expect() calls`.
+- Claimed-token transport subset: `1 pass`, `0 fail`, `4 expect() calls`.
+- Cross-service observer subset: `1 pass`, `0 fail`, `8 expect() calls`.
+- Final focused 13-file command: `140 pass`, `0 fail`, `584 expect() calls`.
+- H5C4A/B1 preservation command: `74 pass`, `0 fail`, `268 expect() calls`.
+- Full Core: `1428 pass`, `0 fail`, `4381 expect() calls`, 153 files.
+- Full CodeMode: `254 pass`, `0 fail`, `744 expect() calls`.
+- V1 MCP HTTP/CLI evidence: `8 pass`, `0 fail`, `32 expect() calls`.
+- Core typecheck: exit 0.
+- Server typecheck: exit 0.
+- Frozen install: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+- SlopCode typecheck remains red only at the unrelated existing `src/session/processor.ts(495,17)` and `src/session/prompt.ts(1382,39)` diagnostics.
+
+### Claim And Observer Commits
+
+- `e84e46090c` `test(core): expose V1 claim and remote sibling gaps`
+- `3289bbbe64` `test(core): cover claimed token startup transport`
+- `5e0daf7529` `fix(core): observe durable OAuth terminal state`
 - Final report evidence: the following `docs:` commit.
 
 ## Last Two Findings Settlement
