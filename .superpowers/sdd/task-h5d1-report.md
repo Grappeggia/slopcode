@@ -4,7 +4,7 @@
 
 `DONE_WITH_CONCERNS`
 
-Durable V2 structured finals and the current stable-client bridge are implemented. Four required Slopcode HTTP tests still fail, but each failure was reproduced unchanged at the approved base `c54a7cd2558fd47217661986f10e7b44c4960451`; exact prompt-retry serialization was fixed by this slice.
+Durable V2 structured finals and the current stable-client bridge are implemented. All H5D1-focused Core, LLM, CodeMode, and stable-control gates pass. The full Slopcode suite retains ten unrelated or previously documented contract/timing failures described in the final re-review appendix.
 
 ## Design Decisions
 
@@ -253,3 +253,73 @@ Result: exit 0; `Checked 2372 installs across 2656 packages (no changes)`.
 `DONE_WITH_CONCERNS`
 
 All structured-final review findings are implemented and focused gates are green. Remaining concerns are the baseline-reproduced unrelated HTTP/worktree failures, the missing-session abort contract mismatch, and the branch-only listener timing threshold described above. No changes were pushed.
+
+## Final Re-review Appendix
+
+### Re-review Remediation
+
+- Structured lifecycle events now execute `SessionRuntime.assert` through the event transaction `guard`, fencing owner `v2`, state `draining`, and the exact epoch before projection and commit.
+- `ToolRegistry.StructuredService` exclusively materializes, decodes, validates, and settles `final_output`; ordinary registry consumers cannot install, discover, invoke, or forge that capability, and closed scopes reject stale materializations.
+- Malformed OpenAI Responses, OpenAI Chat, Anthropic, Gemini, and Bedrock tool arguments become bounded payload-free `tool-input-error` events instead of aborting the provider stream. Required `final_output` requests exercise every protocol fixture.
+- Raw tool input is capped at `1_048_576 + 4_096` bytes before parsing. Exact semantic byte and depth limits apply independently to the extracted value.
+- Structured retry and redispatch interruption recovery, ordinary malformed-tool settlement, and success/failure compaction continuity are covered directly.
+- Stable control and native server composition use the server-owned Session V2 services and one replaceable location graph node. The legacy standalone Session default remains intact for V1 compatibility.
+
+### Re-review RED/GREEN Evidence
+
+- RED `f093dd547c` `test(llm): expose malformed tool input gaps`
+- GREEN `ca1677412f` `fix(llm): preserve malformed tool inputs`
+- RED `61a624c59d` `test(core): require canonical fenced final settlement`
+- GREEN `b2e84c281b` `fix(core): settle structured finals through registry`
+- RED `38d92e6960` `test(slopcode): expose duplicate v2 session graph`
+- GREEN `8990c44e31` `fix(slopcode): reuse one v2 session graph`
+- RED `ea672e8c77` `test(core): expose structured interruption recovery gaps`
+- GREEN `e1f734bb80` `fix(core): preserve structured recovery continuity`
+- Coverage refinement `186541ad87` `test(llm): cover required malformed final calls`
+- Graph correction `f346f750bd` `fix(slopcode): unify native session execution graph`
+- Compatibility preservation `8a87c2d48d` `fix(slopcode): preserve legacy session defaults`
+
+### Final Focused Verification
+
+```text
+cd packages/core && bun test test/session-structured-output.test.ts test/session-structured-output-recovery.test.ts test/session-runner.test.ts test/session-compaction.test.ts
+```
+
+Result: `199 pass`, `0 fail`, `619 expect() calls`, 4 files. This includes exact value limits, private/stale canonical settlement, malformed final retry, ordinary malformed-tool safety, Retry/redispatch interruption recovery, all owner/state/epoch lifecycle fence cells, and structured success/failure compaction continuity.
+
+```text
+cd packages/llm && bun test --timeout 30000 test/tool-stream.test.ts test/provider/openai-chat.test.ts test/provider/openai-responses.test.ts test/provider/anthropic-messages.test.ts test/provider/gemini.test.ts test/provider/bedrock-converse.test.ts
+```
+
+Result: `180 pass`, `0 fail`, `304 expect() calls`, 6 files. The exact raw cap parses, one byte over fails without payload disclosure, and every malformed protocol fixture requests required `final_output`.
+
+```text
+cd packages/slopcode && bun test --timeout 30000 test/session/control.test.ts
+```
+
+Result: `19 pass`, `0 fail`, `76 expect() calls`. The stable-control source and behavior use the server-owned V2 graph and fence V1/V2 owner, state, and epoch races.
+
+The four native execution/compaction/structured HTTP regressions passed together during graph diagnosis when the mixed fixture contained only the live V2 graph: `4 pass`, `0 fail`, `21 expect() calls`. Keeping the historical standalone V1 default in that mixed fixture reintroduces its noop V2 compatibility service, so those previously base-reproduced cases remain represented in the full-suite concerns rather than weakening V1 behavior.
+
+The package-timeout listener suite passes independently: `10 pass`, `0 fail`, `33 expect() calls`, 21.51 seconds. Its first complete listener/PTY/WebSocket cycle took 6.04 seconds, above Bun's default 5-second timeout.
+
+### Final Full Verification
+
+- Core: `1473 pass`, `0 fail`, `4520 expect() calls`, 155 files.
+- LLM: `305 pass`, `30 skip`, `0 fail`, `668 expect() calls`, 26 files.
+- CodeMode: `254 pass`, `0 fail`, `744 expect() calls`, 7 files.
+- Slopcode: `3099 pass`, `22 skip`, `1 todo`, `10 fail`, `8565 expect() calls`, 248 files.
+- Core, LLM, CodeMode, Server, and Slopcode typechecks all exited 0 with `tsgo --noEmit`.
+- `bun install --frozen-lockfile` exited 0: `Checked 2372 installs across 2656 packages (no changes)`.
+- `git diff --check` passed. No diagnostic instrumentation, V1 runner/format import, or V2 native response-format lowering remains.
+
+### Final Concerns
+
+- Five native HTTP cases remain unchanged from the previously approved-base accounting: missing-session abort returns 400 instead of 200; two native compaction cases time out; native prompt wait returns before provider dispatch; stable structured correlation receives 500.
+- The full Slopcode run also retains the known PTY cleanup failure and three `WorkspaceCreateError: Project not found` worktree failures.
+- One listener overlap case exceeded the package's 30-second timeout in the loaded full run, while the complete listener file passes independently under the same timeout.
+- No changes were pushed.
+
+### Final Status
+
+`DONE_WITH_CONCERNS`
