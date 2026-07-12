@@ -37,6 +37,21 @@ it.live("connects a real local SDK stdio client with resolved cwd, environment, 
     expect((yield* Effect.promise(() => client.list(undefined, 5_000))).tools.map((tool) => tool.name)).toEqual([
       "inspect",
     ])
+    const options = { signal: new AbortController().signal, timeout: 5_000 }
+    expect(
+      (yield* Effect.promise(() => client.listPrompts(undefined, options))).prompts.map((item) => item.name),
+    ).toEqual(["review"])
+    expect(
+      yield* Effect.promise(() => client.getPrompt({ name: "review", arguments: { value: "hello" } }, options)),
+    ).toMatchObject({
+      messages: [{ role: "user", content: { type: "text", text: "hello" } }],
+    })
+    expect(
+      (yield* Effect.promise(() => client.listResources(undefined, options))).resources.map((item) => item.name),
+    ).toEqual(["guide"])
+    expect(yield* Effect.promise(() => client.readResource({ uri: "file:///guide.txt" }, options))).toMatchObject({
+      contents: [{ uri: "file:///guide.txt", text: "guide" }],
+    })
     const result = yield* Effect.promise(() =>
       client.call(
         { name: "inspect", arguments: { value: "ok" } },

@@ -519,4 +519,76 @@ describe("MCP", () => {
       expect(yield* FSUtil.Service.use((fs) => fs.readFileString(result.outputPaths![0]!))).toBe("x".repeat(200))
     }),
   )
+
+  let promptChanged: (() => void | Promise<void>) | undefined
+  let resourceChanged: (() => void | Promise<void>) | undefined
+  let contentRevision = 0
+  let contentFailure = false
+  fixture({
+    documents: [
+      new ConfigMCP.Info({
+        servers: { "content server": new ConfigMCP.Local({ type: "local", command: ["content"] }) },
+      }),
+    ],
+    connect: () =>
+      Effect.succeed(
+        MCPClient.make({
+          capabilities: { prompts: { listChanged: true }, resources: { listChanged: true } },
+          list: () => Promise.resolve({ tools: [] }),
+          call: () => Promise.resolve({ content: [] }),
+          listPrompts: (cursor) => {
+            if (contentFailure) return Promise.reject(new Error("refresh failed"))
+            return Promise.resolve(
+              cursor === undefined
+                ? { prompts: [{ name: "same name", description: `revision-${contentRevision}` }], nextCursor: "p2" }
+                : { prompts: [{ name: "second" }] },
+            )
+          },
+          getPrompt: ({ name }, options) => {
+            expect(options.timeout).toBe(30_000)
+            return Promise.resolve({ messages: [{ role: "user", content: { type: "text", text: name } }] })
+          },
+          listResources: (cursor) =>
+            Promise.resolve(
+              cursor === undefined
+                ? { resources: [{ name: "same name", uri: "file:///same.txt" }], nextCursor: "r2" }
+                : { resources: [{ name: "second", uri: "https://example.test/second.bin" }] },
+            ),
+          readResource: (_input, options) => {
+            expect(options.timeout).toBe(30_000)
+            return Promise.resolve({ contents: [{ uri: "file:///same.txt", text: "resource" }] })
+          },
+          promptsChanged: (handler) => {
+            promptChanged = handler
+          },
+          resourcesChanged: (handler) => {
+            resourceChanged = handler
+          },
+          close: () => Promise.resolve(),
+        }),
+      ),
+  }).effect("publishes paginated prompt and resource catalogs independently and retains failed refreshes", () =>
+    Effect.gen(function* () {
+      const mcp = yield* MCP.Service
+      expect((yield* mcp.prompts()).map((item) => [item.name, item.rawName])).toEqual([
+        ["content_server:same_name", "same name"],
+        ["content_server:second", "second"],
+      ])
+      expect((yield* mcp.resources()).map((item) => item.name)).toEqual([
+        "content_server:same_name",
+        "content_server:second",
+      ])
+      expect((yield* mcp.getPrompt({ name: "content_server:same_name" })).text).toBe("[user]\nsame name")
+      expect((yield* mcp.readResource("content_server:same_name")).text).toBe("resource")
+      expect(promptChanged).toBeDefined()
+      expect(resourceChanged).toBeDefined()
+      contentRevision = 1
+      yield* Effect.promise(() => Promise.resolve(promptChanged?.()))
+      expect((yield* mcp.prompts())[0]?.description).toBe("revision-1")
+      contentFailure = true
+      yield* Effect.promise(() => Promise.resolve(promptChanged?.()))
+      expect((yield* mcp.prompts())[0]?.description).toBe("revision-1")
+      contentFailure = false
+    }),
+  )
 })

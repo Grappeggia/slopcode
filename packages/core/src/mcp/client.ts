@@ -7,10 +7,18 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import {
   CallToolResultSchema,
+  GetPromptResultSchema,
   ListToolsResultSchema,
+  PromptListChangedNotificationSchema,
+  ReadResourceResultSchema,
+  ResourceListChangedNotificationSchema,
   ToolSchema,
   ToolListChangedNotificationSchema,
   type CallToolResult,
+  type GetPromptResult,
+  type Prompt as SDKPrompt,
+  type ReadResourceResult,
+  type Resource as SDKResource,
   type Tool as SDKTool,
 } from "@modelcontextprotocol/sdk/types.js"
 import { Context, Effect, Layer, Schema } from "effect"
@@ -25,6 +33,24 @@ export interface Tool extends Omit<SDKTool, "inputSchema" | "outputSchema"> {
 export interface Page {
   readonly tools: ReadonlyArray<Tool>
   readonly nextCursor?: string
+}
+
+export interface PromptPage {
+  readonly prompts: ReadonlyArray<SDKPrompt>
+  readonly nextCursor?: string
+}
+
+export interface ResourcePage {
+  readonly resources: ReadonlyArray<SDKResource>
+  readonly nextCursor?: string
+}
+
+export type Prompt = SDKPrompt
+export type Resource = SDKResource
+
+export interface RequestOptions {
+  readonly signal: AbortSignal
+  readonly timeout: number
 }
 
 export interface Interface {
@@ -47,6 +73,15 @@ export interface Connection {
     options: { readonly signal: AbortSignal; readonly timeout: number; readonly resetTimeoutOnProgress: true },
   ) => Promise<CallToolResult | unknown>
   readonly changed: (handler: () => void | Promise<void>) => void
+  readonly listPrompts: (cursor: string | undefined, options: RequestOptions) => Promise<PromptPage>
+  readonly getPrompt: (
+    input: { readonly name: string; readonly arguments?: Readonly<Record<string, string>> },
+    options: RequestOptions,
+  ) => Promise<GetPromptResult>
+  readonly listResources: (cursor: string | undefined, options: RequestOptions) => Promise<ResourcePage>
+  readonly readResource: (input: { readonly uri: string }, options: RequestOptions) => Promise<ReadResourceResult>
+  readonly promptsChanged: (handler: () => void | Promise<void>) => void
+  readonly resourcesChanged: (handler: () => void | Promise<void>) => void
   readonly closed: (handler: () => void) => void
   readonly close: () => Promise<void>
 }
@@ -72,6 +107,12 @@ export function make(input: {
   readonly list: Connection["list"]
   readonly call: Connection["call"]
   readonly changed?: Connection["changed"]
+  readonly listPrompts?: Connection["listPrompts"]
+  readonly getPrompt?: Connection["getPrompt"]
+  readonly listResources?: Connection["listResources"]
+  readonly readResource?: Connection["readResource"]
+  readonly promptsChanged?: Connection["promptsChanged"]
+  readonly resourcesChanged?: Connection["resourcesChanged"]
   readonly closed?: Connection["closed"]
   readonly close: Connection["close"]
 }): Connection {
@@ -85,12 +126,46 @@ export function make(input: {
     handlers.clear()
   }
   input.closed?.(notify)
+  const capabilities = input.capabilities ?? {}
+  const capability = (name: "prompts" | "resources") => {
+    if (!capabilities[name]) throw new Error(`MCP server does not advertise ${name} capability`)
+  }
   return {
     transport: input.transport ?? "local",
-    capabilities: input.capabilities ?? {},
+    capabilities,
     list: input.list,
     call: input.call,
     changed: input.changed ?? (() => {}),
+    listPrompts: (cursor, options) => {
+      capability("prompts")
+      if (!input.listPrompts) throw new Error("MCP prompts/list is unavailable")
+      return input.listPrompts(cursor, options)
+    },
+    getPrompt: (request, options) => {
+      capability("prompts")
+      if (!input.getPrompt) throw new Error("MCP prompts/get is unavailable")
+      return input.getPrompt(request, options)
+    },
+    listResources: (cursor, options) => {
+      capability("resources")
+      if (!input.listResources) throw new Error("MCP resources/list is unavailable")
+      return input.listResources(cursor, options)
+    },
+    readResource: (request, options) => {
+      capability("resources")
+      if (!input.readResource) throw new Error("MCP resources/read is unavailable")
+      return input.readResource(request, options)
+    },
+    promptsChanged: (handler) => {
+      const prompts = capabilities.prompts
+      if (!record(prompts) || prompts.listChanged !== true) return
+      input.promptsChanged?.(handler)
+    },
+    resourcesChanged: (handler) => {
+      const resources = capabilities.resources
+      if (!record(resources) || resources.listChanged !== true) return
+      input.resourcesChanged?.(handler)
+    },
     closed: (handler) => {
       if (closed) {
         handler()
@@ -256,6 +331,16 @@ async function connect(
     },
     call: (request, options) => client.callTool(request, CallToolResultSchema, options),
     changed: (handler) => client.setNotificationHandler(ToolListChangedNotificationSchema, handler),
+    listPrompts: (cursor, options) =>
+      client.listPrompts(cursor === undefined ? undefined : { cursor }, options) as Promise<PromptPage>,
+    getPrompt: (request, options) =>
+      client.request({ method: "prompts/get", params: request }, GetPromptResultSchema, options),
+    listResources: (cursor, options) =>
+      client.listResources(cursor === undefined ? undefined : { cursor }, options) as Promise<ResourcePage>,
+    readResource: (request, options) =>
+      client.request({ method: "resources/read", params: request }, ReadResourceResultSchema, options),
+    promptsChanged: (handler) => client.setNotificationHandler(PromptListChangedNotificationSchema, handler),
+    resourcesChanged: (handler) => client.setNotificationHandler(ResourceListChangedNotificationSchema, handler),
     closed: (handler) => {
       client.onclose = handler
     },
@@ -322,4 +407,8 @@ function MCPClientHeaders(generated: HeadersInit | undefined, configured: Readon
 
 function message(value: unknown) {
   return value instanceof Error ? value.message : String(value)
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

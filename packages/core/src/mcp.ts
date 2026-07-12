@@ -8,10 +8,20 @@ import { Config } from "./config"
 import { ConfigMCP } from "./config/mcp"
 import { EventV2 } from "./event"
 import { Location } from "./location"
-import { MCPClient, type Connection, type Tool as MCPTool } from "./mcp/client"
+import {
+  MCPClient,
+  type Connection,
+  type Prompt as MCPPrompt,
+  type Resource as MCPResource,
+  type Tool as MCPTool,
+} from "./mcp/client"
 import { PermissionV2 } from "./permission"
 import { PluginV2 } from "./plugin"
 import { SessionEvent } from "./session/event"
+import { SessionV2 } from "./session"
+import { FileAttachment, Prompt } from "./session/prompt"
+import { SessionInput } from "./session/input"
+import { SessionMessage } from "./session/message"
 import { Tool } from "./tool/tool"
 import { Tools } from "./tool/tools"
 
@@ -37,6 +47,31 @@ export class DiscoveryError extends Schema.TaggedErrorClass<DiscoveryError>()("M
   message: Schema.String,
 }) {}
 
+export class RequestError extends Schema.TaggedErrorClass<RequestError>()("MCP.RequestError", {
+  server: Schema.String,
+  item: Schema.String,
+  operation: Schema.Literals(["prompts/get", "resources/read"]),
+  message: Schema.String,
+}) {}
+
+export class ContentError extends Schema.TaggedErrorClass<ContentError>()("MCP.ContentError", {
+  server: Schema.String,
+  item: Schema.String,
+  message: Schema.String,
+}) {}
+
+export interface PromptEntry extends MCPPrompt {
+  readonly name: string
+  readonly rawName: string
+  readonly server: string
+}
+
+export interface ResourceEntry extends MCPResource {
+  readonly name: string
+  readonly rawName: string
+  readonly server: string
+}
+
 export const Event = {
   StatusChanged: EventV2.define({
     type: "mcp.status.changed",
@@ -56,6 +91,13 @@ export interface Interface {
   readonly reconnect: (name: string) => Effect.Effect<void>
   readonly refresh: (name: string) => Effect.Effect<void, DiscoveryError>
   readonly reload: () => Effect.Effect<void>
+  readonly prompts: () => Effect.Effect<ReadonlyArray<PromptEntry>>
+  readonly resources: () => Effect.Effect<ReadonlyArray<ResourceEntry>>
+  readonly getPrompt: (input: {
+    readonly name: string
+    readonly arguments?: Readonly<Record<string, string>>
+  }) => Effect.Effect<Prompt, RequestError | ContentError>
+  readonly readResource: (name: string) => Effect.Effect<Prompt, RequestError | ContentError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCP") {}
@@ -71,6 +113,16 @@ type Server = {
   client?: Connection
   registration?: Scope.Closeable
   names: ReadonlySet<string>
+  prompts: ReadonlyArray<PromptEntry>
+  resources: ReadonlyArray<ResourceEntry>
+}
+
+type Prepared = {
+  readonly client: Connection
+  readonly definitions: ReadonlyArray<MCPTool>
+  readonly prompts: ReadonlyArray<PromptEntry>
+  readonly resources: ReadonlyArray<ResourceEntry>
+  readonly closed: () => boolean
 }
 
 export const layer = Layer.effect(
@@ -107,6 +159,8 @@ export const layer = Layer.effect(
           lock: Semaphore.makeUnsafe(1),
           status: server.disabled ? ({ status: "disabled" } as const) : ({ status: "disconnected" } as const),
           names: new Set(),
+          prompts: [],
+          resources: [],
         },
       ]),
     )
@@ -154,6 +208,8 @@ export const layer = Layer.effect(
       const registration = server.registration
       server.registration = undefined
       server.names = new Set()
+      server.prompts = []
+      server.resources = []
       if (registration) yield* Scope.close(registration, Exit.void).pipe(Effect.ignore)
     })
 
@@ -202,19 +258,62 @@ export const layer = Layer.effect(
             server: server.name,
             message: `MCP server is not connected: ${server.name}`,
           })
-        const definitions = yield* discover(client, server.timeout).pipe(
+        const discovered = yield* discoverAll(server, client).pipe(
           Effect.mapError(
             (cause) => new DiscoveryError({ server: server.name, message: redact(message(cause), server.config) }),
           ),
         )
-        yield* install(server, client, definitions).pipe(
+        yield* validateCatalogs(
+          [...servers.values()].map((current) =>
+            current === server
+              ? { server, prompts: discovered.prompts, resources: discovered.resources }
+              : { server: current, prompts: current.prompts, resources: current.resources },
+          ),
+        ).pipe(
           Effect.mapError(
             (cause) => new DiscoveryError({ server: server.name, message: redact(message(cause), server.config) }),
           ),
         )
+        yield* install(server, client, discovered.definitions).pipe(
+          Effect.mapError(
+            (cause) => new DiscoveryError({ server: server.name, message: redact(message(cause), server.config) }),
+          ),
+        )
+        server.prompts = discovered.prompts
+        server.resources = discovered.resources
       })
 
     const refresh = (server: Server) => operations.withPermits(1)(server.lock.withPermits(1)(refreshUnlocked(server)))
+
+    const refreshContent = (server: Server, client: Connection, kind: "prompts" | "resources") =>
+      operations.withPermits(1)(
+        server.lock.withPermits(1)(
+          Effect.gen(function* () {
+            if (server.client !== client) return
+            const items =
+              kind === "prompts" ? yield* discoverPrompts(server, client) : yield* discoverResources(server, client)
+            if (server.client !== client) return
+            yield* validateCatalogs(
+              [...servers.values()].map((current) => ({
+                server: current,
+                prompts:
+                  current === server && kind === "prompts" ? (items as ReadonlyArray<PromptEntry>) : current.prompts,
+                resources:
+                  current === server && kind === "resources"
+                    ? (items as ReadonlyArray<ResourceEntry>)
+                    : current.resources,
+              })),
+            )
+            if (server.client !== client) return
+            if (kind === "prompts") server.prompts = items as ReadonlyArray<PromptEntry>
+            if (kind === "resources") server.resources = items as ReadonlyArray<ResourceEntry>
+          }).pipe(
+            Effect.mapError(
+              (cause) => new DiscoveryError({ server: server.name, message: redact(message(cause), server.config) }),
+            ),
+          ),
+        ),
+      )
 
     const disconnected = (server: Server, client: Connection) =>
       operations.withPermits(1)(
@@ -251,15 +350,9 @@ export const layer = Layer.effect(
         Effect.runFork(disconnected(server, client.value))
       })
       server.pending = client.value
-      if (!hasTools(client.value.capabilities)) {
-        if (!closed) return { client: client.value, definitions: [] as ReadonlyArray<MCPTool>, closed: () => closed }
-        yield* close(server)
-        yield* failure(server, "Connection closed")
-        return undefined
-      }
-      const discovered = yield* Effect.exit(discover(client.value, server.timeout))
+      const discovered = yield* Effect.exit(discoverAll(server, client.value, true))
       if (Exit.isSuccess(discovered)) {
-        if (!closed) return { client: client.value, definitions: discovered.value, closed: () => closed }
+        if (!closed) return { client: client.value, ...discovered.value, closed: () => closed }
         yield* close(server)
         yield* failure(server, "Connection closed")
         return undefined
@@ -270,14 +363,7 @@ export const layer = Layer.effect(
       return undefined
     })
 
-    const activate = Effect.fnUntraced(function* (
-      server: Server,
-      prepared: {
-        readonly client: Connection
-        readonly definitions: ReadonlyArray<MCPTool>
-        readonly closed: () => boolean
-      },
-    ) {
+    const activate = Effect.fnUntraced(function* (server: Server, prepared: Prepared) {
       const client = prepared.client
       if (server.pending !== client || prepared.closed()) {
         yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
@@ -295,6 +381,8 @@ export const layer = Layer.effect(
           return
         }
       }
+      server.prompts = prepared.prompts
+      server.resources = prepared.resources
       if (prepared.closed()) {
         yield* close(server)
         yield* failure(server, "Connection closed")
@@ -305,6 +393,18 @@ export const layer = Layer.effect(
       if (hasTools(client.capabilities))
         client.changed(() =>
           Effect.runPromise(refresh(server).pipe(Effect.catch((cause) => discoveryFailure(server, cause)))),
+        )
+      if (hasPrompts(client.capabilities))
+        client.promptsChanged(() =>
+          Effect.runPromise(
+            refreshContent(server, client, "prompts").pipe(Effect.catch((cause) => discoveryFailure(server, cause))),
+          ),
+        )
+      if (hasResources(client.capabilities))
+        client.resourcesChanged(() =>
+          Effect.runPromise(
+            refreshContent(server, client, "resources").pipe(Effect.catch((cause) => discoveryFailure(server, cause))),
+          ),
         )
       yield* publish(server, { status: "connected", transport: client.transport })
     })
@@ -318,14 +418,7 @@ export const layer = Layer.effect(
 
     const activateBatch = Effect.fnUntraced(function* (
       ordered: ReadonlyArray<Server>,
-      discovered: ReadonlyArray<
-        | {
-            readonly client: Connection
-            readonly definitions: ReadonlyArray<MCPTool>
-            readonly closed: () => boolean
-          }
-        | undefined
-      >,
+      discovered: ReadonlyArray<Prepared | undefined>,
       unchanged: ReadonlyArray<Server> = [],
     ) {
       const owners = new Map<string, Set<Server>>()
@@ -340,17 +433,41 @@ export const layer = Layer.effect(
         if (candidates.size > 1 || unchanged.some((server) => server.names.has(name)))
           candidates.forEach((server) => collisions.set(server, name))
       })
+      const catalogs = [
+        ...unchanged.map((server) => ({ server, prompts: server.prompts, resources: server.resources })),
+        ...ordered.flatMap((server, index) => {
+          const prepared = discovered[index]
+          return prepared ? [{ server, prompts: prepared.prompts, resources: prepared.resources }] : []
+        }),
+      ]
+      const promptCatalog = yield* Effect.exit(validateCatalog(catalogs, "prompts"))
+      const resourceCatalog = yield* Effect.exit(validateCatalog(catalogs, "resources"))
+      if (Exit.isFailure(promptCatalog))
+        yield* Effect.forEach(ordered, (server) => discoveryFailure(server, promptCatalog.cause), { discard: true })
+      if (Exit.isFailure(resourceCatalog))
+        yield* Effect.forEach(ordered, (server) => discoveryFailure(server, resourceCatalog.cause), { discard: true })
       yield* Effect.forEach(
         ordered,
         (server, index) =>
           server.lock.withPermits(1)(
             Effect.gen(function* () {
               const collision = collisions.get(server)
-              const prepared = discovered[index]
+              const found = discovered[index]
+              const prepared = found
+                ? {
+                    ...found,
+                    prompts: Exit.isSuccess(promptCatalog) ? found.prompts : server.prompts,
+                    resources: Exit.isSuccess(resourceCatalog) ? found.resources : server.resources,
+                  }
+                : undefined
               if (collision) {
                 yield* Effect.promise(() => prepared?.client.close() ?? Promise.resolve()).pipe(Effect.ignore)
                 server.pending = undefined
-                yield* failure(server, `MCP tool name collision: ${collision}`, true)
+                yield* failure(
+                  server,
+                  collision.startsWith("MCP ") ? collision : `MCP tool name collision: ${collision}`,
+                  true,
+                )
                 return
               }
               if (prepared) yield* activate(server, prepared)
@@ -374,6 +491,47 @@ export const layer = Layer.effect(
       ready: () => Deferred.await(ready),
       status: Effect.fn("MCP.status")(function* () {
         return Object.fromEntries([...servers].map(([name, server]) => [name, server.status]))
+      }),
+      prompts: Effect.fn("MCP.prompts")(function* () {
+        return [...servers.values()].flatMap((server) => server.prompts)
+      }),
+      resources: Effect.fn("MCP.resources")(function* () {
+        return [...servers.values()].flatMap((server) => server.resources)
+      }),
+      getPrompt: Effect.fn("MCP.getPrompt")(function* (input) {
+        const found = [...servers.values()]
+          .flatMap((server) => server.prompts.map((entry) => ({ server, entry })))
+          .find(({ entry }) => entry.name === input.name)
+        if (!found)
+          return yield* new RequestError({
+            server: owner(input.name),
+            item: input.name,
+            operation: "prompts/get",
+            message: "MCP prompt is not available",
+          })
+        const result = yield* remote(found.server, found.entry.name, "prompts/get", (signal) =>
+          found.server.client!.getPrompt(
+            { name: found.entry.rawName, arguments: input.arguments },
+            { signal, timeout: found.server.timeout },
+          ),
+        )
+        return yield* normalizePrompt(found.server.name, found.entry.name, result)
+      }),
+      readResource: Effect.fn("MCP.readResource")(function* (name) {
+        const found = [...servers.values()]
+          .flatMap((server) => server.resources.map((entry) => ({ server, entry })))
+          .find(({ entry }) => entry.name === name)
+        if (!found)
+          return yield* new RequestError({
+            server: owner(name),
+            item: name,
+            operation: "resources/read",
+            message: "MCP resource is not available",
+          })
+        const result = yield* remote(found.server, found.entry.name, "resources/read", (signal) =>
+          found.server.client!.readResource({ uri: found.entry.uri }, { signal, timeout: found.server.timeout }),
+        )
+        return yield* normalizeResources(found.server.name, found.entry.name, result)
       }),
       connect: Effect.fn("MCP.connect")(function* (name?: string) {
         yield* operations.withPermits(1)(
@@ -442,6 +600,8 @@ export const layer = Layer.effect(
                 lock: Semaphore.makeUnsafe(1),
                 status: config.disabled ? { status: "disabled" } : { status: "disconnected" },
                 names: new Set(),
+                prompts: [],
+                resources: [],
               }
               servers.set(name, server)
               yield* anchor(server)
@@ -491,6 +651,114 @@ function discover(client: Connection, timeout: number) {
         cursor = page.nextCursor
       }
       throw new Error(`MCP tools/list exceeded ${MAX_PAGES} pages`)
+    },
+    catch: (cause) => cause,
+  })
+}
+
+function discoverAll(server: Server, client: Connection, initial = false) {
+  const prompts = hasPrompts(client.capabilities) ? discoverPrompts(server, client) : Effect.succeed([])
+  const resources = hasResources(client.capabilities) ? discoverResources(server, client) : Effect.succeed([])
+  return Effect.all(
+    {
+      definitions: hasTools(client.capabilities) ? discover(client, server.timeout) : Effect.succeed([]),
+      // Content catalogs are independent from tools and one another. Their
+      // explicit/notification refresh paths surface typed failures and retain
+      // snapshots; initial failure publishes no partial catalog.
+      prompts: initial ? prompts.pipe(Effect.catch(() => Effect.succeed([]))) : prompts,
+      resources: initial ? resources.pipe(Effect.catch(() => Effect.succeed([]))) : resources,
+    },
+    { concurrency: "unbounded" },
+  )
+}
+
+function discoverPrompts(server: Server, client: Connection) {
+  return paginate(
+    "prompts/list",
+    (cursor, signal) => client.listPrompts(cursor, { signal, timeout: server.timeout }),
+    (page) => page.prompts,
+  ).pipe(Effect.flatMap((items) => catalog(server.name, items, "prompt")))
+}
+
+function discoverResources(server: Server, client: Connection) {
+  return paginate(
+    "resources/list",
+    (cursor, signal) => client.listResources(cursor, { signal, timeout: server.timeout }),
+    (page) => page.resources,
+  ).pipe(Effect.flatMap((items) => catalog(server.name, items, "resource")))
+}
+
+function paginate<A, P extends { readonly nextCursor?: string }>(
+  label: string,
+  list: (cursor: string | undefined, signal: AbortSignal) => Promise<P>,
+  items: (page: P) => ReadonlyArray<A>,
+) {
+  return interrupt<A[]>(async (signal) => {
+    const result: A[] = []
+    const cursors = new Set<string>()
+    let cursor: string | undefined
+    for (let index = 0; index < MAX_PAGES; index++) {
+      const page = await list(cursor, signal)
+      result.push(...items(page))
+      if (page.nextCursor === undefined) return result
+      if (cursors.has(page.nextCursor)) throw new Error(`MCP ${label} returned repeated cursor: ${page.nextCursor}`)
+      cursors.add(page.nextCursor)
+      cursor = page.nextCursor
+    }
+    throw new Error(`MCP ${label} exceeded ${MAX_PAGES} pages`)
+  })
+}
+
+function catalog<T extends MCPPrompt | MCPResource>(
+  server: string,
+  items: ReadonlyArray<T>,
+  kind: "prompt" | "resource",
+) {
+  return Effect.try({
+    try: () => {
+      const raw = new Set<string>()
+      const names = new Set<string>()
+      return items.map((item) => {
+        if (raw.has(item.name)) throw new Error(`MCP ${kind} duplicate raw name on ${server}: ${item.name}`)
+        raw.add(item.name)
+        const name = contentCanonical(server, item.name)
+        if (names.has(name)) throw new Error(`MCP ${kind} name collision: ${name}`)
+        names.add(name)
+        return { ...item, name, rawName: item.name, server }
+      })
+    },
+    catch: (cause) => cause,
+  })
+}
+
+function validateCatalogs(
+  entries: ReadonlyArray<{
+    readonly server: Server
+    readonly prompts: ReadonlyArray<PromptEntry>
+    readonly resources: ReadonlyArray<ResourceEntry>
+  }>,
+) {
+  return Effect.all([validateCatalog(entries, "prompts"), validateCatalog(entries, "resources")], { discard: true })
+}
+
+function validateCatalog(
+  entries: ReadonlyArray<{
+    readonly server: Server
+    readonly prompts: ReadonlyArray<PromptEntry>
+    readonly resources: ReadonlyArray<ResourceEntry>
+  }>,
+  kind: "prompts" | "resources",
+) {
+  return Effect.try({
+    try: () => {
+      const names = new Map<string, string>()
+      for (const entry of entries)
+        for (const item of entry[kind]) {
+          const previous = names.get(item.name)
+          if (previous && previous !== entry.server.name)
+            throw new Error(`MCP ${kind === "prompts" ? "prompt" : "resource"} name collision: ${item.name}`)
+          names.set(item.name, entry.server.name)
+        }
     },
     catch: (cause) => cause,
   })
@@ -784,6 +1052,14 @@ function hasTools(capabilities: Readonly<Record<string, unknown>>) {
   return record(capabilities.tools)
 }
 
+function hasPrompts(capabilities: Readonly<Record<string, unknown>>) {
+  return record(capabilities.prompts)
+}
+
+function hasResources(capabilities: Readonly<Record<string, unknown>>) {
+  return record(capabilities.resources)
+}
+
 function sanitize(value: string) {
   const clean = value.replace(/[^A-Za-z0-9_-]/g, "_")
   return /^[A-Za-z]/.test(clean) ? clean : `mcp_${clean}`
@@ -791,6 +1067,14 @@ function sanitize(value: string) {
 
 function canonical(server: string, tool: string) {
   return `${sanitize(server)}_${sanitize(tool)}`
+}
+
+function contentCanonical(server: string, name: string) {
+  return `${sanitize(server)}:${sanitize(name)}`
+}
+
+function owner(name: string) {
+  return name.includes(":") ? name.slice(0, name.indexOf(":")) : "unknown"
 }
 
 function outputSchemaError(value: unknown) {
@@ -826,4 +1110,179 @@ function message(value: unknown) {
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function interrupt<A>(run: (signal: AbortSignal) => Promise<A>) {
+  return Effect.callback<A, unknown>((resume) => {
+    const controller = new AbortController()
+    const promise = Promise.resolve().then(() => run(controller.signal))
+    promise.then(
+      (value) => resume(Effect.succeed(value)),
+      (cause) => resume(Effect.fail(cause)),
+    )
+    return Effect.uninterruptible(
+      Effect.promise(async () => {
+        controller.abort()
+        await promise.catch(() => undefined)
+      }),
+    )
+  })
+}
+
+function remote<A>(
+  server: Server,
+  item: string,
+  operation: RequestError["operation"],
+  run: (signal: AbortSignal) => Promise<A>,
+) {
+  if (!server.client)
+    return Effect.fail(
+      new RequestError({ server: server.name, item, operation, message: "MCP server is not connected" }),
+    )
+  return interrupt(run).pipe(
+    Effect.mapError(
+      (cause) =>
+        new RequestError({
+          server: server.name,
+          item,
+          operation,
+          message: redact(message(cause), server.config),
+        }),
+    ),
+  )
+}
+
+const MIME = /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/
+const SCHEMES = new Set(["file:", "http:", "https:"])
+
+function safe(server: string, item: string, label: string) {
+  return new ContentError({ server, item, message: `MCP content returned invalid ${label}` })
+}
+
+function uri(server: string, item: string, value: unknown) {
+  if (typeof value !== "string") return Effect.fail(safe(server, item, "resource URI"))
+  return Effect.try({
+    try: () => {
+      const parsed = new URL(value)
+      if (!SCHEMES.has(parsed.protocol)) throw new Error("unsupported")
+      return parsed
+    },
+    catch: () => safe(server, item, "resource URI"),
+  })
+}
+
+function mime(server: string, item: string, value: unknown, required = false) {
+  if (value === undefined && !required) return Effect.succeed(undefined)
+  return typeof value === "string" && MIME.test(value)
+    ? Effect.succeed(value)
+    : Effect.fail(safe(server, item, "MIME type"))
+}
+
+function base64(server: string, item: string, value: unknown) {
+  if (
+    typeof value !== "string" ||
+    value.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(value) ||
+    Buffer.from(value, "base64").toString("base64") !== value
+  )
+    return Effect.fail(safe(server, item, "base64"))
+  return Effect.succeed(value)
+}
+
+function resourceContent(server: string, item: string, value: unknown) {
+  return Effect.gen(function* () {
+    if (!record(value)) return yield* safe(server, item, "resource content")
+    const parsed = yield* uri(server, item, value.uri)
+    const type = yield* mime(server, item, value.mimeType)
+    const text = typeof value.text === "string"
+    const blob = typeof value.blob === "string"
+    if (text === blob) return yield* safe(server, item, "resource content")
+    if (text) return { text: value.text as string } as const
+    const data = yield* base64(server, item, value.blob)
+    if (!type) return yield* safe(server, item, "MIME type")
+    return {
+      file: new FileAttachment({
+        uri: `data:${type};base64,${data}`,
+        mime: type,
+        name: path.basename(decodeURIComponent(parsed.pathname)) || parsed.hostname || undefined,
+      }),
+    } as const
+  })
+}
+
+export function normalizeResources(server: string, item: string, value: unknown): Effect.Effect<Prompt, ContentError> {
+  if (!record(value) || !Array.isArray(value.contents)) return Effect.fail(safe(server, item, "resource result"))
+  return Effect.forEach(value.contents, (content) => resourceContent(server, item, content)).pipe(
+    Effect.map(
+      (parts) =>
+        new Prompt({
+          text: parts.flatMap((part) => ("text" in part ? [part.text] : [])).join("\n\n---\n"),
+          files: parts.flatMap((part) => ("file" in part && part.file ? [part.file] : [])),
+        }),
+    ),
+  )
+}
+
+export function normalizePrompt(server: string, item: string, value: unknown): Effect.Effect<Prompt, ContentError> {
+  if (!record(value) || !Array.isArray(value.messages)) return Effect.fail(safe(server, item, "prompt result"))
+  return Effect.forEach(value.messages, (message) =>
+    Effect.gen(function* () {
+      if (!record(message) || (message.role !== "user" && message.role !== "assistant") || !record(message.content))
+        return yield* safe(server, item, "prompt message")
+      const content = message.content
+      if (content.type === "text" && typeof content.text === "string")
+        return { role: message.role, text: content.text } as const
+      if (content.type === "resource") {
+        const part = yield* resourceContent(server, item, content.resource)
+        return { role: message.role, ...part } as const
+      }
+      if (content.type === "image") {
+        const type = yield* mime(server, item, content.mimeType, true)
+        if (!type?.startsWith("image/")) return yield* safe(server, item, "image MIME type")
+        const data = yield* base64(server, item, content.data)
+        return {
+          role: message.role,
+          file: new FileAttachment({ uri: `data:${type};base64,${data}`, mime: type }),
+        } as const
+      }
+      return yield* safe(server, item, "prompt content")
+    }),
+  ).pipe(
+    Effect.map(
+      (parts) =>
+        new Prompt({
+          text: parts.map((part) => `[${part.role}]\n${"text" in part ? part.text : ""}`).join("\n\n---\n"),
+          files: parts.flatMap((part) => ("file" in part && part.file ? [part.file] : [])),
+        }),
+    ),
+  )
+}
+
+export function resolveAndAdmit<E>(
+  mcp: Interface,
+  sessions: SessionV2.Interface,
+  input: {
+    readonly name: string
+    readonly arguments?: Readonly<Record<string, string>>
+    readonly sessionID: SessionV2.ID
+    readonly id?: SessionMessage.ID
+    readonly delivery?: SessionInput.Delivery
+    readonly resume?: boolean
+  },
+  guard: Effect.Effect<void, E> = Effect.void,
+) {
+  return mcp.getPrompt({ name: input.name, arguments: input.arguments }).pipe(
+    Effect.flatMap((prompt) =>
+      sessions.prompt(
+        {
+          id: input.id,
+          sessionID: input.sessionID,
+          prompt,
+          delivery: input.delivery,
+          resume: input.resume,
+        },
+        guard,
+      ),
+    ),
+  )
 }

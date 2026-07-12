@@ -1,7 +1,11 @@
 import { describe, expect } from "bun:test"
 import { MCP } from "@slopcode-ai/core/mcp"
 import { MCPClient } from "@slopcode-ai/core/mcp/client"
-import { Effect } from "effect"
+import { SessionV2 } from "@slopcode-ai/core/session"
+import { SessionInput } from "@slopcode-ai/core/session/input"
+import { SessionMessage } from "@slopcode-ai/core/session/message"
+import { Prompt } from "@slopcode-ai/core/session/prompt"
+import { DateTime, Effect } from "effect"
 import { it } from "./lib/effect"
 
 describe("MCP content", () => {
@@ -19,9 +23,7 @@ describe("MCP content", () => {
         ],
       })
       expect(prompt.text).toBe("[user]\n\n\n---\n[assistant]\nanswer\n\n---\n[user]\n")
-      expect(prompt.files).toEqual([
-        { uri: `data:image/png;base64,${image}`, mime: "image/png", name: undefined },
-      ])
+      expect(prompt.files).toEqual([{ uri: `data:image/png;base64,${image}`, mime: "image/png", name: undefined }])
 
       expect(
         yield* MCP.normalizeResources("server", "resource", {
@@ -83,13 +85,52 @@ describe("MCP content", () => {
         resourcesChanged: () => calls++,
         close: () => Promise.resolve(),
       })
-      expect(() => client.listPrompts(undefined, 1)).toThrow()
+      expect(() => client.listPrompts(undefined, { signal: new AbortController().signal, timeout: 1 })).toThrow()
       expect(() => client.getPrompt({ name: "x" }, { signal: new AbortController().signal, timeout: 1 })).toThrow()
-      expect(() => client.listResources(undefined, 1)).toThrow()
-      expect(() => client.readResource({ uri: "file:///x" }, { signal: new AbortController().signal, timeout: 1 })).toThrow()
+      expect(() => client.listResources(undefined, { signal: new AbortController().signal, timeout: 1 })).toThrow()
+      expect(() =>
+        client.readResource({ uri: "file:///x" }, { signal: new AbortController().signal, timeout: 1 }),
+      ).toThrow()
       client.promptsChanged(() => {})
       client.resourcesChanged(() => {})
       expect(calls).toBe(0)
+    }),
+  )
+
+  it.effect("resolves once and forwards ordinary prompt admission options and guard", () =>
+    Effect.gen(function* () {
+      const calls: unknown[] = []
+      const sessionID = SessionV2.ID.make("ses_mcp_content")
+      const id = SessionMessage.ID.make("msg_mcp_content")
+      const admitted = new SessionInput.Admitted({
+        id,
+        sessionID,
+        prompt: new Prompt({ text: "[user]\nresolved" }),
+        delivery: "queue",
+        admittedSeq: 1,
+        timeCreated: DateTime.makeUnsafe(0),
+      })
+      const mcp = {
+        getPrompt: () => Effect.succeed(admitted.prompt),
+      } as unknown as MCP.Interface
+      const sessions = {
+        prompt: (input: unknown, guard: Effect.Effect<void, string>) =>
+          guard.pipe(
+            Effect.tap(() => Effect.sync(() => calls.push(input))),
+            Effect.as(admitted),
+          ),
+      } as unknown as SessionV2.Interface
+      const guard = Effect.sync(() => calls.push("guard"))
+
+      expect(
+        yield* MCP.resolveAndAdmit(
+          mcp,
+          sessions,
+          { name: "server:prompt", arguments: { value: "x" }, sessionID, id, delivery: "queue", resume: false },
+          guard,
+        ),
+      ).toBe(admitted)
+      expect(calls).toEqual(["guard", { id, sessionID, prompt: admitted.prompt, delivery: "queue", resume: false }])
     }),
   )
 })

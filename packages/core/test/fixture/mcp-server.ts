@@ -15,4 +15,12 @@ server.registerTool(
   }),
 )
 
+server.registerPrompt("review", { argsSchema: { value: z.string() } }, ({ value }) => ({
+  messages: [{ role: "user", content: { type: "text", text: value } }],
+}))
+
+server.registerResource("guide", "file:///guide.txt", { mimeType: "text/plain" }, (uri) => ({
+  contents: [{ uri: uri.href, text: "guide" }],
+}))
+
 await server.connect(new StdioServerTransport())
