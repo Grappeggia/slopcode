@@ -175,6 +175,15 @@ function migrateMcp(info: ConfigMCPV1.Info) {
     }
   })()
   const client = oauth?.clientId || undefined
+  const callback = (() => {
+    if (!oauth?.callbackPort || !redirect) return oauth?.callbackPort
+    const value = new URL(redirect)
+    return value.protocol === "http:" &&
+      (value.hostname === "127.0.0.1" || value.hostname === "[::1]") &&
+      Number(value.port) === oauth.callbackPort
+      ? oauth.callbackPort
+      : undefined
+  })()
   return {
     type: info.type,
     url,
@@ -186,7 +195,7 @@ function migrateMcp(info: ConfigMCPV1.Info) {
             client_id: client,
             client_secret: client ? oauth.clientSecret : undefined,
             scope: oauth.scope,
-            callback_port: oauth.callbackPort,
+            callback_port: callback,
             redirect_uri: redirect,
           },
     disabled,

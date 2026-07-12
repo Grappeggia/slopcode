@@ -2,7 +2,7 @@ export * as MCPClient from "./client"
 
 import path from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { auth, UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
+import { auth, UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -270,9 +270,15 @@ export async function cleanup(pid: number | null, close: () => Promise<void>, ad
 export const locationLayer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const store = yield* MCPOAuthStore.Service
-    const refreshes = new Map<string, Promise<void>>()
-    return Service.of({
+    return service(yield* MCPOAuthStore.Service)
+  }),
+)
+
+export const layerWith = (store: MCPOAuthStore.Interface) => Layer.succeed(Service, service(store))
+
+function service(store: MCPOAuthStore.Interface) {
+  const refreshes = new Map<string, Promise<void>>()
+  return Service.of({
       connect: (input) =>
         interruptible(async (signal) => {
           if (input.config.type === "local") {
@@ -353,11 +359,10 @@ export const locationLayer = Layer.effect(
             }
           }
           const current = enabled ? await Effect.runPromise(store.get(target)) : undefined
-          const provider: OAuthClientProvider | undefined = enabled
-            ? MCPOAuthProvider.connect({ entry: current!, config: oauth, compatibility })
-            : undefined
-          const fetcher = network(url, configured, enabled, signal)
-          const first = new StreamableHTTPClientTransport(url, { authProvider: provider, fetch: fetcher })
+          const credentials = enabled ? MCPOAuthProvider.connect({ entry: current!, compatibility }) : undefined
+          const token = await credentials?.tokens()
+          const fetcher = network(url, configured, enabled, signal, token?.access_token)
+          const first = new StreamableHTTPClientTransport(url, { fetch: fetcher })
           const remote = await connect(first, "remote", input.timeout, signal).catch((cause) => {
             if (signal.aborted) throw cause
             if (cause instanceof UnauthorizedError || cause instanceof AuthRequired) throw new AuthRequired()
@@ -367,7 +372,6 @@ export const locationLayer = Layer.effect(
           if (remote) return remote
           return connect(
             new SSEClientTransport(url, {
-              authProvider: provider,
               fetch: fetcher,
               eventSourceInit: { fetch: fetcher },
             }),
@@ -384,9 +388,8 @@ export const locationLayer = Layer.effect(
                 : error,
           ),
         ),
-    })
-  }),
-)
+  })
+}
 
 export const layer = locationLayer.pipe(
   Layer.provide(MCPOAuthStore.layer.pipe(Layer.provide(Global.defaultLayer))),
@@ -518,6 +521,7 @@ function network(
   configured: Readonly<Record<string, string>> | undefined,
   oauth: boolean,
   signal: AbortSignal,
+  token?: string,
 ) {
   const request = async (input: string | URL | Request, init?: RequestInit, redirects = 0): Promise<Response> => {
     const url = new URL(input instanceof Request ? input.url : input)
@@ -527,12 +531,14 @@ function network(
       generated.delete("authorization")
       Object.keys(configured ?? {}).forEach((name) => generated.delete(name))
     }
+    if (resource && token) generated.set("authorization", `Bearer ${token}`)
     const response = await fetch(input, {
       ...init,
       redirect: configured && Object.keys(configured).length ? "manual" : init?.redirect,
       signal: merge(signal, init?.signal, input instanceof Request ? input.signal : undefined),
       headers: headers(generated, resource ? configured : undefined, oauth),
     })
+    if (response.status === 401 && token) throw new AuthRequired()
     if (![301, 302, 303, 307, 308].includes(response.status) || !response.headers.get("location")) return response
     if (redirects >= 5) throw new Error("MCP redirect limit exceeded")
     const next = new URL(response.headers.get("location")!, url)

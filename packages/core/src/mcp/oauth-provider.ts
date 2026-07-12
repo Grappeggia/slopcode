@@ -109,45 +109,15 @@ export function make(input: {
 
 export function connect(input: {
   readonly entry: MCPOAuthStore.Entry
-  readonly config: typeof ConfigMCP.OAuth.Type
   readonly compatibility: string
-  readonly now?: () => number
-}): OAuthClientProvider {
-  const now = input.now ?? (() => Date.now() / 1000)
-  const client = input.config.client_id
-    ? {
-        client_id: input.config.client_id,
-        ...(input.config.client_secret === undefined ? {} : { client_secret: input.config.client_secret }),
-      }
-    : input.entry.compatibility === input.compatibility
-      ? input.entry.client
-      : undefined
+}) {
   const tokens = input.entry.compatibility === input.compatibility ? input.entry.tokens : undefined
   return {
-    redirectUrl: undefined,
-    clientMetadata: {
-      redirect_uris: [],
-      client_name: "SlopCode",
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-      token_endpoint_auth_method: input.config.client_secret ? "client_secret_post" : "none",
-      ...(input.config.scope ? { scope: input.config.scope } : {}),
-    },
-    clientInformation: () => client,
     tokens: () =>
       tokens && {
         access_token: tokens.access_token,
         token_type: tokens.token_type,
-        ...(tokens.refresh_token === undefined ? {} : { refresh_token: tokens.refresh_token }),
-        ...(tokens.scope === undefined ? {} : { scope: tokens.scope }),
-        ...(tokens.id_token === undefined ? {} : { id_token: tokens.id_token }),
-        ...(tokens.expires_at === undefined ? {} : { expires_in: Math.max(0, Math.floor(tokens.expires_at - now())) }),
       },
-    saveTokens: () => undefined,
-    redirectToAuthorization: () => Promise.reject(new Error("MCP OAuth interaction is unavailable")),
-    saveCodeVerifier: () => Promise.reject(new Error("MCP OAuth interaction is unavailable")),
-    codeVerifier: () => Promise.reject(new Error("MCP OAuth interaction is unavailable")),
-    discoveryState: () => input.entry.discovery,
   }
 }
 

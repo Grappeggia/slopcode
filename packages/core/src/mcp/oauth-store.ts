@@ -27,9 +27,10 @@ export type Attempt = {
   readonly code?: string
   readonly mode?: "auto" | "manual"
   readonly redirect?: string
+  readonly authorization?: string
   readonly created?: number
   readonly expires?: number
-  readonly phase?: "pending" | "received" | "exchanging" | "complete" | "cancelled" | "expired" | "failed"
+  readonly phase?: "initializing" | "pending" | "received" | "exchanging" | "complete" | "cancelled" | "expired" | "failed"
   readonly error?: string
 }
 
@@ -80,6 +81,7 @@ export interface Interface {
   ) => Effect.Effect<{ readonly target: Target; readonly attempt: Attempt } | undefined, StoreError>
   readonly claimAttempt: (attemptID: string, state: string, code: string, now: number) => Effect.Effect<AttemptResult, StoreError>
   readonly cancelAttempt: (attemptID: string) => Effect.Effect<AttemptResult, StoreError>
+  readonly readyAttempt: (target: Target, attemptID: string, authorization: string) => Effect.Effect<Attempt | undefined, StoreError>
   readonly startExchange: (target: Target, attemptID: string, code: string) => Effect.Effect<Attempt | undefined, StoreError>
   readonly finishExchange: (
     target: Target,
@@ -249,14 +251,15 @@ export function make(input: { readonly data: string; readonly legacy?: string })
     update(target, (entry) => {
       const attempts = { ...entry.attempts }
       if (attemptID && (scope === "all" || scope === "verifier")) {
-        const attempt = { ...attempts[attemptID] }
-        delete attempt.verifier
-        if (scope === "all") {
-          delete attempt.state
-          delete attempt.code
-        }
-        if (Object.keys(attempt).length) attempts[attemptID] = attempt
-        else delete attempts[attemptID]
+        const attempt = attempts[attemptID]
+        if (attempt && ["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? ""))
+          attempts[attemptID] = {
+            mode: attempt.mode,
+            redirect: attempt.redirect,
+            created: attempt.created,
+            expires: attempt.expires,
+            phase: "cancelled",
+          }
       }
       if (scope === "tokens") return { ...entry, tokens: undefined }
       if (scope === "client") return { ...entry, client: undefined }
@@ -325,13 +328,35 @@ export function make(input: { readonly data: string; readonly legacy?: string })
       }
     })
 
+  const readyAttempt: Interface["readyAttempt"] = (target, attemptID, authorization) =>
+    transact(async (data) => {
+      const name = key(target)
+      const bucket = data.buckets[name]
+      const attempt = bucket?.entry.attempts?.[attemptID]
+      if (!bucket || attempt?.phase !== "initializing" || !attempt.verifier || !web(authorization)) return { value: undefined }
+      const pending = { ...attempt, authorization, phase: "pending" as const }
+      return {
+        data: {
+          ...data,
+          buckets: {
+            ...data.buckets,
+            [name]: {
+              ...bucket,
+              entry: { ...bucket.entry, attempts: { ...bucket.entry.attempts, [attemptID]: pending } },
+            },
+          },
+        },
+        value: pending,
+      }
+    })
+
   const cancelAttempt: Interface["cancelAttempt"] = (attemptID) =>
     transact<AttemptResult>(async (data) => {
       const found = locate(data, attemptID)
       if (!found) return { value: { status: "missing" } as const }
       const [name, bucket] = found
       const attempt = bucket.entry.attempts![attemptID]!
-      if (attempt.phase !== "pending") return { value: { status: "used" } as const }
+      if (attempt.phase !== "pending" && attempt.phase !== "initializing") return { value: { status: "used" } as const }
       const cancelled = ended(attempt, "cancelled")
       const attempts = { ...bucket.entry.attempts, [attemptID]: cancelled }
       return {
@@ -373,7 +398,7 @@ export function make(input: { readonly data: string; readonly legacy?: string })
           id,
           id === attemptID
             ? ended(current, "complete")
-            : ["pending", "received", "exchanging"].includes(current.phase ?? "")
+            : ["initializing", "pending", "received", "exchanging"].includes(current.phase ?? "")
               ? ended(current, "cancelled")
               : current,
         ]),
@@ -425,7 +450,7 @@ export function make(input: { readonly data: string; readonly legacy?: string })
       attempts: Object.fromEntries(
         Object.entries(entry.attempts ?? {}).map(([id, attempt]) => [
           id,
-          ["pending", "received", "exchanging"].includes(attempt.phase ?? "") ? ended(attempt, "cancelled") : attempt,
+          ["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "") ? ended(attempt, "cancelled") : attempt,
         ]),
       ),
     })).pipe(Effect.asVoid)
@@ -439,6 +464,7 @@ export function make(input: { readonly data: string; readonly legacy?: string })
     findAttempt,
     claimAttempt,
     cancelAttempt,
+    readyAttempt,
     startExchange,
     finishExchange,
     finishAttempt,
@@ -511,9 +537,9 @@ function validData(value: unknown): value is Data {
     }
     if (entry.attempts !== undefined) {
       if (!record(entry.attempts)) return false
-      const phases = new Set(["pending", "received", "exchanging", "complete", "cancelled", "expired", "failed"])
+      const phases = new Set(["initializing", "pending", "received", "exchanging", "complete", "cancelled", "expired", "failed"])
       for (const attempt of Object.values(entry.attempts)) {
-        if (!exact(attempt, ["state", "verifier", "code", "mode", "redirect", "created", "expires", "phase", "error"])) return false
+        if (!exact(attempt, ["state", "verifier", "code", "mode", "redirect", "authorization", "created", "expires", "phase", "error"])) return false
         for (const field of ["state", "verifier", "code"])
           if (attempt[field] !== undefined && typeof attempt[field] !== "string") return false
         if (attempt.error !== undefined && !FAILURES.has(attempt.error as string)) return false
@@ -521,8 +547,11 @@ function validData(value: unknown): value is Data {
         if (attempt.mode !== "auto" && attempt.mode !== "manual") return false
         if (!finite(attempt.created) || attempt.created === undefined || !finite(attempt.expires) || attempt.expires === undefined) return false
         if (!phases.has(attempt.phase as string)) return false
-        if (["received", "exchanging"].includes(attempt.phase as string) && (!attempt.state || !attempt.code || !attempt.verifier)) return false
-        if (["complete", "cancelled", "expired", "failed"].includes(attempt.phase as string) && (attempt.state || attempt.code || attempt.verifier)) return false
+        if (attempt.authorization !== undefined && !web(attempt.authorization)) return false
+        if (attempt.phase === "initializing" && (!attempt.state || attempt.code || attempt.authorization)) return false
+        if (attempt.phase === "pending" && (!attempt.state || !attempt.verifier || !attempt.authorization || attempt.code)) return false
+        if (["received", "exchanging"].includes(attempt.phase as string) && (!attempt.state || !attempt.code || !attempt.verifier || !attempt.authorization)) return false
+        if (["complete", "cancelled", "expired", "failed"].includes(attempt.phase as string) && (attempt.state || attempt.code || attempt.verifier || attempt.authorization)) return false
       }
     }
     return true

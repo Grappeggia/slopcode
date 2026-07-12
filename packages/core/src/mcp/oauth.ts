@@ -103,6 +103,7 @@ export const layer = Layer.effect(
     const store = yield* MCPOAuthStore.Service
     const callbacks = yield* MCPOAuthCallback.Service
     const listeners = new Map<string, { close: () => Promise<void> }>()
+    const exchanges = new Map<string, AbortController>()
     const owned = new Set<string>()
     const completions = new Set<(target: MCPOAuthStore.Target) => void>()
 
@@ -161,7 +162,12 @@ export const layer = Layer.effect(
         ),
       )
 
-    const finish = (input: Parameters<Interface["complete"]>[0], recovered = false, callback = false) =>
+    const finish = (
+      input: Parameters<Interface["complete"]>[0],
+      recovered = false,
+      callback = false,
+      external?: AbortSignal,
+    ) =>
       Effect.gen(function* () {
         if (!input.code || !input.state) return yield* failure("attempt-invalid", input.target, input.attemptID)
         if (!recovered) {
@@ -199,7 +205,7 @@ export const layer = Layer.effect(
                 const exchanged = await auth(provider, {
                   serverUrl: input.target.endpoint,
                   authorizationCode: input.code,
-                  fetchFn: abortFetch(signal),
+                  fetchFn: abortFetch(signal, external),
                 })
                 if (exchanged !== "AUTHORIZED" || !tokens) return "INVALID" as const
                 return (await Effect.runPromise(store.finishExchange(input.target, input.attemptID, tokens)))
@@ -251,64 +257,80 @@ export const layer = Layer.effect(
                 redirect: redirect.url,
                 created,
                 expires,
-                phase: "pending",
+                phase: "initializing",
               },
             },
           })),
           input.target,
         )
         owned.add(attemptID)
-        if (mode === "auto") {
-          const listener = yield* Effect.tryPromise({
-            try: () =>
-              callbacks.register({
-                redirect: redirect.url,
-                state,
-                receive: async (result) => {
-                  if (!result.code) {
-                    await Effect.runPromise(
-                      safe(store.finishAttempt(input.target, attemptID, "failed", "provider-error", ["pending"]), input.target),
-                    )
+        return yield* Effect.gen(function* () {
+          let authorizationUrl: string | undefined
+          const provider = MCPOAuthProvider.make({
+            store,
+            target: input.target,
+            attemptID,
+            state,
+            redirectUrl: redirect.url,
+            compatibility,
+            config: input.config,
+            onRedirect: async (url) => {
+              authorizationUrl = url.toString()
+            },
+          })
+          const result = yield* Effect.tryPromise({
+            try: (signal) => auth(provider, { serverUrl: input.target.endpoint, fetchFn: abortFetch(signal) }),
+            catch: () => failure("discovery", input.target, attemptID),
+          }).pipe(Effect.tapError(() => terminal(input.target, attemptID, "failed", "discovery")))
+          if (result === "AUTHORIZED") {
+            yield* terminal(input.target, attemptID, "complete")
+            return { status: "connected" } as const
+          }
+          if (!authorizationUrl) {
+            yield* terminal(input.target, attemptID, "failed", "discovery")
+            return yield* failure("discovery", input.target, attemptID)
+          }
+          if (mode === "auto") {
+            const listener = yield* Effect.tryPromise({
+              try: () =>
+                callbacks.register({
+                  redirect: redirect.url,
+                  state,
+                  receive: async (result) => {
+                    if (!result.code) {
+                      await Effect.runPromise(
+                        safe(store.finishAttempt(input.target, attemptID, "failed", "provider-error", ["pending"]), input.target),
+                      )
+                      later(attemptID)
+                      return true
+                    }
+                    const controller = new AbortController()
+                    exchanges.set(attemptID, controller)
+                    const completed = await Effect.runPromiseExit(
+                      finish({ ...input, attemptID, code: result.code, state }, false, true, controller.signal),
+                    ).finally(() => exchanges.delete(attemptID))
+                    if (completed._tag !== "Success") {
+                      await Effect.runPromise(
+                        safe(store.finishAttempt(input.target, attemptID, "failed", "exchange", ["received", "exchanging"]), input.target),
+                      )
+                      later(attemptID)
+                      return false
+                    }
                     later(attemptID)
+                    completions.forEach((handler) => handler(input.target))
                     return true
-                  }
-                  const completed = await Effect.runPromiseExit(finish({ ...input, attemptID, code: result.code, state }, false, true))
-                  if (completed._tag !== "Success") return false
-                  later(attemptID)
-                  completions.forEach((handler) => handler(input.target))
-                  return true
-                },
-              }),
-            catch: () => failure("callback-unavailable", input.target, attemptID),
-          }).pipe(Effect.tapError(() => terminal(input.target, attemptID, "failed", "callback-unavailable")))
-          listeners.set(attemptID, listener)
-        }
-        let authorizationUrl: string | undefined
-        const provider = MCPOAuthProvider.make({
-          store,
-          target: input.target,
-          attemptID,
-          state,
-          redirectUrl: redirect.url,
-          compatibility,
-          config: input.config,
-          onRedirect: async (url) => {
-            authorizationUrl = url.toString()
-          },
-        })
-        const result = yield* Effect.tryPromise({
-          try: (signal) => auth(provider, { serverUrl: input.target.endpoint, fetchFn: abortFetch(signal) }),
-          catch: () => failure("discovery", input.target, attemptID),
-        }).pipe(Effect.tapError(() => terminal(input.target, attemptID, "failed", "discovery")))
-        if (result === "AUTHORIZED") {
-          yield* terminal(input.target, attemptID, "complete")
-          return { status: "connected" } as const
-        }
-        if (!authorizationUrl) {
-          yield* terminal(input.target, attemptID, "failed", "discovery")
-          return yield* failure("discovery", input.target, attemptID)
-        }
-        return { status: "authorizing", attemptID, mode, created, expires, authorizationUrl } as const
+                  },
+                }),
+              catch: () => failure("callback-unavailable", input.target, attemptID),
+            }).pipe(Effect.tapError(() => terminal(input.target, attemptID, "failed", "callback-unavailable")))
+            listeners.set(attemptID, listener)
+          }
+          if (!(yield* safe(store.readyAttempt(input.target, attemptID, authorizationUrl), input.target))) {
+            yield* terminal(input.target, attemptID, "failed", "discovery")
+            return yield* failure("attempt-used", input.target, attemptID)
+          }
+          return { status: "authorizing", attemptID, mode, created, expires, authorizationUrl } as const
+        }).pipe(Effect.onInterrupt(() => terminal(input.target, attemptID, "failed", "discovery")))
       })
 
     const cancel: Interface["cancel"] = (attemptID) =>
@@ -351,7 +373,8 @@ export const layer = Layer.effect(
           Effect.forEach(
             Object.entries(entry.attempts ?? {}),
             ([attemptID, attempt]) => {
-              if (["pending", "received", "exchanging"].includes(attempt.phase ?? "")) owned.add(attemptID)
+              if (["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "")) owned.add(attemptID)
+              if (attempt.phase === "initializing") return terminal(input.target, attemptID, "failed", "discovery")
               if (attempt.phase === "exchanging")
                 return terminal(input.target, attemptID, "failed", "indeterminate-exchange")
               if (attempt.phase === "received" && attempt.code && attempt.state)
@@ -379,6 +402,8 @@ export const layer = Layer.effect(
                         later(attemptID)
                         return true
                       }
+                      const controller = new AbortController()
+                      exchanges.set(attemptID, controller)
                       const completed = await Effect.runPromiseExit(
                         finish({
                           target: input.target,
@@ -386,8 +411,8 @@ export const layer = Layer.effect(
                           attemptID: attemptID as AttemptID,
                           code: result.code,
                           state: attempt.state!,
-                        }, false, true),
-                      )
+                        }, false, true, controller.signal),
+                      ).finally(() => exchanges.delete(attemptID))
                       if (completed._tag !== "Success") return false
                       later(attemptID)
                       completions.forEach((handler) => handler(input.target))
@@ -407,17 +432,23 @@ export const layer = Layer.effect(
       )
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(
+      Effect.sync(() => exchanges.forEach((controller) => controller.abort())).pipe(Effect.andThen(Effect.forEach(
         [...owned],
         (attemptID) =>
           safe(store.findAttempt(attemptID)).pipe(
             Effect.flatMap((found) =>
-              found?.attempt.phase === "pending" ? cancel(attemptID as AttemptID) : close(attemptID),
+              found?.attempt.phase === "pending"
+                ? cancel(attemptID as AttemptID)
+                : found?.attempt.phase === "initializing"
+                  ? terminal(found.target, attemptID, "failed", "discovery")
+                  : found?.attempt.phase === "received" || found?.attempt.phase === "exchanging"
+                    ? terminal(found.target, attemptID, "failed", "exchange")
+                    : close(attemptID),
             ),
             Effect.ignore,
           ),
         { discard: true },
-      ),
+      ))),
     )
 
     return Service.of({
@@ -458,13 +489,13 @@ function failureCode(value: string | undefined): FailureCode {
     : "exchange"
 }
 
-function abortFetch(signal: AbortSignal) {
-  return (input: string | URL | Request, init?: RequestInit) => fetch(input, { ...init, signal: merge(signal, init?.signal) })
+function abortFetch(signal: AbortSignal, external?: AbortSignal) {
+  return (input: string | URL | Request, init?: RequestInit) => fetch(input, { ...init, signal: merge(signal, external, init?.signal) })
 }
 
-function merge(first: AbortSignal, second?: AbortSignal | null) {
-  if (!second || first === second) return first
-  return AbortSignal.any([first, second])
+function merge(...signals: ReadonlyArray<AbortSignal | null | undefined>) {
+  const active = [...new Set(signals.filter((value): value is AbortSignal => value !== undefined && value !== null))]
+  return active.length === 1 ? active[0]! : AbortSignal.any(active)
 }
 
 function usable(entry: MCPOAuthStore.Entry) {
