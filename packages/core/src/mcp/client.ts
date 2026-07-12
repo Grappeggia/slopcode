@@ -104,8 +104,14 @@ export interface ProcessAdapter {
 
 export class ConnectionError extends Schema.TaggedErrorClass<ConnectionError>()("MCP.ConnectionError", {
   message: Schema.String,
-  code: Schema.Literal("auth-required").pipe(Schema.optional),
+  code: Schema.Literals(["auth-required", "refresh"]).pipe(Schema.optional),
 }) {}
+
+class RefreshFailed extends Error {
+  constructor() {
+    super("MCP OAuth refresh failed")
+  }
+}
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCPClient") {}
 
@@ -351,6 +357,9 @@ function service(store: MCPOAuthStore.Interface) {
                       })
                       if (result !== "AUTHORIZED") throw new AuthRequired()
                     }, { signal, dir: path.join(input.directory, ".mcp-oauth-refresh-locks") })
+                  .catch((error) => {
+                    throw error instanceof AuthRequired ? error : new RefreshFailed()
+                  })
                   .then(reserved.resolve, reserved.reject)
                   .finally(() => refreshes.delete(key))
                 return reserved.promise
@@ -383,6 +392,8 @@ function service(store: MCPOAuthStore.Interface) {
           Effect.mapError((error) =>
             error.message === "MCP authentication is required"
               ? new ConnectionError({ message: error.message, code: "auth-required" })
+              : error.message === "MCP OAuth refresh failed"
+                ? new ConnectionError({ message: error.message, code: "refresh" })
               : input.config.type === "remote" && input.config.oauth !== false
                 ? new ConnectionError({ message: "MCP OAuth connection failed" })
                 : error,

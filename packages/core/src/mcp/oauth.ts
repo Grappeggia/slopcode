@@ -93,6 +93,7 @@ export interface Interface {
     readonly config: typeof ConfigMCP.OAuth.Type
   }) => Effect.Effect<void, AuthError>
   readonly onComplete: (handler: (target: MCPOAuthStore.Target) => void) => Effect.Effect<void>
+  readonly onChange: (handler: (target: MCPOAuthStore.Target) => void) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCPOAuth") {}
@@ -103,7 +104,7 @@ export const layer = Layer.effect(
     const store = yield* MCPOAuthStore.Service
     const callbacks = yield* MCPOAuthCallback.Service
     const listeners = new Map<string, { close: () => Promise<void> }>()
-    const exchanges = new Map<string, AbortController>()
+    const exchanges = new Map<string, { readonly controller: AbortController; readonly settled: Promise<void> }>()
     const owned = new Set<string>()
     const completions = new Set<(target: MCPOAuthStore.Target) => void>()
 
@@ -120,6 +121,18 @@ export const layer = Layer.effect(
       })
     const later = (attemptID: string) =>
       setTimeout(() => Effect.runPromise(close(attemptID)).catch(() => undefined), 0)
+    const changes = new Set<(target: MCPOAuthStore.Target) => void>()
+    const changed = (target: MCPOAuthStore.Target) => Effect.sync(() => changes.forEach((handler) => handler(target)))
+    const mark = (
+      target: MCPOAuthStore.Target,
+      attemptID: string,
+      phase: "expired" | "failed",
+      error: FailureCode,
+      expected?: ReadonlyArray<MCPOAuthStore.Attempt["phase"]>,
+    ) =>
+      safe(store.finishAttempt(target, attemptID, phase, error, expected), target).pipe(
+        Effect.flatMap((updated) => (updated ? changed(target) : Effect.void)),
+      )
     const terminal = (
       target: MCPOAuthStore.Target,
       attemptID: string,
@@ -128,7 +141,7 @@ export const layer = Layer.effect(
     ) =>
       phase === "complete" || phase === "cancelled"
         ? close(attemptID)
-        : safe(store.finishAttempt(target, attemptID, phase, error ?? phase), target).pipe(
+        : mark(target, attemptID, phase, (error ?? phase) as FailureCode).pipe(
             Effect.andThen(close(attemptID)),
             Effect.asVoid,
           )
@@ -138,11 +151,14 @@ export const layer = Layer.effect(
         Effect.flatMap((entry) =>
           Effect.gen(function* () {
             const now = Date.now()
-            const attempts = Object.entries(entry.attempts ?? {})
-            for (const [id, attempt] of attempts)
+            const stale = Object.entries(entry.attempts ?? {})
+            let expired = false
+            for (const [id, attempt] of stale)
               if (attempt.phase === "pending" && (attempt.expires ?? 0) <= now)
-                yield* terminal(target, id, "expired", "attempt-expired")
-            if (usable(entry)) return { status: "credential-ready" } as const
+                yield* terminal(target, id, "expired", "attempt-expired").pipe(Effect.tap(() => Effect.sync(() => (expired = true))))
+            const current = expired ? yield* safe(store.get(target), target) : entry
+            const attempts = Object.entries(current.attempts ?? {})
+            if (usable(current)) return { status: "credential-ready" } as const
             const live = attempts
               .filter(([, attempt]) => attempt.phase === "pending" && (attempt.expires ?? 0) > now)
               .map(([attemptID, attempt]) => ({
@@ -154,7 +170,7 @@ export const layer = Layer.effect(
               .sort((a, b) => a.created - b.created || a.attemptID.localeCompare(b.attemptID))
             if (live.length) return { status: "authorizing", attempts: live } as const
             const failed = attempts
-              .filter(([, attempt]) => attempt.phase === "failed")
+              .filter(([, attempt]) => attempt.phase === "failed" || attempt.phase === "expired")
               .sort((a, b) => (b[1].created ?? 0) - (a[1].created ?? 0))[0]
             if (failed) return { status: "failed", code: failureCode(failed[1].error) } as const
             return { status: "auth-required" } as const
@@ -305,13 +321,14 @@ export const layer = Layer.effect(
                       return true
                     }
                     const controller = new AbortController()
-                    exchanges.set(attemptID, controller)
-                    const completed = await Effect.runPromiseExit(
+                    const running = Effect.runPromiseExit(
                       finish({ ...input, attemptID, code: result.code, state }, false, true, controller.signal),
-                    ).finally(() => exchanges.delete(attemptID))
+                    )
+                    exchanges.set(attemptID, { controller, settled: running.then(() => undefined) })
+                    const completed = await running.finally(() => exchanges.delete(attemptID))
                     if (completed._tag !== "Success") {
                       await Effect.runPromise(
-                        safe(store.finishAttempt(input.target, attemptID, "failed", "exchange", ["received", "exchanging"]), input.target),
+                        mark(input.target, attemptID, "failed", "exchange", ["received", "exchanging"]),
                       )
                       later(attemptID)
                       return false
@@ -341,10 +358,25 @@ export const layer = Layer.effect(
             : Effect.fail(failure(result.status === "missing" ? "attempt-invalid" : "attempt-used", undefined, attemptID)),
         ),
       )
+    const quiesce = (target: MCPOAuthStore.Target, entry: MCPOAuthStore.Entry) =>
+      Effect.gen(function* () {
+        const ids = Object.keys(entry.attempts ?? {})
+        ids.forEach((id) => exchanges.get(id)?.controller.abort())
+        yield* Effect.promise(() => Promise.all(ids.map((id) => exchanges.get(id)?.settled ?? Promise.resolve()))).pipe(Effect.ignore)
+        yield* Effect.forEach(ids, (id) =>
+          safe(store.findAttempt(id), target).pipe(
+            Effect.flatMap((found) =>
+              found?.attempt.phase === "received" || found?.attempt.phase === "exchanging"
+                ? mark(target, id, "failed", "exchange", ["received", "exchanging"])
+                : Effect.void,
+            ),
+          ), { discard: true })
+        yield* Effect.forEach(ids, close, { discard: true })
+      })
     const remove: Interface["remove"] = (target) =>
       safe(store.get(target), target).pipe(
         Effect.flatMap((entry) =>
-          Effect.forEach(Object.keys(entry.attempts ?? {}), close, { discard: true }).pipe(
+          quiesce(target, entry).pipe(
             Effect.andThen(safe(store.cancelTarget(target, true), target)),
             Effect.andThen(safe(store.remove(target), target)),
           ),
@@ -353,7 +385,7 @@ export const layer = Layer.effect(
     const reset: Interface["reset"] = (target) =>
       safe(store.get(target), target).pipe(
         Effect.flatMap((entry) =>
-          Effect.forEach(Object.keys(entry.attempts ?? {}), close, { discard: true }).pipe(
+          quiesce(target, entry).pipe(
             Effect.andThen(safe(store.cancelTarget(target, true), target)),
           ),
         ),
@@ -361,7 +393,7 @@ export const layer = Layer.effect(
     const stop: Interface["stop"] = (target) =>
       safe(store.get(target), target).pipe(
         Effect.flatMap((entry) =>
-          Effect.forEach(Object.keys(entry.attempts ?? {}), close, { discard: true }).pipe(
+          quiesce(target, entry).pipe(
             Effect.andThen(safe(store.cancelTarget(target), target)),
           ),
         ),
@@ -403,8 +435,7 @@ export const layer = Layer.effect(
                         return true
                       }
                       const controller = new AbortController()
-                      exchanges.set(attemptID, controller)
-                      const completed = await Effect.runPromiseExit(
+                      const running = Effect.runPromiseExit(
                         finish({
                           target: input.target,
                           config: input.config,
@@ -412,8 +443,14 @@ export const layer = Layer.effect(
                           code: result.code,
                           state: attempt.state!,
                         }, false, true, controller.signal),
-                      ).finally(() => exchanges.delete(attemptID))
-                      if (completed._tag !== "Success") return false
+                      )
+                      exchanges.set(attemptID, { controller, settled: running.then(() => undefined) })
+                      const completed = await running.finally(() => exchanges.delete(attemptID))
+                      if (completed._tag !== "Success") {
+                        await Effect.runPromise(mark(input.target, attemptID, "failed", "exchange", ["received", "exchanging"]))
+                        later(attemptID)
+                        return false
+                      }
                       later(attemptID)
                       completions.forEach((handler) => handler(input.target))
                       return true
@@ -432,7 +469,9 @@ export const layer = Layer.effect(
       )
 
     yield* Effect.addFinalizer(() =>
-      Effect.sync(() => exchanges.forEach((controller) => controller.abort())).pipe(Effect.andThen(Effect.forEach(
+      Effect.sync(() => exchanges.forEach((exchange) => exchange.controller.abort())).pipe(
+        Effect.andThen(Effect.promise(() => Promise.all([...exchanges.values()].map((exchange) => exchange.settled)))),
+        Effect.andThen(Effect.forEach(
         [...owned],
         (attemptID) =>
           safe(store.findAttempt(attemptID)).pipe(
@@ -461,6 +500,7 @@ export const layer = Layer.effect(
       stop,
       recover,
       onComplete: (handler) => Effect.sync(() => completions.add(handler)).pipe(Effect.asVoid),
+      onChange: (handler) => Effect.sync(() => changes.add(handler)).pipe(Effect.asVoid),
     })
   }),
 )
