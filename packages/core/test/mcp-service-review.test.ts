@@ -7,6 +7,7 @@ import { Location } from "@slopcode-ai/core/location"
 import { MCP } from "@slopcode-ai/core/mcp"
 import { MCPClient } from "@slopcode-ai/core/mcp/client"
 import { MCPOAuth } from "@slopcode-ai/core/mcp/oauth"
+import { MCPOAuthCallback } from "@slopcode-ai/core/mcp/oauth-callback"
 import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
 import { PluginV2 } from "@slopcode-ai/core/plugin"
@@ -18,8 +19,9 @@ import { ApplicationTools } from "@slopcode-ai/core/tool/application-tools"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
 import { Tools } from "@slopcode-ai/core/tool/tools"
 import { ToolOutputStore } from "@slopcode-ai/core/tool-output-store"
-import { Cause, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
+import { Cause, Context, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { testEffect } from "./lib/effect"
+import { tmpdir } from "./fixture/tmpdir"
 
 const location = Layer.succeed(Location.Service, {
   directory: AbsolutePath.make("/work/review"),
@@ -1432,3 +1434,112 @@ fixture({
     expect(() => Schema.decodeUnknownSync(MCP.AuthStatus)({ status: "failed", code: "remote-body" })).toThrow()
   }),
 )
+
+testEffect(Layer.empty).effect("publishes one real protocol exchange failure as a safe auth event", () =>
+  Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((tmp) =>
+      Effect.acquireRelease(Effect.sync(oauthFailureServer), (server) => Effect.sync(() => server.stop(true))).pipe(
+        Effect.flatMap((server) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+              const port = reserve.port
+              reserve.stop(true)
+              const captured: Array<{ type: string; data: unknown }> = []
+              const events = Layer.mock(EventV2.Service, {
+                publish: (definition, data) => Effect.sync(() => {
+                  captured.push({ type: definition.type, data })
+                  return { id: EventV2.ID.make("evt_oauth_failure"), type: definition.type, data }
+                }) as never,
+              })
+              const permission = Layer.mock(PermissionV2.Service, { assert: () => Effect.void })
+              const plugins = PluginV2.layer.pipe(Layer.provide(events))
+              const registry = ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), Layer.provide(output))
+              const tools = Layer.effect(
+                Tools.Service,
+                Effect.gen(function* () {
+                  const service = yield* ToolRegistry.Service
+                  return Tools.Service.of({ register: (registered, options) => service.register(registered, options) })
+                }),
+              ).pipe(Layer.provide(registry))
+              const store = MCPOAuthStore.make({ data: tmp.path })
+              const oauth = MCPOAuth.layer.pipe(
+                Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                Layer.provide(MCPOAuthCallback.layer),
+              )
+              const source = MCP.locationLayer.pipe(
+                Layer.provide(oauth),
+                Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+              )
+              const config = Layer.succeed(Config.Service, {
+                entries: () => Effect.succeed([new Config.Document({ type: "document", info: { mcp: new ConfigMCP.Info({
+                  servers: { event: new ConfigMCP.Remote({
+                    type: "remote",
+                    url: `${server.url}mcp`,
+                    oauth: { client_id: "static", callback_port: port },
+                  }) },
+                }) } })]),
+              })
+              const mcp = source.pipe(
+                Layer.provide(config),
+                Layer.provide(Layer.succeed(MCPClient.Service, {
+                  connect: () => Effect.fail(new MCPClient.ConnectionError({ message: "MCP authentication is required", code: "auth-required" })),
+                })),
+                Layer.provide(location),
+                Layer.provide(tools),
+                Layer.provide(permission),
+                Layer.provide(plugins),
+                Layer.provide(events),
+              )
+              const context = yield* Layer.build(Layer.mergeAll(mcp, registry, permission, plugins, events, location, output))
+              const service = Context.get(context, MCP.Service)
+              yield* service.ready()
+              const started = yield* service.beginAuth({ name: "event" })
+              if (started.status !== "authorizing") throw new Error("authorization did not start")
+              const authorization = new URL(started.authorizationUrl)
+              expect((yield* Effect.promise(() => fetch(
+                `http://127.0.0.1:${port}/mcp/oauth/callback?state=${authorization.searchParams.get("state")}&code=private-code`,
+              ))).status).toBe(400)
+              const changed = captured.filter((event) =>
+                event.type === MCP.Event.AuthChanged.type &&
+                typeof event.data === "object" && event.data !== null &&
+                "status" in event.data &&
+                typeof event.data.status === "object" && event.data.status !== null &&
+                "status" in event.data.status && event.data.status.status === "failed")
+              expect(changed).toEqual([{
+                type: "mcp.auth.changed",
+                data: { server: "event", status: { status: "failed", code: "exchange" } },
+              }])
+              expect(JSON.stringify(changed)).not.toContain("private-code")
+              expect(JSON.stringify(changed)).not.toContain("authorize")
+            }),
+          ),
+        ),
+      ),
+    ),
+  ),
+)
+
+function oauthFailureServer() {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url)
+      const origin = server.url.origin
+      if (url.pathname === "/.well-known/oauth-protected-resource/mcp")
+        return Response.json({ resource: `${origin}/mcp`, authorization_servers: [origin] })
+      if (url.pathname === "/.well-known/oauth-authorization-server")
+        return Response.json({
+          issuer: origin,
+          authorization_endpoint: `${origin}/authorize`,
+          token_endpoint: `${origin}/token`,
+          response_types_supported: ["code"],
+          code_challenge_methods_supported: ["S256"],
+        })
+      if (url.pathname === "/token") return Response.json({ error: "server_error" }, { status: 500 })
+      return new Response("missing", { status: 404 })
+    },
+  })
+  return server
+}
