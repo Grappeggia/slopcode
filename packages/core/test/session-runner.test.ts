@@ -934,6 +934,102 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("settles malformed protocol input for ordinary tools without exposing raw input", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      responses = [[LLMEvent.toolInputError({ id: "ordinary-bad", name: "echo", reason: "invalid-json" })]]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Malformed ordinary tool" }), resume: false })
+
+      yield* session.resume(sessionID)
+
+      const assistant = (yield* session.messages({ sessionID })).find((message) => message.type === "assistant")
+      expect(assistant).toMatchObject({
+        content: [
+          {
+            type: "tool",
+            name: "echo",
+            state: { status: "error", error: { message: "Provider returned malformed tool input" } },
+          },
+        ],
+      })
+      expect(JSON.stringify(assistant)).not.toContain("must-not-leak")
+    }),
+  )
+
+  it.effect("recovers interruption during structured retry publication", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      let armed = true
+      yield* events.beforeCommit((event) => {
+        if (!armed || !Schema.is(SessionEvent.Structured.Retry)(event)) return Effect.void
+        armed = false
+        return Effect.interrupt
+      })
+      responses = [
+        [LLMEvent.toolCall({ id: "retry-interrupt-bad", name: "final_output", input: { value: "bad" } })],
+        [LLMEvent.toolCall({ id: "retry-interrupt-good", name: "final_output", input: { value: 7 } })],
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Recover retry publication",
+          format: { type: "json_schema", schema: { type: "number" }, retry_count: 1 },
+        }),
+        resume: false,
+      })
+
+      expect(Exit.isFailure(yield* session.resume(sessionID).pipe(Effect.exit))).toBe(true)
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect((yield* session.messages({ sessionID })).findLast((message) => message.type === "assistant")).toMatchObject({
+        structured: 7,
+      })
+    }),
+  )
+
+  it.effect("recovers interruption during structured redispatch publication", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      let armed = true
+      yield* events.beforeCommit((event) => {
+        if (
+          !armed ||
+          !Schema.is(SessionEvent.Structured.Dispatched)(event) ||
+          event.data.attempt !== 2
+        )
+          return Effect.void
+        armed = false
+        return Effect.interrupt
+      })
+      responses = [
+        [LLMEvent.toolCall({ id: "redispatch-bad", name: "final_output", input: { value: "bad" } })],
+        [LLMEvent.toolCall({ id: "redispatch-good", name: "final_output", input: { value: 8 } })],
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Recover redispatch",
+          format: { type: "json_schema", schema: { type: "number" }, retry_count: 1 },
+        }),
+        resume: false,
+      })
+
+      expect(Exit.isFailure(yield* session.resume(sessionID).pipe(Effect.exit))).toBe(true)
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect((yield* session.messages({ sessionID })).findLast((message) => message.type === "assistant")).toMatchObject({
+        structured: 8,
+      })
+    }),
+  )
+
   const lifecycle = [
     {
       name: "dispatch",
