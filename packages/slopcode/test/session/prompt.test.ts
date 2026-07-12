@@ -766,12 +766,7 @@ admissionServer.instance(
           .filter((event) => event.type.startsWith("internal.v1.prompt."))
           .map((event) => event.type)
           .toSorted(),
-      ).toEqual([
-        "internal.v1.prompt.claimed.1",
-        "internal.v1.prompt.completed.1",
-        "internal.v1.prompt.prepared.1",
-        "internal.v1.prompt.requested.1",
-      ])
+      ).toEqual(["internal.v1.prompt.completed.1", "internal.v1.prompt.prepared.1", "internal.v1.prompt.requested.1"])
     }),
   { config: cfg },
 )
@@ -801,6 +796,8 @@ admissionServer.instance(
       const retry = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
       yield* Effect.yieldNow
       expect(admissionCalls).toBe(1)
+      expect(retry.pollUnsafe()).toBeUndefined()
+      yield* Effect.sleep("650 millis")
       expect(retry.pollUnsafe()).toBeUndefined()
       yield* Deferred.succeed(release, undefined)
 
@@ -911,9 +908,13 @@ admissionServer.instance(
       admissionGates.push(() => Deferred.succeed(checked, undefined).pipe(Effect.andThen(Effect.never), Effect.asVoid))
       const fiber = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
       yield* Deferred.await(checked)
+      const waiting = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(waiting.pollUnsafe()).toBeUndefined()
 
       yield* Fiber.interrupt(fiber)
-      const retry = yield* prompt.prompt(input, guard).pipe(Effect.exit)
+      const retry = yield* Fiber.await(waiting)
+      const terminalRetry = yield* prompt.prompt(input, guard).pipe(Effect.exit)
       const terminal = (yield* db
         .select()
         .from(EventTable)
@@ -924,6 +925,10 @@ admissionServer.instance(
       expect(terminal?.data).toMatchObject({ reason: "preparation" })
       expect(Exit.isFailure(retry)).toBe(true)
       if (Exit.isFailure(retry)) expect(Cause.squash(retry.cause)).toMatchObject({ reason: "preparation" })
+      expect(Exit.isFailure(terminalRetry)).toBe(true)
+      if (Exit.isFailure(terminalRetry)) {
+        expect(Cause.squash(terminalRetry.cause)).toMatchObject({ reason: "preparation" })
+      }
       expect(admissionCalls).toBe(1)
     }),
   { config: cfg },
@@ -1052,15 +1057,6 @@ for (const window of ["requested", "prepared", "message", "parts"] as const) {
           .where(eq(EventSequenceTable.aggregate_id, chat.id))
           .run()
           .pipe(Effect.orDie)
-        const claimed = rows.find((event) => event.type === "internal.v1.prompt.claimed.1")
-        if (claimed && claimed.seq <= cutoff.seq) {
-          yield* db
-            .update(EventTable)
-            .set({ data: { ...claimed.data, started: 0 } })
-            .where(eq(EventTable.id, claimed.id))
-            .run()
-            .pipe(Effect.orDie)
-        }
         if (window === "requested" || window === "prepared") {
           yield* db
             .delete(SessionMessageTable)

@@ -8,8 +8,8 @@ DONE_WITH_CONCERNS
 
 - Routed Slopcode V2 prompt and interrupt through Core `SessionControl`, preserving the V1 `SessionPrompt` path and Core's ready/owner/epoch commit guard.
 - Added deterministic paused, draining, migrating, and owner/state/epoch TOCTOU tests proving the guarded V2 prompt/interrupt mutations do not occur.
-- Added deterministic internal V1 `PromptRequested`/`PromptClaimed` plus `PromptCompleted`/`PromptFailed` terminal events; Requested validates owner, ready state, and epoch before MCP/read/plugin/filesystem work.
-- Made exact retries from active services wait for terminal, return durable terminal outcomes, and reject conflicting identities without duplicate side effects.
+- Added deterministic internal V1 `PromptRequested` plus `PromptCompleted`/`PromptFailed` terminal events; Requested validates owner, ready state, and epoch before MCP/read/plugin/filesystem work.
+- Added process-local ownership/deferred state keyed by deterministic Requested ID, so exact concurrent retries wait without timeouts and ownership always settles/removes at terminal or finalization.
 - Added a prepared-message manifest so restart recovery completes only exact durable message/parts, while requested-only or partial persistence settles typed Failed/unknown without rerunning external work.
 - Added an immediate-transaction `SessionRuntime.claim` as the V1 cancellation linearization point; it executes `SessionRunState.cancel` as its coordinate before runtime ownership/state/epoch assignments can commit.
 - Made guarded missing-projection `SessionV2.interrupt` validate and return without calling execution, while preserving unguarded missing-session interruption compatibility.
@@ -35,6 +35,7 @@ DONE_WITH_CONCERNS
 - Precise linearization follow-up: transition-wins tests failed because revert cleanup and agent/model projections mutated before guarded admission; coordinated cancellation failed because `state.cancel` ran after `SessionRuntime.claim` returned.
 - Durable admission follow-up: post-guard MCP/plugin preparation could run before the guarded message write; RED tests timed out waiting for a durable admission event and showed exact/conflicting retries rerunning preparation and replacing the message.
 - Terminal lifecycle follow-up: a plugin defect left Requested without terminal; exact retry returned a different in-progress defect, and no durable safe failure existed for restart recovery.
+- Final High follow-up: the Claimed timestamp heuristic could misclassify retries delayed beyond 500 ms; delayed-owner and interruption RED coverage required explicit process-local ownership instead.
 
 ## Verification
 
@@ -51,7 +52,7 @@ DONE_WITH_CONCERNS
 - PASS: `packages/core`: `bun run typecheck`.
 - PASS: repository `git diff --check`.
 - FULL SUITE: `packages/slopcode`: `bun test` (3059 pass, 22 skip, 1 todo, 11 fail). All 11 named failures also fail at base commit `8389b8fbac`; eight reproduce with the same assertion/timeout, while the three native V2 HTTP tests fail earlier there because `LocationServiceMap` is absent. No listed pass/fail regression is caused by the host-control commits.
-- TYPECHECK: `packages/slopcode`: `bun run typecheck` reaches two existing errors: `src/session/processor.ts:495` (`Record<string, unknown>` to `string`) and pre-existing runtime mismatch construction in `src/session/prompt.ts:1398` (missing `actualState`; shifted by these changes).
+- TYPECHECK: `packages/slopcode`: `bun run typecheck` reaches two existing errors: `src/session/processor.ts:495` (`Record<string, unknown>` to `string`) and pre-existing runtime mismatch construction in `src/session/prompt.ts:1366` (missing `actualState`; shifted by these changes).
 
 ## Concerns
 
