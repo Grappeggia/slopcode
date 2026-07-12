@@ -266,9 +266,13 @@ it.live("leaves the exact store bytes unchanged when a server rejects a stored a
               const compatibility = MCPOAuthProvider.compatibility(endpoint, {}, redirect)
               yield* store.update(target, () => ({
                 compatibility,
-                tokens: { access_token: "rejected-token", token_type: "Bearer" },
-                client: { client_id: "dynamic-client", redirect_uris: [redirect] },
-                discovery: { authorizationServerUrl: fixture.server.url.toString() },
+                tokens: { access_token: "rejected-token", refresh_token: "must-not-refresh", token_type: "Bearer" },
+                client: {
+                  client_id: "expired-dynamic-client",
+                  client_secret: "must-not-register",
+                  client_secret_expires_at: 1,
+                  redirect_uris: [redirect],
+                },
               }))
               const file = path.join(tmp.path, "mcp-oauth/store.json")
               const before = yield* Effect.promise(() => Bun.file(file).bytes())
@@ -283,7 +287,7 @@ it.live("leaves the exact store bytes unchanged when a server rejects a stored a
               }).pipe(Effect.flip)
               expect(error).toMatchObject({ code: "auth-required" })
               expect(yield* Effect.promise(() => Bun.file(file).bytes())).toEqual(before)
-              expect(fixture.requests.some((value) => value.includes("well-known") || value.includes("register"))).toBe(false)
+              expect(fixture.requests).toEqual(["/mcp"])
             }),
           ),
         ),

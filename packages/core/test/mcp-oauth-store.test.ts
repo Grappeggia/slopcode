@@ -215,6 +215,26 @@ describe("MCP OAuth store", () => {
               buckets: {
                 [key]: {
                   identity,
+                  entry: {
+                    attempts: {
+                      bad: {
+                        state: "state",
+                        mode: "manual",
+                        redirect: "https://client.example/callback",
+                        created: 1,
+                        expires: 2,
+                        phase: "pending",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            {
+              version: 1,
+              buckets: {
+                [key]: {
+                  identity,
                   entry: { tokens: { access_token: "token", token_type: "Bearer", expires_at: -1 } },
                 },
               },

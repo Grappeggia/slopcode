@@ -61,7 +61,7 @@ describe("MCP OAuth provider", () => {
     ),
   )
 
-  it.live("builds a strictly read-only connect provider", () =>
+  it.live("does not expose OAuth interaction state from connect credentials", () =>
     Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
@@ -80,13 +80,18 @@ describe("MCP OAuth provider", () => {
             config: {},
             compatibility: "a".repeat(64),
           })
-          expect(provider.redirectUrl).toBeUndefined()
+          expect(yield* Effect.promise(() => Promise.resolve(provider.tokens?.()))).toEqual({
+            access_token: "access",
+            token_type: "Bearer",
+          })
+          expect(provider.clientInformation).toBeUndefined()
+          expect(provider.discoveryState).toBeUndefined()
           expect(provider.saveClientInformation).toBeUndefined()
           expect(provider.saveDiscoveryState).toBeUndefined()
-          yield* Effect.promise(() => Promise.resolve(provider.saveTokens({ access_token: "replacement", token_type: "Bearer" })))
-          yield* Effect.promise(() => Promise.resolve(provider.invalidateCredentials?.("all")))
+          expect(provider.invalidateCredentials).toBeUndefined()
+          expect(provider.codeVerifier).toBeUndefined()
+          expect(provider.saveCodeVerifier).toBeUndefined()
           expect(yield* Effect.promise(() => Bun.file(file).bytes())).toEqual(before)
-          expect(yield* Effect.promise(() => provider.redirectToAuthorization(new URL("https://auth.example/authorize")).then(() => false, () => true))).toBe(true)
         }),
       ),
     ),

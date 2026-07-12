@@ -157,6 +157,11 @@ describe("MCP OAuth protocol boundary", () => {
                 if (started.status !== "authorizing") throw new Error("authorization did not start")
                 expect(started.mode).toBe("manual")
                 const url = new URL(started.authorizationUrl)
+                expect((yield* store.findAttempt(started.attemptID))?.attempt).toMatchObject({
+                  phase: "pending",
+                  verifier: expect.any(String),
+                  authorization: started.authorizationUrl,
+                })
                 fixture.challenge = url.searchParams.get("code_challenge")!
                 expect(yield* oauth.status(target)).toMatchObject({
                   status: "authorizing",
@@ -193,6 +198,46 @@ describe("MCP OAuth protocol boundary", () => {
               }),
             ),
           ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("terminalizes initializing attempts without rehydrating a callback", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const store = MCPOAuthStore.make({ data: tmp.path })
+            const target = { directory: tmp.path, name: "initializing", endpoint: "https://example.com/mcp" }
+            yield* store.update(target, () => ({
+              attempts: {
+                initializing: {
+                  state: "not-returned",
+                  mode: "auto",
+                  redirect: "http://127.0.0.1:19876/mcp/oauth/callback",
+                  created: 1,
+                  expires: Date.now() + 60_000,
+                  phase: "initializing",
+                },
+              },
+            }))
+            const context = yield* Layer.build(
+              MCPOAuth.layer.pipe(
+                Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                Layer.provide(MCPOAuthCallback.layer),
+              ),
+            )
+            yield* Context.get(context, MCPOAuth.Service).recover({ target, config: { client_id: "static" } })
+            expect((yield* store.findAttempt("initializing"))?.attempt).toEqual({
+              mode: "auto",
+              redirect: "http://127.0.0.1:19876/mcp/oauth/callback",
+              created: 1,
+              expires: expect.any(Number),
+              phase: "failed",
+              error: "discovery",
+            })
+          }),
         ),
       ),
     ),
