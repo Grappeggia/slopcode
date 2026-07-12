@@ -27,6 +27,7 @@ import { Spinner } from "../../component/spinner"
 import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useTheme } from "../../context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
+import { SideQuestion } from "../../component/dialog-side-question"
 import type {
   AssistantMessage,
   Part,
@@ -379,6 +380,13 @@ export function Session() {
   let seeded = false
   let scroll: ScrollBoxRenderable
   let prompt: PromptRef | undefined
+  const [side, setSide] = createSignal<{
+    question?: string
+    sessionID: string
+    agent: string
+    model: { providerID: string; modelID: string }
+    variant?: string
+  }>()
   const bind = (r: PromptRef | undefined) => {
     prompt = r
     promptRef.set(r)
@@ -1393,6 +1401,15 @@ export function Session() {
                 </For>
               </scrollbox>
               <box flexShrink={0}>
+                <Show when={side()}>
+                  {(current) => (
+                    <SideQuestion
+                      {...current()}
+                      focused={permissions().length === 0 && questions().length === 0 && dialog.stack.length === 0}
+                      onClose={() => setSide()}
+                    />
+                  )}
+                </Show>
                 <Show when={permissions().length > 0}>
                   <PermissionPrompt
                     request={permissions()[0]}
@@ -1414,17 +1431,18 @@ export function Session() {
                     mode="replace"
                     session_id={route.sessionID}
                     visible={visible()}
-                    disabled={disabled()}
+                    disabled={disabled() || !!side()}
                     on_submit={toBottom}
                     ref={bind}
                   >
                     <Prompt
                       visible={visible()}
                       ref={bind}
-                      disabled={disabled()}
+                      disabled={disabled() || !!side()}
                       onSubmit={() => {
                         toBottom()
                       }}
+                      onSideQuestion={setSide}
                       sessionID={route.sessionID}
                       compactChrome
                       right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}

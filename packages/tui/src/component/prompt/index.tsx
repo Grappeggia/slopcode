@@ -50,7 +50,6 @@ import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
-import { DialogSideQuestion } from "../dialog-side-question"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
 import { useArgs } from "../../context/args"
 import { SLOPCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, useSlopcodeKeymap } from "../../keymap"
@@ -65,6 +64,13 @@ export type PromptProps = {
   visible?: boolean
   disabled?: boolean
   onSubmit?: () => void
+  onSideQuestion?: (input: {
+    question?: string
+    sessionID: string
+    agent: string
+    model: { providerID: string; modelID: string }
+    variant?: string
+  }) => void
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
@@ -296,6 +302,29 @@ export function Prompt(props: PromptProps) {
     extmarkToPartIndex: new Map(),
     interrupt: 0,
   })
+  function openSideQuestion(question?: string) {
+    const agent = local.agent.current()
+    const model = local.model.current()
+    if (!props.sessionID) {
+      toast.show({ message: "Start a session before using /btw", variant: "warning" })
+      return false
+    }
+    if (!agent) return false
+    if (!model) {
+      void promptModelWarning()
+      return false
+    }
+    if (!props.onSideQuestion) return false
+    input.blur()
+    props.onSideQuestion({
+      question,
+      sessionID: props.sessionID,
+      agent: agent.name,
+      model: { providerID: model.providerID, modelID: model.modelID },
+      variant: local.model.variant.current(),
+    })
+    return true
+  }
 
   createEffect(
     on(
@@ -518,13 +547,8 @@ export function Prompt(props: PromptProps) {
         category: "Prompt",
         slashName: "btw",
         run: () => {
-          const text = "/btw "
-          input.setText(text)
-          setStore("prompt", {
-            input: text,
-            parts: [],
-          })
-          input.cursorOffset = Bun.stringWidth(text)
+          if (!openSideQuestion()) return
+          if (store.prompt.input.trimStart().startsWith("/")) resetPrompt()
         },
       },
       {
@@ -648,7 +672,7 @@ export function Prompt(props: PromptProps) {
 
   createEffect(() => {
     if (!input || input.isDestroyed) return
-    if (props.visible === false || dialog.stack.length > 0) {
+    if (props.visible === false || props.disabled || dialog.stack.length > 0) {
       if (input.focused) input.blur()
       return
     }
@@ -1005,33 +1029,8 @@ export function Prompt(props: PromptProps) {
     const side = trimmed.match(/^\/btw(?:\s+([\s\S]+))?$/)
     if (side) {
       const question = side[1]?.trim()
-      if (!question) {
-        toast.show({ message: "Ask a side question with /btw <question>", variant: "warning" })
-        return false
-      }
-      if (!props.sessionID) {
-        toast.show({ message: "Start a session before using /btw", variant: "warning" })
-        return false
-      }
-      if (!selectedModel) {
-        void promptModelWarning()
-        return false
-      }
-
-      input.extmarks.clear()
-      setStore("prompt", { input: "", parts: [] })
-      setStore("extmarkToPartIndex", new Map())
-      input.clear()
-      dialog.setSize("large")
-      dialog.replace(() => (
-        <DialogSideQuestion
-          sessionID={props.sessionID!}
-          question={question}
-          agent={agent.name}
-          model={{ providerID: selectedModel.providerID, modelID: selectedModel.modelID }}
-          variant={variant}
-        />
-      ))
+      if (!openSideQuestion(question)) return false
+      resetPrompt()
       return true
     }
 
