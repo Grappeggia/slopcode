@@ -663,7 +663,7 @@ describe("MCP OAuth protocol boundary", () => {
             const port = reserve()
             const otherPort = reserve()
             const store = MCPOAuthStore.make({ data: tmp.path })
-            const context = yield* Layer.build(MCPOAuth.layerWith({ maxAge: 300 }).pipe(
+            const context = yield* Layer.build(MCPOAuth.layerWith({ maxAge: 2_000 }).pipe(
               Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
               Layer.provide(MCPOAuthCallback.layer),
             ))
@@ -691,7 +691,7 @@ describe("MCP OAuth protocol boundary", () => {
             expect(yield* Effect.promise(() => fetch(
               `http://127.0.0.1:${port}/mcp/oauth/callback?state=${new URL(second.authorizationUrl).searchParams.get("state")}&code=replay`,
             ).then(() => false, () => true))).toBe(true)
-            yield* Effect.sleep("320 millis")
+            yield* Effect.sleep("2100 millis")
             expect((yield* store.findAttempt(second.attemptID))?.attempt.phase).toBe("cancelled")
             expect((yield* store.findAttempt(other.attemptID))?.attempt.phase).toBe("expired")
           }))),
@@ -763,7 +763,7 @@ describe("MCP OAuth protocol boundary", () => {
                 const target = { directory: tmp.path, name: "fresh-timer", endpoint: `${fixture.url}/mcp` }
                 const store = MCPOAuthStore.make({ data: tmp.path })
                 const context = yield* Layer.build(
-                  MCPOAuth.layerWith({ maxAge: 80 }).pipe(
+                  MCPOAuth.layerWith({ maxAge: 1_000 }).pipe(
                     Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
                     Layer.provide(MCPOAuthCallback.layer),
                   ),
@@ -773,7 +773,7 @@ describe("MCP OAuth protocol boundary", () => {
                 yield* oauth.onChange((_target, status) => changes.push(status))
                 const started = yield* oauth.begin({ target, config: { client_id: "static-client", callback_port: port } })
                 if (started.status !== "authorizing") throw new Error("authorization did not start")
-                yield* Effect.sleep("150 millis")
+                yield* Effect.sleep("1200 millis")
                 expect((yield* store.findAttempt(started.attemptID))?.attempt).toMatchObject({ phase: "expired", error: "attempt-expired" })
                 expect(changes).toEqual([{ status: "failed", code: "attempt-expired" }])
                 const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
