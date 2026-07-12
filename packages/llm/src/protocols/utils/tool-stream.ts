@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer"
 import { Effect } from "effect"
 import { LLMError, LLMEvent, type ProviderMetadata, type ToolCall, type ToolType } from "../../schema"
 import { eventError, parseToolInput, type ToolAccumulator } from "../shared"
@@ -13,7 +14,11 @@ export interface PendingTool extends ToolAccumulator {
   readonly toolType?: ToolType
   readonly providerExecuted?: boolean
   readonly providerMetadata?: ProviderMetadata
+  readonly bytes?: number
+  readonly invalid?: boolean
 }
+
+export const MAX_INPUT_BYTES = 1_048_576 + 4_096
 
 /**
  * Sparse parser state keyed by the provider's stream-local tool identifier.
@@ -66,23 +71,32 @@ const inputDelta = (tool: PendingTool, text: string) =>
     ...(tool.toolType ? { toolType: tool.toolType } : {}),
   })
 
-const toolCall = (route: string, tool: PendingTool, inputOverride?: string) =>
-  (tool.toolType === "custom"
-    ? Effect.succeed(inputOverride ?? tool.input)
-    : parseToolInput(route, tool.name, inputOverride ?? tool.input)
-  ).pipe(
-    Effect.map((input): ToolCall => {
-      const common = {
-        id: tool.id,
-        name: tool.name,
-        providerExecuted: tool.providerExecuted ? (true as const) : undefined,
-        providerMetadata: tool.providerMetadata,
-      }
-      if (tool.toolType === "custom")
-        return LLMEvent.toolCall({ ...common, input: input as string, toolType: "custom" })
-      return LLMEvent.toolCall({ ...common, input, ...(tool.toolType ? { toolType: tool.toolType } : {}) })
-    }),
-  )
+const toolCall = Effect.fn("ToolStream.toolCall")(function* (
+  route: string,
+  tool: PendingTool,
+  inputOverride?: string,
+) {
+  const input = inputOverride ?? tool.input
+  const common = {
+    id: tool.id,
+    name: tool.name,
+    providerExecuted: tool.providerExecuted ? (true as const) : undefined,
+    providerMetadata: tool.providerMetadata,
+  }
+  if (tool.toolType === "custom") return LLMEvent.toolCall({ ...common, input, toolType: "custom" })
+  const invalid = () =>
+    LLMEvent.toolInputError({
+      id: tool.id,
+      name: tool.name,
+      reason: "invalid-json",
+      ...(tool.toolType ? { toolType: tool.toolType } : {}),
+      providerMetadata: tool.providerMetadata,
+    })
+  if (tool.invalid || Buffer.byteLength(input) > MAX_INPUT_BYTES) return invalid()
+  const parsed = yield* parseToolInput(route, tool.name, input).pipe(Effect.option)
+  if (parsed._tag === "None") return invalid()
+  return LLMEvent.toolCall({ ...common, input: parsed.value, ...(tool.toolType ? { toolType: tool.toolType } : {}) })
+})
 
 /** Store the updated tool and produce the optional public delta event. */
 const appendTool = <K extends StreamKey>(
@@ -113,7 +127,16 @@ export const start = <K extends StreamKey>(
   tools: State<K>,
   key: K,
   tool: Omit<PendingTool, "input"> & { readonly input?: string },
-) => withTool(tools, key, { ...tool, input: tool.input ?? "" })
+) => {
+  const input = tool.input ?? ""
+  const bytes = Buffer.byteLength(input)
+  return withTool(tools, key, {
+    ...tool,
+    input: bytes > MAX_INPUT_BYTES ? "" : input,
+    bytes,
+    invalid: bytes > MAX_INPUT_BYTES,
+  })
+}
 
 /**
  * Append a streamed argument delta, starting the tool if this provider encodes
@@ -133,17 +156,21 @@ export const appendOrStart = <K extends StreamKey>(
   const name = delta.name ?? current?.name
   if (!id || !name) return eventError(route, missingToolMessage)
 
+  const bytes = (current?.bytes ?? Buffer.byteLength(current?.input ?? "")) + Buffer.byteLength(delta.text)
+  const invalid = current?.invalid === true || bytes > MAX_INPUT_BYTES
   const tool = {
     id,
     name,
-    input: `${current?.input ?? ""}${delta.text}`,
+    input: invalid ? "" : `${current?.input ?? ""}${delta.text}`,
+    bytes,
+    invalid,
     toolType: current?.toolType,
     providerExecuted: current?.providerExecuted,
     providerMetadata: current?.providerMetadata,
   }
   if (current && delta.text.length === 0 && current.id === id && current.name === name)
     return { tools, tool: current, events: [] }
-  return appendTool(tools, key, tool, delta.text)
+  return appendTool(tools, key, tool, invalid ? "" : delta.text)
 }
 
 /**
@@ -161,7 +188,14 @@ export const appendExisting = <K extends StreamKey>(
   const current = tools[key]
   if (!current) return eventError(route, missingToolMessage)
   if (text.length === 0) return { tools, tool: current, events: [] }
-  return appendTool(tools, key, { ...current, input: `${current.input}${text}` }, text)
+  const bytes = (current.bytes ?? Buffer.byteLength(current.input)) + Buffer.byteLength(text)
+  const invalid = current.invalid === true || bytes > MAX_INPUT_BYTES
+  return appendTool(
+    tools,
+    key,
+    { ...current, input: invalid ? "" : `${current.input}${text}`, bytes, invalid },
+    invalid ? "" : text,
+  )
 }
 
 /**

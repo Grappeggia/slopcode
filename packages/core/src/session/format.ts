@@ -136,10 +136,16 @@ export class ToolValueError extends Schema.TaggedErrorClass<ToolValueError>()("S
 export const toolValue = Effect.fn("SessionFormat.toolValue")(function* (input: unknown) {
   if (typeof input === "string")
     return yield* Effect.fail(new ToolValueError({ reason: "invalid-json" }))
-  const value = yield* safeValue(input).pipe(
-    Effect.mapError(() => new ToolValueError({ reason: "value-limit" })),
+  if (!record(input) || !plain(input) || Object.getOwnPropertySymbols(input).length > 0)
+    return yield* Effect.fail(new ToolValueError({ reason: "value-limit" }))
+  const descriptors = Object.getOwnPropertyDescriptors(input)
+  const value = descriptors.value
+  if (
+    Object.keys(descriptors).length !== 1 ||
+    !value ||
+    !("value" in value) ||
+    !value.enumerable
   )
-  if (!record(value) || Object.keys(value).length !== 1 || !Object.hasOwn(value, "value"))
     return yield* Effect.fail(new ToolValueError({ reason: "value-limit" }))
   return yield* safeValue(value.value).pipe(
     Effect.mapError(() => new ToolValueError({ reason: "value-limit" })),

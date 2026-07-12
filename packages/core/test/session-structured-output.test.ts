@@ -219,8 +219,8 @@ describe("SessionFormat admission", () => {
         (yield* SessionFormat.toolValue({ value: `${exact}x` }).pipe(Effect.flip)).reason,
       ).toBe("value-limit")
 
-      const nested = (depth: number): unknown => (depth === 0 ? 1 : [nested(depth - 1)])
-      expect(yield* SessionFormat.toolValue({ value: nested(64) })).toEqual(nested(64))
+      const nested = (depth: number): unknown => (depth === 0 ? {} : [nested(depth - 1)])
+      expect(JSON.stringify(yield* SessionFormat.toolValue({ value: nested(64) }))).toBe(JSON.stringify(nested(64)))
       expect((yield* SessionFormat.toolValue({ value: nested(65) }).pipe(Effect.flip)).reason).toBe("value-limit")
     }),
   )
