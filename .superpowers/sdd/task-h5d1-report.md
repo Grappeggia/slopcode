@@ -315,7 +315,7 @@ The package-timeout listener suite passes independently: `10 pass`, `0 fail`, `3
 
 ### Final Concerns
 
-- Five native HTTP cases remain unchanged from the previously approved-base accounting: missing-session abort returns 400 instead of 200; two native compaction cases time out; native prompt wait returns before provider dispatch; stable structured correlation receives 500.
+- Four native HTTP cases remain unchanged from the previously approved-base accounting: missing-session abort returns 400 instead of 200; two native compaction cases time out; and native prompt wait returns before provider dispatch. The mixed legacy/native fixture also leaves stable structured correlation receiving 500 when its historical noop V2 compatibility service is present.
 - The full Slopcode run also retains the known PTY cleanup failure and three `WorkspaceCreateError: Project not found` worktree failures.
 - One listener overlap case exceeded the package's 30-second timeout in the loaded full run, while the complete listener file passes independently under the same timeout.
 - No changes were pushed.
