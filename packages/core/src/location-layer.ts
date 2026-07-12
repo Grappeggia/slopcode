@@ -1,4 +1,5 @@
 import { Effect, Layer, LayerMap } from "effect"
+import { LayerNode } from "./effect/layer-node"
 import { Location } from "./location"
 import { Policy } from "./policy"
 import { Config } from "./config"
@@ -186,3 +187,5 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
 
 export const withPluginHost = (host: Layer.Layer<PluginPackage.Host>) =>
   LocationServiceMap.layerNoDeps.pipe(Layer.provide([...dependencies, host]))
+
+export const node = LayerNode.make(LocationServiceMap.layer, [])

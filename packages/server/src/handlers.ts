@@ -31,8 +31,7 @@ import { ProjectV2 } from "@slopcode-ai/core/project"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 
-// The application graph also builds the noop default; freshness keeps this live composition from reusing it.
-const sessions = Layer.fresh(SessionV2.layer).pipe(
+export const sessionServices = SessionV2.layer.pipe(
   Layer.provide(SessionExecutionLocal.defaultLayer),
   Layer.provide(SessionStore.defaultLayer),
   Layer.provide(SessionProjector.defaultLayer),
@@ -64,7 +63,7 @@ export const handlers = Layer.mergeAll(
   Layer.provide(sessionLocationLayer),
   Layer.provide(locationLayer),
   Layer.provide(SessionControl.layer),
-  Layer.provide(sessions),
+  Layer.provide(sessionServices),
   Layer.provide(SessionRuntime.defaultLayer),
   Layer.provide(PermissionSaved.defaultLayer),
   Layer.provide(Credential.defaultLayer),

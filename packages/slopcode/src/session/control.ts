@@ -9,14 +9,9 @@ import { AgentAttachment, FileAttachment, Prompt, Source } from "@slopcode-ai/co
 import { SessionFormat } from "@slopcode-ai/core/session/format"
 import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
-import * as SessionExecutionLocal from "@slopcode-ai/core/session/execution/local"
-import { SessionStore } from "@slopcode-ai/core/session/store"
-import { SessionProjector } from "@slopcode-ai/core/session/projector"
-import { EventV2 } from "@slopcode-ai/core/event"
-import { Database } from "@slopcode-ai/core/database/database"
-import { ProjectV2 } from "@slopcode-ai/core/project"
-import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
+import { node as locationServiceMapNode } from "@slopcode-ai/core/location-layer"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
+import { sessionServices } from "@slopcode-ai/server/handlers"
 import { Context, Effect, Layer } from "effect"
 import { Image } from "@/image/image"
 import { SessionPrompt } from "./prompt"
@@ -102,17 +97,8 @@ export const defaultLayer = layer.pipe(
 )
 
 const sessions = LayerNode.make(
-  Layer.fresh(SessionV2.layer).pipe(
-    Layer.provide(SessionExecutionLocal.defaultLayer),
-    Layer.provide(SessionStore.defaultLayer),
-    Layer.provide(SessionProjector.defaultLayer),
-    Layer.provide(EventV2.defaultLayer),
-    Layer.provide(Database.defaultLayer),
-    Layer.provide(ProjectV2.defaultLayer),
-    Layer.provide(LocationServiceMap.layer),
-    Layer.orDie,
-  ),
-  [],
+  sessionServices,
+  [locationServiceMapNode],
 )
 const control = LayerNode.make(CoreSessionControl.layer, [SessionRuntime.node, sessions])
 

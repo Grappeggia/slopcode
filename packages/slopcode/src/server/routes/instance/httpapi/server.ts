@@ -60,7 +60,11 @@ import { ModelsDev } from "@slopcode-ai/core/models-dev"
 import { Npm } from "@slopcode-ai/core/npm"
 import { ProjectV2 } from "@slopcode-ai/core/project"
 import { ProjectCopy } from "@slopcode-ai/core/project/copy"
-import { LocationServiceMap, withPluginHost } from "@slopcode-ai/core/location-layer"
+import {
+  LocationServiceMap,
+  node as locationServiceMapNode,
+  withPluginHost,
+} from "@slopcode-ai/core/location-layer"
 import { PluginPackage } from "@slopcode-ai/core/plugin/package"
 import { PtyTicket } from "@slopcode-ai/core/pty/ticket"
 import { Ripgrep } from "@slopcode-ai/core/ripgrep"
@@ -304,7 +308,11 @@ export function createRoutes(
       MoveSession.defaultLayer,
       HttpServer.layerServices,
     ]),
-    Layer.provide(LayerNode.buildLayer(app)),
+    Layer.provide(
+      LayerNode.buildLayer(app, {
+        replacements: [LayerNode.replace(locationServiceMapNode, locationLayer)],
+      }),
+    ),
     Layer.provide(locationLayer),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provide(Observability.layer),

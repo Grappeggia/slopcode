@@ -18,7 +18,7 @@ import { Permission } from "@/permission"
 import { Skill } from "@/skill"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { Location } from "@slopcode-ai/core/location"
-import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
+import { LocationServiceMap, node as locationServiceMapNode } from "@slopcode-ai/core/location-layer"
 import { PluginBoot } from "@slopcode-ai/core/plugin/boot"
 import { Reference } from "@slopcode-ai/core/reference"
 
@@ -109,8 +109,6 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(Layer.provide(Skill.defaultLayer), Layer.provide(LocationServiceMap.layer))
-
-const locationServiceMapNode = LayerNode.make(LocationServiceMap.layer, [])
 
 export const node = LayerNode.make(layer, [Skill.node, locationServiceMapNode])
 
