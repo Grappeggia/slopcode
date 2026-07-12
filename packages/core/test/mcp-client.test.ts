@@ -233,6 +233,49 @@ it.live("uses OAuth bearer precedence and generated headers on real SSE traffic"
   ),
 )
 
+it.live("claims exact V1 credentials and uses them for authenticated transport", () =>
+  Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((tmp) =>
+      Effect.acquireRelease(Effect.promise(server), (fixture) => Effect.promise(fixture.close)).pipe(
+        Effect.flatMap((fixture) => Effect.scoped(Effect.gen(function* () {
+          const endpoint = `${fixture.url}/mcp`
+          const legacy = path.join(tmp.path, "mcp-auth.json")
+          const source = JSON.stringify({
+            version: 2,
+            entries: {
+              [JSON.stringify([tmp.path, "legacy-connect"])]: {
+                identity: { instance: tmp.path, name: "legacy-connect" },
+                servers: { [endpoint]: {
+                  tokens: { accessToken: "claimed-access" },
+                  clientInfo: { clientId: "claimed-client", clientSecret: "claimed-secret" },
+                } },
+              },
+            },
+          })
+          yield* Effect.promise(() => Bun.write(legacy, source))
+          const store = MCPOAuthStore.make({ data: tmp.path, legacy })
+          const context = yield* Layer.build(MCPClient.layerWith(store))
+          const client = yield* Context.get(context, MCPClient.Service).connect({
+            name: "legacy-connect",
+            directory: tmp.path,
+            timeout: 5_000,
+            config: new ConfigMCP.Remote({
+              type: "remote",
+              url: endpoint,
+              oauth: { client_id: "claimed-client", client_secret: "claimed-secret" },
+            }),
+          })
+          expect((yield* Effect.promise(() => client.list(undefined, 5_000))).tools.map((tool) => tool.name)).toContain("echo")
+          expect(fixture.headers).toContain("Bearer claimed-access")
+          expect((yield* store.get({ directory: tmp.path, name: "legacy-connect", endpoint })).claim).toBe("v1-version-2")
+          expect(yield* Effect.promise(() => Bun.file(legacy).text())).toBe(source)
+          yield* Effect.promise(() => client.close())
+        }))),
+      ),
+    ),
+  ),
+)
+
 it.live("fails auth-required before network or store mutation when credentials are unusable", () =>
   Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
     Effect.flatMap((tmp) =>

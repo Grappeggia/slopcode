@@ -1317,6 +1317,7 @@ let authChange: Parameters<MCPOAuth.Interface["onChange"]>[0] | undefined
 let authReset = (_target: MCPOAuthStore.Target) => Effect.void
 const authStore: MCPOAuthStore.Interface = {
   get: () => Effect.succeed({}),
+  claimLegacy: () => Effect.succeed(false),
   targets: () => Effect.succeed([]),
   update: (_target, change) => Effect.succeed(change({})),
   remove: () => Effect.void,
