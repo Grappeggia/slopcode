@@ -262,3 +262,81 @@ Result: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
 ### Re-Review Concerns
 
 None.
+
+## Final Review Replacement Fixes
+
+### Findings Resolved
+
+- Candidate `tools/list`, `prompts/list`, and `resources/list` discovery now consistently uses the staged replacement timeout while active config and timeout remain unchanged until publication.
+- Enabled-to-disabled reload atomically hides tools, prompts, and resources, publishes disabled status/config, and then awaits old pending/client cleanup. Slow close therefore cannot expose stale catalogs.
+- Every successful replacement installs its complete tool snapshot. A content-only replacement installs an empty registration, removing old tools before the new client and content catalogs publish and before the old client closes.
+
+### Final Review RED Evidence
+
+The committed tests were replayed against pre-fix commit `c916abac6b` in an isolated worktree.
+
+Command:
+
+```text
+cd packages/core && bun test test/mcp-service-review.test.ts
+```
+
+Result: `18 pass`, `3 fail`, `79 expect() calls`, 1 file. The deterministic failures were:
+
+- Expected staged tool-list timeout `222`; received active timeout `111`.
+- Expected old client slow-close cleanup to start during enabled-to-disabled reload; received `false` while stale runtime remained visible.
+- Expected no registered tools after tool-to-content-only replacement; received stale `contentOnly_old`.
+
+The RED tests were committed first in `c916abac6b`.
+
+### Final Review GREEN Evidence
+
+Focused command:
+
+```text
+cd packages/core && bun test test/mcp-content.test.ts test/mcp-client.test.ts test/mcp.test.ts test/mcp-review.test.ts test/mcp-service-review.test.ts test/session-prompt.test.ts
+```
+
+Result: `82 pass`, `0 fail`, `353 expect() calls`, 6 files.
+
+Broad verification:
+
+```text
+cd packages/core && bun test
+```
+
+Result: `1373 pass`, `0 fail`, `4129 expect() calls`, 149 files.
+
+```text
+cd packages/codemode && bun test
+```
+
+Result: `254 pass`, `0 fail`, `744 expect() calls`, 7 files.
+
+```text
+cd packages/core && bun run typecheck
+```
+
+Result: exit 0, `tsgo --noEmit`.
+
+```text
+cd packages/server && bun run typecheck
+```
+
+Result: exit 0, `tsgo --noEmit`.
+
+```text
+bun install --frozen-lockfile
+```
+
+Result: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+
+### Final Review Commits
+
+- `c916abac6b` `test(core): cover final MCP replacement gaps`
+- `00327390d8` `fix(core): complete MCP replacement transitions`
+- Report update: the following `docs:` commit containing this section.
+
+### Final Review Concerns
+
+None.
