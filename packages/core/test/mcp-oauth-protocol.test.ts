@@ -212,6 +212,11 @@ describe("MCP OAuth protocol boundary", () => {
             const store = MCPOAuthStore.make({ data: tmp.path })
             const target = { directory: tmp.path, name: "initializing", endpoint: "https://example.com/mcp" }
             yield* store.update(target, () => ({
+              compatibility: MCPOAuthProvider.compatibility(
+                target.endpoint,
+                { client_id: "static" },
+                "http://127.0.0.1:19876/mcp/oauth/callback",
+              ),
               attempts: {
                 initializing: {
                   state: "not-returned",
@@ -558,6 +563,11 @@ describe("MCP OAuth protocol boundary", () => {
                 const target = { directory: tmp.path, name: "recovered-failure", endpoint: `${fixture.url}/mcp` }
                 const store = MCPOAuthStore.make({ data: tmp.path })
                 yield* store.update(target, () => ({
+                  compatibility: MCPOAuthProvider.compatibility(
+                    target.endpoint,
+                    { client_id: "static-client" },
+                    `http://127.0.0.1:${port}/mcp/oauth/callback`,
+                  ),
                   attempts: {
                     recovered: {
                       state: "recovered-state",
@@ -580,7 +590,7 @@ describe("MCP OAuth protocol boundary", () => {
                 const oauth = Context.get(context, MCPOAuth.Service)
                 const changes: Array<{ status: "failed"; code: string }> = []
                 yield* oauth.onChange((_target, status) => changes.push(status))
-                yield* oauth.recover({ target, config: { client_id: "static-client" } })
+                yield* oauth.recover({ target, config: { client_id: "static-client", callback_port: port } })
                 expect((yield* Effect.promise(() => fetch(
                   `http://127.0.0.1:${port}/mcp/oauth/callback?state=recovered-state&code=bad`,
                 ))).status).toBe(400)
@@ -700,7 +710,13 @@ describe("MCP OAuth protocol boundary", () => {
             reserve.stop(true)
             const target = { directory: tmp.path, name: "timer", endpoint: "https://example.com/mcp" }
             const store = MCPOAuthStore.make({ data: tmp.path })
-            yield* store.update(target, () => ({ attempts: { timer: {
+            yield* store.update(target, () => ({
+              compatibility: MCPOAuthProvider.compatibility(
+                target.endpoint,
+                { client_id: "static" },
+                `http://127.0.0.1:${port}/mcp/oauth/callback`,
+              ),
+              attempts: { timer: {
               state: "timer-state",
               verifier: "timer-verifier",
               authorization: "https://auth.example/authorize",
@@ -709,7 +725,8 @@ describe("MCP OAuth protocol boundary", () => {
               created: Date.now(),
               expires: Date.now() + 80,
               phase: "pending",
-            } } }))
+              } },
+            }))
             const context = yield* Layer.build(
               MCPOAuth.layer.pipe(
                 Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
@@ -719,7 +736,7 @@ describe("MCP OAuth protocol boundary", () => {
             const oauth = Context.get(context, MCPOAuth.Service)
             const changes: Array<{ status: "failed"; code: string }> = []
             yield* oauth.onChange((_target, status) => changes.push(status))
-            yield* oauth.recover({ target, config: { client_id: "static" } })
+            yield* oauth.recover({ target, config: { client_id: "static", callback_port: port } })
             yield* Effect.sleep("150 millis")
             expect((yield* store.findAttempt("timer"))?.attempt).toMatchObject({ phase: "expired", error: "attempt-expired" })
             expect(changes).toEqual([{ status: "failed", code: "attempt-expired" }])
