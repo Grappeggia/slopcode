@@ -26,6 +26,7 @@ import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionFormat } from "@slopcode-ai/core/session/format"
+import { SessionCompaction } from "@slopcode-ai/core/session/compaction"
 import { FileAttachment, Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
@@ -718,6 +719,89 @@ const catalogModel = (
     limit: { context: 1_050_000, input: 922_000, output: 128_000 },
   })
 describe("SessionRunnerLLM", () => {
+  const protocols = ["openai-responses", "openai-chat", "anthropic", "gemini", "bedrock"] as const
+  const finalSequence = (id: string, input: string, value?: unknown): LLMEvent[] => [
+    LLMEvent.toolInputStart({ id, name: "final_output" }),
+    LLMEvent.toolInputDelta({ id, name: "final_output", text: input.slice(0, Math.ceil(input.length / 2)) }),
+    LLMEvent.toolInputDelta({ id, name: "final_output", text: input.slice(Math.ceil(input.length / 2)) }),
+    LLMEvent.toolInputEnd({ id, name: "final_output" }),
+    ...(value === undefined
+      ? [LLMEvent.toolInputError({ id, name: "final_output", reason: "invalid-json" })]
+      : [LLMEvent.toolCall({ id, name: "final_output", input: value })]),
+  ]
+
+  for (const protocol of protocols) {
+    it.effect(`suppresses the complete ${protocol} final_output lifecycle`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const db = (yield* Database.Service).db
+        responses = [finalSequence(`${protocol}-valid`, '{"value":{"answer":42}}', { value: { answer: 42 } })]
+        yield* session.prompt({
+          sessionID,
+          prompt: new Prompt({
+            text: `${protocol} valid final`,
+            format: {
+              type: "json_schema",
+              schema: { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] },
+              retry_count: 0,
+            },
+          }),
+          resume: false,
+        })
+
+        yield* session.resume(sessionID)
+
+        const messages = yield* session.messages({ sessionID, order: "asc" })
+        const assistant = messages.findLast((message) => message.type === "assistant")
+        const rows = yield* db
+          .select({ type: EventTable.type, data: EventTable.data })
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, sessionID))
+          .orderBy(asc(EventTable.seq))
+          .pipe(Effect.orDie)
+        expect(assistant).toMatchObject({ structured: { answer: 42 }, content: [] })
+        expect(SessionCompaction.serializeMessage(assistant!)).toBe('[Assistant structured]: {"answer":42}')
+        expect(rows.filter((row) => row.type.includes(".tool."))).toEqual([])
+        expect(JSON.stringify({ messages, rows })).not.toContain("final_output")
+        expect(JSON.stringify({ messages, rows })).not.toContain('{"value":{"answer":42}}')
+      }),
+    )
+
+    it.effect(`suppresses the malformed ${protocol} final_output lifecycle`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const db = (yield* Database.Service).db
+        responses = [finalSequence(`${protocol}-bad`, "{private-malformed-payload")]
+        yield* session.prompt({
+          sessionID,
+          prompt: new Prompt({
+            text: `${protocol} malformed final`,
+            format: { type: "json_schema", schema: { type: "number" }, retry_count: 0 },
+          }),
+          resume: false,
+        })
+
+        yield* session.resume(sessionID)
+
+        const messages = yield* session.messages({ sessionID, order: "asc" })
+        const assistant = messages.findLast((message) => message.type === "assistant")
+        const rows = yield* db
+          .select({ type: EventTable.type, data: EventTable.data })
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, sessionID))
+          .orderBy(asc(EventTable.seq))
+          .pipe(Effect.orDie)
+        expect(assistant).toMatchObject({ structuredError: { reason: "invalid-json" }, content: [] })
+        expect(SessionCompaction.serializeMessage(assistant!)).toContain("[Assistant structured error]")
+        expect(rows.filter((row) => row.type.includes(".tool."))).toEqual([])
+        expect(JSON.stringify({ messages, rows })).not.toContain("final_output")
+        expect(JSON.stringify({ messages, rows })).not.toContain("private-malformed-payload")
+      }),
+    )
+  }
+
   it.effect("terminates a structured turn through the reserved direct final tool", () =>
     Effect.gen(function* () {
       yield* setup
