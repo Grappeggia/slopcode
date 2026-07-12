@@ -53,6 +53,9 @@ import { SystemContextBuiltIns } from "./system-context/builtins"
 import { FetchHttpClient } from "effect/unstable/http"
 import { MCP } from "./mcp"
 import { MCPClient } from "./mcp/client"
+import { MCPOAuth } from "./mcp/oauth"
+import { MCPOAuthCallback } from "./mcp/oauth-callback"
+import { MCPOAuthStore } from "./mcp/oauth-store"
 
 export const dependencies = [
   Project.defaultLayer,
@@ -75,7 +78,6 @@ export const dependencies = [
   FetchHttpClient.layer,
   ToolOutputStore.defaultCleanupLayer,
   ApplicationTools.layer,
-  MCPClient.layer,
 ] as const
 
 export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("@slopcode/example/LocationServiceMap", {
@@ -131,8 +133,15 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       // Discovery starts only after application/built-in Location tools exist.
       Layer.provide(builtInTools),
     )
-    const mcp = MCP.layer.pipe(
+    const oauthStore = MCPOAuthStore.layer
+    const oauthCallback = MCPOAuthCallback.layer
+    const oauth = MCPOAuth.layer.pipe(Layer.provide(oauthStore), Layer.provide(oauthCallback))
+    const mcpClient = MCPClient.layer.pipe(Layer.provide(oauthStore))
+    const mcp = MCP.locationLayer.pipe(
       Layer.provide(services),
+      Layer.provide(oauthStore),
+      Layer.provide(oauth),
+      Layer.provide(mcpClient),
       // MCP has the final Location registration precedence after plugins.
       Layer.provide(pluginTools),
     )
@@ -161,6 +170,10 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       runner,
       builtInTools,
       pluginTools,
+      oauthStore,
+      oauthCallback,
+      oauth,
+      mcpClient,
       mcp,
       referenceGuidance,
       projectCopyRefresh,

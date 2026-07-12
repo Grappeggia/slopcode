@@ -2,6 +2,7 @@ export * as ConfigMCP from "./mcp"
 
 import { Schema } from "effect"
 import { PositiveInt } from "../schema"
+import { MCPOAuthStore } from "../mcp/oauth-store"
 
 export class Local extends Schema.Class<Local>("ConfigV2.MCP.Local")({
   type: Schema.Literal("local"),
@@ -18,7 +19,11 @@ const redirect = Schema.String.check(
   Schema.makeFilter((value) => {
     try {
       const url = new URL(value)
-      return (url.protocol === "http:" || url.protocol === "https:") && !!url.hostname && !url.username && !url.password && !url.hash
+      return (url.protocol === "http:" || url.protocol === "https:") &&
+        !!url.hostname &&
+        !url.username &&
+        !url.password &&
+        !url.hash
         ? undefined
         : "MCP OAuth redirect URI is invalid"
     } catch {
@@ -43,7 +48,16 @@ export const OAuth = Schema.Struct({
 
 export class Remote extends Schema.Class<Remote>("ConfigV2.MCP.Remote")({
   type: Schema.Literal("remote"),
-  url: Schema.String,
+  url: Schema.String.check(
+    Schema.makeFilter((value) => {
+      try {
+        MCPOAuthStore.normalizeEndpoint(value)
+        return undefined
+      } catch {
+        return "MCP remote endpoint is invalid"
+      }
+    }),
+  ),
   headers: Schema.Record(Schema.String, Schema.String).pipe(Schema.optional),
   oauth: Schema.Union([OAuth, Schema.Literal(false)]).pipe(Schema.optional),
   disabled: Schema.Boolean.pipe(Schema.optional),

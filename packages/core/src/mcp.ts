@@ -206,6 +206,18 @@ const baseLayer = Layer.effect(
       }
     }
 
+    yield* Effect.forEach(
+      servers.values(),
+      (server) => {
+        const target = authTarget(server)
+        if (!target || server.config.type !== "remote") return Effect.void
+        return oauth
+          .recover({ target, config: typeof server.config.oauth === "object" ? server.config.oauth : {} })
+          .pipe(Effect.ignore)
+      },
+      { discard: true },
+    )
+
     // Empty lifetime anchors reserve config order even while a server is disabled,
     // disconnected, unavailable, or replacing its current discovered tools.
     const anchor = (server: Server) =>
@@ -870,6 +882,8 @@ export const layer = baseLayer.pipe(
   Layer.provide(oauthLayer),
   Layer.provide(MCPOAuthStore.layer.pipe(Layer.provide(Global.defaultLayer))),
 )
+
+export const locationLayer = baseLayer
 
 function discover(client: Connection, timeout: number) {
   return Effect.tryPromise({

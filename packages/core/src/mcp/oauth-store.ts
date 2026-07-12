@@ -301,9 +301,19 @@ function validData(value: unknown): value is Data {
       )
         return false
       if (!finite(entry.tokens.expires_in) || !finite(entry.tokens.expires_at)) return false
+      for (const field of ["refresh_token", "scope", "id_token"])
+        if (entry.tokens[field] !== undefined && typeof entry.tokens[field] !== "string") return false
     }
-    if (entry.client !== undefined && (!record(entry.client) || typeof entry.client.client_id !== "string"))
-      return false
+    if (entry.client !== undefined) {
+      if (!record(entry.client) || typeof entry.client.client_id !== "string") return false
+      if (entry.client.client_secret !== undefined && typeof entry.client.client_secret !== "string") return false
+      if (!finite(entry.client.client_id_issued_at) || !finite(entry.client.client_secret_expires_at)) return false
+      if (
+        entry.client.redirect_uris !== undefined &&
+        (!Array.isArray(entry.client.redirect_uris) || !entry.client.redirect_uris.every(web))
+      )
+        return false
+    }
     if (entry.discovery !== undefined) {
       if (!record(entry.discovery) || !web(entry.discovery.authorizationServerUrl)) return false
       for (const field of ["resourceMetadataUrl"])
@@ -314,8 +324,22 @@ function validData(value: unknown): value is Data {
         (!record(metadata) || !web(metadata.authorization_endpoint) || !web(metadata.token_endpoint))
       )
         return false
+      const resource = entry.discovery.resourceMetadata
+      if (resource !== undefined && (!record(resource) || !web(resource.resource))) return false
     }
-    if (entry.attempts !== undefined && !record(entry.attempts)) return false
+    if (entry.attempts !== undefined) {
+      if (!record(entry.attempts)) return false
+      const phases = new Set(["pending", "received", "exchanging", "complete", "cancelled", "expired", "failed"])
+      for (const attempt of Object.values(entry.attempts)) {
+        if (!record(attempt)) return false
+        for (const field of ["state", "verifier", "code", "error"])
+          if (attempt[field] !== undefined && typeof attempt[field] !== "string") return false
+        if (attempt.redirect !== undefined && !web(attempt.redirect)) return false
+        if (attempt.mode !== undefined && attempt.mode !== "auto" && attempt.mode !== "manual") return false
+        if (!finite(attempt.created) || !finite(attempt.expires)) return false
+        if (attempt.phase !== undefined && !phases.has(attempt.phase as string)) return false
+      }
+    }
     return true
   })
 }

@@ -29,6 +29,7 @@ import { InstallationVersion } from "../installation/version"
 import type { WorkspaceV2 } from "../workspace"
 import { MCPOAuthProvider } from "./oauth-provider"
 import { MCPOAuthStore } from "./oauth-store"
+import { Flock } from "../util/flock"
 
 export interface Tool extends Omit<SDKTool, "inputSchema" | "outputSchema"> {
   readonly inputSchema: Readonly<Record<string, unknown>>
@@ -308,8 +309,21 @@ export const layer = Layer.effect(
             const entry = await Effect.runPromise(store.get(target))
             if (entry.tokens?.expires_at !== undefined && entry.tokens.expires_at <= Date.now() / 1000 + 60) {
               if (!entry.tokens.refresh_token) throw new AuthRequired()
-              const result = await auth(provider, { serverUrl: url, fetchFn: network(url, configured, true, signal) })
-              if (result !== "AUTHORIZED") throw new AuthRequired()
+              await Flock.withLock(
+                `mcp-oauth-refresh:${JSON.stringify(target)}`,
+                async () => {
+                  const latest = await Effect.runPromise(store.get(target))
+                  if (latest.tokens?.expires_at === undefined || latest.tokens.expires_at > Date.now() / 1000 + 60)
+                    return
+                  if (!latest.tokens.refresh_token) throw new AuthRequired()
+                  const result = await auth(provider, {
+                    serverUrl: url,
+                    fetchFn: network(url, configured, true, signal),
+                  })
+                  if (result !== "AUTHORIZED") throw new AuthRequired()
+                },
+                { signal },
+              )
             }
           }
           const fetcher = network(url, configured, enabled, signal)

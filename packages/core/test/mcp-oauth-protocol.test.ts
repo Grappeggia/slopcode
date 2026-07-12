@@ -3,8 +3,10 @@ import { ConfigMCP } from "@slopcode-ai/core/config/mcp"
 import { MCPClient } from "@slopcode-ai/core/mcp/client"
 import { MCPOAuthProvider } from "@slopcode-ai/core/mcp/oauth-provider"
 import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
+import { MCPOAuth } from "@slopcode-ai/core/mcp/oauth"
+import { MCPOAuthCallback } from "@slopcode-ai/core/mcp/oauth-callback"
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js"
-import { Effect, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { it } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -84,6 +86,72 @@ describe("MCP OAuth protocol boundary", () => {
               expect(fixture.discovery).toBe(1)
               expect(fixture.grants).toEqual(["authorization_code", "refresh_token"])
             }),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("exposes manual begin, status, single-use completion, cancellation, and removal", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const store = MCPOAuthStore.make({ data: tmp.path })
+                const context = yield* Layer.build(
+                  MCPOAuth.layer.pipe(
+                    Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                    Layer.provide(MCPOAuthCallback.layer),
+                  ),
+                )
+                const oauth = Context.get(context, MCPOAuth.Service)
+                const target = { directory: tmp.path, name: "controls", endpoint: `${fixture.url}/mcp` }
+                const config = {
+                  client_id: "static-client",
+                  scope: "fallback-scope",
+                  redirect_uri: "https://client.example/callback",
+                }
+                const started = yield* oauth.begin({ target, config, mode: "auto" })
+                expect(started.status).toBe("authorizing")
+                if (started.status !== "authorizing") throw new Error("authorization did not start")
+                expect(started.mode).toBe("manual")
+                const url = new URL(started.authorizationUrl)
+                fixture.challenge = url.searchParams.get("code_challenge")!
+                expect(yield* oauth.status(target)).toMatchObject({
+                  status: "authorizing",
+                  attempts: [{ attemptID: started.attemptID }],
+                })
+                expect(
+                  yield* oauth.complete({
+                    target,
+                    config,
+                    attemptID: started.attemptID,
+                    code: "authorization-code",
+                    state: url.searchParams.get("state")!,
+                  }),
+                ).toEqual({ status: "connected" })
+                expect(yield* oauth.status(target)).toEqual({ status: "connected" })
+                expect(
+                  yield* oauth
+                    .complete({
+                      target,
+                      config,
+                      attemptID: started.attemptID,
+                      code: "authorization-code",
+                      state: url.searchParams.get("state")!,
+                    })
+                    .pipe(Effect.flip),
+                ).toMatchObject({ code: "attempt-used" })
+                yield* oauth.remove(target)
+                expect(yield* oauth.status(target)).toEqual({ status: "auth-required" })
+                const cancelled = yield* oauth.begin({ target, config, mode: "manual" })
+                if (cancelled.status !== "authorizing") throw new Error("authorization did not restart")
+                yield* oauth.cancel(cancelled.attemptID)
+                expect(yield* oauth.status(target)).toEqual({ status: "auth-required" })
+              }),
+            ),
           ),
         ),
       ),
