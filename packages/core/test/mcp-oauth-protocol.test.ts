@@ -663,36 +663,37 @@ describe("MCP OAuth protocol boundary", () => {
             const port = reserve()
             const otherPort = reserve()
             const store = MCPOAuthStore.make({ data: tmp.path })
-            const context = yield* Layer.build(MCPOAuth.layerWith({ maxAge: 2_000 }).pipe(
+            const service = () => MCPOAuth.layerWith({ maxAge: 2_000, observeInterval: 10 }).pipe(
               Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
               Layer.provide(MCPOAuthCallback.layer),
-            ))
-            const oauth = Context.get(context, MCPOAuth.Service)
+            )
+            const firstService = Context.get(yield* Layer.build(service()), MCPOAuth.Service)
+            const secondService = Context.get(yield* Layer.build(service()), MCPOAuth.Service)
             const target = { directory: tmp.path, name: "siblings", endpoint: `${fixture.url}/mcp` }
             const config = { client_id: "static-client", callback_port: port }
-            const first = yield* oauth.begin({ target, config })
-            const second = yield* oauth.begin({ target, config })
+            const first = yield* firstService.begin({ target, config })
+            const second = yield* secondService.begin({ target, config })
             const otherTarget = { directory: tmp.path, name: "unrelated", endpoint: `${fixture.url}/mcp` }
-            const other = yield* oauth.begin({ target: otherTarget, config: { ...config, callback_port: otherPort } })
+            const other = yield* firstService.begin({ target: otherTarget, config: { ...config, callback_port: otherPort } })
             if (first.status !== "authorizing" || second.status !== "authorizing" || other.status !== "authorizing")
               throw new Error("authorization did not start")
-            const authorization = new URL(first.authorizationUrl)
+            const authorization = new URL(second.authorizationUrl)
             fixture.challenge = authorization.searchParams.get("code_challenge")!
             expect((yield* Effect.promise(() => fetch(
               `http://127.0.0.1:${port}/mcp/oauth/callback?state=${authorization.searchParams.get("state")}&code=authorization-code`,
             ))).status).toBe(200)
             yield* Effect.sleep("30 millis")
-            expect((yield* store.findAttempt(first.attemptID))?.attempt.phase).toBe("complete")
-            expect((yield* store.findAttempt(second.attemptID))?.attempt.phase).toBe("cancelled")
+            expect((yield* store.findAttempt(second.attemptID))?.attempt.phase).toBe("complete")
+            expect((yield* store.findAttempt(first.attemptID))?.attempt.phase).toBe("cancelled")
             expect((yield* store.findAttempt(other.attemptID))?.attempt.phase).toBe("pending")
             const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
             expect(reused.port).toBe(port)
             reused.stop(true)
             expect(yield* Effect.promise(() => fetch(
-              `http://127.0.0.1:${port}/mcp/oauth/callback?state=${new URL(second.authorizationUrl).searchParams.get("state")}&code=replay`,
+              `http://127.0.0.1:${port}/mcp/oauth/callback?state=${new URL(first.authorizationUrl).searchParams.get("state")}&code=replay`,
             ).then(() => false, () => true))).toBe(true)
             yield* Effect.sleep("2100 millis")
-            expect((yield* store.findAttempt(second.attemptID))?.attempt.phase).toBe("cancelled")
+            expect((yield* store.findAttempt(first.attemptID))?.attempt.phase).toBe("cancelled")
             expect((yield* store.findAttempt(other.attemptID))?.attempt.phase).toBe("expired")
           }))),
         ),

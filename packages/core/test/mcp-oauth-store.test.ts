@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
+import { MCPOAuthProvider } from "@slopcode-ai/core/mcp/oauth-provider"
 import { Flock } from "@slopcode-ai/core/util/flock"
 import { WorkspaceV2 } from "@slopcode-ai/core/workspace"
 import { Effect, Fiber } from "effect"
@@ -128,19 +129,38 @@ describe("MCP OAuth store", () => {
           })
           yield* Effect.promise(() => Bun.write(legacy, raw))
           const store = MCPOAuthStore.make({ data: tmp.path, legacy })
-          const entry = yield* store.get({ directory: "/workspace", name: "server", endpoint })
+          const target = { directory: "/workspace", name: "server", endpoint }
+          expect(yield* store.get(target)).toEqual({})
+          expect(yield* store.claimLegacy(target, {
+            compatibility: "b".repeat(64),
+            clientID: "other-client",
+            clientSecret: "legacy-secret",
+          })).toBe(false)
+          expect(yield* store.get(target)).toEqual({})
+          const compatibility = MCPOAuthProvider.compatibility(
+            endpoint,
+            { client_id: "legacy-client", client_secret: "legacy-secret" },
+            "http://127.0.0.1:19876/mcp/oauth/callback",
+          )
+          expect(yield* store.claimLegacy(target, {
+            compatibility,
+            clientID: "legacy-client",
+            clientSecret: "legacy-secret",
+          })).toBe(true)
+          const entry = yield* store.get(target)
           expect(entry.tokens?.access_token).toBe("legacy-access")
           expect(entry.client?.client_id).toBe("legacy-client")
+          expect(entry.compatibility).toBe(compatibility)
           expect(entry.attempts).toBeUndefined()
           expect(yield* Effect.promise(() => Bun.file(legacy).text())).toBe(raw)
           expect(
-            (yield* store.get({
+            (yield* store.claimLegacy({
               directory: "/workspace",
               workspaceID: WorkspaceV2.ID.make("wrk_no_claim"),
               name: "server",
               endpoint,
-            })).tokens,
-          ).toBeUndefined()
+            }, { compatibility, clientID: "legacy-client", clientSecret: "legacy-secret" })),
+          ).toBe(false)
         }),
       ),
     ),
