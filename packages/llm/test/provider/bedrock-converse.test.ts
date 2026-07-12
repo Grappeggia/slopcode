@@ -260,7 +260,12 @@ describe("Bedrock Converse route", () => {
         ["contentBlockStop", { contentBlockIndex: 0 }],
         ["messageStop", { stopReason: "tool_use" }],
       )
-      const response = yield* LLMClient.generate(baseRequest).pipe(Effect.provide(fixedBytes(body)))
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(baseRequest, {
+          tools: [{ name: "final_output", description: "Return the final value", inputSchema: { type: "object" } }],
+          toolChoice: { type: "required" },
+        }),
+      ).pipe(Effect.provide(fixedBytes(body)))
 
       expect(response.events).toContainEqual({
         type: "tool-input-error",

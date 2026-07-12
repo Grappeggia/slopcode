@@ -372,7 +372,12 @@ describe("Gemini route", () => {
           },
         ],
       })
-      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          tools: [{ name: "final_output", description: "Return the final value", inputSchema: { type: "object" } }],
+          toolChoice: { type: "required" },
+        }),
+      ).pipe(Effect.provide(fixedResponse(body)))
 
       expect(response.events).toContainEqual({
         type: "tool-input-error",
