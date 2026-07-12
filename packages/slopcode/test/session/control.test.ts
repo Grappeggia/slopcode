@@ -46,11 +46,14 @@ const legacy = Layer.succeed(
   SessionPrompt.Service,
   SessionPrompt.Service.of({
     cancel: (id, coordinate) => {
-      const cancel = Effect.gen(function* () {
-        yield* legacyCancelGates.shift() ?? Effect.void
+      const cleanup = legacyCancelGates.shift() ?? Effect.void
+      const take = Effect.sync(() => {
         legacyCancelCalls.push(id)
       })
-      return coordinate ? coordinate(cancel) : cancel
+      return Effect.gen(function* () {
+        yield* coordinate ? coordinate(take) : take
+        yield* cleanup
+      })
     },
     prompt: (input, guard) =>
       Effect.gen(function* () {
@@ -444,17 +447,17 @@ describe("SessionControl", () => {
           })
           .pipe(Effect.forkChild)
         yield* Effect.yieldNow
-        expect(transition.pollUnsafe()).toBeUndefined()
-        expect(legacyCancelCalls).toEqual([])
-
-        yield* Deferred.succeed(release, undefined)
-        yield* Fiber.join(cancellation)
-        expect(legacyCancelCalls).toEqual([sessionID])
         expect(yield* Fiber.join(transition)).toMatchObject({
           owner: change === "owner" ? "v2" : "v1",
           state: change === "state" ? "migrating" : "ready",
           epoch: 1,
         })
+        expect(cancellation.pollUnsafe()).toBeUndefined()
+        expect(legacyCancelCalls).toEqual([sessionID])
+
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(cancellation)
+        expect(legacyCancelCalls).toEqual([sessionID])
       }),
     )
   }

@@ -1822,6 +1822,67 @@ it.instance(
 // Cancel semantics
 
 it.instance(
+  "coordinated cancel releases the database before awaiting runner finalizers",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, run, chat } = yield* boot()
+      const runtime = yield* SessionRuntime.Service
+      const { db } = yield* Database.Service
+      const running = yield* Deferred.make<void>()
+      const finalized = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const work = Deferred.succeed(running, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.ensuring(
+          db
+            .update(SessionTable)
+            .set({ title: "cancel-finalized" })
+            .where(eq(SessionTable.id, chat.id))
+            .run()
+            .pipe(
+              Effect.orDie,
+              Effect.andThen(Deferred.succeed(finalized, undefined)),
+              Effect.andThen(Deferred.await(release)),
+            ),
+        ),
+      )
+      const active = yield* run.ensureRunning(chat.id, Effect.die("interrupted"), work).pipe(Effect.forkChild)
+      yield* Deferred.await(running)
+      const current = yield* runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready" })
+      const cancellation = yield* prompt
+        .cancel(chat.id, (take) =>
+          runtime
+            .claim({ sessionID: chat.id, owner: "v1", state: "ready", epoch: current.epoch }, take)
+            .pipe(Effect.asVoid),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.await(finalized)
+      expect(cancellation.pollUnsafe()).toBeUndefined()
+      yield* prompt.cancel(chat.id)
+      const transition = yield* runtime.assign({
+        sessionID: chat.id,
+        state: "migrating",
+        expectedOwner: "v1",
+        expectedEpoch: current.epoch,
+      })
+      expect(transition).toMatchObject({ owner: "v1", state: "migrating", epoch: current.epoch + 1 })
+      expect(
+        yield* db.select({ title: SessionTable.title }).from(SessionTable).where(eq(SessionTable.id, chat.id)).get(),
+      ).toEqual({ title: "cancel-finalized" })
+
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(cancellation)
+      yield* Fiber.await(active)
+      yield* prompt.cancel(chat.id)
+      expect(
+        yield* db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, chat.id)).get(),
+      ).toEqual({ id: chat.id })
+    }),
+  5_000,
+)
+
+it.instance(
   "cancel interrupts loop and resolves with an assistant message",
   () =>
     Effect.gen(function* () {
