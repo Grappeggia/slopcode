@@ -15,6 +15,10 @@ import {
   type Resource as MCPResource,
   type Tool as MCPTool,
 } from "./mcp/client"
+import { MCPOAuth } from "./mcp/oauth"
+import { MCPOAuthCallback } from "./mcp/oauth-callback"
+import { MCPOAuthStore } from "./mcp/oauth-store"
+import { Global } from "./global"
 import { PermissionV2 } from "./permission"
 import { PluginV2 } from "./plugin"
 import { SessionEvent } from "./session/event"
@@ -41,6 +45,13 @@ export const Status = Schema.Union([
   Failed,
 ])
 export type Status = typeof Status.Type
+export type AuthStatus = MCPOAuth.AuthStatus
+export type BeginAuthResult = MCPOAuth.BeginResult
+export type AttemptID = MCPOAuth.AttemptID
+
+export class AuthNotFoundError extends Schema.TaggedErrorClass<AuthNotFoundError>()("MCP.AuthNotFoundError", {
+  server: Schema.String,
+}) {}
 
 export class DiscoveryError extends Schema.TaggedErrorClass<DiscoveryError>()("MCP.DiscoveryError", {
   server: Schema.String,
@@ -98,6 +109,18 @@ export interface Interface {
     readonly arguments?: Readonly<Record<string, string>>
   }) => Effect.Effect<Prompt, RequestError | ContentError>
   readonly readResource: (name: string) => Effect.Effect<Prompt, RequestError | ContentError>
+  readonly authStatus: (name: string) => Effect.Effect<AuthStatus, AuthNotFoundError | MCPOAuth.AuthError>
+  readonly beginAuth: (input: {
+    readonly name: string
+    readonly mode?: "auto" | "manual"
+  }) => Effect.Effect<BeginAuthResult, AuthNotFoundError | MCPOAuth.AuthError>
+  readonly completeAuth: (input: {
+    readonly attemptID: AttemptID
+    readonly code: string
+    readonly state: string
+  }) => Effect.Effect<AuthStatus, AuthNotFoundError | MCPOAuth.AuthError>
+  readonly cancelAuth: (attemptID: AttemptID) => Effect.Effect<void, MCPOAuth.AuthError>
+  readonly removeAuth: (name: string) => Effect.Effect<void, AuthNotFoundError | MCPOAuth.AuthError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCP") {}
@@ -129,7 +152,7 @@ type Prepared = {
   readonly closed: () => boolean
 }
 
-export const layer = Layer.effect(
+const baseLayer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
@@ -139,6 +162,8 @@ export const layer = Layer.effect(
     const plugin = yield* PluginV2.Service
     const permission = yield* PermissionV2.Service
     const events = yield* EventV2.Service
+    const oauth = yield* MCPOAuth.Service
+    const oauthStore = yield* MCPOAuthStore.Service
     const scope = yield* Scope.Scope
     const ready = yield* Deferred.make<void>()
     const effective = Effect.fnUntraced(function* () {
@@ -171,6 +196,15 @@ export const layer = Layer.effect(
     )
     const registrations = Semaphore.makeUnsafe(1)
     const operations = Semaphore.makeUnsafe(1)
+    const authTarget = (server: Server) => {
+      if (server.config.type !== "remote" || server.config.oauth === false) return
+      return {
+        directory: location.directory,
+        workspaceID: location.workspaceID,
+        name: server.name,
+        endpoint: MCPOAuthStore.normalizeEndpoint(server.config.url),
+      }
+    }
 
     // Empty lifetime anchors reserve config order even while a server is disabled,
     // disconnected, unavailable, or replacing its current discovered tools.
@@ -373,6 +407,7 @@ export const layer = Layer.effect(
         .connect({
           name: server.name,
           directory: location.directory,
+          workspaceID: location.workspaceID,
           timeout: target.timeout,
           config: target.config,
         })
@@ -610,6 +645,83 @@ export const layer = Layer.effect(
         )
         return yield* normalizeResources(found.server.name, found.entry.name, result)
       }),
+      authStatus: Effect.fn("MCP.authStatus")(function* (name: string) {
+        const server = servers.get(name)
+        if (!server) return yield* new AuthNotFoundError({ server: name })
+        const target = authTarget(server)
+        if (!target) return { status: "not-applicable" }
+        if (server.client) return { status: "connected" }
+        return yield* oauth.status(target)
+      }),
+      beginAuth: Effect.fn("MCP.beginAuth")(function* (input) {
+        const server = servers.get(input.name)
+        if (!server) return yield* new AuthNotFoundError({ server: input.name })
+        const target = authTarget(server)
+        if (!target || server.config.type !== "remote")
+          return yield* new MCPOAuth.AuthError({
+            code: "not-applicable",
+            server: input.name,
+            message: "MCP OAuth not-applicable",
+          })
+        if (server.client) return { status: "connected" }
+        const result = yield* oauth.begin({
+          target,
+          config: typeof server.config.oauth === "object" ? server.config.oauth : {},
+          mode: input.mode,
+        })
+        if (result.status === "connected") yield* operations.withPermits(1)(connectOne(server))
+        return result
+      }),
+      completeAuth: Effect.fn("MCP.completeAuth")(function* (input) {
+        const found = yield* oauthStore.findAttempt(input.attemptID).pipe(
+          Effect.mapError(
+            () =>
+              new MCPOAuth.AuthError({
+                code: "store",
+                attemptID: input.attemptID,
+                message: "MCP OAuth store",
+              }),
+          ),
+        )
+        if (!found)
+          return yield* new MCPOAuth.AuthError({
+            code: "attempt-invalid",
+            attemptID: input.attemptID,
+            message: "MCP OAuth attempt-invalid",
+          })
+        const server = servers.get(found.target.name)
+        if (!server) return yield* new AuthNotFoundError({ server: found.target.name })
+        const target = authTarget(server)
+        if (!target || JSON.stringify(target) !== JSON.stringify(found.target) || server.config.type !== "remote")
+          return yield* new MCPOAuth.AuthError({
+            code: "attempt-invalid",
+            attemptID: input.attemptID,
+            message: "MCP OAuth attempt-invalid",
+          })
+        const result = yield* oauth.complete({
+          ...input,
+          target,
+          config: typeof server.config.oauth === "object" ? server.config.oauth : {},
+        })
+        if (result.status === "connected") yield* operations.withPermits(1)(connectOne(server))
+        return server.client ? ({ status: "connected" } as const) : result
+      }),
+      cancelAuth: Effect.fn("MCP.cancelAuth")((attemptID) => oauth.cancel(attemptID)),
+      removeAuth: Effect.fn("MCP.removeAuth")(function* (name: string) {
+        const server = servers.get(name)
+        if (!server) return yield* new AuthNotFoundError({ server: name })
+        const target = authTarget(server)
+        if (!target)
+          return yield* new MCPOAuth.AuthError({
+            code: "not-applicable",
+            server: name,
+            message: "MCP OAuth not-applicable",
+          })
+        yield* operations.withPermits(1)(
+          server.lock.withPermits(1)(close(server).pipe(Effect.andThen(publish(server, { status: "disconnected" })))),
+        )
+        yield* oauth.remove(target)
+      }),
       connect: Effect.fn("MCP.connect")(function* (name?: string) {
         yield* operations.withPermits(1)(
           name === undefined ? connectAll() : servers.has(name) ? connectOne(servers.get(name)!) : Effect.void,
@@ -747,6 +859,16 @@ export const layer = Layer.effect(
     yield* service.connect().pipe(Effect.ensuring(Deferred.succeed(ready, undefined)), Effect.forkScoped)
     return service
   }),
+)
+
+const oauthLayer = MCPOAuth.layer.pipe(
+  Layer.provide(MCPOAuthCallback.layer),
+  Layer.provide(MCPOAuthStore.layer.pipe(Layer.provide(Global.defaultLayer))),
+)
+
+export const layer = baseLayer.pipe(
+  Layer.provide(oauthLayer),
+  Layer.provide(MCPOAuthStore.layer.pipe(Layer.provide(Global.defaultLayer))),
 )
 
 function discover(client: Connection, timeout: number) {

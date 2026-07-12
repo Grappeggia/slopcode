@@ -1,8 +1,10 @@
 export * as MCPOAuthCallback from "./oauth-callback"
 
 import { createServer, type Server } from "node:http"
+import { Context, Effect, Layer } from "effect"
 
-const SUCCESS = "<!doctype html><title>Authorization complete</title><p>Authorization complete. You may close this window.</p>"
+const SUCCESS =
+  "<!doctype html><title>Authorization complete</title><p>Authorization complete. You may close this window.</p>"
 const FAILURE = "<!doctype html><title>Authorization failed</title><p>Authorization could not be completed.</p>"
 const HEADERS = {
   "Content-Type": "text/html; charset=utf-8",
@@ -12,7 +14,19 @@ const HEADERS = {
   "Referrer-Policy": "no-referrer",
 }
 
-type Registration = { readonly path: string; readonly receive: (result: { code?: string; error?: true }) => Promise<void> }
+type Registration = {
+  readonly path: string
+  readonly receive: (result: { code?: string; error?: true }) => Promise<void>
+}
+
+export interface Interface extends Awaited<ReturnType<typeof make>> {}
+export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCPOAuthCallback") {}
+export const layer = Layer.effect(
+  Service,
+  Effect.acquireRelease(Effect.promise(make), (service) => Effect.promise(() => service.close())).pipe(
+    Effect.map(Service.of),
+  ),
+)
 
 export async function make() {
   const servers = new Map<number, { server: Server; refs: number }>()
@@ -76,7 +90,9 @@ export async function make() {
     register,
     close: async () => {
       states.clear()
-      await Promise.all([...servers.values()].map((entry) => new Promise<void>((resolve) => entry.server.close(() => resolve()))))
+      await Promise.all(
+        [...servers.values()].map((entry) => new Promise<void>((resolve) => entry.server.close(() => resolve()))),
+      )
       servers.clear()
     },
   }

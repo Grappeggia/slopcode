@@ -118,6 +118,7 @@ it.live("connects Streamable HTTP with configured headers and falls back to lega
             type: "remote",
             url: `${fixture.url}/mcp`,
             headers: { Authorization: "Bearer streamable" },
+            oauth: false,
           }),
         })
         expect(remote.transport).toBe("remote")
@@ -134,6 +135,7 @@ it.live("connects Streamable HTTP with configured headers and falls back to lega
             type: "remote",
             url: `${fixture.url}/sse`,
             headers: { Authorization: "Bearer sse" },
+            oauth: false,
           }),
         })
         expect(sse.transport).toBe("sse")

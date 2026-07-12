@@ -5,7 +5,8 @@ import { randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js"
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js"
-import { Effect, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
+import { Global } from "../global"
 import type { WorkspaceV2 } from "../workspace"
 import { Flock } from "../util/flock"
 
@@ -43,7 +44,12 @@ export type Entry = {
 }
 
 type Bucket = {
-  readonly identity: { readonly directory: string; readonly workspaceID?: string; readonly name: string; readonly endpoint: string }
+  readonly identity: {
+    readonly directory: string
+    readonly workspaceID?: string
+    readonly name: string
+    readonly endpoint: string
+  }
   readonly entry: Entry
 }
 
@@ -64,7 +70,20 @@ export interface Interface {
     scope: "all" | "client" | "tokens" | "verifier" | "discovery",
     attemptID?: string,
   ) => Effect.Effect<void, StoreError>
+  readonly findAttempt: (
+    attemptID: string,
+  ) => Effect.Effect<{ readonly target: Target; readonly attempt: Attempt } | undefined, StoreError>
 }
+
+export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCPOAuthStore") {}
+
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const global = yield* Global.Service
+    return Service.of(make({ data: global.data, legacy: path.join(global.data, "mcp-auth.json") }))
+  }),
+)
 
 export function normalizeEndpoint(value: string) {
   const url = (() => {
@@ -100,7 +119,8 @@ export function make(input: { readonly data: string; readonly legacy?: string })
   const ensure = async () => {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 })
     const info = await fs.lstat(dir)
-    if (!info.isDirectory() || info.isSymbolicLink()) throw new StoreError({ code: "unsafe", message: "MCP OAuth store path is unsafe" })
+    if (!info.isDirectory() || info.isSymbolicLink())
+      throw new StoreError({ code: "unsafe", message: "MCP OAuth store path is unsafe" })
     await fs.chmod(dir, 0o700)
   }
 
@@ -111,7 +131,8 @@ export function make(input: { readonly data: string; readonly legacy?: string })
       throw error
     })
     if (!info) return { version: 1, buckets: {} }
-    if (!info.isFile() || info.isSymbolicLink()) throw new StoreError({ code: "unsafe", message: "MCP OAuth store file is unsafe" })
+    if (!info.isFile() || info.isSymbolicLink())
+      throw new StoreError({ code: "unsafe", message: "MCP OAuth store file is unsafe" })
     await fs.chmod(file, 0o600)
     const raw: unknown = JSON.parse(await fs.readFile(file, "utf8"))
     if (!validData(raw)) throw new StoreError({ code: "invalid", message: "MCP OAuth store data is invalid" })
@@ -153,7 +174,10 @@ export function make(input: { readonly data: string; readonly legacy?: string })
       catch: (cause) =>
         cause instanceof StoreError
           ? cause
-          : new StoreError({ code: cause instanceof SyntaxError ? "invalid" : "io", message: "MCP OAuth store operation failed" }),
+          : new StoreError({
+              code: cause instanceof SyntaxError ? "invalid" : "io",
+              message: "MCP OAuth store operation failed",
+            }),
     })
 
   const update: Interface["update"] = (target, change) =>
@@ -165,7 +189,18 @@ export function make(input: { readonly data: string; readonly legacy?: string })
     })
 
   const get: Interface["get"] = (target) =>
-    transact(async (data) => ({ value: data.buckets[key(target)]?.entry ?? {} }))
+    transact(async (data) => {
+      const name = key(target)
+      const current = data.buckets[name]?.entry
+      if (current || target.workspaceID !== undefined || !input.legacy) return { value: current ?? {} }
+      const claimed = await legacy(input.legacy, identity(target))
+      if (!claimed) return { value: {} }
+      const entry = { ...claimed, claim: "v1-version-2" }
+      return {
+        data: { version: 1, buckets: { ...data.buckets, [name]: { identity: identity(target), entry } } },
+        value: entry,
+      }
+    })
 
   const remove: Interface["remove"] = (target) =>
     transact(async (data) => {
@@ -207,14 +242,40 @@ export function make(input: { readonly data: string; readonly legacy?: string })
       return { attempts }
     }).pipe(Effect.asVoid)
 
-  return { get, update, remove, saveTokens, invalidate }
+  const findAttempt: Interface["findAttempt"] = (attemptID) =>
+    transact(async (data) => {
+      const found = Object.values(data.buckets).find((bucket) => bucket.entry.attempts?.[attemptID])
+      return {
+        value: found
+          ? {
+              target: {
+                directory: found.identity.directory,
+                ...(found.identity.workspaceID === undefined
+                  ? {}
+                  : { workspaceID: found.identity.workspaceID as WorkspaceV2.ID }),
+                name: found.identity.name,
+                endpoint: found.identity.endpoint,
+              },
+              attempt: found.entry.attempts![attemptID]!,
+            }
+          : undefined,
+      }
+    })
+
+  return { get, update, remove, saveTokens, invalidate, findAttempt }
 }
 
 function web(value: unknown) {
   if (typeof value !== "string") return false
   try {
     const url = new URL(value)
-    return (url.protocol === "http:" || url.protocol === "https:") && !!url.hostname && !url.username && !url.password && !url.hash
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      !!url.hostname &&
+      !url.username &&
+      !url.password &&
+      !url.hash
+    )
   } catch {
     return false
   }
@@ -233,20 +294,85 @@ function validData(value: unknown): value is Data {
     if (id.workspaceID !== undefined && typeof id.workspaceID !== "string") return false
     const entry = candidate.entry
     if (entry.tokens !== undefined) {
-      if (!record(entry.tokens) || typeof entry.tokens.access_token !== "string" || typeof entry.tokens.token_type !== "string") return false
+      if (
+        !record(entry.tokens) ||
+        typeof entry.tokens.access_token !== "string" ||
+        typeof entry.tokens.token_type !== "string"
+      )
+        return false
       if (!finite(entry.tokens.expires_in) || !finite(entry.tokens.expires_at)) return false
     }
-    if (entry.client !== undefined && (!record(entry.client) || typeof entry.client.client_id !== "string")) return false
+    if (entry.client !== undefined && (!record(entry.client) || typeof entry.client.client_id !== "string"))
+      return false
     if (entry.discovery !== undefined) {
       if (!record(entry.discovery) || !web(entry.discovery.authorizationServerUrl)) return false
       for (const field of ["resourceMetadataUrl"])
         if (entry.discovery[field] !== undefined && !web(entry.discovery[field])) return false
       const metadata = entry.discovery.authorizationServerMetadata
-      if (metadata !== undefined && (!record(metadata) || !web(metadata.authorization_endpoint) || !web(metadata.token_endpoint))) return false
+      if (
+        metadata !== undefined &&
+        (!record(metadata) || !web(metadata.authorization_endpoint) || !web(metadata.token_endpoint))
+      )
+        return false
     }
     if (entry.attempts !== undefined && !record(entry.attempts)) return false
     return true
   })
+}
+
+async function legacy(file: string, target: ReturnType<typeof legacyIdentity>): Promise<Entry | undefined> {
+  const raw: unknown = await fs
+    .readFile(file, "utf8")
+    .then(JSON.parse)
+    .catch(() => undefined)
+  if (!record(raw) || raw.version !== 2 || !record(raw.entries)) return
+  const matches = Object.values(raw.entries).filter((value) => {
+    if (!record(value) || !record(value.identity) || !record(value.servers)) return false
+    return value.identity.instance === target.directory && value.identity.name === target.name
+  })
+  if (matches.length !== 1) return
+  const source = (matches[0] as { servers: Record<string, unknown> }).servers[target.endpoint]
+  if (!record(source)) return
+  const tokens = record(source.tokens)
+    ? {
+        access_token: source.tokens.accessToken,
+        token_type: "Bearer",
+        refresh_token: source.tokens.refreshToken,
+        scope: source.tokens.scope,
+        ...(finite(source.tokens.expiresAt) && source.tokens.expiresAt !== undefined
+          ? { expires_at: source.tokens.expiresAt }
+          : {}),
+      }
+    : undefined
+  const client = record(source.clientInfo)
+    ? {
+        client_id: source.clientInfo.clientId,
+        client_secret: source.clientInfo.clientSecret,
+        client_id_issued_at: source.clientInfo.clientIdIssuedAt,
+        client_secret_expires_at: source.clientInfo.clientSecretExpiresAt,
+      }
+    : undefined
+  if (
+    tokens &&
+    (typeof tokens.access_token !== "string" ||
+      (tokens.refresh_token !== undefined && typeof tokens.refresh_token !== "string"))
+  )
+    return
+  if (
+    client &&
+    (typeof client.client_id !== "string" ||
+      (client.client_secret !== undefined && typeof client.client_secret !== "string"))
+  )
+    return
+  if (!tokens && !client) return
+  return {
+    ...(tokens ? { tokens: tokens as Tokens } : {}),
+    ...(client ? { client: client as OAuthClientInformationMixed } : {}),
+  }
+}
+
+function legacyIdentity(target: Target) {
+  return { directory: target.directory, name: target.name, endpoint: normalizeEndpoint(target.endpoint) }
 }
 
 function record(value: unknown): value is Record<string, unknown> {

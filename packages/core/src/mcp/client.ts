@@ -2,6 +2,7 @@ export * as MCPClient from "./client"
 
 import path from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { auth, UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -21,9 +22,13 @@ import {
   type Resource as SDKResource,
   type Tool as SDKTool,
 } from "@modelcontextprotocol/sdk/types.js"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import type { ConfigMCP } from "../config/mcp"
+import { Global } from "../global"
 import { InstallationVersion } from "../installation/version"
+import type { WorkspaceV2 } from "../workspace"
+import { MCPOAuthProvider } from "./oauth-provider"
+import { MCPOAuthStore } from "./oauth-store"
 
 export interface Tool extends Omit<SDKTool, "inputSchema" | "outputSchema"> {
   readonly inputSchema: Readonly<Record<string, unknown>>
@@ -60,6 +65,7 @@ export interface Interface {
 export interface ConnectInput {
   readonly name: string
   readonly directory: string
+  readonly workspaceID?: WorkspaceV2.ID
   readonly timeout: number
   readonly config: typeof ConfigMCP.Server.Type
 }
@@ -97,6 +103,7 @@ export interface ProcessAdapter {
 
 export class ConnectionError extends Schema.TaggedErrorClass<ConnectionError>()("MCP.ConnectionError", {
   message: Schema.String,
+  code: Schema.Literal("auth-required").pipe(Schema.optional),
 }) {}
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCPClient") {}
@@ -251,50 +258,88 @@ export async function cleanup(pid: number | null, close: () => Promise<void>, ad
   if (outcome && "error" in outcome) throw outcome.error
 }
 
-export const layer = Layer.succeed(
+export const layer = Layer.effect(
   Service,
-  Service.of({
-    connect: (input) =>
-      interruptible(async (signal) => {
-        if (input.config.type === "local") {
-          const command = input.config.command[0]
-          if (!command) throw new Error(`MCP server "${input.name}" has an empty command`)
-          const transport = new StdioClientTransport({
-            command,
-            args: input.config.command.slice(1),
-            cwd: path.resolve(input.directory, input.config.cwd ?? "."),
-            env: { ...getDefaultEnvironment(), ...input.config.environment },
-            stderr: "pipe",
-          })
-          return connect(transport, "local", input.timeout, signal)
-        }
+  Effect.gen(function* () {
+    const available = yield* Effect.serviceOption(MCPOAuthStore.Service)
+    const store = Option.getOrElse(available, () => MCPOAuthStore.make({ data: Global.Path.data }))
+    return Service.of({
+      connect: (input) =>
+        interruptible(async (signal) => {
+          if (input.config.type === "local") {
+            const command = input.config.command[0]
+            if (!command) throw new Error(`MCP server "${input.name}" has an empty command`)
+            const transport = new StdioClientTransport({
+              command,
+              args: input.config.command.slice(1),
+              cwd: path.resolve(input.directory, input.config.cwd ?? "."),
+              env: { ...getDefaultEnvironment(), ...input.config.environment },
+              stderr: "pipe",
+            })
+            return connect(transport, "local", input.timeout, signal)
+          }
 
-        const url = new URL(input.config.url)
-        if (url.protocol !== "http:" && url.protocol !== "https:")
-          throw new Error(`Unsupported MCP URL protocol: ${url.protocol}`)
-        const headers = input.config.headers
-        const options = headers ? { requestInit: { headers } } : undefined
-        const first = new StreamableHTTPClientTransport(url, options)
-        const remote = await connect(first, "remote", input.timeout, signal).catch((cause) => {
-          if (signal.aborted) throw cause
-          return undefined
-        })
-        if (remote) return remote
-        return connect(
-          new SSEClientTransport(url, {
-            requestInit: options?.requestInit,
-            eventSourceInit: headers
-              ? {
-                  fetch: (url: string | URL, init?: RequestInit) =>
-                    fetch(url, { ...init, headers: MCPClientHeaders(init?.headers, headers) }),
-                }
-              : undefined,
-          }),
-          "sse",
-          input.timeout,
-          signal,
-        )
-      }),
+          const url = new URL(MCPOAuthStore.normalizeEndpoint(input.config.url))
+          if (url.protocol !== "http:" && url.protocol !== "https:")
+            throw new Error(`Unsupported MCP URL protocol: ${url.protocol}`)
+          const configured = input.config.headers
+          const enabled = input.config.oauth !== false
+          const target = {
+            directory: input.directory,
+            workspaceID: input.workspaceID,
+            name: input.name,
+            endpoint: url.toString(),
+          }
+          const provider: OAuthClientProvider | undefined = enabled
+            ? MCPOAuthProvider.make({
+                store,
+                target,
+                attemptID: "mcp_auth_connect",
+                state: "connect",
+                redirectUrl: callback(input.config.oauth),
+                config: typeof input.config.oauth === "object" ? input.config.oauth : {},
+                transient: false,
+                onRedirect: async () => {
+                  throw new AuthRequired()
+                },
+              })
+            : undefined
+          if (provider) {
+            const entry = await Effect.runPromise(store.get(target))
+            if (entry.tokens?.expires_at !== undefined && entry.tokens.expires_at <= Date.now() / 1000 + 60) {
+              if (!entry.tokens.refresh_token) throw new AuthRequired()
+              const result = await auth(provider, { serverUrl: url, fetchFn: network(url, configured, true, signal) })
+              if (result !== "AUTHORIZED") throw new AuthRequired()
+            }
+          }
+          const fetcher = network(url, configured, enabled, signal)
+          const first = new StreamableHTTPClientTransport(url, { authProvider: provider, fetch: fetcher })
+          const remote = await connect(first, "remote", input.timeout, signal).catch((cause) => {
+            if (signal.aborted) throw cause
+            if (cause instanceof UnauthorizedError || cause instanceof AuthRequired) throw new AuthRequired()
+            return undefined
+          })
+          if (remote) return remote
+          return connect(
+            new SSEClientTransport(url, {
+              authProvider: provider,
+              fetch: fetcher,
+              eventSourceInit: { fetch: fetcher },
+            }),
+            "sse",
+            input.timeout,
+            signal,
+          )
+        }).pipe(
+          Effect.mapError((error) =>
+            error.message === "MCP authentication is required"
+              ? new ConnectionError({ message: error.message, code: "auth-required" })
+              : input.config.type === "remote" && input.config.oauth !== false
+                ? new ConnectionError({ message: "MCP OAuth connection failed" })
+                : error,
+          ),
+        ),
+    })
   }),
 )
 
@@ -406,6 +451,34 @@ const system: ProcessAdapter = {
 
 function MCPClientHeaders(generated: HeadersInit | undefined, configured: Readonly<Record<string, string>>) {
   return headers(generated, configured)
+}
+
+class AuthRequired extends Error {
+  constructor() {
+    super("MCP authentication is required")
+  }
+}
+
+function callback(config: (typeof ConfigMCP.Remote.Type)["oauth"]) {
+  if (config && typeof config === "object" && config.redirect_uri) return config.redirect_uri
+  return `http://127.0.0.1:${config && typeof config === "object" ? (config.callback_port ?? 19876) : 19876}/mcp/oauth/callback`
+}
+
+function network(
+  endpoint: URL,
+  configured: Readonly<Record<string, string>> | undefined,
+  oauth: boolean,
+  signal: AbortSignal,
+) {
+  return (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input)
+    const resource = url.origin === endpoint.origin
+    return fetch(input, {
+      ...init,
+      signal,
+      headers: headers(init?.headers, resource ? configured : undefined, oauth),
+    })
+  }
 }
 
 function message(value: unknown) {

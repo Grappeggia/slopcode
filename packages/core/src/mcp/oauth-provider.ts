@@ -1,7 +1,11 @@
 export * as MCPOAuthProvider from "./oauth-provider"
 
 import type { OAuthClientProvider, OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js"
-import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js"
+import type {
+  OAuthClientInformationMixed,
+  OAuthClientMetadata,
+  OAuthTokens,
+} from "@modelcontextprotocol/sdk/shared/auth.js"
 import { Effect } from "effect"
 import type { ConfigMCP } from "../config/mcp"
 import type { MCPOAuthStore } from "./oauth-store"
@@ -15,6 +19,7 @@ export function make(input: {
   readonly config: typeof ConfigMCP.OAuth.Type
   readonly onRedirect: (url: URL) => Promise<void>
   readonly now?: () => number
+  readonly transient?: boolean
 }): OAuthClientProvider {
   const run = <A>(effect: Effect.Effect<A, MCPOAuthStore.StoreError>) => Effect.runPromise(effect)
   const now = input.now ?? (() => Date.now() / 1000)
@@ -32,7 +37,10 @@ export function make(input: {
     state: () => input.state,
     clientInformation: async () => {
       if (input.config.client_id)
-        return { client_id: input.config.client_id, ...(input.config.client_secret === undefined ? {} : { client_secret: input.config.client_secret }) }
+        return {
+          client_id: input.config.client_id,
+          ...(input.config.client_secret === undefined ? {} : { client_secret: input.config.client_secret }),
+        }
       const client = (await run(input.store.get(input.target))).client
       if (!client) return undefined
       const expiry = client.client_secret_expires_at
@@ -56,13 +64,16 @@ export function make(input: {
     saveTokens: (tokens) => run(input.store.saveTokens(input.target, tokens, now())),
     redirectToAuthorization: input.onRedirect,
     saveCodeVerifier: (verifier) =>
-      run(
-        input.store.update(input.target, (entry) => ({
-          ...entry,
-          attempts: { ...entry.attempts, [input.attemptID]: { ...entry.attempts?.[input.attemptID], verifier } },
-        })),
-      ).then(() => undefined),
+      input.transient === false
+        ? Promise.resolve()
+        : run(
+            input.store.update(input.target, (entry) => ({
+              ...entry,
+              attempts: { ...entry.attempts, [input.attemptID]: { ...entry.attempts?.[input.attemptID], verifier } },
+            })),
+          ).then(() => undefined),
     codeVerifier: async () => {
+      if (input.transient === false) throw new Error("MCP OAuth verifier is unavailable")
       const verifier = (await run(input.store.get(input.target))).attempts?.[input.attemptID]?.verifier
       if (!verifier) throw new Error("MCP OAuth verifier is unavailable")
       return verifier
