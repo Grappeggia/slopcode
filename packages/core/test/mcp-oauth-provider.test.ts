@@ -89,4 +89,26 @@ describe("MCP OAuth provider", () => {
       ),
     ),
   )
+
+  it.live("routes noninteractive authorization through the typed redirect callback", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const expected = new Error("typed-auth-required")
+          const provider = MCPOAuthProvider.make({
+            store: MCPOAuthStore.make({ data: tmp.path }),
+            target: { directory: tmp.path, name: "refresh", endpoint: "https://example.com/mcp" },
+            attemptID: "refresh",
+            state: "refresh",
+            redirectUrl: "http://127.0.0.1:19876/mcp/oauth/callback",
+            config: { client_id: "static" },
+            interactive: false,
+            transient: false,
+            onRedirect: async () => { throw expected },
+          })
+          expect(yield* Effect.promise(() => provider.redirectToAuthorization(new URL("https://auth.example/authorize")).catch((error) => error))).toBe(expected)
+        }),
+      ),
+    ),
+  )
 })

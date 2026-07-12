@@ -1408,6 +1408,22 @@ fixture({
     expect(changed[0]?.data).toEqual({ server: "staged", status: { status: "failed", code: "provider-error" } })
     expect(JSON.stringify(changed)).not.toContain("authorize")
     expect(JSON.stringify(changed)).not.toContain("new-client")
+    let disabledReset = 0
+    authReset = () => Effect.sync(() => disabledReset++)
+    authDocuments[0] = new ConfigMCP.Info({
+      servers: {
+        staged: new ConfigMCP.Remote({
+          type: "remote",
+          url: "https://new.example/mcp",
+          oauth: { client_id: "new-client", scope: "new-scope", redirect_uri: "https://client.example/new" },
+          disabled: true,
+        }),
+      },
+    })
+    yield* mcp.reload()
+    expect(disabledReset).toBeGreaterThan(0)
+    expect((yield* mcp.status()).staged).toEqual({ status: "disabled" })
+    authReset = () => Effect.void
     yield* mcp.removeAuth("staged")
     expect(authRemoves.map((target) => target.endpoint).toSorted()).toEqual([
       "https://new.example/mcp",

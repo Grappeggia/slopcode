@@ -459,7 +459,7 @@ it.live("bounds invalid grant malformed and interaction refresh failures", () =>
                   timeout: 1_000,
                   config: new ConfigMCP.Remote({ type: "remote", url: target.endpoint, oauth: { client_id: "static" } }),
                 }).pipe(Effect.flip)
-                expect(["auth-required", "refresh"]).toContain(error.code)
+                expect(error.code).toBe(mode === "malformed" ? "refresh" : "auth-required")
                 expect(error.message).not.toContain("invalid_grant")
                 expect((yield* store.get(target)).attempts).toBeUndefined()
               }),
