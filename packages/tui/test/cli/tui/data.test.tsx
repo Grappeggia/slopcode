@@ -270,7 +270,8 @@ test("settles pending tools when a live failure arrives", async () => {
         assistantMessageID: "msg_explicit_assistant_9",
         callID: "call-1",
         tool: "bash",
-        input: {},
+        input: "{}",
+        toolType: "custom",
         provider: { executed: false, metadata: { fake: { call: true } } },
       },
     })
