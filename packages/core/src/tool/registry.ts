@@ -36,6 +36,7 @@ import {
   type Context as ToolContext,
 } from "./tool"
 import { Tools, type RegistrationOptions } from "./tools"
+import * as StructuredTool from "#structured-tool"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
@@ -91,26 +92,7 @@ export interface Settlement {
   readonly result: ToolResultValue
   readonly output?: ToolOutput
   readonly outputPaths?: ReadonlyArray<string>
-  readonly final?: FinalSettlement
 }
-
-export type FinalSettlement =
-  | { readonly type: "success"; readonly value: unknown }
-  | { readonly type: "schema"; readonly value: unknown }
-  | { readonly type: "invalid"; readonly reason: "invalid-json" | "value-limit" }
-  | { readonly type: "stale" }
-
-export interface StructuredInterface {
-  readonly materialize: (
-    permissions: PermissionV2.Ruleset,
-    plan: ToolPlan,
-    format: SessionFormat.JsonFormat,
-  ) => Effect.Effect<Materialization, never, Scope.Scope>
-}
-
-export class StructuredService extends Context.Service<StructuredService, StructuredInterface>()(
-  "@slopcode/v2/ToolRegistry/Structured",
-) {}
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/ToolRegistry") {}
 
@@ -295,23 +277,20 @@ const registryLayer = Layer.effectContext(
         ])
         const settleMaterialized = (input: ExecuteInput): Effect.Effect<Settlement, ToolOutputStore.Error> => {
           if (input.call.name === FINAL_OUTPUT && final) {
-            if (!final.active)
-              return Effect.succeed({ result: { type: "error", value: "Stale structured final" }, final: { type: "stale" } })
+            if (!final.active) return Effect.succeed({ result: { type: "error", value: "Stale structured final" } })
             if (input.call.type === "tool-input-error")
               return Effect.succeed({
                 result: { type: "error", value: "Invalid structured final JSON" },
-                final: { type: "invalid", reason: "invalid-json" },
               })
             return SessionFormat.toolValue(input.call.input).pipe(
               Effect.map((value): Settlement =>
                 SessionFormat.validate(final.format, value)
-                  ? { result: { type: "text", value: "Structured final settled" }, final: { type: "success", value } }
-                  : { result: { type: "error", value: "Structured final schema mismatch" }, final: { type: "schema", value } },
+                  ? { result: { type: "text", value: "Structured final settled" } }
+                  : { result: { type: "error", value: "Structured final schema mismatch" } },
               ),
               Effect.catchTag("SessionFormat.ToolValueError", (error) =>
                 Effect.succeed({
                   result: { type: "error" as const, value: "Invalid structured final value" },
-                  final: { type: "invalid" as const, reason: error.reason },
                 }),
               ),
             )
@@ -494,19 +473,33 @@ SOURCE: /[\s\S]+/
         }
       }) as Interface["materialize"],
     })
-    const structured = StructuredService.of({
-      materialize: (permissions, plan, format) =>
+    const structured = StructuredTool.make((permissions, plan, format) =>
         Effect.gen(function* () {
           const final: Final = { format, active: true }
           yield* Effect.addFinalizer(() => Effect.sync(() => (final.active = false)))
-          return yield* service.materialize(permissions, plan, {
+          const materialized = yield* service.materialize(permissions, plan, {
             tools: {},
             direct: new Set([FINAL_OUTPUT]),
             [Final]: final,
           } as TurnTools).pipe(Effect.orDie)
+          const settleFinal = (input: ExecuteInput): Effect.Effect<StructuredTool.FinalSettlement> => {
+            if (input.call.name !== FINAL_OUTPUT) return Effect.die("Expected structured final call")
+            if (!final.active) return Effect.succeed({ type: "stale" })
+            if (input.call.type === "tool-input-error")
+              return Effect.succeed({ type: "invalid", reason: "invalid-json" })
+            return SessionFormat.toolValue(input.call.input).pipe(
+              Effect.map((value): StructuredTool.FinalSettlement =>
+                SessionFormat.validate(final.format, value) ? { type: "success", value } : { type: "schema", value },
+              ),
+              Effect.catchTag("SessionFormat.ToolValueError", (error) =>
+                Effect.succeed({ type: "invalid" as const, reason: error.reason }),
+              ),
+            )
+          }
+          return { ...materialized, settleFinal }
         }),
-    })
-    return Context.make(Service, service).pipe(Context.add(StructuredService, structured))
+    )
+    return Context.make(Service, service).pipe(Context.add(StructuredTool.Service, structured))
   }),
 )
 

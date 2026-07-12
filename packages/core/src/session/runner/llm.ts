@@ -28,6 +28,7 @@ import { ReferenceGuidance } from "../../reference/guidance"
 import { ShellCommand } from "../../shell"
 import { ToolRegistry } from "../../tool/registry"
 import { FINAL_OUTPUT } from "../../tool/registry"
+import * as StructuredTool from "#structured-tool"
 import { ToolOutputStore } from "../../tool-output-store"
 import { Wildcard } from "../../util/wildcard"
 import { SessionContextEpoch } from "../context-epoch"
@@ -99,6 +100,53 @@ import { toLLMMessages } from "./to-llm-message"
 
 // QUESTION: Did this exist previously, or did we add this limit? Does it make sense?
 const MAX_STEPS = 25
+const FINAL_INPUT_MAX_BYTES = 1_048_576 + 4_096
+
+const finalStream = () => {
+  const inputs = new Map<string, { chunks: string[]; bytes: number; overflow: boolean }>()
+  const bytes = (value: string) => new TextEncoder().encode(value).byteLength
+
+  return (event: LLMEvent): LLMEvent | undefined => {
+    if (!("name" in event) || event.name !== FINAL_OUTPUT) return event
+    if (event.type === "tool-input-start") {
+      if (inputs.has(event.id)) throw new Error(`Duplicate structured final input start: ${event.id}`)
+      inputs.set(event.id, { chunks: [], bytes: 0, overflow: false })
+      return
+    }
+    if (event.type === "tool-input-delta") {
+      const input = inputs.get(event.id)
+      if (!input) throw new Error(`Structured final input delta before start: ${event.id}`)
+      const size = bytes(event.text)
+      input.bytes += size
+      if (input.bytes > FINAL_INPUT_MAX_BYTES) {
+        input.overflow = true
+        input.chunks.length = 0
+        return
+      }
+      input.chunks.push(event.text)
+      return
+    }
+    if (event.type === "tool-input-end") return
+    const input = inputs.get(event.id)
+    inputs.delete(event.id)
+    if (event.type === "tool-call") {
+      if (input?.overflow)
+        return LLMEvent.toolInputError({ id: event.id, name: FINAL_OUTPUT, reason: "invalid-json" })
+      if (!input) return event
+      try {
+        if (event.toolType === "custom")
+          return LLMEvent.toolInputError({ id: event.id, name: FINAL_OUTPUT, reason: "invalid-json" })
+        return { ...event, input: JSON.parse(input.chunks.join("")) as unknown }
+      } catch {
+        return LLMEvent.toolInputError({ id: event.id, name: FINAL_OUTPUT, reason: "invalid-json" })
+      }
+    }
+    if (event.type === "tool-input-error") return event
+    if (event.type === "tool-error")
+      return LLMEvent.toolInputError({ id: event.id, name: FINAL_OUTPUT, reason: "invalid-json" })
+    return
+  }
+}
 
 export const layer = Layer.effect(
   Service,
@@ -107,7 +155,7 @@ export const layer = Layer.effect(
     const llm = yield* LLMClient.Service
     const agents = yield* AgentV2.Service
     const tools = yield* ToolRegistry.Service
-    const structuredTools = yield* ToolRegistry.StructuredService
+    const structuredTools = yield* StructuredTool.Service
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const runtime = yield* SessionRuntime.Service
@@ -586,9 +634,10 @@ export const layer = Layer.effect(
             }
           : {}),
       }
-      const toolMaterialization = format
+      const structuredMaterialization = format
         ? yield* structuredTools.materialize(permissions, toolPlan, format)
-        : yield* tools.materialize(permissions, toolPlan)
+        : undefined
+      const toolMaterialization = structuredMaterialization ?? (yield* tools.materialize(permissions, toolPlan))
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
         model,
@@ -638,6 +687,7 @@ export const layer = Layer.effect(
       let overflowFailure: ProviderErrorEvent | undefined
       let structuredSettled = false
       let structuredValid = false
+      const finalStreamEvent = finalStream()
       const structuredEvent = Effect.fnUntraced(function* (id: EventV2.ID) {
         return yield* db.select().from(EventTable).where(eq(EventTable.id, id)).get().pipe(Effect.orDie)
       })
@@ -850,21 +900,23 @@ export const layer = Layer.effect(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
             if (overflowFailure || publisher.hasProviderError()) return
+            const current = format ? finalStreamEvent(event) : event
+            if (!current) return
             if (
               format &&
               root &&
-              (event.type === "tool-call" || event.type === "tool-input-error") &&
-              event.name === FINAL_OUTPUT
+              (current.type === "tool-call" || current.type === "tool-input-error") &&
+              current.name === FINAL_OUTPUT
             ) {
               const assistantMessageID = yield* publisher.startAssistant()
-              const settlement = yield* toolMaterialization.settle({
+              if (!structuredMaterialization)
+                return yield* Effect.die("Structured final did not use the internal registry bridge")
+              const final = yield* structuredMaterialization.settleFinal({
                 sessionID: session.id,
                 agent: agent.id,
                 assistantMessageID,
-                call: event,
+                call: current,
               })
-              const final = settlement.final
-              if (!final) return yield* Effect.die("Structured final did not use canonical registry settlement")
               yield* events.publish(
                 SessionEvent.Structured.Candidate,
                 {
@@ -915,15 +967,15 @@ export const layer = Layer.effect(
               structuredSettled = true
               return yield* Effect.die(new StructuredSettled())
             }
-            if (LLMEvent.is.providerError(event)) {
-              if (isContextOverflowFailure(event) && !publisher.hasAssistantStarted()) {
-                overflowFailure = event
+            if (LLMEvent.is.providerError(current)) {
+              if (isContextOverflowFailure(current) && !publisher.hasAssistantStarted()) {
+                overflowFailure = current
                 return
               }
             }
-            if (event.type === "tool-call" && !event.providerExecuted && event.name === "task") {
+            if (current.type === "tool-call" && !current.providerExecuted && current.name === "task") {
               const assistantMessageID = yield* publisher.startAssistant()
-              const input = event.input as {
+              const input = current.input as {
                 readonly description?: unknown
                 readonly subagent_type?: unknown
               }
@@ -964,8 +1016,8 @@ export const layer = Layer.effect(
                   sessionID: session.id,
                   timestamp: yield* DateTime.now,
                   assistantMessageID,
-                  callID: event.id,
-                  input: event.input,
+                  callID: current.id,
+                  input: current.input,
                   callerAgent: agent.id,
                   permissions: toolMaterialization.permissions,
                   plan: { ...plan, multiAgent: plan.multiAgent ?? "v2" },
@@ -977,16 +1029,16 @@ export const layer = Layer.effect(
                   title: `${typeof input.description === "string" ? input.description : "Task"} (@${selectedID} subagent)`,
                   ceiling,
                 },
-                { id: SessionTask.preparedEventID(session.id, assistantMessageID, event.id) },
+                { id: SessionTask.preparedEventID(session.id, assistantMessageID, current.id) },
               )
             }
-            yield* publish(event)
-            if (event.type !== "tool-call" || event.providerExecuted) return
+            yield* publish(current)
+            if (current.type !== "tool-call" || current.providerExecuted) return
             needsContinuation = true
-            const assistantMessageID = yield* publisher.assistantMessageID(event.id)
+            const assistantMessageID = yield* publisher.assistantMessageID(current.id)
             const prepared =
-              event.name === "task"
-                ? yield* SessionTask.prepared(db, session.id, assistantMessageID, event.id)
+              current.name === "task"
+                ? yield* SessionTask.prepared(db, session.id, assistantMessageID, current.id)
                 : undefined
             yield* assertRuntime(sessionID, runtimeEpoch)
             yield* Effect.uninterruptibleMask((restore) =>
@@ -995,18 +1047,18 @@ export const layer = Layer.effect(
                   sessionID: session.id,
                   agent: agent.id,
                   assistantMessageID,
-                  call: event,
+                  call: current,
                   prepared,
                 }),
               ).pipe(
                 Effect.flatMap((settlement) =>
                   publish(
                     LLMEvent.toolResult({
-                      id: event.id,
-                      name: event.name,
+                      id: current.id,
+                      name: current.name,
                       result: settlement.result,
                       output: settlement.output,
-                      toolType: event.toolType,
+                      toolType: current.toolType,
                     }),
                     settlement.outputPaths ?? [],
                   ),

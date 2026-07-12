@@ -15,6 +15,7 @@ import { EventV2 } from "@slopcode-ai/core/event"
 import { ProjectV2 } from "@slopcode-ai/core/project"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { sessionServices } from "@slopcode-ai/server/handlers"
+import { SessionGraph } from "@slopcode-ai/server/session-graph"
 import { Context, Effect, Layer } from "effect"
 import { Image } from "@/image/image"
 import { SessionPrompt } from "./prompt"
@@ -99,11 +100,25 @@ export const defaultLayer = layer.pipe(
   ),
 )
 
-export const sessionServicesNode = LayerNode.make(
+const sessionServicesNode = LayerNode.make(
   sessionServices,
   [Database.node, EventV2.node, ProjectV2.node, SessionRuntime.node, locationServiceMapNode],
 )
-const control = LayerNode.make(CoreSessionControl.layer, [SessionRuntime.node, sessionServicesNode])
+export const sessionNode = LayerNode.make(Layer.effect(SessionV2.Service, SessionV2.Service), [sessionServicesNode])
+const control = LayerNode.make(CoreSessionControl.layer, [SessionRuntime.node, sessionNode])
+export const sessionGraphNode = LayerNode.make(
+  Layer.effect(
+    SessionGraph.Service,
+    Effect.gen(function* () {
+      return SessionGraph.Service.of({
+        session: yield* SessionV2.Service,
+        control: yield* CoreSessionControl.Service,
+        runtime: yield* SessionRuntime.Service,
+      })
+    }),
+  ),
+  [SessionRuntime.node, sessionNode, control],
+)
 
 export const node = LayerNode.make(layer, [SessionRuntime.node, control, SessionPrompt.node])
 

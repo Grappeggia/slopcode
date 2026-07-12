@@ -17,6 +17,7 @@
   },
   "exports": {
     "./public": "./src/public/index.ts",
+    "./internal/structured-tool": null,
     "./session/runner": "./src/session/runner/index.ts",
     "./system-context": "./src/system-context/index.ts",
     "./*": "./src/*.ts"
@@ -36,7 +37,8 @@
       "bun": "./src/filesystem/fff.bun.ts",
       "node": "./src/filesystem/fff.node.ts",
       "default": "./src/filesystem/fff.bun.ts"
-    }
+    },
+    "#structured-tool": "./src/internal/structured-tool.ts"
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",

@@ -1,10 +1,8 @@
-import { SessionV2 } from "@slopcode-ai/core/session"
-import { SessionControl } from "@slopcode-ai/core/session/control"
-import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { DateTime, Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "../groups/session"
+import { SessionGraph } from "../session-graph"
 import {
   ConflictError,
   InvalidRequestError,
@@ -19,9 +17,10 @@ const DefaultSessionsLimit = 50
 
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
-    const session = yield* SessionV2.Service
-    const control = yield* SessionControl.Service
-    const runtime = yield* SessionRuntime.Service
+    const graph = yield* SessionGraph.Service
+    const session = graph.session
+    const control = graph.control
+    const runtime = graph.runtime
 
     const runtimeUnavailable = (error: { readonly sessionID: string; readonly actualOwner: "v1" | "v2" }) =>
       new ServiceUnavailableError({
