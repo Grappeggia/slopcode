@@ -8,4 +8,4 @@ const target = { directory: "/workspace", name: "server", endpoint: "https://exa
 const won = await Effect.runPromise(
   store.finishExchange(target, attempt, { access_token: token, token_type: "Bearer" }, 10),
 )
-process.stdout.write(won ? "won" : "lost")
+process.stdout.write(won.won ? "won" : "lost")

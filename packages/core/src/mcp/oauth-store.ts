@@ -68,6 +68,7 @@ export class StoreError extends Schema.TaggedErrorClass<StoreError>()("MCP.OAuth
 
 export interface Interface {
   readonly get: (target: Target) => Effect.Effect<Entry, StoreError>
+  readonly targets: (scope: Omit<Target, "endpoint">) => Effect.Effect<ReadonlyArray<Target>, StoreError>
   readonly update: (target: Target, change: (entry: Entry) => Entry) => Effect.Effect<Entry, StoreError>
   readonly remove: (target: Target) => Effect.Effect<void, StoreError>
   readonly saveTokens: (target: Target, tokens: OAuthTokens, now?: number) => Effect.Effect<void, StoreError>
@@ -88,7 +89,7 @@ export interface Interface {
     attemptID: string,
     tokens: OAuthTokens,
     now?: number,
-  ) => Effect.Effect<boolean, StoreError>
+  ) => Effect.Effect<{ readonly won: boolean; readonly cancelled: ReadonlyArray<string> }, StoreError>
   readonly finishAttempt: (
     target: Target,
     attemptID: string,
@@ -288,6 +289,16 @@ export function make(input: { readonly data: string; readonly legacy?: string })
       }
     })
 
+  const targets: Interface["targets"] = (scope) =>
+    transact(async (data) => ({
+      value: Object.values(data.buckets)
+        .filter((bucket) =>
+          bucket.identity.directory === scope.directory &&
+          bucket.identity.workspaceID === scope.workspaceID &&
+          bucket.identity.name === scope.name)
+        .map(targetOf),
+    }))
+
   const locate = (data: Data, attemptID: string) =>
     Object.entries(data.buckets).find(([, bucket]) => bucket.entry.attempts?.[attemptID])
   const targetOf = (bucket: Bucket): Target => ({
@@ -388,11 +399,14 @@ export function make(input: { readonly data: string; readonly legacy?: string })
     })
 
   const finishExchange: Interface["finishExchange"] = (target, attemptID, tokens, now = Date.now() / 1000) =>
-    transact(async (data) => {
+    transact<{ readonly won: boolean; readonly cancelled: ReadonlyArray<string> }>(async (data) => {
       const name = key(target)
       const bucket = data.buckets[name]
       const attempt = bucket?.entry.attempts?.[attemptID]
-      if (!bucket || attempt?.phase !== "exchanging") return { value: false }
+      if (!bucket || attempt?.phase !== "exchanging") return { value: { won: false, cancelled: [] } }
+      const cancelled = Object.entries(bucket.entry.attempts ?? {})
+        .filter(([id, current]) => id !== attemptID && ["initializing", "pending", "received", "exchanging"].includes(current.phase ?? ""))
+        .map(([id]) => id)
       const attempts = Object.fromEntries(
         Object.entries(bucket.entry.attempts ?? {}).map(([id, current]) => [
           id,
@@ -416,7 +430,7 @@ export function make(input: { readonly data: string; readonly legacy?: string })
           ...data,
           buckets: { ...data.buckets, [name]: { ...bucket, entry: { ...bucket.entry, tokens: saved, attempts } } },
         },
-        value: true,
+        value: { won: true, cancelled },
       }
     })
 
@@ -457,6 +471,7 @@ export function make(input: { readonly data: string; readonly legacy?: string })
 
   return {
     get,
+    targets,
     update,
     remove,
     saveTokens,

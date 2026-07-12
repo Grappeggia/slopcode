@@ -127,6 +127,14 @@ export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.e
       })
     const later = (attemptID: string) =>
       setTimeout(() => Effect.runPromise(close(attemptID)).catch(() => undefined), 0)
+    const settle = (attemptIDs: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        attemptIDs.forEach((attemptID) => exchanges.get(attemptID)?.controller.abort())
+        yield* Effect.promise(() => Promise.all(
+          attemptIDs.map((attemptID) => exchanges.get(attemptID)?.settled ?? Promise.resolve()),
+        )).pipe(Effect.ignore)
+        yield* Effect.forEach(attemptIDs, close, { discard: true })
+      })
     const changes = new Set<Parameters<Interface["onChange"]>[0]>()
     const changed = (target: MCPOAuthStore.Target, code: FailureCode) =>
       Effect.sync(() => changes.forEach((handler) => handler(target, { status: "failed", code })))
@@ -236,23 +244,25 @@ export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.e
               `mcp-oauth-exchange:${JSON.stringify(input.target)}`,
               async () => {
                 const latest = await Effect.runPromise(store.findAttempt(input.attemptID))
-                if (latest?.attempt.phase !== "exchanging") return "LOST" as const
+                if (latest?.attempt.phase !== "exchanging") return { status: "LOST", cancelled: [] } as const
                 const exchanged = await auth(provider, {
                   serverUrl: input.target.endpoint,
                   authorizationCode: input.code,
                   fetchFn: abortFetch(signal, external),
                 })
                 if (exchanged !== "AUTHORIZED" || !tokens) return "INVALID" as const
-                return (await Effect.runPromise(store.finishExchange(input.target, input.attemptID, tokens)))
-                  ? ("WON" as const)
-                  : ("LOST" as const)
+                const committed = await Effect.runPromise(store.finishExchange(input.target, input.attemptID, tokens))
+                return committed.won
+                  ? ({ status: "WON", cancelled: committed.cancelled } as const)
+                  : ({ status: "LOST", cancelled: [] } as const)
               },
               { signal },
             ),
           catch: () => failure("exchange", input.target, input.attemptID),
         }).pipe(Effect.tapError(() => mark(input.target, input.attemptID, "failed", "exchange", ["exchanging"])))
-        if (result === "LOST") return yield* failure("attempt-used", input.target, input.attemptID)
-        if (result !== "WON") return yield* failure("exchange", input.target, input.attemptID)
+        if (result === "INVALID") return yield* failure("exchange", input.target, input.attemptID)
+        if (result.status === "LOST") return yield* failure("attempt-used", input.target, input.attemptID)
+        yield* settle(result.cancelled)
         if (!callback) yield* close(input.attemptID)
         return { status: "credential-ready" } as const
       })
@@ -418,7 +428,20 @@ export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.e
     const recover: Interface["recover"] = (input) =>
       safe(store.get(input.target), input.target).pipe(
         Effect.flatMap((entry) =>
-          Effect.forEach(
+          Effect.gen(function* () {
+            const redirect = yield* Effect.try({
+              try: () => redirectFor(input.config),
+              catch: () => failure("invalid-redirect", input.target),
+            })
+            const compatible = entry.compatibility === MCPOAuthProvider.compatibility(
+              input.target.endpoint,
+              input.config,
+              redirect.url,
+            ) && Object.values(entry.attempts ?? {}).every((attempt) =>
+              !["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "") ||
+              attempt.redirect === redirect.url)
+            if (!compatible) return yield* reset(input.target)
+            yield* Effect.forEach(
             Object.entries(entry.attempts ?? {}),
             ([attemptID, attempt]) => {
               if (["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "")) owned.add(attemptID)
@@ -482,7 +505,8 @@ export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.e
               )
             },
             { discard: true },
-          ),
+            )
+          }),
         ),
       )
 

@@ -223,7 +223,7 @@ const baseLayer = Layer.effect(
     const registrations = Semaphore.makeUnsafe(1)
     const operations = Semaphore.makeUnsafe(1)
     const authTarget = (server: Server, candidate = server.auth?.config ?? server.config) => {
-      if (candidate.type !== "remote" || candidate.oauth === false) return
+      if (candidate.disabled || candidate.type !== "remote" || candidate.oauth === false) return
       return {
         directory: location.directory,
         workspaceID: location.workspaceID,
@@ -248,17 +248,25 @@ const baseLayer = Layer.effect(
           ])
         : undefined
 
-    yield* Effect.forEach(
-      servers.values(),
-      (server) => {
-        const target = authTarget(server)
-        if (!target || server.config.type !== "remote") return Effect.void
-        return oauth
-          .recover({ target, config: typeof server.config.oauth === "object" ? server.config.oauth : {} })
-          .pipe(Effect.ignore)
-      },
-      { discard: true },
-    )
+    yield* Effect.forEach(servers.values(), (server) =>
+      Effect.gen(function* () {
+        const current = authTarget(server)
+        const stored = yield* oauthStore.targets({
+          directory: location.directory,
+          workspaceID: location.workspaceID,
+          name: server.name,
+        }).pipe(Effect.orElseSucceed(() => []))
+        yield* Effect.forEach(
+          stored.filter((target) => !current || JSON.stringify(target) !== JSON.stringify(current)),
+          (target) => oauth.reset(target).pipe(Effect.ignore),
+          { discard: true },
+        )
+        if (!current) return
+        yield* oauth.recover({
+          target: current,
+          config: server.config.type === "remote" && typeof server.config.oauth === "object" ? server.config.oauth : {},
+        }).pipe(Effect.ignore)
+      }), { discard: true })
 
     // Empty lifetime anchors reserve config order even while a server is disabled,
     // disconnected, unavailable, or replacing its current discovered tools.
