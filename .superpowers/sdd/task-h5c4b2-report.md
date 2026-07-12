@@ -211,3 +211,55 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 ### Review Concerns
 
 - The unrelated SlopCode package typecheck failures above remain outside H5C4B2. All H5C4B2-focused, preservation, full Core, V1 evidence, CodeMode, Core/server typecheck, and dependency gates pass.
+
+## Second Re-review Settlement
+
+### RED Evidence
+
+- Re-review boundary command (`mcp-client`, `mcp-oauth-protocol`, `mcp-oauth-callback`): `15 pass`, `2 fail`, `69 expect() calls`. Config accepted `callback_port` with an incompatible HTTPS redirect and runtime classified the conflict as discovery instead of typed `invalid-redirect`.
+- Read-only provider command (`mcp-oauth-provider`): `1 pass`, `1 fail`, `5 expect() calls`. `MCPOAuthProvider.connect` did not exist, proving normal transport still received the mutation-capable provider.
+- First final full Core run after adding cross-process SDK evidence: `1404 pass`, `1 fail`, `4277 expect() calls`. The sibling workers made two token requests. The token request was under the exchange flock, but winner publication happened after releasing it.
+
+### Repairs
+
+- Added a snapshot-only connect provider. It has no redirect URL, client-registration writer, discovery writer, invalidation hook, state, or verifier persistence. Token save is inert and redirect/verifier requests fail closed. Normal 401 handling returns bounded `auth-required` without changing exact store bytes.
+- Kept mutation-capable OAuth exclusively in proactive refresh and explicit begin/complete flows. Refresh now has a service-scoped in-process reservation in addition to the process flock, and the Location client layer requires the exact injected OAuth store rather than silently falling back to global storage.
+- Expanded closed validation for token numeric/string fields, registration timestamps/arrays/URLs/JWK JSON, authorization-server and OIDC arrays/booleans/URLs, protected-resource arrays/booleans/URLs, bounded attempt failures, compatibility hashes, claim literals, canonical legacy keys, and closed `legacy`/`recoverable` entries.
+- Config and runtime now reject every mixed callback-port/manual redirect, default-port redirect, and explicit mismatched-port case. Runtime parsing is wrapped in `Effect.try` and emits input-independent `invalid-redirect`.
+- Replaced callback module state with explicit `HostService` ownership above Location layers. Per-Location leases share the injected host service and retain exact bind/port/path/state isolation.
+- Public begin results are exactly `connected | authorizing`; failed reconnect produces bounded `connection`. Failed status codes use the closed `FailureCode` schema.
+- `removeAuth` closes the runtime and removes both distinct candidate and active OAuth targets while preserving unrelated targets.
+- Listener close is awaited for cancel, terminal API paths, shutdown, reset, and removal. Callback-handler completion defers the final listener close until after the HTTP response to avoid self-deadlock.
+- Winner token publication and sibling cancellation now execute inside the same process flock as the SDK token request. Ten repeated protocol runs produced exactly one token request and one winner every time.
+
+### Added Evidence
+
+- Exact rejected-token store bytes before and after normal connect are identical; no well-known discovery or registration request occurs.
+- Closed nested-schema mutation matrix rejects malformed token, client registration, authorization/OIDC metadata, protected-resource metadata, attempts, legacy fields, unknown fields, and noncanonical identities.
+- Dynamic registration replaces an expired client secret; OIDC discovery fallback is exercised against a real HTTP fixture.
+- Spawned sibling processes run the real SDK authorization-code exchange and produce exactly one token request.
+- Callback cancellation awaits close and permits immediate same-port reuse.
+- Real Streamable HTTP POST/GET requests assert JSON/event-stream headers; real SSE event GET and message POST assert their respective accept/content-type behavior.
+- Dual active/candidate removal and bounded public status decoding are asserted at the integrated MCP service boundary.
+
+### Final Verification
+
+- Focused 12-file command: `103 pass`, `0 fail`, `402 expect() calls`.
+- Cross-process protocol stress (`--rerun-each 10`): `100 pass`, `0 fail`, `460 expect() calls`.
+- H5C4A/B1 preservation command: `121 pass`, `0 fail`, `487 expect() calls`.
+- Full Core after the final lock-scope fix: `1405 pass`, `0 fail`, `4277 expect() calls`, 153 files.
+- Full CodeMode: `254 pass`, `0 fail`, `744 expect() calls`.
+- V1 OAuth evidence: `40 pass`, `0 fail`, `123 expect() calls`.
+- Core typecheck: exit 0.
+- Server typecheck: exit 0.
+- Frozen install: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+- SlopCode typecheck remains red only at the two unrelated existing session diagnostics: `src/session/processor.ts(495,17)` and `src/session/prompt.ts(1382,39)`.
+
+### Second Re-review Commits
+
+- `6f2e19296e` `test(core): expose remaining MCP OAuth boundaries`
+- `f66b418ee8` `fix(core): close MCP OAuth review gaps`
+- `fbab28c9a6` `test(core): cover MCP OAuth OIDC fallback`
+- `1496460ecc` `fix(core): serialize MCP OAuth refresh`
+- `4e5a0fffa5` `fix(core): commit OAuth exchange under lock`
+- Report appendix: the following `docs:` commit.
