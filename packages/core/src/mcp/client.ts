@@ -358,7 +358,12 @@ function service(store: MCPOAuthStore.Interface) {
                       if (result !== "AUTHORIZED") throw new AuthRequired()
                     }, { signal, dir: path.join(input.directory, ".mcp-oauth-refresh-locks") })
                   .catch((error) => {
-                    throw error instanceof AuthRequired ? error : new RefreshFailed()
+                    throw error instanceof AuthRequired || (
+                      typeof error === "object" &&
+                      error !== null &&
+                      "errorCode" in error &&
+                      error.errorCode === "interaction_required"
+                    ) ? new AuthRequired() : new RefreshFailed()
                   })
                   .then(reserved.resolve, reserved.reject)
                   .finally(() => refreshes.delete(key))

@@ -853,6 +853,7 @@ const baseLayer = Layer.effect(
               readonly server: Server
               readonly config: typeof ConfigMCP.Server.Type
               readonly timeout: number
+              readonly reset?: ReadonlyArray<MCPOAuthStore.Target>
             }> = []
             const removed = [...servers.values()].filter((server) => !next.servers.has(server.name))
             const replaced = [...next.servers].flatMap(([name, config]) => {
@@ -889,13 +890,19 @@ const baseLayer = Layer.effect(
                 const previous = existing.auth?.config ?? existing.config
                 const oldTarget = authTarget(existing, previous)
                 const nextTarget = authTarget(existing, config)
-                if (authIdentity(previous) !== authIdentity(config)) {
+                const disabling = !previous.disabled && config.disabled
+                if (!disabling && authIdentity(previous) !== authIdentity(config)) {
                   if (oldTarget) yield* oauth.reset(oldTarget).pipe(Effect.ignore)
                   if (existing.auth?.target && JSON.stringify(existing.auth.target) !== JSON.stringify(oldTarget))
                     yield* oauth.reset(existing.auth.target).pipe(Effect.ignore)
                 }
+                const reset = disabling
+                  ? [oldTarget, existing.auth?.target]
+                      .filter((target): target is MCPOAuthStore.Target => target !== undefined)
+                      .filter((target, index, values) => values.findIndex((value) => JSON.stringify(value) === JSON.stringify(target)) === index)
+                  : undefined
                 existing.auth = { config, timeout: config.timeout ?? next.timeout, target: nextTarget }
-                changed.push({ server: existing, config, timeout: config.timeout ?? next.timeout })
+                changed.push({ server: existing, config, timeout: config.timeout ?? next.timeout, reset })
                 continue
               }
               const server: Server = {
@@ -921,6 +928,7 @@ const baseLayer = Layer.effect(
                 target.server.lock.withPermits(1)(
                   Effect.gen(function* () {
                     yield* hide(target.server)
+                    yield* Effect.forEach(target.reset ?? [], (value) => oauth.reset(value).pipe(Effect.ignore), { discard: true })
                     const pending = target.server.pending
                     const client = target.server.client
                     target.server.pending = undefined

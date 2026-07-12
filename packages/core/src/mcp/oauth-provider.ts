@@ -84,7 +84,7 @@ export function make(input: {
           })),
         ).then(() => undefined),
       ),
-    redirectToAuthorization: (url) => input.interactive === false ? Promise.reject(new Error("MCP OAuth interaction is unavailable")) : input.onRedirect(url),
+    redirectToAuthorization: input.onRedirect,
     saveCodeVerifier: (verifier) =>
       input.transient === false
         ? Promise.resolve()

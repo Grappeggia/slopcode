@@ -100,13 +100,14 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCPOAuth") {}
 
-export const layer = Layer.effect(
+export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.effect(
   Service,
   Effect.gen(function* () {
     const store = yield* MCPOAuthStore.Service
     const callbacks = yield* MCPOAuthCallback.Service
     const listeners = new Map<string, { close: () => Promise<void> }>()
     const exchanges = new Map<string, { readonly controller: AbortController; readonly settled: Promise<void> }>()
+    const timers = new Map<string, ReturnType<typeof setTimeout>>()
     const owned = new Set<string>()
     const completions = new Set<(target: MCPOAuthStore.Target) => void>()
 
@@ -116,6 +117,9 @@ export const layer = Layer.effect(
       effect.pipe(Effect.mapError(() => failure("store", target)))
     const close = (attemptID: string) =>
       Effect.gen(function* () {
+        const timer = timers.get(attemptID)
+        if (timer) clearTimeout(timer)
+        timers.delete(attemptID)
         const listener = listeners.get(attemptID)
         listeners.delete(attemptID)
         owned.delete(attemptID)
@@ -134,7 +138,7 @@ export const layer = Layer.effect(
       expected?: ReadonlyArray<MCPOAuthStore.Attempt["phase"]>,
     ) =>
       safe(store.finishAttempt(target, attemptID, phase, error, expected), target).pipe(
-        Effect.flatMap((updated) => (updated ? changed(target, error) : Effect.void)),
+        Effect.flatMap((updated) => updated ? changed(target, error).pipe(Effect.as(true)) : Effect.succeed(false)),
       )
     const terminal = (
       target: MCPOAuthStore.Target,
@@ -148,6 +152,18 @@ export const layer = Layer.effect(
             Effect.andThen(close(attemptID)),
             Effect.asVoid,
           )
+    const schedule = (target: MCPOAuthStore.Target, attemptID: string, expires: number) =>
+      Effect.sync(() => {
+        const current = timers.get(attemptID)
+        if (current) clearTimeout(current)
+        timers.set(attemptID, setTimeout(() => {
+          void Effect.runPromise(
+            mark(target, attemptID, "expired", "attempt-expired", ["initializing", "pending"]).pipe(
+              Effect.flatMap((updated) => updated ? close(attemptID) : Effect.void),
+            ),
+          ).catch(() => undefined)
+        }, Math.max(0, expires - Date.now())))
+      })
 
     const status: Interface["status"] = (target) =>
       safe(store.get(target), target).pipe(
@@ -234,11 +250,7 @@ export const layer = Layer.effect(
               { signal },
             ),
           catch: () => failure("exchange", input.target, input.attemptID),
-        }).pipe(
-          Effect.tapError(() =>
-            safe(store.finishAttempt(input.target, input.attemptID, "failed", "exchange", ["exchanging"]), input.target),
-          ),
-        )
+        }).pipe(Effect.tapError(() => mark(input.target, input.attemptID, "failed", "exchange", ["exchanging"])))
         if (result === "LOST") return yield* failure("attempt-used", input.target, input.attemptID)
         if (result !== "WON") return yield* failure("exchange", input.target, input.attemptID)
         if (!callback) yield* close(input.attemptID)
@@ -261,7 +273,7 @@ export const layer = Layer.effect(
         const attemptID = `mcp_auth_${randomBytes(16).toString("hex")}` as AttemptID
         const state = randomBytes(32).toString("base64url")
         const created = Date.now()
-        const expires = created + MAX_AGE
+        const expires = created + (options.maxAge ?? MAX_AGE)
         const requested = input.mode ?? "auto"
         const mode = requested === "auto" && redirect.local ? "auto" : "manual"
         yield* safe(
@@ -283,6 +295,7 @@ export const layer = Layer.effect(
           input.target,
         )
         owned.add(attemptID)
+        yield* schedule(input.target, attemptID, expires)
         return yield* Effect.gen(function* () {
           let authorizationUrl: string | undefined
           const provider = MCPOAuthProvider.make({
@@ -423,7 +436,8 @@ export const layer = Layer.effect(
               if (attempt.phase !== "pending") return Effect.void
               if ((attempt.expires ?? 0) <= Date.now())
                 return terminal(input.target, attemptID, "expired", "attempt-expired")
-              if (attempt.mode !== "auto" || !attempt.redirect || !attempt.state) return Effect.void
+              if (attempt.mode !== "auto" || !attempt.redirect || !attempt.state)
+                return schedule(input.target, attemptID, attempt.expires!)
               return Effect.tryPromise({
                 try: () =>
                   callbacks.register({
@@ -462,6 +476,7 @@ export const layer = Layer.effect(
                 catch: () => failure("callback-unavailable", input.target, attemptID),
               }).pipe(
                 Effect.tap((listener) => Effect.sync(() => listeners.set(attemptID, listener))),
+                Effect.tap(() => schedule(input.target, attemptID, attempt.expires!)),
                 Effect.catch(() => terminal(input.target, attemptID, "failed", "callback-unavailable")),
                 Effect.asVoid,
               )
@@ -507,6 +522,8 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+export const layer = layerWith()
 
 function redirectFor(config: typeof ConfigMCP.OAuth.Type) {
   const value = config.redirect_uri ?? `http://127.0.0.1:${config.callback_port ?? DEFAULT_PORT}${PATH}`
