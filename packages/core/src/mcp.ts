@@ -3,7 +3,7 @@ export * as MCP from "./mcp"
 import path from "node:path"
 import Ajv, { type ValidateFunction } from "ajv"
 import { isDeepStrictEqual } from "node:util"
-import { Context, Deferred, Effect, Exit, Layer, Schema, Scope, Semaphore } from "effect"
+import { Context, DateTime, Deferred, Effect, Exit, Layer, Schema, Scope, Semaphore } from "effect"
 import { Config } from "./config"
 import { ConfigMCP } from "./config/mcp"
 import { EventV2 } from "./event"
@@ -11,6 +11,7 @@ import { Location } from "./location"
 import { MCPClient, type Connection, type Tool as MCPTool } from "./mcp/client"
 import { PermissionV2 } from "./permission"
 import { PluginV2 } from "./plugin"
+import { SessionEvent } from "./session/event"
 import { Tool } from "./tool/tool"
 import { Tools } from "./tool/tools"
 
@@ -174,7 +175,7 @@ export const layer = Layer.effect(
       client: Connection,
       definitions: ReadonlyArray<MCPTool>,
     ) {
-      const adapted = yield* adapt(server, client, definitions, plugin, permission)
+      const adapted = yield* adapt(server, client, definitions, plugin, permission, events)
       yield* registrations.withPermits(1)(
         Effect.gen(function* () {
           for (const name of Object.keys(adapted))
@@ -501,6 +502,7 @@ function adapt(
   definitions: ReadonlyArray<MCPTool>,
   plugin: PluginV2.Interface,
   permission: PermissionV2.Interface,
+  events: EventV2.Interface,
 ) {
   return Effect.gen(function* () {
     const names = new Set<string>()
@@ -512,7 +514,7 @@ function adapt(
           if (names.has(name)) throw new Error(`MCP tool name collision: ${name}`)
           names.add(name)
           const validator = new Ajv({ allErrors: true, strict: false }).compile(definition.inputSchema)
-          return [name, tool(name, definition, server, client, validator, plugin, permission)] as const
+          return [name, tool(name, definition, server, client, validator, plugin, permission, events)] as const
         },
         catch: (cause) => cause,
       }),
@@ -529,6 +531,7 @@ function tool(
   validator: ValidateFunction,
   plugin: PluginV2.Interface,
   permission: PermissionV2.Interface,
+  events: EventV2.Interface,
 ) {
   const decode = (value: unknown) =>
     validator(value)
@@ -574,9 +577,22 @@ function tool(
           { tool: name, sessionID: context.sessionID, callID: context.toolCallID, args: decoded },
           afterInput,
         )
-        const final = isDeepStrictEqual(afterOutput(after), afterInput)
-          ? normalized
-          : yield* normalizeHook(after, normalized)
+        const contentChanged =
+          after.output !== afterInput.output || !isDeepStrictEqual(after.attachments, afterInput.attachments)
+        const final =
+          isDeepStrictEqual(afterOutput(after), afterInput) && !contentChanged
+            ? normalized
+            : yield* normalizeHook(after, normalized, contentChanged)
+        if (after.title !== undefined && typeof after.title !== "string") return yield* invalid("hook title")
+        if (after.title)
+          yield* events.publish(SessionEvent.Tool.Progress, {
+            timestamp: DateTime.nowUnsafe(),
+            sessionID: context.sessionID,
+            assistantMessageID: context.assistantMessageID,
+            callID: context.toolCallID,
+            structured: final.metadata ?? {},
+            content: [{ type: "text", text: after.title }],
+          })
         if (final.isError)
           return yield* new Tool.Failure({
             message:
@@ -697,6 +713,7 @@ function afterOutput(value: PluginV2.HookOutput<"tool.execute.after">) {
 function normalizeHook(
   value: PluginV2.HookOutput<"tool.execute.after">,
   original: Normalized,
+  contentChanged: boolean,
 ): Effect.Effect<Normalized, Tool.Failure> {
   if (typeof value.output !== "string" || (value.metadata !== undefined && !record(value.metadata)))
     return invalid("hook output")
@@ -735,7 +752,9 @@ function normalizeHook(
       structured,
       metadata: meta as Record<string, unknown> | undefined,
       isError: original.isError,
-      content: [...(value.output ? [{ type: "text" as const, text: value.output }] : []), ...files],
+      content: contentChanged
+        ? [...(value.output ? [{ type: "text" as const, text: value.output }] : []), ...files]
+        : original.content,
     })),
   )
 }

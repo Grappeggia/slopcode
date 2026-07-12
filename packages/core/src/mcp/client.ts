@@ -137,15 +137,25 @@ export function headers(generated?: HeadersInit, configured?: Readonly<Record<st
 }
 
 export async function cleanup(pid: number | null, close: () => Promise<void>, adapter: ProcessAdapter = system) {
-  if (!pid) return close()
+  let outcome: { readonly error?: unknown } | undefined
+  const closing = Promise.resolve()
+    .then(close)
+    .then(
+      () => {
+        outcome = {}
+      },
+      (error) => {
+        outcome = { error }
+      },
+    )
+  if (!pid) {
+    await Promise.race([closing, adapter.sleep(1_000)])
+    if (outcome && "error" in outcome) throw outcome.error
+    return
+  }
   const found = new Set<number>([pid, ...(await adapter.tree(pid).catch(() => []))])
-  const closing = Promise.resolve().then(close)
   await adapter.sleep(0)
   ;(await adapter.tree(pid).catch(() => [])).forEach((child) => found.add(child))
-  const failure = await closing.then(
-    () => undefined,
-    (cause) => cause,
-  )
   ;(await adapter.tree(pid).catch(() => [])).forEach((child) => found.add(child))
   if (adapter.platform === "win32") {
     await adapter.windows?.(pid)
@@ -159,7 +169,8 @@ export async function cleanup(pid: number | null, close: () => Promise<void>, ad
       await adapter.sleep(100)
     }
   }
-  if (failure !== undefined) throw failure
+  await Promise.race([closing, adapter.sleep(100)])
+  if (outcome && "error" in outcome) throw outcome.error
 }
 
 export const layer = Layer.succeed(

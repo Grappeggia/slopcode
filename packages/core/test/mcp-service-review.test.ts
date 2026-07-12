@@ -11,6 +11,7 @@ import { PluginV2 } from "@slopcode-ai/core/plugin"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionV2 } from "@slopcode-ai/core/session"
+import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { ApplicationTools } from "@slopcode-ai/core/tool/application-tools"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
 import { ToolOutputStore } from "@slopcode-ai/core/tool-output-store"
@@ -179,6 +180,130 @@ fixture({
       type: "error",
       value: expect.stringContaining("invalid hook structuredContent"),
     })
+  }),
+)
+
+let contentHook: "metadata" | "title" | "output" | "attachments" = "metadata"
+const contentEvents: Array<{ type: string; data: unknown }> = []
+const image = Buffer.from("image").toString("base64")
+const blob = Buffer.from("blob").toString("base64")
+fixture({
+  events: contentEvents,
+  documents: [
+    new ConfigMCP.Info({ servers: { content: new ConfigMCP.Local({ type: "local", command: ["content"] }) } }),
+  ],
+  connect: () =>
+    Effect.succeed(
+      MCPClient.make({
+        capabilities: { tools: {} },
+        list: () => Promise.resolve({ tools: [{ name: "mixed", inputSchema: { type: "object" } }] }),
+        call: () =>
+          Promise.resolve({
+            content: [
+              { type: "text", text: "first" },
+              { type: "image", data: image, mimeType: "image/png" },
+              { type: "resource", resource: { uri: "text://resource", text: "resource" } },
+              {
+                type: "resource",
+                resource: { uri: "file:///blob.bin", blob, mimeType: "application/octet-stream" },
+              },
+              { type: "text", text: "last" },
+            ],
+            structuredContent: { structured: true },
+            _meta: { source: "mcp" },
+            isError: false,
+          }),
+        close: () => Promise.resolve(),
+      }),
+    ),
+}).effect("preserves mixed content for metadata/title hooks and reconstructs explicit replacements", () =>
+  Effect.gen(function* () {
+    yield* (yield* PluginV2.Service).add({
+      id: PluginV2.ID.make("content-hook"),
+      effect: Effect.succeed({
+        "tool.execute.after": (event) =>
+          Effect.sync(() => {
+            if (contentHook === "metadata") event.metadata = { ...event.metadata, hook: true }
+            if (contentHook === "title") event.title = "MCP progress"
+            if (contentHook === "output") event.output = "replacement"
+            if (contentHook === "attachments")
+              event.attachments = [
+                {
+                  type: "file",
+                  mime: "application/json",
+                  url: `data:application/json;base64,${Buffer.from("{}").toString("base64")}`,
+                  filename: "replacement.json",
+                },
+              ]
+          }),
+      }),
+    })
+    const registry = yield* ToolRegistry.Service
+    const settle = () =>
+      registry.materialize().pipe(
+        Effect.flatMap((tools) =>
+          tools.settle({
+            ...identity,
+            call: { type: "tool-call", id: `call-content-${contentHook}`, name: "content_mixed", input: {} },
+          }),
+        ),
+      )
+    const original = [
+      { type: "text", text: "first" },
+      { type: "file", uri: `data:image/png;base64,${image}`, mime: "image/png", name: undefined },
+      { type: "text", text: "resource" },
+      {
+        type: "file",
+        uri: `data:application/octet-stream;base64,${blob}`,
+        mime: "application/octet-stream",
+        name: "blob.bin",
+      },
+      { type: "text", text: "last" },
+    ]
+    contentHook = "metadata"
+    const metadata = yield* settle()
+    expect(metadata.output?.content).toEqual(original)
+    expect(metadata.output?.structured).toEqual({
+      structuredContent: { structured: true },
+      _meta: { source: "mcp", hook: true },
+      isError: false,
+    })
+    contentHook = "title"
+    contentEvents.length = 0
+    const title = yield* settle()
+    expect(title.output?.content).toEqual(original)
+    expect(title.output?.structured).toEqual({
+      structuredContent: { structured: true },
+      _meta: { source: "mcp" },
+      isError: false,
+    })
+    expect(contentEvents.find((event) => event.type === SessionEvent.Tool.Progress.type)?.data).toMatchObject({
+      sessionID: identity.sessionID,
+      assistantMessageID: identity.assistantMessageID,
+      content: [{ type: "text", text: "MCP progress" }],
+      structured: { source: "mcp" },
+    })
+    contentHook = "output"
+    expect((yield* settle()).output?.content).toEqual([
+      { type: "text", text: "replacement" },
+      { type: "file", uri: `data:image/png;base64,${image}`, mime: "image/png", name: undefined },
+      {
+        type: "file",
+        uri: `data:application/octet-stream;base64,${blob}`,
+        mime: "application/octet-stream",
+        name: "blob.bin",
+      },
+    ])
+    contentHook = "attachments"
+    expect((yield* settle()).output?.content).toEqual([
+      { type: "text", text: "first\nresource\nlast" },
+      {
+        type: "file",
+        uri: `data:application/json;base64,${Buffer.from("{}").toString("base64")}`,
+        mime: "application/json",
+        name: "replacement.json",
+      },
+    ])
   }),
 )
 

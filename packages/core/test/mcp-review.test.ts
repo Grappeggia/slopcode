@@ -179,3 +179,24 @@ it.effect("tracks close from acquisition and replays it exactly once to late han
     expect(second).toBe(1)
   }),
 )
+
+it.effect("bounds a never-settling SDK close and still escalates a stubborn grandchild", () =>
+  Effect.gen(function* () {
+    const signals: Array<{ pids: ReadonlyArray<number>; signal: "SIGTERM" | "SIGKILL" }> = []
+    let scans = 0
+    yield* Effect.promise(() =>
+      MCPClient.cleanup(40, () => new Promise(() => {}), {
+        platform: "linux",
+        tree: async () => (++scans === 1 ? [41] : [41, 42]),
+        signal: async (pids, signal) => signals.push({ pids, signal }),
+        alive: async (pids) => pids.filter((pid) => pid === 42),
+        sleep: async () => {},
+      }),
+    )
+    expect(signals).toEqual([
+      { pids: [42, 41, 40], signal: "SIGTERM" },
+      { pids: [42], signal: "SIGKILL" },
+    ])
+    expect(scans).toBeGreaterThan(1)
+  }),
+)
