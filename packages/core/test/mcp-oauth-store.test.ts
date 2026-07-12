@@ -34,6 +34,13 @@ describe("MCP OAuth store", () => {
           expect((yield* store.get(base)).tokens?.access_token).toBe("base")
           expect((yield* store.get(scoped)).tokens?.access_token).toBe("scoped")
           expect((yield* store.get({ ...base, endpoint: "https://example.com/mcp/" })).tokens).toBeUndefined()
+          for (const target of [
+            { ...base, directory: "/other" },
+            { ...base, name: "other" },
+            { ...base, endpoint: "https://example.com/other" },
+            { ...base, endpoint: "https://example.com/mcp?tenant=one" },
+          ])
+            expect((yield* store.get(target)).tokens).toBeUndefined()
 
           const dir = path.join(tmp.path, "mcp-oauth")
           expect((yield* Effect.promise(() => fs.stat(dir))).mode & 0o777).toBe(0o700)
@@ -276,6 +283,37 @@ describe("MCP OAuth store", () => {
           yield* Effect.promise(() => fs.rm(file, { recursive: true }))
           yield* MCPOAuthStore.make({ data: tmp.path }).update(target, () => ({}))
           expect((yield* Effect.promise(() => fs.readdir(dir))).filter((name) => name.endsWith(".tmp"))).toEqual([])
+        }),
+      ),
+    ),
+  )
+
+  it.live("ignores malformed or ambiguous legacy buckets without weakening the destination", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const legacy = path.join(tmp.path, "mcp-auth.json")
+          yield* Effect.promise(() => Bun.write(legacy, JSON.stringify({
+            version: 2,
+            entries: {
+              wrong: {
+                identity: { instance: "/workspace", name: "server" },
+                servers: {
+                  "https://example.com/mcp": {
+                    tokens: { accessToken: "must-not-claim" },
+                    unknown: true,
+                  },
+                },
+              },
+            },
+          })))
+          const entry = yield* MCPOAuthStore.make({ data: tmp.path, legacy }).get({
+            directory: "/workspace",
+            name: "server",
+            endpoint: "https://example.com/mcp",
+          })
+          expect(entry).toEqual({})
+          expect(yield* Effect.promise(() => Bun.file(legacy).text())).toContain("must-not-claim")
         }),
       ),
     ),

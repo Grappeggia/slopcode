@@ -70,4 +70,48 @@ describe("MCP OAuth callback", () => {
       ),
     ),
   )
+
+  it.live("rejects duplicate parameters, occupied ports, and keeps IPv4 and IPv6 ownership distinct", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => MCPOAuthCallback.make()),
+      (callbacks) => Effect.promise(() => callbacks.close()),
+    ).pipe(
+      Effect.flatMap((callbacks) =>
+        Effect.gen(function* () {
+          const occupied = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+          const unavailable = callbacks.register({
+            redirect: `http://127.0.0.1:${occupied.port}/callback`,
+            state: "occupied",
+            receive: async () => true,
+          })
+          expect(yield* Effect.promise(() => unavailable.then(() => false, () => true))).toBe(true)
+          occupied.stop(true)
+
+          const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+          const port = reserve.port
+          reserve.stop(true)
+          const registration = yield* Effect.promise(() => callbacks.register({
+            redirect: `http://127.0.0.1:${port}/callback`,
+            state: "duplicates",
+            receive: async () => true,
+          }))
+          expect((yield* Effect.promise(() => fetch(`http://127.0.0.1:${port}/callback?state=duplicates&state=duplicates&code=code`))).status).toBe(400)
+          expect((yield* Effect.promise(() => fetch(`http://127.0.0.1:${port}/callback?state=duplicates&code=one&code=two`))).status).toBe(400)
+          yield* Effect.promise(() => registration.close())
+
+          if (process.platform !== "linux") return
+          const ipv6 = Bun.serve({ hostname: "::1", port: 0, fetch: () => new Response() })
+          const ipv6Port = ipv6.port
+          ipv6.stop(true)
+          const six = yield* Effect.promise(() => callbacks.register({
+            redirect: `http://[::1]:${ipv6Port}/callback`,
+            state: "ipv6-state",
+            receive: async () => true,
+          }))
+          expect((yield* Effect.promise(() => fetch(`http://[::1]:${ipv6Port}/callback?state=ipv6-state&code=code`))).status).toBe(200)
+          yield* Effect.promise(() => six.close())
+        }),
+      ),
+    ),
+  )
 })
