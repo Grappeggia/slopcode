@@ -249,20 +249,31 @@ export const layer = Layer.effect(
     ) {
       const adapted = yield* adapt(server, client, definitions, plugin, permission, events)
       if (!valid()) return yield* Effect.fail(new Error("MCP replacement closed before tool registration"))
-      yield* registrations.withPermits(1)(
+      return yield* registrations.withPermits(1)(
         Effect.gen(function* () {
           for (const name of Object.keys(adapted))
             if ([...servers.values()].some((current) => current !== server && current.names.has(name)))
               return yield* Effect.fail(new Error(`MCP tool name collision: ${name}`))
           const next = yield* Scope.fork(scope)
-          yield* tools.register(adapted, { slot: server.slot }).pipe(
+          let visible = false
+          yield* tools.register(adapted, { slot: server.slot, visible: () => visible }).pipe(
             Scope.provide(next),
             Effect.onError(() => Scope.close(next, Exit.void)),
           )
-          const previous = server.registration
-          server.registration = next
-          server.names = new Set(Object.keys(adapted))
-          if (previous) yield* Scope.close(previous, Exit.void).pipe(Effect.ignore)
+          if (!valid()) {
+            yield* Scope.close(next, Exit.void).pipe(Effect.ignore)
+            return yield* Effect.fail(new Error("MCP replacement closed during tool registration"))
+          }
+          return {
+            scope: next,
+            publish: () => {
+              const previous = server.registration
+              visible = true
+              server.registration = next
+              server.names = new Set(Object.keys(adapted))
+              return previous
+            },
+          }
         }),
       )
     })
@@ -291,14 +302,16 @@ export const layer = Layer.effect(
             (cause) => new DiscoveryError({ server: server.name, message: redact(message(cause), server.config) }),
           ),
         )
-        yield* install(server, client, discovered.definitions).pipe(
+        const staged = yield* install(server, client, discovered.definitions).pipe(
           Effect.mapError(
             (cause) => new DiscoveryError({ server: server.name, message: redact(message(cause), server.config) }),
           ),
         )
+        const previous = staged.publish()
         server.definitions = discovered.definitions
         server.prompts = discovered.prompts
         server.resources = discovered.resources
+        if (previous) yield* Scope.close(previous, Exit.void).pipe(Effect.ignore)
       })
 
     const refresh = (server: Server) => operations.withPermits(1)(server.lock.withPermits(1)(refreshUnlocked(server)))
@@ -406,7 +419,6 @@ export const layer = Layer.effect(
     const activate = Effect.fnUntraced(function* (server: Server, prepared: Prepared) {
       const client = prepared.client
       const previous = server.client
-      const definitions = server.definitions
       if (server.pending !== client || prepared.closed()) {
         yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
         server.pending = undefined
@@ -425,8 +437,7 @@ export const layer = Layer.effect(
         return
       }
       if (prepared.closed()) {
-        if (previous) yield* install(server, previous, definitions).pipe(Effect.orDie)
-        if (!previous) yield* hide(server)
+        if (Exit.isSuccess(result)) yield* Scope.close(result.value.scope, Exit.void).pipe(Effect.ignore)
         yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
         server.pending = undefined
         if (previous) yield* publish(server, { status: "connected", transport: previous.transport })
@@ -435,6 +446,7 @@ export const layer = Layer.effect(
       }
       // Publish the owning client and all content snapshots without yielding so
       // readers can never observe entries backed by an unavailable client.
+      const registration = result.value.publish()
       server.client = client
       server.pending = undefined
       server.config = prepared.config
@@ -442,6 +454,7 @@ export const layer = Layer.effect(
       server.definitions = prepared.definitions
       server.prompts = prepared.prompts
       server.resources = prepared.resources
+      if (registration) yield* Scope.close(registration, Exit.void).pipe(Effect.ignore)
       if (previous && previous !== client) yield* Effect.promise(() => previous.close()).pipe(Effect.ignore)
       if (hasTools(client.capabilities))
         client.changed(() =>
@@ -670,34 +683,48 @@ export const layer = Layer.effect(
               yield* anchor(server)
               changed.push({ server, config, timeout: config.timeout ?? next.timeout })
             }
-            const discovered = yield* Effect.forEach(
-              changed.filter((target) => !target.config.disabled),
-              (target) => target.server.lock.withPermits(1)(prepare(target.server, target)),
-              { concurrency: "unbounded" },
-            )
             const disabled = changed.filter((target) => target.config.disabled)
-            yield* Effect.forEach(
+            const cleanup = yield* Effect.forEach(
               disabled,
               (target) =>
                 target.server.lock.withPermits(1)(
-                  Effect.uninterruptible(
-                    Effect.gen(function* () {
-                      yield* hide(target.server)
-                      const pending = target.server.pending
-                      const client = target.server.client
-                      target.server.pending = undefined
-                      target.server.client = undefined
-                      target.server.config = target.config
-                      target.server.timeout = target.timeout
-                      yield* publish(target.server, { status: "disabled" })
-                      if (pending && pending !== client)
-                        yield* Effect.promise(() => pending.close()).pipe(Effect.ignore)
-                      if (client) yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
-                    }),
-                  ),
+                  Effect.gen(function* () {
+                    yield* hide(target.server)
+                    const pending = target.server.pending
+                    const client = target.server.client
+                    target.server.pending = undefined
+                    target.server.client = undefined
+                    target.server.config = target.config
+                    target.server.timeout = target.timeout
+                    yield* publish(target.server, { status: "disabled" })
+                    return [pending, client] as const
+                  }),
                 ),
-              { concurrency: "unbounded", discard: true },
+              { concurrency: "unbounded" },
             )
+            const result = yield* Effect.all(
+              {
+                discovered: Effect.forEach(
+                  changed.filter((target) => !target.config.disabled),
+                  (target) => target.server.lock.withPermits(1)(prepare(target.server, target)),
+                  { concurrency: "unbounded" },
+                ),
+                cleanup: Effect.forEach(
+                  cleanup,
+                  ([pending, client]) =>
+                    Effect.uninterruptible(
+                      Effect.gen(function* () {
+                        if (pending && pending !== client)
+                          yield* Effect.promise(() => pending.close()).pipe(Effect.ignore)
+                        if (client) yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
+                      }),
+                    ),
+                  { concurrency: "unbounded", discard: true },
+                ),
+              },
+              { concurrency: "unbounded" },
+            )
+            const discovered = result.discovered
             const ordered = changed.filter((target) => !target.config.disabled).map((target) => target.server)
             yield* activateBatch(
               ordered,

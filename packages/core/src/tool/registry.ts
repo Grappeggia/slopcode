@@ -99,7 +99,12 @@ const registryLayer = Layer.effect(
     const resources = yield* ToolOutputStore.Service
     type Registration = { readonly identity: object; readonly tool: AnyTool }
     type Captured = { readonly registration: Registration; readonly overlay: boolean }
-    type Local = { readonly slot: object; readonly token: object; readonly registration: Registration }
+    type Local = {
+      readonly slot: object
+      readonly token: object
+      readonly registration: Registration
+      readonly visible: () => boolean
+    }
     const local = new Map<string, Local[]>()
     const order = new Map<object, number>()
     const active = new Map<object, Set<object>>()
@@ -161,13 +166,14 @@ const registryLayer = Layer.effect(
             if (!order.has(slot)) order.set(slot, sequence++)
             active.set(slot, new Set([...(active.get(slot) ?? []), token]))
             for (const [name, tool] of entries) {
-              const registration = { slot, token, registration: { identity: {}, tool } }
+              const registration = {
+                slot,
+                token,
+                registration: { identity: {}, tool },
+                visible: options?.visible ?? (() => true),
+              }
               const existing = local.get(name) ?? []
-              const index = existing.findIndex((item) => item.slot === slot)
-              const registrations =
-                index < 0
-                  ? [...existing, registration]
-                  : existing.map((item, current) => (current === index ? registration : item))
+              const registrations = [...existing, registration]
               registrations.sort((left, right) => order.get(left.slot)! - order.get(right.slot)!)
               local.set(name, registrations)
             }
@@ -206,7 +212,7 @@ const registryLayer = Layer.effect(
           Array.from(applications.entries(), ([name, registration]) => [name, { registration, overlay: false }] as const),
         )
         for (const [name, entries] of local) {
-          const registration = entries.at(-1)?.registration
+          const registration = entries.findLast((entry) => entry.visible())?.registration
           if (registration) registrations.set(name, { registration, overlay: false })
         }
         const groups: ReadonlyArray<Readonly<Record<string, AnyTool>>> = turn
