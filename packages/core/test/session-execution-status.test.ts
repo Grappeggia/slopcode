@@ -10,7 +10,7 @@ import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionExecutionStatusTable, SessionTable } from "@slopcode-ai/core/session/sql"
-import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { EventTable } from "@slopcode-ai/core/event/sql"
 import { asc, eq } from "drizzle-orm"
@@ -398,6 +398,23 @@ describe("SessionExecutionStatus", () => {
 
       yield* events.publish(SessionEvent.Execution.Failed, { ...data, message: "😀".repeat(128) })
       expect((yield* events.publish(SessionEvent.Execution.Failed, { ...data, message: "😀".repeat(129) }).pipe(Effect.exit))._tag).toBe("Failure")
+    }),
+  )
+
+  it.effect("decodes continuation readiness through canonical durable and all-event unions", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const service = yield* SessionExecutionStatus.Service
+      const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+      const activity = { activityID: rootID, rootID, activity: "prompt" as const }
+      const fingerprint = "f".repeat(64)
+      yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      yield* service.complete({ ...fence, ...activity, phase: "tool", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      const event = yield* service.continue({ ...fence, ...activity, phase: "tool", requestAttempt: 1, providerAttempt: 1, fingerprint })
+
+      expect(Schema.is(SessionEvent.Durable)(event)).toBe(true)
+      expect(Schema.is(SessionEvent.All)(event)).toBe(true)
     }),
   )
 

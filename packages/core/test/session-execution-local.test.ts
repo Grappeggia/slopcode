@@ -331,6 +331,59 @@ describe("SessionExecutionLocal startup recovery", () => {
       expect(runs).toEqual([sessionID])
     }),
   )
+  it.effect("reconstructs each durable proof when the continuation marker was not published", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const status = yield* SessionExecutionStatus.make
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
+      const cases = ["tool", "structured", "compaction", "steer"] as const
+      for (const kind of cases) {
+        const sessionID = SessionSchema.ID.make(`ses_recovered_proof_${kind}`)
+        const rootID = SessionMessage.ID.make(`msg_recovered_proof_${kind}`)
+        const assistantMessageID = SessionMessage.ID.make(`msg_recovered_proof_${kind}_assistant`)
+        const fingerprint = kind.charCodeAt(0).toString(16).repeat(64).slice(0, 64)
+        yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: sessionID, directory: "/project", title: kind, version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
+        const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: 1, activityID: rootID, rootID, activity: "prompt" as const }
+        yield* status.start({ ...fence, phase: "preparing" })
+        yield* status.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+        if (kind === "tool" || kind === "steer") {
+          yield* events.publish(SessionEvent.Step.Started, { sessionID, timestamp: yield* DateTime.now, assistantMessageID, rootUserID: rootID, agent: "build", model: { providerID: ProviderV2.ID.make("fake"), id: ModelV2.ID.make("fake") } })
+          if (kind === "tool") {
+            yield* events.publish(SessionEvent.Tool.CalledV1, { sessionID, timestamp: yield* DateTime.now, assistantMessageID, callID: "call-proof", tool: "echo", input: { text: "done" }, provider: { executed: false } })
+            yield* events.publish(SessionEvent.Tool.Success, { sessionID, timestamp: yield* DateTime.now, assistantMessageID, callID: "call-proof", structured: { text: "done" }, content: [], provider: { executed: false } })
+          }
+          yield* events.publish(SessionEvent.Step.Ended, { sessionID, timestamp: yield* DateTime.now, assistantMessageID, finish: kind === "tool" ? "tool-calls" : "stop", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
+        }
+        yield* status.complete({ ...fence, phase: kind === "tool" ? "tool" : "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+        if (kind === "structured")
+          yield* events.publish(SessionEvent.Structured.Retry, { sessionID, timestamp: yield* DateTime.now, rootUserID: rootID, assistantMessageID, attempt: 1, remaining: 1, reason: "schema", message: "retry" })
+        if (kind === "compaction") {
+          const messageID = SessionMessage.ID.make("msg_recovered_proof_compaction_summary")
+          yield* events.publish(SessionEvent.Compaction.Started, { sessionID, timestamp: yield* DateTime.now, messageID, reason: "auto" })
+          yield* events.publish(SessionEvent.Compaction.Ended, { sessionID, timestamp: yield* DateTime.now, messageID, reason: "auto", text: "summary", recent: "" })
+        }
+        if (kind === "steer")
+          yield* SessionInput.admit(db, events, { id: SessionMessage.ID.make("msg_recovered_proof_steer_pending"), sessionID, prompt: new Prompt({ text: "continue" }), delivery: "steer" })
+      }
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.type, "session.next.execution.continuation.ready.1")).all().pipe(Effect.orDie)).toEqual([])
+      const runs: SessionSchema.ID[] = []
+      const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run: (input) => Effect.sync(() => runs.push(input.sessionID)) }))
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.scoped(Layer.build(execution))
+      expect(runs.sort()).toEqual(cases.map((kind) => SessionSchema.ID.make(`ses_recovered_proof_${kind}`)).sort())
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.type, "session.next.execution.continuation.ready.1")).all().pipe(Effect.orDie)).toHaveLength(4)
+    }),
+  )
   it.effect("recovers and drains durable pending input without a new prompt", () => verify("steer"))
   it.effect("recovers and drains queued durable input without a new prompt", () => verify("queue"))
   it.effect("leaves recovered sessions paused when no durable input is pending", () => verify())
