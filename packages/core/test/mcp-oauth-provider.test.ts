@@ -34,7 +34,7 @@ describe("MCP OAuth provider", () => {
             config: {},
             onRedirect: () => Promise.resolve(),
           })
-          expect(yield* Effect.promise(() => first.clientInformation())).toEqual({
+          expect(yield* Effect.promise(() => Promise.resolve(first.clientInformation()))).toEqual({
             client_id: "static",
             client_secret: " secret ",
           })
@@ -42,7 +42,7 @@ describe("MCP OAuth provider", () => {
           yield* Effect.promise(() => second.saveCodeVerifier("verifier-two"))
           expect(yield* Effect.promise(() => first.codeVerifier())).toBe("verifier-one")
           expect(yield* Effect.promise(() => second.codeVerifier())).toBe("verifier-two")
-          expect(yield* Effect.promise(() => first.state())).toBe("state-one")
+          expect(yield* Effect.promise(() => Promise.resolve(first.state!()))).toBe("state-one")
           expect(first.clientMetadata.scope).toBe("read")
         }),
       ),

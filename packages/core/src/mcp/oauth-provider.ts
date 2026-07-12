@@ -1,0 +1,75 @@
+export * as MCPOAuthProvider from "./oauth-provider"
+
+import type { OAuthClientProvider, OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js"
+import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js"
+import { Effect } from "effect"
+import type { ConfigMCP } from "../config/mcp"
+import type { MCPOAuthStore } from "./oauth-store"
+
+export function make(input: {
+  readonly store: MCPOAuthStore.Interface
+  readonly target: MCPOAuthStore.Target
+  readonly attemptID: string
+  readonly state: string
+  readonly redirectUrl: string
+  readonly config: typeof ConfigMCP.OAuth.Type
+  readonly onRedirect: (url: URL) => Promise<void>
+  readonly now?: () => number
+}): OAuthClientProvider {
+  const run = <A>(effect: Effect.Effect<A, MCPOAuthStore.StoreError>) => Effect.runPromise(effect)
+  const now = input.now ?? (() => Date.now() / 1000)
+  return {
+    redirectUrl: input.redirectUrl,
+    clientMetadata: {
+      redirect_uris: [input.redirectUrl],
+      client_name: "SlopCode",
+      client_uri: "https://slopcode.ai",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: input.config.client_secret ? "client_secret_post" : "none",
+      ...(input.config.scope ? { scope: input.config.scope } : {}),
+    } satisfies OAuthClientMetadata,
+    state: () => input.state,
+    clientInformation: async () => {
+      if (input.config.client_id)
+        return { client_id: input.config.client_id, ...(input.config.client_secret === undefined ? {} : { client_secret: input.config.client_secret }) }
+      const client = (await run(input.store.get(input.target))).client
+      if (!client) return undefined
+      const expiry = client.client_secret_expires_at
+      if (expiry !== undefined && Number.isFinite(expiry) && expiry > 0 && expiry <= now()) return undefined
+      return client
+    },
+    saveClientInformation: (client: OAuthClientInformationMixed) =>
+      run(input.store.update(input.target, (entry) => ({ ...entry, client }))).then(() => undefined),
+    tokens: async () => {
+      const tokens = (await run(input.store.get(input.target))).tokens
+      if (!tokens) return undefined
+      return {
+        access_token: tokens.access_token,
+        token_type: tokens.token_type,
+        ...(tokens.refresh_token === undefined ? {} : { refresh_token: tokens.refresh_token }),
+        ...(tokens.scope === undefined ? {} : { scope: tokens.scope }),
+        ...(tokens.id_token === undefined ? {} : { id_token: tokens.id_token }),
+        ...(tokens.expires_at === undefined ? {} : { expires_in: Math.max(0, Math.floor(tokens.expires_at - now())) }),
+      } satisfies OAuthTokens
+    },
+    saveTokens: (tokens) => run(input.store.saveTokens(input.target, tokens, now())),
+    redirectToAuthorization: input.onRedirect,
+    saveCodeVerifier: (verifier) =>
+      run(
+        input.store.update(input.target, (entry) => ({
+          ...entry,
+          attempts: { ...entry.attempts, [input.attemptID]: { ...entry.attempts?.[input.attemptID], verifier } },
+        })),
+      ).then(() => undefined),
+    codeVerifier: async () => {
+      const verifier = (await run(input.store.get(input.target))).attempts?.[input.attemptID]?.verifier
+      if (!verifier) throw new Error("MCP OAuth verifier is unavailable")
+      return verifier
+    },
+    discoveryState: () => run(input.store.get(input.target)).then((entry) => entry.discovery),
+    saveDiscoveryState: (discovery: OAuthDiscoveryState) =>
+      run(input.store.update(input.target, (entry) => ({ ...entry, discovery }))).then(() => undefined),
+    invalidateCredentials: (scope) => run(input.store.invalidate(input.target, scope, input.attemptID)),
+  }
+}

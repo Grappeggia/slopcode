@@ -205,9 +205,12 @@ export function interruptible(run: (signal: AbortSignal) => Promise<Connection>)
   })
 }
 
-export function headers(generated?: HeadersInit, configured?: Readonly<Record<string, string>>) {
-  const result = new Headers(generated)
-  Object.entries(configured ?? {}).forEach(([name, value]) => result.set(name, value))
+export function headers(generated?: HeadersInit, configured?: Readonly<Record<string, string>>, oauth = false) {
+  const result = new Headers(oauth ? undefined : generated)
+  Object.entries(configured ?? {}).forEach(([name, value]) => {
+    if (!oauth || name.toLowerCase() !== "authorization") result.set(name, value)
+  })
+  if (oauth) new Headers(generated).forEach((value, name) => result.set(name, value))
   return result
 }
 
