@@ -682,11 +682,19 @@ describe("MCP OAuth protocol boundary", () => {
             expect((yield* Effect.promise(() => fetch(
               `http://127.0.0.1:${port}/mcp/oauth/callback?state=${authorization.searchParams.get("state")}&code=authorization-code`,
             ))).status).toBe(200)
-            yield* Effect.sleep("30 millis")
             expect((yield* store.findAttempt(second.attemptID))?.attempt.phase).toBe("complete")
             expect((yield* store.findAttempt(first.attemptID))?.attempt.phase).toBe("cancelled")
             expect((yield* store.findAttempt(other.attemptID))?.attempt.phase).toBe("pending")
-            const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+            const reused = yield* Effect.promise(async () => {
+              for (const deadline = Date.now() + 1000; ; ) {
+                try {
+                  return Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+                } catch (error) {
+                  if (Date.now() >= deadline) throw error
+                  await Bun.sleep(10)
+                }
+              }
+            })
             expect(reused.port).toBe(port)
             reused.stop(true)
             expect(yield* Effect.promise(() => fetch(
