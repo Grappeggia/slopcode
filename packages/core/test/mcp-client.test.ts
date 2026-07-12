@@ -441,7 +441,7 @@ it.live("single-flights proactive refresh across spawned processes", () =>
   ),
 )
 
-it.live("bounds invalid grant malformed and unavailable refresh failures", () =>
+it.live("bounds invalid grant malformed and interaction refresh failures", () =>
   Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
     Effect.flatMap((tmp) =>
       Effect.forEach(["invalid", "malformed", "interaction"] as const, (mode, index) =>
