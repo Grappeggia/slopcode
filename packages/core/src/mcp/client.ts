@@ -312,23 +312,7 @@ export const layer = Layer.effect(
                 !entry.tokens.refresh_token))
           )
             throw new AuthRequired()
-          const provider: OAuthClientProvider | undefined = enabled
-            ? MCPOAuthProvider.make({
-                store,
-                target,
-                attemptID: "mcp_auth_connect",
-                state: "connect",
-                redirectUrl: redirect,
-                compatibility,
-                config: oauth,
-                transient: false,
-                interactive: false,
-                onRedirect: async () => {
-                  throw new AuthRequired()
-                },
-              })
-            : undefined
-          if (provider) {
+          if (enabled) {
             if (entry!.tokens!.expires_at !== undefined && entry!.tokens!.expires_at <= Date.now() / 1000 + 60) {
               await Flock.withLock(
                 `mcp-oauth-refresh:${JSON.stringify(target)}`,
@@ -337,9 +321,22 @@ export const layer = Layer.effect(
                   if (latest.tokens?.expires_at === undefined || latest.tokens.expires_at > Date.now() / 1000 + 60)
                     return
                   if (!latest.tokens.refresh_token) throw new AuthRequired()
-                  const result = await auth(provider, {
+                  const result = await auth(MCPOAuthProvider.make({
+                    store,
+                    target,
+                    attemptID: "mcp_auth_refresh",
+                    state: "refresh",
+                    redirectUrl: redirect,
+                    compatibility,
+                    config: oauth,
+                    transient: false,
+                    interactive: false,
+                    onRedirect: async () => {
+                      throw new AuthRequired()
+                    },
+                  }), {
                     serverUrl: url,
-                    fetchFn: network(url, configured, true, signal),
+                    fetchFn: network(url, undefined, true, signal),
                   })
                   if (result !== "AUTHORIZED") throw new AuthRequired()
                 },
@@ -347,6 +344,10 @@ export const layer = Layer.effect(
               )
             }
           }
+          const current = enabled ? await Effect.runPromise(store.get(target)) : undefined
+          const provider: OAuthClientProvider | undefined = enabled
+            ? MCPOAuthProvider.connect({ entry: current!, config: oauth, compatibility })
+            : undefined
           const fetcher = network(url, configured, enabled, signal)
           const first = new StreamableHTTPClientTransport(url, { authProvider: provider, fetch: fetcher })
           const remote = await connect(first, "remote", input.timeout, signal).catch((cause) => {

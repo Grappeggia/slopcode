@@ -28,11 +28,20 @@ export type AuthStatus =
         readonly expires: number
       }>
     }
-  | { readonly status: "failed"; readonly code: string }
+  | { readonly status: "failed"; readonly code: FailureCode }
+
+export const FailureCode = Schema.Literals([
+  "attempt-expired",
+  "provider-error",
+  "callback-unavailable",
+  "indeterminate-exchange",
+  "discovery",
+  "exchange",
+])
+export type FailureCode = typeof FailureCode.Type
 
 export type BeginResult =
   | { readonly status: "connected" }
-  | { readonly status: "credential-ready" }
   | {
       readonly status: "authorizing"
       readonly attemptID: AttemptID
@@ -54,6 +63,7 @@ export class AuthError extends Schema.TaggedErrorClass<AuthError>()("MCP.AuthErr
     "discovery",
     "exchange",
     "store",
+    "connection",
   ]),
   server: Schema.String.pipe(Schema.optional),
   attemptID: Schema.String.pipe(Schema.optional),
@@ -101,17 +111,19 @@ export const layer = Layer.effect(
     const safe = <A>(effect: Effect.Effect<A, MCPOAuthStore.StoreError>, target?: MCPOAuthStore.Target) =>
       effect.pipe(Effect.mapError(() => failure("store", target)))
     const close = (attemptID: string) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const listener = listeners.get(attemptID)
         listeners.delete(attemptID)
         owned.delete(attemptID)
-        void listener?.close().catch(() => undefined)
+        if (listener) yield* Effect.promise(() => listener.close()).pipe(Effect.ignore)
       })
+    const later = (attemptID: string) =>
+      setTimeout(() => Effect.runPromise(close(attemptID)).catch(() => undefined), 0)
     const terminal = (
       target: MCPOAuthStore.Target,
       attemptID: string,
       phase: "complete" | "cancelled" | "expired" | "failed",
-      error?: string,
+       error?: FailureCode,
     ) =>
       phase === "complete" || phase === "cancelled"
         ? close(attemptID)
@@ -143,13 +155,13 @@ export const layer = Layer.effect(
             const failed = attempts
               .filter(([, attempt]) => attempt.phase === "failed")
               .sort((a, b) => (b[1].created ?? 0) - (a[1].created ?? 0))[0]
-            if (failed) return { status: "failed", code: failed[1].error ?? "exchange" } as const
+            if (failed) return { status: "failed", code: failureCode(failed[1].error) } as const
             return { status: "auth-required" } as const
           }),
         ),
       )
 
-    const finish = (input: Parameters<Interface["complete"]>[0], recovered = false) =>
+    const finish = (input: Parameters<Interface["complete"]>[0], recovered = false, callback = false) =>
       Effect.gen(function* () {
         if (!input.code || !input.state) return yield* failure("attempt-invalid", input.target, input.attemptID)
         if (!recovered) {
@@ -158,7 +170,7 @@ export const layer = Layer.effect(
           if (claim.status !== "claimed" || JSON.stringify(claim.target) !== JSON.stringify(input.target))
             return yield* failure(claim.status === "invalid" ? "attempt-invalid" : "attempt-used", input.target, input.attemptID)
         }
-        yield* close(input.attemptID)
+        if (!callback) yield* close(input.attemptID)
         const attempt = yield* safe(store.startExchange(input.target, input.attemptID, input.code), input.target)
         if (!attempt) return yield* failure("attempt-used", input.target, input.attemptID)
         let tokens: import("@modelcontextprotocol/sdk/shared/auth.js").OAuthTokens | undefined
@@ -202,7 +214,7 @@ export const layer = Layer.effect(
         if (result !== "AUTHORIZED") return yield* failure("exchange", input.target, input.attemptID)
         if (!tokens || !(yield* safe(store.finishExchange(input.target, input.attemptID, tokens), input.target)))
           return yield* failure("attempt-used", input.target, input.attemptID)
-        yield* close(input.attemptID)
+        if (!callback) yield* close(input.attemptID)
         return { status: "credential-ready" } as const
       })
     const complete: Interface["complete"] = (input) => finish(input)
@@ -210,10 +222,13 @@ export const layer = Layer.effect(
     const begin: Interface["begin"] = (input) =>
       Effect.gen(function* () {
         const existing = yield* safe(store.get(input.target), input.target)
-        const redirect = redirectFor(input.config)
+        const redirect = yield* Effect.try({
+          try: () => redirectFor(input.config),
+          catch: () => failure("invalid-redirect", input.target),
+        })
         const compatibility = MCPOAuthProvider.compatibility(input.target.endpoint, input.config, redirect.url)
         if (existing.compatibility === compatibility && usable(existing))
-          return { status: "credential-ready" } as const
+          return { status: "connected" } as const
         if (existing.compatibility && existing.compatibility !== compatibility)
           yield* safe(store.cancelTarget(input.target, true), input.target)
         const attemptID = `mcp_auth_${randomBytes(16).toString("hex")}` as AttemptID
@@ -249,11 +264,15 @@ export const layer = Layer.effect(
                 state,
                 receive: async (result) => {
                   if (!result.code) {
-                    await Effect.runPromise(terminal(input.target, attemptID, "failed", "provider-error"))
+                    await Effect.runPromise(
+                      safe(store.finishAttempt(input.target, attemptID, "failed", "provider-error", ["pending"]), input.target),
+                    )
+                    later(attemptID)
                     return true
                   }
-                  const completed = await Effect.runPromiseExit(complete({ ...input, attemptID, code: result.code, state }))
+                  const completed = await Effect.runPromiseExit(finish({ ...input, attemptID, code: result.code, state }, false, true))
                   if (completed._tag !== "Success") return false
+                  later(attemptID)
                   completions.forEach((handler) => handler(input.target))
                   return true
                 },
@@ -281,7 +300,7 @@ export const layer = Layer.effect(
         }).pipe(Effect.tapError(() => terminal(input.target, attemptID, "failed", "discovery")))
         if (result === "AUTHORIZED") {
           yield* terminal(input.target, attemptID, "complete")
-          return { status: "credential-ready" } as const
+          return { status: "connected" } as const
         }
         if (!authorizationUrl) {
           yield* terminal(input.target, attemptID, "failed", "discovery")
@@ -352,19 +371,23 @@ export const layer = Layer.effect(
                     state: attempt.state!,
                     receive: async (result) => {
                       if (!result.code) {
-                        await Effect.runPromise(terminal(input.target, attemptID, "failed", "provider-error"))
+                        await Effect.runPromise(
+                          safe(store.finishAttempt(input.target, attemptID, "failed", "provider-error", ["pending"]), input.target),
+                        )
+                        later(attemptID)
                         return true
                       }
                       const completed = await Effect.runPromiseExit(
-                        complete({
+                        finish({
                           target: input.target,
                           config: input.config,
                           attemptID: attemptID as AttemptID,
                           code: result.code,
                           state: attempt.state!,
-                        }),
+                        }, false, true),
                       )
                       if (completed._tag !== "Success") return false
+                      later(attemptID)
                       completions.forEach((handler) => handler(input.target))
                       return true
                     },
@@ -412,12 +435,25 @@ export const layer = Layer.effect(
 function redirectFor(config: typeof ConfigMCP.OAuth.Type) {
   const value = config.redirect_uri ?? `http://127.0.0.1:${config.callback_port ?? DEFAULT_PORT}${PATH}`
   const url = new URL(value)
-  if (config.callback_port !== undefined && url.port && Number(url.port) !== config.callback_port)
+  if (
+    config.callback_port !== undefined &&
+    config.redirect_uri !== undefined &&
+    (url.protocol !== "http:" ||
+      (url.hostname !== "127.0.0.1" && url.hostname !== "[::1]") ||
+      !url.port ||
+      Number(url.port) !== config.callback_port)
+  )
     throw new AuthError({ code: "invalid-redirect", message: "MCP OAuth invalid-redirect" })
   const local = url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "[::1]")
   if (local && (!url.port || url.search || url.hash || url.username || url.password))
     throw new AuthError({ code: "invalid-redirect", message: "MCP OAuth invalid-redirect" })
   return { url: url.toString(), local }
+}
+
+function failureCode(value: string | undefined): FailureCode {
+  return ["attempt-expired", "provider-error", "callback-unavailable", "indeterminate-exchange", "discovery", "exchange"].includes(value ?? "")
+    ? (value as FailureCode)
+    : "exchange"
 }
 
 function abortFetch(signal: AbortSignal) {

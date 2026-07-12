@@ -78,6 +78,7 @@ export const dependencies = [
   FetchHttpClient.layer,
   ToolOutputStore.defaultCleanupLayer,
   ApplicationTools.layer,
+  MCPOAuthCallback.hostLayer,
 ] as const
 
 export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("@slopcode/example/LocationServiceMap", {
@@ -134,7 +135,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       Layer.provide(builtInTools),
     )
     const oauthStore = MCPOAuthStore.layer
-    const oauthCallback = MCPOAuthCallback.layer
+    const oauthCallback = MCPOAuthCallback.locationLayer
     const oauth = MCPOAuth.layer.pipe(Layer.provide(oauthStore), Layer.provide(oauthCallback))
     const mcpClient = MCPClient.layer.pipe(Layer.provide(oauthStore))
     const mcp = MCP.locationLayer.pipe(

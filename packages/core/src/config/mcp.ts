@@ -39,11 +39,18 @@ export const OAuth = Schema.Struct({
   callback_port: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 })).pipe(Schema.optional),
   redirect_uri: redirect.pipe(Schema.optional),
 }).check(
-  Schema.makeFilter((value) =>
-    value.client_secret === undefined || value.client_id !== undefined
+  Schema.makeFilter((value) => {
+    if (value.client_secret !== undefined && value.client_id === undefined)
+      return "MCP OAuth client ID is required when a client secret is configured"
+    if (value.callback_port === undefined || value.redirect_uri === undefined) return undefined
+    const url = new URL(value.redirect_uri)
+    return url.protocol === "http:" &&
+      (url.hostname === "127.0.0.1" || url.hostname === "[::1]") &&
+      !!url.port &&
+      Number(url.port) === value.callback_port
       ? undefined
-      : "MCP OAuth client ID is required when a client secret is configured",
-  ),
+      : "MCP OAuth callback configuration is invalid"
+  }),
 )
 
 export class Remote extends Schema.Class<Remote>("ConfigV2.MCP.Remote")({

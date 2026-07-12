@@ -38,10 +38,13 @@ describe("MCP OAuth callback", () => {
 
   it.live("shares listeners across callback services and unregisters only after durable acceptance", () =>
     Effect.acquireRelease(
-      Effect.promise(() => Promise.all([MCPOAuthCallback.make(), MCPOAuthCallback.make()])),
-      (callbacks) => Effect.promise(() => Promise.all(callbacks.map((callback) => callback.close())).then(() => undefined)),
+      Effect.promise(async () => {
+        const host = await MCPOAuthCallback.makeHost()
+        return { host, callbacks: await Promise.all([MCPOAuthCallback.make(host), MCPOAuthCallback.make(host)]) }
+      }),
+      (value) => Effect.promise(() => Promise.all(value.callbacks.map((callback) => callback.close())).then(() => value.host.close())),
     ).pipe(
-      Effect.flatMap(([first, second]) =>
+      Effect.flatMap(({ callbacks: [first, second] }) =>
         Effect.gen(function* () {
           const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
           const port = listener.port

@@ -18,7 +18,7 @@ import { ApplicationTools } from "@slopcode-ai/core/tool/application-tools"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
 import { Tools } from "@slopcode-ai/core/tool/tools"
 import { ToolOutputStore } from "@slopcode-ai/core/tool-output-store"
-import { Cause, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { testEffect } from "./lib/effect"
 
 const location = Layer.succeed(Location.Service, {
@@ -1304,11 +1304,12 @@ fixture({
 const authDocuments = [
   new ConfigMCP.Info({
     servers: {
-      staged: new ConfigMCP.Remote({ type: "remote", url: "https://old.example/mcp", oauth: false }),
+      staged: new ConfigMCP.Remote({ type: "remote", url: "https://old.example/mcp", oauth: { client_id: "old-client" } }),
     },
   }),
 ]
 const authBegins: Array<{ target: MCPOAuthStore.Target; config: typeof ConfigMCP.OAuth.Type }> = []
+const authRemoves: MCPOAuthStore.Target[] = []
 const authStore: MCPOAuthStore.Interface = {
   get: () => Effect.succeed({}),
   update: (_target, change) => Effect.succeed(change({})),
@@ -1339,7 +1340,7 @@ const stagedOAuth: MCPOAuth.Interface = {
     }),
   complete: () => Effect.fail(new MCPOAuth.AuthError({ code: "attempt-invalid", message: "unused" })),
   cancel: () => Effect.void,
-  remove: () => Effect.void,
+  remove: (target) => Effect.sync(() => authRemoves.push(target)).pipe(Effect.asVoid),
   reset: () => Effect.void,
   stop: () => Effect.void,
   recover: () => Effect.void,
@@ -1381,5 +1382,11 @@ fixture({
       target: { endpoint: "https://new.example/mcp" },
       config: { client_id: "new-client", scope: "new-scope", redirect_uri: "https://client.example/new" },
     })
+    yield* mcp.removeAuth("staged")
+    expect(authRemoves.map((target) => target.endpoint).toSorted()).toEqual([
+      "https://new.example/mcp",
+      "https://old.example/mcp",
+    ])
+    expect(() => Schema.decodeUnknownSync(MCP.AuthStatus)({ status: "failed", code: "remote-body" })).toThrow()
   }),
 )

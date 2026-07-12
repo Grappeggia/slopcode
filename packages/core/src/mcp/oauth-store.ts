@@ -482,8 +482,8 @@ function validData(value: unknown): value is Data {
     if (normalizeEndpoint(id.endpoint) !== id.endpoint || expected !== key) return false
     const entry = candidate.entry
     if (!exact(entry, ["tokens", "client", "discovery", "compatibility", "attempts", "claim"])) return false
-    if (entry.compatibility !== undefined && typeof entry.compatibility !== "string") return false
-    if (entry.claim !== undefined && typeof entry.claim !== "string") return false
+    if (entry.compatibility !== undefined && (typeof entry.compatibility !== "string" || !/^[a-f0-9]{64}$/.test(entry.compatibility))) return false
+    if (entry.claim !== undefined && entry.claim !== "v1-version-2") return false
     if (entry.tokens !== undefined) {
       if (
         !exact(entry.tokens, ["access_token", "token_type", "expires_in", "expires_at", "refresh_token", "scope", "id_token"]) ||
@@ -514,8 +514,9 @@ function validData(value: unknown): value is Data {
       const phases = new Set(["pending", "received", "exchanging", "complete", "cancelled", "expired", "failed"])
       for (const attempt of Object.values(entry.attempts)) {
         if (!exact(attempt, ["state", "verifier", "code", "mode", "redirect", "created", "expires", "phase", "error"])) return false
-        for (const field of ["state", "verifier", "code", "error"])
+        for (const field of ["state", "verifier", "code"])
           if (attempt[field] !== undefined && typeof attempt[field] !== "string") return false
+        if (attempt.error !== undefined && !FAILURES.has(attempt.error as string)) return false
         if (!web(attempt.redirect)) return false
         if (attempt.mode !== "auto" && attempt.mode !== "manual") return false
         if (!finite(attempt.created) || attempt.created === undefined || !finite(attempt.expires) || attempt.expires === undefined) return false
@@ -556,25 +557,70 @@ const RESOURCE_FIELDS = [
 
 function client(value: unknown): value is OAuthClientInformationMixed {
   if (!exact(value, CLIENT_FIELDS) || typeof value.client_id !== "string") return false
+  if (value.client_secret !== undefined && typeof value.client_secret !== "string") return false
+  if (!finite(value.client_id_issued_at) || !finite(value.client_secret_expires_at)) return false
   if (value.redirect_uris !== undefined && (!Array.isArray(value.redirect_uris) || !value.redirect_uris.every(web))) return false
+  if (!strings(value, ["token_endpoint_auth_method", "client_name", "scope", "software_id", "software_version", "software_statement"])) return false
+  if (!arrays(value, ["grant_types", "response_types", "contacts"])) return false
+  if (!json(value.jwks)) return false
   return urlFields(value, ["client_uri", "logo_uri", "tos_uri", "policy_uri", "jwks_uri"])
 }
 
 function authorization(value: unknown) {
   if (!exact(value, AUTH_FIELDS)) return false
   if (typeof value.issuer !== "string" || !web(value.issuer) || !web(value.authorization_endpoint) || !web(value.token_endpoint)) return false
+  if (!Array.isArray(value.response_types_supported) || !value.response_types_supported.every((item) => typeof item === "string")) return false
+  if (!arrays(value, [
+    "scopes_supported", "response_modes_supported", "grant_types_supported", "token_endpoint_auth_methods_supported",
+    "token_endpoint_auth_signing_alg_values_supported", "revocation_endpoint_auth_methods_supported",
+    "revocation_endpoint_auth_signing_alg_values_supported", "introspection_endpoint_auth_methods_supported",
+    "introspection_endpoint_auth_signing_alg_values_supported", "code_challenge_methods_supported", "acr_values_supported",
+    "subject_types_supported", "id_token_signing_alg_values_supported", "id_token_encryption_alg_values_supported",
+    "id_token_encryption_enc_values_supported", "userinfo_signing_alg_values_supported", "userinfo_encryption_alg_values_supported",
+    "userinfo_encryption_enc_values_supported", "request_object_signing_alg_values_supported",
+    "request_object_encryption_alg_values_supported", "request_object_encryption_enc_values_supported", "display_values_supported",
+    "claim_types_supported", "claims_supported", "claims_locales_supported", "ui_locales_supported",
+  ])) return false
+  if (!booleans(value, [
+    "client_id_metadata_document_supported", "claims_parameter_supported", "request_parameter_supported",
+    "request_uri_parameter_supported", "require_request_uri_registration",
+  ])) return false
   return urlFields(value, ["registration_endpoint", "service_documentation", "revocation_endpoint", "introspection_endpoint", "userinfo_endpoint", "jwks_uri", "op_policy_uri", "op_tos_uri"])
 }
 
 function protectedResource(value: unknown) {
   if (!exact(value, RESOURCE_FIELDS) || !web(value.resource)) return false
   if (value.authorization_servers !== undefined && (!Array.isArray(value.authorization_servers) || !value.authorization_servers.every(web))) return false
+  if (!arrays(value, ["scopes_supported", "bearer_methods_supported", "resource_signing_alg_values_supported", "authorization_details_types_supported", "dpop_signing_alg_values_supported"])) return false
+  if (!strings(value, ["resource_name"])) return false
+  if (!booleans(value, ["tls_client_certificate_bound_access_tokens", "dpop_bound_access_tokens_required"])) return false
   return urlFields(value, ["jwks_uri", "resource_documentation", "resource_policy_uri", "resource_tos_uri"])
 }
 
 function urlFields(value: Record<string, unknown>, fields: ReadonlyArray<string>) {
   return fields.every((field) => value[field] === undefined || value[field] === "" || web(value[field]))
 }
+
+function strings(value: Record<string, unknown>, fields: ReadonlyArray<string>) {
+  return fields.every((field) => value[field] === undefined || typeof value[field] === "string")
+}
+
+function arrays(value: Record<string, unknown>, fields: ReadonlyArray<string>) {
+  return fields.every((field) => value[field] === undefined || (Array.isArray(value[field]) && value[field].every((item) => typeof item === "string")))
+}
+
+function booleans(value: Record<string, unknown>, fields: ReadonlyArray<string>) {
+  return fields.every((field) => value[field] === undefined || typeof value[field] === "boolean")
+}
+
+function json(value: unknown): boolean {
+  if (value === undefined || value === null || typeof value === "string" || typeof value === "boolean") return true
+  if (typeof value === "number") return Number.isFinite(value)
+  if (Array.isArray(value)) return value.every(json)
+  return record(value) && Object.values(value).every(json)
+}
+
+const FAILURES = new Set(["attempt-expired", "provider-error", "callback-unavailable", "indeterminate-exchange", "discovery", "exchange"])
 
 function exact(value: unknown, fields: ReadonlyArray<string>): value is Record<string, unknown> {
   return record(value) && Object.keys(value).every((field) => fields.includes(field))
@@ -647,25 +693,39 @@ type LegacyEntry = {
   readonly clientInfo?: { readonly clientId: string; readonly clientSecret?: string; readonly clientIdIssuedAt?: number; readonly clientSecretExpiresAt?: number }
   readonly codeVerifier?: string
   readonly oauthState?: string
+  readonly serverUrl?: string
 }
 type LegacyData = {
   readonly version: 2
   readonly entries: Readonly<Record<string, { readonly identity: { readonly instance: string; readonly name: string }; readonly servers: Readonly<Record<string, LegacyEntry>> }>>
-  readonly legacy?: Readonly<Record<string, unknown>>
-  readonly recoverable?: Readonly<Record<string, unknown>>
+  readonly legacy?: Readonly<Record<string, LegacyEntry>>
+  readonly recoverable?: Readonly<Record<string, LegacyEntry>>
 }
 
 function legacyData(value: unknown): value is LegacyData {
   if (!exact(value, ["version", "entries", "legacy", "recoverable"]) || value.version !== 2 || !record(value.entries)) return false
-  return Object.values(value.entries).every((bucket) => {
+  if (value.legacy !== undefined && !legacyEntries(value.legacy, true)) return false
+  if (value.recoverable !== undefined && !legacyEntries(value.recoverable, true)) return false
+  return Object.entries(value.entries).every(([key, bucket]) => {
     if (!exact(bucket, ["identity", "servers"]) || !exact(bucket.identity, ["instance", "name"]) || !record(bucket.servers)) return false
     if (typeof bucket.identity.instance !== "string" || typeof bucket.identity.name !== "string") return false
-    return Object.entries(bucket.servers).every(([endpoint, entry]) => {
-      if (!exact(entry, ["tokens", "clientInfo", "codeVerifier", "oauthState"])) return false
+    if (key !== JSON.stringify([bucket.identity.instance, bucket.identity.name])) return false
+    return legacyEntries(bucket.servers, false)
+  })
+}
+
+function legacyEntries(value: unknown, serverUrl: boolean) {
+  if (!record(value)) return false
+  return Object.entries(value).every(([endpoint, entry]) => {
+      if (!exact(entry, ["tokens", "clientInfo", "codeVerifier", "oauthState", ...(serverUrl ? ["serverUrl"] : [])])) return false
+      if (serverUrl) {
+        if (entry.serverUrl !== undefined && (typeof entry.serverUrl !== "string" || !web(entry.serverUrl))) return false
+      } else {
       try {
         if (normalizeEndpoint(endpoint) !== endpoint) return false
       } catch {
         return false
+      }
       }
       if (entry.codeVerifier !== undefined && typeof entry.codeVerifier !== "string") return false
       if (entry.oauthState !== undefined && typeof entry.oauthState !== "string") return false
@@ -682,7 +742,6 @@ function legacyData(value: unknown): value is LegacyData {
       }
       return true
     })
-  })
 }
 
 function legacyIdentity(target: Target) {

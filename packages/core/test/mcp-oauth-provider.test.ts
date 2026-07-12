@@ -68,7 +68,7 @@ describe("MCP OAuth provider", () => {
           const store = MCPOAuthStore.make({ data: tmp.path })
           const target = { directory: "/workspace", name: "connect", endpoint: "https://example.com/mcp" }
           yield* store.update(target, () => ({
-            compatibility: "compatible",
+            compatibility: "a".repeat(64),
             tokens: { access_token: "access", token_type: "Bearer" },
             client: { client_id: "client", redirect_uris: ["https://client.example/callback"] },
             discovery: { authorizationServerUrl: "https://auth.example/" },
@@ -78,7 +78,7 @@ describe("MCP OAuth provider", () => {
           const provider = MCPOAuthProvider.connect({
             entry: yield* store.get(target),
             config: {},
-            compatibility: "compatible",
+            compatibility: "a".repeat(64),
           })
           expect(provider.redirectUrl).toBeUndefined()
           expect(provider.saveClientInformation).toBeUndefined()

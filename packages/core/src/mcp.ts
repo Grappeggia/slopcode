@@ -60,7 +60,7 @@ export const AuthStatus = Schema.Union([
       }),
     ),
   }),
-  Schema.Struct({ status: Schema.Literal("failed"), code: Schema.String }),
+  Schema.Struct({ status: Schema.Literal("failed"), code: MCPOAuth.FailureCode }),
 ])
 export type AuthStatus = typeof AuthStatus.Type
 export type BeginAuthResult = MCPOAuth.BeginResult
@@ -738,8 +738,7 @@ const baseLayer = Layer.effect(
           config: authOptions(server),
           mode: input.mode,
         })
-        if (result.status === "connected" || result.status === "credential-ready")
-          yield* operations.withPermits(1)(resumeAuth(server))
+        if (result.status === "connected") yield* operations.withPermits(1)(resumeAuth(server))
         const stored = yield* oauth.status(target)
         const status = server.client
           ? ({ status: "connected" } as const)
@@ -747,11 +746,14 @@ const baseLayer = Layer.effect(
             ? ({ status: "auth-required" } as const)
             : stored
         yield* publishAuth(server.name, status)
-        return result.status === "authorizing"
-          ? result
-          : server.client
-            ? ({ status: "connected" } as const)
-            : result
+        if (result.status === "authorizing") return result
+        if (!server.client || server.auth)
+          return yield* new MCPOAuth.AuthError({
+            code: "connection",
+            server: server.name,
+            message: "MCP OAuth connection",
+          })
+        return { status: "connected" } as const
       }),
       completeAuth: Effect.fn("MCP.completeAuth")(function* (input) {
         const found = yield* oauthStore.findAttempt(input.attemptID).pipe(
@@ -807,8 +809,10 @@ const baseLayer = Layer.effect(
       removeAuth: Effect.fn("MCP.removeAuth")(function* (name: string) {
         const server = servers.get(name)
         if (!server) return yield* new AuthNotFoundError({ server: name })
-        const target = authTarget(server)
-        if (!target)
+        const targets: MCPOAuthStore.Target[] = [authTarget(server), authTarget(server, server.config)].flatMap(
+          (target) => (target ? [target] : []),
+        ).filter((target, index, values) => values.findIndex((value) => JSON.stringify(value) === JSON.stringify(target)) === index)
+        if (!targets.length)
           return yield* new MCPOAuth.AuthError({
             code: "not-applicable",
             server: name,
@@ -817,7 +821,7 @@ const baseLayer = Layer.effect(
         yield* operations.withPermits(1)(
           server.lock.withPermits(1)(close(server).pipe(Effect.andThen(publish(server, { status: "disconnected" })))),
         )
-        yield* oauth.remove(target)
+        yield* Effect.forEach(targets, (target) => oauth.remove(target), { discard: true })
         yield* publishAuth(name, { status: "auth-required" })
       }),
       connect: Effect.fn("MCP.connect")(function* (name?: string) {

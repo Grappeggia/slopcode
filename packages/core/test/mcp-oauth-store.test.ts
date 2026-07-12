@@ -152,7 +152,7 @@ describe("MCP OAuth store", () => {
           const second = MCPOAuthStore.make({ data: tmp.path })
           const target = { directory: "/workspace", name: "server", endpoint: "https://example.com/mcp" }
           yield* first.update(target, () => ({
-            compatibility: "compatible",
+            compatibility: "a".repeat(64),
             attempts: {
               winner: {
                 state: "winner-state",
@@ -314,6 +314,69 @@ describe("MCP OAuth store", () => {
           })
           expect(entry).toEqual({})
           expect(yield* Effect.promise(() => Bun.file(legacy).text())).toContain("must-not-claim")
+        }),
+      ),
+    ),
+  )
+
+  it.live("rejects every malformed nested OAuth SDK field mutation", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const dir = path.join(tmp.path, "mcp-oauth")
+          const file = path.join(dir, "store.json")
+          yield* Effect.promise(() => fs.mkdir(dir, { recursive: true }))
+          const identity = { directory: "/workspace", name: "matrix", endpoint: "https://example.com/mcp" }
+          const key = JSON.stringify([identity.directory, identity.name, identity.endpoint])
+          const base = {
+            version: 1,
+            buckets: {
+              [key]: {
+                identity,
+                entry: {
+                  compatibility: "a".repeat(64),
+                  tokens: { access_token: "access", token_type: "Bearer", expires_at: 10 },
+                  client: {
+                    client_id: "client",
+                    redirect_uris: ["https://client.example/callback"],
+                    grant_types: ["authorization_code"],
+                    contacts: ["ops@example.com"],
+                  },
+                  discovery: {
+                    authorizationServerUrl: "https://auth.example/",
+                    authorizationServerMetadata: {
+                      issuer: "https://auth.example/",
+                      authorization_endpoint: "https://auth.example/authorize",
+                      token_endpoint: "https://auth.example/token",
+                      response_types_supported: ["code"],
+                      code_challenge_methods_supported: ["S256"],
+                    },
+                    resourceMetadata: {
+                      resource: "https://example.com/mcp",
+                      authorization_servers: ["https://auth.example/"],
+                      scopes_supported: ["read"],
+                      dpop_bound_access_tokens_required: false,
+                    },
+                  },
+                },
+              },
+            },
+          }
+          const invalid = [
+            { ...base, buckets: { [key]: { identity, entry: { ...base.buckets[key]!.entry, tokens: { access_token: "a", token_type: "Bearer", expires_at: "soon" } } } } },
+            { ...base, buckets: { [key]: { identity, entry: { ...base.buckets[key]!.entry, client: { client_id: "c", grant_types: "bad" } } } } },
+            { ...base, buckets: { [key]: { identity, entry: { ...base.buckets[key]!.entry, client: { client_id: "c", contacts: [1] } } } } },
+            { ...base, buckets: { [key]: { identity, entry: { ...base.buckets[key]!.entry, client: { client_id: "c", client_uri: "javascript:bad" } } } } },
+            { ...base, buckets: { [key]: { identity, entry: { ...base.buckets[key]!.entry, client: { client_id: "c", client_id_issued_at: -1 } } } } },
+            { ...base, buckets: { [key]: { identity, entry: { ...base.buckets[key]!.entry, discovery: { authorizationServerUrl: "https://auth.example/", authorizationServerMetadata: { issuer: "https://auth.example/", authorization_endpoint: "https://auth.example/a", token_endpoint: "https://auth.example/t", response_types_supported: "code" } } } } } },
+            { ...base, buckets: { [key]: { identity, entry: { ...base.buckets[key]!.entry, discovery: { authorizationServerUrl: "https://auth.example/", authorizationServerMetadata: { issuer: "https://auth.example/", authorization_endpoint: "https://auth.example/a", token_endpoint: "https://auth.example/t", response_types_supported: ["code"], client_id_metadata_document_supported: "yes" } } } } } },
+            { ...base, buckets: { [key]: { identity, entry: { ...base.buckets[key]!.entry, discovery: { authorizationServerUrl: "https://auth.example/", resourceMetadata: { resource: "https://example.com/mcp", scopes_supported: [1] } } } } } },
+            { ...base, buckets: { [key]: { identity, entry: { ...base.buckets[key]!.entry, discovery: { authorizationServerUrl: "https://auth.example/", resourceMetadata: { resource: "https://example.com/mcp", dpop_bound_access_tokens_required: "no" } } } } } },
+          ]
+          for (const data of invalid) {
+            yield* Effect.promise(() => Bun.write(file, JSON.stringify(data)))
+            expect(yield* MCPOAuthStore.make({ data: tmp.path }).get(identity).pipe(Effect.flip)).toMatchObject({ code: "invalid" })
+          }
         }),
       ),
     ),

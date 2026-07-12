@@ -197,6 +197,51 @@ describe("MCP OAuth protocol boundary", () => {
     ),
   )
 
+  it.live("dynamically registers and replaces an expired client secret", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.gen(function* () {
+              const store = MCPOAuthStore.make({ data: tmp.path })
+              const target = { directory: tmp.path, name: "dynamic", endpoint: `${fixture.url}/mcp` }
+              yield* store.update(target, () => ({
+                client: { client_id: "expired", client_secret: "old", client_secret_expires_at: 1 },
+                attempts: {
+                  mcp_auth_dynamic: {
+                    state: "dynamic-state",
+                    mode: "manual",
+                    redirect: "https://client.example/callback",
+                    created: 1,
+                    expires: Date.now() + 60_000,
+                    phase: "pending",
+                  },
+                },
+              }))
+              let redirected = false
+              const provider = MCPOAuthProvider.make({
+                store,
+                target,
+                attemptID: "mcp_auth_dynamic",
+                state: "dynamic-state",
+                redirectUrl: "https://client.example/callback",
+                config: {},
+                now: () => 2,
+                onRedirect: async () => {
+                  redirected = true
+                },
+              })
+              expect(yield* Effect.promise(() => auth(provider, { serverUrl: target.endpoint }))).toBe("REDIRECT")
+              expect(redirected).toBe(true)
+              expect(fixture.registrations).toBe(1)
+              expect((yield* store.get(target)).client?.client_id).toBe("registered-1")
+            }),
+          ),
+        ),
+      ),
+    ),
+  )
+
   it.live("cancels incompatible attempts and all owned manual attempts on shutdown", () =>
     Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
       Effect.flatMap((tmp) =>
@@ -241,6 +286,107 @@ describe("MCP OAuth protocol boundary", () => {
       ),
     ),
   )
+
+  it.live("awaits OAuth cancellation before callback port reuse", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+                const port = reserve.port
+                reserve.stop(true)
+                const store = MCPOAuthStore.make({ data: tmp.path })
+                const context = yield* Layer.build(
+                  MCPOAuth.layer.pipe(
+                    Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                    Layer.provide(MCPOAuthCallback.layer),
+                  ),
+                )
+                const started = yield* Context.get(context, MCPOAuth.Service).begin({
+                  target: { directory: tmp.path, name: "reuse", endpoint: `${fixture.url}/mcp` },
+                  config: { client_id: "static-client", callback_port: port },
+                })
+                if (started.status !== "authorizing") throw new Error("authorization did not start")
+                yield* Context.get(context, MCPOAuth.Service).cancel(started.attemptID)
+                const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+                expect(reused.port).toBe(port)
+                reused.stop(true)
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("issues exactly one SDK token request for cross-process sibling completions", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            let tokens = 0
+            const server = Bun.serve({
+              hostname: "127.0.0.1",
+              port: 0,
+              fetch: (request) => {
+                const url = new URL(request.url)
+                if (url.pathname === "/.well-known/oauth-protected-resource/mcp")
+                  return Response.json({ resource: `${url.origin}/mcp`, authorization_servers: [url.origin] })
+                if (url.pathname === "/.well-known/oauth-authorization-server")
+                  return Response.json({
+                    issuer: url.origin,
+                    authorization_endpoint: `${url.origin}/authorize`,
+                    token_endpoint: `${url.origin}/token`,
+                    response_types_supported: ["code"],
+                    code_challenge_methods_supported: ["S256"],
+                  })
+                if (url.pathname === "/token") {
+                  tokens++
+                  return Response.json({ access_token: "winner", token_type: "Bearer" })
+                }
+                return new Response("missing", { status: 404 })
+              },
+            })
+            return { server, tokens: () => tokens }
+          }),
+          (fixture) => Effect.sync(() => fixture.server.stop(true)),
+        ).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.gen(function* () {
+              const endpoint = `${fixture.server.url}mcp`
+              const store = MCPOAuthStore.make({ data: tmp.path })
+              const attempt = (id: string): MCPOAuthStore.Attempt => ({
+                state: `${id}-state`,
+                verifier: `${id}-verifier`,
+                mode: "manual",
+                redirect: "https://client.example/callback",
+                created: Date.now(),
+                expires: Date.now() + 60_000,
+                phase: "pending",
+              })
+              yield* store.update({ directory: "/workspace", name: "process", endpoint }, () => ({
+                attempts: { one: attempt("one"), two: attempt("two") },
+              }))
+              const worker = `${import.meta.dir}/fixture/mcp-oauth-complete-worker.ts`
+              const results = yield* Effect.promise(() => Promise.all(["one", "two"].map(async (id) => {
+                const child = Bun.spawn(["bun", worker, tmp.path, endpoint, id, `${id}-state`, `${id}-code`], {
+                  cwd: `${import.meta.dir}/..`,
+                  stdout: "pipe",
+                })
+                const output = await new Response(child.stdout).text()
+                expect(await child.exited).toBe(0)
+                return output
+              })))
+              expect(results.toSorted()).toEqual(["lost", "won"])
+              expect(fixture.tokens()).toBe(1)
+            }),
+          ),
+        ),
+      ),
+    ),
+  )
 })
 
 function protocol() {
@@ -249,6 +395,7 @@ function protocol() {
     challenge: "",
     discovery: 0,
     grants,
+    registrations: 0,
     url: "",
     stop: () => {},
   }
@@ -271,10 +418,16 @@ function protocol() {
           issuer: origin,
           authorization_endpoint: `${origin}/authorize`,
           token_endpoint: `${origin}/token`,
+          registration_endpoint: `${origin}/register`,
           response_types_supported: ["code"],
           code_challenge_methods_supported: ["S256"],
           token_endpoint_auth_methods_supported: ["none"],
         })
+      if (url.pathname === "/register") {
+        fixture.registrations++
+        const metadata = await request.json()
+        return Response.json({ ...metadata, client_id: `registered-${fixture.registrations}`, client_secret_expires_at: 0 })
+      }
       if (url.pathname === "/token") {
         const form = await request.formData()
         const grant = String(form.get("grant_type"))
