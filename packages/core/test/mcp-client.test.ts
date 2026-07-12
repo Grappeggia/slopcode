@@ -8,7 +8,7 @@ import { ConfigMCP } from "@slopcode-ai/core/config/mcp"
 import { MCPClient } from "@slopcode-ai/core/mcp/client"
 import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
 import { MCPOAuthProvider } from "@slopcode-ai/core/mcp/oauth-provider"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Fiber, Layer } from "effect"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 import { z } from "zod"
@@ -127,6 +127,7 @@ it.live("connects Streamable HTTP with configured headers and falls back to lega
         expect((yield* Effect.promise(() => remote.list(undefined, 5_000))).tools.map((tool) => tool.name)).toEqual([
           "echo",
         ])
+        yield* Effect.sleep("100 millis")
         yield* Effect.promise(() => remote.close())
 
         const sse = yield* clients.connect({
@@ -153,7 +154,81 @@ it.live("connects Streamable HTTP with configured headers and falls back to lega
           expect.objectContaining({ method: "GET", path: "/mcp", accept: "text/event-stream" }),
           expect.objectContaining({ method: "POST", path: "/messages", contentType: expect.stringContaining("application/json") }),
         ]))
+        expect(fixture.requests).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            method: "GET",
+            path: "/mcp",
+            last: "event-1",
+            session: expect.any(String),
+            protocol: expect.any(String),
+          }),
+        ]))
+        expect(fixture.requests).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            method: "GET",
+            path: "/mcp",
+            authorization: "Bearer streamable",
+            session: expect.any(String),
+            protocol: expect.any(String),
+          }),
+        ]))
       }),
+    ),
+  ),
+)
+
+it.live("uses OAuth bearer precedence and generated headers on real SSE traffic", () =>
+  Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((tmp) =>
+      Effect.acquireRelease(Effect.promise(server), (fixture) => Effect.promise(fixture.close)).pipe(
+        Effect.flatMap((fixture) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const store = MCPOAuthStore.make({ data: tmp.path })
+              const endpoint = `${fixture.url}/sse`
+              yield* store.update({ directory: tmp.path, name: "oauth-sse", endpoint }, () => ({
+                compatibility: MCPOAuthProvider.compatibility(
+                  endpoint,
+                  {},
+                  "http://127.0.0.1:19876/mcp/oauth/callback",
+                ),
+                tokens: { access_token: "oauth-token", token_type: "Bearer" },
+              }))
+              const context = yield* Layer.build(MCPClient.layerWith(store))
+              const connection = yield* Context.get(context, MCPClient.Service).connect({
+                name: "oauth-sse",
+                directory: tmp.path,
+                timeout: 5_000,
+                config: new ConfigMCP.Remote({
+                  type: "remote",
+                  url: endpoint,
+                  oauth: {},
+                  headers: { Authorization: "Bearer configured", "X-Custom": "configured" },
+                }),
+              })
+              yield* Effect.promise(() => connection.list(undefined, 5_000))
+              yield* Effect.promise(() => connection.close())
+              expect(fixture.requests.filter((request) => ["/sse", "/messages"].includes(request.path))).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({
+                    method: "GET",
+                    path: "/sse",
+                    accept: "text/event-stream",
+                    authorization: "Bearer oauth-token",
+                    custom: "configured",
+                  }),
+                  expect.objectContaining({
+                    method: "POST",
+                    path: "/messages",
+                    authorization: "Bearer oauth-token",
+                    custom: "configured",
+                  }),
+                ]),
+              )
+            }),
+          ),
+        ),
+      ),
     ),
   ),
 )
@@ -174,7 +249,7 @@ it.live("fails auth-required before network or store mutation when credentials a
             Effect.gen(function* () {
               const store = MCPOAuthStore.make({ data: tmp.path })
               const context = yield* Layer.build(
-                MCPClient.locationLayer.pipe(Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store)))),
+                MCPClient.layerWith(store),
               )
               const clients = Context.get(context, MCPClient.Service)
               const error = yield* clients.connect({
@@ -260,7 +335,7 @@ it.live("leaves the exact store bytes unchanged when a server rejects a stored a
           Effect.scoped(
             Effect.gen(function* () {
               const store = MCPOAuthStore.make({ data: tmp.path })
-              const endpoint = `${fixture.server.url}mcp`
+              const endpoint = new URL("mcp", fixture.server.url).toString()
               const target = { directory: tmp.path, name: "rejected", endpoint }
               const redirect = "http://127.0.0.1:19876/mcp/oauth/callback"
               const compatibility = MCPOAuthProvider.compatibility(endpoint, {}, redirect)
@@ -276,20 +351,90 @@ it.live("leaves the exact store bytes unchanged when a server rejects a stored a
               }))
               const file = path.join(tmp.path, "mcp-oauth/store.json")
               const before = yield* Effect.promise(() => Bun.file(file).bytes())
+              const seen: MCPOAuthStore.Entry[] = []
+              const observed: MCPOAuthStore.Interface = {
+                ...store,
+                get: (value) => store.get(value).pipe(Effect.tap((entry) => Effect.sync(() => seen.push(entry)))),
+              }
               const context = yield* Layer.build(
-                MCPClient.locationLayer.pipe(Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store)))),
+                MCPClient.layerWith(observed),
               )
+              expect((yield* store.get(target)).compatibility).toBe(
+                MCPOAuthProvider.compatibility(MCPOAuthStore.normalizeEndpoint(endpoint), {}, redirect),
+              )
+              expect((yield* store.get(target)).tokens?.access_token).toBe("rejected-token")
               const error = yield* Context.get(context, MCPClient.Service).connect({
                 name: target.name,
                 directory: target.directory,
                 timeout: 1_000,
-                config: new ConfigMCP.Remote({ type: "remote", url: endpoint }),
+                config: new ConfigMCP.Remote({ type: "remote", url: endpoint, oauth: {} }),
               }).pipe(Effect.flip)
               expect(error).toMatchObject({ code: "auth-required" })
+              expect(seen.at(0)?.tokens?.access_token).toBe("rejected-token")
               expect(yield* Effect.promise(() => Bun.file(file).bytes())).toEqual(before)
               expect(fixture.requests).toEqual(["/mcp"])
             }),
           ),
+        ),
+      ),
+    ),
+  ),
+)
+
+it.live("single-flights proactive refresh in-process and preserves an interrupted waiter", () =>
+  Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((tmp) =>
+      Effect.acquireRelease(Effect.sync(refreshFixture), (fixture) => Effect.sync(() => fixture.server.stop(true))).pipe(
+        Effect.flatMap((fixture) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const store = MCPOAuthStore.make({ data: tmp.path })
+              const target = { directory: tmp.path, name: "refresh", endpoint: `${fixture.server.url}mcp` }
+              yield* seedRefresh(store, target, fixture.server.url.origin)
+              const context = yield* Layer.build(MCPClient.layerWith(store))
+              const clients = Context.get(context, MCPClient.Service)
+              const connect = () => clients.connect({
+                name: target.name,
+                directory: target.directory,
+                timeout: 2_000,
+                config: new ConfigMCP.Remote({ type: "remote", url: target.endpoint, oauth: { client_id: "static" } }),
+              }).pipe(Effect.exit)
+              const owner = yield* connect().pipe(Effect.forkChild)
+              yield* Effect.promise(() => fixture.started)
+              const waiter = yield* connect().pipe(Effect.forkChild)
+              yield* Fiber.interrupt(waiter).pipe(Effect.forkChild)
+              fixture.release()
+              yield* Fiber.join(owner)
+              expect(fixture.refreshes()).toBe(1)
+              expect((yield* store.get(target)).tokens?.access_token).toBe("fresh")
+            }),
+          ),
+        ),
+      ),
+    ),
+  ),
+)
+
+it.live("single-flights proactive refresh across spawned processes", () =>
+  Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((tmp) =>
+      Effect.acquireRelease(Effect.sync(refreshFixture), (fixture) => Effect.sync(() => fixture.server.stop(true))).pipe(
+        Effect.flatMap((fixture) =>
+          Effect.gen(function* () {
+            const endpoint = `${fixture.server.url}mcp`
+            const store = MCPOAuthStore.make({ data: tmp.path })
+            yield* seedRefresh(store, { directory: tmp.path, name: "refresh-process", endpoint }, fixture.server.url.origin)
+            const worker = `${import.meta.dir}/fixture/mcp-oauth-refresh-worker.ts`
+            const children = [0, 1].map(() => Bun.spawn(["bun", worker, tmp.path, endpoint], {
+              cwd: `${import.meta.dir}/..`,
+              stdout: "pipe",
+            }))
+            yield* Effect.promise(() => fixture.started)
+            fixture.release()
+            expect(yield* Effect.promise(() => Promise.all(children.map((child) => child.exited)))).toEqual([0, 0])
+            expect(fixture.refreshes()).toBe(1)
+            expect((yield* store.get({ directory: tmp.path, name: "refresh-process", endpoint })).tokens?.access_token).toBe("fresh")
+          }),
         ),
       ),
     ),
@@ -304,11 +449,62 @@ function mcp() {
   return server
 }
 
+function refreshFixture() {
+  let refreshes = 0
+  const started = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: async (request) => {
+      const url = new URL(request.url)
+      if (url.pathname === "/token") {
+        refreshes++
+        started.resolve()
+        await release.promise
+        return Response.json({ access_token: "fresh", refresh_token: "refresh", token_type: "Bearer", expires_in: 3600 })
+      }
+      return new Response("missing", { status: 404 })
+    },
+  })
+  return { server, started: started.promise, release: release.resolve, refreshes: () => refreshes }
+}
+
+function seedRefresh(store: MCPOAuthStore.Interface, target: MCPOAuthStore.Target, authorization: string) {
+  const redirect = "http://127.0.0.1:19876/mcp/oauth/callback"
+  return store.update(target, () => ({
+    compatibility: MCPOAuthProvider.compatibility(target.endpoint, { client_id: "static" }, redirect),
+    tokens: { access_token: "expired", refresh_token: "refresh", token_type: "Bearer", expires_at: 1 },
+    discovery: {
+      authorizationServerUrl: authorization,
+      authorizationServerMetadata: {
+        issuer: authorization,
+        authorization_endpoint: `${authorization}/authorize`,
+        token_endpoint: `${authorization}/token`,
+        response_types_supported: ["code"],
+      },
+      resourceMetadata: { resource: target.endpoint, authorization_servers: [authorization] },
+    },
+  }))
+}
+
 async function server() {
   const app = createMcpExpressApp()
   const headers: string[] = []
-  const requests: Array<{ method: string; path: string; accept: string | undefined; contentType: string | undefined }> = []
+  const requests: Array<{
+    method: string
+    path: string
+    accept: string | undefined
+    contentType: string | undefined
+    authorization: string | undefined
+    custom: string | undefined
+    session: string | undefined
+    protocol: string | undefined
+    last: string | undefined
+  }> = []
   const streams = new Map<string, SSEServerTransport>()
+  const sessions = new Map<string, StreamableHTTPServerTransport>()
+  let resumed = false
   const servers = new Set<McpServer>()
   app.use((request, _response, next) => {
     const authorization = request.headers.authorization
@@ -318,16 +514,49 @@ async function server() {
       path: request.path,
       accept: request.headers.accept,
       contentType: request.headers["content-type"],
+      authorization: request.headers.authorization,
+      custom: request.headers["x-custom"] as string | undefined,
+      session: request.headers["mcp-session-id"] as string | undefined,
+      protocol: request.headers["mcp-protocol-version"] as string | undefined,
+      last: request.headers["last-event-id"] as string | undefined,
     })
     next()
   })
   app.post("/mcp", async (request, response) => {
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-    const current = mcp()
-    servers.add(current)
-    await current.connect(transport)
+    const id = request.headers["mcp-session-id"] as string | undefined
+    const existing = id ? sessions.get(id) : undefined
+    const transport = existing ?? new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => crypto.randomUUID(),
+      onsessioninitialized: (session) => sessions.set(session, transport),
+    })
+    if (!existing) {
+      const current = mcp()
+      servers.add(current)
+      transport.onclose = () => {
+        if (transport.sessionId) sessions.delete(transport.sessionId)
+        servers.delete(current)
+      }
+      await current.connect(transport)
+    }
     await transport.handleRequest(request, response, request.body)
-    response.on("close", () => void current.close().finally(() => servers.delete(current)))
+  })
+  app.get("/mcp", async (request, response) => {
+    const id = request.headers["mcp-session-id"] as string | undefined
+    const transport = id ? sessions.get(id) : undefined
+    if (!transport) return response.status(404).end()
+    if (!resumed && !request.headers["last-event-id"]) {
+      resumed = true
+      response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" })
+      response.end('retry: 10\nid: event-1\nevent: message\ndata: {"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"resume"}}\n\n')
+      return
+    }
+    await transport.handleRequest(request, response)
+  })
+  app.delete("/mcp", async (request, response) => {
+    const id = request.headers["mcp-session-id"] as string | undefined
+    const transport = id ? sessions.get(id) : undefined
+    if (!transport) return response.status(404).end()
+    await transport.handleRequest(request, response)
   })
   app.get("/sse", async (_request, response) => {
     const transport = new SSEServerTransport("/messages", response)

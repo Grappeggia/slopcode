@@ -23,7 +23,7 @@ describe("MCP OAuth provider", () => {
                   redirect: "http://127.0.0.1:19876/callback",
                   created: 1,
                   expires: 2,
-                  phase: "pending",
+                  phase: "initializing",
                 },
               ]),
             ),
@@ -77,20 +77,13 @@ describe("MCP OAuth provider", () => {
           const before = yield* Effect.promise(() => Bun.file(file).bytes())
           const provider = MCPOAuthProvider.connect({
             entry: yield* store.get(target),
-            config: {},
             compatibility: "a".repeat(64),
           })
           expect(yield* Effect.promise(() => Promise.resolve(provider.tokens?.()))).toEqual({
             access_token: "access",
             token_type: "Bearer",
           })
-          expect(provider.clientInformation).toBeUndefined()
-          expect(provider.discoveryState).toBeUndefined()
-          expect(provider.saveClientInformation).toBeUndefined()
-          expect(provider.saveDiscoveryState).toBeUndefined()
-          expect(provider.invalidateCredentials).toBeUndefined()
-          expect(provider.codeVerifier).toBeUndefined()
-          expect(provider.saveCodeVerifier).toBeUndefined()
+          expect(Object.keys(provider)).toEqual(["tokens"])
           expect(yield* Effect.promise(() => Bun.file(file).bytes())).toEqual(before)
         }),
       ),

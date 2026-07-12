@@ -106,7 +106,7 @@ describe("Config", () => {
       expect(decoded.mcp?.servers?.external).toMatchObject({
         oauth: { redirect_uri: "https://client.example/callback" },
       })
-      expect((decoded.mcp?.servers?.external as ConfigMCP.Remote).oauth).not.toHaveProperty("callback_port")
+      expect(((decoded.mcp?.servers?.external as ConfigMCP.Remote).oauth as typeof ConfigMCP.OAuth.Type).callback_port).toBeUndefined()
     }),
   )
 

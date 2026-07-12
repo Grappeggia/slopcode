@@ -2,8 +2,9 @@ import { describe, expect } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
+import { Flock } from "@slopcode-ai/core/util/flock"
 import { WorkspaceV2 } from "@slopcode-ai/core/workspace"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { it } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -72,6 +73,7 @@ describe("MCP OAuth store", () => {
                 verifier: "verifier",
                 mode: "manual",
                 redirect: "https://client.example/callback",
+                authorization: "https://auth.example/authorize",
                 created: 1,
                 expires: 2,
                 phase: "pending",
@@ -93,7 +95,7 @@ describe("MCP OAuth store", () => {
                 redirect: "https://client.example/callback",
                 created: 1,
                 expires: 2,
-                phase: "pending",
+                phase: "cancelled",
               },
             },
           })
@@ -159,6 +161,7 @@ describe("MCP OAuth store", () => {
                 verifier: "winner-verifier",
                 mode: "manual",
                 redirect: "https://client.example/callback",
+                authorization: "https://auth.example/authorize",
                 created: 1,
                 expires: 100,
                 phase: "pending",
@@ -168,6 +171,7 @@ describe("MCP OAuth store", () => {
                 verifier: "sibling-verifier",
                 mode: "manual",
                 redirect: "https://client.example/callback",
+                authorization: "https://auth.example/authorize",
                 created: 2,
                 expires: 100,
                 phase: "pending",
@@ -260,6 +264,7 @@ describe("MCP OAuth store", () => {
             code: `${id}-code`,
             mode: "manual",
             redirect: "https://client.example/callback",
+            authorization: "https://auth.example/authorize",
             created: 1,
             expires: 100,
             phase: "exchanging",
@@ -397,6 +402,52 @@ describe("MCP OAuth store", () => {
             yield* Effect.promise(() => Bun.write(file, JSON.stringify(data)))
             expect(yield* MCPOAuthStore.make({ data: tmp.path }).get(identity).pipe(Effect.flip)).toMatchObject({ code: "invalid" })
           }
+        }),
+      ),
+    ),
+  )
+
+  it.live("repairs secure modes, preserves concurrent fields, and interrupts lock waiters", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const target = { directory: "/workspace", name: "durability", endpoint: "https://example.com/mcp" }
+          const store = MCPOAuthStore.make({ data: tmp.path })
+          yield* store.update(target, () => ({}))
+          const dir = path.join(tmp.path, "mcp-oauth")
+          const file = path.join(dir, "store.json")
+          yield* Effect.promise(() => Promise.all([fs.chmod(dir, 0o777), fs.chmod(file, 0o666)]))
+          yield* store.get(target)
+          expect((yield* Effect.promise(() => fs.stat(dir))).mode & 0o777).toBe(0o700)
+          expect((yield* Effect.promise(() => fs.stat(file))).mode & 0o777).toBe(0o600)
+
+          yield* Effect.all(
+            Array.from({ length: 20 }, (_, index) =>
+              MCPOAuthStore.make({ data: tmp.path }).update(target, (entry) => ({
+                ...entry,
+                attempts: {
+                  ...entry.attempts,
+                  [`attempt-${index}`]: {
+                    state: `state-${index}`,
+                    mode: "manual",
+                    redirect: "https://client.example/callback",
+                    created: index,
+                    expires: 100,
+                    phase: "initializing",
+                  },
+                },
+              })),
+            ),
+            { concurrency: "unbounded" },
+          )
+          expect(Object.keys((yield* store.get(target)).attempts ?? {})).toHaveLength(20)
+
+          const lock = yield* Effect.promise(() => Flock.acquire(`mcp-oauth:${file}`, { dir: path.join(tmp.path, ".mcp-oauth-locks") }))
+          const waiter = yield* store.update(target, (entry) => ({ ...entry, compatibility: "b".repeat(64) })).pipe(Effect.forkChild)
+          yield* Effect.sleep("20 millis")
+          yield* Fiber.interrupt(waiter)
+          yield* Effect.promise(() => lock.release())
+          expect((yield* store.get(target)).compatibility).toBeUndefined()
         }),
       ),
     ),

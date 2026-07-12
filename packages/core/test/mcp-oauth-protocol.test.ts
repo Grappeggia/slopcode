@@ -6,7 +6,7 @@ import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
 import { MCPOAuth } from "@slopcode-ai/core/mcp/oauth"
 import { MCPOAuthCallback } from "@slopcode-ai/core/mcp/oauth-callback"
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import { it } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -84,7 +84,7 @@ describe("MCP OAuth protocol boundary", () => {
                     redirect: "http://127.0.0.1:19876/callback",
                     created: 1,
                     expires: Date.now() + 60_000,
-                    phase: "pending",
+                    phase: "initializing",
                   },
                 },
               }))
@@ -243,6 +243,54 @@ describe("MCP OAuth protocol boundary", () => {
     ),
   )
 
+  it.live("scrubs an attempt interrupted during initialization", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            const started = Promise.withResolvers<void>()
+            const server = Bun.serve({
+              hostname: "127.0.0.1",
+              port: 0,
+              fetch: async () => {
+                started.resolve()
+                return new Promise<Response>(() => {})
+              },
+            })
+            return { server, started: started.promise }
+          }),
+          (fixture) => Effect.sync(() => fixture.server.stop(true)),
+        ).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const store = MCPOAuthStore.make({ data: tmp.path })
+                const target = { directory: tmp.path, name: "interrupt-init", endpoint: `${fixture.server.url}mcp` }
+                const context = yield* Layer.build(
+                  MCPOAuth.layer.pipe(
+                    Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                    Layer.provide(MCPOAuthCallback.layer),
+                  ),
+                )
+                const fiber = yield* Context.get(context, MCPOAuth.Service).begin({
+                  target,
+                  config: { client_id: "static", redirect_uri: "https://client.example/callback" },
+                }).pipe(Effect.forkChild)
+                yield* Effect.promise(() => fixture.started)
+                yield* Fiber.interrupt(fiber)
+                expect(Object.values((yield* store.get(target)).attempts ?? {})).toEqual([
+                  expect.objectContaining({ phase: "failed", error: "discovery" }),
+                ])
+                expect(Object.values((yield* store.get(target)).attempts ?? {})[0]).not.toHaveProperty("state")
+                expect(Object.values((yield* store.get(target)).attempts ?? {})[0]).not.toHaveProperty("verifier")
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
   it.live("dynamically registers and replaces an expired client secret", () =>
     Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
       Effect.flatMap((tmp) =>
@@ -260,7 +308,7 @@ describe("MCP OAuth protocol boundary", () => {
                     redirect: "https://client.example/callback",
                     created: 1,
                     expires: Date.now() + 60_000,
-                    phase: "pending",
+                    phase: "initializing",
                   },
                 },
               }))
@@ -334,7 +382,7 @@ describe("MCP OAuth protocol boundary", () => {
                     redirect: "https://client.example/callback",
                     created: 1,
                     expires: Date.now() + 60_000,
-                    phase: "pending",
+                    phase: "initializing",
                   },
                 },
               }))
@@ -438,6 +486,91 @@ describe("MCP OAuth protocol boundary", () => {
     ),
   )
 
+  it.live("releases the callback port after a failed automatic exchange", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+                const port = reserve.port
+                reserve.stop(true)
+                fixture.failToken = true
+                const store = MCPOAuthStore.make({ data: tmp.path })
+                const context = yield* Layer.build(
+                  MCPOAuth.layer.pipe(
+                    Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                    Layer.provide(MCPOAuthCallback.layer),
+                  ),
+                )
+                const started = yield* Context.get(context, MCPOAuth.Service).begin({
+                  target: { directory: tmp.path, name: "failed-auto", endpoint: `${fixture.url}/mcp` },
+                  config: { client_id: "static-client", callback_port: port },
+                })
+                if (started.status !== "authorizing") throw new Error("authorization did not start")
+                const authorization = new URL(started.authorizationUrl)
+                fixture.challenge = authorization.searchParams.get("code_challenge")!
+                expect((yield* Effect.promise(() => fetch(
+                  `http://127.0.0.1:${port}/mcp/oauth/callback?state=${authorization.searchParams.get("state")}&code=bad`,
+                ))).status).toBe(400)
+                yield* Effect.sleep("20 millis")
+                expect((yield* store.findAttempt(started.attemptID))?.attempt).toMatchObject({ phase: "failed", error: "exchange" })
+                const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+                expect(reused.port).toBe(port)
+                reused.stop(true)
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("aborts a callback exchange and releases its port on Location shutdown", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.gen(function* () {
+              const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+              const port = reserve.port
+              reserve.stop(true)
+              fixture.hangToken = true
+              const store = MCPOAuthStore.make({ data: tmp.path })
+              const target = { directory: tmp.path, name: "shutdown-exchange", endpoint: `${fixture.url}/mcp` }
+              const scope = yield* Scope.make()
+              const context = yield* Layer.buildWithScope(
+                MCPOAuth.layer.pipe(
+                  Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                  Layer.provide(MCPOAuthCallback.layer),
+                ),
+                scope,
+              )
+              const started = yield* Context.get(context, MCPOAuth.Service).begin({
+                target,
+                config: { client_id: "static-client", callback_port: port },
+              })
+              if (started.status !== "authorizing") throw new Error("authorization did not start")
+              const authorization = new URL(started.authorizationUrl)
+              fixture.challenge = authorization.searchParams.get("code_challenge")!
+              const callback = fetch(
+                `http://127.0.0.1:${port}/mcp/oauth/callback?state=${authorization.searchParams.get("state")}&code=hang`,
+              )
+              yield* Effect.promise(() => fixture.tokenStarted)
+              yield* Scope.close(scope, Exit.void)
+              expect((yield* Effect.promise(() => callback)).status).toBe(400)
+              expect((yield* store.findAttempt(started.attemptID))?.attempt).toMatchObject({ phase: "failed", error: "exchange" })
+              const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+              expect(reused.port).toBe(port)
+              reused.stop(true)
+            }),
+          ),
+        ),
+      ),
+    ),
+  )
+
   it.live("issues exactly one SDK token request for cross-process sibling completions", () =>
     Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
       Effect.flatMap((tmp) =>
@@ -479,6 +612,7 @@ describe("MCP OAuth protocol boundary", () => {
                 verifier: `${id}-verifier`,
                 mode: "manual",
                 redirect: "https://client.example/callback",
+                authorization: "https://auth.example/authorize",
                 created: Date.now(),
                 expires: Date.now() + 60_000,
                 phase: "pending",
@@ -508,11 +642,15 @@ describe("MCP OAuth protocol boundary", () => {
 
 function protocol() {
   const grants: string[] = []
+  const token = Promise.withResolvers<void>()
   const fixture = {
     challenge: "",
     discovery: 0,
     grants,
     registrations: 0,
+    failToken: false,
+    hangToken: false,
+    tokenStarted: token.promise,
     url: "",
     stop: () => {},
   }
@@ -546,6 +684,11 @@ function protocol() {
         return Response.json({ ...metadata, client_id: `registered-${fixture.registrations}`, client_secret_expires_at: 0 })
       }
       if (url.pathname === "/token") {
+        if (fixture.hangToken) {
+          token.resolve()
+          return new Promise<Response>(() => {})
+        }
+        if (fixture.failToken) return Response.json({ error: "invalid_grant" }, { status: 400 })
         const form = await request.formData()
         const grant = String(form.get("grant_type"))
         grants.push(grant)
