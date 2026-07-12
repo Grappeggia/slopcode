@@ -43,8 +43,11 @@
 - `packages/core/src/mcp.ts`
 - `packages/core/src/mcp/client.ts`
 - `packages/core/test/fixture/mcp-server.ts`
+- `packages/core/test/fixture/mcp-stubborn-server.ts`
 - `packages/core/test/location-layer.test.ts`
 - `packages/core/test/mcp-client.test.ts`
+- `packages/core/test/mcp-review.test.ts`
+- `packages/core/test/mcp-service-review.test.ts`
 - `packages/core/test/mcp.test.ts`
 - `.superpowers/sdd/task-h5c4a-report.md`
 
@@ -114,3 +117,31 @@ The first full Core attempt was run concurrently with the other verification job
 ### Review Commit
 
 - `aed9dd7660 fix(core): harden MCP runtime lifecycle`
+
+## Re-Review Corrections
+
+### Implementation
+
+- `MCPClient.make` now installs one internal close observer as soon as a connection is created, records closure once, and synchronously replays that state to late `closed` subscribers. Manual close also marks the same tracker in `finally`.
+- MCP service discovery subscribes before assigning pending ownership. Prepared clients carry a synchronous closure fence checked before and after adaptation, so closure during discovery or before activation closes resources and cannot publish tools or connected status.
+- Initial connect and reload now share complete-batch collision preflight. Reload prepares changed/new servers concurrently, checks every canonical name against unchanged active registrations and all prepared candidates, rejects every ambiguous candidate, and activates survivors in config order under stable slots.
+- MCP image content now requires an `image/*` MIME before generic file/base64 validation; embedded blob resources retain generic MIME support.
+
+### RED Evidence
+
+- `bun test test/mcp-review.test.ts test/mcp-service-review.test.ts` from `packages/core`: 15 pass, 4 fail, 40 assertions. Failures proved that close observation was not installed at acquisition, a discovery-time close was not observable before activation, `text/plain` image content was accepted, and reload registered one completion-order collision winner.
+
+### GREEN Evidence
+
+- `bun test test/mcp-review.test.ts test/mcp-service-review.test.ts test/mcp.test.ts test/mcp-client.test.ts test/location-layer.test.ts` from `packages/core`: 36 pass, 0 fail, 107 assertions.
+- `bun test --timeout 10000` from `packages/core`: 1356 pass, 0 fail, 4020 assertions across 148 files.
+- `bun test` from `packages/codemode`: 254 pass, 0 fail, 744 assertions.
+- `bun run typecheck` from `packages/core`: pass.
+- `bun run typecheck` from `packages/server`: pass.
+- `bun install --frozen-lockfile` from the repository root: pass, 2372 installs checked, no changes.
+- `bunx prettier --check packages/core/src/mcp.ts packages/core/src/mcp/client.ts packages/core/test/mcp-review.test.ts packages/core/test/mcp-service-review.test.ts`: pass.
+- `git diff --check`: pass.
+
+### Re-Review Commit
+
+- `735eca7d22 fix(core): fence MCP reload activation`
