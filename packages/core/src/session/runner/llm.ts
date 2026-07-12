@@ -103,14 +103,14 @@ const MAX_STEPS = 25
 const FINAL_INPUT_MAX_BYTES = 1_048_576 + 4_096
 
 const finalStream = () => {
-  const inputs = new Map<string, { chunks: string[]; bytes: number; overflow: boolean }>()
+  const inputs = new Map<string, { bytes: number; overflow: boolean }>()
   const bytes = (value: string) => new TextEncoder().encode(value).byteLength
 
   return (event: LLMEvent): LLMEvent | undefined => {
     if (!("name" in event) || event.name !== FINAL_OUTPUT) return event
     if (event.type === "tool-input-start") {
       if (inputs.has(event.id)) throw new Error(`Duplicate structured final input start: ${event.id}`)
-      inputs.set(event.id, { chunks: [], bytes: 0, overflow: false })
+      inputs.set(event.id, { bytes: 0, overflow: false })
       return
     }
     if (event.type === "tool-input-delta") {
@@ -120,10 +120,7 @@ const finalStream = () => {
       input.bytes += size
       if (input.bytes > FINAL_INPUT_MAX_BYTES) {
         input.overflow = true
-        input.chunks.length = 0
-        return
       }
-      input.chunks.push(event.text)
       return
     }
     if (event.type === "tool-input-end") return
@@ -132,14 +129,7 @@ const finalStream = () => {
     if (event.type === "tool-call") {
       if (input?.overflow)
         return LLMEvent.toolInputError({ id: event.id, name: FINAL_OUTPUT, reason: "invalid-json" })
-      if (!input) return event
-      try {
-        if (event.toolType === "custom")
-          return LLMEvent.toolInputError({ id: event.id, name: FINAL_OUTPUT, reason: "invalid-json" })
-        return { ...event, input: JSON.parse(input.chunks.join("")) as unknown }
-      } catch {
-        return LLMEvent.toolInputError({ id: event.id, name: FINAL_OUTPUT, reason: "invalid-json" })
-      }
+      return event
     }
     if (event.type === "tool-input-error") return event
     if (event.type === "tool-error")
