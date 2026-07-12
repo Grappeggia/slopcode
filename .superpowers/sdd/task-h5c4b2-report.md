@@ -14,7 +14,7 @@ H5C4B2 is implemented in V2 Core. Remote MCP OAuth now has Location/workspace-sc
 - `MCPOAuthProvider` implements the SDK `OAuthClientProvider` only for interactive initialization/exchange and explicit noninteractive refresh. Static client configuration is authoritative; expired dynamic secrets are unavailable only when expiry is finite, positive, and elapsed. Token writes preserve omitted refresh token/scope and clear stale expiry when `expires_in` is omitted. All five SDK invalidation scopes are implemented.
 - `MCPOAuth` owns attempt coordination. IDs use 128 CSPRNG bits with an `mcp_auth_` prefix; state uses 256 bits. Attempts persist ten-minute wall-clock expiry and transition `initializing -> pending -> received -> exchanging -> complete|failed`, with cancellation/expiry terminals erasing state, verifier, code, and authorization URL. `pending` is published only after the verifier and exact authorization URL are durable.
 - Exchange and proactive 60-second-skew refresh use identity-keyed inter-process single-flight locks and reread persisted state after lock acquisition. Active callback exchanges are tracked by attempt with an abort controller and settlement promise. Remove, reset, stop, reload, disable, replacement, and Location shutdown abort exchanges, await settlement, terminalize once, then close listeners.
-- Every owned initializing/pending attempt has a wall-clock expiry timer derived from its persisted expiry. Recovery terminalizes `initializing` and indeterminate `exchanging`, re-registers unexpired auto callbacks, schedules their remaining duration, and resumes durable `received` records. Fresh and recovered callback failures share terminal scrubbing and reliably scheduled registration cleanup.
+- Every owned initializing/pending attempt has a wall-clock expiry timer derived from its persisted expiry. Startup enumerates stored buckets, cancels stale/disabled/non-OAuth targets, and recovers only an exact endpoint/client/scope/redirect/callback compatibility match. Compatible recovery terminalizes `initializing` and indeterminate `exchanging`, re-registers unexpired auto callbacks, schedules their remaining duration, and resumes durable `received` records.
 - `MCPOAuthCallback` binds explicit literal loopback addresses only, registers exact paths and states, accepts GET only, rejects duplicate/missing/unknown/replayed parameters, and returns fixed non-reflective pages with no-store, CSP, nosniff, and no-referrer headers. HTTPS and non-loopback redirects become manual mode.
 - `MCPClient` passes no OAuth provider to Streamable HTTP or SSE. After explicit proactive refresh, it snapshots only the access token and injects bearer authorization at the resource fetch boundary. Refresh interaction maps to typed `auth-required`; other refresh failures map to bounded `refresh`. Normal connect cannot create an attempt, listener, authorization result, or browser action. Auth failures do not fall back; SSE fallback is limited to Streamable HTTP compatibility codes.
 - The remote fetch boundary adds configured headers only on the MCP resource origin, removes configured `Authorization` when OAuth is enabled, then overlays generated headers. Bearer, Accept, Content-Type, Last-Event-ID, session, and protocol headers therefore win. `oauth: false` retains prior explicit-header behavior.
@@ -417,4 +417,55 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 - `6e10fed65b` `test(core): tighten final MCP OAuth evidence`
 - `bc26926484` `fix(core): finalize MCP OAuth terminal lifecycle`
 - `18d94420f7` `test(core): integrate real MCP OAuth failure event`
+- Final report evidence: the following `docs:` commit.
+
+## Last Two Findings Settlement
+
+### Last Two RED Evidence
+
+- Atomic store sibling-result command: `0 pass`, `1 fail`, `5 expect() calls`. `finishExchange` returned only `true`, so the service could not know which sibling registrations/timers/work it had atomically cancelled.
+- Recovery/sibling protocol command: `0 pass`, `2 fail`, `5 expect() calls`. Changed client/scope recovery left the old attempt pending and installed its listener; a successful winner left the cancelled sibling listener holding the callback port.
+- Startup selection command: `0 pass`, `1 fail`, `1 expect() call`. MCP invoked recovery once for the disabled remote server instead of skipping disabled, OAuth-disabled, and local servers.
+- `ea11ed2f69` committed these failing contracts before implementation.
+
+### Last Two Repairs
+
+- `MCPOAuthStore.targets` enumerates exact persisted targets for one Location/workspace/server name. MCP startup compares those buckets with the current enabled remote OAuth target, resets every stale bucket, and invokes recovery only for the exact current target. Disabled, `oauth: false`, and local servers recover none and still scrub stale stored attempts.
+- `MCPOAuth.recover` derives the exact current redirect/callback mode and compatibility hash from endpoint, static client ID/secret, scope, redirect URI, and callback port before adding ownership or creating listeners, timers, or exchange work. Any entry or active-attempt redirect mismatch resets the bucket and scrubs transients without token exchange.
+- `finishExchange` now atomically returns `{ won, cancelled }`, where `cancelled` contains only live sibling IDs from the same exact bucket. Losing and repeated commits return `{ won: false, cancelled: [] }`.
+- A winning service aborts active work for those exact sibling IDs, awaits settlement, closes each registration, removes timer/ownership state, and leaves every other target untouched. Cross-process workers consume the same structured winner result; losers cannot overwrite tokens.
+- Compatible restart fixtures now persist the exact compatibility marker and callback port. This keeps recovery tests honest instead of relying on pre-contract entries with missing compatibility.
+
+### Last Two Coverage
+
+- Startup evidence covers disabled remote, `oauth: false`, local, and changed-endpoint configurations. Stale buckets are reset first; only the exact new endpoint is recovered.
+- Direct recovery evidence changes static client and scope while retaining the old callback data. The attempt is cancelled/scrubbed, no listener binds, no token request occurs, and the port is immediately reusable. Compatibility construction also includes secret, redirect URI, callback port, and endpoint.
+- Store evidence asserts the exact cancelled sibling ID and an empty list on a repeated losing commit.
+- Real protocol evidence starts two automatic attempts on one target and one on another target. Winner success completes itself, cancels and immediately closes its sibling, releases the shared callback port, rejects sibling replay, prevents sibling expiry, and leaves the unrelated target live until its own expiry.
+- Existing spawned-process completion evidence remains green with exactly one winner/token publication and structured loser handling.
+- Timer test lifetimes were widened after a full parallel run exposed scheduler-load flakiness; the final tests retain real expiry/cancellation assertions without allowing discovery time to consume the test lifetime.
+
+### Last Two Results
+
+- Exact store result subset: `1 pass`, `0 fail`, `9 expect() calls`.
+- Exact recovery/sibling protocol subset: `2 pass`, `0 fail`, `12 expect() calls`.
+- Exact startup selection subset: `2 pass`, `0 fail`, `4 expect() calls`.
+- Final protocol file: `21 pass`, `0 fail`, `98 expect() calls`.
+- Final focused 13-file command: `139 pass`, `0 fail`, `575 expect() calls`.
+- H5C4A/B1 preservation command: `74 pass`, `0 fail`, `268 expect() calls`.
+- Full Core: `1427 pass`, `0 fail`, `4372 expect() calls`, 153 files.
+- Full CodeMode: `254 pass`, `0 fail`, `744 expect() calls`.
+- V1 MCP HTTP/CLI evidence: `8 pass`, `0 fail`, `32 expect() calls`.
+- Core typecheck: exit 0.
+- Server typecheck: exit 0.
+- Frozen install retry: exit 0, `Checked 2372 installs across 2656 packages (no changes)`. The first install attempt timed out under parallel load before resolution completed and made no changes.
+- SlopCode typecheck remains red only at the unrelated existing `src/session/processor.ts(495,17)` and `src/session/prompt.ts(1382,39)` diagnostics.
+
+### Last Two Commits
+
+- `ea11ed2f69` `test(core): expose final OAuth recovery gaps`
+- `49ef649802` `test(core): tighten OAuth restart recovery evidence`
+- `569aca3b4c` `fix(core): reconcile OAuth recovery siblings`
+- `7f1d1133e5` `test(core): seed exact OAuth recovery compatibility`
+- `6816ec3b15` `test(core): stabilize OAuth expiry races`
 - Final report evidence: the following `docs:` commit.
