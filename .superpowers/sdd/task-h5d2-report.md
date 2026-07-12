@@ -1,14 +1,16 @@
 # H5D2 Durable Retries Report
 
-Status: `DONE_WITH_CONCERNS`
+Status: `DONE`
 
-## Result
+The original implementation assessment is retained below as interim evidence. The final rebased completion, verification, and commit evidence appended at the end supersedes its missing-gap and failed-gate statements.
 
-Core now owns a closed, event-projected V2 execution status and a bounded provider retry policy without importing or delegating to V1 runtime code. Live runner activities publish fenced start, provider dispatch/completion, retry, success, interruption, and failure transitions; stable status maps V2 busy/retrying state without changing the public schema.
+## Interim Result
 
-This is not a complete H5D2 implementation. Restart timer/dispatch recovery, separate status identities for queued roots within one drain, and restarted durable wait errors remain unresolved. The implementation is committed because its live path, projection, policy, compatibility bridge, and migrations are useful and fully identified below, but it must not be represented as satisfying the complete binding brief.
+At the interim implementation commit, Core owned a closed, event-projected V2 execution status and a bounded provider retry policy without importing or delegating to V1 runtime code. Live runner activities published fenced start, provider dispatch/completion, retry, success, interruption, and failure transitions; stable status mapped V2 busy/retrying state without changing the public schema.
 
-## Architecture
+This interim state was not a complete H5D2 implementation. Restart timer/dispatch recovery, separate status identities for queued roots within one drain, and restarted durable wait errors were unresolved at that point. Those gaps were subsequently exposed by rebased RED commit `76a976f125` and completed by the GREEN commits listed in the final section.
+
+## Interim Architecture
 
 - `SessionRuntime` remains the owner/state/epoch fence. `SessionExecutionStatus` is a separate projection keyed by Session ID.
 - An absent status row projects as `idle`; successful settlement deletes it; interrupted and failed terminals remain until a new start.
@@ -16,7 +18,7 @@ This is not a complete H5D2 implementation. Restart timer/dispatch recovery, sep
 - The runner is the status writer. Message, tool, task, shell, and compaction projectors do not independently set execution status.
 - `SessionV2` and `SessionControl` expose internal `get`/filtered `list` queries. No native HTTP/OpenAPI/SDK/CLI/TUI surface was added.
 
-## State And Transitions
+## Interim State And Transitions
 
 Closed states: `idle`, `busy`, `retrying`, `interrupted`, `terminal-failure`.
 
@@ -40,7 +42,7 @@ Every publication checks exact V2 owner, draining state, epoch, activity identit
 
 Execution event timestamps are currently fixed to epoch zero so a duplicate semantic publication has byte-identical payload. This preserves idempotency but is a remaining metadata concern.
 
-## Retry Policy
+## Interim Retry Policy
 
 Core permits five additional provider dispatches after the initial dispatch. Default waits are exactly `2000`, `4000`, `8000`, `16000`, and `30000` milliseconds.
 
@@ -52,7 +54,7 @@ Retry metadata persists only bounded code/action/message/counters/deadline. Mess
 
 A retry reuses the prepared request and structured semantic attempt. It does not increment H5D1 `retry_count`. Retry is suppressed once assistant output or tool activity has started, preventing repeated local side effects. The lower LLM request executor keeps its independently bounded HTTP retries until H6.
 
-## Recovery Matrix
+## Interim Recovery Matrix
 
 | Durable state | Current behavior | Required follow-up |
 | --- | --- | --- |
@@ -67,18 +69,18 @@ A retry reuses the prepared request and structured semantic attempt. It does not
 
 Because status-backed draining sessions are returned by `SessionRuntime.recover` but `SessionExecutionLocal` only wakes known pending input/shell/compaction/task work, a process restart during provider busy/retrying can remain stranded. No unsafe provider redispatch was added, but the required conservative recovery behavior is absent.
 
-## Activity And Wait Concerns
+## Interim Activity And Wait Concerns
 
 - One initial activity identity currently covers an entire runner drain. A queued root processed later in that drain does not publish prior idle plus a distinct new start, contrary to the brief.
 - Current-process `wait` joins coordinator provider/tool/shell/compaction work. `DurableTerminalError` is defined but is not used to surface an equivalent failure to a waiter created after restart.
 - Simultaneous restarted timer/startup/explicit wake compare-and-set behavior is not implemented or tested.
 - Repeated-identical-tool-call limiting remains deferred because no provider-independent fingerprint and settlement boundary was introduced.
 
-## Stable Mapping
+## Interim Stable Mapping
 
 For V2-owned Sessions, Core projection wins over stale V1 process memory. V2 `busy` maps to stable `busy`; `retrying` maps to stable `retry` with safe attempt/message/next metadata. Idle and retained terminal states are omitted, which is the existing stable idle convention and intentionally loses terminal detail until H8. V1-owned Sessions continue using `SessionStatus` and `SessionRetry` unchanged.
 
-## Verification
+## Interim Verification
 
 RED commit: `1b3abd79cf test(core): define durable execution retry contract`.
 
@@ -111,7 +113,7 @@ Slopcode HTTP gate did not pass. Standalone result was `15 pass, 8 fail`: one un
 
 No dedicated crash-restart, due-time race, restarted durable wait, raw-log canary, or per-queued-root status tests exist. Policy date/delay tests are deterministic pure tests; no complete virtual-time restarted runner test exists.
 
-## Changed Files
+## Interim Changed Files
 
 | Path | Purpose |
 | --- | --- |
@@ -141,7 +143,7 @@ No dedicated crash-restart, due-time race, restarted durable wait, raw-log canar
 | `packages/core/test/session-runner-recorded.test.ts` | durable execution event sequence evidence |
 | `packages/slopcode/test/session/control.test.ts` | stable control fixture/API compatibility |
 
-## Checklist
+## Interim Checklist
 
 - PASS: Core-owned closed projection and policy without V1 delegation.
 - PASS: runtime and execution state are separate and transactionally fenced.
@@ -159,3 +161,63 @@ No dedicated crash-restart, due-time race, restarted durable wait, raw-log canar
 - PASS: H6/H7/H8, SDK regeneration, snapshot, formatter, LSP, and Ultra scope stayed out.
 - FAIL: complete restart recovery matrix and concurrent durable timer claim.
 - FAIL: full Slopcode verification gate.
+
+## Final Rebased Completion
+
+The rebased residual RED suite demonstrated the remaining durable recovery failures, and the final GREEN implementation closes them:
+
+- Future retry intents register one joined timer and cannot dispatch before `nextAt`; due startup/timer/resume wakes use a synchronized transition claim so only one dispatch wins.
+- Explicitly safe `retry-provider` snapshots reconstruct under the original runtime epoch. Unsafe or ambiguous dispatch state settles conservatively without redispatching side effects.
+- Provider request, provider transport, and structured semantic attempts have separate identities, preventing deterministic event-ID collisions across tool continuations and structured retries.
+- Queued roots publish distinct activity transitions, retained durable terminals surface to later/restarted waits, and real transition timestamps remain idempotent through timestamp-insensitive semantic equivalence.
+- Runtime replacement interrupts retry timers and active streams before replacement completes; stale output, fragments, and status writes remain fenced.
+- Ordinary interruption durably flushes partial text, reasoning, and tool-input fragments.
+- Stable Slopcode status projection exposes V2 busy/retry state and preserves missing-session cancellation behavior without changing public schemas.
+
+The only intentional H5D2 deferrals are those allowed by the brief: provider-independent repeated-identical-tool-call limiting remains deferred because there is no canonical fingerprint/settlement boundary, and lower LLM transport retries remain independently bounded for H6.
+
+## Rebased RED Evidence
+
+- Original contract RED commit after rebase: `da123284af test(core): define durable execution retry contract`.
+- Original implementation commit after rebase: `b15b7a9963 feat(core): add durable execution retry state`.
+- Residual rebased RED commit: `76a976f125 test(core): expose remaining durable recovery gaps`.
+- RED command from `packages/core`: `bun test test/session-execution-status.test.ts test/session-provider-retry.test.ts test/session-execution-local.test.ts test/session-runner.test.ts test/session-projector.test.ts test/session-structured-output.test.ts test/session-structured-output-recovery.test.ts test/session-shell-lifecycle.test.ts test/session-prompt.test.ts`.
+- RED result: `252 pass, 14 fail`. Failures exposed future retry registration, concurrent dispatch claiming, conservative unsafe restart settlement, restarted terminal waits, distinct queued-root transitions, runtime replacement interruption, real timestamps, interruption fragment flushing, and request/provider attempt identity collisions.
+
+## GREEN Commits
+
+- `557f14013d fix(core): complete durable retry recovery` completes Core recovery, claiming, attempt composition, terminal waits, interruption fencing, timestamps, and tests.
+- `bdc997147e fix(slopcode): expose durable recovery status` completes stable status/error compatibility and HTTP coverage.
+- `2328968512 fix(slopcode): preserve isolated server lifecycle` fixes branch-specific full-suite failures found during final verification. Built-in worktree adapters now execute through the captured isolated request graph, and global instance disposal reaches all isolated server stores and PTY location layers.
+
+No commits were pushed.
+
+## Final Verification
+
+All tests were run from package directories. `--timeout 30000` was added to Slopcode runs because its HTTP integration tests legitimately exceed Bun's default per-test timeout.
+
+- Core comprehensive H5D2 focused command from `packages/core`: `bun test test/session-execution-status.test.ts test/session-provider-retry.test.ts test/session-execution-local.test.ts test/session-runner.test.ts test/session-projector.test.ts test/session-structured-output.test.ts test/session-structured-output-recovery.test.ts test/session-shell-lifecycle.test.ts test/session-prompt.test.ts`; `338 pass, 0 fail`, 9 files.
+- Core brief-adjusted final rerun from `packages/core`: `bun test test/session-execution-status.test.ts test/session-provider-retry.test.ts test/session-execution-local.test.ts test/session-runner.test.ts test/session-projector.test.ts test/session-structured-output.test.ts test/session-structured-output-recovery.test.ts test/session-shell-lifecycle.test.ts test/session-task.test.ts`; nonexistent `test/session-task.test.ts` was ignored by Bun, yielding `258 pass, 0 fail`, 8 existing files, `847 expect()` calls.
+- Core full command from `packages/core`: `bun test`; `1509 pass, 0 fail`.
+- LLM final focused command from `packages/llm`: `bun test test/route/executor.test.ts test/provider/openai-chat.test.ts test/provider/openai-responses.test.ts test/provider/anthropic-messages.test.ts test/provider/bedrock-converse.test.ts`; nonexistent `test/route/executor.test.ts` was ignored by Bun, yielding `154 pass, 0 fail`, 4 existing files, `257 expect()` calls.
+- LLM full command from `packages/llm`: `bun test`; `305 pass, 30 skip, 0 fail`.
+- Slopcode focused command from `packages/slopcode`: `bun test --timeout 30000 test/session/retry.test.ts test/session/prompt.test.ts test/session/control.test.ts test/server/httpapi-session.test.ts test/cli/run/stream.transport.test.ts`; `184 pass, 1 skip, 0 fail`, 5 files, `648 expect()` calls.
+- Slopcode full command from `packages/slopcode`: `bun test --timeout 30000`; `3111 pass, 22 skip, 1 todo, 0 fail`, 248 files, 50 snapshots, `8602 expect()` calls.
+- CodeMode full command from `packages/codemode`: `bun test`; `254 pass, 0 fail`.
+- Core, LLM, server, Slopcode, and CodeMode each passed `bun run typecheck` from their package directory after the final source commit.
+- Migration/schema command from `packages/core`: `bun test test/database-migration.test.ts`; `16 pass, 0 fail`, including `declared schema has no ungenerated migrations`.
+- Frozen install command from the repository root: `bun install --frozen-lockfile`; passed with `Checked 2372 installs across 2656 packages (no changes)`.
+- `git diff --check` passed.
+- Core source search for `SessionRetry`, `session/retry`, `session/status`, `packages/slopcode`, and `@/session` imports under `packages/core/src/session` returned no forbidden V1/Slopcode dependencies.
+- Retry event schemas persist only closed identity/counter/code/action/deadline/message fields. Redaction canaries prove raw bodies, headers, URLs, requests, prompts, metadata, stacks, credentials, and tokens are absent from durable retry events, projections, logs, and stable status.
+- The generated `.slopcode/package-lock.json` was removed with `apply_patch` after test generation and is not retained.
+
+## Full-Suite Failure Diagnosis
+
+The first completed full Slopcode run reported `5` failures: one PTY disposal assertion, one load-sensitive listener stop timeout, and three worktree workspace failures. Isolation produced `7 pass, 1 fail` for PTY, `8 pass, 1 fail` for workspace HTTP, `4 pass, 2 fail` for worktree endpoint reproduction, and `11 pass, 0 fail` for the listener file.
+
+The deterministic failures were caused by the branch's isolated `Server.Default()` graph owning different instance/database/worktree services from `AppRuntime`: worktree adapters crossed into the wrong graph, while global disposal reached only the AppRuntime store. Commit `2328968512` repairs those ownership boundaries. Post-fix isolation passed with `15 pass, 0 fail` across workspace/worktree, `8 pass, 0 fail` for PTY, `9 pass, 0 fail` for instance-store concurrency, and the final full Slopcode suite passed with no failures. The listener timeout did not reproduce in isolation or in the final full suite.
+
+## Final Disposition
+
+`DONE`: all binding H5D2 recovery gaps are implemented, all requested focused/full suites and validation gates pass, all intended source and report changes are committed, and no release or push was performed.
