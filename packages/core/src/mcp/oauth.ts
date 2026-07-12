@@ -196,11 +196,15 @@ export const layer = Layer.effect(
               async () => {
                 const latest = await Effect.runPromise(store.findAttempt(input.attemptID))
                 if (latest?.attempt.phase !== "exchanging") return "LOST" as const
-                return auth(provider, {
+                const exchanged = await auth(provider, {
                   serverUrl: input.target.endpoint,
                   authorizationCode: input.code,
                   fetchFn: abortFetch(signal),
                 })
+                if (exchanged !== "AUTHORIZED" || !tokens) return "INVALID" as const
+                return (await Effect.runPromise(store.finishExchange(input.target, input.attemptID, tokens)))
+                  ? ("WON" as const)
+                  : ("LOST" as const)
               },
               { signal },
             ),
@@ -211,9 +215,7 @@ export const layer = Layer.effect(
           ),
         )
         if (result === "LOST") return yield* failure("attempt-used", input.target, input.attemptID)
-        if (result !== "AUTHORIZED") return yield* failure("exchange", input.target, input.attemptID)
-        if (!tokens || !(yield* safe(store.finishExchange(input.target, input.attemptID, tokens), input.target)))
-          return yield* failure("attempt-used", input.target, input.attemptID)
+        if (result !== "WON") return yield* failure("exchange", input.target, input.attemptID)
         if (!callback) yield* close(input.attemptID)
         return { status: "credential-ready" } as const
       })
