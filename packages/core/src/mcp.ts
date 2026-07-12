@@ -414,17 +414,15 @@ export const layer = Layer.effect(
         if (!previous) yield* failure(server, "Connection closed")
         return
       }
-      if (hasTools(client.capabilities)) {
-        const result = yield* Effect.exit(
-          install(server, client, prepared.definitions, () => server.pending === client && !prepared.closed()),
-        )
-        if (Exit.isFailure(result)) {
-          yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
-          server.pending = undefined
-          if (previous) yield* publish(server, { status: "connected", transport: previous.transport })
-          if (!previous) yield* failure(server, result.cause, true)
-          return
-        }
+      const result = yield* Effect.exit(
+        install(server, client, prepared.definitions, () => server.pending === client && !prepared.closed()),
+      )
+      if (Exit.isFailure(result)) {
+        yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
+        server.pending = undefined
+        if (previous) yield* publish(server, { status: "connected", transport: previous.transport })
+        if (!previous) yield* failure(server, result.cause, true)
+        return
       }
       if (prepared.closed()) {
         if (previous) yield* install(server, previous, definitions).pipe(Effect.orDie)
@@ -673,11 +671,34 @@ export const layer = Layer.effect(
               changed.push({ server, config, timeout: config.timeout ?? next.timeout })
             }
             const discovered = yield* Effect.forEach(
-              changed,
+              changed.filter((target) => !target.config.disabled),
               (target) => target.server.lock.withPermits(1)(prepare(target.server, target)),
               { concurrency: "unbounded" },
             )
-            const ordered = changed.map((target) => target.server)
+            const disabled = changed.filter((target) => target.config.disabled)
+            yield* Effect.forEach(
+              disabled,
+              (target) =>
+                target.server.lock.withPermits(1)(
+                  Effect.uninterruptible(
+                    Effect.gen(function* () {
+                      yield* hide(target.server)
+                      const pending = target.server.pending
+                      const client = target.server.client
+                      target.server.pending = undefined
+                      target.server.client = undefined
+                      target.server.config = target.config
+                      target.server.timeout = target.timeout
+                      yield* publish(target.server, { status: "disabled" })
+                      if (pending && pending !== client)
+                        yield* Effect.promise(() => pending.close()).pipe(Effect.ignore)
+                      if (client) yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
+                    }),
+                  ),
+                ),
+              { concurrency: "unbounded", discard: true },
+            )
+            const ordered = changed.filter((target) => !target.config.disabled).map((target) => target.server)
             yield* activateBatch(
               ordered,
               discovered,
@@ -746,7 +767,7 @@ function discoverInitial(server: Server, client: Connection, timeout: number) {
     : Effect.succeed(Exit.succeed([] as ReadonlyArray<ResourceEntry>))
   return Effect.all(
     {
-      definitions: hasTools(client.capabilities) ? discover(client, server.timeout) : Effect.succeed([]),
+      definitions: hasTools(client.capabilities) ? discover(client, timeout) : Effect.succeed([]),
       prompts,
       resources,
     },
