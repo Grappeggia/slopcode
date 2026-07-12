@@ -4,6 +4,53 @@
 
 `DONE_WITH_CONCERNS`
 
+## Rejected Review Remediation Appendix
+
+### Status
+
+`BLOCKED`
+
+The four implementation findings are addressed and their focused behavioral gates pass. The explicitly required raw `bun test test/server/httpapi-listen.test.ts` command still exceeds Bun's fixed 5-second per-test default on this host; no timeout was enlarged and no shutdown semantics were weakened to hide it.
+
+### Commits
+
+- RED `5e16ecc84f` `test: expose final lifecycle and lazy graph gaps`
+- GREEN `d921a121fd` `fix: isolate structured finals and native session graph`
+- Provider-fixture refinement `1063327adf` `test: mirror provider final event lifecycles`
+
+### Implemented Findings
+
+- A bounded private runner interceptor now consumes every `final_output` input-start/delta/end and terminal tool event before the ordinary publisher. Valid streamed input is parsed from the private accumulator; malformed and oversized input becomes a payload-free typed failure. No `SessionEvent.Tool` row, assistant tool part, generic unsettled-tool failure, raw argument payload, or compaction tool serialization is produced.
+- OpenAI Responses, OpenAI Chat, Anthropic, Gemini, and Bedrock valid/malformed runner fixtures mirror their normalized protocol lifecycles. Ten end-to-end cases inspect projected messages, event rows, and compaction serialization.
+- `StructuredInterface`, `StructuredService`, and public final settlement metadata were removed from `ToolRegistry`. Registry-owned definition, decode, validation, stale-scope state, and settlement are exposed to the runner only through `#structured-tool`; `./internal/structured-tool` is explicitly blocked in package exports and the bridge carries a module-private runtime brand.
+- Native HTTP handlers now acquire `SessionGraph.Service`, not ambient Session V2 tags. One isolated authoritative Session V2 layer shares the captured database, event, project, runtime, location map, store, projector, and local execution services while ignoring the legacy noop compatibility graph.
+- The authoritative native graph is cached behind lazy proxies. Listener construction and `/status` leave the initialization counter at zero; the first native request changes it to one and subsequent requests reuse it.
+
+### Focused Verification
+
+- Final lifecycle runner matrix: `10 pass`, `0 fail`, `50 expect() calls`.
+- Public capability boundary: `4 pass`, `0 fail`, `9 expect() calls`.
+- Mixed native/stable HTTP regressions: `4 pass`, `0 fail`, `21 expect() calls`.
+- Stable control: `19 pass`, `0 fail`, `76 expect() calls`.
+- Listener with package integration timeout: `11 pass`, `0 fail`, `40 expect() calls`.
+- Raw default listener command: `4 pass`, `7 fail`; all seven failures are Bun 5-second timeouts. The lazy graph instrumentation itself passes in 3.03 seconds.
+
+### Full Verification
+
+- Core: `1483 pass`, `0 fail`, `4569 expect() calls`, 155 files.
+- LLM: `305 pass`, `30 skip`, `0 fail`, `668 expect() calls`, 26 files.
+- CodeMode: `254 pass`, `0 fail`, `744 expect() calls`, 7 files.
+- Slopcode: `3105 pass`, `22 skip`, `1 todo`, `5 fail`, `8592 expect() calls`, 248 files.
+- Core, LLM, CodeMode, Server, and Slopcode typechecks exited 0.
+- `bun install --frozen-lockfile` exited 0 with no changes.
+
+### Remaining Full-Suite Failures
+
+- Missing-session abort still returns 400 instead of the legacy test's expected 200.
+- One existing PTY legacy-instance cleanup assertion retains a running PTY after `disposeAllInstances()`.
+- Three existing worktree tests return `WorkspaceCreateError: Project not found`.
+- No changes were pushed.
+
 Durable V2 structured finals and the current stable-client bridge are implemented. All H5D1-focused Core, LLM, CodeMode, and stable-control gates pass. The full Slopcode suite retains ten unrelated or previously documented contract/timing failures described in the final re-review appendix.
 
 ## Design Decisions
