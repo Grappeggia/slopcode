@@ -209,6 +209,60 @@ describe("Formatter", () => {
     ),
   )
 
+  it.live("executes the exact cached ruff and ocamlformat paths after PATH changes", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(async () => {
+        const tmp = await tmpdir()
+        const first = path.join(tmp.path, "first")
+        const second = path.join(tmp.path, "second")
+        await Promise.all([fs.mkdir(first), fs.mkdir(second)])
+        const make = async (directory: string, name: string, value: string) => {
+          const file = path.join(directory, name)
+          await fs.writeFile(
+            file,
+            `#!${process.execPath}\nrequire("fs").writeFileSync(process.argv.at(-1),${JSON.stringify(value)})\n`,
+            { mode: 0o755 },
+          )
+        }
+        await Promise.all([
+          make(first, "ruff", "first-ruff"),
+          make(second, "ruff", "second-ruff"),
+          make(first, "ocamlformat", "first-ocaml"),
+          make(second, "ocamlformat", "second-ocaml"),
+          fs.writeFile(path.join(tmp.path, "pyproject.toml"), "[tool.ruff]\n"),
+          fs.writeFile(path.join(tmp.path, ".ocamlformat"), "version=0.26.2\n"),
+        ])
+        return { tmp, first, second, path: process.env.PATH }
+      }),
+      ({ tmp, first, second }) => {
+        process.env.PATH = `${first}${path.delimiter}${process.env.PATH ?? ""}`
+        return withFormatter(
+          tmp.path,
+          [document(true)],
+          Effect.gen(function* () {
+            const formatter = yield* Formatter.Service
+            const status = yield* formatter.status()
+            expect(status.find((item) => item.name === "ruff")?.available).toBe(true)
+            expect(status.find((item) => item.name === "ocamlformat")?.available).toBe(true)
+            process.env.PATH = `${second}${path.delimiter}${process.env.PATH ?? ""}`
+            const python = path.join(tmp.path, "source.py")
+            const ocaml = path.join(tmp.path, "source.ml")
+            yield* Effect.promise(() => Promise.all([fs.writeFile(python, "source"), fs.writeFile(ocaml, "source")]))
+            yield* formatter.format({ canonical: python })
+            yield* formatter.format({ canonical: ocaml })
+            expect(yield* Effect.promise(() => fs.readFile(python, "utf8"))).toBe("first-ruff")
+            expect(yield* Effect.promise(() => fs.readFile(ocaml, "utf8"))).toBe("first-ocaml")
+          }),
+        )
+      },
+      ({ tmp, path: original }) => Effect.promise(async () => {
+        if (original === undefined) delete process.env.PATH
+        else process.env.PATH = original
+        await tmp[Symbol.asyncDispose]()
+      }),
+    ),
+  )
+
   it.effect("keeps Core formatter sources isolated from V1 and Slopcode runtime imports", () =>
     Effect.promise(async () => {
       const source = await fs.readFile(new URL("../src/formatter.ts", import.meta.url), "utf8")

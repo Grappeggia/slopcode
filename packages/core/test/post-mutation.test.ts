@@ -25,10 +25,10 @@ describe("PostMutation", () => {
           Formatter.Service.of({
             list: () => Effect.succeed([]),
             status: () => Effect.succeed([]),
-            format: () =>
+            format: (stage) =>
               Effect.promise(async () => {
                 order.push("format")
-                await fs.writeFile(target.canonical, "\uFEFF\uFEFFformatted")
+                await fs.writeFile(stage.canonical, "\uFEFF\uFEFFformatted")
                 return { matched: true, outcomes: [{ name: "test", code: "formatted" as const, stdoutBytes: 0, stderrBytes: 0, stdoutTruncated: false, stderrTruncated: false, exitCode: 0 }] }
               }),
           }),

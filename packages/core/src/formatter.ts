@@ -204,15 +204,16 @@ export const layer = Layer.effect(
         case "clang-format": return (yield* fs.findUp(".clang-format", location.directory, location.project.directory)).length ? command("clang-format", "-i", "$FILE") : undefined
         case "ktlint": return command("ktlint", "-F", "$FILE")
         case "ruff": {
-          if (!find("ruff")) return
+          const bin = find("ruff")
+          if (!bin) return
           for (const name of ["pyproject.toml", "ruff.toml", ".ruff.toml"]) {
             const found = yield* fs.findUp(name, location.directory, location.project.directory)
             if (!found.length) continue
-            if (name !== "pyproject.toml" || (yield* fs.readFileStringSafe(found[0]!))?.includes("[tool.ruff]")) return ["ruff", "format", "$FILE"]
+            if (name !== "pyproject.toml" || (yield* fs.readFileStringSafe(found[0]!))?.includes("[tool.ruff]")) return [bin, "format", "$FILE"]
           }
           for (const name of ["requirements.txt", "pyproject.toml", "Pipfile"]) {
             const found = yield* fs.findUp(name, location.directory, location.project.directory)
-            if (found.length && (yield* fs.readFileStringSafe(found[0]!))?.includes("ruff")) return ["ruff", "format", "$FILE"]
+            if (found.length && (yield* fs.readFileStringSafe(found[0]!))?.includes("ruff")) return [bin, "format", "$FILE"]
           }
           return
         }
@@ -235,7 +236,12 @@ export const layer = Layer.effect(
         case "standardrb": return command("standardrb", "--fix", "$FILE")
         case "htmlbeautifier": return command("htmlbeautifier", "$FILE")
         case "dart": return command("dart", "format", "$FILE")
-        case "ocamlformat": return find("ocamlformat") && (yield* fs.findUp(".ocamlformat", location.directory, location.project.directory)).length ? ["ocamlformat", "-i", "$FILE"] : undefined
+        case "ocamlformat": {
+          const bin = find("ocamlformat")
+          return bin && (yield* fs.findUp(".ocamlformat", location.directory, location.project.directory)).length
+            ? [bin, "-i", "$FILE"]
+            : undefined
+        }
         case "terraform": return command("terraform", "fmt", "$FILE")
         case "latexindent": return command("latexindent", "-w", "-s", "$FILE")
         case "gleam": return command("gleam", "format", "$FILE")

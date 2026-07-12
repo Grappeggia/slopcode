@@ -74,18 +74,19 @@ const filesystem = Layer.effect(
         Effect.sync(() => {
           if (!editApproved) readsBeforeEditApproval++
         }).pipe(Effect.andThen(fs.readFile(target))),
-      remove: (target, options) => {
-        if (failRemoveTarget && path.basename(target) === failRemoveTarget) return Effect.die("forced remove failure")
-        if (blockRemoveTarget && path.basename(target) === blockRemoveTarget && removeStarted && releaseRemove)
-          return Deferred.succeed(removeStarted, undefined).pipe(
-            Effect.andThen(Deferred.await(releaseRemove)),
-            Effect.andThen(fs.remove(target, options)),
-          )
-        return fs.remove(target, options)
-      },
     })
   }),
 ).pipe(Layer.provide(FSUtil.defaultLayer))
+const hooks = Layer.succeed(FileMutation.Hooks, FileMutation.Hooks.of({
+  pause: (phase, target) => {
+    if (phase !== "before-remove") return Effect.void
+    if (failRemoveTarget && path.basename(target) === failRemoveTarget) return Effect.die("forced remove failure")
+    if (blockRemoveTarget && path.basename(target) === blockRemoveTarget && removeStarted && releaseRemove) {
+      return Deferred.succeed(removeStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseRemove)))
+    }
+    return Effect.void
+  },
+}))
 
 const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>) => {
   const activeLocation = Layer.succeed(
@@ -93,7 +94,7 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
     Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
   )
   const resolution = LocationMutation.layer.pipe(Layer.provide(filesystem), Layer.provide(activeLocation))
-  const mutation = FileMutation.layer.pipe(Layer.provide(filesystem))
+  const mutation = FileMutation.layer.pipe(Layer.provide(filesystem), Layer.provide(hooks))
   const events = EventV2.defaultLayer
   const reconcile = MutationEvents.layer.pipe(Layer.provide(filesystem))
   const formatter = Layer.succeed(Formatter.Service, Formatter.Service.of({

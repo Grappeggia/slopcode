@@ -49,17 +49,10 @@ const reset = () => {
   denyAction = undefined
 }
 
-const filesystem = Layer.effect(
-  FSUtil.Service,
-  Effect.gen(function* () {
-    const fs = yield* FSUtil.Service
-    return FSUtil.Service.of({
-      ...fs,
-      writeWithDirs: (target, content, mode) =>
-        Effect.sync(() => writes.push(target)).pipe(Effect.andThen(fs.writeWithDirs(target, content, mode))),
-    })
-  }),
-).pipe(Layer.provide(FSUtil.defaultLayer))
+const filesystem = FSUtil.defaultLayer
+const hooks = Layer.succeed(FileMutation.Hooks, FileMutation.Hooks.of({
+  pause: (phase, target) => phase === "before-write" ? Effect.sync(() => writes.push(target)) : Effect.void,
+}))
 
 const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>) => {
   const activeLocation = Layer.succeed(
@@ -67,7 +60,7 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
     Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
   )
   const resolution = LocationMutation.layer.pipe(Layer.provide(filesystem), Layer.provide(activeLocation))
-  const mutation = FileMutation.layer.pipe(Layer.provide(filesystem))
+  const mutation = FileMutation.layer.pipe(Layer.provide(filesystem), Layer.provide(hooks))
   const events = EventV2.defaultLayer
   const reconcile = MutationEvents.layer.pipe(Layer.provide(filesystem))
   const formatter = Layer.succeed(Formatter.Service, Formatter.Service.of({

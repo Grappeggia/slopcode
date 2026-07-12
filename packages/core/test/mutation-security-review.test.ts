@@ -145,6 +145,40 @@ describe("mutation security review", () => {
     ),
   )
 
+  it.live("refuses to delete a child substituted after its handle opens", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return
+        const approved = target(directory)
+        const moved = path.join(directory, "opened.txt")
+        const escaped = path.join(directory, "escaped.txt")
+        yield* Effect.promise(() => Promise.all([
+          fs.writeFile(approved.canonical, "approved"),
+          fs.writeFile(escaped, "escaped"),
+        ]))
+        const opened = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const hooks: FileMutation.HooksInterface = {
+          pause: (phase) => phase === "file-opened"
+            ? Deferred.succeed(opened, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void,
+        }
+        const fiber = yield* Effect.gen(function* () {
+          return yield* (yield* FileMutation.Service).remove({ target: approved })
+        }).pipe(Effect.provide(mutationLayer(hooks)), Effect.flip, Effect.forkChild)
+        yield* Deferred.await(opened)
+        yield* Effect.promise(async () => {
+          await fs.rename(approved.canonical, moved)
+          await fs.symlink(escaped, approved.canonical)
+        })
+        yield* Deferred.succeed(release, undefined)
+        expect(yield* Fiber.join(fiber)).toMatchObject({ _tag: "FileMutation.TargetChangedError" })
+        expect(yield* Effect.promise(() => fs.readFile(moved, "utf8"))).toBe("approved")
+        expect(yield* Effect.promise(() => fs.readFile(escaped, "utf8"))).toBe("escaped")
+      }),
+    ),
+  )
+
   it.live("formats a private stage and rejects a concurrent user edit", () =>
     withTmp((directory) => {
       const approved = target(directory, "source.fmt")
@@ -174,6 +208,93 @@ describe("mutation security review", () => {
         expect(stage).not.toBe("")
         expect(yield* Effect.promise(() => fs.stat(path.dirname(stage)).then(() => true, () => false))).toBe(false)
       }).pipe(Effect.provide(postLayer({ formatter })))
+    }),
+  )
+
+  it.live("does not follow a target or parent substituted while the formatter runs", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return
+        for (const swap of ["target", "parent"] as const) {
+          const parent = path.join(directory, swap)
+          const moved = path.join(directory, `${swap}-moved`)
+          const escaped = path.join(directory, `${swap}-escaped.fmt`)
+          yield* Effect.promise(async () => {
+            await fs.mkdir(parent)
+            await fs.writeFile(path.join(parent, "source.fmt"), "before")
+            await fs.writeFile(escaped, "escaped")
+          })
+          const approved = target(parent, "source.fmt")
+          const formatter: Formatter.Interface = {
+            list: () => Effect.succeed([]),
+            status: () => Effect.succeed([]),
+            format: (stage) => Effect.promise(async () => {
+              if (swap === "target") {
+                await fs.rm(approved.canonical)
+                await fs.symlink(escaped, approved.canonical)
+              } else {
+                await fs.rename(parent, moved)
+                await fs.mkdir(parent)
+                await fs.writeFile(approved.canonical, "primitive")
+              }
+              await fs.writeFile(stage.canonical, "formatted")
+              return { matched: true, outcomes: [{ name: "test", code: "formatted" }] }
+            }),
+          }
+          yield* Effect.gen(function* () {
+            const files = yield* FileMutation.Service
+            const error = yield* (yield* PostMutation.Service).run({
+              target: approved,
+              intent: "write",
+              mutation: files.write({ target: approved, content: "primitive" }),
+            }).pipe(Effect.flip)
+            expect(error).toMatchObject({ _tag: expect.stringMatching(/^FileMutation\.(?:StaleContent|TargetChanged)Error$/) })
+          }).pipe(Effect.provide(postLayer({ formatter })))
+          expect(yield* Effect.promise(() => fs.readFile(escaped, "utf8"))).toBe("escaped")
+          if (swap === "parent") {
+            expect(yield* Effect.promise(() => fs.readFile(path.join(moved, "source.fmt"), "utf8"))).toBe("primitive")
+            expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toBe("primitive")
+          }
+        }
+      }),
+    ),
+  )
+
+  it.live("invokes the supplied primitive once and emits when formatting leaves bytes unchanged", () =>
+    withTmp((directory) => {
+      const approved = target(directory, "same.fmt")
+      let primitive = 0
+      let semantic = 0
+      let watcher = 0
+      let diagnostics = 0
+      const formatter: Formatter.Interface = {
+        list: () => Effect.succeed([]),
+        status: () => Effect.succeed([]),
+        format: () => Effect.succeed({ matched: true, outcomes: [{ name: "test", code: "formatted" }] }),
+      }
+      return Effect.gen(function* () {
+        yield* Effect.promise(() => fs.writeFile(approved.canonical, "before"))
+        const events = yield* EventV2.Service
+        yield* events.listen((event) => {
+          if (event.type === FileSystem.Event.Edited.type) return Effect.sync(() => { semantic++ })
+          if (event.type === Watcher.Event.Updated.type) return Effect.sync(() => { watcher++ })
+          return Effect.void
+        })
+        const files = yield* FileMutation.Service
+        const result = yield* (yield* PostMutation.Service).run({
+          target: approved,
+          intent: "write",
+          mutation: Effect.sync(() => { primitive++ }).pipe(
+            Effect.andThen(files.write({ target: approved, content: "changed" })),
+          ),
+        })
+        expect(primitive).toBe(1)
+        expect(result).toMatchObject({ change: "changed", emitted: true, matched: true, changed: false })
+        expect([semantic, watcher, diagnostics]).toEqual([1, 1, 1])
+      }).pipe(Effect.provide(postLayer({
+        formatter,
+        diagnostics: { notify: () => Effect.sync(() => { diagnostics++ }) },
+      })))
     }),
   )
 

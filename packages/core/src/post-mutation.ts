@@ -1,14 +1,18 @@
 export * as PostMutation from "./post-mutation"
 
-import { Context, Effect, Layer } from "effect"
+import fs from "fs/promises"
+import os from "os"
+import path from "path"
+import { Context, Effect, Layer, Schema } from "effect"
 import { KeyedMutex } from "./effect/keyed-mutex"
 import { EventV2 } from "./event"
 import { FileMutation } from "./file-mutation"
 import { FileSystem } from "./filesystem"
 import { Watcher } from "./filesystem/watcher"
 import { Formatter } from "./formatter"
-import { FSUtil } from "./fs-util"
 import { MutationEvents } from "./mutation-events"
+
+export const STAGE_LIMIT = 16 * 1024 * 1024
 
 export interface Fence { readonly check: Effect.Effect<void, unknown> }
 export const current: Fence = { check: Effect.void }
@@ -17,6 +21,15 @@ export interface DiagnosticsInterface {
 }
 export class Diagnostics extends Context.Service<Diagnostics, DiagnosticsInterface>()("@slopcode/v2/PostMutation/Diagnostics") {}
 export const diagnosticsLayer = Layer.succeed(Diagnostics, Diagnostics.of({ notify: () => Effect.void }))
+
+export class ResultMismatchError extends Schema.TaggedErrorClass<ResultMismatchError>()("PostMutation.ResultMismatchError", {
+  path: Schema.String,
+}) {}
+
+export class StageLimitError extends Schema.TaggedErrorClass<StageLimitError>()("PostMutation.StageLimitError", {
+  path: Schema.String,
+  bytes: Schema.Number,
+}) {}
 
 type Mutation = FileMutation.WriteResult | FileMutation.RemoveResult
 export interface Input<A extends Mutation> {
@@ -27,6 +40,7 @@ export interface Input<A extends Mutation> {
 }
 export type Result<A extends Mutation> = A & {
   readonly event: MutationEvents.Kind
+  readonly emitted: boolean
   readonly matched: boolean
   readonly formatters: readonly Formatter.Outcome[]
   readonly changed: boolean
@@ -38,18 +52,54 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/PostMutation") {}
 
 const hasBom = (content: Uint8Array) => content[0] === 0xef && content[1] === 0xbb && content[2] === 0xbf
-const same = (left: Uint8Array, right: Uint8Array) => left.length === right.length && left.every((byte, index) => byte === right[index])
+const same = (left: Uint8Array, right: Uint8Array) =>
+  left.length === right.length && left.every((byte, index) => byte === right[index])
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const files = yield* FileMutation.Service
     const formatter = yield* Formatter.Service
-    const fs = yield* FSUtil.Service
     const events = yield* EventV2.Service
     const ownership = yield* MutationEvents.Service
     const diagnostics = yield* Diagnostics
     const locks = KeyedMutex.makeUnsafe<string>()
+
+    const staged = (target: Input<Mutation>["target"], immediate: Uint8Array) => Effect.acquireUseRelease(
+      Effect.gen(function* () {
+        if (immediate.length > STAGE_LIMIT) {
+          return yield* new StageLimitError({ path: target.canonical, bytes: immediate.length })
+        }
+        return yield* Effect.tryPromise({
+          try: async () => {
+            const directory = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-format-"))
+            const file = path.join(directory, `stage${path.extname(target.canonical)}`)
+            const handle = await fs.open(file, "wx", 0o600)
+            await handle.writeFile(immediate)
+            await handle.close()
+            return { directory, file }
+          },
+          catch: (cause) => cause,
+        })
+      }),
+      (stage) => Effect.gen(function* () {
+        const formatted = yield* formatter.format({ canonical: stage.file })
+        const output = yield* Effect.tryPromise({
+          try: () => fs.readFile(stage.file),
+          catch: (cause) => cause,
+        })
+        const wanted = hasBom(immediate)
+        let offset = 0
+        while (hasBom(output.slice(offset))) offset += 3
+        const body = output.slice(offset)
+        return {
+          formatted,
+          final: wanted ? new Uint8Array([0xef, 0xbb, 0xbf, ...body]) : body,
+        }
+      }),
+      (stage) => Effect.promise(() => fs.rm(stage.directory, { recursive: true, force: true })).pipe(Effect.ignore),
+    )
+
     const run = <A extends Mutation>(input: Input<A>) => locks.withLock(input.target.canonical)(
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
@@ -59,37 +109,64 @@ export const layer = Layer.effect(
           let complete = false
           return yield* Effect.gen(function* () {
             const mutated = yield* restore(input.mutation)
+            const operation = input.intent === "delete" ? "remove" : "write"
+            if (
+              mutated.target !== input.target.canonical || mutated.resource !== input.target.resource ||
+              mutated.operation !== operation
+            ) return yield* new ResultMismatchError({ path: input.target.canonical })
+
+            const snapshot = files.private(mutated)
+            if (!snapshot) return yield* new ResultMismatchError({ path: input.target.canonical })
             const deleted = mutated.operation === "remove"
-            const immediate = deleted ? new Uint8Array() : yield* fs.readFile(input.target.canonical)
-            yield* fence.check
-            const formatted = deleted ? { matched: false, outcomes: [] } : yield* restore(formatter.format(input.target))
-            let final = deleted ? new Uint8Array() : yield* fs.readFile(input.target.canonical)
-            if (!deleted) {
-              const wanted = hasBom(immediate)
-              let offset = 0
-              while (hasBom(final.slice(offset))) offset += 3
-              const body = final.slice(offset)
-              const repaired = wanted ? new Uint8Array([0xef, 0xbb, 0xbf, ...body]) : body
-              if (!same(final, repaired)) {
-                yield* files.write({ target: input.target, content: repaired })
-                final = repaired
+            const event: MutationEvents.Kind = deleted ? "unlink" : mutated.existed ? "change" : "add"
+            if (mutated.change === "none") {
+              yield* owner.cancel
+              complete = true
+              yield* fence.check
+              return {
+                ...mutated,
+                change: mutated.change,
+                event,
+                emitted: false,
+                matched: false,
+                formatters: [],
+                changed: false,
+                bytes: snapshot.content.length,
               }
             }
-            const event: MutationEvents.Kind = deleted ? "unlink" : mutated.existed ? "change" : "add"
+
+            const immediate = snapshot.content
+            yield* fence.check
+            const output = deleted
+              ? { formatted: { matched: false, outcomes: [] }, final: new Uint8Array() }
+              : yield* restore(staged(input.target, immediate))
+            if (!deleted && output.formatted.matched) {
+              yield* files.commit({
+                target: input.target,
+                expected: immediate,
+                content: output.final,
+                revision: snapshot.revision,
+              })
+            }
+
             yield* fence.check
             if (!deleted) yield* events.publish(FileSystem.Event.Edited, { file: input.target.canonical })
+            yield* fence.check
             yield* events.publish(Watcher.Event.Updated, { file: input.target.canonical, event })
             yield* owner.complete(event)
             complete = true
+            yield* fence.check
             yield* diagnostics.notify({ canonical: input.target.canonical, event })
             yield* fence.check
             return {
               ...mutated,
+              change: mutated.change,
               event,
-              matched: formatted.matched,
-              formatters: formatted.outcomes,
-              changed: !same(immediate, final),
-              bytes: final.length,
+              emitted: true,
+              matched: output.formatted.matched,
+              formatters: output.formatted.outcomes,
+              changed: !same(immediate, output.final),
+              bytes: output.final.length,
             }
           }).pipe(Effect.ensuring(Effect.suspend(() => complete ? Effect.void : owner.cancel)))
         }),
