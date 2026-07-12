@@ -85,7 +85,8 @@ One intermediate full Core run exposed stricter V2 endpoint admission breaking a
 - `2bc1368c20` `fix(core): preserve valid MCP config migration`
 - `ae6f83c7fd` `fix(core): enforce MCP OAuth compatibility`
 - `54ae3f8f75` `feat(core): publish safe MCP auth events`
-- Report commits: documented in the final report appendix.
+- `43123c3450` `docs: report H5C4B2 implementation`
+- Final hash appendix: the following `docs:` commit containing this line.
 
 ## Self-Review
 
