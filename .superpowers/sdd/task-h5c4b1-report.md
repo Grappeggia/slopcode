@@ -185,3 +185,80 @@ Result: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
 ### Post-Fix Concerns
 
 None.
+
+## Re-Review Replacement Fixes
+
+### Findings Resolved
+
+- Reload now creates staged replacement descriptors containing candidate config and timeout. Active `server.config` and `server.timeout` remain unchanged throughout connection, discovery, collision preflight, and failure cleanup.
+- Candidate config, timeout, client, tool definitions, prompt snapshot, and resource snapshot publish together only after successful validation and installation. Failed replacement continues using the old timeout and old secret set.
+- Failure redaction applies both candidate and active config secrets without mutating active state.
+- Servers retain their active raw tool definitions. Replacement closure is checked after adaptation and before tool registration. If closure occurs during/after registration, the old definitions are reinstalled before the candidate is closed, restoring the old client/tool/catalog/config/timeout/status runtime.
+- Resource discovery now has direct parity tests for repeated cursor, 1000-page overflow, duplicate raw names, sanitization collisions, and stale resource list-changed callbacks.
+
+### Re-Review RED Evidence
+
+Command:
+
+```text
+cd packages/core && bun test test/mcp-service-review.test.ts
+```
+
+Result before fixes: `17 pass`, `2 fail`, `73 expect() calls`. Representative failures:
+
+- Failed replacement retained the old client but used timeout `222` instead of old timeout `111`.
+- A deterministic close from the replacement tool schema left `closed_new` registered instead of `closed_old`.
+
+The RED tests were committed first in `deaffca032`.
+
+### Re-Review GREEN Evidence
+
+Focused command:
+
+```text
+cd packages/core && bun test test/mcp-content.test.ts test/mcp-client.test.ts test/mcp.test.ts test/mcp-review.test.ts test/mcp-service-review.test.ts test/session-prompt.test.ts
+```
+
+Result: `80 pass`, `0 fail`, `344 expect() calls`, 6 files.
+
+Broad verification:
+
+```text
+cd packages/core && bun test
+```
+
+Result: `1371 pass`, `0 fail`, `4120 expect() calls`, 149 files.
+
+```text
+cd packages/codemode && bun test
+```
+
+Result: `254 pass`, `0 fail`, `744 expect() calls`, 7 files.
+
+```text
+cd packages/core && bun run typecheck
+```
+
+Result: exit 0, `tsgo --noEmit`.
+
+```text
+cd packages/server && bun run typecheck
+```
+
+Result: exit 0, `tsgo --noEmit`.
+
+```text
+cd ../.. && bun install --frozen-lockfile
+```
+
+Result: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+
+### Re-Review Commits
+
+- `deaffca032` `test(core): cover MCP replacement staging races`
+- `05a99d871f` `fix(core): stage complete MCP replacements`
+- Report update: the following `docs:` commit containing this section.
+
+### Re-Review Concerns
+
+None.
