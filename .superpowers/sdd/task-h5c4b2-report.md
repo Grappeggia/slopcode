@@ -338,7 +338,7 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 
 ### Approval Coverage
 
-- Hanging exchange teardown covers remove, reset, and stop directly; reload and replacement use the tested reset path. Callback response settles 400, attempts scrub once, and the callback port is immediately reusable.
+- Hanging exchange teardown covers remove, reset, and stop directly. A service-level endpoint replacement proves reload is fenced until that reset settles, composing the same tested active-exchange path. Callback response settles 400, attempts scrub once, and the callback port is immediately reusable.
 - A recovered callback exchange failure records bounded `exchange`, schedules registration cleanup, and immediately reuses the port.
 - Invalid-grant, malformed response, and interaction fallback return only `auth-required` or `refresh`, create no attempts/listeners, and do not expose private response text.
 - First-call expiry returns `{ status: "failed", code: "attempt-expired" }`, emits once, scrubs secrets, and a second status call emits nothing.
@@ -348,7 +348,7 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 ### Approval Results
 
 - Approval subset: `63 pass`, `0 fail`, `281 expect() calls`, 4 files.
-- Final focused 13-file command: `131 pass`, `0 fail`, `538 expect() calls`.
+- Final focused 13-file command: `131 pass`, `0 fail`, `539 expect() calls`.
 - H5C4A/B1 regression command: `71 pass`, `0 fail`, `257 expect() calls`.
 - Full Core: `1419 pass`, `0 fail`, `4335 expect() calls`, 153 files.
 - Full CodeMode: `254 pass`, `0 fail`, `744 expect() calls`.
@@ -365,4 +365,6 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 - `e969512d90` `test(core): verify terminal MCP auth events`
 - `973b351de1` `fix(core): publish exact terminal auth events`
 - `98ddea0754` `test(core): name interaction refresh coverage`
+- `710a47849c` `test(core): fence OAuth reset during replacement`
+- `415c925597` `test(core): preserve delayed cleanup fixture`
 - Approval report: the following `docs:` commit.
