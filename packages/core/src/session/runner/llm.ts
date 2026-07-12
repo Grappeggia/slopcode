@@ -5,7 +5,7 @@ import {
   LLMEvent,
   SystemPart,
   isContextOverflowFailure,
-  type ProviderErrorEvent,
+  ProviderErrorEvent,
 } from "@slopcode-ai/llm"
 import { OpenAIProviderOptions } from "@slopcode-ai/llm/providers/openai"
 import { Cause, Clock, DateTime, Effect, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
@@ -44,8 +44,9 @@ import { SessionStore } from "../store"
 import { SessionTask } from "../task"
 import { SessionExecutionStatus } from "../execution-status"
 import { SessionProviderRetry } from "../provider-retry"
+import { SessionRequestFingerprint } from "../request-fingerprint"
 import { eq } from "drizzle-orm"
-import { type RunError, Service, StepLimitExceededError } from "./index"
+import { type RunError, ProviderStreamError, RestartRequestMismatch, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
@@ -522,7 +523,7 @@ export const layer = Layer.effect(
       runtimeEpoch: number,
       recoverOverflow = false,
       beforeDispatch?: Effect.Effect<void>,
-      recovery?: { readonly requestAttempt: number; readonly providerAttempt: number },
+      recovery?: { readonly requestAttempt: number; readonly providerAttempt: number; readonly fingerprint: string },
     ) {
       const events = fencedEvents(sessionID, runtimeEpoch)
       const compaction = SessionCompaction.make({ events, llm, config: documents })
@@ -663,6 +664,15 @@ export const layer = Layer.effect(
         tools: toolMaterialization.definitions,
         toolChoice: format ? "required" : undefined,
       })
+      const fingerprint = SessionRequestFingerprint.fingerprint({
+        request,
+        catalog: resolved.catalog,
+        variant: session.model?.variant,
+        agent: agent.id,
+        harness: resolved.harness,
+      })
+      if (recovery && recovery.fingerprint !== fingerprint)
+        return yield* new RestartRequestMismatch({ message: "Provider request changed during restart recovery" })
       const projected = yield* status.get(sessionID).pipe(Effect.orDie)
       const requestAttempt = recovery?.requestAttempt ?? (projected.type === "idle" ? 1 : (projected.requestAttempt ?? 0) + 1)
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
@@ -901,8 +911,9 @@ export const layer = Layer.effect(
             if (overflowFailure || publisher.hasProviderError()) return
             const current = format ? finalStreamEvent(event) : event
             if (!current) return
-            if (LLMEvent.is.providerError(current) && SessionProviderRetry.classify(current) && !publisher.hasAssistantStarted()) {
-              protocolFailure = current
+            if (LLMEvent.is.providerError(current) && !publisher.hasAssistantStarted()) {
+              if (isContextOverflowFailure(current)) overflowFailure = current
+              else protocolFailure = current
               return
             }
             if (
@@ -969,12 +980,6 @@ export const layer = Layer.effect(
               }
               structuredSettled = true
               return yield* Effect.die(new StructuredSettled())
-            }
-            if (LLMEvent.is.providerError(current)) {
-              if (isContextOverflowFailure(current) && !publisher.hasAssistantStarted()) {
-                overflowFailure = current
-                return
-              }
             }
             if (current.type === "tool-call" && !current.providerExecuted && current.name === "task") {
               const assistantMessageID = yield* publisher.startAssistant()
@@ -1086,9 +1091,15 @@ export const layer = Layer.effect(
             phase: "provider",
             requestAttempt,
             providerAttempt,
-            recovery: recovery ? "retry-provider" : "interrupt",
+            fingerprint,
+            now: yield* Clock.currentTimeMillis,
+            recovery: "retry-provider",
             ...(format ? { structuredAttempt: attempt } : {}),
-          })
+          }).pipe(Effect.catchDefect((defect) =>
+            defect instanceof SessionExecutionStatus.TransitionRejected
+              ? Effect.die(new DispatchClaimLost())
+              : Effect.die(defect),
+          ))
           if (!dispatch.claimed) return yield* Effect.die(new DispatchClaimLost())
         }
         protocolFailure = undefined
@@ -1118,13 +1129,19 @@ export const layer = Layer.effect(
             phase: needsContinuation ? "tool" : "provider",
             requestAttempt,
             providerAttempt,
+            fingerprint,
             ...(format ? { structuredAttempt: attempt } : {}),
           })
         const failure = protocolFailure ?? streamFailure
+        const protocol = Schema.is(ProviderErrorEvent)(failure) ? failure : undefined
         const retry = SessionProviderRetry.classify(failure)
         const additional = providerAttempt
         if (!retry || !SessionProviderRetry.canRetry(additional) || publisher.hasAssistantStarted()) {
-          if (protocolFailure) yield* publish(protocolFailure)
+          if (protocol) yield* publish(protocol)
+          if (protocol) return yield* new ProviderStreamError({
+            message: SessionProviderRetry.sanitize(protocol.message),
+            exhausted: retry !== undefined && !SessionProviderRetry.canRetry(additional),
+          })
           if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
           return
         }
@@ -1146,7 +1163,8 @@ export const layer = Layer.effect(
             attempt: additional,
             maxAttempts: SessionProviderRetry.MAX_ADDITIONAL_ATTEMPTS,
             nextAt: now + wait,
-            recovery: "interrupt",
+            recovery: "retry-provider",
+            fingerprint,
             ...retry,
           })
         yield* Effect.raceFirst(Effect.sleep(wait), watchRuntime(sessionID, runtimeEpoch))
@@ -1220,7 +1238,7 @@ export const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       runtimeEpoch: number,
       beforeDispatch?: Effect.Effect<void>,
-      recovery?: { readonly requestAttempt: number; readonly providerAttempt: number },
+      recovery?: { readonly requestAttempt: number; readonly providerAttempt: number; readonly fingerprint: string },
     ) => Effect.Effect<boolean, RunError>
 
     const runAfterOverflowCompaction: RunTurn = (sessionID, promotion, runtimeEpoch) =>
@@ -1291,6 +1309,7 @@ export const layer = Layer.effect(
     const run = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly force?: boolean
+      readonly recovery?: { readonly requestAttempt: number; readonly providerAttempt: number; readonly fingerprint: string }
     }) {
       const shell = yield* SessionInput.pendingShell(db, input.sessionID)
       const owned = yield* runtime.assert({ sessionID: input.sessionID, owner: "v2" }).pipe(Effect.exit)
@@ -1307,15 +1326,28 @@ export const layer = Layer.effect(
       }
       const owner = owned.value
       const projected = yield* status.get(input.sessionID).pipe(Effect.orDie)
-      const recovery = projected.type === "retrying" && projected.recovery === "retry-provider" && projected.requestAttempt !== undefined && projected.providerAttempt !== undefined && owner.state === "draining" && owner.epoch === projected.epoch
-        ? { requestAttempt: projected.requestAttempt, providerAttempt: projected.providerAttempt }
+      if (input.recovery && !(
+        projected.type === "retrying" &&
+        projected.recovery === "retry-provider" &&
+        projected.requestAttempt === input.recovery.requestAttempt &&
+        projected.providerAttempt === input.recovery.providerAttempt &&
+        projected.fingerprint === input.recovery.fingerprint
+      )) return
+      const recovery = projected.type === "retrying" && projected.recovery === "retry-provider" && projected.requestAttempt !== undefined && projected.providerAttempt !== undefined && projected.fingerprint !== undefined && owner.state === "draining" && owner.epoch === projected.epoch
+        ? { requestAttempt: projected.requestAttempt, providerAttempt: projected.providerAttempt, fingerprint: projected.fingerprint }
         : undefined
+      const continuation = projected.type === "busy" && owner.state === "draining" && owner.epoch === projected.epoch && (
+        projected.recovery === "continue-provider" ||
+        (projected.phase === "preparing" && projected.requestAttempt === undefined) ||
+        projected.phase === "tool" ||
+        projected.activity !== "prompt"
+      )
       const manual = yield* SessionInput.pendingCompaction(db, input.sessionID)
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
       const task = input.force === true ? false : yield* SessionTask.hasPending(store, input.sessionID)
-      if (input.force !== true && !shell && !manual && !hasSteer && !hasQueue && !task && !recovery) return
-      const assigned = yield* (recovery ? Effect.succeed(owner) : runtime
+      if (input.force !== true && !shell && !manual && !hasSteer && !hasQueue && !task && !recovery && !continuation) return
+      const assigned = yield* (recovery || continuation ? Effect.succeed(owner) : runtime
         .assign({
           sessionID: input.sessionID,
           state: "draining",
@@ -1350,7 +1382,8 @@ export const layer = Layer.effect(
         readonly promotion?: SessionInput.Delivery
         readonly shell?: SessionInput.ShellRequest
         readonly manual?: SessionInput.CompactionRequest
-        readonly recovery?: { readonly requestAttempt: number; readonly providerAttempt: number }
+        readonly recovery?: { readonly requestAttempt: number; readonly providerAttempt: number; readonly fingerprint: string }
+        readonly resumed?: boolean
       }
       const select = Effect.fnUntraced(function* (delivery?: SessionInput.Delivery, fallback = false): Effect.fn.Return<Selected | undefined, RunError> {
         const shell = yield* SessionInput.pendingShell(db, input.sessionID)
@@ -1388,8 +1421,17 @@ export const layer = Layer.effect(
             identity: { activityID: projected.activityID, rootID: projected.rootID, activity: projected.activity },
             phase: projected.phase,
             recovery,
+            resumed: true,
           }
-        : yield* select(shell ? undefined : manual ? undefined : hasSteer ? "steer" : hasQueue ? "queue" : undefined, true)
+        : continuation && projected.type === "busy"
+          ? {
+              identity: { activityID: projected.activityID, rootID: projected.rootID, activity: projected.activity },
+              phase: projected.phase,
+              resumed: true,
+              ...(shell ? { shell } : {}),
+              ...(manual ? { manual } : {}),
+            }
+          : yield* select(shell ? undefined : manual ? undefined : hasSteer ? "steer" : hasQueue ? "queue" : undefined, true)
       if (!initial) {
         yield* runtime.assign({ sessionID: input.sessionID, state: "ready", expectedOwner: "v2", expectedEpoch: active.epoch })
         return
@@ -1400,7 +1442,7 @@ export const layer = Layer.effect(
           let first = true
           while (selected) {
             const current = selected
-            if (!current.recovery)
+            if (!current.resumed)
               yield* status.start({
                 sessionID: input.sessionID,
                 owner: "v2",
@@ -1463,10 +1505,16 @@ export const layer = Layer.effect(
               if (Cause.hasInterrupts(exit.cause))
                 yield* status.interrupt({ ...base, code: "interrupted", message: "Session activity was interrupted" }).pipe(Effect.exit)
               if (!Cause.hasInterrupts(exit.cause)) {
-                const retry = SessionProviderRetry.classify(failure)
-                yield* status.fail({
-                  ...base,
-                  code: failure instanceof StepLimitExceededError ? "step-limit" : retry ? "provider-exhausted" : failure instanceof LLMError ? "provider-nonretryable" : "runner-failure",
+                  const retry = SessionProviderRetry.classify(failure)
+                  yield* status.fail({
+                    ...base,
+                    code: failure instanceof StepLimitExceededError
+                      ? "step-limit"
+                      : failure instanceof RestartRequestMismatch
+                        ? "restart"
+                        : failure instanceof ProviderStreamError
+                          ? failure.exhausted ? "provider-exhausted" : "provider-nonretryable"
+                          : retry ? "provider-exhausted" : failure instanceof LLMError ? "provider-nonretryable" : "runner-failure",
                   message: SessionProviderRetry.sanitize(failure instanceof Error ? failure.message : "Session runner failed"),
                 }).pipe(Effect.exit)
               }

@@ -28,6 +28,7 @@ export const layer = Layer.effect(
     const recovered = yield* runtime.recover()
     const recovery = new Map(recovered.map((info) => [info.sessionID, info]))
     const resumable: SessionSchema.ID[] = []
+    const continuations: SessionSchema.ID[] = []
     yield* Effect.forEach(
       recovered,
       Effect.fnUntraced(function* (info) {
@@ -56,10 +57,29 @@ export const layer = Layer.effect(
           return
         }
         if (current.type === "retrying" && current.recovery === "retry-provider") {
+          if (!current.fingerprint) {
+            yield* status.fail({
+              sessionID: info.sessionID,
+              owner: "v2",
+              runtimeState: "draining",
+              epoch: current.epoch,
+              activityID: current.activityID,
+              rootID: current.rootID,
+              activity: current.activity,
+              phase: current.phase,
+              requestAttempt: current.requestAttempt,
+              providerAttempt: current.providerAttempt,
+              structuredAttempt: current.structuredAttempt,
+              code: "restart",
+              message: "Provider retry has no immutable request identity",
+              resultingEpoch: current.epoch + 1,
+            })
+            return
+          }
           resumable.push(info.sessionID)
           return
         }
-        if (current.type === "busy" && current.recovery === "retry-provider" && current.requestAttempt !== undefined && current.providerAttempt !== undefined) {
+        if (current.type === "busy" && current.recovery === "retry-provider" && current.requestAttempt !== undefined && current.providerAttempt !== undefined && current.fingerprint) {
           if (current.providerAttempt >= 6) {
             yield* status.fail({
               sessionID: info.sessionID,
@@ -97,9 +117,19 @@ export const layer = Layer.effect(
             code: "dispatch-uncertain",
             action: "retry-provider",
             message: "Provider dispatch outcome was uncertain after restart",
-            recovery: "retry-provider",
-          })
-          resumable.push(info.sessionID)
+              recovery: "retry-provider",
+              fingerprint: current.fingerprint,
+            })
+            resumable.push(info.sessionID)
+            return
+        }
+        if (current.type === "busy" && (
+          current.recovery === "continue-provider" ||
+          (current.phase === "preparing" && current.requestAttempt === undefined) ||
+          current.phase === "tool" ||
+          current.activity !== "prompt"
+        )) {
+          continuations.push(info.sessionID)
           return
         }
         yield* status.interrupt({
@@ -153,8 +183,16 @@ export const layer = Layer.effect(
       Effect.fnUntraced(function* (sessionID) {
         const current = yield* status.get(sessionID)
         if (current.type !== "retrying" || current.recovery !== "retry-provider") return
+        if (current.requestAttempt === undefined || current.providerAttempt === undefined || current.fingerprint === undefined) return
+        const expected = {
+          requestAttempt: current.requestAttempt,
+          providerAttempt: current.providerAttempt,
+          fingerprint: current.fingerprint,
+        }
         const fiber = yield* Effect.sleep(Math.max(0, current.nextAt - (yield* Clock.currentTimeMillis))).pipe(
-          Effect.andThen(coordinator.run(sessionID)),
+          Effect.andThen(SessionRunner.Service.use((runner) => runner.run({ sessionID, recovery: expected })).pipe(
+            Effect.provide(locations.get((yield* store.get(sessionID))!.location)),
+          )),
           Effect.exit,
           Effect.asVoid,
           Effect.ensuring(Effect.sync(() => timers.delete(sessionID))),
@@ -164,6 +202,7 @@ export const layer = Layer.effect(
       }),
       { discard: true },
     )
+    yield* Effect.forEach(continuations, (sessionID) => coordinator.wake(sessionID), { discard: true })
     yield* events.listen((event) => {
       if (Schema.is(SessionEvent.Task.Execute)(event))
         return SessionTask.orphaned(db, event.data.childSessionID).pipe(

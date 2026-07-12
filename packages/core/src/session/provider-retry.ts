@@ -7,7 +7,9 @@ export const MAX_ADDITIONAL_ATTEMPTS = 5
 export const MAX_ATTEMPTS = MAX_ADDITIONAL_ATTEMPTS + 1
 export const MAX_DELAY_MS = 30_000
 const BACKOFF = [2_000, 4_000, 8_000, 16_000, 30_000] as const
-const REDACT = /(?:bearer\s+|(?:api[-_]?key|token|secret|credential|authorization)\s*[:=]?\s*)[^\s,;]+/gi
+const AUTH = /\b(?:basic|bearer)\s+(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi
+const JSON_SECRET = /"(?:authorization|api[-_]?key|token|secret|credential)"\s*:\s*"(?:[^"\\]|\\.)*"/gi
+const ASSIGNED_SECRET = /\b(?:authorization|api[-_]?key|token|secret|credential)\b\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^,;]+)/gi
 
 export const Code = Schema.Literals(["rate-limit", "server", "explicit", "dispatch-uncertain"])
 export type Code = typeof Code.Type
@@ -92,8 +94,15 @@ export const hints = (failure: unknown): Hint => {
 
 export const canRetry = (additionalAttempt: number) => additionalAttempt >= 1 && additionalAttempt <= MAX_ADDITIONAL_ATTEMPTS
 
-export const sanitize = (value: string) => {
-  const normalized = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(REDACT, "$1<redacted>").replace(/\s+/g, " ").trim()
+export const sanitize = (value: string, secrets: ReadonlyArray<string> = []) => {
+  const redacted = secrets.filter(Boolean).reduce((text, item) => text.replaceAll(item, "<redacted>"), value)
+  const normalized = redacted
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(JSON_SECRET, '"credential":"<redacted>"')
+    .replace(AUTH, "credential <redacted>")
+    .replace(ASSIGNED_SECRET, "credential=<redacted>")
+    .replace(/\s+/g, " ")
+    .trim()
   const bytes = new TextEncoder().encode(normalized)
   if (bytes.byteLength <= 512) return normalized
   const decoder = new TextDecoder("utf-8", { fatal: false })

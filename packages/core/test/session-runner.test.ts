@@ -6381,7 +6381,9 @@ describe("SessionRunnerLLM", () => {
       streamStarted = undefined
       response = [LLMEvent.stepStart({ index: 0 }), LLMEvent.providerError({ message: "Provider unavailable" })]
 
-      yield* session.resume(sessionID)
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toMatchObject({
+        _tag: "SessionRunner.ProviderStreamError",
+      })
 
       expect(requests).toHaveLength(1)
       expect(yield* session.context(sessionID)).toMatchObject([
@@ -6400,7 +6402,9 @@ describe("SessionRunnerLLM", () => {
       requests.length = 0
       response = [LLMEvent.providerError({ message: "Provider unavailable" })]
 
-      yield* session.resume(sessionID)
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toMatchObject({
+        _tag: "SessionRunner.ProviderStreamError",
+      })
 
       expect(requests).toHaveLength(1)
       expect(yield* session.context(sessionID)).toMatchObject([
@@ -6500,11 +6504,14 @@ describe("SessionRunnerLLM", () => {
     )
   }
 
-  it.effect("persists organic retry recovery identity before the retry deadline", () =>
+  it.effect("rebuilds the local execution graph over an organic retry and dispatches once at its deadline", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
       const executionStatus = yield* SessionExecutionStatus.Service
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Organic retry identity" }), resume: false })
       streamFailure = new LLMError({
         module: "test",
@@ -6520,11 +6527,28 @@ describe("SessionRunnerLLM", () => {
         nextAt: 1_000,
         fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
       })
-      yield* Fiber.interrupt(run)
+      const rebuilt = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+      streamFailure = undefined
+      response = fragmentFixture("text", "text-organic-retry", ["recovered once"]).completeEvents
+      yield* Effect.gen(function* () {
+        yield* SessionExecution.Service
+        yield* TestClock.adjust(999)
+        expect(requests).toHaveLength(1)
+        yield* TestClock.adjust(1)
+        while (requests.length < 2) yield* Effect.yieldNow
+        while ((yield* executionStatus.get(sessionID)).type !== "idle") yield* Effect.yieldNow
+      }).pipe(Effect.provide(Layer.fresh(rebuilt)))
+      expect(requests).toHaveLength(2)
+      expect((yield* Fiber.await(run))._tag).toBe("Success")
     }),
   )
 
-  it.effect("reconstructs and claims one explicitly safe provider retry after restart", () =>
+  it.effect("terminal-fails a forged restart retry fingerprint without provider dispatch", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -6535,18 +6559,19 @@ describe("SessionRunnerLLM", () => {
       yield* SessionInput.promoteSteers((yield* Database.Service).db, events, sessionID, Number.MAX_SAFE_INTEGER)
       const active = yield* runtime.assign({ sessionID, state: "draining", expectedOwner: "v2", expectedEpoch: 0 })
       const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: active.epoch, activityID: admitted.id, rootID: admitted.id, activity: "prompt" as const }
+      const fingerprint = "a".repeat(64)
       yield* executionStatus.start({ ...fence, phase: "preparing" })
-      yield* executionStatus.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, recovery: "retry-provider" })
-      yield* executionStatus.complete({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1 })
-      yield* executionStatus.retry({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 0, code: "server", action: "retry-provider", message: "safe", recovery: "retry-provider" })
-      response = fragmentFixture("text", "text-recovered-retry", ["recovered"]).completeEvents
+      yield* executionStatus.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, recovery: "retry-provider", fingerprint })
+      yield* executionStatus.complete({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      yield* executionStatus.retry({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 0, code: "server", action: "retry-provider", message: "safe", recovery: "retry-provider", fingerprint })
       requests.length = 0
 
-      yield* (yield* SessionRunner.Service).run({ sessionID, force: true })
+      expect(yield* (yield* SessionRunner.Service).run({ sessionID, force: true }).pipe(Effect.flip)).toMatchObject({
+        _tag: "SessionRunner.RestartRequestMismatch",
+      })
 
-      expect(requests).toHaveLength(1)
-      expect(userTexts(requests[0]!)).toEqual(["Recover provider retry"])
-      expect(yield* executionStatus.get(sessionID)).toEqual({ type: "idle" })
+      expect(requests).toHaveLength(0)
+      expect(yield* executionStatus.get(sessionID)).toMatchObject({ type: "terminal-failure", code: "restart" })
       expect(yield* runtime.get(sessionID)).toMatchObject({ state: "ready", epoch: active.epoch + 1 })
     }),
   )

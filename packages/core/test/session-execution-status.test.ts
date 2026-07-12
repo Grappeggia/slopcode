@@ -9,7 +9,7 @@ import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
-import { DateTime, Effect, Layer } from "effect"
+import { DateTime, Effect, Exit, Layer } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { EventTable } from "@slopcode-ai/core/event/sql"
 import { eq } from "drizzle-orm"
@@ -180,6 +180,8 @@ describe("SessionExecutionStatus", () => {
       const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
       const activity = { activityID: rootID, rootID, activity: "prompt" as const }
       yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint: "a".repeat(64) })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint: "a".repeat(64) })
       yield* service.retry({
         ...fence,
         ...activity,
@@ -206,11 +208,11 @@ describe("SessionExecutionStatus", () => {
           recovery: "retry-provider",
           fingerprint: "a".repeat(64),
           now: 0,
-        })),
+        }).pipe(Effect.exit)),
         { concurrency: "unbounded" },
       )
 
-      expect(claims.filter((claim) => claim.claimed)).toHaveLength(1)
+      expect(claims.filter(Exit.isSuccess).filter((claim) => claim.value.claimed)).toHaveLength(1)
     }),
   )
 

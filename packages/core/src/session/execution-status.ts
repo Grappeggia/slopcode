@@ -3,7 +3,7 @@ export * as SessionExecutionStatus from "./execution-status"
 import { createHash } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { and, asc, eq } from "drizzle-orm"
-import { Context, DateTime, Effect, Layer, Schema } from "effect"
+import { Clock, Context, DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { EventTable } from "../event/sql"
@@ -11,6 +11,7 @@ import { NonNegativeInt } from "../schema"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { SessionRuntime } from "./runtime"
+import { SessionProviderRetry } from "./provider-retry"
 import { SessionSchema } from "./schema"
 import { SessionExecutionStatusTable, SessionTable } from "./sql"
 
@@ -34,6 +35,7 @@ const Identity = {
   rootID: SessionMessage.ID,
   activity: Activity,
 }
+const Fingerprint = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
 const Active = {
   ...Identity,
   phase: Phase,
@@ -43,13 +45,14 @@ const Active = {
   requestAttempt: NonNegativeInt.pipe(Schema.optional),
   providerAttempt: NonNegativeInt.pipe(Schema.optional),
   structuredAttempt: NonNegativeInt.pipe(Schema.optional),
+  fingerprint: Fingerprint.pipe(Schema.optional),
 }
 export const Info = Schema.Union([
   Schema.Struct({ type: Schema.Literal("idle") }),
   Schema.Struct({
     type: Schema.Literal("busy"),
     ...Active,
-    recovery: Schema.Literals(["retry-provider", "interrupt"]).pipe(Schema.optional),
+    recovery: Schema.Literals(["retry-provider", "continue-provider", "interrupt"]).pipe(Schema.optional),
   }),
   Schema.Struct({
     type: Schema.Literal("retrying"),
@@ -59,11 +62,12 @@ export const Info = Schema.Union([
     nextAt: NonNegativeInt,
     code: SessionEvent.Execution.RetryCode,
     action: SessionEvent.Execution.RetryAction,
-    message: Schema.String,
+    message: Schema.String.check(Schema.isMaxLength(512)),
     recovery: Schema.Literals(["retry-provider", "interrupt"]),
+    fingerprint: Fingerprint,
   }),
-  Schema.Struct({ type: Schema.Literal("interrupted"), ...Active, code: TerminalCode, message: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("terminal-failure"), ...Active, code: TerminalCode, message: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("interrupted"), ...Active, code: TerminalCode, message: Schema.String.check(Schema.isMaxLength(512)) }),
+  Schema.Struct({ type: Schema.Literal("terminal-failure"), ...Active, code: TerminalCode, message: Schema.String.check(Schema.isMaxLength(512)) }),
 ]).pipe(Schema.toTaggedUnion("type"))
 export type Info = typeof Info.Type
 
@@ -83,6 +87,7 @@ type ActiveInput = Fence & IdentityInput & {
   readonly requestAttempt?: number
   readonly providerAttempt?: number
   readonly structuredAttempt?: number
+  readonly fingerprint?: string
 }
 
 export class NotFound extends Schema.TaggedErrorClass<NotFound>()("SessionExecutionStatus.NotFound", {
@@ -104,9 +109,9 @@ export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<Info, NotFound>
   readonly list: (input?: { readonly owner?: SessionRuntime.Owner; readonly nonIdle?: boolean }) => Effect.Effect<ReadonlyArray<{ readonly sessionID: SessionSchema.ID; readonly status: Info }>>
   readonly start: (input: ActiveInput) => Effect.Effect<EventV2.Payload>
-  readonly dispatch: (input: ActiveInput & { readonly requestAttempt: number; readonly providerAttempt: number; readonly recovery?: "retry-provider" | "interrupt" }) => Effect.Effect<{ readonly event: EventV2.Payload; readonly claimed: boolean }>
-  readonly complete: (input: ActiveInput & { readonly requestAttempt: number; readonly providerAttempt: number }) => Effect.Effect<EventV2.Payload>
-  readonly retry: (input: ActiveInput & { readonly requestAttempt: number; readonly attempt: number; readonly maxAttempts: number; readonly nextAt: number; readonly code: SessionEvent.Execution.RetryCode; readonly action: SessionEvent.Execution.RetryAction; readonly message: string; readonly recovery?: "retry-provider" | "interrupt" }) => Effect.Effect<EventV2.Payload>
+  readonly dispatch: (input: ActiveInput & { readonly requestAttempt: number; readonly providerAttempt: number; readonly fingerprint: string; readonly now?: number; readonly recovery?: "retry-provider" | "continue-provider" | "interrupt" }) => Effect.Effect<{ readonly event?: EventV2.Payload; readonly claimed: boolean }>
+  readonly complete: (input: ActiveInput & { readonly requestAttempt: number; readonly providerAttempt: number; readonly fingerprint: string }) => Effect.Effect<EventV2.Payload>
+  readonly retry: (input: ActiveInput & { readonly requestAttempt: number; readonly attempt: number; readonly maxAttempts: number; readonly nextAt: number; readonly code: SessionEvent.Execution.RetryCode; readonly action: SessionEvent.Execution.RetryAction; readonly message: string; readonly fingerprint: string; readonly recovery?: "retry-provider" | "interrupt" }) => Effect.Effect<EventV2.Payload>
   readonly succeed: (input: Fence & IdentityInput & { readonly release?: boolean }) => Effect.Effect<EventV2.Payload>
   readonly interrupt: (input: ActiveInput & { readonly code: TerminalCode; readonly message: string; readonly resultingEpoch: number }) => Effect.Effect<EventV2.Payload>
   readonly fail: (input: ActiveInput & { readonly code: TerminalCode; readonly message: string; readonly resultingEpoch: number }) => Effect.Effect<EventV2.Payload>
@@ -133,7 +138,7 @@ export const make = Effect.gen(function* () {
       const row = yield* db.select().from(SessionExecutionStatusTable).where(eq(SessionExecutionStatusTable.session_id, sessionID)).get().pipe(Effect.orDie)
       return row ? decode(row.data) : ({ type: "idle" } as const)
     })
-    const guard = (input: Fence & IdentityInput, predecessors: ReadonlyArray<Info["type"]>) =>
+    const guard = (input: Fence & IdentityInput, predecessors: ReadonlyArray<Info["type"]>, validate?: (status: Info) => boolean) =>
       Effect.gen(function* () {
         const runtime = yield* db.select().from(SessionTable).where(eq(SessionTable.id, input.sessionID)).get().pipe(Effect.orDie)
         if (!runtime || runtime.runtime !== "v2" || runtime.runtime_state !== input.runtimeState || runtime.runtime_epoch !== input.epoch)
@@ -143,6 +148,8 @@ export const make = Effect.gen(function* () {
         const replacement = predecessors.includes("idle") && (type === "interrupted" || type === "terminal-failure")
         if (!predecessors.includes(type) || (type !== "idle" && !replacement && !same(row, input)))
           return yield* new TransitionRejected({ sessionID: input.sessionID, message: "Illegal execution status predecessor" })
+        if (validate && !validate(row ? decode(row.data) : { type: "idle" }))
+          return yield* new TransitionRejected({ sessionID: input.sessionID, message: "Execution status claim changed" })
       }).pipe(Effect.orDie)
     const publishEvent = events.publish as unknown as (definition: EventV2.Definition, data: unknown, options: EventV2.PublishOptions) => Effect.Effect<EventV2.Payload>
     const equivalent = (stored: Record<string, unknown>, current: Record<string, unknown>) => {
@@ -157,14 +164,14 @@ export const make = Effect.gen(function* () {
           ? DateTime.makeUnsafe(stored.data.timestamp)
           : yield* DateTime.now
       })
-    const publish = (definition: EventV2.Definition, data: Record<string, unknown>, input: ActiveInput | (Fence & IdentityInput), predecessors: ReadonlyArray<Info["type"]>, commit?: (seq: number) => Effect.Effect<void>) =>
+    const publish = (definition: EventV2.Definition, data: Record<string, unknown>, input: ActiveInput | (Fence & IdentityInput), predecessors: ReadonlyArray<Info["type"]>, commit?: (seq: number) => Effect.Effect<void>, validate?: (status: Info) => boolean) =>
       Effect.gen(function* () {
         const id = eventID({ ...input, kind: definition.type, requestAttempt: "requestAttempt" in input ? input.requestAttempt : undefined, providerAttempt: "providerAttempt" in input ? input.providerAttempt : undefined, structuredAttempt: "structuredAttempt" in input ? input.structuredAttempt : undefined })
         return yield* publishEvent(definition, { ...data, timestamp: yield* timestamp(id) }, {
           id,
           idempotent: true,
           equivalent,
-          guard: () => guard(input, predecessors),
+          guard: () => guard(input, predecessors, validate),
           ...(commit ? { commit } : {}),
         })
       })
@@ -182,21 +189,46 @@ export const make = Effect.gen(function* () {
       }),
       start: (input) => publish(SessionEvent.Execution.Started, eventData(input), input, ["idle", "interrupted", "terminal-failure"]),
       dispatch: (input) => Effect.gen(function* () {
-        let claimed = false
+        const now = input.now ?? (yield* Clock.currentTimeMillis)
+        const validate = (current: Info) => current.type === "retrying"
+          ? current.recovery === "retry-provider" && current.nextAt <= now && current.requestAttempt === input.requestAttempt && current.providerAttempt === input.providerAttempt && current.fingerprint === input.fingerprint
+          : current.type === "busy" && (
+            current.requestAttempt === undefined
+              ? input.requestAttempt === 1 && input.providerAttempt === 1
+              : current.recovery === "continue-provider" && input.requestAttempt === current.requestAttempt + 1 && input.providerAttempt === 1
+          )
+        yield* guard(input, ["busy", "retrying"], validate)
+        const row = yield* db.select().from(SessionExecutionStatusTable).where(eq(SessionExecutionStatusTable.session_id, input.sessionID)).get().pipe(Effect.orDie)
+        if (!row) return { claimed: false }
+        const claim = yield* db.update(SessionExecutionStatusTable)
+          .set({ seq: row.seq + 1 })
+          .where(and(
+            eq(SessionExecutionStatusTable.session_id, input.sessionID),
+            eq(SessionExecutionStatusTable.activity_id, input.activityID),
+            eq(SessionExecutionStatusTable.root_id, input.rootID),
+            eq(SessionExecutionStatusTable.owner, "v2"),
+            eq(SessionExecutionStatusTable.epoch, input.epoch),
+            eq(SessionExecutionStatusTable.seq, row.seq),
+          ))
+          .returning({ sessionID: SessionExecutionStatusTable.session_id })
+          .get()
+          .pipe(Effect.orDie)
+        if (!claim) return { claimed: false }
         const event = yield* publish(
           SessionEvent.Execution.ProviderDispatched,
           { ...eventData(input), recovery: input.recovery ?? "retry-provider" },
           input,
           ["busy", "retrying"],
-          () => Effect.sync(() => { claimed = true }),
+          undefined,
+          validate,
         )
-        return { event, claimed }
+        return { event, claimed: true }
       }),
-      complete: (input) => publish(SessionEvent.Execution.ProviderCompleted, eventData(input), input, ["busy"]),
-      retry: (input) => publish(SessionEvent.Execution.RetryScheduled, { ...eventData(input), recovery: input.recovery ?? "interrupt" }, input, ["busy"]),
+      complete: (input) => publish(SessionEvent.Execution.ProviderCompleted, { ...eventData(input), recovery: "continue-provider" }, input, ["busy"], undefined, (current) => current.type === "busy" && current.requestAttempt === input.requestAttempt && current.providerAttempt === input.providerAttempt && current.fingerprint === input.fingerprint),
+      retry: (input) => publish(SessionEvent.Execution.RetryScheduled, { ...eventData(input), message: SessionProviderRetry.sanitize(input.message), recovery: input.recovery ?? "retry-provider" }, input, ["busy"], undefined, (current) => current.type === "busy" && current.requestAttempt === input.requestAttempt && current.providerAttempt !== undefined && input.providerAttempt === current.providerAttempt + 1 && current.fingerprint === input.fingerprint),
       succeed: (input) => publish(SessionEvent.Execution.Succeeded, eventData(input), input, ["busy"], input.release === false ? undefined : () => release(input, input.epoch + 1)),
-      interrupt: (input) => publish(SessionEvent.Execution.Interrupted, eventData(input), input, ["busy", "retrying"], () => release(input, input.resultingEpoch)),
-      fail: (input) => publish(SessionEvent.Execution.Failed, eventData(input), input, ["busy", "retrying"], () => release(input, input.resultingEpoch)),
+      interrupt: (input) => publish(SessionEvent.Execution.Interrupted, { ...eventData(input), message: SessionProviderRetry.sanitize(input.message) }, input, ["busy", "retrying"], () => release(input, input.resultingEpoch)),
+      fail: (input) => publish(SessionEvent.Execution.Failed, { ...eventData(input), message: SessionProviderRetry.sanitize(input.message) }, input, ["busy", "retrying"], () => release(input, input.resultingEpoch)),
       replace: (input) => Effect.gen(function* () {
         const id = eventID({ ...input, kind: `${SessionEvent.Execution.Interrupted.type}:runtime-replaced`, requestAttempt: input.requestAttempt, providerAttempt: input.providerAttempt, structuredAttempt: input.structuredAttempt })
         const data = {

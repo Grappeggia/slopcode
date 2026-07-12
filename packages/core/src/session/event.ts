@@ -386,6 +386,8 @@ export namespace Structured {
 }
 
 export namespace Execution {
+  const Message = Schema.String.check(Schema.isMaxLength(512))
+  const Fingerprint = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
   export const Activity = Schema.Literals(["prompt", "shell", "compaction", "task"])
   export const Phase = Schema.Literals(["preparing", "provider", "tool", "shell", "compaction", "task", "settling"])
   export const TerminalCode = Schema.Literals([
@@ -415,6 +417,7 @@ export namespace Execution {
     requestAttempt: NonNegativeInt.pipe(Schema.optional),
     providerAttempt: NonNegativeInt.pipe(Schema.optional),
     structuredAttempt: NonNegativeInt.pipe(Schema.optional),
+    fingerprint: Fingerprint.pipe(Schema.optional),
   }
 
   export const Started = EventV2.define({
@@ -431,7 +434,8 @@ export namespace Execution {
       ...Active,
       requestAttempt: NonNegativeInt,
       providerAttempt: NonNegativeInt,
-      recovery: Schema.Literals(["retry-provider", "interrupt"]),
+      fingerprint: Fingerprint,
+      recovery: Schema.Literals(["retry-provider", "continue-provider", "interrupt"]),
     },
   })
   export type ProviderDispatched = typeof ProviderDispatched.Type
@@ -439,7 +443,7 @@ export namespace Execution {
   export const ProviderCompleted = EventV2.define({
     type: "session.next.execution.provider.completed",
     ...options,
-    schema: { ...Active, requestAttempt: NonNegativeInt, providerAttempt: NonNegativeInt },
+    schema: { ...Active, requestAttempt: NonNegativeInt, providerAttempt: NonNegativeInt, fingerprint: Fingerprint, recovery: Schema.Literal("continue-provider") },
   })
   export type ProviderCompleted = typeof ProviderCompleted.Type
 
@@ -454,7 +458,8 @@ export namespace Execution {
       nextAt: NonNegativeInt,
       code: RetryCode,
       action: RetryAction,
-      message: Schema.String,
+      message: Message,
+      fingerprint: Fingerprint,
       recovery: Schema.Literals(["retry-provider", "interrupt"]),
     },
   })
@@ -470,7 +475,7 @@ export namespace Execution {
   const Terminal = {
     ...Active,
     code: TerminalCode,
-    message: Schema.String,
+    message: Message,
     resultingEpoch: NonNegativeInt,
   }
   export const Interrupted = EventV2.define({

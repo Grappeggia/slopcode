@@ -277,7 +277,7 @@ describe("session HttpApi", () => {
         yield* db.insert(SessionExecutionStatusTable).values({ session_id: session.id, activity_id: active.activityID, root_id: active.rootID, owner: "v2", epoch: 1, seq: 1, data: { type: "busy", ...active } }).run().pipe(Effect.orDie)
         expect(yield* requestJson<Record<string, unknown>>(SessionPaths.status, { headers })).toEqual({ [session.id]: { type: "busy" } })
 
-        yield* db.update(SessionExecutionStatusTable).set({ data: { type: "retrying", ...active, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 12_000, code: "server", action: "retry-provider", message: "safe", recovery: "interrupt" } }).where(eq(SessionExecutionStatusTable.session_id, session.id)).run().pipe(Effect.orDie)
+        yield* db.update(SessionExecutionStatusTable).set({ data: { type: "retrying", ...active, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 12_000, code: "server", action: "retry-provider", message: "safe", recovery: "interrupt", fingerprint: "a".repeat(64) } }).where(eq(SessionExecutionStatusTable.session_id, session.id)).run().pipe(Effect.orDie)
         expect(yield* requestJson<Record<string, unknown>>(SessionPaths.status, { headers })).toEqual({ [session.id]: { type: "retry", attempt: 1, message: "safe", next: 12_000 } })
 
         yield* db.update(SessionExecutionStatusTable).set({ data: { type: "terminal-failure", ...active, code: "provider-exhausted", message: "safe" } }).where(eq(SessionExecutionStatusTable.session_id, session.id)).run().pipe(Effect.orDie)

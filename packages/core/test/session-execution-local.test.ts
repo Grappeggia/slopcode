@@ -146,7 +146,7 @@ describe("SessionExecutionLocal startup recovery", () => {
         yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: sessionID, directory: "/project", title: kind, version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
         const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: 1, activityID: rootID, rootID, activity: "prompt" as const }
         yield* status.start({ ...fence, phase: "preparing" })
-        if (kind === "after_dispatch") yield* status.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, recovery: "interrupt" })
+        if (kind === "after_dispatch") yield* status.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, recovery: "interrupt", fingerprint: "a".repeat(64) })
       }
       let runs = 0
       const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run: () => Effect.sync(() => runs++) }))
@@ -159,12 +159,10 @@ describe("SessionExecutionLocal startup recovery", () => {
 
       yield* Effect.scoped(Layer.build(execution))
 
-      expect(runs).toBe(0)
-      for (const kind of ids) {
-        const sessionID = SessionSchema.ID.make(`ses_recovered_${kind}`)
-        expect(yield* status.get(sessionID)).toMatchObject({ type: "interrupted", code: "restart" })
-        expect(yield* runtime.get(sessionID)).toMatchObject({ state: "ready", epoch: 2 })
-      }
+      expect(runs).toBe(1)
+      expect(yield* status.get(SessionSchema.ID.make("ses_recovered_before_dispatch"))).toMatchObject({ type: "busy", phase: "preparing" })
+      expect(yield* status.get(SessionSchema.ID.make("ses_recovered_after_dispatch"))).toMatchObject({ type: "interrupted", code: "restart" })
+      expect(yield* runtime.get(SessionSchema.ID.make("ses_recovered_after_dispatch"))).toMatchObject({ state: "ready", epoch: 2 })
     }),
   )
   it.effect("pauses a stale execution epoch and records runtime replacement without running", () =>
@@ -210,9 +208,9 @@ describe("SessionExecutionLocal startup recovery", () => {
       yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: sessionID, directory: "/project", title: "Recovered retry", version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
       const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: 1, activityID: rootID, rootID, activity: "prompt" as const }
       yield* status.start({ ...fence, phase: "preparing" })
-      yield* status.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, recovery: "interrupt" })
-      yield* status.complete({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1 })
-      yield* status.retry({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 50_000, code: "server", action: "retry-provider", message: "retry later", recovery: "interrupt" })
+      yield* status.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, recovery: "interrupt", fingerprint: "a".repeat(64) })
+      yield* status.complete({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint: "a".repeat(64) })
+      yield* status.retry({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 50_000, code: "server", action: "retry-provider", message: "retry later", recovery: "interrupt", fingerprint: "a".repeat(64) })
       let runs = 0
       const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run: () => Effect.sync(() => runs++) }))
       const execution = SessionExecutionLocal.layer.pipe(
@@ -246,7 +244,9 @@ describe("SessionExecutionLocal startup recovery", () => {
       yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: sessionID, directory: "/project", title: "future", version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
       const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: 1, activityID: rootID, rootID, activity: "prompt" as const }
       yield* status.start({ ...fence, phase: "preparing" })
-      yield* status.retry({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 1_000, code: "server", action: "retry-provider", message: "safe", recovery: "retry-provider" })
+      yield* status.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint: "a".repeat(64) })
+      yield* status.complete({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint: "a".repeat(64) })
+      yield* status.retry({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 1_000, code: "server", action: "retry-provider", message: "safe", recovery: "retry-provider", fingerprint: "a".repeat(64) })
       let runs = 0
       const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run: () => Effect.sync(() => runs++) }))
       const execution = SessionExecutionLocal.layer.pipe(
@@ -264,6 +264,43 @@ describe("SessionExecutionLocal startup recovery", () => {
         yield* Effect.yieldNow
         expect(runs).toBe(1)
       }).pipe(Effect.provide(execution))
+    }),
+  )
+  it.effect("wakes provider-completed tool, automatic compaction, and child task continuations", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const status = yield* SessionExecutionStatus.make
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
+      const cases = [
+        { id: "tool", activity: "prompt" as const, phase: "tool" as const, complete: true },
+        { id: "compaction", activity: "compaction" as const, phase: "compaction" as const, complete: false },
+        { id: "task", activity: "task" as const, phase: "task" as const, complete: false },
+      ]
+      for (const item of cases) {
+        const sessionID = SessionSchema.ID.make(`ses_recovered_continuation_${item.id}`)
+        const rootID = SessionMessage.ID.make(`msg_recovered_continuation_${item.id}`)
+        yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: sessionID, directory: "/project", title: item.id, version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
+        const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: 1, activityID: rootID, rootID, activity: item.activity }
+        yield* status.start({ ...fence, phase: item.phase })
+        if (item.complete) {
+          yield* status.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint: "a".repeat(64) })
+          yield* status.complete({ ...fence, phase: "tool", requestAttempt: 1, providerAttempt: 1, fingerprint: "a".repeat(64) })
+        }
+      }
+      const runs: SessionSchema.ID[] = []
+      const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run: (input) => Effect.sync(() => runs.push(input.sessionID)) }))
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.scoped(Layer.build(execution))
+      expect(runs.sort()).toEqual(cases.map((item) => SessionSchema.ID.make(`ses_recovered_continuation_${item.id}`)).sort())
     }),
   )
   it.effect("recovers and drains durable pending input without a new prompt", () => verify("steer"))
