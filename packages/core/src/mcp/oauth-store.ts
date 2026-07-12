@@ -68,6 +68,12 @@ export class StoreError extends Schema.TaggedErrorClass<StoreError>()("MCP.OAuth
 
 export interface Interface {
   readonly get: (target: Target) => Effect.Effect<Entry, StoreError>
+  readonly claimLegacy: (target: Target, input: {
+    readonly compatibility: string
+    readonly clientID?: string
+    readonly clientSecret?: string
+    readonly scope?: string
+  }) => Effect.Effect<boolean, StoreError>
   readonly targets: (scope: Omit<Target, "endpoint">) => Effect.Effect<ReadonlyArray<Target>, StoreError>
   readonly update: (target: Target, change: (entry: Entry) => Entry) => Effect.Effect<Entry, StoreError>
   readonly remove: (target: Target) => Effect.Effect<void, StoreError>
@@ -218,13 +224,27 @@ export function make(input: { readonly data: string; readonly legacy?: string })
     transact(async (data) => {
       const name = key(target)
       const current = data.buckets[name]?.entry
-      if (current || target.workspaceID !== undefined || !input.legacy) return { value: current ?? {} }
+      return { value: current ?? {} }
+    })
+
+  const claimLegacy: Interface["claimLegacy"] = (target, options) =>
+    transact(async (data) => {
+      const name = key(target)
+      const current = data.buckets[name]?.entry
+      if (current) return { value: current.claim === "v1-version-2" && current.compatibility === options.compatibility }
+      if (target.workspaceID !== undefined || !input.legacy || !options.clientID) return { value: false }
       const claimed = await legacy(input.legacy, identity(target))
-      if (!claimed) return { value: {} }
-      const entry = { ...claimed, claim: "v1-version-2" }
+      if (
+        !claimed?.tokens?.access_token ||
+        !claimed.client ||
+        claimed.client.client_id !== options.clientID ||
+        claimed.client.client_secret !== options.clientSecret ||
+        (options.scope !== undefined && claimed.tokens.scope !== options.scope)
+      ) return { value: false }
+      const entry = { ...claimed, compatibility: options.compatibility, claim: "v1-version-2" as const }
       return {
         data: { version: 1, buckets: { ...data.buckets, [name]: { identity: identity(target), entry } } },
-        value: entry,
+        value: true,
       }
     })
 
@@ -471,6 +491,7 @@ export function make(input: { readonly data: string; readonly legacy?: string })
 
   return {
     get,
+    claimLegacy,
     targets,
     update,
     remove,

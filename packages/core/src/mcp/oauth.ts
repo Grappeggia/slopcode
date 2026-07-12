@@ -100,7 +100,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCPOAuth") {}
 
-export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.effect(
+export const layerWith = (options: { readonly maxAge?: number; readonly observeInterval?: number } = {}) => Layer.effect(
   Service,
   Effect.gen(function* () {
     const store = yield* MCPOAuthStore.Service
@@ -108,6 +108,7 @@ export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.e
     const listeners = new Map<string, { close: () => Promise<void> }>()
     const exchanges = new Map<string, { readonly controller: AbortController; readonly settled: Promise<void> }>()
     const timers = new Map<string, ReturnType<typeof setTimeout>>()
+    const observers = new Map<string, ReturnType<typeof setInterval>>()
     const owned = new Set<string>()
     const completions = new Set<(target: MCPOAuthStore.Target) => void>()
 
@@ -120,6 +121,9 @@ export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.e
         const timer = timers.get(attemptID)
         if (timer) clearTimeout(timer)
         timers.delete(attemptID)
+        const observer = observers.get(attemptID)
+        if (observer) clearInterval(observer)
+        observers.delete(attemptID)
         const listener = listeners.get(attemptID)
         listeners.delete(attemptID)
         owned.delete(attemptID)
@@ -171,6 +175,22 @@ export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.e
             ),
           ).catch(() => undefined)
         }, Math.max(0, expires - Date.now())))
+      })
+    const observe = (attemptID: string) =>
+      Effect.sync(() => {
+        const current = observers.get(attemptID)
+        if (current) clearInterval(current)
+        let checking = false
+        observers.set(attemptID, setInterval(() => {
+          if (checking) return
+          checking = true
+          void Effect.runPromise(store.findAttempt(attemptID)).then((found) => {
+            if (!found || ["complete", "cancelled", "expired", "failed"].includes(found.attempt.phase ?? ""))
+              return Effect.runPromise(close(attemptID))
+          }).catch(() => undefined).finally(() => {
+            checking = false
+          })
+        }, options.observeInterval ?? 250))
       })
 
     const status: Interface["status"] = (target) =>
@@ -305,6 +325,7 @@ export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.e
           input.target,
         )
         owned.add(attemptID)
+        yield* observe(attemptID)
         yield* schedule(input.target, attemptID, expires)
         return yield* Effect.gen(function* () {
           let authorizationUrl: string | undefined
@@ -425,27 +446,12 @@ export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.e
         ),
       )
 
-    const recover: Interface["recover"] = (input) =>
-      safe(store.get(input.target), input.target).pipe(
-        Effect.flatMap((entry) =>
-          Effect.gen(function* () {
-            const redirect = yield* Effect.try({
-              try: () => redirectFor(input.config),
-              catch: () => failure("invalid-redirect", input.target),
-            })
-            const compatible = entry.compatibility === MCPOAuthProvider.compatibility(
-              input.target.endpoint,
-              input.config,
-              redirect.url,
-            ) && Object.values(entry.attempts ?? {}).every((attempt) =>
-              !["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "") ||
-              attempt.redirect === redirect.url)
-            if (!compatible) return yield* reset(input.target)
-            yield* Effect.forEach(
-            Object.entries(entry.attempts ?? {}),
-            ([attemptID, attempt]) => {
-              if (["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "")) owned.add(attemptID)
-              if (attempt.phase === "initializing") return terminal(input.target, attemptID, "failed", "discovery")
+    const recoverAttempt = (
+      input: Parameters<Interface["recover"]>[0],
+      attemptID: string,
+      attempt: MCPOAuthStore.Attempt,
+    ): Effect.Effect<void, AuthError> => {
+      if (attempt.phase === "initializing") return terminal(input.target, attemptID, "failed", "discovery")
               if (attempt.phase === "exchanging")
                 return terminal(input.target, attemptID, "failed", "indeterminate-exchange")
               if (attempt.phase === "received" && attempt.code && attempt.state)
@@ -503,12 +509,32 @@ export const layerWith = (options: { readonly maxAge?: number } = {}) => Layer.e
                 Effect.catch(() => terminal(input.target, attemptID, "failed", "callback-unavailable")),
                 Effect.asVoid,
               )
-            },
-            { discard: true },
-            )
-          }),
-        ),
-      )
+    }
+
+    const recover: Interface["recover"] = (input) =>
+      Effect.gen(function* () {
+        const redirect = yield* Effect.try({
+          try: () => redirectFor(input.config),
+          catch: () => failure("invalid-redirect", input.target),
+        })
+        const compatibility = MCPOAuthProvider.compatibility(input.target.endpoint, input.config, redirect.url)
+        yield* safe(store.claimLegacy(input.target, {
+          compatibility,
+          clientID: input.config.client_id,
+          clientSecret: input.config.client_secret,
+          scope: input.config.scope,
+        }), input.target)
+        const entry = yield* safe(store.get(input.target), input.target)
+        const compatible = entry.compatibility === compatibility && Object.values(entry.attempts ?? {}).every((attempt) =>
+          !["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "") ||
+          attempt.redirect === redirect.url)
+        if (!compatible) return yield* reset(input.target)
+        yield* Effect.forEach(Object.entries(entry.attempts ?? {}), ([attemptID, attempt]) => {
+          if (!["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "")) return Effect.void
+          owned.add(attemptID)
+          return observe(attemptID).pipe(Effect.andThen(recoverAttempt(input, attemptID, attempt)))
+        }, { discard: true })
+      })
 
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => exchanges.forEach((exchange) => exchange.controller.abort())).pipe(

@@ -314,6 +314,12 @@ function service(store: MCPOAuthStore.Interface) {
           const oauth = typeof input.config.oauth === "object" ? input.config.oauth : {}
           const redirect = callback(input.config.oauth)
           const compatibility = MCPOAuthProvider.compatibility(url.toString(), oauth, redirect)
+          if (enabled) await Effect.runPromise(store.claimLegacy(target, {
+            compatibility,
+            clientID: oauth.client_id,
+            clientSecret: oauth.client_secret,
+            scope: oauth.scope,
+          }))
           const entry = enabled ? await Effect.runPromise(store.get(target)) : undefined
           if (
             enabled &&
