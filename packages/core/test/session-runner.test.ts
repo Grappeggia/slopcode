@@ -985,7 +985,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect((yield* session.messages({ sessionID })).findLast((message) => message.type === "assistant")).toMatchObject({
+      expect((yield* session.messages({ sessionID, order: "asc" })).findLast((message) => message.type === "assistant")).toMatchObject({
         structured: 7,
       })
     }),
@@ -1024,7 +1024,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect((yield* session.messages({ sessionID })).findLast((message) => message.type === "assistant")).toMatchObject({
+      expect((yield* session.messages({ sessionID, order: "asc" })).findLast((message) => message.type === "assistant")).toMatchObject({
         structured: 8,
       })
     }),

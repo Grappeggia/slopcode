@@ -122,6 +122,8 @@ const serialize = (message: SessionMessage.Message) => {
   return ""
 }
 
+export const serializeMessage = serialize
+
 const settings = (documents: readonly Config.Entry[]) => {
   const configured = documents
     .filter((entry): entry is Config.Document => entry.type === "document")
