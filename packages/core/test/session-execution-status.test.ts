@@ -13,7 +13,7 @@ import { SessionExecutionStatusTable, SessionTable } from "@slopcode-ai/core/ses
 import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { EventTable } from "@slopcode-ai/core/event/sql"
-import { asc, eq } from "drizzle-orm"
+import { asc, eq, inArray } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -288,24 +288,35 @@ describe("SessionExecutionStatus", () => {
       const service = yield* SessionExecutionStatus.Service
       const events = yield* EventV2.Service
       const db = (yield* Database.Service).db
-      const replayID = SessionSchema.ID.make("ses_execution_status_replay")
-      const replayRoot = SessionMessage.ID.make("msg_execution_status_replay")
       yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
-      yield* db.insert(SessionTable).values({ id: replayID, project_id: Project.ID.global, slug: replayID, directory: "/project", title: "replay", version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
-      const fence = { sessionID: replayID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
-      const activity = { activityID: replayRoot, rootID: replayRoot, activity: "prompt" as const }
-      const fingerprint = "e".repeat(64)
-      yield* service.start({ ...fence, ...activity, phase: "preparing" })
-      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
-      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
-      yield* service.retry({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 9_000, code: "server", action: "retry-provider", message: "safe", fingerprint })
-      const expected = yield* service.get(replayID)
-      const recorded = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, replayID)).orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+      const ids = ["continuation", "terminal", "success"] as const
+      for (const kind of ids) {
+        const id = SessionSchema.ID.make(`ses_execution_status_replay_${kind}`)
+        const root = SessionMessage.ID.make(`msg_execution_status_replay_${kind}`)
+        const fingerprint = kind.charCodeAt(0).toString(16).repeat(64).slice(0, 64)
+        const fence = { sessionID: id, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+        const activity = { activityID: root, rootID: root, activity: "prompt" as const }
+        yield* db.insert(SessionTable).values({ id, project_id: Project.ID.global, slug: id, directory: "/project", title: kind, version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
+        yield* service.start({ ...fence, ...activity, phase: "preparing" })
+        yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+        yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+        if (kind === "continuation") yield* service.continue({ ...fence, ...activity, phase: "tool", requestAttempt: 1, providerAttempt: 1, fingerprint })
+        if (kind === "terminal") yield* service.fail({ ...fence, ...activity, phase: "settling", requestAttempt: 1, providerAttempt: 1, fingerprint, code: "runner-failure", message: "failed", resultingEpoch: 2 })
+        if (kind === "success") yield* service.succeed({ ...fence, ...activity, phase: "settling", requestAttempt: 1, providerAttempt: 1, fingerprint, release: false })
+      }
+      const expected = new Map(yield* Effect.forEach(ids, (kind) => {
+        const id = SessionSchema.ID.make(`ses_execution_status_replay_${kind}`)
+        return service.get(id).pipe(Effect.map((value) => [id, value] as const))
+      }))
+      const replayIDs = ids.map((kind) => SessionSchema.ID.make(`ses_execution_status_replay_${kind}`))
+      const recorded = yield* db.select().from(EventTable).where(inArray(EventTable.aggregate_id, replayIDs)).orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
 
-      yield* events.remove(replayID)
-      yield* db.delete(SessionExecutionStatusTable).where(eq(SessionExecutionStatusTable.session_id, replayID)).run().pipe(Effect.orDie)
-      yield* events.replayAll(recorded.map((event) => ({ id: event.id, aggregateID: event.aggregate_id, seq: event.seq, type: event.type, data: event.data })))
-      expect(yield* service.get(replayID)).toEqual(expected)
+      yield* Effect.forEach(ids, (kind) => {
+        const id = SessionSchema.ID.make(`ses_execution_status_replay_${kind}`)
+        return events.remove(id).pipe(Effect.andThen(db.delete(SessionExecutionStatusTable).where(eq(SessionExecutionStatusTable.session_id, id)).run()), Effect.orDie)
+      }, { discard: true })
+      yield* Effect.forEach(replayIDs, (id) => events.replayAll(recorded.filter((event) => event.aggregate_id === id).map((event) => ({ id: event.id, aggregateID: event.aggregate_id, seq: event.seq, type: event.type, data: event.data }))), { discard: true })
+      for (const [id, value] of expected) expect(yield* service.get(id)).toEqual(value)
     }),
   )
 

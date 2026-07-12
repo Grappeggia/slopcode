@@ -461,6 +461,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.next.execution.started": () => Effect.void,
       "session.next.execution.provider.dispatched": () => Effect.void,
       "session.next.execution.provider.completed": () => Effect.void,
+      "session.next.execution.continuation.ready": () => Effect.void,
       "session.next.execution.retry.scheduled": () => Effect.void,
       "session.next.execution.succeeded": () => Effect.void,
       "session.next.execution.interrupted": () => Effect.void,

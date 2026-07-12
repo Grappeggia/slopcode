@@ -153,6 +153,7 @@ export const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const runtime = yield* SessionRuntime.Service
     const status = yield* SessionExecutionStatus.Service
+    const fingerprints = yield* SessionRequestFingerprint.Service
     const location = yield* Location.Service
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
@@ -687,7 +688,7 @@ export const layer = Layer.effect(
         tools: toolMaterialization.definitions,
         toolChoice: format ? "required" : undefined,
       })
-      const fingerprint = SessionRequestFingerprint.fingerprint({
+      const fingerprint = fingerprints.fingerprint({
         request,
         catalog: resolved.catalog,
         variant: session.model?.variant,
@@ -1588,4 +1589,4 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer
+export const defaultLayer = layer.pipe(Layer.provide(SessionRequestFingerprint.defaultLayer))

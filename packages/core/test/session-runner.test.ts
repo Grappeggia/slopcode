@@ -28,6 +28,7 @@ import { ContextSnapshotDecodeError } from "@slopcode-ai/core/session/error"
 import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import { SessionRequestFingerprint } from "@slopcode-ai/core/session/request-fingerprint"
 import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionFormat } from "@slopcode-ai/core/session/format"
@@ -91,6 +92,7 @@ let responseStream: Stream.Stream<LLMEvent, LLMError> | undefined
 let streamGate: Deferred.Deferred<void> | undefined
 let streamStarted: Deferred.Deferred<void> | undefined
 let streamFailure: LLMError | undefined
+let fingerprintKey = new Uint8Array(32).fill(1)
 let toolExecutionGate: Deferred.Deferred<void> | undefined
 let toolExecutionsStarted: Deferred.Deferred<void> | undefined
 let toolExecutionsReady = 5
@@ -320,6 +322,9 @@ const config = Layer.succeed(
   }),
 )
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(Layer.succeed(SessionRequestFingerprint.Service, SessionRequestFingerprint.Service.of({
+    fingerprint: (input) => SessionRequestFingerprint.fromKey(fingerprintKey).fingerprint(input),
+  }))),
   Layer.provide(status),
   Layer.provide(database),
   Layer.provide(store),
@@ -428,6 +433,7 @@ const setup = Effect.gen(function* () {
   skillBaselines.clear()
   responses = undefined
   streamFailure = undefined
+  fingerprintKey = new Uint8Array(32).fill(1)
   responseStream = undefined
   streamGate = undefined
   streamStarted = undefined
@@ -6581,6 +6587,28 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(0)
       expect(yield* executionStatus.get(sessionID)).toMatchObject({ type: "terminal-failure", code: "restart" })
       expect(yield* runtime.get(sessionID)).toMatchObject({ state: "ready", epoch: active.epoch + 1 })
+    }),
+  )
+
+  it.effect("terminal-fails a copied retry database when the installation key is absent", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const executionStatus = yield* SessionExecutionStatus.Service
+      const runner = yield* SessionRunner.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Copied retry identity" }), resume: false })
+      streamFailure = new LLMError({ module: "test", method: "stream", reason: new RateLimitReason({ message: "later", retryAfterMs: 1_000 }) })
+      yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while ((yield* executionStatus.get(sessionID)).type !== "retrying") yield* Effect.yieldNow
+      expect(requests).toHaveLength(1)
+      const retrying = yield* executionStatus.get(sessionID)
+      if (retrying.type !== "retrying") return yield* Effect.die("Expected persisted retry")
+      fingerprintKey = new Uint8Array(32).fill(2)
+      streamFailure = undefined
+      expect(yield* runner.run({ sessionID, recovery: { requestAttempt: retrying.requestAttempt!, providerAttempt: retrying.providerAttempt!, fingerprint: retrying.fingerprint } }).pipe(Effect.flip)).toMatchObject({ _tag: "SessionRunner.RestartRequestMismatch" })
+
+      expect(requests).toHaveLength(1)
+      expect(yield* executionStatus.get(sessionID)).toMatchObject({ type: "terminal-failure", code: "restart" })
     }),
   )
 

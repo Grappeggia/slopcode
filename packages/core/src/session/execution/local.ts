@@ -1,6 +1,7 @@
 import { Clock, Effect, Fiber, Layer } from "effect"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
+import { EventTable } from "../../event/sql"
 import { LocationServiceMap } from "../../location-layer"
 import { SessionInput } from "../input"
 import { SessionRunCoordinator } from "../run-coordinator"
@@ -14,6 +15,7 @@ import { SessionEvent } from "../event"
 import { SessionTask } from "../task"
 import { SessionExecutionStatus } from "../execution-status"
 import { Schema } from "effect"
+import { asc, eq } from "drizzle-orm"
 
 /** Current-process routing for implicit-local Locations. Future remote placement belongs here. */
 export const layer = Layer.effect(
@@ -29,6 +31,59 @@ export const layer = Layer.effect(
     const recovery = new Map(recovered.map((info) => [info.sessionID, info]))
     const resumable: SessionSchema.ID[] = []
     const continuations: SessionSchema.ID[] = []
+    const continuation = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, current: Extract<SessionExecutionStatus.Info, { readonly type: "busy" }>) {
+      if (current.requestAttempt === undefined || current.providerAttempt === undefined || current.fingerprint === undefined) return false
+      const rows = yield* db.select({ seq: EventTable.seq, type: EventTable.type, data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      const matches = (row: (typeof rows)[number]) =>
+        row.data.requestAttempt === current.requestAttempt &&
+        row.data.providerAttempt === current.providerAttempt &&
+        row.data.fingerprint === current.fingerprint
+      const completed = rows.findLast((row) => row.type === `${SessionEvent.Execution.ProviderCompleted.type}.1` && matches(row))
+      if (!completed) return false
+      const dispatched = rows.findLast((row) => row.seq < completed.seq && row.type === `${SessionEvent.Execution.ProviderDispatched.type}.1` && matches(row))
+      if (!dispatched) return false
+      const turn = rows.filter((row) => row.seq > dispatched.seq)
+      const after = turn.filter((row) => row.seq > completed.seq)
+      if (after.some((row) => [
+        `${SessionEvent.Execution.ProviderDispatched.type}.1`,
+        `${SessionEvent.Execution.RetryScheduled.type}.1`,
+        `${SessionEvent.Execution.Succeeded.type}.1`,
+        `${SessionEvent.Execution.Interrupted.type}.1`,
+        `${SessionEvent.Execution.Failed.type}.1`,
+        `${SessionEvent.Step.Failed.type}.2`,
+      ].includes(row.type))) return false
+      const calls = turn.filter((row) =>
+        (row.type === `${SessionEvent.Tool.Called.type}.1` || row.type === `${SessionEvent.Tool.CalledV2.type}.2`) &&
+        (row.data.provider as { executed?: unknown } | undefined)?.executed === false
+      )
+      const settled = calls.length > 0 && calls.every((call) => turn.some((row) =>
+        (row.type === `${SessionEvent.Tool.Success.type}.1` || row.type === `${SessionEvent.Tool.Failed.type}.1`) &&
+        row.data.assistantMessageID === call.data.assistantMessageID &&
+        row.data.callID === call.data.callID &&
+        (row.data.provider as { executed?: unknown } | undefined)?.executed === false
+      ))
+      const tools = settled && turn.some((row) => row.type === `${SessionEvent.Step.Ended.type}.2` && row.data.finish === "tool-calls")
+      const retry = after.findLast((row) =>
+        row.type === `${SessionEvent.Structured.Retry.type}.1` &&
+        row.data.rootUserID === current.rootID &&
+        typeof row.data.remaining === "number" && row.data.remaining > 0
+      )
+      const structured = retry !== undefined && !after.some((row) =>
+        row.seq > retry.seq && (row.type === `${SessionEvent.Structured.Result.type}.1` || row.type === `${SessionEvent.Structured.Failed.type}.1`)
+      )
+      const compacted = after.some((ended) =>
+        ended.type === `${SessionEvent.Compaction.Ended.type}.2` && ended.data.reason === "auto" &&
+        after.some((started) => started.seq < ended.seq && started.type === `${SessionEvent.Compaction.Started.type}.1` && started.data.reason === "auto" && started.data.messageID === ended.data.messageID) &&
+        !after.some((failed) => failed.seq > ended.seq && failed.type === `${SessionEvent.Compaction.Failed.type}.1`)
+      )
+      const steering = yield* SessionInput.hasPending(db, sessionID, "steer")
+      return tools || structured || compacted || steering
+    })
     yield* Effect.forEach(
       recovered,
       Effect.fnUntraced(function* (info) {
@@ -128,6 +183,23 @@ export const layer = Layer.effect(
           (current.activity === "compaction" && (yield* SessionInput.hasPendingCompaction(db, info.sessionID))) ||
           (current.activity === "task" && (yield* SessionTask.hasPending(store, info.sessionID)))
         )
+        if (current.type === "busy" && current.recovery === undefined && (yield* continuation(info.sessionID, current))) {
+          yield* status.continue({
+            sessionID: info.sessionID,
+            owner: "v2",
+            runtimeState: "draining",
+            epoch: current.epoch,
+            activityID: current.activityID,
+            rootID: current.rootID,
+            activity: current.activity,
+            phase: current.phase,
+            requestAttempt: current.requestAttempt!,
+            providerAttempt: current.providerAttempt!,
+            fingerprint: current.fingerprint!,
+          })
+          continuations.push(info.sessionID)
+          return
+        }
         if (current.type === "busy" && (
           current.recovery === "continue-provider" ||
           (current.phase === "preparing" && current.requestAttempt === undefined) ||
@@ -207,6 +279,7 @@ export const layer = Layer.effect(
       { discard: true },
     )
     yield* Effect.forEach(continuations, (sessionID) => coordinator.wake(sessionID), { discard: true })
+    const continuationIDs = new Set(continuations)
     yield* events.listen((event) => {
       if (Schema.is(SessionEvent.Task.Execute)(event))
         return SessionTask.orphaned(db, event.data.childSessionID).pipe(
@@ -229,6 +302,7 @@ export const layer = Layer.effect(
     yield* Effect.forEach(
       recovery.values(),
       Effect.fnUntraced(function* (info) {
+        if (continuationIDs.has(info.sessionID)) return
         if (yield* SessionTask.orphaned(db, info.sessionID)) return
         const pending = yield* Effect.all([
           SessionInput.hasPendingShell(db, info.sessionID),

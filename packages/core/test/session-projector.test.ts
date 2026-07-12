@@ -472,6 +472,43 @@ describe("SessionProjector", () => {
     ),
   )
 
+  it.effect("exposes continuation readiness through the canonical session event stream", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const events = yield* EventV2.Service
+      const id = SessionV2.ID.make("ses_projector_continuation_stream")
+      const root = SessionMessage.ID.make("msg_projector_continuation_stream")
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
+      yield* db.insert(SessionTable).values({ id, project_id: Project.ID.global, slug: id, directory: "/project", title: "stream", version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
+      yield* events.publish(SessionEvent.Execution.ContinuationReady, {
+        sessionID: id,
+        timestamp: DateTime.makeUnsafe(1),
+        owner: "v2",
+        epoch: 1,
+        activityID: root,
+        rootID: root,
+        activity: "prompt",
+        phase: "tool",
+        requestAttempt: 1,
+        providerAttempt: 1,
+        fingerprint: "f".repeat(64),
+        recovery: "continue-provider",
+      })
+      const streamed = Array.from(yield* (yield* SessionV2.Service).events({ sessionID: id }).pipe(Stream.take(1), Stream.runCollect))
+      expect(streamed.map((item) => item.event.type)).toEqual(["session.next.execution.continuation.ready"])
+    }).pipe(
+      Effect.provide(SessionV2.layer.pipe(
+        Layer.provide(status),
+        Layer.provide(events),
+        Layer.provide(database),
+        Layer.provide(Project.defaultLayer),
+        Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
+        Layer.provide(SessionExecution.noopLayer),
+        Layer.provide(locationServices),
+      )),
+    ),
+  )
+
   it.effect("rejects distinct creator events that reuse one projected message ID", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service

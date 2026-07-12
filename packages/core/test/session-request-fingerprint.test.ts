@@ -16,8 +16,9 @@ describe("SessionRequestFingerprint", () => {
     toolChoice: "auto",
     providerOptions: { fake: { effort: "low" } },
   })
-  const hash = (patch: Partial<Parameters<typeof SessionRequestFingerprint.fingerprint>[0]> = {}) =>
-    SessionRequestFingerprint.fingerprint({
+  const service = SessionRequestFingerprint.fromKey(new Uint8Array(32).fill(1))
+  const hash = (patch: Partial<SessionRequestFingerprint.Input> = {}) =>
+    service.fingerprint({
       request,
       catalog,
       variant: "default",

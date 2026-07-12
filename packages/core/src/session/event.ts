@@ -940,6 +940,7 @@ const ExecutionDefinitions = [
   Execution.Started,
   Execution.ProviderDispatched,
   Execution.ProviderCompleted,
+  Execution.ContinuationReady,
   Execution.RetryScheduled,
   Execution.Succeeded,
   Execution.Interrupted,
