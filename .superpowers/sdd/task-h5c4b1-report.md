@@ -423,3 +423,81 @@ Result: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
 ### Atomic Publication Concerns
 
 None.
+
+## Visible Settlement Review Fix
+
+### Finding Resolved
+
+- ToolRegistry now uses one newest-visible-generation selector for both materialization and settlement identity checks. Hidden same-slot MCP stages no longer make active captures stale; publishing the stage immediately makes prior captures stale as intended.
+
+### Visible Settlement RED Evidence
+
+Command:
+
+```text
+cd packages/core && bun test test/session-runner-tool-registry.test.ts
+```
+
+Result before the fix: `19 pass`, `1 fail`, `40 expect() calls`, 1 file. The hidden same-slot generation caused the prior visible materialization to return `Stale tool call: echo` before publication instead of successfully settling.
+
+The RED test was committed first in `6ba9c1765e`.
+
+### Visible Settlement GREEN Evidence
+
+Exact focused command, rerun in isolation to avoid cross-process SQLite fixture contention:
+
+```text
+cd packages/core && bun test test/mcp-content.test.ts test/mcp-client.test.ts test/mcp.test.ts test/mcp-review.test.ts test/mcp-service-review.test.ts test/session-prompt.test.ts
+```
+
+Result: `84 pass`, `0 fail`, `360 expect() calls`, 6 files.
+
+Extended ToolRegistry/MCP command:
+
+```text
+cd packages/core && bun test test/mcp-content.test.ts test/mcp-client.test.ts test/mcp.test.ts test/mcp-review.test.ts test/mcp-service-review.test.ts test/session-prompt.test.ts test/plugin-tool.test.ts test/session-runner-tool-registry.test.ts
+```
+
+Result: `117 pass`, `0 fail`, `473 expect() calls`, 8 files.
+
+Broad verification:
+
+```text
+cd packages/core && bun test
+```
+
+Result: `1376 pass`, `0 fail`, `4139 expect() calls`, 149 files.
+
+```text
+cd packages/codemode && bun test
+```
+
+Result: `254 pass`, `0 fail`, `744 expect() calls`, 7 files.
+
+```text
+cd packages/core && bun run typecheck
+```
+
+Result: exit 0, `tsgo --noEmit`.
+
+```text
+cd packages/server && bun run typecheck
+```
+
+Result: exit 0, `tsgo --noEmit`.
+
+```text
+bun install --frozen-lockfile
+```
+
+Result: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+
+### Visible Settlement Commits
+
+- `6ba9c1765e` `test(core): cover staged tool settlement`
+- `0af16f7ba7` `fix(core): settle visible tool generation`
+- Report update: the following `docs:` commit containing this section.
+
+### Visible Settlement Concerns
+
+None.
