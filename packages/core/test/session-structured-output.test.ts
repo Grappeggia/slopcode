@@ -149,9 +149,10 @@ describe("SessionFormat admission", () => {
       })
       if (admitted.type !== "json_schema") throw new Error("expected structured format")
       expect(SessionFormat.toolSchema(admitted)).not.toHaveProperty("$schema")
-      expect((SessionFormat.toolSchema(admitted).properties as Record<string, unknown>).nested).toHaveProperty(
-        "$schema",
-      )
+      expect(
+        (((SessionFormat.toolSchema(admitted).properties as Record<string, unknown>).value as Record<string, unknown>)
+          .properties as Record<string, unknown>).nested,
+      ).toHaveProperty("$schema")
       expect(admitted.schema).toHaveProperty("$schema")
       expect(SessionFormat.toolSchema(admitted)).toEqual({
         type: "object",
@@ -164,6 +165,49 @@ describe("SessionFormat admission", () => {
         required: ["value"],
         additionalProperties: false,
       })
+    }),
+  )
+
+  it.effect("rejects unsafe and ambiguous portable final envelopes without invoking accessors", () =>
+    Effect.gen(function* () {
+      let accessed = false
+      const accessor = Object.defineProperty({}, "value", {
+        enumerable: true,
+        get() {
+          accessed = true
+          return 1
+        },
+      })
+      const cycle: Record<string, unknown> = {}
+      cycle.value = cycle
+      for (const input of [
+        1,
+        [],
+        { value: 1, extra: true },
+        accessor,
+        cycle,
+        { value: Symbol("unsafe") },
+        Object.assign(Object.create({ value: 1 }), { other: true }),
+      ])
+        expect(Exit.isFailure(yield* SessionFormat.toolValue(input).pipe(Effect.exit))).toBe(true)
+      expect(accessed).toBe(false)
+
+      const wrapped = Object.create(null) as Record<string, unknown>
+      Object.defineProperty(wrapped, "value", {
+        value: Object.fromEntries([
+          ["__proto__", "safe"],
+          ["constructor", 1],
+          ["prototype", false],
+        ]),
+        enumerable: true,
+      })
+      expect(yield* SessionFormat.toolValue(wrapped)).toEqual(
+        Object.fromEntries([
+          ["__proto__", "safe"],
+          ["constructor", 1],
+          ["prototype", false],
+        ]),
+      )
     }),
   )
 })

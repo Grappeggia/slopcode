@@ -857,6 +857,82 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  for (const [name, retryCount, total] of [
+    ["default", 2, 3],
+    ["maximum", 5, 6],
+  ] as const) {
+    it.effect(`consumes exactly ${name} structured attempt budget`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        responses = Array.from({ length: total }, () => [])
+        yield* session.prompt({
+          sessionID,
+          prompt: new Prompt({
+            text: `Exhaust ${name}`,
+            format: { type: "json_schema", schema: { type: "number" }, retry_count: retryCount },
+          }),
+          resume: false,
+        })
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(total)
+        expect(
+          (yield* session.messages({ sessionID, order: "asc" })).findLast((message) => message.type === "assistant"),
+        ).toMatchObject({ structuredError: { attempts: total, retryCount, exhausted: true } })
+      }),
+    )
+  }
+
+  it.effect("distinguishes invalid JSON final arguments from schema mismatch", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      responses = [[LLMEvent.toolCall({ id: "invalid-json", name: "final_output", input: "{" })]]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Return JSON",
+          format: { type: "json_schema", schema: { type: "number" }, retry_count: 0 },
+        }),
+        resume: false,
+      })
+
+      yield* session.resume(sessionID)
+
+      expect((yield* session.messages({ sessionID })).find((message) => message.type === "assistant")).toMatchObject({
+        structuredError: { reason: "invalid-json", attempts: 1 },
+      })
+    }),
+  )
+
+  it.effect("commits only the first of duplicate final calls", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      responses = [[
+        LLMEvent.toolCall({ id: "final-first", name: "final_output", input: { value: 1 } }),
+        LLMEvent.toolCall({ id: "final-second", name: "final_output", input: { value: 2 } }),
+      ]]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Return once",
+          format: { type: "json_schema", schema: { type: "number" }, retry_count: 0 },
+        }),
+        resume: false,
+      })
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect((yield* session.messages({ sessionID })).filter((message) => message.type === "assistant")).toMatchObject([
+        { structured: 1 },
+      ])
+    }),
+  )
+
   it.effect("recovers a durable final candidate before another provider request", () =>
     Effect.gen(function* () {
       yield* setup
@@ -904,6 +980,50 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.message({ sessionID, messageID: assistantMessageID })).toMatchObject({
         structured: { answer: 9 },
       })
+    }),
+  )
+
+  it.effect("consumes a durable dispatched attempt before recovery redispatch", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const events = yield* EventV2.Service
+      const session = yield* SessionV2.Service
+      const format = yield* SessionFormat.admit({
+        type: "json_schema",
+        schema: { type: "number" },
+        retry_count: 1,
+      })
+      if (format.type !== "json_schema") throw new Error("expected structured format")
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Recover dispatch", format }),
+        resume: false,
+      })
+      const { db } = yield* Database.Service
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      yield* events.publish(
+        SessionEvent.Structured.Dispatched,
+        {
+          sessionID,
+          rootUserID: admitted.id,
+          timestamp: yield* DateTime.now,
+          attempt: 1,
+          fingerprint: SessionFormat.fingerprint(format),
+        },
+        { id: SessionFormat.dispatchID(sessionID, admitted.id, 1) },
+      )
+      responses = [[LLMEvent.toolCall({ id: "final-recovered", name: "final_output", input: { value: 7 } })]]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      const assistants = (yield* session.messages({ sessionID, order: "asc" })).filter(
+        (message) => message.type === "assistant",
+      )
+      expect(assistants).toMatchObject([
+        { structuredRetry: { attempt: 1, remaining: 1, reason: "interrupted" } },
+        { structured: 7 },
+      ])
     }),
   )
 
