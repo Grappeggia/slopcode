@@ -170,3 +170,67 @@ Result before production files: `0 pass`, `3 fail`, `3 errors`; module resolutio
 ## Final Disposition
 
 `DONE_WITH_CONCERNS`: implementation, canonical specs, focused/full Core, V1 evidence, CodeMode, all typechecks, frozen install, and source gates are complete and green. The only verification gaps are the timed-out aggregate Slopcode run and the absence of a dedicated formatter-specific test for every individual runner crash window.
+
+## H5E1 Rejection Remediation
+
+This appendix supersedes the original security, formatter-path, result-validation, matrix-coverage, and aggregate-suite claims above.
+
+Status: `DONE`
+
+### Commits
+
+- Rejected base: `634cf79834`.
+- RED: `ce592739c5 test(core): expose H5E1 security gaps`.
+- GREEN: `0d2fa74043 fix(core): secure mutation formatting settlement`.
+- Matrix: `32e1c6a7e2 test(core): complete H5E1 review matrix`.
+- Specs: `f642554188 docs: specify secure mutation formatting`.
+- Report: the commit containing this appendix.
+- Pushes: none.
+
+### RED Evidence
+
+Command from `packages/core`:
+
+```text
+bun test test/mutation-security-review.test.ts
+```
+
+Result before production edits: `0 pass, 6 fail`. All six cases failed at the absent `FileMutation.Hooks` descriptor seam. The cases covered target substitution, parent substitution, live-path formatting/concurrent edit, no-op suppression, primitive-result mismatch, and per-boundary epoch fencing.
+
+### Remediation
+
+- Linux mutation now walks from a no-follow root directory descriptor, opens every directory with `O_DIRECTORY | O_NOFOLLOW`, verifies the resulting handle path, and writes existing files through `O_NOFOLLOW` handles. Creation uses an exclusive no-follow child open through the verified parent descriptor. Unsupported platforms fail closed with `FileMutation.UnsupportedPlatformError`.
+- Removal opens the child without following links and compares its device/inode identity with the named child immediately before unlink. Deterministic barriers prove a substituted child is rejected and neither the opened original nor symlink destination is deleted.
+- Primitive results carry non-enumerable `none`/`created`/`changed`/`deleted` identity plus a service-private WeakMap capability containing immediate bytes and revision. `PostMutation` rejects a forged or mismatched target, resource, or operation before formatter/event work.
+- The supplied primitive effect is evaluated exactly once. The formatter's conditional descriptor-safe `commit` is explicitly separate coordinator settlement, not a recursive primitive or semantic event.
+- Formatter execution receives a private `0700` temporary directory and exclusive `0600` same-extension stage, never the approved live pathname. Immediate bytes are capped at 16 MiB, BOM repair occurs in staging, and the final commit requires both the primitive revision and immediate bytes. Target swaps, parent swaps, and concurrent edits fail without overwriting the replacement.
+- Stage cleanup is scoped across success, expected formatter failure, defect, interruption, and service shutdown. Interruption coverage proves no stale events or diagnostics and no retained stage directory.
+- Fence checks now occur before each semantic event, watcher event, diagnostics notification, and final success. Boundary tests prove replacement suppresses all later effects.
+- Primitive no-ops and missing deletes skip formatting, events, and diagnostics. Primitive failures and result defects do likewise. A primitive change still emits one mutation event when formatter output is byte-identical.
+- Ruff and ocamlformat retain the exact executable path returned by discovery. A real-process test changes `PATH` after positive discovery and proves both cached executables remain pinned.
+- Tool tests count/block descriptor mutation through the internal hook rather than instrumenting pathname `FSUtil` writes, preserving exact once-only and sequential interruption/partial-application evidence.
+
+### Added Matrix Evidence
+
+- Descriptor barriers: existing target, prospective parent, delete child identity, formatter target swap, formatter parent swap, and concurrent user edit.
+- Coordinator: one supplied effect, opaque result validation, no-op/rejected suppression, byte-identical formatter event, BOM preserve/remove/duplicate repair, every event/diagnostic/success fence, interruption cleanup, and stale conditional commit.
+- Formatter: complete catalog/config fold, exact cached ruff/ocamlformat paths, negative rediscovery, concurrent help-probe coalescing, direct argv/metacharacters, sequential execution, bounded output, expected failures, active-Location cwd/environment for external targets, canary redaction, and no `process.env` mutation.
+- Existing focused suites remain authoritative for Location reopen/isolation, watcher echo suppression, process timeout/descendant cleanup, runner restart/no replay, direct ToolRegistry mode, CodeMode projection, and partial apply_patch behavior.
+
+### Final Verification
+
+- Focused Core H5E1 matrix, including the new security review: `350 pass, 0 fail`, 14 files, `1122 expect()` calls.
+- Core full: `1562 pass, 0 fail`, 163 files, `4867 expect()` calls.
+- Slopcode full: `3111 pass, 22 skip, 1 todo, 0 fail`, 248 files, 50 snapshots, `8602 expect()` calls.
+- V1 formatter/config compatibility: `105 pass, 0 fail`, 2 files, `173 expect()` calls.
+- CodeMode full: `254 pass, 0 fail`, 7 files, `744 expect()` calls.
+- Core, server, Slopcode, and CodeMode `bun run typecheck`: pass.
+- Root `bun install --frozen-lockfile`: pass, `2372` installs checked across `2656` packages with no changes.
+- `git diff --check`: pass.
+- Source searches: no formatter/coordinator V1 or Slopcode runtime imports; no implicit shell, `exec`, or `process.env` assignment; no live approved-path formatter call; no direct pathname mutation bypass; no literal discovered ruff/ocamlformat executable; all five tool primitive expressions appear only as the one effect supplied to `post.run`.
+- `bunx prettier --check` is advisory and reports repository-style differences in 11 touched legacy files; no formatter rewrite was applied. Typechecks, tests, and whitespace validation are authoritative and green.
+
+### Final Concerns
+
+- None for the requested Linux security and behavioral contract.
+- Descriptor-relative mutation intentionally fails closed on non-Linux platforms until an equivalent native adapter is implemented; it does not fall back to vulnerable pathname mutation.
