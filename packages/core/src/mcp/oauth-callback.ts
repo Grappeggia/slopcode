@@ -15,8 +15,19 @@ const HEADERS = {
 }
 
 type Registration = {
+  readonly key: string
+  readonly serverKey: string
+  readonly server: Owned
   readonly path: string
-  readonly receive: (result: { code?: string; error?: true }) => Promise<void>
+  readonly receive: (result: { code?: string; error?: true }) => Promise<boolean>
+}
+
+type Owned = { readonly server: Server; refs: number }
+const host = {
+  servers: new Map<string, Owned>(),
+  starting: new Map<string, Promise<Owned>>(),
+  states: new Map<string, Registration>(),
+  claims: new Set<string>(),
 }
 
 export interface Interface extends Awaited<ReturnType<typeof make>> {}
@@ -29,8 +40,7 @@ export const layer = Layer.effect(
 )
 
 export async function make() {
-  const servers = new Map<number, { server: Server; refs: number }>()
-  const states = new Map<string, Registration>()
+  const owned = new Set<Registration>()
 
   const register = async (input: {
     readonly redirect: string
@@ -38,18 +48,22 @@ export async function make() {
     readonly receive: Registration["receive"]
   }) => {
     const url = callback(input.redirect)
-    if (states.has(input.state)) throw new Error("MCP OAuth callback registration is unavailable")
-    const current = servers.get(Number(url.port))
-    const owned =
-      current ??
-      (await new Promise<{ server: Server; refs: number }>((resolve, reject) => {
-        const server = createServer(async (request, response) => {
+    const serverKey = `${url.hostname}:${url.port}`
+    const stateKey = `${serverKey}:${url.pathname}:${input.state}`
+    if (host.states.has(stateKey) || host.claims.has(stateKey))
+      throw new Error("MCP OAuth callback registration is unavailable")
+    host.claims.add(stateKey)
+    const current = host.servers.get(serverKey)
+    const start = () =>
+      new Promise<Owned>((resolve, reject) => {
+        const listener = createServer(async (request, response) => {
           const requestUrl = new URL(request.url ?? "/", `http://${url.hostname}:${url.port}`)
           const values = (name: string) => requestUrl.searchParams.getAll(name)
           const state = values("state")
           const code = values("code")
           const error = values("error")
-          const found = state.length === 1 ? states.get(state[0]!) : undefined
+          const found =
+            state.length === 1 ? host.states.get(`${serverKey}:${requestUrl.pathname}:${state[0]!}`) : undefined
           const valid =
             request.method === "GET" &&
             found?.path === requestUrl.pathname &&
@@ -61,27 +75,37 @@ export async function make() {
             response.end(FAILURE)
             return
           }
-          states.delete(state[0]!)
-          await found.receive(code.length === 1 ? { code: code[0] } : { error: true }).catch(() => undefined)
-          response.writeHead(code.length === 1 ? 200 : 400, HEADERS)
-          response.end(code.length === 1 ? SUCCESS : FAILURE)
+          const accepted = await found.receive(code.length === 1 ? { code: code[0] } : { error: true }).catch(() => false)
+          if (accepted) host.states.delete(found.key)
+          response.writeHead(accepted && code.length === 1 ? 200 : 400, HEADERS)
+          response.end(accepted && code.length === 1 ? SUCCESS : FAILURE)
         })
-        server.once("error", () => reject(new Error("MCP OAuth callback is unavailable")))
-        server.listen(Number(url.port), url.hostname, () => resolve({ server, refs: 0 }))
-      }))
-    if (!current) servers.set(Number(url.port), owned)
-    owned.refs++
-    states.set(input.state, { path: url.pathname, receive: input.receive })
+        listener.once("error", () => reject(new Error("MCP OAuth callback is unavailable")))
+        listener.listen(Number(url.port), url.hostname, () => resolve({ server: listener, refs: 0 }))
+      })
+    const pending = current ? Promise.resolve(current) : (host.starting.get(serverKey) ?? start())
+    if (!current && !host.starting.has(serverKey)) host.starting.set(serverKey, pending)
+    const server = await pending.finally(() => host.starting.delete(serverKey)).catch((error) => {
+      host.claims.delete(stateKey)
+      throw error
+    })
+    if (!current) host.servers.set(serverKey, server)
+    server.refs++
+    const registration = { key: stateKey, serverKey, server, path: url.pathname, receive: input.receive }
+    host.states.set(stateKey, registration)
+    host.claims.delete(stateKey)
+    owned.add(registration)
     let closed = false
     return {
       close: async () => {
         if (closed) return
         closed = true
-        states.delete(input.state)
-        owned.refs--
-        if (owned.refs > 0) return
-        servers.delete(Number(url.port))
-        await new Promise<void>((resolve) => owned.server.close(() => resolve()))
+        owned.delete(registration)
+        host.states.delete(stateKey)
+        server.refs--
+        if (server.refs > 0) return
+        host.servers.delete(serverKey)
+        await new Promise<void>((resolve) => server.server.close(() => resolve()))
       },
     }
   }
@@ -89,11 +113,17 @@ export async function make() {
   return {
     register,
     close: async () => {
-      states.clear()
+      const entries = [...owned]
       await Promise.all(
-        [...servers.values()].map((entry) => new Promise<void>((resolve) => entry.server.close(() => resolve()))),
+        entries.map(async (registration) => {
+          host.states.delete(registration.key)
+          owned.delete(registration)
+          const server = host.servers.get(registration.serverKey)
+          if (!server || --server.refs > 0) return
+          host.servers.delete(registration.serverKey)
+          await new Promise<void>((resolve) => server.server.close(() => resolve()))
+        }),
       )
-      servers.clear()
     },
   }
 }

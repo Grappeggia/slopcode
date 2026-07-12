@@ -160,6 +160,11 @@ type Server = {
   definitions: ReadonlyArray<MCPTool>
   prompts: ReadonlyArray<PromptEntry>
   resources: ReadonlyArray<ResourceEntry>
+  auth?: {
+    readonly config: typeof ConfigMCP.Server.Type
+    readonly timeout: number
+    readonly target?: MCPOAuthStore.Target
+  }
 }
 
 type Prepared = {
@@ -217,15 +222,31 @@ const baseLayer = Layer.effect(
     )
     const registrations = Semaphore.makeUnsafe(1)
     const operations = Semaphore.makeUnsafe(1)
-    const authTarget = (server: Server) => {
-      if (server.config.type !== "remote" || server.config.oauth === false) return
+    const authTarget = (server: Server, candidate = server.auth?.config ?? server.config) => {
+      if (candidate.type !== "remote" || candidate.oauth === false) return
       return {
         directory: location.directory,
         workspaceID: location.workspaceID,
         name: server.name,
-        endpoint: MCPOAuthStore.normalizeEndpoint(server.config.url),
+        endpoint: MCPOAuthStore.normalizeEndpoint(candidate.url),
       }
     }
+    const authConfig = (server: Server) => server.auth?.config ?? server.config
+    const authOptions = (server: Server) => {
+      const candidate = authConfig(server)
+      return candidate.type === "remote" && typeof candidate.oauth === "object" ? candidate.oauth : {}
+    }
+    const authIdentity = (candidate: typeof ConfigMCP.Server.Type) =>
+      candidate.type === "remote" && candidate.oauth !== false
+        ? JSON.stringify([
+            MCPOAuthStore.normalizeEndpoint(candidate.url),
+            typeof candidate.oauth === "object" ? candidate.oauth.client_id ?? null : null,
+            typeof candidate.oauth === "object" ? candidate.oauth.client_secret ?? null : null,
+            typeof candidate.oauth === "object" ? candidate.oauth.scope ?? null : null,
+            typeof candidate.oauth === "object" ? candidate.oauth.redirect_uri ?? null : null,
+            typeof candidate.oauth === "object" ? candidate.oauth.callback_port ?? null : null,
+          ])
+        : undefined
 
     yield* Effect.forEach(
       servers.values(),
@@ -524,6 +545,7 @@ const baseLayer = Layer.effect(
       server.definitions = prepared.definitions
       server.prompts = prepared.prompts
       server.resources = prepared.resources
+      if (server.auth?.config === prepared.config) server.auth = undefined
       if (registration) yield* Scope.close(registration, Exit.void).pipe(Effect.ignore)
       if (previous && previous !== client) yield* Effect.promise(() => previous.close()).pipe(Effect.ignore)
       if (hasTools(client.capabilities))
@@ -549,6 +571,17 @@ const baseLayer = Layer.effect(
       const prepared = yield* prepare(server)
       if (prepared) yield* activate(server, prepared)
     })
+
+    const resumeAuth = (server: Server) =>
+      server.lock.withPermits(1)(
+        Effect.gen(function* () {
+          const candidate = server.auth
+            ? { config: server.auth.config, timeout: server.auth.timeout }
+            : { config: server.config, timeout: server.timeout }
+          const prepared = yield* prepare(server, candidate)
+          if (prepared) yield* activate(server, prepared)
+        }),
+      )
 
     const connectOne = (server: Server) => server.lock.withPermits(1)(close(server).pipe(Effect.andThen(open(server))))
 
@@ -686,30 +719,39 @@ const baseLayer = Layer.effect(
         const target = authTarget(server)
         if (!target) return { status: "not-applicable" }
         if (server.client) return { status: "connected" }
-        return yield* oauth.status(target)
+        const status = yield* oauth.status(target)
+        return status.status === "credential-ready" ? ({ status: "auth-required" } as const) : status
       }),
       beginAuth: Effect.fn("MCP.beginAuth")(function* (input) {
         const server = servers.get(input.name)
         if (!server) return yield* new AuthNotFoundError({ server: input.name })
         const target = authTarget(server)
-        if (!target || server.config.type !== "remote")
+        if (!target || authConfig(server).type !== "remote")
           return yield* new MCPOAuth.AuthError({
             code: "not-applicable",
             server: input.name,
             message: "MCP OAuth not-applicable",
           })
-        if (server.client) return { status: "connected" }
+        if (server.client && !server.auth) return { status: "connected" }
         const result = yield* oauth.begin({
           target,
-          config: typeof server.config.oauth === "object" ? server.config.oauth : {},
+          config: authOptions(server),
           mode: input.mode,
         })
-        if (result.status === "connected") yield* operations.withPermits(1)(connectOne(server))
-        yield* publishAuth(
-          server.name,
-          result.status === "connected" ? { status: "connected" } : yield* oauth.status(target),
-        )
-        return result
+        if (result.status === "connected" || result.status === "credential-ready")
+          yield* operations.withPermits(1)(resumeAuth(server))
+        const stored = yield* oauth.status(target)
+        const status = server.client
+          ? ({ status: "connected" } as const)
+          : stored.status === "credential-ready"
+            ? ({ status: "auth-required" } as const)
+            : stored
+        yield* publishAuth(server.name, status)
+        return result.status === "authorizing"
+          ? result
+          : server.client
+            ? ({ status: "connected" } as const)
+            : result
       }),
       completeAuth: Effect.fn("MCP.completeAuth")(function* (input) {
         const found = yield* oauthStore.findAttempt(input.attemptID).pipe(
@@ -731,7 +773,7 @@ const baseLayer = Layer.effect(
         const server = servers.get(found.target.name)
         if (!server) return yield* new AuthNotFoundError({ server: found.target.name })
         const target = authTarget(server)
-        if (!target || JSON.stringify(target) !== JSON.stringify(found.target) || server.config.type !== "remote")
+        if (!target || JSON.stringify(target) !== JSON.stringify(found.target) || authConfig(server).type !== "remote")
           return yield* new MCPOAuth.AuthError({
             code: "attempt-invalid",
             attemptID: input.attemptID,
@@ -740,18 +782,27 @@ const baseLayer = Layer.effect(
         const result = yield* oauth.complete({
           ...input,
           target,
-          config: typeof server.config.oauth === "object" ? server.config.oauth : {},
+          config: authOptions(server),
         })
-        if (result.status === "connected") yield* operations.withPermits(1)(connectOne(server))
-        yield* publishAuth(server.name, server.client ? { status: "connected" } : result)
-        return server.client ? ({ status: "connected" } as const) : result
+        if (result.status === "connected" || result.status === "credential-ready")
+          yield* operations.withPermits(1)(resumeAuth(server))
+        const status = server.client
+          ? ({ status: "connected" } as const)
+          : result.status === "credential-ready"
+            ? ({ status: "auth-required" } as const)
+            : result
+        yield* publishAuth(server.name, status)
+        return status
       }),
       cancelAuth: Effect.fn("MCP.cancelAuth")(function* (attemptID) {
         const found = yield* oauthStore
           .findAttempt(attemptID)
           .pipe(Effect.mapError(() => new MCPOAuth.AuthError({ code: "store", attemptID, message: "MCP OAuth store" })))
         yield* oauth.cancel(attemptID)
-        if (found) yield* publishAuth(found.target.name, yield* oauth.status(found.target))
+        if (found) {
+          const status = yield* oauth.status(found.target)
+          yield* publishAuth(found.target.name, status.status === "credential-ready" ? { status: "auth-required" } : status)
+        }
       }),
       removeAuth: Effect.fn("MCP.removeAuth")(function* (name: string) {
         const server = servers.get(name)
@@ -809,7 +860,15 @@ const baseLayer = Layer.effect(
                 return []
               return [server]
             })
-            yield* Effect.forEach(removed, (server) => server.lock.withPermits(1)(close(server)), {
+            yield* Effect.forEach(removed, (server) => server.lock.withPermits(1)(
+              Effect.gen(function* () {
+                const targets = [server.auth?.target, authTarget(server, server.config)].filter(
+                  (target): target is MCPOAuthStore.Target => target !== undefined,
+                )
+                yield* Effect.forEach(targets, (target) => oauth.remove(target).pipe(Effect.ignore), { discard: true })
+                yield* close(server)
+              }),
+            ), {
               concurrency: "unbounded",
               discard: true,
             })
@@ -823,6 +882,15 @@ const baseLayer = Layer.effect(
               )
                 continue
               if (existing) {
+                const previous = existing.auth?.config ?? existing.config
+                const oldTarget = authTarget(existing, previous)
+                const nextTarget = authTarget(existing, config)
+                if (authIdentity(previous) !== authIdentity(config)) {
+                  if (oldTarget) yield* oauth.reset(oldTarget).pipe(Effect.ignore)
+                  if (existing.auth?.target && JSON.stringify(existing.auth.target) !== JSON.stringify(oldTarget))
+                    yield* oauth.reset(existing.auth.target).pipe(Effect.ignore)
+                }
+                existing.auth = { config, timeout: config.timeout ?? next.timeout, target: nextTarget }
                 changed.push({ server: existing, config, timeout: config.timeout ?? next.timeout })
                 continue
               }
@@ -855,6 +923,7 @@ const baseLayer = Layer.effect(
                     target.server.client = undefined
                     target.server.config = target.config
                     target.server.timeout = target.timeout
+                    target.server.auth = undefined
                     yield* publish(target.server, { status: "disabled" })
                     return [pending, client] as const
                   }),
@@ -895,9 +964,33 @@ const baseLayer = Layer.effect(
       }),
     })
 
+    yield* oauth.onComplete((target) => {
+      const server = servers.get(target.name)
+      if (!server || JSON.stringify(authTarget(server)) !== JSON.stringify(target)) return
+      Effect.runFork(
+        operations.withPermits(1)(
+          resumeAuth(server).pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const status = server.client ? ({ status: "connected" } as const) : ({ status: "auth-required" } as const)
+                yield* publishAuth(server.name, status)
+              }),
+            ),
+          ),
+        ),
+      )
+    })
     yield* Effect.addFinalizer(() =>
       operations.withPermits(1)(
-        Effect.forEach(servers.values(), (server) => server.lock.withPermits(1)(close(server)), {
+        Effect.forEach(servers.values(), (server) => server.lock.withPermits(1)(
+          Effect.gen(function* () {
+            const targets = [server.auth?.target, authTarget(server, server.config)].filter(
+              (target): target is MCPOAuthStore.Target => target !== undefined,
+            )
+            yield* Effect.forEach(targets, (target) => oauth.stop(target).pipe(Effect.ignore), { discard: true })
+            yield* close(server)
+          }),
+        ), {
           concurrency: "unbounded",
           discard: true,
         }),

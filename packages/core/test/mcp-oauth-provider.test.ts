@@ -14,7 +14,19 @@ describe("MCP OAuth provider", () => {
           const target = { directory: "/workspace", name: "server", endpoint: "https://example.com/mcp" }
           yield* store.update(target, () => ({
             client: { client_id: "dynamic", redirect_uris: ["http://127.0.0.1:19876/callback"] },
-            attempts: {},
+            attempts: Object.fromEntries(
+              ["mcp_auth_first", "mcp_auth_second"].map((attemptID) => [
+                attemptID,
+                {
+                  state: attemptID,
+                  mode: "manual",
+                  redirect: "http://127.0.0.1:19876/callback",
+                  created: 1,
+                  expires: 2,
+                  phase: "pending",
+                },
+              ]),
+            ),
           }))
           const first = MCPOAuthProvider.make({
             store,

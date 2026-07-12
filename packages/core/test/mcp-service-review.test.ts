@@ -6,6 +6,8 @@ import { EventV2 } from "@slopcode-ai/core/event"
 import { Location } from "@slopcode-ai/core/location"
 import { MCP } from "@slopcode-ai/core/mcp"
 import { MCPClient } from "@slopcode-ai/core/mcp/client"
+import { MCPOAuth } from "@slopcode-ai/core/mcp/oauth"
+import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
 import { PluginV2 } from "@slopcode-ai/core/plugin"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
@@ -44,6 +46,8 @@ function fixture(input: {
     tools: Readonly<Record<string, unknown>>,
     registry: ToolRegistry.Interface,
   ) => Effect.Effect<void>
+  readonly oauth?: MCPOAuth.Interface
+  readonly oauthStore?: MCPOAuthStore.Interface
 }) {
   const config = Layer.succeed(Config.Service, {
     entries: () =>
@@ -72,7 +76,13 @@ function fixture(input: {
       })
     }),
   ).pipe(Layer.provide(registry))
-  const mcp = MCP.layer.pipe(
+  const source = input.oauth && input.oauthStore
+    ? MCP.locationLayer.pipe(
+        Layer.provide(Layer.succeed(MCPOAuth.Service, MCPOAuth.Service.of(input.oauth))),
+        Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(input.oauthStore))),
+      )
+    : MCP.layer
+  const mcp = source.pipe(
     Layer.provide(config),
     Layer.provide(Layer.succeed(MCPClient.Service, { connect: input.connect })),
     Layer.provide(location),
@@ -1288,5 +1298,88 @@ fixture({
     expect(prompt).toBeInstanceOf(MCP.RequestError)
     expect(resource).toBeInstanceOf(MCP.RequestError)
     expect(JSON.stringify([prompt, resource])).not.toContain("content-secret")
+  }),
+)
+
+const authDocuments = [
+  new ConfigMCP.Info({
+    servers: {
+      staged: new ConfigMCP.Remote({ type: "remote", url: "https://old.example/mcp", oauth: false }),
+    },
+  }),
+]
+const authBegins: Array<{ target: MCPOAuthStore.Target; config: typeof ConfigMCP.OAuth.Type }> = []
+const authStore: MCPOAuthStore.Interface = {
+  get: () => Effect.succeed({}),
+  update: (_target, change) => Effect.succeed(change({})),
+  remove: () => Effect.void,
+  saveTokens: () => Effect.void,
+  invalidate: () => Effect.void,
+  findAttempt: () => Effect.succeed(undefined),
+  claimAttempt: () => Effect.succeed({ status: "missing" }),
+  cancelAttempt: () => Effect.succeed({ status: "missing" }),
+  startExchange: () => Effect.succeed(undefined),
+  finishExchange: () => Effect.succeed(false),
+  finishAttempt: () => Effect.succeed(false),
+  cancelTarget: () => Effect.void,
+}
+const stagedOAuth: MCPOAuth.Interface = {
+  status: () => Effect.succeed({ status: "auth-required" }),
+  begin: (input) =>
+    Effect.sync(() => {
+      authBegins.push(input)
+      return {
+        status: "authorizing" as const,
+        attemptID: "mcp_auth_staged" as const,
+        mode: "manual" as const,
+        created: 1,
+        expires: 2,
+        authorizationUrl: "https://auth.example/authorize",
+      }
+    }),
+  complete: () => Effect.fail(new MCPOAuth.AuthError({ code: "attempt-invalid", message: "unused" })),
+  cancel: () => Effect.void,
+  remove: () => Effect.void,
+  reset: () => Effect.void,
+  stop: () => Effect.void,
+  recover: () => Effect.void,
+  onComplete: () => Effect.void,
+}
+fixture({
+  documents: authDocuments,
+  oauth: stagedOAuth,
+  oauthStore: authStore,
+  connect: (input) =>
+    input.config.type === "remote" && input.config.url === "https://new.example/mcp"
+      ? Effect.fail(new MCPClient.ConnectionError({ message: "MCP authentication is required", code: "auth-required" }))
+      : Effect.succeed(
+          MCPClient.make({
+            capabilities: { tools: {} },
+            list: () => Promise.resolve({ tools: [{ name: "old", inputSchema: { type: "object" } }] }),
+            call: () => Promise.resolve({ content: [] }),
+            close: () => Promise.resolve(),
+          }),
+        ),
+}).effect("keeps active runtime while auth controls own the failed replacement candidate", () =>
+  Effect.gen(function* () {
+    const mcp = yield* MCP.Service
+    authDocuments[0] = new ConfigMCP.Info({
+      servers: {
+        staged: new ConfigMCP.Remote({
+          type: "remote",
+          url: "https://new.example/mcp",
+          oauth: { client_id: "new-client", scope: "new-scope", redirect_uri: "https://client.example/new" },
+        }),
+      },
+    })
+    yield* mcp.reload()
+    expect((yield* mcp.status()).staged).toMatchObject({ status: "connected" })
+    expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toContain("staged_old")
+    const started = yield* mcp.beginAuth({ name: "staged", mode: "manual" })
+    expect(started.status).toBe("authorizing")
+    expect(authBegins.at(-1)).toMatchObject({
+      target: { endpoint: "https://new.example/mcp" },
+      config: { client_id: "new-client", scope: "new-scope", redirect_uri: "https://client.example/new" },
+    })
   }),
 )

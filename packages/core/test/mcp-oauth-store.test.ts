@@ -59,7 +59,17 @@ describe("MCP OAuth store", () => {
             },
             client: { client_id: "dynamic", redirect_uris: ["http://127.0.0.1:19876/callback"] },
             discovery: { authorizationServerUrl: "https://auth.example.com/" },
-            attempts: { attempt: { state: "state", verifier: "verifier" } },
+            attempts: {
+              attempt: {
+                state: "state",
+                verifier: "verifier",
+                mode: "manual",
+                redirect: "https://client.example/callback",
+                created: 1,
+                expires: 2,
+                phase: "pending",
+              },
+            },
           }))
           yield* store.saveTokens(target, { access_token: "new", token_type: "Bearer" }, 200)
           expect((yield* store.get(target)).tokens).toEqual({
@@ -69,7 +79,17 @@ describe("MCP OAuth store", () => {
             scope: "read",
           })
           yield* store.invalidate(target, "all", "attempt")
-          expect(yield* store.get(target)).toEqual({ attempts: {} })
+          expect(yield* store.get(target)).toEqual({
+            attempts: {
+              attempt: {
+                mode: "manual",
+                redirect: "https://client.example/callback",
+                created: 1,
+                expires: 2,
+                phase: "pending",
+              },
+            },
+          })
         }),
       ),
     ),
@@ -196,6 +216,66 @@ describe("MCP OAuth store", () => {
             yield* Effect.promise(() => Bun.write(file, JSON.stringify(data)))
             expect(yield* MCPOAuthStore.make({ data: tmp.path }).get(target).pipe(Effect.flip)).toMatchObject({ code: "invalid" })
           }
+        }),
+      ),
+    ),
+  )
+
+  it.live("serializes a winning token commit across spawned processes", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const store = MCPOAuthStore.make({ data: tmp.path })
+          const target = { directory: "/workspace", name: "server", endpoint: "https://example.com/mcp" }
+          const attempt = (id: string): MCPOAuthStore.Attempt => ({
+            state: `${id}-state`,
+            verifier: `${id}-verifier`,
+            code: `${id}-code`,
+            mode: "manual",
+            redirect: "https://client.example/callback",
+            created: 1,
+            expires: 100,
+            phase: "exchanging",
+          })
+          yield* store.update(target, () => ({ attempts: { one: attempt("one"), two: attempt("two") } }))
+          const worker = path.join(import.meta.dir, "fixture/mcp-oauth-worker.ts")
+          const output = yield* Effect.promise(() =>
+            Promise.all(
+              [["one", "first"], ["two", "second"]].map(async ([id, token]) => {
+                const process = Bun.spawn(["bun", worker, tmp.path, id!, token!], { cwd: path.dirname(import.meta.dir), stdout: "pipe" })
+                const text = await new Response(process.stdout).text()
+                expect(await process.exited).toBe(0)
+                return text
+              }),
+            ),
+          )
+          expect(output.toSorted()).toEqual(["lost", "won"])
+          expect(["first", "second"]).toContain((yield* store.get(target)).tokens?.access_token)
+          expect(Object.values((yield* store.get(target)).attempts ?? {}).map((value) => value.phase).toSorted()).toEqual([
+            "cancelled",
+            "complete",
+          ])
+        }),
+      ),
+    ),
+  )
+
+  it.live("rejects symlink and nonregular stores and leaves no temporary files", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const dir = path.join(tmp.path, "mcp-oauth")
+          const file = path.join(dir, "store.json")
+          const target = { directory: "/workspace", name: "server", endpoint: "https://example.com/mcp" }
+          yield* Effect.promise(() => fs.mkdir(dir, { recursive: true }))
+          yield* Effect.promise(() => fs.symlink(path.join(tmp.path, "missing"), file))
+          expect(yield* MCPOAuthStore.make({ data: tmp.path }).get(target).pipe(Effect.flip)).toMatchObject({ code: "unsafe" })
+          yield* Effect.promise(() => fs.rm(file))
+          yield* Effect.promise(() => fs.mkdir(file))
+          expect(yield* MCPOAuthStore.make({ data: tmp.path }).get(target).pipe(Effect.flip)).toMatchObject({ code: "unsafe" })
+          yield* Effect.promise(() => fs.rm(file, { recursive: true }))
+          yield* MCPOAuthStore.make({ data: tmp.path }).update(target, () => ({}))
+          expect((yield* Effect.promise(() => fs.readdir(dir))).filter((name) => name.endsWith(".tmp"))).toEqual([])
         }),
       ),
     ),

@@ -22,6 +22,8 @@ export function make(input: {
   readonly now?: () => number
   readonly transient?: boolean
   readonly compatibility?: string
+  readonly saveTokens?: (tokens: OAuthTokens) => Promise<void>
+  readonly interactive?: boolean
 }): OAuthClientProvider {
   const run = <A>(effect: Effect.Effect<A, MCPOAuthStore.StoreError>) => Effect.runPromise(effect)
   const now = input.now ?? (() => Date.now() / 1000)
@@ -72,7 +74,9 @@ export function make(input: {
       } satisfies OAuthTokens
     },
     saveTokens: (tokens) =>
-      run(input.store.saveTokens(input.target, tokens, now())).then(() =>
+      input.saveTokens
+        ? input.saveTokens(tokens)
+        : run(input.store.saveTokens(input.target, tokens, now())).then(() =>
         run(
           input.store.update(input.target, (entry) => ({
             ...entry,
@@ -80,7 +84,7 @@ export function make(input: {
           })),
         ).then(() => undefined),
       ),
-    redirectToAuthorization: input.onRedirect,
+    redirectToAuthorization: (url) => input.interactive === false ? Promise.reject(new Error("MCP OAuth interaction is unavailable")) : input.onRedirect(url),
     saveCodeVerifier: (verifier) =>
       input.transient === false
         ? Promise.resolve()

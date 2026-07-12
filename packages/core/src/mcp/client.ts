@@ -196,7 +196,15 @@ export function interruptible(run: (signal: AbortSignal) => Promise<Connection>)
           void client.close().catch(() => undefined)
           return
         }
-        resume(Effect.succeed(client))
+        resume(
+          Effect.succeed({
+            ...client,
+            close: () => {
+              controller.abort()
+              return client.close()
+            },
+          }),
+        )
       },
       (cause) => {
         if (active) resume(Effect.fail(new ConnectionError({ message: message(cause) })))
@@ -291,29 +299,37 @@ export const layer = Layer.effect(
             name: input.name,
             endpoint: url.toString(),
           }
+          const oauth = typeof input.config.oauth === "object" ? input.config.oauth : {}
+          const redirect = callback(input.config.oauth)
+          const compatibility = MCPOAuthProvider.compatibility(url.toString(), oauth, redirect)
+          const entry = enabled ? await Effect.runPromise(store.get(target)) : undefined
+          if (
+            enabled &&
+            (entry?.compatibility !== compatibility ||
+              !entry.tokens?.access_token ||
+              (entry.tokens.expires_at !== undefined &&
+                entry.tokens.expires_at <= Date.now() / 1000 + 60 &&
+                !entry.tokens.refresh_token))
+          )
+            throw new AuthRequired()
           const provider: OAuthClientProvider | undefined = enabled
             ? MCPOAuthProvider.make({
                 store,
                 target,
                 attemptID: "mcp_auth_connect",
                 state: "connect",
-                redirectUrl: callback(input.config.oauth),
-                compatibility: MCPOAuthProvider.compatibility(
-                  url.toString(),
-                  typeof input.config.oauth === "object" ? input.config.oauth : {},
-                  callback(input.config.oauth),
-                ),
-                config: typeof input.config.oauth === "object" ? input.config.oauth : {},
+                redirectUrl: redirect,
+                compatibility,
+                config: oauth,
                 transient: false,
+                interactive: false,
                 onRedirect: async () => {
                   throw new AuthRequired()
                 },
               })
             : undefined
           if (provider) {
-            const entry = await Effect.runPromise(store.get(target))
-            if (entry.tokens?.expires_at !== undefined && entry.tokens.expires_at <= Date.now() / 1000 + 60) {
-              if (!entry.tokens.refresh_token) throw new AuthRequired()
+            if (entry!.tokens!.expires_at !== undefined && entry!.tokens!.expires_at <= Date.now() / 1000 + 60) {
               await Flock.withLock(
                 `mcp-oauth-refresh:${JSON.stringify(target)}`,
                 async () => {
@@ -490,15 +506,38 @@ function network(
   oauth: boolean,
   signal: AbortSignal,
 ) {
-  return (input: string | URL | Request, init?: RequestInit) => {
+  const request = async (input: string | URL | Request, init?: RequestInit, redirects = 0): Promise<Response> => {
     const url = new URL(input instanceof Request ? input.url : input)
     const resource = url.origin === endpoint.origin
-    return fetch(input, {
+    const generated = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+    if (!resource) {
+      generated.delete("authorization")
+      Object.keys(configured ?? {}).forEach((name) => generated.delete(name))
+    }
+    const response = await fetch(input, {
       ...init,
-      signal,
-      headers: headers(init?.headers, resource ? configured : undefined, oauth),
+      redirect: configured && Object.keys(configured).length ? "manual" : init?.redirect,
+      signal: merge(signal, init?.signal, input instanceof Request ? input.signal : undefined),
+      headers: headers(generated, resource ? configured : undefined, oauth),
     })
+    if (![301, 302, 303, 307, 308].includes(response.status) || !response.headers.get("location")) return response
+    if (redirects >= 5) throw new Error("MCP redirect limit exceeded")
+    const next = new URL(response.headers.get("location")!, url)
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET")
+    const changed = response.status === 303 || ((response.status === 301 || response.status === 302) && method === "POST")
+    return request(next, {
+      ...init,
+      method: changed ? "GET" : method,
+      body: changed ? undefined : init?.body,
+      headers: generated,
+    }, redirects + 1)
   }
+  return request
+}
+
+function merge(...signals: ReadonlyArray<AbortSignal | null | undefined>) {
+  const active = signals.filter((value): value is AbortSignal => value !== undefined && value !== null)
+  return active.length === 1 ? active[0] : AbortSignal.any(active)
 }
 
 function message(value: unknown) {

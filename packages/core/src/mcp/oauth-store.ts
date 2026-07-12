@@ -33,6 +33,11 @@ export type Attempt = {
   readonly error?: string
 }
 
+export type AttemptResult =
+  | { readonly status: "claimed"; readonly target: Target; readonly attempt: Attempt }
+  | { readonly status: "cancelled"; readonly target: Target; readonly attempt: Attempt }
+  | { readonly status: "missing" | "invalid" | "expired" | "used" }
+
 export type Tokens = OAuthTokens & { readonly expires_at?: number }
 export type Entry = {
   readonly tokens?: Tokens
@@ -73,6 +78,23 @@ export interface Interface {
   readonly findAttempt: (
     attemptID: string,
   ) => Effect.Effect<{ readonly target: Target; readonly attempt: Attempt } | undefined, StoreError>
+  readonly claimAttempt: (attemptID: string, state: string, code: string, now: number) => Effect.Effect<AttemptResult, StoreError>
+  readonly cancelAttempt: (attemptID: string) => Effect.Effect<AttemptResult, StoreError>
+  readonly startExchange: (target: Target, attemptID: string, code: string) => Effect.Effect<Attempt | undefined, StoreError>
+  readonly finishExchange: (
+    target: Target,
+    attemptID: string,
+    tokens: OAuthTokens,
+    now?: number,
+  ) => Effect.Effect<boolean, StoreError>
+  readonly finishAttempt: (
+    target: Target,
+    attemptID: string,
+    phase: "expired" | "failed",
+    error: string,
+    expected?: ReadonlyArray<Attempt["phase"]>,
+  ) => Effect.Effect<boolean, StoreError>
+  readonly cancelTarget: (target: Target, invalidate?: boolean) => Effect.Effect<void, StoreError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCPOAuthStore") {}
@@ -141,6 +163,7 @@ export function make(input: { readonly data: string; readonly legacy?: string })
 
   const write = async (data: Data) => {
     await ensure()
+    if (!validData(data)) throw new StoreError({ code: "invalid", message: "MCP OAuth store data is invalid" })
     const temp = path.join(dir, `.store.${process.pid}.${randomBytes(16).toString("hex")}.tmp`)
     const handle = await fs.open(temp, "wx", 0o600)
     try {
@@ -262,7 +285,165 @@ export function make(input: { readonly data: string; readonly legacy?: string })
       }
     })
 
-  return { get, update, remove, saveTokens, invalidate, findAttempt }
+  const locate = (data: Data, attemptID: string) =>
+    Object.entries(data.buckets).find(([, bucket]) => bucket.entry.attempts?.[attemptID])
+  const targetOf = (bucket: Bucket): Target => ({
+    directory: bucket.identity.directory,
+    ...(bucket.identity.workspaceID === undefined ? {} : { workspaceID: bucket.identity.workspaceID as WorkspaceV2.ID }),
+    name: bucket.identity.name,
+    endpoint: bucket.identity.endpoint,
+  })
+  const ended = (attempt: Attempt, phase: "complete" | "cancelled" | "expired" | "failed", error?: string) => ({
+    mode: attempt.mode,
+    redirect: attempt.redirect,
+    created: attempt.created,
+    expires: attempt.expires,
+    phase,
+    ...(error ? { error } : {}),
+  })
+
+  const claimAttempt: Interface["claimAttempt"] = (attemptID, state, code, now) =>
+    transact<AttemptResult>(async (data) => {
+      const found = locate(data, attemptID)
+      if (!found) return { value: { status: "missing" } as const }
+      const [name, bucket] = found
+      const attempt = bucket.entry.attempts![attemptID]!
+      if (attempt.phase !== "pending") return { value: { status: "used" } as const }
+      if (attempt.state !== state || !code) return { value: { status: "invalid" } as const }
+      if (attempt.expires! <= now) {
+        const attempts = { ...bucket.entry.attempts, [attemptID]: ended(attempt, "expired", "attempt-expired") }
+        return {
+          data: { ...data, buckets: { ...data.buckets, [name]: { ...bucket, entry: { ...bucket.entry, attempts } } } },
+          value: { status: "expired" } as const,
+        }
+      }
+      const claimed = { ...attempt, phase: "received" as const, code }
+      const attempts = { ...bucket.entry.attempts, [attemptID]: claimed }
+      return {
+        data: { ...data, buckets: { ...data.buckets, [name]: { ...bucket, entry: { ...bucket.entry, attempts } } } },
+        value: { status: "claimed", target: targetOf(bucket), attempt: claimed } as const,
+      }
+    })
+
+  const cancelAttempt: Interface["cancelAttempt"] = (attemptID) =>
+    transact<AttemptResult>(async (data) => {
+      const found = locate(data, attemptID)
+      if (!found) return { value: { status: "missing" } as const }
+      const [name, bucket] = found
+      const attempt = bucket.entry.attempts![attemptID]!
+      if (attempt.phase !== "pending") return { value: { status: "used" } as const }
+      const cancelled = ended(attempt, "cancelled")
+      const attempts = { ...bucket.entry.attempts, [attemptID]: cancelled }
+      return {
+        data: { ...data, buckets: { ...data.buckets, [name]: { ...bucket, entry: { ...bucket.entry, attempts } } } },
+        value: { status: "cancelled", target: targetOf(bucket), attempt: cancelled } as const,
+      }
+    })
+
+  const startExchange: Interface["startExchange"] = (target, attemptID, code) =>
+    transact(async (data) => {
+      const name = key(target)
+      const bucket = data.buckets[name]
+      const attempt = bucket?.entry.attempts?.[attemptID]
+      if (!bucket || attempt?.phase !== "received" || attempt.code !== code) return { value: undefined }
+      const exchanging = { ...attempt, phase: "exchanging" as const }
+      return {
+        data: {
+          ...data,
+          buckets: {
+            ...data.buckets,
+            [name]: {
+              ...bucket,
+              entry: { ...bucket.entry, attempts: { ...bucket.entry.attempts, [attemptID]: exchanging } },
+            },
+          },
+        },
+        value: exchanging,
+      }
+    })
+
+  const finishExchange: Interface["finishExchange"] = (target, attemptID, tokens, now = Date.now() / 1000) =>
+    transact(async (data) => {
+      const name = key(target)
+      const bucket = data.buckets[name]
+      const attempt = bucket?.entry.attempts?.[attemptID]
+      if (!bucket || attempt?.phase !== "exchanging") return { value: false }
+      const attempts = Object.fromEntries(
+        Object.entries(bucket.entry.attempts ?? {}).map(([id, current]) => [
+          id,
+          id === attemptID
+            ? ended(current, "complete")
+            : ["pending", "received", "exchanging"].includes(current.phase ?? "")
+              ? ended(current, "cancelled")
+              : current,
+        ]),
+      )
+      const saved: Tokens = {
+        ...tokens,
+        ...(tokens.refresh_token === undefined && bucket.entry.tokens?.refresh_token
+          ? { refresh_token: bucket.entry.tokens.refresh_token }
+          : {}),
+        ...(tokens.scope === undefined && bucket.entry.tokens?.scope ? { scope: bucket.entry.tokens.scope } : {}),
+        ...(tokens.expires_in === undefined ? {} : { expires_at: now + tokens.expires_in }),
+      }
+      return {
+        data: {
+          ...data,
+          buckets: { ...data.buckets, [name]: { ...bucket, entry: { ...bucket.entry, tokens: saved, attempts } } },
+        },
+        value: true,
+      }
+    })
+
+  const finishAttempt: Interface["finishAttempt"] = (target, attemptID, phase, error, expected) =>
+    transact(async (data) => {
+      const name = key(target)
+      const bucket = data.buckets[name]
+      const attempt = bucket?.entry.attempts?.[attemptID]
+      if (!bucket || !attempt || (expected && !expected.includes(attempt.phase))) return { value: false }
+      return {
+        data: {
+          ...data,
+          buckets: {
+            ...data.buckets,
+            [name]: {
+              ...bucket,
+              entry: {
+                ...bucket.entry,
+                attempts: { ...bucket.entry.attempts, [attemptID]: ended(attempt, phase, error) },
+              },
+            },
+          },
+        },
+        value: true,
+      }
+    })
+
+  const cancelTarget: Interface["cancelTarget"] = (target, invalidate = false) =>
+    update(target, (entry) => ({
+      ...(invalidate ? {} : entry),
+      attempts: Object.fromEntries(
+        Object.entries(entry.attempts ?? {}).map(([id, attempt]) => [
+          id,
+          ["pending", "received", "exchanging"].includes(attempt.phase ?? "") ? ended(attempt, "cancelled") : attempt,
+        ]),
+      ),
+    })).pipe(Effect.asVoid)
+
+  return {
+    get,
+    update,
+    remove,
+    saveTokens,
+    invalidate,
+    findAttempt,
+    claimAttempt,
+    cancelAttempt,
+    startExchange,
+    finishExchange,
+    finishAttempt,
+    cancelTarget,
+  }
 }
 
 function web(value: unknown) {
@@ -282,20 +463,30 @@ function web(value: unknown) {
 }
 
 function finite(value: unknown) {
-  return value === undefined || (typeof value === "number" && Number.isFinite(value))
+  return value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0)
 }
 
 function validData(value: unknown): value is Data {
-  if (!record(value) || value.version !== 1 || !record(value.buckets)) return false
-  return Object.values(value.buckets).every((candidate) => {
-    if (!record(candidate) || !record(candidate.identity) || !record(candidate.entry)) return false
+  if (!exact(value, ["version", "buckets"]) || value.version !== 1 || !record(value.buckets)) return false
+  return Object.entries(value.buckets).every(([key, candidate]) => {
+    if (!exact(candidate, ["identity", "entry"]) || !record(candidate.identity) || !record(candidate.entry)) return false
     const id = candidate.identity
-    if (typeof id.directory !== "string" || typeof id.name !== "string" || !web(id.endpoint)) return false
+    if (!exact(id, ["directory", "workspaceID", "name", "endpoint"])) return false
+    if (typeof id.directory !== "string" || typeof id.name !== "string" || typeof id.endpoint !== "string" || !web(id.endpoint)) return false
     if (id.workspaceID !== undefined && typeof id.workspaceID !== "string") return false
+    const expected = JSON.stringify(
+      id.workspaceID === undefined
+        ? [id.directory, id.name, id.endpoint]
+        : [id.directory, id.workspaceID, id.name, id.endpoint],
+    )
+    if (normalizeEndpoint(id.endpoint) !== id.endpoint || expected !== key) return false
     const entry = candidate.entry
+    if (!exact(entry, ["tokens", "client", "discovery", "compatibility", "attempts", "claim"])) return false
+    if (entry.compatibility !== undefined && typeof entry.compatibility !== "string") return false
+    if (entry.claim !== undefined && typeof entry.claim !== "string") return false
     if (entry.tokens !== undefined) {
       if (
-        !record(entry.tokens) ||
+        !exact(entry.tokens, ["access_token", "token_type", "expires_in", "expires_at", "refresh_token", "scope", "id_token"]) ||
         typeof entry.tokens.access_token !== "string" ||
         typeof entry.tokens.token_type !== "string"
       )
@@ -305,43 +496,88 @@ function validData(value: unknown): value is Data {
         if (entry.tokens[field] !== undefined && typeof entry.tokens[field] !== "string") return false
     }
     if (entry.client !== undefined) {
-      if (!record(entry.client) || typeof entry.client.client_id !== "string") return false
+      if (!client(entry.client) || typeof entry.client.client_id !== "string") return false
       if (entry.client.client_secret !== undefined && typeof entry.client.client_secret !== "string") return false
       if (!finite(entry.client.client_id_issued_at) || !finite(entry.client.client_secret_expires_at)) return false
-      if (
-        entry.client.redirect_uris !== undefined &&
-        (!Array.isArray(entry.client.redirect_uris) || !entry.client.redirect_uris.every(web))
-      )
-        return false
     }
     if (entry.discovery !== undefined) {
-      if (!record(entry.discovery) || !web(entry.discovery.authorizationServerUrl)) return false
+      if (!exact(entry.discovery, ["authorizationServerUrl", "resourceMetadataUrl", "authorizationServerMetadata", "resourceMetadata"]) || !web(entry.discovery.authorizationServerUrl)) return false
       for (const field of ["resourceMetadataUrl"])
         if (entry.discovery[field] !== undefined && !web(entry.discovery[field])) return false
       const metadata = entry.discovery.authorizationServerMetadata
-      if (
-        metadata !== undefined &&
-        (!record(metadata) || !web(metadata.authorization_endpoint) || !web(metadata.token_endpoint))
-      )
-        return false
+      if (metadata !== undefined && !authorization(metadata)) return false
       const resource = entry.discovery.resourceMetadata
-      if (resource !== undefined && (!record(resource) || !web(resource.resource))) return false
+      if (resource !== undefined && !protectedResource(resource)) return false
     }
     if (entry.attempts !== undefined) {
       if (!record(entry.attempts)) return false
       const phases = new Set(["pending", "received", "exchanging", "complete", "cancelled", "expired", "failed"])
       for (const attempt of Object.values(entry.attempts)) {
-        if (!record(attempt)) return false
+        if (!exact(attempt, ["state", "verifier", "code", "mode", "redirect", "created", "expires", "phase", "error"])) return false
         for (const field of ["state", "verifier", "code", "error"])
           if (attempt[field] !== undefined && typeof attempt[field] !== "string") return false
-        if (attempt.redirect !== undefined && !web(attempt.redirect)) return false
-        if (attempt.mode !== undefined && attempt.mode !== "auto" && attempt.mode !== "manual") return false
-        if (!finite(attempt.created) || !finite(attempt.expires)) return false
-        if (attempt.phase !== undefined && !phases.has(attempt.phase as string)) return false
+        if (!web(attempt.redirect)) return false
+        if (attempt.mode !== "auto" && attempt.mode !== "manual") return false
+        if (!finite(attempt.created) || attempt.created === undefined || !finite(attempt.expires) || attempt.expires === undefined) return false
+        if (!phases.has(attempt.phase as string)) return false
+        if (["received", "exchanging"].includes(attempt.phase as string) && (!attempt.state || !attempt.code || !attempt.verifier)) return false
+        if (["complete", "cancelled", "expired", "failed"].includes(attempt.phase as string) && (attempt.state || attempt.code || attempt.verifier)) return false
       }
     }
     return true
   })
+}
+
+const CLIENT_FIELDS = [
+  "client_id", "client_secret", "client_id_issued_at", "client_secret_expires_at", "redirect_uris",
+  "token_endpoint_auth_method", "grant_types", "response_types", "client_name", "client_uri", "logo_uri", "scope",
+  "contacts", "tos_uri", "policy_uri", "jwks_uri", "jwks", "software_id", "software_version", "software_statement",
+] as const
+const AUTH_FIELDS = [
+  "issuer", "authorization_endpoint", "token_endpoint", "registration_endpoint", "scopes_supported",
+  "response_types_supported", "response_modes_supported", "grant_types_supported", "token_endpoint_auth_methods_supported",
+  "token_endpoint_auth_signing_alg_values_supported", "service_documentation", "revocation_endpoint",
+  "revocation_endpoint_auth_methods_supported", "revocation_endpoint_auth_signing_alg_values_supported",
+  "introspection_endpoint", "introspection_endpoint_auth_methods_supported", "introspection_endpoint_auth_signing_alg_values_supported",
+  "code_challenge_methods_supported", "client_id_metadata_document_supported", "userinfo_endpoint", "jwks_uri",
+  "acr_values_supported", "subject_types_supported", "id_token_signing_alg_values_supported",
+  "id_token_encryption_alg_values_supported", "id_token_encryption_enc_values_supported", "userinfo_signing_alg_values_supported",
+  "userinfo_encryption_alg_values_supported", "userinfo_encryption_enc_values_supported", "request_object_signing_alg_values_supported",
+  "request_object_encryption_alg_values_supported", "request_object_encryption_enc_values_supported", "display_values_supported",
+  "claim_types_supported", "claims_supported", "claims_locales_supported", "ui_locales_supported", "claims_parameter_supported",
+  "request_parameter_supported", "request_uri_parameter_supported", "require_request_uri_registration", "op_policy_uri", "op_tos_uri",
+] as const
+const RESOURCE_FIELDS = [
+  "resource", "authorization_servers", "jwks_uri", "scopes_supported", "bearer_methods_supported",
+  "resource_signing_alg_values_supported", "resource_name", "resource_documentation", "resource_policy_uri", "resource_tos_uri",
+  "tls_client_certificate_bound_access_tokens", "authorization_details_types_supported", "dpop_signing_alg_values_supported",
+  "dpop_bound_access_tokens_required",
+] as const
+
+function client(value: unknown): value is OAuthClientInformationMixed {
+  if (!exact(value, CLIENT_FIELDS) || typeof value.client_id !== "string") return false
+  if (value.redirect_uris !== undefined && (!Array.isArray(value.redirect_uris) || !value.redirect_uris.every(web))) return false
+  return urlFields(value, ["client_uri", "logo_uri", "tos_uri", "policy_uri", "jwks_uri"])
+}
+
+function authorization(value: unknown) {
+  if (!exact(value, AUTH_FIELDS)) return false
+  if (typeof value.issuer !== "string" || !web(value.issuer) || !web(value.authorization_endpoint) || !web(value.token_endpoint)) return false
+  return urlFields(value, ["registration_endpoint", "service_documentation", "revocation_endpoint", "introspection_endpoint", "userinfo_endpoint", "jwks_uri", "op_policy_uri", "op_tos_uri"])
+}
+
+function protectedResource(value: unknown) {
+  if (!exact(value, RESOURCE_FIELDS) || !web(value.resource)) return false
+  if (value.authorization_servers !== undefined && (!Array.isArray(value.authorization_servers) || !value.authorization_servers.every(web))) return false
+  return urlFields(value, ["jwks_uri", "resource_documentation", "resource_policy_uri", "resource_tos_uri"])
+}
+
+function urlFields(value: Record<string, unknown>, fields: ReadonlyArray<string>) {
+  return fields.every((field) => value[field] === undefined || value[field] === "" || web(value[field]))
+}
+
+function exact(value: unknown, fields: ReadonlyArray<string>): value is Record<string, unknown> {
+  return record(value) && Object.keys(value).every((field) => fields.includes(field))
 }
 
 async function legacy(file: string, target: ReturnType<typeof legacyIdentity>): Promise<Entry | undefined> {
