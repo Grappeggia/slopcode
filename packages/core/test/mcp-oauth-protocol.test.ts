@@ -20,9 +20,36 @@ describe("MCP OAuth protocol boundary", () => {
       { client_secret: "secret" },
       { callback_port: 0 },
       { redirect_uri: "file:///private" },
+      { callback_port: 19876, redirect_uri: "https://client.example/callback" },
+      { callback_port: 19876, redirect_uri: "http://127.0.0.1/callback" },
+      { callback_port: 19876, redirect_uri: "http://127.0.0.1:19877/callback" },
     ])
       expect(() => decode({ type: "remote", url: "https://example.com/mcp", oauth })).toThrow()
   })
+
+  it.live("returns redirect conflicts through the typed failure channel", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const store = MCPOAuthStore.make({ data: tmp.path })
+            const context = yield* Layer.build(
+              MCPOAuth.layer.pipe(
+                Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                Layer.provide(MCPOAuthCallback.layer),
+              ),
+            )
+            const exit = yield* Effect.exit(Context.get(context, MCPOAuth.Service).begin({
+              target: { directory: tmp.path, name: "conflict", endpoint: "https://example.com/mcp" },
+              config: { callback_port: 19876, redirect_uri: "https://client.example/callback" },
+            }))
+            expect(exit._tag).toBe("Failure")
+            if (exit._tag === "Failure") expect(String(exit.cause)).toContain("invalid-redirect")
+          }),
+        ),
+      ),
+    ),
+  )
 
   test("overlays generated transport headers and strips OAuth configured authorization", () => {
     expect(

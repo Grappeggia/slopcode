@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { ConfigMCP } from "@slopcode-ai/core/config/mcp"
 import { MCPClient } from "@slopcode-ai/core/mcp/client"
 import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
+import { MCPOAuthProvider } from "@slopcode-ai/core/mcp/oauth-provider"
 import { Context, Effect, Layer } from "effect"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
@@ -227,6 +228,60 @@ it.live("does not leak configured authorization across redirects", () =>
         expect(fixture.received.length).toBeGreaterThan(0)
         expect(fixture.received.every((value) => value === null)).toBe(true)
       }),
+    ),
+  ),
+)
+
+it.live("leaves the exact store bytes unchanged when a server rejects a stored access token", () =>
+  Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((tmp) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          const requests: string[] = []
+          const server = Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            fetch: (request) => {
+              requests.push(new URL(request.url).pathname)
+              return new Response(null, { status: 401 })
+            },
+          })
+          return { server, requests }
+        }),
+        (fixture) => Effect.sync(() => fixture.server.stop(true)),
+      ).pipe(
+        Effect.flatMap((fixture) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const store = MCPOAuthStore.make({ data: tmp.path })
+              const endpoint = `${fixture.server.url}mcp`
+              const target = { directory: tmp.path, name: "rejected", endpoint }
+              const redirect = "http://127.0.0.1:19876/mcp/oauth/callback"
+              const compatibility = MCPOAuthProvider.compatibility(endpoint, {}, redirect)
+              yield* store.update(target, () => ({
+                compatibility,
+                tokens: { access_token: "rejected-token", token_type: "Bearer" },
+                client: { client_id: "dynamic-client", redirect_uris: [redirect] },
+                discovery: { authorizationServerUrl: fixture.server.url.toString() },
+              }))
+              const file = path.join(tmp.path, "mcp-oauth/store.json")
+              const before = yield* Effect.promise(() => Bun.file(file).bytes())
+              const context = yield* Layer.build(
+                MCPClient.layer.pipe(Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store)))),
+              )
+              const error = yield* Context.get(context, MCPClient.Service).connect({
+                name: target.name,
+                directory: target.directory,
+                timeout: 1_000,
+                config: new ConfigMCP.Remote({ type: "remote", url: endpoint }),
+              }).pipe(Effect.flip)
+              expect(error).toMatchObject({ code: "auth-required" })
+              expect(yield* Effect.promise(() => Bun.file(file).bytes())).toEqual(before)
+              expect(fixture.requests.some((value) => value.includes("well-known") || value.includes("register"))).toBe(false)
+            }),
+          ),
+        ),
+      ),
     ),
   ),
 )

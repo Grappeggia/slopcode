@@ -60,4 +60,35 @@ describe("MCP OAuth provider", () => {
       ),
     ),
   )
+
+  it.live("builds a strictly read-only connect provider", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const store = MCPOAuthStore.make({ data: tmp.path })
+          const target = { directory: "/workspace", name: "connect", endpoint: "https://example.com/mcp" }
+          yield* store.update(target, () => ({
+            compatibility: "compatible",
+            tokens: { access_token: "access", token_type: "Bearer" },
+            client: { client_id: "client", redirect_uris: ["https://client.example/callback"] },
+            discovery: { authorizationServerUrl: "https://auth.example/" },
+          }))
+          const file = `${tmp.path}/mcp-oauth/store.json`
+          const before = yield* Effect.promise(() => Bun.file(file).bytes())
+          const provider = MCPOAuthProvider.connect({
+            entry: yield* store.get(target),
+            config: {},
+            compatibility: "compatible",
+          })
+          expect(provider.redirectUrl).toBeUndefined()
+          expect(provider.saveClientInformation).toBeUndefined()
+          expect(provider.saveDiscoveryState).toBeUndefined()
+          yield* Effect.promise(() => Promise.resolve(provider.saveTokens({ access_token: "replacement", token_type: "Bearer" })))
+          yield* Effect.promise(() => Promise.resolve(provider.invalidateCredentials?.("all")))
+          expect(yield* Effect.promise(() => Bun.file(file).bytes())).toEqual(before)
+          expect(yield* Effect.promise(() => provider.redirectToAuthorization(new URL("https://auth.example/authorize")).then(() => false, () => true))).toBe(true)
+        }),
+      ),
+    ),
+  )
 })

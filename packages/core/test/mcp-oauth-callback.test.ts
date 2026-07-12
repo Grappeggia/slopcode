@@ -114,4 +114,28 @@ describe("MCP OAuth callback", () => {
       ),
     ),
   )
+
+  it.live("settles listener close before the callback port is reused", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => MCPOAuthCallback.make()),
+      (callbacks) => Effect.promise(() => callbacks.close()),
+    ).pipe(
+      Effect.flatMap((callbacks) =>
+        Effect.gen(function* () {
+          const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+          const port = reserve.port
+          reserve.stop(true)
+          const registered = yield* Effect.promise(() => callbacks.register({
+            redirect: `http://127.0.0.1:${port}/callback`,
+            state: "close-state",
+            receive: async () => true,
+          }))
+          yield* Effect.promise(() => registered.close())
+          const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+          expect(reused.port).toBe(port)
+          reused.stop(true)
+        }),
+      ),
+    ),
+  )
 })
