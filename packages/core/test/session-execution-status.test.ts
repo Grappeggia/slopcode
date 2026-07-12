@@ -10,7 +10,7 @@ import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionExecutionStatusTable, SessionTable } from "@slopcode-ai/core/session/sql"
-import { DateTime, Effect, Exit, Layer } from "effect"
+import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { EventTable } from "@slopcode-ai/core/event/sql"
 import { asc, eq } from "drizzle-orm"
@@ -217,6 +217,49 @@ describe("SessionExecutionStatus", () => {
     }),
   )
 
+  it.effect("forces two independent event services through one dispatch barrier and streams once", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const service = yield* SessionExecutionStatus.Service
+      const database = yield* Database.Service
+      const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+      const activity = { activityID: rootID, rootID, activity: "prompt" as const }
+      const fingerprint = "c".repeat(64)
+      yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      yield* service.retry({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 0, code: "server", action: "retry-provider", message: "safe", fingerprint })
+      const scope = yield* Scope.make()
+      const make = Effect.gen(function* () {
+        const context = yield* Layer.buildWithScope(Layer.fresh(EventV2.layer.pipe(Layer.provide(Layer.succeed(Database.Service, database)))), scope)
+        const events = Context.get(context, EventV2.Service)
+        yield* SessionExecutionStatus.project(events, database.db)
+        return yield* SessionExecutionStatus.make.pipe(Effect.provideService(EventV2.Service, events))
+      })
+      const left = yield* make
+      const right = yield* make
+      const ready = yield* Deferred.make<void>()
+      const gate = yield* Deferred.make<void>()
+      let arrivals = 0
+      let streams = 0
+      const llm = { stream: () => { streams++ } }
+      const attempt = (candidate: SessionExecutionStatus.Interface) => Effect.gen(function* () {
+        arrivals++
+        if (arrivals === 2) yield* Deferred.succeed(ready, undefined)
+        yield* Deferred.await(gate)
+        const claim = yield* candidate.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2, fingerprint, now: 0 })
+        if (claim.claimed) llm.stream()
+      })
+      const claims = yield* Effect.all([attempt(left), attempt(right)], { concurrency: "unbounded" }).pipe(Effect.forkChild)
+      yield* Deferred.await(ready)
+      yield* Deferred.succeed(gate, undefined)
+      yield* Fiber.join(claims)
+
+      expect(streams).toBe(1)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
   it.effect("rolls back the status claim when deterministic dispatch event insertion fails", () =>
     Effect.gen(function* () {
       yield* setup
@@ -355,6 +398,29 @@ describe("SessionExecutionStatus", () => {
 
       yield* events.publish(SessionEvent.Execution.Failed, { ...data, message: "😀".repeat(128) })
       expect((yield* events.publish(SessionEvent.Execution.Failed, { ...data, message: "😀".repeat(129) }).pipe(Effect.exit))._tag).toBe("Failure")
+    }),
+  )
+
+  it.effect("records epoch replacement during tool, shell, task, and compaction phases", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionExecutionStatus.Service
+      const db = (yield* Database.Service).db
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
+      for (const item of [
+        { name: "tool", activity: "prompt" as const, phase: "tool" as const },
+        { name: "shell", activity: "shell" as const, phase: "shell" as const },
+        { name: "task", activity: "task" as const, phase: "task" as const },
+        { name: "compaction", activity: "compaction" as const, phase: "compaction" as const },
+      ]) {
+        const id = SessionSchema.ID.make(`ses_epoch_${item.name}`)
+        const root = SessionMessage.ID.make(`msg_epoch_${item.name}`)
+        yield* db.insert(SessionTable).values({ id, project_id: Project.ID.global, slug: id, directory: "/project", title: item.name, version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
+        const active = { sessionID: id, owner: "v2" as const, runtimeState: "draining" as const, epoch: 1, activityID: root, rootID: root, activity: item.activity, phase: item.phase }
+        yield* service.start(active)
+        yield* db.update(SessionTable).set({ runtime_state: "paused", runtime_epoch: 2 }).where(eq(SessionTable.id, id)).run().pipe(Effect.orDie)
+        yield* service.replace({ ...active, resultingOwner: "v2", resultingState: "paused", resultingEpoch: 2 })
+        expect(yield* service.get(id)).toMatchObject({ type: "interrupted", code: "runtime-replaced", phase: item.phase, epoch: 2 })
+      }
     }),
   )
 })

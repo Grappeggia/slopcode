@@ -298,6 +298,29 @@ export const layer = Layer.effect(
     const awaitToolFibers = (fibers: FiberSet.FiberSet<void, ToolOutputStore.Error | SessionRuntime.Error>) =>
       Effect.raceFirst(FiberSet.join(fibers), FiberSet.awaitEmpty(fibers))
 
+    const readyContinuation = Effect.fn("SessionRunner.readyContinuation")(function* (
+      sessionID: SessionSchema.ID,
+      epoch: number,
+      phase: SessionExecutionStatus.Phase,
+    ) {
+      const current = yield* status.get(sessionID).pipe(Effect.orDie)
+      if (current.type !== "busy" || current.recovery !== undefined || current.requestAttempt === undefined || current.providerAttempt === undefined || current.fingerprint === undefined) return
+      yield* status.continue({
+        sessionID,
+        owner: "v2",
+        runtimeState: "draining",
+        epoch,
+        activityID: current.activityID,
+        rootID: current.rootID,
+        activity: current.activity,
+        phase,
+        requestAttempt: current.requestAttempt,
+        providerAttempt: current.providerAttempt,
+        fingerprint: current.fingerprint,
+        structuredAttempt: current.structuredAttempt,
+      })
+    })
+
     // Match V1: dismissing a question halts the loop instead of becoming model-facing tool output.
     const isQuestionRejected = (cause: Cause.Cause<unknown>) =>
       cause.reasons.some((reason) => Cause.isDieReason(reason) && reason.defect instanceof QuestionV2.RejectedError)
@@ -1179,7 +1202,11 @@ export const layer = Layer.effect(
             stream.cause.reasons.some(
               (reason) => Cause.isDieReason(reason) && reason.defect instanceof StructuredSettled,
             )
-          if (finalStop) return !structuredValid && format !== undefined && attempt <= format.retry_count
+          if (finalStop) {
+            const continuation = !structuredValid && format !== undefined && attempt <= format.retry_count
+            if (continuation) yield* readyContinuation(sessionID, runtimeEpoch, "provider")
+            return continuation
+          }
           const failure =
             stream._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(stream.cause)) : undefined
           if (
@@ -1187,8 +1214,10 @@ export const layer = Layer.effect(
             !publisher.hasAssistantStarted() &&
             isContextOverflowFailure(overflowFailure ?? failure) &&
             (yield* restore(compaction.compactAfterOverflow({ sessionID: session.id, entries, model, request })))
-          )
+          ) {
+            yield* readyContinuation(sessionID, runtimeEpoch, "compaction")
             return yield* Effect.die(continueAfterOverflowCompaction)
+          }
           if (overflowFailure) yield* publish(overflowFailure)
           const llmFailure = failure instanceof LLMError ? failure : undefined
           if (llmFailure && !publisher.hasProviderError()) {
@@ -1229,7 +1258,9 @@ export const layer = Layer.effect(
             yield* settleStructured(yield* publisher.startAssistant(), "missing-final")
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure") return yield* Effect.failCause(settled.cause)
-          return !publisher.hasProviderError() && (needsContinuation || (format !== undefined && attempt <= format.retry_count))
+          const continuation = !publisher.hasProviderError() && (needsContinuation || (format !== undefined && attempt <= format.retry_count))
+          if (continuation) yield* readyContinuation(sessionID, runtimeEpoch, needsContinuation ? "tool" : "provider")
+          return continuation
         }),
       )
     }, Effect.scoped)
@@ -1336,16 +1367,17 @@ export const layer = Layer.effect(
       const recovery = projected.type === "retrying" && projected.recovery === "retry-provider" && projected.requestAttempt !== undefined && projected.providerAttempt !== undefined && projected.fingerprint !== undefined && owner.state === "draining" && owner.epoch === projected.epoch
         ? { requestAttempt: projected.requestAttempt, providerAttempt: projected.providerAttempt, fingerprint: projected.fingerprint }
         : undefined
+      const manual = yield* SessionInput.pendingCompaction(db, input.sessionID)
+      const task = input.force === true ? false : yield* SessionTask.hasPending(store, input.sessionID)
       const continuation = projected.type === "busy" && owner.state === "draining" && owner.epoch === projected.epoch && (
         projected.recovery === "continue-provider" ||
         (projected.phase === "preparing" && projected.requestAttempt === undefined) ||
-        projected.phase === "tool" ||
-        projected.activity !== "prompt"
+        (projected.activity === "shell" && shell !== undefined) ||
+        (projected.activity === "compaction" && manual !== undefined) ||
+        (projected.activity === "task" && task)
       )
-      const manual = yield* SessionInput.pendingCompaction(db, input.sessionID)
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
-      const task = input.force === true ? false : yield* SessionTask.hasPending(store, input.sessionID)
       if (input.force !== true && !shell && !manual && !hasSteer && !hasQueue && !task && !recovery && !continuation) return
       const assigned = yield* (recovery || continuation ? Effect.succeed(owner) : runtime
         .assign({
@@ -1401,16 +1433,22 @@ export const layer = Layer.effect(
             manual,
           }
         const pending = delivery ? yield* SessionInput.pending(db, input.sessionID, delivery) : undefined
-        if (pending)
+        if (pending) {
+          const activity = (yield* store.task(input.sessionID)) || (yield* store.get(input.sessionID))?.parentID
+            ? "task" as const
+            : "prompt" as const
           return {
-            identity: { activityID: pending.id, rootID: pending.id, activity: "prompt" },
-            phase: "preparing",
+            identity: { activityID: pending.id, rootID: pending.id, activity },
+            phase: activity === "task" ? "task" : "preparing",
             promotion: delivery,
           }
+        }
         if (!fallback) return
         const context = (yield* getContext(input.sessionID)).findLast((message) => message.type === "user")
         if (!context) return
-        const activity = (yield* store.task(input.sessionID)) ? "task" as const : "prompt" as const
+        const activity = (yield* store.task(input.sessionID)) || (yield* store.get(input.sessionID))?.parentID
+          ? "task" as const
+          : "prompt" as const
         return {
           identity: { activityID: context.id, rootID: context.id, activity },
           phase: activity === "task" ? "task" : "preparing",
@@ -1477,7 +1515,10 @@ export const layer = Layer.effect(
                 yield* assertRuntime(input.sessionID, active.epoch)
                 if (!needsContinuation && (yield* SessionInput.hasPendingCompaction(db, input.sessionID))) return
                 if (!needsContinuation && (yield* SessionInput.hasPendingShell(db, input.sessionID))) return
-                if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+                if (!needsContinuation) {
+                  needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+                  if (needsContinuation) yield* readyContinuation(input.sessionID, active.epoch, "provider")
+                }
                 if (!needsContinuation) break
               }
               if (needsContinuation)

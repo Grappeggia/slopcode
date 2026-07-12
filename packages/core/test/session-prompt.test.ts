@@ -153,6 +153,23 @@ describe("SessionV2.prompt", () => {
       yield* status.fail({ sessionID, owner: "v2", runtimeState: "draining", epoch: 1, activityID: rootID, rootID, activity: "prompt", phase: "settling", code: "runner-failure", message: "durable failure", resultingEpoch: 2 })
 
       expect(yield* (yield* SessionV2.Service).wait(sessionID).pipe(Effect.flip)).toEqual(new SessionExecutionStatus.DurableTerminalError({ sessionID, code: "runner-failure", message: "durable failure" }))
+      const database = yield* Database.Service
+      const eventService = yield* EventV2.Service
+      const sessionStore = yield* SessionStore.Service
+      const rebuiltStatus = SessionExecutionStatus.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(EventV2.Service, eventService)),
+      )
+      const rebuilt = SessionV2.layer.pipe(
+        Layer.provide(rebuiltStatus),
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(EventV2.Service, eventService)),
+        Layer.provide(Layer.succeed(SessionStore.Service, sessionStore)),
+        Layer.provide(Project.defaultLayer),
+        Layer.provide(execution),
+        Layer.provide(locationServices),
+      )
+      expect(yield* SessionV2.Service.use((service) => service.wait(sessionID)).pipe(Effect.provide(Layer.fresh(rebuilt)), Effect.flip)).toEqual(new SessionExecutionStatus.DurableTerminalError({ sessionID, code: "runner-failure", message: "durable failure" }))
     }),
   )
   it.effect("delegates execution continuation through SessionExecution", () =>

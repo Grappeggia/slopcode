@@ -1,12 +1,18 @@
 import { describe, expect, test } from "bun:test"
 import {
   AuthenticationReason,
+  ContentPolicyReason,
   HttpContext,
   HttpRequestDetails,
   HttpResponseDetails,
   InvalidRequestReason,
+  InvalidProviderOutputReason,
   LLMError,
+  ModelID,
+  NoRouteReason,
   ProviderInternalReason,
+  ProviderID,
+  QuotaExceededReason,
   RateLimitReason,
   TransportReason,
 } from "@slopcode-ai/llm"
@@ -40,6 +46,12 @@ describe("SessionProviderRetry", () => {
     expect(SessionProviderRetry.classify(LLMEvent.providerError({ message: "rate limit 500", retryable: false }))).toBeUndefined()
     expect(SessionProviderRetry.classify(error(new AuthenticationReason({ message: "no", kind: "invalid" })))).toBeUndefined()
     expect(SessionProviderRetry.classify(error(new InvalidRequestReason({ message: "too large", classification: "context-overflow" })))).toBeUndefined()
+    for (const reason of [
+      new NoRouteReason({ route: "none", provider: ProviderID.make("fake"), model: ModelID.make("fake") }),
+      new QuotaExceededReason({ message: "quota" }),
+      new ContentPolicyReason({ message: "policy" }),
+      new InvalidProviderOutputReason({ message: "invalid output" }),
+    ]) expect(SessionProviderRetry.classify(error(reason))).toBeUndefined()
     expect(SessionProviderRetry.classify(error(new ProviderInternalReason({ message: "lower", status: 500 })))).toBeDefined()
     expect(SessionProviderRetry.classify(error(new ProviderInternalReason({ message: "upper", status: 599 })))).toBeDefined()
     expect(SessionProviderRetry.classify(error(new ProviderInternalReason({ message: "outside", status: 600 })))).toBeUndefined()

@@ -123,11 +123,15 @@ export const layer = Layer.effect(
             resumable.push(info.sessionID)
             return
         }
+        const pendingRoot = current.type === "busy" && (
+          (current.activity === "shell" && (yield* SessionInput.hasPendingShell(db, info.sessionID))) ||
+          (current.activity === "compaction" && (yield* SessionInput.hasPendingCompaction(db, info.sessionID))) ||
+          (current.activity === "task" && (yield* SessionTask.hasPending(store, info.sessionID)))
+        )
         if (current.type === "busy" && (
           current.recovery === "continue-provider" ||
           (current.phase === "preparing" && current.requestAttempt === undefined) ||
-          current.phase === "tool" ||
-          current.activity !== "prompt"
+          pendingRoot
         )) {
           continuations.push(info.sessionID)
           return

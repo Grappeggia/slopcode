@@ -386,7 +386,9 @@ export namespace Structured {
 }
 
 export namespace Execution {
-  const Message = Schema.String.check(Schema.isMaxLength(512))
+  export const Message = Schema.String.check(Schema.makeFilter((value) =>
+    new TextEncoder().encode(value).byteLength <= 512 ? undefined : "Expected at most 512 UTF-8 bytes"
+  ))
   const Fingerprint = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
   export const Activity = Schema.Literals(["prompt", "shell", "compaction", "task"])
   export const Phase = Schema.Literals(["preparing", "provider", "tool", "shell", "compaction", "task", "settling"])
@@ -443,9 +445,22 @@ export namespace Execution {
   export const ProviderCompleted = EventV2.define({
     type: "session.next.execution.provider.completed",
     ...options,
-    schema: { ...Active, requestAttempt: NonNegativeInt, providerAttempt: NonNegativeInt, fingerprint: Fingerprint, recovery: Schema.Literal("continue-provider") },
+    schema: { ...Active, requestAttempt: NonNegativeInt, providerAttempt: NonNegativeInt, fingerprint: Fingerprint },
   })
   export type ProviderCompleted = typeof ProviderCompleted.Type
+
+  export const ContinuationReady = EventV2.define({
+    type: "session.next.execution.continuation.ready",
+    ...options,
+    schema: {
+      ...Active,
+      requestAttempt: NonNegativeInt,
+      providerAttempt: NonNegativeInt,
+      fingerprint: Fingerprint,
+      recovery: Schema.Literal("continue-provider"),
+    },
+  })
+  export type ContinuationReady = typeof ContinuationReady.Type
 
   export const RetryScheduled = EventV2.define({
     type: "session.next.execution.retry.scheduled",

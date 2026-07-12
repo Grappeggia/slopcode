@@ -6,18 +6,32 @@ import type { AgentV2 } from "../agent"
 import type { ModelV2 } from "../model"
 import type { ModelHarness } from "../model-harness"
 
-const secret = /^(?:authorization|proxy-authorization|api[-_]?key|token|secret|credential|cookie|set-cookie)$/i
+const secret = /^(?:authorization|proxy-authorization|(?:x-)?api[-_]?key|token|secret|credential|cookie|set-cookie|auth|password)$/i
 
-const canonical = (value: unknown): unknown => {
+const plain = (value: unknown): unknown => {
   if (value === undefined) return null
   if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value
-  if (Array.isArray(value)) return value.map(canonical)
+  if (Array.isArray(value)) return value.map(plain)
+  if (typeof value !== "object") return String(value)
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, plain(item)]))
+}
+
+const credential = (path: ReadonlyArray<string>, value: unknown) => createHash("sha256")
+  .update("slopcode-request-credential-v1\0")
+  .update(path.join("\0"))
+  .update("\0")
+  .update(JSON.stringify(plain(value)))
+  .digest("hex")
+
+const canonical = (value: unknown, path: ReadonlyArray<string> = []): unknown => {
+  if (value === undefined) return null
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value
+  if (Array.isArray(value)) return value.map((item, index) => canonical(item, [...path, String(index)]))
   if (typeof value !== "object") return String(value)
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([key]) => !secret.test(key))
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => [key, canonical(item)]),
+      .map(([key, item]) => [key, secret.test(key) ? { credential: credential([...path, key], item) } : canonical(item, [...path, key])]),
   )
 }
 
@@ -47,6 +61,7 @@ export const fingerprint = (input: {
         protocol: input.request.model.route.protocol,
         capabilities: input.request.model.route.capabilities,
         defaults: input.request.model.route.defaults,
+        auth: input.request.model.route.auth,
       },
     },
     system: input.request.system,

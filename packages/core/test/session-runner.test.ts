@@ -2787,6 +2787,7 @@ describe("SessionRunnerLLM", () => {
       yield* Effect.all([Fiber.join(first), Fiber.join(second)])
 
       expect(shellRuns.map((run) => run.command)).toEqual(["first", "second"])
+      expect((yield* (yield* Database.Service).db.select({ data: EventTable.data }).from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)).some((row) => row.data.activity === "shell" && row.data.phase === "shell")).toBe(true)
     }),
   )
 
@@ -3183,6 +3184,7 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.context(sessionID)).toMatchObject([
         { id, type: "compaction", reason: "manual", summary: "## Goal\n- Preserve the short history", recent: "" },
       ])
+      expect((yield* (yield* Database.Service).db.select({ data: EventTable.data }).from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)).some((row) => row.data.activity === "compaction" && row.data.phase === "compaction")).toBe(true)
     }),
   )
 
@@ -3490,6 +3492,7 @@ describe("SessionRunnerLLM", () => {
         { type: "compaction", summary: "## Goal\n- Recover overflow" },
         { type: "assistant", finish: "stop" },
       ])
+      expect((yield* (yield* Database.Service).db.select({ data: EventTable.data }).from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)).some((row) => row.data.recovery === "continue-provider" && row.data.phase === "compaction")).toBe(true)
       yield* replaySessionProjection(sessionID)
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "compaction" },
@@ -3793,6 +3796,10 @@ describe("SessionRunnerLLM", () => {
         },
         { type: "assistant", finish: "stop", content: [{ type: "text", id: "text-final", text: "Done" }] },
       ])
+      const lifecycle = yield* (yield* Database.Service).db.select({ type: EventTable.type, seq: EventTable.seq }).from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+      const ready = lifecycle.find((row) => row.type === "session.next.execution.continuation.ready.1")
+      expect(ready).toBeDefined()
+      expect(ready!.seq).toBeLessThan(lifecycle.findLast((row) => row.type === "session.next.execution.provider.dispatched.1")!.seq)
     }),
   )
 
@@ -5093,6 +5100,7 @@ describe("SessionRunnerLLM", () => {
           },
         },
       })
+      expect((yield* db.select({ aggregate: EventTable.aggregate_id, data: EventTable.data }).from(EventTable).all().pipe(Effect.orDie)).flatMap((row) => typeof row.data.activity === "string" ? [[row.aggregate, row.data.activity, row.data.phase]] : [])).toContainEqual([childID, "task", "task"])
     }),
   )
 

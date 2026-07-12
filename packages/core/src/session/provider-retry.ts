@@ -69,6 +69,7 @@ export const classify = (failure: unknown): Notice | undefined => {
         ? "server"
         : undefined
     const http = status(failure.reason)
+    if (http !== undefined && http !== 429 && (http < 500 || http > 599)) return
     if (!failure.retryable && http !== 429 && !(http !== undefined && http >= 500 && http <= 599)) return
     return { code: code ?? (http === 429 ? "rate-limit" : "server"), action: "retry-provider", message: sanitize(failure.reason.message) }
   }

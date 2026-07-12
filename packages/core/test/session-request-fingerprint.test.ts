@@ -52,17 +52,16 @@ describe("SessionRequestFingerprint", () => {
   })
 
   test("changes for credential, header, cookie, and API-key mutations without exposing low-entropy values", () => {
-    const values = ["a", "b"] as const
     const identity = (name: string, value: string) => hash({
       request: LLM.updateRequest(request, { http: { headers: { [name]: value } } }),
     })
     for (const name of ["authorization", "cookie", "x-api-key", "credential"]) {
-      const left = identity(name, values[0])
-      const right = identity(name, values[1])
+      const left = identity(name, "a")
+      const right = identity(name, "b")
       expect(left).not.toBe(right)
-      expect(`${left}${right}`).not.toContain(values[0])
-      expect(`${left}${right}`).not.toContain(values[1])
-      expect(identity(name, values[0])).toBe(left)
+      expect(identity(name, "a")).toBe(left)
+      const canary = `low-plaintext-${name}-canary`
+      expect(identity(name, canary)).not.toContain(canary)
     }
   })
 })
