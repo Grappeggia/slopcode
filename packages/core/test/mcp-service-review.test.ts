@@ -14,6 +14,7 @@ import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { ApplicationTools } from "@slopcode-ai/core/tool/application-tools"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
+import { Tools } from "@slopcode-ai/core/tool/tools"
 import { ToolOutputStore } from "@slopcode-ai/core/tool-output-store"
 import { Cause, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { testEffect } from "./lib/effect"
@@ -39,6 +40,10 @@ function fixture(input: {
   readonly events?: Array<{ type: string; data: unknown }>
   readonly deny?: boolean
   readonly wait?: boolean
+  readonly registering?: (
+    tools: Readonly<Record<string, unknown>>,
+    registry: ToolRegistry.Interface,
+  ) => Effect.Effect<void>
 }) {
   const config = Layer.succeed(Config.Service, {
     entries: () =>
@@ -55,11 +60,23 @@ function fixture(input: {
   })
   const plugins = PluginV2.layer.pipe(Layer.provide(events))
   const registry = ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), Layer.provide(output))
+  const tools = Layer.effect(
+    Tools.Service,
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      return Tools.Service.of({
+        register: (registered, options) =>
+          service
+            .register(registered, options)
+            .pipe(Effect.tap(() => input.registering?.(registered, service) ?? Effect.void)),
+      })
+    }),
+  ).pipe(Layer.provide(registry))
   const mcp = MCP.layer.pipe(
     Layer.provide(config),
     Layer.provide(Layer.succeed(MCPClient.Service, { connect: input.connect })),
     Layer.provide(location),
-    Layer.provide(registry),
+    Layer.provide(tools),
     Layer.provide(permission),
     Layer.provide(plugins),
     Layer.provide(events),
@@ -992,6 +1009,121 @@ fixture({
     expect((yield* mcp.prompts()).map((item) => item.rawName)).toEqual(["old"])
     expect((yield* mcp.getPrompt({ name: "closed:old" })).text).toBe("[user]\nold:old")
     expect((yield* mcp.status()).closed).toEqual({ status: "connected", transport: "local" })
+  }),
+)
+
+const atomicConfig = [
+  new ConfigMCP.Info({ servers: { atomic: new ConfigMCP.Local({ type: "local", command: ["old"] }) } }),
+]
+let atomicClose: (() => void) | undefined
+const atomicObserved: string[][] = []
+fixture({
+  documents: atomicConfig,
+  registering: (tools, registry) =>
+    Object.hasOwn(tools, "atomic_new")
+      ? Effect.sync(() => atomicClose?.()).pipe(
+          Effect.andThen(registry.materialize()),
+          Effect.tap((materialized) =>
+            Effect.sync(() => atomicObserved.push(materialized.definitions.map((item) => item.name))),
+          ),
+          Effect.asVoid,
+        )
+      : Effect.void,
+  connect: (input) => {
+    const version = input.config.type === "local" ? input.config.command.at(-1)! : "remote"
+    return Effect.succeed(
+      MCPClient.make({
+        capabilities: { tools: {} },
+        list: () => Promise.resolve({ tools: [{ name: version, inputSchema: { type: "object" } }] }),
+        call: () => Promise.resolve({ content: [] }),
+        closed: (handler) => {
+          if (version === "new") atomicClose = handler
+        },
+        close: () => Promise.resolve(),
+      }),
+    )
+  },
+}).effect("never materializes candidate tools when replacement closes during registration", () =>
+  Effect.gen(function* () {
+    const mcp = yield* MCP.Service
+    atomicConfig.splice(
+      0,
+      1,
+      new ConfigMCP.Info({ servers: { atomic: new ConfigMCP.Local({ type: "local", command: ["new"] }) } }),
+    )
+    yield* mcp.reload()
+    expect(atomicObserved).toEqual([["atomic_old"]])
+    expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toEqual([
+      "atomic_old",
+    ])
+  }),
+)
+
+const orderedDisabledConfig = [
+  new ConfigMCP.Info({
+    servers: {
+      orderedDisabled: new ConfigMCP.Local({ type: "local", command: ["enabled"] }),
+      orderedSlow: new ConfigMCP.Local({ type: "local", command: ["old"] }),
+    },
+  }),
+]
+const orderedDiscovery = Promise.withResolvers<void>()
+const orderedRelease = Promise.withResolvers<void>()
+const orderedClose = Promise.withResolvers<void>()
+fixture({
+  documents: orderedDisabledConfig,
+  connect: (input) => {
+    const version = input.config.type === "local" ? input.config.command.at(-1)! : "remote"
+    return Effect.succeed(
+      MCPClient.make({
+        capabilities: { tools: {}, prompts: {}, resources: {} },
+        list: async () => {
+          if (version === "slow") {
+            orderedDiscovery.resolve()
+            await orderedRelease.promise
+          }
+          return { tools: [{ name: "tool", inputSchema: { type: "object" } }] }
+        },
+        call: () => Promise.resolve({ content: [] }),
+        listPrompts: () => Promise.resolve({ prompts: [{ name: "prompt" }] }),
+        getPrompt: () => Promise.resolve({ messages: [] }),
+        listResources: () => Promise.resolve({ resources: [{ name: "resource", uri: "file:///resource" }] }),
+        readResource: () => Promise.resolve({ contents: [] }),
+        close: async () => {
+          if (version === "enabled") orderedClose.resolve()
+        },
+      }),
+    )
+  },
+}).effect("disables and hides a server before unrelated replacement discovery completes", () =>
+  Effect.gen(function* () {
+    const mcp = yield* MCP.Service
+    orderedDisabledConfig.splice(
+      0,
+      1,
+      new ConfigMCP.Info({
+        servers: {
+          orderedDisabled: new ConfigMCP.Local({ type: "local", command: ["disabled"], disabled: true }),
+          orderedSlow: new ConfigMCP.Local({ type: "local", command: ["slow"] }),
+        },
+      }),
+    )
+    const reload = yield* mcp.reload().pipe(Effect.forkChild)
+    yield* Effect.promise(() => orderedDiscovery.promise)
+    const definitions = (yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)
+    const prompts = (yield* mcp.prompts()).map((item) => item.name)
+    const resources = (yield* mcp.resources()).map((item) => item.name)
+    const status = (yield* mcp.status()).orderedDisabled
+    const closed = yield* Effect.promise(() =>
+      Promise.race([orderedClose.promise.then(() => true), Bun.sleep(50).then(() => false)]),
+    )
+    orderedRelease.resolve()
+    yield* Fiber.join(reload)
+    expect(definitions).not.toContain("orderedDisabled_tool")
+    expect(prompts).not.toContain("orderedDisabled:prompt")
+    expect(resources).not.toContain("orderedDisabled:resource")
+    expect(status).toEqual({ status: "disabled" })
+    expect(closed).toBe(true)
   }),
 )
 
