@@ -730,8 +730,7 @@ describe("SessionV2.prompt", () => {
 })
 
 describe("MCP.resolveAndAdmit", () => {
-  const mcp = (text: string) =>
-    ({ getPrompt: () => Effect.succeed(new Prompt({ text })) }) as unknown as MCP.Interface
+  const mcp = (text: string) => ({ getPrompt: () => Effect.succeed(new Prompt({ text })) }) as unknown as MCP.Interface
 
   it.effect("uses the real admission transaction for guard failure without admission or wake", () =>
     Effect.gen(function* () {

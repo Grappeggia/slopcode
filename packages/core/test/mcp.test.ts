@@ -426,9 +426,13 @@ describe("MCP", () => {
       connections++
       return Effect.succeed(
         MCPClient.make({
-          capabilities: { tools: {} },
+          capabilities: { tools: {}, prompts: {}, resources: {} },
           list: () => Promise.resolve({ tools: [{ name: "tool", inputSchema: { type: "object" } }] }),
           call: () => Promise.resolve({ content: [] }),
+          listPrompts: () => Promise.resolve({ prompts: [{ name: "prompt" }] }),
+          getPrompt: () => Promise.resolve({ messages: [] }),
+          listResources: () => Promise.resolve({ resources: [{ name: "resource", uri: "file:///resource" }] }),
+          readResource: () => Promise.resolve({ contents: [] }),
           close: () => {
             closing.resolve()
             return release.promise
@@ -442,6 +446,8 @@ describe("MCP", () => {
       const disconnect = yield* mcp.disconnect("lifecycle").pipe(Effect.forkChild)
       yield* Effect.promise(() => closing.promise)
       expect((yield* (yield* ToolRegistry.Service).materialize()).definitions).toEqual([])
+      expect(yield* mcp.prompts()).toEqual([])
+      expect(yield* mcp.resources()).toEqual([])
       release.resolve()
       yield* Fiber.join(disconnect)
       expect((yield* mcp.status()).lifecycle).toEqual({ status: "disconnected" })

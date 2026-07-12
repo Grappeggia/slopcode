@@ -747,3 +747,210 @@ fixture({
     }
   }),
 )
+
+const contentConfig = [
+  new ConfigMCP.Info({
+    servers: { "same server": new ConfigMCP.Local({ type: "local", command: ["old"] }) },
+  }),
+]
+let contentRound = 0
+const contentClosed: string[] = []
+fixture({
+  documents: contentConfig,
+  connect: (input) => {
+    const version = input.config.type === "local" ? input.config.command.at(-1)! : "remote"
+    return Effect.succeed(
+      MCPClient.make({
+        capabilities: { tools: {}, prompts: {} },
+        list: () => Promise.resolve({ tools: [{ name: version, inputSchema: { type: "object" } }] }),
+        call: () => Promise.resolve({ content: [] }),
+        listPrompts: async () => {
+          if (version === "broken") throw new Error("replacement discovery failed")
+          if (version !== "old") await Bun.sleep((version === "left") === (contentRound % 2 === 0) ? 20 : 1)
+          return { prompts: [{ name: version === "old" ? "stable" : "same" }] }
+        },
+        getPrompt: ({ name }) =>
+          Promise.resolve({ messages: [{ role: "user", content: { type: "text", text: `${version}:${name}` } }] }),
+        close: async () => {
+          contentClosed.push(version)
+        },
+      }),
+    )
+  },
+}).effect("retains the complete prior replacement snapshot on timing-independent batch content collision", () =>
+  Effect.gen(function* () {
+    const mcp = yield* MCP.Service
+    const registry = yield* ToolRegistry.Service
+    for (contentRound = 0; contentRound < 2; contentRound++) {
+      contentConfig.splice(
+        0,
+        1,
+        new ConfigMCP.Info({
+          servers: {
+            "same server": new ConfigMCP.Local({ type: "local", command: ["left"] }),
+            "same@server": new ConfigMCP.Local({ type: "local", command: ["right"] }),
+          },
+        }),
+      )
+      yield* mcp.reload()
+      expect((yield* mcp.prompts()).map((item) => item.name)).toEqual(["same_server:stable"])
+      expect((yield* mcp.getPrompt({ name: "same_server:stable" })).text).toBe("[user]\nold:stable")
+      expect((yield* registry.materialize()).definitions.map((item) => item.name)).toContain("same_server_old")
+      expect(contentClosed).toContain("left")
+      expect((yield* mcp.status())["same server"]).toEqual({ status: "connected", transport: "local" })
+      contentConfig.splice(
+        0,
+        1,
+        new ConfigMCP.Info({
+          servers: { "same server": new ConfigMCP.Local({ type: "local", command: ["old"] }) },
+        }),
+      )
+      yield* mcp.reload()
+    }
+    contentConfig.splice(
+      0,
+      1,
+      new ConfigMCP.Info({
+        servers: { "same server": new ConfigMCP.Local({ type: "local", command: ["broken"] }) },
+      }),
+    )
+    yield* mcp.reload()
+    expect((yield* mcp.prompts()).map((item) => item.name)).toEqual(["same_server:stable"])
+    expect((yield* mcp.getPrompt({ name: "same_server:stable" })).text).toBe("[user]\nold:stable")
+    expect((yield* registry.materialize()).definitions.map((item) => item.name)).toContain("same_server_old")
+  }),
+)
+
+let contentPages = 0
+fixture({
+  documents: [
+    new ConfigMCP.Info({
+      servers: {
+        repeated: new ConfigMCP.Local({ type: "local", command: ["repeated"] }),
+        overflow: new ConfigMCP.Local({ type: "local", command: ["overflow"] }),
+        duplicate: new ConfigMCP.Local({ type: "local", command: ["duplicate"] }),
+        sanitized: new ConfigMCP.Local({ type: "local", command: ["sanitized"] }),
+      },
+    }),
+  ],
+  connect: (input) =>
+    Effect.succeed(
+      MCPClient.make({
+        capabilities: { tools: {}, prompts: {}, resources: {} },
+        list: () => Promise.resolve({ tools: [{ name: "tool", inputSchema: { type: "object" } }] }),
+        call: () => Promise.resolve({ content: [] }),
+        listPrompts: () => {
+          if (input.name === "repeated") return Promise.resolve({ prompts: [], nextCursor: "same" })
+          if (input.name === "overflow") {
+            contentPages++
+            return Promise.resolve({ prompts: [], nextCursor: String(contentPages) })
+          }
+          if (input.name === "duplicate") return Promise.resolve({ prompts: [{ name: "same" }, { name: "same" }] })
+          return Promise.resolve({ prompts: [{ name: "same name" }, { name: "same@name" }] })
+        },
+        getPrompt: () => Promise.resolve({ messages: [] }),
+        listResources: () => Promise.resolve({ resources: [] }),
+        readResource: () => Promise.resolve({ contents: [] }),
+        close: () => Promise.resolve(),
+      }),
+    ),
+}).effect(
+  "rejects content cursor repetition, overflow, duplicate raw names, and sanitize collisions without tools",
+  () =>
+    Effect.gen(function* () {
+      const mcp = yield* MCP.Service
+      expect(yield* mcp.prompts()).toEqual([])
+      expect(contentPages).toBe(1000)
+      expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toEqual([
+        "repeated_tool",
+        "overflow_tool",
+        "duplicate_tool",
+        "sanitized_tool",
+      ])
+      expect(Object.values(yield* mcp.status()).every((status) => status.status === "connected")).toBe(true)
+    }),
+)
+
+let staleConnection = 0
+const staleHandlers: Array<() => void | Promise<void>> = []
+fixture({
+  documents: [new ConfigMCP.Info({ servers: { stale: new ConfigMCP.Local({ type: "local", command: ["stale"] }) } })],
+  connect: () => {
+    const id = ++staleConnection
+    return Effect.succeed(
+      MCPClient.make({
+        capabilities: { prompts: { listChanged: true } },
+        list: () => Promise.resolve({ tools: [] }),
+        call: () => Promise.resolve({ content: [] }),
+        listPrompts: () => Promise.resolve({ prompts: [{ name: `prompt_${id}` }] }),
+        getPrompt: () => Promise.resolve({ messages: [] }),
+        promptsChanged: (handler) => staleHandlers.push(handler),
+        close: () => Promise.resolve(),
+      }),
+    )
+  },
+}).effect("fences stale prompt list-changed callbacks after reconnect", () =>
+  Effect.gen(function* () {
+    const mcp = yield* MCP.Service
+    const stale = staleHandlers[0]!
+    yield* mcp.reconnect("stale")
+    expect((yield* mcp.prompts()).map((item) => item.rawName)).toEqual(["prompt_2"])
+    yield* Effect.promise(() => Promise.resolve(stale()))
+    expect((yield* mcp.prompts()).map((item) => item.rawName)).toEqual(["prompt_2"])
+  }),
+)
+
+const requestStarted = Promise.withResolvers<void>()
+const requestAborted = Promise.withResolvers<void>()
+let requestMode: "abort" | "fail" = "abort"
+fixture({
+  documents: [
+    new ConfigMCP.Info({
+      servers: {
+        request: new ConfigMCP.Remote({
+          type: "remote",
+          url: "https://example.test/mcp",
+          headers: { Authorization: "Bearer content-secret" },
+        }),
+      },
+    }),
+  ],
+  connect: () =>
+    Effect.succeed(
+      MCPClient.make({
+        capabilities: { prompts: {}, resources: {} },
+        list: () => Promise.resolve({ tools: [] }),
+        call: () => Promise.resolve({ content: [] }),
+        listPrompts: () => Promise.resolve({ prompts: [{ name: "prompt" }] }),
+        listResources: () => Promise.resolve({ resources: [{ name: "resource", uri: "file:///resource" }] }),
+        getPrompt: (_input, options) =>
+          requestMode === "fail"
+            ? Promise.reject(new Error("Bearer content-secret prompt failure"))
+            : new Promise((_resolve, reject) => {
+                requestStarted.resolve()
+                options.signal.addEventListener("abort", () => {
+                  requestAborted.resolve()
+                  reject(new DOMException("aborted", "AbortError"))
+                })
+              }),
+        readResource: () => Promise.reject(new Error("Bearer content-secret resource failure")),
+        close: () => Promise.resolve(),
+      }),
+    ),
+}).effect("types and redacts get/read failures and aborts interrupted requests", () =>
+  Effect.gen(function* () {
+    const mcp = yield* MCP.Service
+    const fiber = yield* mcp.getPrompt({ name: "request:prompt" }).pipe(Effect.forkChild)
+    yield* Effect.promise(() => requestStarted.promise)
+    yield* Fiber.interrupt(fiber)
+    yield* Effect.promise(() => requestAborted.promise)
+    const exit = yield* Fiber.await(fiber)
+    expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true)
+    requestMode = "fail"
+    const prompt = yield* mcp.getPrompt({ name: "request:prompt" }).pipe(Effect.flip)
+    const resource = yield* mcp.readResource("request:resource").pipe(Effect.flip)
+    expect(prompt).toBeInstanceOf(MCP.RequestError)
+    expect(resource).toBeInstanceOf(MCP.RequestError)
+    expect(JSON.stringify([prompt, resource])).not.toContain("content-secret")
+  }),
+)

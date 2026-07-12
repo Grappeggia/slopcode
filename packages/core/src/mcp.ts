@@ -122,6 +122,7 @@ type Prepared = {
   readonly definitions: ReadonlyArray<MCPTool>
   readonly prompts: ReadonlyArray<PromptEntry>
   readonly resources: ReadonlyArray<ResourceEntry>
+  readonly errors: ReadonlyArray<unknown>
   readonly closed: () => boolean
 }
 
@@ -368,13 +369,14 @@ export const layer = Layer.effect(
 
     const activate = Effect.fnUntraced(function* (server: Server, prepared: Prepared) {
       const client = prepared.client
+      const previous = server.client
       if (server.pending !== client || prepared.closed()) {
         yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
         server.pending = undefined
-        yield* failure(server, "Connection closed")
+        if (previous) yield* publish(server, { status: "connected", transport: previous.transport })
+        if (!previous) yield* failure(server, "Connection closed")
         return
       }
-      if (server.client && server.client !== client) yield* close(server)
       if (hasTools(client.capabilities)) {
         const result = yield* Effect.exit(install(server, client, prepared.definitions))
         if (Exit.isFailure(result)) {
@@ -384,15 +386,20 @@ export const layer = Layer.effect(
           return
         }
       }
-      server.prompts = prepared.prompts
-      server.resources = prepared.resources
       if (prepared.closed()) {
-        yield* close(server)
-        yield* failure(server, "Connection closed")
+        yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
+        server.pending = undefined
+        if (previous) yield* publish(server, { status: "connected", transport: previous.transport })
+        if (!previous) yield* failure(server, "Connection closed")
         return
       }
+      // Publish the owning client and all content snapshots without yielding so
+      // readers can never observe entries backed by an unavailable client.
       server.client = client
       server.pending = undefined
+      server.prompts = prepared.prompts
+      server.resources = prepared.resources
+      if (previous && previous !== client) yield* Effect.promise(() => previous.close()).pipe(Effect.ignore)
       if (hasTools(client.capabilities))
         client.changed(() =>
           Effect.runPromise(refresh(server).pipe(Effect.catch((cause) => discoveryFailure(server, cause)))),
@@ -456,6 +463,13 @@ export const layer = Layer.effect(
             Effect.gen(function* () {
               const collision = collisions.get(server)
               const found = discovered[index]
+              const catalogCollision = Exit.isFailure(promptCatalog) || Exit.isFailure(resourceCatalog)
+              if (found && server.client && (catalogCollision || found.errors.length > 0)) {
+                yield* Effect.promise(() => found.client.close()).pipe(Effect.ignore)
+                server.pending = undefined
+                yield* publish(server, { status: "connected", transport: server.client.transport })
+                return
+              }
               const prepared = found
                 ? {
                     ...found,
@@ -464,8 +478,12 @@ export const layer = Layer.effect(
                   }
                 : undefined
               if (collision) {
-                yield* Effect.promise(() => prepared?.client.close() ?? Promise.resolve()).pipe(Effect.ignore)
+                yield* Effect.promise(() => found?.client.close() ?? Promise.resolve()).pipe(Effect.ignore)
                 server.pending = undefined
+                if (server.client) {
+                  yield* publish(server, { status: "connected", transport: server.client.transport })
+                  return
+                }
                 yield* failure(
                   server,
                   collision.startsWith("MCP ") ? collision : `MCP tool name collision: ${collision}`,
@@ -573,10 +591,6 @@ export const layer = Layer.effect(
               return [server]
             })
             yield* Effect.forEach(removed, (server) => server.lock.withPermits(1)(close(server)), {
-              concurrency: "unbounded",
-              discard: true,
-            })
-            yield* Effect.forEach(replaced, (server) => server.lock.withPermits(1)(close(server)), {
               concurrency: "unbounded",
               discard: true,
             })
@@ -1216,12 +1230,18 @@ function base64(server: string, item: string, value: unknown) {
 function resourceContent(server: string, item: string, value: unknown) {
   return Effect.gen(function* () {
     if (!record(value)) return yield* safe(server, item, "resource content")
+    const text = Object.hasOwn(value, "text")
+    const blob = Object.hasOwn(value, "blob")
+    if (text === blob) return yield* safe(server, item, "resource content")
+    const allowed = new Set(["uri", "mimeType", "_meta", text ? "text" : "blob"])
+    if (Object.keys(value).some((key) => !allowed.has(key))) return yield* safe(server, item, "resource content")
     const parsed = yield* uri(server, item, value.uri)
     const type = yield* mime(server, item, value.mimeType)
-    const text = typeof value.text === "string"
-    const blob = typeof value.blob === "string"
-    if (text === blob) return yield* safe(server, item, "resource content")
-    if (text) return { text: value.text as string } as const
+    if (text) {
+      if (typeof value.text !== "string") return yield* safe(server, item, "resource text")
+      return { text: value.text } as const
+    }
+    if (typeof value.blob !== "string") return yield* safe(server, item, "resource blob")
     const data = yield* base64(server, item, value.blob)
     if (!type) return yield* safe(server, item, "MIME type")
     return {
@@ -1254,13 +1274,20 @@ export function normalizePrompt(server: string, item: string, value: unknown): E
       if (!record(message) || (message.role !== "user" && message.role !== "assistant") || !record(message.content))
         return yield* safe(server, item, "prompt message")
       const content = message.content
-      if (content.type === "text" && typeof content.text === "string")
+      if (content.type === "text") {
+        if (!shape(content, ["type", "text", "annotations", "_meta"]) || typeof content.text !== "string")
+          return yield* safe(server, item, "prompt text")
         return { role: message.role, text: content.text } as const
+      }
       if (content.type === "resource") {
+        if (!shape(content, ["type", "resource", "annotations", "_meta"]))
+          return yield* safe(server, item, "prompt resource")
         const part = yield* resourceContent(server, item, content.resource)
         return { role: message.role, ...part } as const
       }
       if (content.type === "image") {
+        if (!shape(content, ["type", "data", "mimeType", "annotations", "_meta"]))
+          return yield* safe(server, item, "prompt image")
         const type = yield* mime(server, item, content.mimeType, true)
         if (!type?.startsWith("image/")) return yield* safe(server, item, "image MIME type")
         const data = yield* base64(server, item, content.data)
@@ -1280,6 +1307,10 @@ export function normalizePrompt(server: string, item: string, value: unknown): E
         }),
     ),
   )
+}
+
+function shape(value: Record<string, unknown>, allowed: ReadonlyArray<string>) {
+  return Object.keys(value).every((key) => allowed.includes(key))
 }
 
 export function resolveAndAdmit<E>(
