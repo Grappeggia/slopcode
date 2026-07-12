@@ -172,6 +172,7 @@ describe("MCP OAuth protocol boundary", () => {
                   }),
                 ).toEqual({ status: "credential-ready" })
                 expect(yield* oauth.status(target)).toEqual({ status: "credential-ready" })
+                expect(yield* oauth.begin({ target, config, mode: "manual" })).toEqual({ status: "connected" })
                 expect(
                   yield* oauth
                     .complete({
@@ -235,6 +236,77 @@ describe("MCP OAuth protocol boundary", () => {
               expect(redirected).toBe(true)
               expect(fixture.registrations).toBe(1)
               expect((yield* store.get(target)).client?.client_id).toBe("registered-1")
+            }),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("falls back from OAuth metadata to OIDC discovery", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            let oidc = 0
+            const server = Bun.serve({
+              hostname: "127.0.0.1",
+              port: 0,
+              fetch: (request) => {
+                const url = new URL(request.url)
+                if (url.pathname === "/.well-known/oauth-protected-resource/mcp")
+                  return Response.json({ resource: `${url.origin}/mcp`, authorization_servers: [url.origin] })
+                if (url.pathname === "/.well-known/oauth-authorization-server") return new Response("missing", { status: 404 })
+                if (url.pathname === "/.well-known/openid-configuration") {
+                  oidc++
+                  return Response.json({
+                    issuer: url.origin,
+                    authorization_endpoint: `${url.origin}/authorize`,
+                    token_endpoint: `${url.origin}/token`,
+                    jwks_uri: `${url.origin}/jwks`,
+                    response_types_supported: ["code"],
+                    subject_types_supported: ["public"],
+                    id_token_signing_alg_values_supported: ["RS256"],
+                    code_challenge_methods_supported: ["S256"],
+                  })
+                }
+                return new Response("missing", { status: 404 })
+              },
+            })
+            return { server, oidc: () => oidc }
+          }),
+          (fixture) => Effect.sync(() => fixture.server.stop(true)),
+        ).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.gen(function* () {
+              const store = MCPOAuthStore.make({ data: tmp.path })
+              const target = { directory: tmp.path, name: "oidc", endpoint: `${fixture.server.url}mcp` }
+              yield* store.update(target, () => ({
+                attempts: {
+                  mcp_auth_oidc: {
+                    state: "oidc-state",
+                    mode: "manual",
+                    redirect: "https://client.example/callback",
+                    created: 1,
+                    expires: Date.now() + 60_000,
+                    phase: "pending",
+                  },
+                },
+              }))
+              const provider = MCPOAuthProvider.make({
+                store,
+                target,
+                attemptID: "mcp_auth_oidc",
+                state: "oidc-state",
+                redirectUrl: "https://client.example/callback",
+                config: { client_id: "static" },
+                onRedirect: async () => {},
+              })
+              expect(yield* Effect.promise(() => auth(provider, { serverUrl: target.endpoint }))).toBe("REDIRECT")
+              expect(fixture.oidc()).toBe(1)
+              expect((yield* store.get(target)).discovery?.authorizationServerMetadata).toMatchObject({
+                jwks_uri: `${fixture.server.url}jwks`,
+              })
             }),
           ),
         ),
