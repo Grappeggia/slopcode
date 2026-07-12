@@ -98,6 +98,10 @@ export type Event =
   | EventQuestionReplied
   | EventQuestionRejected
   | EventSessionCompacted
+  | EventInternalV1PromptRequested
+  | EventInternalV1PromptPrepared
+  | EventInternalV1PromptCompleted
+  | EventInternalV1PromptFailed
   | EventVcsBranchUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
@@ -1798,6 +1802,45 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "internal.v1.prompt.requested"
+        properties: {
+          sessionID: string
+          messageID: string
+          identity: string
+        }
+      }
+    | {
+        id: string
+        type: "internal.v1.prompt.prepared"
+        properties: {
+          sessionID: string
+          messageID: string
+          identity: string
+          manifest: string
+        }
+      }
+    | {
+        id: string
+        type: "internal.v1.prompt.completed"
+        properties: {
+          sessionID: string
+          messageID: string
+          identity: string
+          manifest: string
+        }
+      }
+    | {
+        id: string
+        type: "internal.v1.prompt.failed"
+        properties: {
+          sessionID: string
+          messageID: string
+          identity: string
+          reason: "preparation" | "persistence" | "unknown"
+        }
+      }
+    | {
+        id: string
         type: "vcs.branch.updated"
         properties: {
           branch?: string
@@ -1900,6 +1943,10 @@ export type GlobalEvent = {
     | SyncEventSessionNextCompactionFailed
     | SyncEventSessionNextCompactionStarted
     | SyncEventSessionNextCompactionEnded
+    | SyncEventInternalV1PromptRequested
+    | SyncEventInternalV1PromptPrepared
+    | SyncEventInternalV1PromptCompleted
+    | SyncEventInternalV1PromptFailed
 }
 
 /**
@@ -2806,6 +2853,44 @@ export type ProviderAuthMethod = {
       }
   >
 }
+
+export type OpenAiUsage =
+  | {
+      status: "disconnected"
+    }
+  | {
+      status: "api_key"
+    }
+  | {
+      status: "unavailable"
+    }
+  | {
+      status: "oauth"
+      plan: string
+      email?: string
+      primary?: {
+        usedPercent: number
+        windowMinutes?: number
+        resetAt?: number
+      }
+      secondary?: {
+        usedPercent: number
+        windowMinutes?: number
+        resetAt?: number
+      }
+      credits?: {
+        hasCredits: boolean
+        unlimited: boolean
+        balance?: string
+      }
+      spend?: {
+        limit: string
+        used: string
+        remainingPercent: number
+        resetAt?: number
+      }
+      capturedAt: number
+    }
 
 export type ProviderAuthAuthorization = {
   url: string
@@ -4194,6 +4279,73 @@ export type SyncEventSessionNextCompactionEnded = {
       reason: "auto" | "manual"
       text: string
       recent: string
+    }
+  }
+}
+
+export type SyncEventInternalV1PromptRequested = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "internal.v1.prompt.requested.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      messageID: string
+      identity: string
+    }
+  }
+}
+
+export type SyncEventInternalV1PromptPrepared = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "internal.v1.prompt.prepared.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      messageID: string
+      identity: string
+      manifest: string
+    }
+  }
+}
+
+export type SyncEventInternalV1PromptCompleted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "internal.v1.prompt.completed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      messageID: string
+      identity: string
+      manifest: string
+    }
+  }
+}
+
+export type SyncEventInternalV1PromptFailed = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "internal.v1.prompt.failed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      messageID: string
+      identity: string
+      reason: "preparation" | "persistence" | "unknown"
     }
   }
 }
@@ -5956,6 +6108,49 @@ export type EventSessionCompacted = {
   type: "session.compacted"
   properties: {
     sessionID: string
+  }
+}
+
+export type EventInternalV1PromptRequested = {
+  id: string
+  type: "internal.v1.prompt.requested"
+  properties: {
+    sessionID: string
+    messageID: string
+    identity: string
+  }
+}
+
+export type EventInternalV1PromptPrepared = {
+  id: string
+  type: "internal.v1.prompt.prepared"
+  properties: {
+    sessionID: string
+    messageID: string
+    identity: string
+    manifest: string
+  }
+}
+
+export type EventInternalV1PromptCompleted = {
+  id: string
+  type: "internal.v1.prompt.completed"
+  properties: {
+    sessionID: string
+    messageID: string
+    identity: string
+    manifest: string
+  }
+}
+
+export type EventInternalV1PromptFailed = {
+  id: string
+  type: "internal.v1.prompt.failed"
+  properties: {
+    sessionID: string
+    messageID: string
+    identity: string
+    reason: "preparation" | "persistence" | "unknown"
   }
 }
 
@@ -8399,6 +8594,34 @@ export type ProviderAuthResponses = {
 }
 
 export type ProviderAuthResponse = ProviderAuthResponses[keyof ProviderAuthResponses]
+
+export type ProviderOpenaiUsageData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/provider/openai/usage"
+}
+
+export type ProviderOpenaiUsageErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ProviderOpenaiUsageError = ProviderOpenaiUsageErrors[keyof ProviderOpenaiUsageErrors]
+
+export type ProviderOpenaiUsageResponses = {
+  /**
+   * Safe OpenAI account usage status
+   */
+  200: OpenAiUsage
+}
+
+export type ProviderOpenaiUsageResponse = ProviderOpenaiUsageResponses[keyof ProviderOpenaiUsageResponses]
 
 export type ProviderOauthAuthorizeData = {
   body?: {
