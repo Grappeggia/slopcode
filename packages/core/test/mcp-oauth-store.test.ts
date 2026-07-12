@@ -116,4 +116,88 @@ describe("MCP OAuth store", () => {
       ),
     ),
   )
+
+  it.live("atomically claims, cancels, exchanges, and publishes one winning attempt", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const first = MCPOAuthStore.make({ data: tmp.path })
+          const second = MCPOAuthStore.make({ data: tmp.path })
+          const target = { directory: "/workspace", name: "server", endpoint: "https://example.com/mcp" }
+          yield* first.update(target, () => ({
+            compatibility: "compatible",
+            attempts: {
+              winner: {
+                state: "winner-state",
+                verifier: "winner-verifier",
+                mode: "manual",
+                redirect: "https://client.example/callback",
+                created: 1,
+                expires: 100,
+                phase: "pending",
+              },
+              sibling: {
+                state: "sibling-state",
+                verifier: "sibling-verifier",
+                mode: "manual",
+                redirect: "https://client.example/callback",
+                created: 2,
+                expires: 100,
+                phase: "pending",
+              },
+            },
+          }))
+          const claims = yield* Effect.all(
+            [first.claimAttempt("winner", "winner-state", "code", 10), second.claimAttempt("winner", "winner-state", "code", 10)],
+            { concurrency: "unbounded" },
+          )
+          expect(claims.filter((result) => result.status === "claimed")).toHaveLength(1)
+          expect(claims.filter((result) => result.status === "used")).toHaveLength(1)
+          expect((yield* first.cancelAttempt("winner")).status).toBe("used")
+          expect((yield* first.startExchange(target, "winner", "code"))?.phase).toBe("exchanging")
+          expect(yield* first.finishExchange(target, "winner", { access_token: "winning", token_type: "Bearer" }, 20)).toBe(true)
+          expect(yield* second.finishExchange(target, "winner", { access_token: "late", token_type: "Bearer" }, 21)).toBe(false)
+          expect(yield* first.get(target)).toMatchObject({
+            tokens: { access_token: "winning" },
+            attempts: { winner: { phase: "complete" }, sibling: { phase: "cancelled" } },
+          })
+          expect((yield* first.get(target)).attempts?.winner.state).toBeUndefined()
+          expect((yield* first.get(target)).attempts?.sibling.verifier).toBeUndefined()
+        }),
+      ),
+    ),
+  )
+
+  it.live("rejects unknown fields, malformed nested values, and mismatched bucket identities", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const dir = path.join(tmp.path, "mcp-oauth")
+          const file = path.join(dir, "store.json")
+          const target = { directory: "/workspace", name: "server", endpoint: "https://example.com/mcp" }
+          const identity = { directory: target.directory, name: target.name, endpoint: target.endpoint }
+          const key = JSON.stringify(Object.values(identity))
+          yield* Effect.promise(() => fs.mkdir(dir, { recursive: true }))
+          for (const data of [
+            { version: 1, buckets: {}, unknown: true },
+            { version: 1, buckets: { [key]: { identity, entry: { unknown: true } } } },
+            { version: 1, buckets: { wrong: { identity, entry: {} } } },
+            { version: 1, buckets: { [key]: { identity, entry: { attempts: { bad: { phase: "pending" } } } } } },
+            {
+              version: 1,
+              buckets: {
+                [key]: {
+                  identity,
+                  entry: { tokens: { access_token: "token", token_type: "Bearer", expires_at: -1 } },
+                },
+              },
+            },
+          ]) {
+            yield* Effect.promise(() => Bun.write(file, JSON.stringify(data)))
+            expect(yield* MCPOAuthStore.make({ data: tmp.path }).get(target).pipe(Effect.flip)).toMatchObject({ code: "invalid" })
+          }
+        }),
+      ),
+    ),
+  )
 })

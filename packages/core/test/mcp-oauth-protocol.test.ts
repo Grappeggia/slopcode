@@ -132,7 +132,7 @@ describe("MCP OAuth protocol boundary", () => {
                     state: url.searchParams.get("state")!,
                   }),
                 ).toEqual({ status: "connected" })
-                expect(yield* oauth.status(target)).toEqual({ status: "connected" })
+                expect(yield* oauth.status(target)).toEqual({ status: "credential-ready" })
                 expect(
                   yield* oauth
                     .complete({

@@ -15,7 +15,7 @@ describe("MCP OAuth callback", () => {
             callbacks.register({
               redirect: "http://127.0.0.1:19876/mcp/oauth/callback",
               state: "private-state",
-              receive: () => Promise.resolve(),
+              receive: () => Promise.resolve(true),
             }),
           )
           const missing = yield* Effect.promise(() => fetch("http://127.0.0.1:19876/mcp/oauth/callback?code=secret"))
@@ -31,6 +31,41 @@ describe("MCP OAuth callback", () => {
           )
           expect(replay.status).toBe(400)
           yield* Effect.promise(() => registered.close())
+        }),
+      ),
+    ),
+  )
+
+  it.live("shares listeners across callback services and unregisters only after durable acceptance", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => Promise.all([MCPOAuthCallback.make(), MCPOAuthCallback.make()])),
+      (callbacks) => Effect.promise(() => Promise.all(callbacks.map((callback) => callback.close())).then(() => undefined)),
+    ).pipe(
+      Effect.flatMap(([first, second]) =>
+        Effect.gen(function* () {
+          const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+          const port = listener.port
+          listener.stop(true)
+          let claims = 0
+          const one = yield* Effect.promise(() =>
+            first.register({
+              redirect: `http://127.0.0.1:${port}/one`,
+              state: "state-one",
+              receive: async () => ++claims > 1,
+            }),
+          )
+          const two = yield* Effect.promise(() =>
+            second.register({
+              redirect: `http://127.0.0.1:${port}/two`,
+              state: "state-two",
+              receive: async () => true,
+            }),
+          )
+          expect((yield* Effect.promise(() => fetch(`http://127.0.0.1:${port}/one?state=state-one&code=code`))).status).toBe(400)
+          expect((yield* Effect.promise(() => fetch(`http://127.0.0.1:${port}/one?state=state-one&code=code`))).status).toBe(200)
+          yield* Effect.promise(() => first.close())
+          expect((yield* Effect.promise(() => fetch(`http://127.0.0.1:${port}/two?state=state-two&error=denied`))).status).toBe(400)
+          yield* Effect.promise(() => Promise.all([one.close(), two.close()]).then(() => undefined))
         }),
       ),
     ),
