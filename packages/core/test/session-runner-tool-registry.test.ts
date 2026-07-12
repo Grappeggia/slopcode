@@ -178,6 +178,35 @@ describe("ToolRegistry", () => {
     }),
   )
 
+  it.effect("settles against the newest visible same-slot generation", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      const slot = {}
+      const previous = yield* Scope.make()
+      const staged = yield* Scope.make()
+      let visible = false
+      yield* service.register({ echo: make() }, { slot }).pipe(Scope.provide(previous))
+      const captured = yield* service.materialize()
+      yield* service.register({ echo: make() }, { slot, visible: () => visible }).pipe(Scope.provide(staged))
+
+      expect((yield* captured.settle(call("echo", "call-before-publish"))).result).toEqual({
+        type: "text",
+        value: "echo",
+      })
+      visible = true
+      expect((yield* captured.settle(call("echo", "call-after-publish"))).result).toEqual({
+        type: "error",
+        value: "Stale tool call: echo",
+      })
+      expect((yield* (yield* service.materialize()).settle(call("echo", "call-published"))).result).toEqual({
+        type: "text",
+        value: "echo",
+      })
+      yield* Scope.close(staged, Exit.void)
+      yield* Scope.close(previous, Exit.void)
+    }),
+  )
+
   it.effect("returns model errors without swallowing interruption or defects", () =>
     Effect.gen(function* () {
       const service = yield* ToolRegistry.Service
