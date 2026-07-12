@@ -865,8 +865,7 @@ fixture({
       MCPClient.make({
         capabilities: { tools: {}, prompts: {} },
         list: () => {
-          if (version === "old")
-            return Promise.resolve({ tools: [{ name: "old", inputSchema: { type: "object" } }] })
+          if (version === "old") return Promise.resolve({ tools: [{ name: "old", inputSchema: { type: "object" } }] })
           const tool = { name: "new" } as { name: string; inputSchema: Readonly<Record<string, unknown>> }
           Object.defineProperty(tool, "inputSchema", {
             enumerable: true,
@@ -936,8 +935,7 @@ fixture({
         },
         getPrompt: () => Promise.resolve({ messages: [] }),
         listResources: () => {
-          if (input.name === "repeated")
-            return Promise.resolve({ resources: [], nextCursor: "resource-same" })
+          if (input.name === "repeated") return Promise.resolve({ resources: [], nextCursor: "resource-same" })
           if (input.name === "overflow") {
             resourcePages++
             return Promise.resolve({ resources: [], nextCursor: String(resourcePages) })
@@ -1001,7 +999,7 @@ fixture({
       }),
     )
   },
-}).effect("fences stale prompt list-changed callbacks after reconnect", () =>
+}).effect("fences stale prompt and resource list-changed callbacks after reconnect", () =>
   Effect.gen(function* () {
     const mcp = yield* MCP.Service
     const stale = staleHandlers[0]!

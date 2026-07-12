@@ -113,6 +113,7 @@ type Server = {
   client?: Connection
   registration?: Scope.Closeable
   names: ReadonlySet<string>
+  definitions: ReadonlyArray<MCPTool>
   prompts: ReadonlyArray<PromptEntry>
   resources: ReadonlyArray<ResourceEntry>
 }
@@ -123,6 +124,8 @@ type Prepared = {
   readonly prompts: ReadonlyArray<PromptEntry>
   readonly resources: ReadonlyArray<ResourceEntry>
   readonly errors: ReadonlyArray<unknown>
+  readonly config: typeof ConfigMCP.Server.Type
+  readonly timeout: number
   readonly closed: () => boolean
 }
 
@@ -160,6 +163,7 @@ export const layer = Layer.effect(
           lock: Semaphore.makeUnsafe(1),
           status: server.disabled ? ({ status: "disabled" } as const) : ({ status: "disconnected" } as const),
           names: new Set(),
+          definitions: [],
           prompts: [],
           resources: [],
         },
@@ -179,8 +183,13 @@ export const layer = Layer.effect(
         server.status = status
       }).pipe(Effect.andThen(events.publish(Event.StatusChanged, { server: server.name, status })), Effect.ignore)
 
-    const failure = (server: Server, cause: unknown, discovery = false) => {
-      const error = redact(message(cause), server.config)
+    const failure = (
+      server: Server,
+      cause: unknown,
+      discovery = false,
+      candidate: typeof ConfigMCP.Server.Type = server.config,
+    ) => {
+      const error = redact(redact(message(cause), candidate), server.config)
       return publish(server, { status: "failed", error }).pipe(
         Effect.andThen(
           discovery
@@ -193,8 +202,12 @@ export const layer = Layer.effect(
       )
     }
 
-    const discoveryFailure = (server: Server, cause: unknown) => {
-      const error = redact(message(cause), server.config)
+    const discoveryFailure = (
+      server: Server,
+      cause: unknown,
+      candidate: typeof ConfigMCP.Server.Type = server.config,
+    ) => {
+      const error = redact(redact(message(cause), candidate), server.config)
       return events
         .publish(Event.DiscoveryFailed, { server: server.name, message: error })
         .pipe(
@@ -209,6 +222,7 @@ export const layer = Layer.effect(
       const registration = server.registration
       server.registration = undefined
       server.names = new Set()
+      server.definitions = []
       server.prompts = []
       server.resources = []
       if (registration) yield* Scope.close(registration, Exit.void).pipe(Effect.ignore)
@@ -231,8 +245,10 @@ export const layer = Layer.effect(
       server: Server,
       client: Connection,
       definitions: ReadonlyArray<MCPTool>,
+      valid: () => boolean = () => true,
     ) {
       const adapted = yield* adapt(server, client, definitions, plugin, permission, events)
+      if (!valid()) return yield* Effect.fail(new Error("MCP replacement closed before tool registration"))
       yield* registrations.withPermits(1)(
         Effect.gen(function* () {
           for (const name of Object.keys(adapted))
@@ -280,6 +296,7 @@ export const layer = Layer.effect(
             (cause) => new DiscoveryError({ server: server.name, message: redact(message(cause), server.config) }),
           ),
         )
+        server.definitions = discovered.definitions
         server.prompts = discovered.prompts
         server.resources = discovered.resources
       })
@@ -327,8 +344,14 @@ export const layer = Layer.effect(
         ),
       )
 
-    const prepare = Effect.fnUntraced(function* (server: Server) {
-      if (server.config.disabled) {
+    const prepare = Effect.fnUntraced(function* (
+      server: Server,
+      target: { readonly config: typeof ConfigMCP.Server.Type; readonly timeout: number } = {
+        config: server.config,
+        timeout: server.timeout,
+      },
+    ) {
+      if (target.config.disabled) {
         yield* publish(server, { status: "disabled" })
         return undefined
       }
@@ -337,25 +360,34 @@ export const layer = Layer.effect(
         .connect({
           name: server.name,
           directory: location.directory,
-          timeout: server.timeout,
-          config: server.config,
+          timeout: target.timeout,
+          config: target.config,
         })
         .pipe(
-          Effect.tapError((cause) => failure(server, cause)),
+          Effect.tapError((cause) =>
+            server.client
+              ? discoveryFailure(server, cause, target.config)
+              : failure(server, cause, false, target.config),
+          ),
           Effect.option,
         )
-      if (client._tag === "None") return undefined
+      if (client._tag === "None") {
+        if (server.client) yield* publish(server, { status: "connected", transport: server.client.transport })
+        return undefined
+      }
       let closed = false
       client.value.closed(() => {
         closed = true
         Effect.runFork(disconnected(server, client.value))
       })
       server.pending = client.value
-      const discovered = yield* Effect.exit(discoverInitial(server, client.value))
+      const discovered = yield* Effect.exit(discoverInitial(server, client.value, target.timeout))
       if (Exit.isSuccess(discovered)) {
         if (!closed) {
-          yield* Effect.forEach(discovered.value.errors, (cause) => discoveryFailure(server, cause), { discard: true })
-          return { client: client.value, ...discovered.value, closed: () => closed }
+          yield* Effect.forEach(discovered.value.errors, (cause) => discoveryFailure(server, cause, target.config), {
+            discard: true,
+          })
+          return { client: client.value, ...discovered.value, ...target, closed: () => closed }
         }
         yield* close(server)
         yield* failure(server, "Connection closed")
@@ -363,13 +395,18 @@ export const layer = Layer.effect(
       }
       server.pending = undefined
       yield* Effect.promise(() => client.value.close()).pipe(Effect.ignore)
-      yield* failure(server, discovered.cause, true)
+      if (server.client) {
+        yield* discoveryFailure(server, discovered.cause, target.config)
+        yield* publish(server, { status: "connected", transport: server.client.transport })
+      }
+      if (!server.client) yield* failure(server, discovered.cause, true)
       return undefined
     })
 
     const activate = Effect.fnUntraced(function* (server: Server, prepared: Prepared) {
       const client = prepared.client
       const previous = server.client
+      const definitions = server.definitions
       if (server.pending !== client || prepared.closed()) {
         yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
         server.pending = undefined
@@ -378,15 +415,20 @@ export const layer = Layer.effect(
         return
       }
       if (hasTools(client.capabilities)) {
-        const result = yield* Effect.exit(install(server, client, prepared.definitions))
+        const result = yield* Effect.exit(
+          install(server, client, prepared.definitions, () => server.pending === client && !prepared.closed()),
+        )
         if (Exit.isFailure(result)) {
           yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
           server.pending = undefined
-          yield* failure(server, result.cause, true)
+          if (previous) yield* publish(server, { status: "connected", transport: previous.transport })
+          if (!previous) yield* failure(server, result.cause, true)
           return
         }
       }
       if (prepared.closed()) {
+        if (previous) yield* install(server, previous, definitions).pipe(Effect.orDie)
+        if (!previous) yield* hide(server)
         yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
         server.pending = undefined
         if (previous) yield* publish(server, { status: "connected", transport: previous.transport })
@@ -397,6 +439,9 @@ export const layer = Layer.effect(
       // readers can never observe entries backed by an unavailable client.
       server.client = client
       server.pending = undefined
+      server.config = prepared.config
+      server.timeout = prepared.timeout
+      server.definitions = prepared.definitions
       server.prompts = prepared.prompts
       server.resources = prepared.resources
       if (previous && previous !== client) yield* Effect.promise(() => previous.close()).pipe(Effect.ignore)
@@ -579,7 +624,11 @@ export const layer = Layer.effect(
         yield* operations.withPermits(1)(
           Effect.gen(function* () {
             const next = yield* effective()
-            const changed: Server[] = []
+            const changed: Array<{
+              readonly server: Server
+              readonly config: typeof ConfigMCP.Server.Type
+              readonly timeout: number
+            }> = []
             const removed = [...servers.values()].filter((server) => !next.servers.has(server.name))
             const replaced = [...next.servers].flatMap(([name, config]) => {
               const server = servers.get(name)
@@ -604,9 +653,7 @@ export const layer = Layer.effect(
               )
                 continue
               if (existing) {
-                existing.config = config
-                existing.timeout = config.timeout ?? next.timeout
-                changed.push(existing)
+                changed.push({ server: existing, config, timeout: config.timeout ?? next.timeout })
                 continue
               }
               const server: Server = {
@@ -617,20 +664,24 @@ export const layer = Layer.effect(
                 lock: Semaphore.makeUnsafe(1),
                 status: config.disabled ? { status: "disabled" } : { status: "disconnected" },
                 names: new Set(),
+                definitions: [],
                 prompts: [],
                 resources: [],
               }
               servers.set(name, server)
               yield* anchor(server)
-              changed.push(server)
+              changed.push({ server, config, timeout: config.timeout ?? next.timeout })
             }
-            const discovered = yield* Effect.forEach(changed, (server) => server.lock.withPermits(1)(prepare(server)), {
-              concurrency: "unbounded",
-            })
-            yield* activateBatch(
+            const discovered = yield* Effect.forEach(
               changed,
+              (target) => target.server.lock.withPermits(1)(prepare(target.server, target)),
+              { concurrency: "unbounded" },
+            )
+            const ordered = changed.map((target) => target.server)
+            yield* activateBatch(
+              ordered,
               discovered,
-              [...servers.values()].filter((server) => !changed.includes(server)),
+              [...servers.values()].filter((server) => !ordered.includes(server)),
             )
           }),
         )
@@ -686,12 +737,12 @@ function discoverAll(server: Server, client: Connection) {
   )
 }
 
-function discoverInitial(server: Server, client: Connection) {
+function discoverInitial(server: Server, client: Connection, timeout: number) {
   const prompts = hasPrompts(client.capabilities)
-    ? discoverPrompts(server, client).pipe(Effect.exit)
+    ? discoverPrompts(server, client, timeout).pipe(Effect.exit)
     : Effect.succeed(Exit.succeed([] as ReadonlyArray<PromptEntry>))
   const resources = hasResources(client.capabilities)
-    ? discoverResources(server, client).pipe(Effect.exit)
+    ? discoverResources(server, client, timeout).pipe(Effect.exit)
     : Effect.succeed(Exit.succeed([] as ReadonlyArray<ResourceEntry>))
   return Effect.all(
     {
@@ -710,18 +761,18 @@ function discoverInitial(server: Server, client: Connection) {
   )
 }
 
-function discoverPrompts(server: Server, client: Connection) {
+function discoverPrompts(server: Server, client: Connection, timeout = server.timeout) {
   return paginate(
     "prompts/list",
-    (cursor, signal) => client.listPrompts(cursor, { signal, timeout: server.timeout }),
+    (cursor, signal) => client.listPrompts(cursor, { signal, timeout }),
     (page) => page.prompts,
   ).pipe(Effect.flatMap((items) => catalog(server.name, items, "prompt")))
 }
 
-function discoverResources(server: Server, client: Connection) {
+function discoverResources(server: Server, client: Connection, timeout = server.timeout) {
   return paginate(
     "resources/list",
-    (cursor, signal) => client.listResources(cursor, { signal, timeout: server.timeout }),
+    (cursor, signal) => client.listResources(cursor, { signal, timeout }),
     (page) => page.resources,
   ).pipe(Effect.flatMap((items) => catalog(server.name, items, "resource")))
 }
