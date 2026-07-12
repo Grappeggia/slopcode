@@ -362,6 +362,28 @@ describe("Gemini route", () => {
     }),
   )
 
+  it.effect("preserves malformed recorded function arguments as a typed failure", () =>
+    Effect.gen(function* () {
+      const body = sseEvents({
+        candidates: [
+          {
+            content: { role: "model", parts: [{ functionCall: { name: "final_output", args: "{" } }] },
+            finishReason: "MALFORMED_FUNCTION_CALL",
+          },
+        ],
+      })
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events).toContainEqual({
+        type: "tool-input-error",
+        id: "tool_0",
+        name: "final_output",
+        reason: "invalid-json",
+      })
+      expect(JSON.stringify(response.events)).not.toContain('args":"{"')
+    }),
+  )
+
   it.effect("preserves thoughtSignature for reasoning and tool-call continuation", () =>
     Effect.gen(function* () {
       const body = sseEvents({

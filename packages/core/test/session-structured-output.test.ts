@@ -210,4 +210,18 @@ describe("SessionFormat admission", () => {
       )
     }),
   )
+
+  it.effect("applies exact byte and depth limits only to the extracted value", () =>
+    Effect.gen(function* () {
+      const exact = "x".repeat(SessionFormat.VALUE_MAX_BYTES - 2)
+      expect(yield* SessionFormat.toolValue({ value: exact })).toBe(exact)
+      expect(
+        (yield* SessionFormat.toolValue({ value: `${exact}x` }).pipe(Effect.flip)).reason,
+      ).toBe("value-limit")
+
+      const nested = (depth: number): unknown => (depth === 0 ? 1 : [nested(depth - 1)])
+      expect(yield* SessionFormat.toolValue({ value: nested(64) })).toEqual(nested(64))
+      expect((yield* SessionFormat.toolValue({ value: nested(65) }).pipe(Effect.flip)).reason).toBe("value-limit")
+    }),
+  )
 })

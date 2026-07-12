@@ -417,6 +417,26 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
+  it.effect("preserves malformed recorded tool arguments without failing the stream", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call_bad", name: "final_output" } },
+        { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{" } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events).toContainEqual({
+        type: "tool-input-error",
+        id: "call_bad",
+        name: "final_output",
+        reason: "invalid-json",
+      })
+      expect(JSON.stringify(response.events)).not.toContain('partial_json":"{"')
+    }),
+  )
+
   it.effect("assembles streamed tool call input", () =>
     Effect.gen(function* () {
       const body = sseEvents(

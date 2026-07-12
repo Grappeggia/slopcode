@@ -64,6 +64,26 @@ describe("ToolStream", () => {
     }),
   )
 
+  it.effect("preserves malformed JSON as a bounded typed tool-input failure", () =>
+    Effect.gen(function* () {
+      const tools = ToolStream.start(ToolStream.empty<number>(), 0, {
+        id: "call_secret",
+        name: "lookup",
+        input: '{"secret":"must-not-leak"',
+      })
+      const finished = yield* ToolStream.finish(ADAPTER, tools, 0)
+
+      expect(finished).toEqual({
+        tools: {},
+        events: [
+          { type: "tool-input-end", id: "call_secret", name: "lookup" },
+          { type: "tool-input-error", id: "call_secret", name: "lookup", reason: "invalid-json" },
+        ],
+      })
+      expect(JSON.stringify(finished.events)).not.toContain("must-not-leak")
+    }),
+  )
+
   it.effect("preserves providerExecuted and clears all tools", () =>
     Effect.gen(function* () {
       const first: ToolStream.State<number> = ToolStream.start(ToolStream.empty<number>(), 0, {
