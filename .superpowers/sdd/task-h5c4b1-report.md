@@ -340,3 +340,86 @@ Result: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
 ### Final Review Concerns
 
 None.
+
+## Atomic Publication Review Fixes
+
+### Findings Resolved
+
+- ToolRegistry registrations can now carry a visibility predicate. Same-slot generations coexist while staged, and materialization selects the newest visible generation, preserving the prior registration and its captured identity until publication.
+- MCP tool installation now returns a hidden staged registration. Candidate liveness is checked after registration, and the tool generation becomes visible in the same no-yield publication block as client, config, timeout, prompt, and resource ownership. Failed candidates close only their hidden stage and never expose candidate tools.
+- Enabled-to-disabled reload now hides catalogs/tools and publishes disabled config/status before starting any unrelated replacement discovery. Old runtime cleanup runs concurrently with discovery after stale visibility has been removed.
+
+### Atomic Publication RED Evidence
+
+Command:
+
+```text
+cd packages/core && bun test test/mcp-service-review.test.ts
+```
+
+Result before fixes: `21 pass`, `2 fail`, `90 expect() calls`, 1 file. Deterministic failures:
+
+- A synchronous observer inside replacement registration materialized both `atomic_old` and transient `atomic_new` after closing the candidate.
+- While unrelated replacement discovery was blocked, materialization still contained `orderedDisabled_tool` and the disabled server catalogs remained published.
+
+The RED tests were committed first in `304e962db0`.
+
+### Atomic Publication GREEN Evidence
+
+Exact focused command:
+
+```text
+cd packages/core && bun test test/mcp-content.test.ts test/mcp-client.test.ts test/mcp.test.ts test/mcp-review.test.ts test/mcp-service-review.test.ts test/session-prompt.test.ts
+```
+
+Result: `84 pass`, `0 fail`, `360 expect() calls`, 6 files.
+
+Additional ToolRegistry, slot, staleness, and lifecycle command:
+
+```text
+cd packages/core && bun test test/mcp-content.test.ts test/mcp-client.test.ts test/mcp.test.ts test/mcp-review.test.ts test/mcp-service-review.test.ts test/session-prompt.test.ts test/plugin-tool.test.ts test/session-runner-tool-registry.test.ts
+```
+
+Result: `116 pass`, `0 fail`, `470 expect() calls`, 8 files.
+
+Broad verification:
+
+```text
+cd packages/core && bun test
+```
+
+Result: `1375 pass`, `0 fail`, `4136 expect() calls`, 149 files.
+
+```text
+cd packages/codemode && bun test
+```
+
+Result: `254 pass`, `0 fail`, `744 expect() calls`, 7 files.
+
+```text
+cd packages/core && bun run typecheck
+```
+
+Result: exit 0, `tsgo --noEmit`.
+
+```text
+cd packages/server && bun run typecheck
+```
+
+Result: exit 0, `tsgo --noEmit`.
+
+```text
+bun install --frozen-lockfile
+```
+
+Result: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+
+### Atomic Publication Commits
+
+- `304e962db0` `test(core): expose MCP publication race`
+- `5aa335cf44` `fix(core): fence MCP tool publication`
+- Report update: the following `docs:` commit containing this section.
+
+### Atomic Publication Concerns
+
+None.
