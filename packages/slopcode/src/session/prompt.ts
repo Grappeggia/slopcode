@@ -207,11 +207,19 @@ export const layer = Layer.effect(
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* <E = never>(
       sessionID: SessionID,
-      coordinate?: (cancel: Effect.Effect<void>) => Effect.Effect<void, E>,
+      coordinate?: (take: Effect.Effect<void>) => Effect.Effect<void, E>,
     ) {
       yield* Effect.logInfo("cancel", { "session.id": sessionID })
-      const cancel = state.cancel(sessionID)
-      yield* coordinate ? coordinate(cancel) : cancel
+      const result: { cleanup: Effect.Effect<void> } = { cleanup: Effect.void }
+      const take = state.take(sessionID).pipe(
+        Effect.tap((cleanup) =>
+          Effect.sync(() => {
+            result.cleanup = cleanup
+          }),
+        ),
+        Effect.asVoid,
+      )
+      yield* (coordinate ? coordinate(take) : take).pipe(Effect.ensuring(Effect.suspend(() => result.cleanup)))
     })
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {

@@ -11,7 +11,7 @@ DONE_WITH_CONCERNS
 - Added deterministic internal V1 `PromptRequested` plus `PromptCompleted`/`PromptFailed` terminal events; Requested validates owner, ready state, and epoch before MCP/read/plugin/filesystem work.
 - Added a process-wide ownership/deferred registry partitioned by shared Database connection identity and keyed within each partition by deterministic Requested ID, so every prompt layer on one database coordinates exact retries without cross-database collisions; ownership always settles/removes at terminal or finalization.
 - Added a prepared-message manifest so restart recovery completes only exact durable message/parts, while requested-only or partial persistence settles typed Failed/unknown without rerunning external work.
-- Added an immediate-transaction `SessionRuntime.claim` as the V1 cancellation linearization point; it executes `SessionRunState.cancel` as its coordinate before runtime ownership/state/epoch assignments can commit.
+- Added an immediate-transaction `SessionRuntime.claim` as the V1 cancellation linearization point; its coordinate atomically takes the matching active runner out of `SessionRunState` and captures its cancellation handle, then cancellation initiates and awaits background work, fiber interruption, and finalizers only after the database transaction releases its semaphore.
 - Made guarded missing-projection `SessionV2.interrupt` validate and return without calling execution, while preserving unguarded missing-session interruption compatibility.
 - Installed scoped `PluginPackage.Host` layers in Slopcode's in-process and listener server compositions, with configured SDK transport, actual listener URL, auth injection, and no standalone server runtime.
 - Bridged package workspace registrations into the production adapter registry with token-owned cleanup on location/host scope disposal.
@@ -37,12 +37,14 @@ DONE_WITH_CONCERNS
 - Terminal lifecycle follow-up: a plugin defect left Requested without terminal; exact retry returned a different in-progress defect, and no durable safe failure existed for restart recovery.
 - Final High follow-up: the Claimed timestamp heuristic could misclassify retries delayed beyond 500 ms; delayed-owner and interruption RED coverage required explicit process-local ownership instead.
 - Cross-layer High follow-up: ownership scoped to one `SessionPrompt.layer` let independently constructed Location/server layers on the same database rerun exact prompt preparation concurrently; the registry now shares only by actual connection identity.
+- Cancellation deadlock follow-up: `SessionRuntime.claim` awaited the active runner's interruption finalizers while holding its immediate database transaction, so any finalizer using the same Database could not complete; runner take and cleanup are now separate phases.
 
 ## Verification
 
 - PASS: `packages/slopcode`: `bun test test/session/control.test.ts test/control-plane/adapters.test.ts test/server/plugin-package-production.test.ts` (17 pass).
 - PASS: `packages/slopcode`: twenty-three Requested/terminal guard, race, retry, cross-layer shared/separate-database, cleanup, failure, interruption, and crash-recovery regressions in `test/session/prompt.test.ts` (23 pass); the preceding full file completed with 71 pass, 1 skip, and only 4 previously classified failures.
 - PASS: `packages/slopcode`: `bun test test/session/control.test.ts` (16 pass), including coordinated cancellation and concurrent owner/state/epoch ordering.
+- PASS: `packages/slopcode`: coordinated cancellation DB-finalizer regression (1 pass), proving finalizer DB access, post-claim transition progress, repeated cancellation, and subsequent DB usability; cancellation-focused prompt coverage completed with 11 pass and only the previously classified truncation timeout.
 - PASS: `packages/slopcode`: `bun test test/session/revert-compact.test.ts` (7 pass), including cleanup compatibility.
 - PASS: `packages/core`: guarded missing-projection V2 interrupt regression (1 pass).
 - PASS: `packages/core`: `bun test test/event.test.ts test/session-prompt.test.ts` (81 pass), including exact EventV2 deduplication and conflict rejection.
@@ -53,7 +55,7 @@ DONE_WITH_CONCERNS
 - PASS: `packages/core`: `bun run typecheck`.
 - PASS: repository `git diff --check`.
 - FULL SUITE: `packages/slopcode`: `bun test` (3059 pass, 22 skip, 1 todo, 11 fail). All 11 named failures also fail at base commit `8389b8fbac`; eight reproduce with the same assertion/timeout, while the three native V2 HTTP tests fail earlier there because `LocationServiceMap` is absent. No listed pass/fail regression is caused by the host-control commits.
-- TYPECHECK: `packages/slopcode`: `bun run typecheck` reaches two existing errors: `src/session/processor.ts:495` (`Record<string, unknown>` to `string`) and pre-existing runtime mismatch construction in `src/session/prompt.ts:1374` (missing `actualState`; shifted by these changes).
+- TYPECHECK: `packages/slopcode`: `bun run typecheck` reaches two existing errors: `src/session/processor.ts:495` (`Record<string, unknown>` to `string`) and pre-existing runtime mismatch construction in `src/session/prompt.ts:1382` (missing `actualState`; shifted by these changes).
 
 ## Concerns
 
