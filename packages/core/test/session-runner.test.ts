@@ -720,15 +720,20 @@ const catalogModel = (
   })
 describe("SessionRunnerLLM", () => {
   const protocols = ["openai-responses", "openai-chat", "anthropic", "gemini", "bedrock"] as const
-  const finalSequence = (id: string, input: string, value?: unknown): LLMEvent[] => [
-    LLMEvent.toolInputStart({ id, name: "final_output" }),
-    LLMEvent.toolInputDelta({ id, name: "final_output", text: input.slice(0, Math.ceil(input.length / 2)) }),
-    LLMEvent.toolInputDelta({ id, name: "final_output", text: input.slice(Math.ceil(input.length / 2)) }),
-    LLMEvent.toolInputEnd({ id, name: "final_output" }),
-    ...(value === undefined
-      ? [LLMEvent.toolInputError({ id, name: "final_output", reason: "invalid-json" })]
-      : [LLMEvent.toolCall({ id, name: "final_output", input: value })]),
-  ]
+  const finalSequence = (protocol: (typeof protocols)[number], id: string, input: string, value?: unknown): LLMEvent[] => {
+    const settled =
+      value === undefined
+        ? LLMEvent.toolInputError({ id, name: "final_output", reason: "invalid-json" })
+        : LLMEvent.toolCall({ id, name: "final_output", input: value })
+    if (protocol === "gemini") return [settled]
+    return [
+      LLMEvent.toolInputStart({ id, name: "final_output" }),
+      LLMEvent.toolInputDelta({ id, name: "final_output", text: input.slice(0, Math.ceil(input.length / 2)) }),
+      LLMEvent.toolInputDelta({ id, name: "final_output", text: input.slice(Math.ceil(input.length / 2)) }),
+      LLMEvent.toolInputEnd({ id, name: "final_output" }),
+      settled,
+    ]
+  }
 
   for (const protocol of protocols) {
     it.effect(`suppresses the complete ${protocol} final_output lifecycle`, () =>
@@ -736,7 +741,9 @@ describe("SessionRunnerLLM", () => {
         yield* setup
         const session = yield* SessionV2.Service
         const db = (yield* Database.Service).db
-        responses = [finalSequence(`${protocol}-valid`, '{"value":{"answer":42}}', { value: { answer: 42 } })]
+        responses = [
+          finalSequence(protocol, `${protocol}-valid`, '{"value":{"answer":42}}', { value: { answer: 42 } }),
+        ]
         yield* session.prompt({
           sessionID,
           prompt: new Prompt({
@@ -773,7 +780,7 @@ describe("SessionRunnerLLM", () => {
         yield* setup
         const session = yield* SessionV2.Service
         const db = (yield* Database.Service).db
-        responses = [finalSequence(`${protocol}-bad`, "{private-malformed-payload")]
+        responses = [finalSequence(protocol, `${protocol}-bad`, "{private-malformed-payload")]
         yield* session.prompt({
           sessionID,
           prompt: new Prompt({
