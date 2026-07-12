@@ -844,6 +844,65 @@ describe("session HttpApi", () => {
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )
 
+  it.live("correlates stable structured prompts and paginates projected v2 messages", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const id = SessionID.descending()
+      const headers = { "x-slopcode-directory": directory, "content-type": "application/json" }
+      yield* request("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          id,
+          location: { directory },
+          model: { providerID: "test", id: "test-model" },
+        }),
+      })
+      yield* request(`/api/session/${id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: { text: "queued text" }, delivery: "queue", resume: false }),
+      })
+      yield* llm.tool("final_output", { value: { answer: 42 } })
+      yield* llm.text("queued answer")
+
+      const response = yield* request(`/session/${id}/message`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          messageID: "msg_stable_structured",
+          parts: [{ type: "text", text: "structured now" }],
+          format: {
+            type: "json_schema",
+            schema: {
+              type: "object",
+              properties: { answer: { type: "number" } },
+              required: ["answer"],
+            },
+            retryCount: 0,
+          },
+        }),
+      })
+
+      const body = yield* responseJson(response)
+      expect({ status: response.status, body }).toMatchObject({ status: 200 })
+      expect(body).toMatchObject({
+        info: { role: "assistant", parentID: "msg_stable_structured", structured: { answer: 42 } },
+      })
+      const first = yield* request(`/session/${id}/message?limit=1`, { headers })
+      const cursor = first.headers["x-next-cursor"]
+      expect(first.status).toBe(200)
+      expect(cursor).toBeTruthy()
+      expect(first.headers["link"]).toContain(`before=${cursor}`)
+      expect((yield* responseJson(first)) as unknown[]).toHaveLength(1)
+      const second = yield* request(`/session/${id}/message?limit=1&before=${cursor}`, { headers })
+      expect(second.status).toBe(200)
+      expect((yield* responseJson(second)) as unknown[]).toHaveLength(1)
+      expect(yield* llm.calls).toBe(2)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+  )
+
   it.instance(
     "returns safe v2 unknown errors for corrupt projected messages",
     () =>
