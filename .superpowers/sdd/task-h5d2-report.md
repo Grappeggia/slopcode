@@ -276,3 +276,75 @@ The deterministic failures were caused by the branch's isolated `Server.Default(
 ## Final Disposition
 
 `DONE`: all binding H5D2 recovery gaps are implemented, all requested focused/full suites and validation gates pass, all intended source and report changes are committed, and no release or push was performed.
+
+## Atomic Recovery Re-review Remediation
+
+This section supersedes the earlier rejected-review claims about dispatch CAS, generic provider completion, excluded credentials, character-count bounds, and Slopcode full-suite status.
+
+### Commits
+
+- RED: `4a00b044e0 test(core): expose atomic recovery gaps`
+- GREEN: `ba226a7c19 fix(core): make durable recovery claims atomic`
+- REPORT: recorded by the commit containing this section
+- Pushes: none
+
+### Atomic Dispatch
+
+- `SessionExecutionStatus.dispatch` no longer changes the projection sequence before event publication.
+- Due time, request/provider counters, fingerprint, activity/root, owner, runtime state, and epoch are validated by the synchronized event guard inside `EventV2`'s immediate database transaction.
+- The deterministic `ProviderDispatched` insertion and status projection happen in that same transaction. The local winner flag is set only by the new-event commit callback, which is skipped for an idempotent loser.
+- A forced insertion failure proves both the event and status projection roll back. A barrier test constructs two independent `EventV2` and `SessionExecutionStatus` services over one database, releases both claims together, and calls the fake `llm.stream` exactly once.
+
+### Completion Recovery
+
+- Generic `ProviderCompleted` has no recovery intent. Startup conservatively terminalizes a completed success-before-settlement, failed-before-retry, or nonretryable-before-terminal window without provider redispatch.
+- `ContinuationReady` is a distinct synchronized event. It is emitted only after durable local tool settlement, durable structured retry state, completed overflow compaction, or admitted steering input proves another provider turn is required.
+- Startup and direct runner recovery resume only explicit `continue-provider`, safe pre-dispatch preparation, or durable shell/manual-compaction/task records. A generic completed `tool` phase or non-prompt activity is not sufficient.
+- Real runner tests prove a local tool result precedes `ContinuationReady`, which precedes the second provider dispatch; overflow compaction emits compaction readiness; resumed child tasks complete end to end and persist task-root execution status.
+
+### Request Identity And Bounds
+
+- Credential-valued authorization, proxy authorization, auth, cookie, API-key, token, secret, credential, password, and set-cookie fields are represented by domain-separated SHA-256 digests in canonical request identity instead of being omitted or persisted as plaintext.
+- Route auth is included. Canonical key ordering and array paths make the same request restart-stable; low-entropy and plaintext canaries, authorization/header/cookie/API-key mutations, and existing persisted event/status/log canaries pass.
+- The final persisted identity remains one outer SHA-256 value. No request, prompt, header, cookie, API key, or credential plaintext is stored.
+- Closed retry and terminal event/status schemas now enforce `512` UTF-8 bytes with `TextEncoder`, while service-boundary sanitization remains. Direct synchronized publication accepts `128` four-byte emoji and rejects `129`.
+
+### Added Coverage
+
+- Complete execution status projection removal and ordered replay from the synchronized event log.
+- A newly built status/session graph returns the retained durable terminal to a waiter.
+- Real shell, manual compaction, automatic overflow compaction, local tool, and resumed child-task lifecycle evidence.
+- Epoch replacement projection in tool, shell, task, and compaction phases.
+- Retry policy boundaries `500`, `599`, and `600`; malformed, negative, stale-date, and future-date hints; and all deny classes.
+- Parented child sessions are now classified as task roots for both admitted pending input and fallback execution, even if immutable task metadata is temporarily unavailable.
+
+### RED Evidence
+
+Command from `packages/core`:
+
+```text
+bun test test/session-execution-status.test.ts test/session-execution-local.test.ts test/session-request-fingerprint.test.ts test/session-provider-retry.test.ts
+```
+
+Result before GREEN: `31 pass, 6 fail`, `130 expect()` calls. One replay test setup was then corrected to order events by aggregate sequence; the product failures were independent status mutation surviving event rollback, credential mutations collapsing to one identity, generic completion redispatch, multibyte schema overrun acceptance, and HTTP `600` retry.
+
+### Final Verification
+
+- Focused Core status/recovery/policy command: `bun test test/session-execution-status.test.ts test/session-execution-local.test.ts test/session-provider-retry.test.ts test/session-request-fingerprint.test.ts test/session-prompt.test.ts`; `78 pass, 0 fail`, `318 expect()` calls.
+- Complete runner: `bun test test/session-runner.test.ts`; `207 pass, 0 fail`, `669 expect()` calls.
+- Core full: `bun test`; `1526 pass, 0 fail`, 158 files, `4751 expect()` calls.
+- LLM full: `bun test`; `305 pass, 30 skip, 0 fail`, 26 files, `668 expect()` calls.
+- CodeMode full: `bun test`; `254 pass, 0 fail`, 7 files, `744 expect()` calls.
+- Core, LLM, server, Slopcode, and CodeMode passed `bun run typecheck`.
+- Slopcode focused recovery integration: `bun test --timeout 30000 test/session/retry.test.ts test/session/prompt.test.ts test/session/control.test.ts test/server/httpapi-session.test.ts test/cli/run/stream.transport.test.ts`; `184 pass, 1 skip, 0 fail`, `648 expect()` calls.
+- Repository-root `bun install --frozen-lockfile` passed with `Checked 2372 installs across 2656 packages (no changes)`.
+- `git diff --check` passed.
+- The generated `.slopcode/package-lock.json` was inspected and removed with `apply_patch`; it is not retained.
+- Slopcode full default run exceeded a 15-minute command timeout without a final result. A completed rerun under heavy unrelated host load reported `3065 pass, 22 skip, 1 todo, 46 fail`; all failures were fixed 5-second HTTP/server timeouts.
+- Slopcode full serial rerun, `bun test --max-concurrency 1`, reported `3082 pass, 22 skip, 1 todo, 29 fail`; every failure was again an unrelated fixed 5-second timeout while neighboring HTTP tests took 5-12 seconds.
+- Complete serial server isolation, `bun test test/server --max-concurrency 1`, reported `283 pass, 2 skip, 14 fail`; remaining failures were fixed 5-second timeouts, while many cases that failed in the full runs passed in isolation. No failure referenced the changed Core recovery code or asserted incorrect behavior.
+
+### Concerns
+
+- The domain-separated credential digest is intentionally unkeyed SHA-256, which satisfies stable cross-restart identity without installation-key lifecycle risk. It is persisted only inside the outer request fingerprint, not directly; low-entropy values are therefore not visible, although an installation-key HMAC would provide stronger defense if canonical identity were ever exposed internally.
+- The Slopcode aggregate suite could not produce a green run under current unrelated host contention. Core and every affected recovery/lifecycle test are green, but the fixed-timeout Slopcode failures remain an environmental verification gap and are not represented as passing.
