@@ -598,6 +598,98 @@ describe("MCP OAuth protocol boundary", () => {
     ),
   )
 
+  it.live("rejects incompatible recovery before listener or exchange setup", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+          Effect.flatMap((fixture) => Effect.scoped(Effect.gen(function* () {
+            const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+            const port = reserve.port
+            reserve.stop(true)
+            const target = { directory: tmp.path, name: "changed", endpoint: `${fixture.url}/mcp` }
+            const redirect = `http://127.0.0.1:${port}/mcp/oauth/callback`
+            const store = MCPOAuthStore.make({ data: tmp.path })
+            yield* store.update(target, () => ({
+              compatibility: MCPOAuthProvider.compatibility(target.endpoint, { client_id: "old", scope: "old" }, redirect),
+              attempts: { changed: {
+                state: "private-state",
+                verifier: "private-verifier",
+                authorization: `${fixture.url}/authorize`,
+                mode: "auto",
+                redirect,
+                created: 1,
+                expires: Date.now() + 60_000,
+                phase: "pending",
+              } },
+            }))
+            const context = yield* Layer.build(MCPOAuth.layer.pipe(
+              Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+              Layer.provide(MCPOAuthCallback.layer),
+            ))
+            yield* Context.get(context, MCPOAuth.Service).recover({ target, config: { client_id: "new", scope: "new" } })
+            expect((yield* store.findAttempt("changed"))?.attempt.phase).toBe("cancelled")
+            expect(JSON.stringify(yield* store.get(target))).not.toContain("private")
+            expect(fixture.grants).toHaveLength(0)
+            const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+            expect(reused.port).toBe(port)
+            reused.stop(true)
+          }))),
+        ),
+      ),
+    ),
+  )
+
+  it.live("closes every atomically cancelled sibling without touching another target", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+          Effect.flatMap((fixture) => Effect.scoped(Effect.gen(function* () {
+            const reserve = () => {
+              const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+              const port = server.port
+              server.stop(true)
+              return port
+            }
+            const port = reserve()
+            const otherPort = reserve()
+            const store = MCPOAuthStore.make({ data: tmp.path })
+            const context = yield* Layer.build(MCPOAuth.layerWith({ maxAge: 300 }).pipe(
+              Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+              Layer.provide(MCPOAuthCallback.layer),
+            ))
+            const oauth = Context.get(context, MCPOAuth.Service)
+            const target = { directory: tmp.path, name: "siblings", endpoint: `${fixture.url}/mcp` }
+            const config = { client_id: "static-client", callback_port: port }
+            const first = yield* oauth.begin({ target, config })
+            const second = yield* oauth.begin({ target, config })
+            const otherTarget = { directory: tmp.path, name: "unrelated", endpoint: `${fixture.url}/mcp` }
+            const other = yield* oauth.begin({ target: otherTarget, config: { ...config, callback_port: otherPort } })
+            if (first.status !== "authorizing" || second.status !== "authorizing" || other.status !== "authorizing")
+              throw new Error("authorization did not start")
+            const authorization = new URL(first.authorizationUrl)
+            fixture.challenge = authorization.searchParams.get("code_challenge")!
+            expect((yield* Effect.promise(() => fetch(
+              `http://127.0.0.1:${port}/mcp/oauth/callback?state=${authorization.searchParams.get("state")}&code=authorization-code`,
+            ))).status).toBe(200)
+            yield* Effect.sleep("30 millis")
+            expect((yield* store.findAttempt(first.attemptID))?.attempt.phase).toBe("complete")
+            expect((yield* store.findAttempt(second.attemptID))?.attempt.phase).toBe("cancelled")
+            expect((yield* store.findAttempt(other.attemptID))?.attempt.phase).toBe("pending")
+            const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+            expect(reused.port).toBe(port)
+            reused.stop(true)
+            expect(yield* Effect.promise(() => fetch(
+              `http://127.0.0.1:${port}/mcp/oauth/callback?state=${new URL(second.authorizationUrl).searchParams.get("state")}&code=replay`,
+            ).then(() => false, () => true))).toBe(true)
+            yield* Effect.sleep("320 millis")
+            expect((yield* store.findAttempt(second.attemptID))?.attempt.phase).toBe("cancelled")
+            expect((yield* store.findAttempt(other.attemptID))?.attempt.phase).toBe("expired")
+          }))),
+        ),
+      ),
+    ),
+  )
+
   it.live("expires a recovered automatic attempt without status activity", () =>
     Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
       Effect.flatMap((tmp) =>

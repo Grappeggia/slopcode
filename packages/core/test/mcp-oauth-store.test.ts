@@ -186,8 +186,14 @@ describe("MCP OAuth store", () => {
           expect(claims.filter((result) => result.status === "used")).toHaveLength(1)
           expect((yield* first.cancelAttempt("winner")).status).toBe("used")
           expect((yield* first.startExchange(target, "winner", "code"))?.phase).toBe("exchanging")
-          expect(yield* first.finishExchange(target, "winner", { access_token: "winning", token_type: "Bearer" }, 20)).toBe(true)
-          expect(yield* second.finishExchange(target, "winner", { access_token: "late", token_type: "Bearer" }, 21)).toBe(false)
+          expect(yield* first.finishExchange(target, "winner", { access_token: "winning", token_type: "Bearer" }, 20)).toEqual({
+            won: true,
+            cancelled: ["loser"],
+          })
+          expect(yield* second.finishExchange(target, "winner", { access_token: "late", token_type: "Bearer" }, 21)).toEqual({
+            won: false,
+            cancelled: [],
+          })
           expect(yield* first.get(target)).toMatchObject({
             tokens: { access_token: "winning" },
             attempts: { winner: { phase: "complete" }, sibling: { phase: "cancelled" } },

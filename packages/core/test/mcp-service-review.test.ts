@@ -1435,6 +1435,23 @@ fixture({
   }),
 )
 
+let forbiddenRecovery = 0
+fixture({
+  documents: [new ConfigMCP.Info({ servers: {
+    disabledRecovery: new ConfigMCP.Remote({ type: "remote", url: "https://disabled.example/mcp", disabled: true }),
+    falseRecovery: new ConfigMCP.Remote({ type: "remote", url: "https://false.example/mcp", oauth: false }),
+    localRecovery: new ConfigMCP.Local({ type: "local", command: ["local"] }),
+  } })],
+  oauth: { ...stagedOAuth, recover: () => Effect.sync(() => forbiddenRecovery++).pipe(Effect.asVoid) },
+  oauthStore: authStore,
+  connect: () => Effect.fail(new MCPClient.ConnectionError({ message: "unused" })),
+}).effect("never recovers disabled oauth-false or local servers", () =>
+  Effect.gen(function* () {
+    yield* (yield* MCP.Service).ready()
+    expect(forbiddenRecovery).toBe(0)
+  }),
+)
+
 testEffect(Layer.empty).effect("publishes one real protocol exchange failure as a safe auth event", () =>
   Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
     Effect.flatMap((tmp) =>
