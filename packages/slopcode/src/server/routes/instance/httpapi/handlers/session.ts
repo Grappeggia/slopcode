@@ -133,6 +133,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         })
       }
       yield* requireSession(ctx.params.sessionID)
+      const projected = yield* controlSvc.messages(ctx.params.sessionID).pipe(
+        Effect.mapError(() => new HttpApiError.BadRequest({})),
+      )
+      if (projected) {
+        const items = projected
+        return ctx.query.limit === undefined || ctx.query.limit === 0 ? items : items.slice(-ctx.query.limit)
+      }
       if (ctx.query.limit === undefined || ctx.query.limit === 0) {
         return yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       }
@@ -164,6 +171,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const message = Effect.fn("SessionHttpApi.message")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
+      const projected = yield* controlSvc.messages(ctx.params.sessionID).pipe(
+        Effect.mapError(() => new HttpApiError.BadRequest({})),
+      )
+      if (projected)
+        return projected.find((item) => item.info.id === ctx.params.messageID) ??
+          (yield* new HttpApiError.BadRequest({}))
       return yield* SessionError.mapStorageNotFound(
         MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
       )

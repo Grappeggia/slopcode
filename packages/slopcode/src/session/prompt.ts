@@ -1371,7 +1371,11 @@ export const layer = Layer.effect(
 
     const assertV1 = Effect.fn("SessionPrompt.assertRuntime")(function* (sessionID: SessionID, epoch?: number) {
       const row = yield* db
-        .select({ runtime: SessionTable.runtime, runtime_epoch: SessionTable.runtime_epoch })
+        .select({
+          runtime: SessionTable.runtime,
+          runtime_epoch: SessionTable.runtime_epoch,
+          runtime_state: SessionTable.runtime_state,
+        })
         .from(SessionTable)
         .where(eq(SessionTable.id, sessionID))
         .get()
@@ -1383,6 +1387,7 @@ export const layer = Layer.effect(
             sessionID,
             expectedOwner: "v1",
             actualOwner: row.runtime,
+            actualState: row.runtime_state,
             expectedEpoch: epoch,
             actualEpoch: row.runtime_epoch,
           }),

@@ -1,7 +1,10 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
+import { Location } from "@slopcode-ai/core/location"
 import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
+import { ModelV2 } from "@slopcode-ai/core/model"
+import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { SessionControl as CoreSessionControl } from "@slopcode-ai/core/session/control"
 import { Project } from "@slopcode-ai/core/project"
 import { ProjectTable } from "@slopcode-ai/core/project/sql"
@@ -17,6 +20,7 @@ import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { eq, sql } from "drizzle-orm"
 import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
 import { SessionControl } from "../../src/session/control"
+import { projectV2 } from "../../src/session/message-compat"
 import { SessionPrompt } from "../../src/session/prompt"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
@@ -27,7 +31,7 @@ const sessionID = SessionID.make("ses_control_test")
 const legacyCalls: SessionPrompt.PromptInput[] = []
 const legacyCancelCalls: SessionID[] = []
 const legacyCancelGates: Effect.Effect<void>[] = []
-const v2Calls: Array<{ readonly prompt: string; readonly resume?: boolean }> = []
+const v2Calls: Array<{ readonly prompt: string; readonly resume?: boolean; readonly format?: unknown }> = []
 const interruptCalls: SessionID[] = []
 const realInterruptCalls: SessionID[] = []
 const legacyMessage = {
@@ -83,7 +87,7 @@ const sessions = Layer.succeed(
     prompt: (input, commit) =>
       Effect.gen(function* () {
         yield* commit ?? Effect.void
-        v2Calls.push({ prompt: input.prompt.text, resume: input.resume })
+        v2Calls.push({ prompt: input.prompt.text, resume: input.resume, format: input.prompt.format })
         return new SessionInput.Admitted({
           admittedSeq: 1,
           id: input.id ?? SessionMessage.ID.create(),
@@ -164,6 +168,73 @@ const setup = Effect.gen(function* () {
 })
 
 describe("SessionControl", () => {
+  test("projects V2 structured contracts, results, and failures for stable clients", () => {
+    const created = DateTime.makeUnsafe(1)
+    const user = new SessionMessage.User({
+      id: SessionMessage.ID.make("msg_v2_user"),
+      type: "user",
+      text: "structured",
+      files: [],
+      agents: [],
+      format: { type: "json_schema", schema: { type: "number" }, retry_count: 3 },
+      time: { created },
+    })
+    const model = { id: ModelV2.ID.make("test"), providerID: ProviderV2.ID.make("test") }
+    const messages = projectV2(
+      sessionID,
+      [
+        user,
+        new SessionMessage.Assistant({
+          id: SessionMessage.ID.make("msg_v2_result"),
+          type: "assistant",
+          agent: "build",
+          model,
+          content: [],
+          structured: { answer: 42 },
+          time: { created, completed: created },
+        }),
+        new SessionMessage.Assistant({
+          id: SessionMessage.ID.make("msg_v2_failed"),
+          type: "assistant",
+          agent: "build",
+          model,
+          content: [],
+          structuredError: {
+            reason: "schema",
+            attempts: 4,
+            retryCount: 3,
+            exhausted: true,
+            message: "Structured output did not match the schema",
+          },
+          time: { created, completed: created },
+        }),
+      ],
+      new SessionV2.Info({
+        id: sessionID,
+        projectID: Project.ID.make("global"),
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created, updated: created },
+        title: "structured",
+        location: new Location.Ref({ directory: AbsolutePath.make("/tmp") }),
+      }),
+    )
+
+    expect(messages[0]?.info).toMatchObject({
+      role: "user",
+      format: { type: "json_schema", schema: { type: "number" }, retryCount: 3 },
+    })
+    expect(messages[0]?.parts).toMatchObject([{ type: "text", text: "structured" }])
+    expect(messages[1]?.info).toMatchObject({ role: "assistant", structured: { answer: 42 } })
+    expect(messages[2]?.info).toMatchObject({
+      role: "assistant",
+      error: {
+        name: "StructuredOutputError",
+        data: { message: "Structured output did not match the schema", retries: 3 },
+      },
+    })
+  })
+
   it.effect("routes V1-owned prompts to SessionPrompt", () =>
     Effect.gen(function* () {
       yield* setup
@@ -219,7 +290,31 @@ describe("SessionControl", () => {
         yield* control.prompt({ sessionID, noReply: true, parts: [{ type: "text", text: "next" }] }),
       ).toMatchObject({ prompt: { text: "next" } })
       expect(legacyCalls).toEqual([])
-      expect(v2Calls).toEqual([{ prompt: "next", resume: false }])
+      expect(v2Calls).toEqual([{ prompt: "next", resume: false, format: undefined }])
+    }),
+  )
+
+  it.effect("maps stable retryCount into the V2 durable structured format", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const control = yield* SessionControl.Service
+      const runtime = yield* SessionRuntime.Service
+      yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
+
+      yield* control.prompt({
+        sessionID,
+        noReply: true,
+        parts: [{ type: "text", text: "structured" }],
+        format: { type: "json_schema", schema: { type: "number" }, retryCount: 5 },
+      })
+
+      expect(v2Calls).toEqual([
+        {
+          prompt: "structured",
+          resume: false,
+          format: { type: "json_schema", schema: { type: "number" }, retry_count: 5 },
+        },
+      ])
     }),
   )
 

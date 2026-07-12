@@ -487,7 +487,7 @@ export const layer = Layer.effect(
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
             if (mirrorAssistant) {
               const assistantMessageID = yield* requireV2AssistantMessage(toolCall.call)
-              yield* events.publish(SessionEvent.Tool.Called, {
+              yield* events.publish(SessionEvent.Tool.CalledV1, {
                 sessionID: ctx.sessionID,
                 assistantMessageID,
                 callID: value.id,
