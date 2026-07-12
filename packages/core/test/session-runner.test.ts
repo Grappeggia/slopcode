@@ -809,6 +809,101 @@ describe("SessionRunnerLLM", () => {
     )
   }
 
+  for (const [name, schema, value, stale] of [
+    ["scalar", { type: "number" }, 42, "{stale-scalar"],
+    ["array", { type: "array", items: { type: "number" } }, [1, 2], '["stale-array"'],
+    [
+      "object",
+      { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] },
+      { answer: 42 },
+      '{"value":{"answer":"stale"}',
+    ],
+  ] as const) {
+    it.effect(`uses corrected authoritative ${name} terminal input instead of stale deltas`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const db = (yield* Database.Service).db
+        const id = `authoritative-${name}`
+        responses = [
+          [
+            LLMEvent.toolInputStart({ id, name: "final_output" }),
+            LLMEvent.toolInputDelta({ id, name: "final_output", text: stale }),
+            LLMEvent.toolInputEnd({ id, name: "final_output" }),
+            LLMEvent.toolCall({ id, name: "final_output", input: { value } }),
+          ],
+        ]
+        yield* session.prompt({
+          sessionID,
+          prompt: new Prompt({
+            text: `Return corrected ${name}`,
+            format: { type: "json_schema", schema, retry_count: 0 },
+          }),
+          resume: false,
+        })
+
+        yield* session.resume(sessionID)
+
+        const messages = yield* session.messages({ sessionID, order: "asc" })
+        const assistant = messages.findLast((message) => message.type === "assistant")
+        const rows = yield* db
+          .select({ type: EventTable.type, data: EventTable.data })
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, sessionID))
+          .orderBy(asc(EventTable.seq))
+          .pipe(Effect.orDie)
+        expect(assistant).toMatchObject({ structured: value, content: [] })
+        expect(SessionCompaction.serializeMessage(assistant!)).toBe(
+          `[Assistant structured]: ${JSON.stringify(value)}`,
+        )
+        expect(rows.filter((row) => row.type.includes(".tool."))).toEqual([])
+        expect(JSON.stringify({ messages, rows })).not.toContain("final_output")
+        expect(JSON.stringify({ messages, rows })).not.toContain(stale)
+      }),
+    )
+  }
+
+  it.effect("rejects oversized private final accumulation without leaking it", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const db = (yield* Database.Service).db
+      const id = "authoritative-over-cap"
+      const payload = `private-over-cap-${"x".repeat(1_048_576 + 4_096)}`
+      responses = [
+        [
+          LLMEvent.toolInputStart({ id, name: "final_output" }),
+          LLMEvent.toolInputDelta({ id, name: "final_output", text: payload }),
+          LLMEvent.toolInputEnd({ id, name: "final_output" }),
+          LLMEvent.toolCall({ id, name: "final_output", input: { value: 42 } }),
+        ],
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Reject oversized private input",
+          format: { type: "json_schema", schema: { type: "number" }, retry_count: 0 },
+        }),
+        resume: false,
+      })
+
+      yield* session.resume(sessionID)
+
+      const messages = yield* session.messages({ sessionID, order: "asc" })
+      const assistant = messages.findLast((message) => message.type === "assistant")
+      const rows = yield* db
+        .select({ type: EventTable.type, data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))
+        .pipe(Effect.orDie)
+      expect(assistant).toMatchObject({ structuredError: { reason: "invalid-json" }, content: [] })
+      expect(rows.filter((row) => row.type.includes(".tool."))).toEqual([])
+      expect(JSON.stringify({ messages, rows })).not.toContain("final_output")
+      expect(JSON.stringify({ messages, rows })).not.toContain("private-over-cap")
+    }),
+  )
+
   it.effect("terminates a structured turn through the reserved direct final tool", () =>
     Effect.gen(function* () {
       yield* setup
