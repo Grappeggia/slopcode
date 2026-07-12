@@ -10,6 +10,9 @@ import { SessionFormat } from "@slopcode-ai/core/session/format"
 import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { node as locationServiceMapNode } from "@slopcode-ai/core/location-layer"
+import { Database } from "@slopcode-ai/core/database/database"
+import { EventV2 } from "@slopcode-ai/core/event"
+import { ProjectV2 } from "@slopcode-ai/core/project"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { sessionServices } from "@slopcode-ai/server/handlers"
 import { Context, Effect, Layer } from "effect"
@@ -96,11 +99,11 @@ export const defaultLayer = layer.pipe(
   ),
 )
 
-const sessions = LayerNode.make(
+export const sessionServicesNode = LayerNode.make(
   sessionServices,
-  [locationServiceMapNode],
+  [Database.node, EventV2.node, ProjectV2.node, SessionRuntime.node, locationServiceMapNode],
 )
-const control = LayerNode.make(CoreSessionControl.layer, [SessionRuntime.node, sessions])
+const control = LayerNode.make(CoreSessionControl.layer, [SessionRuntime.node, sessionServicesNode])
 
 export const node = LayerNode.make(layer, [SessionRuntime.node, control, SessionPrompt.node])
 

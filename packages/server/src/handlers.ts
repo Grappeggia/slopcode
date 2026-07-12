@@ -31,17 +31,16 @@ import { ProjectV2 } from "@slopcode-ai/core/project"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 
-export const sessionServices = SessionV2.layer.pipe(
-  Layer.provide(SessionExecutionLocal.defaultLayer),
-  Layer.provide(SessionStore.defaultLayer),
-  Layer.provide(SessionProjector.defaultLayer),
-  Layer.provide(EventV2.defaultLayer),
-  Layer.provide(Database.defaultLayer),
-  Layer.provide(ProjectV2.defaultLayer),
+const store = SessionStore.layer
+const execution = SessionExecutionLocal.layer.pipe(Layer.provide(store))
+export const sessionServices = Layer.mergeAll(
+  SessionV2.layer.pipe(Layer.provide(execution), Layer.provide(store)),
+  SessionProjector.layer,
+).pipe(
   Layer.orDie,
 )
 
-export const handlers = Layer.mergeAll(
+export const rawHandlers = Layer.mergeAll(
   HealthHandler,
   LocationHandler,
   AgentHandler,
@@ -67,4 +66,12 @@ export const handlers = Layer.mergeAll(
   Layer.provide(SessionRuntime.defaultLayer),
   Layer.provide(PermissionSaved.defaultLayer),
   Layer.provide(Credential.defaultLayer),
+)
+
+export const handlers = rawHandlers.pipe(
+  Layer.provide(sessionServices),
+  Layer.provide(SessionRuntime.defaultLayer),
+  Layer.provide(ProjectV2.defaultLayer),
+  Layer.provide(EventV2.defaultLayer),
+  Layer.provide(Database.defaultLayer),
 )

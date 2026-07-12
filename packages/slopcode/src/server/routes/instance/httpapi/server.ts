@@ -33,7 +33,7 @@ import { Instruction } from "@/session/instruction"
 import { LLM } from "@/session/llm"
 import { SessionProcessor } from "@/session/processor"
 import { SessionPrompt } from "@/session/prompt"
-import { SessionControl } from "@/session/control"
+import { SessionControl, sessionServicesNode } from "@/session/control"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionSideQuestion } from "@/session/side-question"
@@ -69,6 +69,7 @@ import { PluginPackage } from "@slopcode-ai/core/plugin/package"
 import { PtyTicket } from "@slopcode-ai/core/pty/ticket"
 import { Ripgrep } from "@slopcode-ai/core/ripgrep"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
+import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { lazy } from "@/util/lazy"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
@@ -103,7 +104,7 @@ import { questionHandlers } from "./handlers/question"
 import { sessionHandlers } from "./handlers/session"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
-import { handlers } from "@slopcode-ai/server/handlers"
+import { rawHandlers } from "@slopcode-ai/server/handlers"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@slopcode-ai/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
 import { instanceContextLayer } from "./middleware/instance-context"
@@ -176,7 +177,7 @@ const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
 )
 const serverRoutes = HttpApiBuilder.layer(Api).pipe(
-  Layer.provide(handlers),
+  Layer.provide(rawHandlers),
   Layer.provide([serverHttpApiAuthLayer, v2SchemaErrorLayer]),
 )
 
@@ -271,6 +272,7 @@ const app = LayerNode.group([
   ProjectV2.node,
   ProjectCopy.node,
   PtyTicket.node,
+  sessionServicesNode,
 ])
 
 export function createRoutes(
@@ -289,6 +291,21 @@ export function createRoutes(
         }),
       ).pipe(Layer.provide(locations))
     : locations
+  const services = LayerNode.make(
+    Layer.mergeAll(
+      Database.defaultLayer,
+      EventV2.defaultLayer,
+      ProjectV2.defaultLayer,
+      SessionRuntime.defaultLayer,
+      locationLayer,
+    ),
+    [],
+  )
+  const database = LayerNode.make(Layer.effect(Database.Service, Database.Service), [services])
+  const events = LayerNode.make(Layer.effect(EventV2.Service, EventV2.Service), [services])
+  const projects = LayerNode.make(Layer.effect(ProjectV2.Service, ProjectV2.Service), [services])
+  const runtime = LayerNode.make(Layer.effect(SessionRuntime.Service, SessionRuntime.Service), [services])
+  const locationMap = LayerNode.make(Layer.effect(LocationServiceMap, LocationServiceMap), [services])
   return Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,
@@ -310,7 +327,13 @@ export function createRoutes(
     ]),
     Layer.provide(
       LayerNode.buildLayer(app, {
-        replacements: [LayerNode.replace(locationServiceMapNode, locationLayer)],
+        replacements: [
+          LayerNode.replaceWithNode(Database.node, database),
+          LayerNode.replaceWithNode(EventV2.node, events),
+          LayerNode.replaceWithNode(ProjectV2.node, projects),
+          LayerNode.replaceWithNode(SessionRuntime.node, runtime),
+          LayerNode.replaceWithNode(locationServiceMapNode, locationMap),
+        ],
       }),
     ),
     Layer.provide(locationLayer),

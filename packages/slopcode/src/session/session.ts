@@ -12,8 +12,6 @@ import { Database } from "@slopcode-ai/core/database/database"
 import { makeRuntime } from "@slopcode-ai/core/effect/runtime"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@slopcode-ai/core/event"
-import { SessionV2 } from "@slopcode-ai/core/session"
-import { SessionExecution } from "@slopcode-ai/core/session/execution"
 
 import { NotFoundError } from "@/storage/storage"
 import { eq } from "drizzle-orm"
@@ -971,8 +969,6 @@ export const defaultLayer = layer.pipe(
   Layer.provide(BackgroundJob.defaultLayer),
   Layer.provide(Database.defaultLayer),
   Layer.provide(EventV2Bridge.defaultLayer),
-  Layer.provide(SessionExecution.noopLayer),
-  Layer.provide(SessionV2.defaultLayer),
   Layer.provide(RuntimeFlags.defaultLayer),
 )
 
