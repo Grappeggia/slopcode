@@ -7,6 +7,7 @@ import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { Patch } from "../patch"
 import { PermissionV2 } from "../permission"
+import { PostMutation } from "../post-mutation"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -48,6 +49,7 @@ export const layer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const mutation = yield* LocationMutation.Service
     const files = yield* FileMutation.Service
+    const post = yield* PostMutation.Service
     const fs = yield* FSUtil.Service
     const permission = yield* PermissionV2.Service
 
@@ -141,25 +143,40 @@ export const layer = Layer.effectDiscard(
                   (change) =>
                     Effect.gen(function* () {
                       if (change.type === "add") {
-                        const result = yield* files.create({
+                        const result = yield* post.run({
                           target: change.target,
-                          content:
-                            change.contents.endsWith("\n") || change.contents === ""
-                              ? change.contents
-                              : `${change.contents}\n`,
+                          intent: "add",
+                          mutation: files.create({
+                            target: change.target,
+                            content:
+                              change.contents.endsWith("\n") || change.contents === ""
+                                ? change.contents
+                                : `${change.contents}\n`,
+                          }),
+                          fence: context.fence ?? PostMutation.current,
                         })
                         applied.push({ type: change.type, resource: result.resource, target: result.target })
                         return
                       }
                       if (change.type === "delete") {
-                        const result = yield* files.remove({ target: change.target })
+                        const result = yield* post.run({
+                          target: change.target,
+                          intent: "delete",
+                          mutation: files.remove({ target: change.target }),
+                          fence: context.fence ?? PostMutation.current,
+                        })
                         applied.push({ type: change.type, resource: result.resource, target: result.target })
                         return
                       }
-                      const result = yield* files.writeIfUnchanged({
+                      const result = yield* post.run({
                         target: change.target,
-                        expected: change.source,
-                        content: change.content,
+                        intent: "update",
+                        mutation: files.writeIfUnchanged({
+                          target: change.target,
+                          expected: change.source,
+                          content: change.content,
+                        }),
+                        fence: context.fence ?? PostMutation.current,
                       })
                       applied.push({ type: change.type, resource: result.resource, target: result.target })
                     }).pipe(Effect.mapError(() => fail(change.path))),

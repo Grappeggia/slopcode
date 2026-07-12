@@ -36,6 +36,10 @@ export class TargetExistsError extends Schema.TaggedErrorClass<TargetExistsError
   path: Schema.String,
 }) {}
 
+export class TargetChangedError extends Schema.TaggedErrorClass<TargetChangedError>()("FileMutation.TargetChangedError", {
+  path: Schema.String,
+}) {}
+
 export interface WriteResult {
   readonly operation: "write"
   readonly target: string
@@ -52,15 +56,15 @@ export interface RemoveResult {
 
 export interface Interface {
   /** Create without replacing an existing target. */
-  readonly create: (input: WriteInput) => Effect.Effect<WriteResult, TargetExistsError | FSUtil.Error>
-  readonly write: (input: WriteInput) => Effect.Effect<WriteResult, FSUtil.Error>
+  readonly create: (input: WriteInput) => Effect.Effect<WriteResult, TargetExistsError | TargetChangedError | FSUtil.Error>
+  readonly write: (input: WriteInput) => Effect.Effect<WriteResult, TargetChangedError | FSUtil.Error>
   /** Write text while retaining an existing UTF-8 BOM and emitting at most one BOM. */
-  readonly writeTextPreservingBom: (input: TextWriteInput) => Effect.Effect<WriteResult, FSUtil.Error>
+  readonly writeTextPreservingBom: (input: TextWriteInput) => Effect.Effect<WriteResult, TargetChangedError | FSUtil.Error>
   /** Commit only if an existing target still has the expected bytes. */
   readonly writeIfUnchanged: (
     input: ConditionalWriteInput,
-  ) => Effect.Effect<WriteResult, StaleContentError | FSUtil.Error>
-  readonly remove: (input: RemoveInput) => Effect.Effect<RemoveResult, FSUtil.Error>
+  ) => Effect.Effect<WriteResult, StaleContentError | TargetChangedError | FSUtil.Error>
+  readonly remove: (input: RemoveInput) => Effect.Effect<RemoveResult, TargetChangedError | FSUtil.Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/FileMutation") {}
@@ -80,6 +84,23 @@ export const layer = Layer.effect(
       <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         locks.withLock(target.canonical)(Effect.uninterruptible(effect))
 
+    const verify = Effect.fnUntraced(function* (target: Target) {
+      const existing = yield* fs.realPath(target.canonical).pipe(
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)),
+      )
+      if (existing !== undefined) {
+        if (FSUtil.normalizePath(existing) !== FSUtil.normalizePath(target.canonical))
+          return yield* new TargetChangedError({ path: target.canonical })
+        return
+      }
+      const parent = dirname(target.canonical)
+      const canonical = yield* fs.realPath(parent).pipe(
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)),
+      )
+      if (canonical !== undefined && FSUtil.normalizePath(canonical) !== FSUtil.normalizePath(parent))
+        return yield* new TargetChangedError({ path: target.canonical })
+    })
+
     const writeResult = (target: Target, existed: boolean): WriteResult => ({
       operation: "write",
       target: target.canonical,
@@ -97,6 +118,7 @@ export const layer = Layer.effect(
     const write = Effect.fn("FileMutation.write")((input: WriteInput) =>
       withTargetLock(input.target)(
         Effect.gen(function* () {
+          yield* verify(input.target)
           const existed = yield* fs.exists(input.target.canonical)
           yield* fs.writeWithDirs(input.target.canonical, input.content, 0o644)
           return writeResult(input.target, existed)
@@ -107,6 +129,7 @@ export const layer = Layer.effect(
     const writeTextPreservingBom = Effect.fn("FileMutation.writeTextPreservingBom")((input: TextWriteInput) =>
       withTargetLock(input.target)(
         Effect.gen(function* () {
+          yield* verify(input.target)
           const next = splitBom(input.content)
           const current = yield* fs
             .readFile(input.target.canonical)
@@ -124,6 +147,7 @@ export const layer = Layer.effect(
     const create = Effect.fn("FileMutation.create")((input: WriteInput) =>
       withTargetLock(input.target)(
         Effect.gen(function* () {
+          yield* verify(input.target)
           const write =
             typeof input.content === "string"
               ? fs.writeFileString(input.target.canonical, input.content, { flag: "wx" })
@@ -145,10 +169,12 @@ export const layer = Layer.effect(
     const writeIfUnchanged = Effect.fn("FileMutation.writeIfUnchanged")((input: ConditionalWriteInput) =>
       withTargetLock(input.target)(
         Effect.gen(function* () {
+          yield* verify(input.target)
           const current = yield* fs.readFile(input.target.canonical)
           if (!sameBytes(current, input.expected)) {
             return yield* new StaleContentError({ path: input.target.canonical })
           }
+          yield* verify(input.target)
           yield* typeof input.content === "string"
             ? fs.writeFileString(input.target.canonical, input.content)
             : fs.writeFile(input.target.canonical, input.content)
@@ -160,6 +186,7 @@ export const layer = Layer.effect(
     const remove = Effect.fn("FileMutation.remove")((input: RemoveInput) =>
       withTargetLock(input.target)(
         Effect.gen(function* () {
+          yield* verify(input.target)
           const existed = yield* fs.remove(input.target.canonical).pipe(
             Effect.as(true),
             Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(false)),
@@ -197,8 +224,6 @@ export const locationLayer = layer
 /**
  * Deferred until the corresponding V2 integrations exist.
  */
-// TODO: Add formatter integration after V2 formatter runtime exists.
-// TODO: Publish watcher/file-edit events after V2 watcher integration exists.
 // TODO: Add snapshots / undo after V2 snapshot design exists.
 // TODO: Notify LSP and collect diagnostics after V2 LSP runtime exists.
 // TODO: Design multi-file transactions / rollback if apply_patch needs atomic edits.

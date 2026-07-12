@@ -21,6 +21,7 @@ describe("MutationEvents", () => {
           yield* ownership.complete("add")
           expect(yield* events.native(target, "add")).toBe(false)
           expect(yield* events.native(target, "change")).toBe(false)
+          expect(yield* events.native(target, "unlink")).toBe(false)
           yield* Effect.promise(() => fs.writeFile(target, "two"))
           expect(yield* events.native(target, "change")).toBe(true)
         }).pipe(Effect.provide(MutationEvents.layer.pipe(Layer.provide(FSUtil.defaultLayer))))

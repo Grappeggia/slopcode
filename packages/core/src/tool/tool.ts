@@ -7,6 +7,7 @@ import type { PermissionV2 } from "../permission"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
 import type { SessionEvent } from "../session/event"
+import type { PostMutation } from "../post-mutation"
 
 export interface Context {
   readonly sessionID: SessionSchema.ID
@@ -23,6 +24,7 @@ export interface Context {
   }
   readonly task?: SessionEvent.Task.Requested["data"]
   readonly prepared?: SessionEvent.Task.Prepared["data"]
+  readonly fence?: PostMutation.Fence
 }
 
 export type SchemaType<A> = Schema.Codec<A, any, never, never>

@@ -4,6 +4,10 @@ import { fileURLToPath } from "url"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FileMutation } from "@slopcode-ai/core/file-mutation"
+import { EventV2 } from "@slopcode-ai/core/event"
+import { Formatter } from "@slopcode-ai/core/formatter"
+import { MutationEvents } from "@slopcode-ai/core/mutation-events"
+import { PostMutation } from "@slopcode-ai/core/post-mutation"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { Location } from "@slopcode-ai/core/location"
 import { LocationMutation } from "@slopcode-ai/core/location-mutation"
@@ -64,16 +68,28 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
   )
   const resolution = LocationMutation.layer.pipe(Layer.provide(filesystem), Layer.provide(activeLocation))
   const mutation = FileMutation.layer.pipe(Layer.provide(filesystem))
+  const events = EventV2.defaultLayer
+  const reconcile = MutationEvents.layer.pipe(Layer.provide(filesystem))
+  const formatter = Layer.succeed(Formatter.Service, Formatter.Service.of({
+    format: () => Effect.succeed({ matched: false, outcomes: [] }),
+    list: () => Effect.succeed([]),
+    status: () => Effect.succeed([]),
+  }))
+  const post = PostMutation.layer.pipe(
+    Layer.provide(mutation), Layer.provide(formatter), Layer.provide(filesystem), Layer.provide(events),
+    Layer.provide(reconcile), Layer.provide(PostMutation.diagnosticsLayer),
+  )
   const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(permission))
   const write = WriteTool.layer.pipe(
     Layer.provide(registry),
     Layer.provide(permission),
     Layer.provide(resolution),
     Layer.provide(mutation),
+    Layer.provide(post),
   )
   return Effect.gen(function* () {
     return yield* body(yield* ToolRegistry.Service)
-  }).pipe(Effect.provide(Layer.mergeAll(registry, resolution, mutation, write)))
+  }).pipe(Effect.provide(Layer.mergeAll(registry, resolution, mutation, events, reconcile, post, write)))
 }
 
 const call = (input: typeof WriteTool.Input.Type, id = "call-write") => ({
@@ -283,8 +299,6 @@ test("keeps the locked write schema, semantics docstring, and deferred UX TODOs 
   )
   for (const todo of [
     "Revisit whether model-facing mutation schemas should prefer absolute `filePath` naming for trained-in compatibility after evaluating model behavior.",
-    "Add formatter integration after V2 formatter runtime exists.",
-    "Publish watcher/file-edit events after V2 watcher integration exists.",
     "Add snapshots / undo after design exists.",
     "Add LSP notification and diagnostics after V2 LSP runtime exists.",
   ]) {

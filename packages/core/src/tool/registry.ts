@@ -25,6 +25,7 @@ import { SessionSchema } from "../session/schema"
 import type { SessionEvent } from "../session/event"
 import { ToolOutputStore } from "../tool-output-store"
 import { Wildcard } from "../util/wildcard"
+import { PostMutation } from "../post-mutation"
 import { ApplicationTools } from "./application-tools"
 import {
   definition,
@@ -80,6 +81,7 @@ export interface ToolPlan {
   readonly patch?: "freeform"
   readonly multiAgent?: "v1" | "v2"
   readonly progress?: (input: ExecuteInput, progress: ChildProgress) => Effect.Effect<void>
+  readonly fence?: PostMutation.Fence
 }
 
 export interface TurnTools {
@@ -144,6 +146,7 @@ const registryLayer = Layer.effectContext(
           },
           task: { value: input.task },
           prepared: { value: input.prepared },
+          fence: { value: plan.fence ?? PostMutation.current },
         },
       ) as ToolContext
       const pending = yield* settle(registration.tool, input.call, context).pipe(
@@ -221,6 +224,7 @@ const registryLayer = Layer.effectContext(
           patch: plan.patch,
           multiAgent: plan.multiAgent,
           progress: plan.progress,
+          fence: plan.fence,
         })
         const registrations = new Map<string, Captured>(
           Array.from(applications.entries(), ([name, registration]) => [name, { registration, overlay: false }] as const),

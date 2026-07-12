@@ -30,6 +30,9 @@ import { Ripgrep } from "./ripgrep"
 import { Watcher } from "./filesystem/watcher"
 import { LocationMutation } from "./location-mutation"
 import { FileMutation } from "./file-mutation"
+import { Formatter } from "./formatter"
+import { MutationEvents } from "./mutation-events"
+import { PostMutation } from "./post-mutation"
 import { Reference } from "./reference"
 import { ReferenceGuidance } from "./reference/guidance"
 import { RepositoryCache } from "./repository-cache"
@@ -89,6 +92,8 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       Effect.logInfo("booting location services", { directory: ref.directory, workspaceID: ref.workspaceID }),
     )
     const location = Location.layer(ref)
+    const mutationEvents = MutationEvents.locationLayer.pipe(Layer.provide(FSUtil.defaultLayer))
+    const watcher = Watcher.locationLayer.pipe(Layer.provide(mutationEvents))
     const systemContext = SystemContextBuiltIns.locationLayer
     const base = Layer.mergeAll(
       location,
@@ -104,7 +109,8 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       ProjectCopy.locationLayer,
       FileSystem.locationLayer,
       LocationSearch.locationLayer,
-      Watcher.locationLayer,
+      mutationEvents,
+      watcher,
       Pty.locationLayer,
       SkillV2.locationLayer,
       systemContext,
@@ -119,6 +125,14 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     const services = Layer.mergeAll(base, resources, permissionsAndTools)
     const image = Image.layer.pipe(Layer.provide(services))
     const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
+    const formatter = Formatter.locationLayer.pipe(Layer.provide(services))
+    const postMutation = PostMutation.locationLayer.pipe(
+      Layer.provide(services),
+      Layer.provide(mutation),
+      Layer.provide(formatter),
+      Layer.provide(mutationEvents),
+      Layer.provide(PostMutation.diagnosticsLayer),
+    )
     const skillGuidance = SkillGuidance.locationLayer.pipe(Layer.provide(services))
     const referenceGuidance = ReferenceGuidance.locationLayer.pipe(Layer.provide(services))
     const todos = SessionTodo.layer.pipe(Layer.provide(services))
@@ -126,6 +140,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     const builtInTools = BuiltInTools.locationLayer.pipe(
       Layer.provide(services),
       Layer.provide(mutation),
+      Layer.provide(postMutation),
       Layer.provide(resources),
       Layer.provide(todos),
       Layer.provide(questions),
@@ -167,6 +182,8 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       services,
       image,
       mutation,
+      formatter,
+      postMutation,
       resources,
       todos,
       questions,

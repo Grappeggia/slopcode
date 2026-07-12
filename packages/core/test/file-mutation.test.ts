@@ -309,6 +309,29 @@ describe("FileMutation", () => {
     ),
   )
 
+  it.live("rejects a canonical target replaced by an escaping symlink after approval", () =>
+    withTmp((directory) =>
+      withTmp((outside) =>
+        Effect.gen(function* () {
+          if (process.platform === "win32") return
+          const targetPath = path.join(directory, "approved.txt")
+          const escaped = path.join(outside, "escaped.txt")
+          yield* Effect.promise(() => Promise.all([fs.writeFile(targetPath, "approved"), fs.writeFile(escaped, "escaped")]))
+          const target = yield* (yield* LocationMutation.Service).resolve({ path: "approved.txt" })
+          yield* Effect.promise(async () => {
+            await fs.rm(targetPath)
+            await fs.symlink(escaped, targetPath)
+          })
+
+          expect(yield* (yield* FileMutation.Service).write({ target, content: "blocked" }).pipe(Effect.flip)).toMatchObject({
+            _tag: "FileMutation.TargetChangedError",
+          })
+          expect(yield* Effect.promise(() => fs.readFile(escaped, "utf8"))).toBe("escaped")
+        }).pipe(provide(directory)),
+      ),
+    ),
+  )
+
   it.live("allows distinct canonical targets to proceed independently", () =>
     withTmp((directory) =>
       Effect.gen(function* () {

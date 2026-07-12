@@ -37,6 +37,8 @@ export interface RunResult {
   readonly exitCode: number
   readonly stdout: Buffer
   readonly stderr: Buffer
+  readonly stdoutBytes?: number
+  readonly stderrBytes?: number
   readonly stdoutTruncated: boolean
   readonly stderrTruncated: boolean
 }
@@ -129,7 +131,7 @@ export const collectStream = (stream: Stream.Stream<Uint8Array, PlatformError>, 
       acc.truncated = acc.truncated || acc.bytes > maxOutputBytes
       return acc
     },
-  ).pipe(Effect.map((x) => ({ buffer: Buffer.concat(x.chunks), truncated: x.truncated })))
+  ).pipe(Effect.map((x) => ({ buffer: Buffer.concat(x.chunks), bytes: x.bytes, truncated: x.truncated })))
 
 export const layer = Layer.effect(
   Service,
@@ -155,6 +157,8 @@ export const layer = Layer.effect(
             exitCode,
             stdout: stdout.buffer,
             stderr: stderr.buffer,
+            stdoutBytes: stdout.bytes,
+            stderrBytes: stderr.bytes,
             stdoutTruncated: stdout.truncated,
             stderrTruncated: stderr.truncated,
           } satisfies RunResult

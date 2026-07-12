@@ -1,10 +1,11 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { AppProcess } from "@slopcode-ai/core/process"
 import { Config } from "@slopcode-ai/core/config"
 import { Formatter } from "@slopcode-ai/core/formatter"
+import { Flag } from "@slopcode-ai/core/flag/flag"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { Location } from "@slopcode-ai/core/location"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
@@ -34,9 +35,64 @@ const withFormatter = <A, E, R>(
   )
 
 const document = (formatter?: Config.Info["formatter"]) =>
-  new Config.Document({ type: "document", info: new Config.Info({ formatter }) })
+  new Config.Document({ type: "document", info: Schema.decodeUnknownSync(Config.Info)({ formatter }) })
 
 describe("Formatter", () => {
+  it.effect("implements omitted, boolean, reset, re-enable, and malformed config semantics", () =>
+    Effect.sync(() => {
+      expect(Formatter.resolve([document()])).toEqual([])
+      expect(Formatter.resolve([document(false)])).toEqual([])
+      expect(Formatter.resolve([document(true)])).toHaveLength(26)
+      expect(Formatter.resolve([document({})])).toHaveLength(26)
+      expect(Formatter.resolve([document(true), document(false), document()])).toEqual([])
+      expect(Formatter.resolve([document(false), document({ gofmt: { disabled: false } })])).toHaveLength(26)
+      expect(Formatter.resolve([document({ custom: { command: ["run"], extensions: [".x"] } }), document({ custom: { disabled: true } }), document({ custom: { disabled: false } })]).at(-1)?.name).toBe("custom")
+      expect(Formatter.resolve([document({ custom: { command: [], extensions: [".x"] } })]).some((item) => item.name === "custom")).toBe(false)
+      expect(Formatter.resolve([document({ custom: { command: ["run"], extensions: [] } })]).some((item) => item.name === "custom")).toBe(false)
+      expect(Formatter.resolve([document({ gofmt: { command: [] } })]).some((item) => item.name === "gofmt")).toBe(false)
+      expect(Formatter.resolve([document({ custom: { command: ["run"], extensions: [".x"], environment: { "BAD=KEY": "value" } } })]).some((item) => item.name === "custom")).toBe(false)
+    }),
+  )
+
+  it.effect("preserves the complete built-in catalog and compatibility extensions", () =>
+    Effect.sync(() => {
+      expect(Formatter.resolve([document(true)]).map((item) => [item.name, item.extensions])).toEqual([
+        ["gofmt", [".go"]],
+        ["mix", [".ex", ".exs", ".eex", ".heex", ".leex", ".neex", ".sface"]],
+        ["prettier", [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".html", ".htm", ".css", ".scss", ".sass", ".less", ".vue", ".svelte", ".json", ".jsonc", ".yaml", ".yml", ".toml", ".xml", ".md", ".mdx", ".graphql", ".gql"]],
+        ["oxfmt", [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"]],
+        ["biome", [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".html", ".htm", ".css", ".scss", ".sass", ".less", ".vue", ".svelte", ".json", ".jsonc", ".yaml", ".yml", ".toml", ".xml", ".md", ".mdx", ".graphql", ".gql"]],
+        ["zig", [".zig", ".zon"]],
+        ["clang-format", [".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".h++", ".ino", ".C", ".H"]],
+        ["ktlint", [".kt", ".kts"]], ["ruff", [".py", ".pyi"]], ["air", [".R"]], ["uv", [".py", ".pyi"]],
+        ["rubocop", [".rb", ".rake", ".gemspec", ".ru"]], ["standardrb", [".rb", ".rake", ".gemspec", ".ru"]],
+        ["htmlbeautifier", [".erb", ".html.erb"]], ["dart", [".dart"]], ["ocamlformat", [".ml", ".mli"]],
+        ["terraform", [".tf", ".tfvars"]], ["latexindent", [".tex"]], ["gleam", [".gleam"]], ["shfmt", [".sh", ".bash"]],
+        ["nixfmt", [".nix"]], ["rustfmt", [".rs"]], ["pint", [".php"]], ["ormolu", [".hs"]],
+        ["cljfmt", [".clj", ".cljs", ".cljc", ".edn"]], ["dfmt", [".d"]],
+      ])
+    }),
+  )
+
+  it.effect("reads the oxfmt flag at runtime with experimental inheritance", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => ({ experimental: process.env.SLOPCODE_EXPERIMENTAL, oxfmt: process.env.SLOPCODE_EXPERIMENTAL_OXFMT })),
+      () => Effect.sync(() => {
+        process.env.SLOPCODE_EXPERIMENTAL = "true"
+        delete process.env.SLOPCODE_EXPERIMENTAL_OXFMT
+        expect(Flag.SLOPCODE_EXPERIMENTAL_OXFMT).toBe(true)
+        process.env.SLOPCODE_EXPERIMENTAL_OXFMT = "false"
+        expect(Flag.SLOPCODE_EXPERIMENTAL_OXFMT).toBe(false)
+      }),
+      (previous) => Effect.sync(() => {
+        if (previous.experimental === undefined) delete process.env.SLOPCODE_EXPERIMENTAL
+        else process.env.SLOPCODE_EXPERIMENTAL = previous.experimental
+        if (previous.oxfmt === undefined) delete process.env.SLOPCODE_EXPERIMENTAL_OXFMT
+        else process.env.SLOPCODE_EXPERIMENTAL_OXFMT = previous.oxfmt
+      }),
+    ),
+  )
+
   it.effect("folds formatter documents with replacement arrays and stable custom order", () =>
     Effect.sync(() => {
       expect(
@@ -51,11 +107,13 @@ describe("Formatter", () => {
             custom: { command: ["second", "$FILE"], extensions: [".two"] },
             later: { command: ["later", "$FILE"], extensions: [".later"] },
           }),
-        ]).map((item) => ({ name: item.name, extensions: item.extensions, environment: item.environment })),
+        ])
+          .filter((item) => ["prettier", "custom", "later"].includes(item.name))
+          .map((item) => ({ name: item.name, extensions: item.extensions, environment: item.environment })),
       ).toEqual([
-        expect.objectContaining({ name: "prettier", extensions: [".second"], environment: { BASE: "one", NEXT: "two" } }),
-        expect.objectContaining({ name: "custom", extensions: [".two"] }),
-        expect.objectContaining({ name: "later", extensions: [".later"] }),
+        { name: "prettier", extensions: [".second"], environment: { BUN_BE_BUN: "1", BASE: "one", NEXT: "two" } },
+        { name: "custom", extensions: [".two"], environment: undefined },
+        { name: "later", extensions: [".later"], environment: undefined },
       ])
     }),
   )
@@ -103,6 +161,48 @@ describe("Formatter", () => {
               }),
             ),
           ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("replaces every placeholder, does not append one, and keeps failures nonfatal", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        const target = path.join(tmp.path, "literal ; $() name.edge")
+        const marker = path.join(tmp.path, "marker")
+        const write = `require('fs').appendFileSync(${JSON.stringify(marker)},process.argv.slice(1).join('|')+'\\n')`
+        return Effect.promise(() => fs.writeFile(target, "source")).pipe(
+          Effect.andThen(withFormatter(
+            tmp.path,
+            [document({
+              none: { command: [process.execPath, "-e", write], extensions: [".edge"] },
+              every: { command: [process.execPath, "-e", write, "$FILE", "before:$FILE:after", "$FILE"], extensions: [".edge"] },
+              nonzero: { command: [process.execPath, "-e", "process.exit(7)"], extensions: [".edge"] },
+              missing: { command: [path.join(tmp.path, "does-not-exist"), "$FILE"], extensions: [".edge"] },
+            })],
+            Effect.gen(function* () {
+              const formatter = yield* Formatter.Service
+              const result = yield* formatter.format({ canonical: target })
+              expect(result.outcomes.map((item) => [item.name, item.code, item.exitCode])).toEqual([
+                ["none", "formatted", 0],
+                ["every", "formatted", 0],
+                ["nonzero", "nonzero", 7],
+                ["missing", "spawn-error", undefined],
+              ])
+              expect((yield* Effect.promise(() => fs.readFile(marker, "utf8"))).split("\n")).toEqual([
+                "",
+                `${target}|before:${target}:after|${target}`,
+                "",
+              ])
+              expect(yield* formatter.format({ canonical: `${target}.UPPER` })).toEqual({ matched: false, outcomes: [] })
+              expect(yield* formatter.status()).toEqual(expect.arrayContaining([
+                expect.objectContaining({ name: "none", configured: true, available: true, outcome: "available" }),
+              ]))
+            }),
+          )),
         )
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),

@@ -175,6 +175,28 @@ describe("AppProcess", () => {
         ),
         5_000,
       )
+
+      it.live(
+        "timeout terminates and awaits a spawned descendant",
+        Effect.acquireUseRelease(
+          Effect.promise(() => fs.mkdtemp(path.join(tmpdir(), "slopcode-process-tree-"))),
+          (directory) => {
+            const ready = path.join(directory, "descendant-ready")
+            const settled = path.join(directory, "descendant-settled")
+            const child = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(settled)},'settled');process.exit(0)});setInterval(()=>{},60000)`
+            const parent = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'ignore'});setInterval(()=>{},60000)`
+            return Effect.gen(function* () {
+              const svc = yield* AppProcess.Service
+              const exit = yield* Effect.exit(svc.run(cmd("-e", parent), { timeout: "1 second" }))
+              expect(Exit.isFailure(exit)).toBe(true)
+              expect(yield* waitForFile(ready)).toMatch(/^\d+$/)
+              expect(yield* waitForFile(settled)).toBe("settled")
+            })
+          },
+          (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+        ),
+        5_000,
+      )
     }
   })
 

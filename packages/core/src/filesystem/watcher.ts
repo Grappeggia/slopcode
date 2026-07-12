@@ -3,7 +3,7 @@ export * as Watcher from "./watcher"
 // @ts-ignore
 import { createWrapper } from "@parcel/watcher/wrapper"
 import type ParcelWatcher from "@parcel/watcher"
-import { Cause, Context, Effect, Layer, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
 import path from "path"
 import { Config } from "../config"
 import { EventV2 } from "../event"
@@ -14,6 +14,7 @@ import { Location } from "../location"
 import { lazy } from "../util/lazy"
 import { Ignore } from "./ignore"
 import { Protected } from "./protected"
+import { MutationEvents } from "../mutation-events"
 
 declare const SLOPCODE_LIBC: string | undefined
 
@@ -80,6 +81,7 @@ export const layer = Layer.effect(
 
     yield* Effect.logInfo("watcher backend", { directory: location.directory, platform: process.platform, backend })
     const events = yield* EventV2.Service
+    const reconciler = yield* Effect.serviceOption(MutationEvents.Service)
     const fs = yield* FSUtil.Service
     const git = yield* Git.Service
     const context = yield* Effect.context()
@@ -89,11 +91,19 @@ export const layer = Layer.effect(
       Effect.promise(() => Promise.allSettled(subscriptions.map((subscription) => subscription.unsubscribe()))),
     )
 
+    const publish = (input: string, event: MutationEvents.Kind) => {
+      const file = FSUtil.normalizePath(input)
+      return Option.isNone(reconciler)
+        ? events.publish(Event.Updated, { file, event })
+        : reconciler.value.native(file, event).pipe(
+            Effect.flatMap((allowed) => allowed ? events.publish(Event.Updated, { file, event }) : Effect.void),
+          )
+    }
     const callback: ParcelWatcher.SubscribeCallback = (_error, updates) => {
       for (const update of updates) {
-        if (update.type === "create") runFork(events.publish(Event.Updated, { file: update.path, event: "add" }))
-        if (update.type === "update") runFork(events.publish(Event.Updated, { file: update.path, event: "change" }))
-        if (update.type === "delete") runFork(events.publish(Event.Updated, { file: update.path, event: "unlink" }))
+        if (update.type === "create") runFork(publish(update.path, "add"))
+        if (update.type === "update") runFork(publish(update.path, "change"))
+        if (update.type === "delete") runFork(publish(update.path, "unlink"))
       }
     }
 

@@ -37,14 +37,17 @@ describe("PostMutation", () => {
           PostMutation.Diagnostics,
           PostMutation.Diagnostics.of({ notify: () => Effect.sync(() => order.push("diagnostics")) }),
         )
-        const layer = PostMutation.layer.pipe(
-          Layer.provide(FileMutation.layer.pipe(Layer.provide(FSUtil.defaultLayer))),
+        const eventLayer = EventV2.defaultLayer
+        const fileLayer = FileMutation.layer.pipe(Layer.provide(FSUtil.defaultLayer))
+        const post = PostMutation.layer.pipe(
+          Layer.provide(fileLayer),
           Layer.provide(formatter),
           Layer.provide(FSUtil.defaultLayer),
-          Layer.provide(EventV2.defaultLayer),
+          Layer.provide(eventLayer),
           Layer.provide(MutationEvents.layer.pipe(Layer.provide(FSUtil.defaultLayer))),
           Layer.provide(diagnostics),
         )
+        const layer = Layer.mergeAll(eventLayer, fileLayer, post)
         return Effect.gen(function* () {
           const events = yield* EventV2.Service
           yield* events.listen((event) =>

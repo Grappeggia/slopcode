@@ -640,6 +640,7 @@ export const layer = Layer.effect(
         : {}
       const toolPlan = {
         ...plan,
+        fence: { check: assertRuntime(sessionID, runtimeEpoch) },
         ...(resolved.harness
           ? {
               progress: (input: ToolRegistry.ExecuteInput, progress: ToolRegistry.ChildProgress) =>

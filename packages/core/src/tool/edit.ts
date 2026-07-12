@@ -14,6 +14,7 @@ import { FileMutation } from "../file-mutation"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { PermissionV2 } from "../permission"
+import { PostMutation } from "../post-mutation"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -83,8 +84,6 @@ export const toModelOutput = (output: Output, oldString: string, newString: stri
 
 /** Deferred V2 edit behavior and UX integrations remain visible at the model-facing seam. */
 // TODO: Port V1 fuzzy correction strategies only after exact-edit behavior is established: line-trimmed matching, block-anchor fallback, indentation correction, and similarity-threshold review.
-// TODO: Add formatter integration after V2 formatter runtime exists.
-// TODO: Publish watcher/file-edit events after V2 watcher integration exists.
 // TODO: Add snapshots / undo after design exists.
 // TODO: Add LSP notification and diagnostics after V2 LSP runtime exists.
 
@@ -93,6 +92,7 @@ export const layer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const mutation = yield* LocationMutation.Service
     const files = yield* FileMutation.Service
+    const post = yield* PostMutation.Service
     const fs = yield* FSUtil.Service
     const permission = yield* PermissionV2.Service
 
@@ -183,13 +183,24 @@ export const layer = Layer.effectDiscard(
                     : source.text.replace(oldString, newString)
                 const next = splitBom(replaced)
                 const result = yield* unableToEdit(
-                  files.writeIfUnchanged({
+                  post.run({
                     target,
-                    expected: source.content,
-                    content: joinBom(next.text, source.bom || next.bom),
+                    intent: "edit",
+                    mutation: files.writeIfUnchanged({
+                      target,
+                      expected: source.content,
+                      content: joinBom(next.text, source.bom || next.bom),
+                    }),
+                    fence: context.fence ?? PostMutation.current,
                   }),
                 )
-                return { ...result, replacements } satisfies Output
+                return {
+                  operation: result.operation,
+                  target: result.target,
+                  resource: result.resource,
+                  existed: result.existed,
+                  replacements,
+                } satisfies Output
               })
             },
           }),
