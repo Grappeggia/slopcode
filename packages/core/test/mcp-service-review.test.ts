@@ -455,7 +455,7 @@ fixture({
 testEffect(Layer.empty).effect("closes a delayed connect result when the Location scope shuts down", () =>
   Effect.gen(function* () {
     const pending = Promise.withResolvers<MCPClient.Connection>()
-    const resetStarted = Promise.withResolvers<void>()
+    const started = Promise.withResolvers<void>()
     let closed = 0
     const config = Layer.succeed(Config.Service, {
       entries: () =>
