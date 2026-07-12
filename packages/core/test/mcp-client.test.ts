@@ -65,6 +65,31 @@ it.live("times out and cleans up an unresponsive local SDK transport", () =>
   }),
 )
 
+it.live("escalates cleanup for a real stdio grandchild that ignores SIGTERM", () =>
+  Effect.gen(function* () {
+    if (process.platform === "win32") return
+    const tmp = yield* Effect.acquireRelease(Effect.promise(tmpdir), (tmp) =>
+      Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    )
+    const pidfile = path.join(tmp.path, "child.pid")
+    const client = yield* (yield* MCPClient.Service).connect({
+      name: "stubborn",
+      directory: tmp.path,
+      timeout: 5_000,
+      config: new ConfigMCP.Local({
+        type: "local",
+        command: ["bun", path.join(import.meta.dir, "fixture/mcp-stubborn-server.ts")],
+        environment: { MCP_CHILD_PID: pidfile },
+      }),
+    })
+    const pid = Number(yield* Effect.promise(() => Bun.file(pidfile).text()))
+    expect(() => process.kill(pid, 0)).not.toThrow()
+    yield* Effect.promise(() => client.close())
+    yield* Effect.sleep("50 millis")
+    expect(() => process.kill(pid, 0)).toThrow()
+  }),
+)
+
 it.live("connects Streamable HTTP with configured headers and falls back to legacy SSE", () =>
   Effect.acquireRelease(Effect.promise(server), (fixture) => Effect.promise(fixture.close)).pipe(
     Effect.flatMap((fixture) =>

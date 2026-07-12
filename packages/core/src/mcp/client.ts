@@ -51,6 +51,15 @@ export interface Connection {
   readonly close: () => Promise<void>
 }
 
+export interface ProcessAdapter {
+  readonly platform: NodeJS.Platform
+  readonly tree: (pid: number) => Promise<ReadonlyArray<number>>
+  readonly signal: (pids: ReadonlyArray<number>, signal: "SIGTERM" | "SIGKILL") => Promise<void>
+  readonly alive: (pids: ReadonlyArray<number>) => Promise<ReadonlyArray<number>>
+  readonly windows?: (pid: number) => Promise<void>
+  readonly sleep: (milliseconds: number) => Promise<void>
+}
+
 export class ConnectionError extends Schema.TaggedErrorClass<ConnectionError>()("MCP.ConnectionError", {
   message: Schema.String,
 }) {}
@@ -78,45 +87,109 @@ export function make(input: {
   }
 }
 
+export function interruptible(run: (signal: AbortSignal) => Promise<Connection>) {
+  return Effect.callback<Connection, ConnectionError>((resume) => {
+    const controller = new AbortController()
+    let active = true
+    const pending = Promise.resolve().then(() => run(controller.signal))
+    pending.then(
+      (client) => {
+        if (!active) {
+          void client.close().catch(() => undefined)
+          return
+        }
+        resume(Effect.succeed(client))
+      },
+      (cause) => {
+        if (active) resume(Effect.fail(new ConnectionError({ message: message(cause) })))
+      },
+    )
+    return Effect.uninterruptible(
+      Effect.promise(async () => {
+        active = false
+        controller.abort()
+        const client = await pending.catch(() => undefined)
+        await client?.close().catch(() => undefined)
+      }),
+    )
+  })
+}
+
+export function headers(generated?: HeadersInit, configured?: Readonly<Record<string, string>>) {
+  const result = new Headers(generated)
+  Object.entries(configured ?? {}).forEach(([name, value]) => result.set(name, value))
+  return result
+}
+
+export async function cleanup(pid: number | null, close: () => Promise<void>, adapter: ProcessAdapter = system) {
+  if (!pid) return close()
+  const found = new Set<number>([pid, ...(await adapter.tree(pid).catch(() => []))])
+  const closing = Promise.resolve().then(close)
+  await adapter.sleep(0)
+  ;(await adapter.tree(pid).catch(() => [])).forEach((child) => found.add(child))
+  const failure = await closing.then(
+    () => undefined,
+    (cause) => cause,
+  )
+  ;(await adapter.tree(pid).catch(() => [])).forEach((child) => found.add(child))
+  if (adapter.platform === "win32") {
+    await adapter.windows?.(pid)
+  } else {
+    const pids = [...found].toReversed()
+    await adapter.signal(pids, "SIGTERM")
+    await adapter.sleep(500)
+    const alive = await adapter.alive(pids)
+    if (alive.length > 0) {
+      await adapter.signal(alive, "SIGKILL")
+      await adapter.sleep(100)
+    }
+  }
+  if (failure !== undefined) throw failure
+}
+
 export const layer = Layer.succeed(
   Service,
   Service.of({
     connect: (input) =>
-      Effect.tryPromise({
-        try: async () => {
-          if (input.config.type === "local") {
-            const command = input.config.command[0]
-            if (!command) throw new Error(`MCP server "${input.name}" has an empty command`)
-            const transport = new StdioClientTransport({
-              command,
-              args: input.config.command.slice(1),
-              cwd: path.resolve(input.directory, input.config.cwd ?? "."),
-              env: { ...getDefaultEnvironment(), ...input.config.environment },
-              stderr: "pipe",
-            })
-            return connect(transport, "local", input.timeout)
-          }
+      interruptible(async (signal) => {
+        if (input.config.type === "local") {
+          const command = input.config.command[0]
+          if (!command) throw new Error(`MCP server "${input.name}" has an empty command`)
+          const transport = new StdioClientTransport({
+            command,
+            args: input.config.command.slice(1),
+            cwd: path.resolve(input.directory, input.config.cwd ?? "."),
+            env: { ...getDefaultEnvironment(), ...input.config.environment },
+            stderr: "pipe",
+          })
+          return connect(transport, "local", input.timeout, signal)
+        }
 
-          const url = new URL(input.config.url)
-          if (url.protocol !== "http:" && url.protocol !== "https:")
-            throw new Error(`Unsupported MCP URL protocol: ${url.protocol}`)
-          const headers = input.config.headers
-          const options = headers ? { requestInit: { headers } } : undefined
-          const first = new StreamableHTTPClientTransport(url, options)
-          const remote = await connect(first, "remote", input.timeout).catch(() => undefined)
-          if (remote) return remote
-          return connect(
-            new SSEClientTransport(url, {
-              requestInit: options?.requestInit,
-              eventSourceInit: headers
-                ? { fetch: (url: string | URL, init?: RequestInit) => fetch(url, { ...init, headers }) }
-                : undefined,
-            }),
-            "sse",
-            input.timeout,
-          )
-        },
-        catch: (cause) => new ConnectionError({ message: message(cause) }),
+        const url = new URL(input.config.url)
+        if (url.protocol !== "http:" && url.protocol !== "https:")
+          throw new Error(`Unsupported MCP URL protocol: ${url.protocol}`)
+        const headers = input.config.headers
+        const options = headers ? { requestInit: { headers } } : undefined
+        const first = new StreamableHTTPClientTransport(url, options)
+        const remote = await connect(first, "remote", input.timeout, signal).catch((cause) => {
+          if (signal.aborted) throw cause
+          return undefined
+        })
+        if (remote) return remote
+        return connect(
+          new SSEClientTransport(url, {
+            requestInit: options?.requestInit,
+            eventSourceInit: headers
+              ? {
+                  fetch: (url: string | URL, init?: RequestInit) =>
+                    fetch(url, { ...init, headers: MCPClientHeaders(init?.headers, headers) }),
+                }
+              : undefined,
+          }),
+          "sse",
+          input.timeout,
+          signal,
+        )
       }),
   }),
 )
@@ -125,20 +198,21 @@ async function connect(
   transport: StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport,
   kind: Connection["transport"],
   timeout: number,
+  signal: AbortSignal,
 ) {
   const client = new Client({ name: "slopcode", version: InstallationVersion })
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await Promise.race([
-      client.connect(transport, { timeout }),
+      client.connect(transport, { timeout, signal }),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`MCP connection timed out after ${timeout}ms`)), timeout)
       }),
     ])
   } catch (error) {
-    const children = transport instanceof StdioClientTransport ? await descendants(transport.pid) : []
-    await client.close().catch(() => undefined)
-    terminate(children)
+    await cleanup(transport instanceof StdioClientTransport ? transport.pid : null, () => client.close()).catch(
+      () => undefined,
+    )
     throw error
   } finally {
     if (timer) clearTimeout(timer)
@@ -160,9 +234,7 @@ async function connect(
       client.onclose = handler
     },
     close: async () => {
-      const children = transport instanceof StdioClientTransport ? await descendants(transport.pid) : []
-      await client.close()
-      terminate(children)
+      await cleanup(transport instanceof StdioClientTransport ? transport.pid : null, () => client.close())
     },
   })
 }
@@ -171,8 +243,8 @@ const TolerantListToolsResultSchema = ListToolsResultSchema.extend({
   tools: ToolSchema.omit({ outputSchema: true }).passthrough().array(),
 })
 
-async function descendants(pid: number | null) {
-  if (!pid || process.platform === "win32") return []
+async function descendants(pid: number) {
+  if (process.platform === "win32") return []
   const output = await new Response(Bun.spawn(["ps", "-eo", "pid=,ppid="], { stdout: "pipe" }).stdout).text()
   const pairs = output
     .trim()
@@ -192,12 +264,34 @@ async function descendants(pid: number | null) {
   return result
 }
 
-function terminate(children: ReadonlyArray<number>) {
-  children.forEach((pid) => {
-    try {
-      process.kill(pid, "SIGTERM")
-    } catch {}
-  })
+const system: ProcessAdapter = {
+  platform: process.platform,
+  tree: descendants,
+  signal: async (pids, signal) => {
+    pids.forEach((pid) => {
+      try {
+        process.kill(pid, signal)
+      } catch {}
+    })
+  },
+  alive: async (pids) =>
+    pids.filter((pid) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }),
+  windows: async (pid) => {
+    const child = Bun.spawn(["taskkill", "/PID", String(pid), "/T", "/F"], { stdout: "ignore", stderr: "ignore" })
+    await child.exited
+  },
+  sleep: Bun.sleep,
+}
+
+function MCPClientHeaders(generated: HeadersInit | undefined, configured: Readonly<Record<string, string>>) {
+  return headers(generated, configured)
 }
 
 function message(value: unknown) {

@@ -54,17 +54,19 @@ export interface Interface {
   readonly disconnect: (name: string) => Effect.Effect<void>
   readonly reconnect: (name: string) => Effect.Effect<void>
   readonly refresh: (name: string) => Effect.Effect<void, DiscoveryError>
+  readonly reload: () => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCP") {}
 
 type Server = {
   readonly name: string
-  readonly config: typeof ConfigMCP.Server.Type
-  readonly timeout: number
+  config: typeof ConfigMCP.Server.Type
+  timeout: number
   readonly slot: object
   readonly lock: ReturnType<typeof Semaphore.makeUnsafe>
   status: Status
+  pending?: Connection
   client?: Connection
   registration?: Scope.Closeable
   names: ReadonlySet<string>
@@ -82,19 +84,24 @@ export const layer = Layer.effect(
     const events = yield* EventV2.Service
     const scope = yield* Scope.Scope
     const ready = yield* Deferred.make<void>()
-    const documents = (yield* config.entries()).filter((entry): entry is Config.Document => entry.type === "document")
-    const timeout = documents.reduce((value, entry) => entry.info.mcp?.timeout ?? value, DEFAULT_TIMEOUT)
-    const configured = new Map<string, typeof ConfigMCP.Server.Type>()
-    documents.forEach((entry) =>
-      Object.entries(entry.info.mcp?.servers ?? {}).forEach(([name, server]) => configured.set(name, server)),
-    )
+    const effective = Effect.fnUntraced(function* () {
+      const documents = (yield* config.entries()).filter((entry): entry is Config.Document => entry.type === "document")
+      const timeout = documents.reduce((value, entry) => entry.info.mcp?.timeout ?? value, DEFAULT_TIMEOUT)
+      const servers = new Map<string, typeof ConfigMCP.Server.Type>()
+      documents.forEach((entry) =>
+        Object.entries(entry.info.mcp?.servers ?? {}).forEach(([name, server]) => servers.set(name, server)),
+      )
+      return { timeout, servers }
+    })
+    const initial = yield* effective()
+    const configured = initial.servers
     const servers = new Map<string, Server>(
       [...configured].map(([name, server]) => [
         name,
         {
           name,
           config: server,
-          timeout: server.timeout ?? timeout,
+          timeout: server.timeout ?? initial.timeout,
           slot: {},
           lock: Semaphore.makeUnsafe(1),
           status: server.disabled ? ({ status: "disabled" } as const) : ({ status: "disconnected" } as const),
@@ -103,12 +110,13 @@ export const layer = Layer.effect(
       ]),
     )
     const registrations = Semaphore.makeUnsafe(1)
+    const operations = Semaphore.makeUnsafe(1)
 
     // Empty lifetime anchors reserve config order even while a server is disabled,
     // disconnected, unavailable, or replacing its current discovered tools.
-    yield* Effect.forEach(servers.values(), (server) => tools.register({}, { slot: server.slot }), {
-      discard: true,
-    }).pipe(Effect.orDie)
+    const anchor = (server: Server) =>
+      tools.register({}, { slot: server.slot }).pipe(Scope.provide(scope), Effect.orDie)
+    yield* Effect.forEach(servers.values(), anchor, { discard: true })
 
     const publish = (server: Server, status: Status) =>
       Effect.sync(() => {
@@ -148,15 +156,25 @@ export const layer = Layer.effect(
       if (registration) yield* Scope.close(registration, Exit.void).pipe(Effect.ignore)
     })
 
-    const close = Effect.fnUntraced(function* (server: Server) {
-      yield* hide(server)
-      const client = server.client
-      server.client = undefined
-      if (client) yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
-    })
+    const close = (server: Server): Effect.Effect<void> =>
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* hide(server)
+          const pending = server.pending
+          const client = server.client
+          server.pending = undefined
+          server.client = undefined
+          if (pending && pending !== client) yield* Effect.promise(() => pending.close()).pipe(Effect.ignore)
+          if (client) yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
+        }),
+      )
 
-    const install = Effect.fnUntraced(function* (server: Server, definitions: ReadonlyArray<MCPTool>) {
-      const adapted = yield* adapt(server, definitions, plugin, permission)
+    const install = Effect.fnUntraced(function* (
+      server: Server,
+      client: Connection,
+      definitions: ReadonlyArray<MCPTool>,
+    ) {
+      const adapted = yield* adapt(server, client, definitions, plugin, permission)
       yield* registrations.withPermits(1)(
         Effect.gen(function* () {
           for (const name of Object.keys(adapted))
@@ -188,14 +206,14 @@ export const layer = Layer.effect(
             (cause) => new DiscoveryError({ server: server.name, message: redact(message(cause), server.config) }),
           ),
         )
-        yield* install(server, definitions).pipe(
+        yield* install(server, client, definitions).pipe(
           Effect.mapError(
             (cause) => new DiscoveryError({ server: server.name, message: redact(message(cause), server.config) }),
           ),
         )
       })
 
-    const refresh = (server: Server) => server.lock.withPermits(1)(refreshUnlocked(server))
+    const refresh = (server: Server) => operations.withPermits(1)(server.lock.withPermits(1)(refreshUnlocked(server)))
 
     const prepare = Effect.fnUntraced(function* (server: Server) {
       if (server.config.disabled) {
@@ -215,43 +233,103 @@ export const layer = Layer.effect(
           Effect.option,
         )
       if (client._tag === "None") return undefined
-      server.client = client.value
-      client.value.closed(() => {
-        if (server.client !== client.value) return
-        server.client = undefined
-        Effect.runFork(hide(server).pipe(Effect.andThen(failure(server, "Connection closed"))))
-      })
-      if (!hasTools(client.value.capabilities)) return [] as ReadonlyArray<MCPTool>
+      server.pending = client.value
+      if (!hasTools(client.value.capabilities))
+        return { client: client.value, definitions: [] as ReadonlyArray<MCPTool> }
       const discovered = yield* Effect.exit(discover(client.value, server.timeout))
-      if (Exit.isSuccess(discovered)) return discovered.value
-      yield* close(server)
+      if (Exit.isSuccess(discovered)) return { client: client.value, definitions: discovered.value }
+      server.pending = undefined
+      yield* Effect.promise(() => client.value.close()).pipe(Effect.ignore)
       yield* failure(server, discovered.cause, true)
       return undefined
     })
 
-    const activate = Effect.fnUntraced(function* (server: Server, definitions: ReadonlyArray<MCPTool>) {
-      const client = server.client
-      if (!client) return
+    const activate = Effect.fnUntraced(function* (
+      server: Server,
+      prepared: { readonly client: Connection; readonly definitions: ReadonlyArray<MCPTool> },
+    ) {
+      const client = prepared.client
+      if (server.pending !== client) {
+        yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
+        return
+      }
+      if (server.client && server.client !== client) yield* close(server)
       if (hasTools(client.capabilities)) {
-        const result = yield* Effect.exit(install(server, definitions))
+        const result = yield* Effect.exit(install(server, client, prepared.definitions))
         if (Exit.isFailure(result)) {
-          yield* close(server)
+          yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
+          server.pending = undefined
           yield* failure(server, result.cause, true)
           return
         }
+      }
+      server.client = client
+      server.pending = undefined
+      client.closed(() => {
+        Effect.runFork(
+          operations.withPermits(1)(
+            server.lock.withPermits(1)(
+              Effect.gen(function* () {
+                if (server.client !== client) return
+                server.client = undefined
+                yield* hide(server)
+                yield* failure(server, "Connection closed")
+              }),
+            ),
+          ),
+        )
+      })
+      if (hasTools(client.capabilities))
         client.changed(() =>
           Effect.runPromise(refresh(server).pipe(Effect.catch((cause) => discoveryFailure(server, cause)))),
         )
-      }
       yield* publish(server, { status: "connected", transport: client.transport })
     })
 
     const open = Effect.fnUntraced(function* (server: Server) {
-      const definitions = yield* prepare(server)
-      if (definitions) yield* activate(server, definitions)
+      const prepared = yield* prepare(server)
+      if (prepared) yield* activate(server, prepared)
     })
 
     const connectOne = (server: Server) => server.lock.withPermits(1)(close(server).pipe(Effect.andThen(open(server))))
+
+    const connectAll = Effect.fnUntraced(function* () {
+      const ordered = [...servers.values()]
+      const discovered = yield* Effect.forEach(
+        ordered,
+        (server) => server.lock.withPermits(1)(close(server).pipe(Effect.andThen(prepare(server)))),
+        { concurrency: "unbounded" },
+      )
+      const owners = new Map<string, Set<Server>>()
+      discovered.forEach((prepared, index) =>
+        prepared?.definitions.forEach((definition) => {
+          const tool = canonical(ordered[index]!.name, definition.name)
+          owners.set(tool, new Set([...(owners.get(tool) ?? []), ordered[index]!]))
+        }),
+      )
+      const collisions = new Map<Server, string>()
+      owners.forEach((owners, tool) => {
+        if (owners.size > 1) owners.forEach((server) => collisions.set(server, tool))
+      })
+      yield* Effect.forEach(
+        ordered,
+        (server, index) =>
+          server.lock.withPermits(1)(
+            Effect.gen(function* () {
+              const collision = collisions.get(server)
+              const prepared = discovered[index]
+              if (collision) {
+                yield* Effect.promise(() => prepared?.client.close() ?? Promise.resolve()).pipe(Effect.ignore)
+                server.pending = undefined
+                yield* failure(server, `MCP tool name collision: ${collision}`, true)
+                return
+              }
+              if (prepared) yield* activate(server, prepared)
+            }),
+          ),
+        { discard: true },
+      )
+    })
 
     const service = Service.of({
       ready: () => Deferred.await(ready),
@@ -259,57 +337,78 @@ export const layer = Layer.effect(
         return Object.fromEntries([...servers].map(([name, server]) => [name, server.status]))
       }),
       connect: Effect.fn("MCP.connect")(function* (name?: string) {
-        if (name !== undefined) {
-          const server = servers.get(name)
-          if (server) yield* connectOne(server)
-          return
-        }
-        const ordered = [...servers.values()]
-        yield* Effect.forEach(ordered, close, { concurrency: "unbounded", discard: true })
-        const discovered = yield* Effect.forEach(ordered, prepare, { concurrency: "unbounded" })
-        const owners = new Map<string, Set<Server>>()
-        discovered.forEach((definitions, index) =>
-          definitions?.forEach((definition) => {
-            const tool = canonical(ordered[index]!.name, definition.name)
-            owners.set(tool, new Set([...(owners.get(tool) ?? []), ordered[index]!]))
-          }),
-        )
-        const collisions = new Map<Server, string>()
-        owners.forEach((owners, tool) => {
-          if (owners.size > 1) owners.forEach((server) => collisions.set(server, tool))
-        })
-        yield* Effect.forEach(
-          ordered,
-          (server, index) => {
-            const collision = collisions.get(server)
-            if (collision)
-              return close(server).pipe(Effect.andThen(failure(server, `MCP tool name collision: ${collision}`, true)))
-            const definitions = discovered[index]
-            return definitions ? activate(server, definitions) : Effect.void
-          },
-          { discard: true },
+        yield* operations.withPermits(1)(
+          name === undefined ? connectAll() : servers.has(name) ? connectOne(servers.get(name)!) : Effect.void,
         )
       }),
       disconnect: Effect.fn("MCP.disconnect")(function* (name: string) {
         const server = servers.get(name)
         if (!server) return
-        yield* server.lock.withPermits(1)(
-          close(server).pipe(Effect.andThen(publish(server, { status: "disconnected" }))),
+        yield* operations.withPermits(1)(
+          server.lock.withPermits(1)(close(server).pipe(Effect.andThen(publish(server, { status: "disconnected" })))),
         )
       }),
       reconnect: Effect.fn("MCP.reconnect")(function* (name: string) {
         const server = servers.get(name)
-        if (server) yield* connectOne(server)
+        if (server) yield* operations.withPermits(1)(connectOne(server))
       }),
       refresh: Effect.fn("MCP.refresh")(function* (name: string) {
         const server = servers.get(name)
         if (!server) return yield* new DiscoveryError({ server: name, message: `Unknown MCP server: ${name}` })
-        yield* refresh(server)
+        yield* refresh(server).pipe(Effect.tapError((cause) => discoveryFailure(server, cause)))
+      }),
+      reload: Effect.fn("MCP.reload")(function* () {
+        yield* operations.withPermits(1)(
+          Effect.gen(function* () {
+            const next = yield* effective()
+            const changed: Server[] = []
+            const removed = [...servers.values()].filter((server) => !next.servers.has(server.name))
+            yield* Effect.forEach(removed, (server) => server.lock.withPermits(1)(close(server)), {
+              concurrency: "unbounded",
+              discard: true,
+            })
+            removed.forEach((server) => servers.delete(server.name))
+            for (const [name, config] of next.servers) {
+              const existing = servers.get(name)
+              if (
+                existing &&
+                isDeepStrictEqual(existing.config, config) &&
+                existing.timeout === (config.timeout ?? next.timeout)
+              )
+                continue
+              if (existing) {
+                yield* existing.lock.withPermits(1)(close(existing))
+                existing.config = config
+                existing.timeout = config.timeout ?? next.timeout
+                changed.push(existing)
+                continue
+              }
+              const server: Server = {
+                name,
+                config,
+                timeout: config.timeout ?? next.timeout,
+                slot: {},
+                lock: Semaphore.makeUnsafe(1),
+                status: config.disabled ? { status: "disabled" } : { status: "disconnected" },
+                names: new Set(),
+              }
+              servers.set(name, server)
+              yield* anchor(server)
+              changed.push(server)
+            }
+            yield* Effect.forEach(changed, connectOne, { concurrency: "unbounded", discard: true })
+          }),
+        )
       }),
     })
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach(servers.values(), close, { concurrency: "unbounded", discard: true }),
+      operations.withPermits(1)(
+        Effect.forEach(servers.values(), (server) => server.lock.withPermits(1)(close(server)), {
+          concurrency: "unbounded",
+          discard: true,
+        }),
+      ),
     )
     yield* service.connect().pipe(Effect.ensuring(Deferred.succeed(ready, undefined)), Effect.forkScoped)
     return service
@@ -341,6 +440,7 @@ function discover(client: Connection, timeout: number) {
 
 function adapt(
   server: Server,
+  client: Connection,
   definitions: ReadonlyArray<MCPTool>,
   plugin: PluginV2.Interface,
   permission: PermissionV2.Interface,
@@ -355,7 +455,7 @@ function adapt(
           if (names.has(name)) throw new Error(`MCP tool name collision: ${name}`)
           names.add(name)
           const validator = new Ajv({ allErrors: true, strict: false }).compile(definition.inputSchema)
-          return [name, tool(name, definition, server, validator, plugin, permission)] as const
+          return [name, tool(name, definition, server, client, validator, plugin, permission)] as const
         },
         catch: (cause) => cause,
       }),
@@ -368,6 +468,7 @@ function tool(
   name: string,
   definition: MCPTool,
   server: Server,
+  client: Connection,
   validator: ValidateFunction,
   plugin: PluginV2.Interface,
   permission: PermissionV2.Interface,
@@ -401,14 +502,14 @@ function tool(
             source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
           })
           .pipe(Effect.mapError(() => new Tool.Failure({ message: `Permission denied: ${name}` })))
-        const result = yield* Effect.tryPromise({
-          try: (signal) =>
-            server.client!.call(
+        const result = yield* invoke(
+          (signal) =>
+            client.call(
               { name: definition.name, arguments: decoded },
               { signal, timeout: server.timeout, resetTimeoutOnProgress: true },
             ),
-          catch: (cause) => new Tool.Failure({ message: `MCP tool failed: ${redact(message(cause), server.config)}` }),
-        })
+          (cause) => new Tool.Failure({ message: `MCP tool failed: ${redact(message(cause), server.config)}` }),
+        )
         const normalized = yield* normalize(result)
         const afterInput = hookOutput(normalized)
         const after = yield* plugin.trigger(
@@ -416,7 +517,9 @@ function tool(
           { tool: name, sessionID: context.sessionID, callID: context.toolCallID, args: decoded },
           afterInput,
         )
-        const final = isDeepStrictEqual(afterOutput(after), afterInput) ? normalized : yield* normalizeHook(after)
+        const final = isDeepStrictEqual(afterOutput(after), afterInput)
+          ? normalized
+          : yield* normalizeHook(after, normalized)
         if (final.isError)
           return yield* new Tool.Failure({
             message:
@@ -431,7 +534,7 @@ function tool(
     encodeOutput: (value) =>
       Effect.succeed({
         ...(value.structured === undefined ? {} : { structuredContent: value.structured }),
-        ...(value.metadata === undefined ? {} : { metadata: value.metadata }),
+        ...(value.metadata === undefined ? {} : { _meta: value.metadata }),
         ...(value.isError === undefined ? {} : { isError: value.isError }),
       }),
     toModelOutput: ({ value }) => value.content,
@@ -513,7 +616,7 @@ function hookOutput(value: Normalized): PluginV2.HookOutput<"tool.execute.after"
       .join("\n"),
     metadata: {
       ...(value.structured === undefined ? {} : { structuredContent: value.structured }),
-      ...(value.metadata === undefined ? {} : { metadata: value.metadata }),
+      ...(value.metadata === undefined ? {} : { _meta: value.metadata }),
       ...(value.isError === undefined ? {} : { isError: value.isError }),
     },
     attachments: value.content
@@ -531,9 +634,31 @@ function afterOutput(value: PluginV2.HookOutput<"tool.execute.after">) {
   return { output: value.output, metadata: value.metadata, attachments: value.attachments }
 }
 
-function normalizeHook(value: PluginV2.HookOutput<"tool.execute.after">): Effect.Effect<Normalized, Tool.Failure> {
+function normalizeHook(
+  value: PluginV2.HookOutput<"tool.execute.after">,
+  original: Normalized,
+): Effect.Effect<Normalized, Tool.Failure> {
   if (typeof value.output !== "string" || (value.metadata !== undefined && !record(value.metadata)))
     return invalid("hook output")
+  const metadata = value.metadata
+  const structured =
+    metadata && Object.hasOwn(metadata, "structuredContent") ? metadata.structuredContent : original.structured
+  const reserved = metadata && ["structuredContent", "_meta", "isError"].some((key) => Object.hasOwn(metadata, key))
+  const extra = metadata
+    ? Object.fromEntries(
+        Object.entries(metadata).filter(([key]) => !["structuredContent", "_meta", "isError"].includes(key)),
+      )
+    : {}
+  const base = metadata && Object.hasOwn(metadata, "_meta") ? metadata._meta : original.metadata
+  const meta = !metadata
+    ? original.metadata
+    : !reserved
+      ? metadata
+      : Object.keys(extra).length === 0
+        ? base
+        : { ...(record(base) ? base : {}), ...extra }
+  if (structured !== undefined && !record(structured)) return invalid("hook structuredContent")
+  if (meta !== undefined && !record(meta)) return invalid("hook metadata")
   return Effect.forEach(value.attachments ?? [], (attachment) => {
     if (!record(attachment) || attachment.type !== "file" || typeof attachment.url !== "string")
       return invalid("hook attachment")
@@ -547,7 +672,9 @@ function normalizeHook(value: PluginV2.HookOutput<"tool.execute.after">): Effect
     )
   }).pipe(
     Effect.map((files) => ({
-      structured: value.metadata,
+      structured,
+      metadata: meta as Record<string, unknown> | undefined,
+      isError: original.isError,
       content: [...(value.output ? [{ type: "text" as const, text: value.output }] : []), ...files],
     })),
   )
@@ -555,6 +682,23 @@ function normalizeHook(value: PluginV2.HookOutput<"tool.execute.after">): Effect
 
 function invalid(label: string): Effect.Effect<never, Tool.Failure> {
   return Effect.fail(new Tool.Failure({ message: `MCP tool returned invalid ${label}` }))
+}
+
+function invoke<A>(run: (signal: AbortSignal) => Promise<A>, failure: (cause: unknown) => Tool.Failure) {
+  return Effect.callback<A, Tool.Failure>((resume) => {
+    const controller = new AbortController()
+    const promise = run(controller.signal)
+    promise.then(
+      (value) => resume(Effect.succeed(value)),
+      (cause) => resume(Effect.fail(failure(cause))),
+    )
+    return Effect.uninterruptible(
+      Effect.promise(async () => {
+        controller.abort()
+        await promise.catch(() => undefined)
+      }),
+    )
+  })
 }
 
 function hasTools(capabilities: Readonly<Record<string, unknown>>) {
