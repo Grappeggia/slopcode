@@ -299,6 +299,33 @@ Result: exit 0; `Checked 2372 installs across 2656 packages (no changes)`.
 
 `DONE_WITH_CONCERNS`
 
+## Authoritative Final Input Appendix
+
+### Status
+
+`DONE_WITH_CONCERNS`
+
+The remaining H5D1 lifecycle finding is fixed. The runner's private final interceptor now retains only byte-count and overflow state for deltas. A bounded valid terminal `tool-call` passes through unchanged so canonical registry settlement consumes normalized authoritative `event.input`, matching `ToolStream.finishWithInput`; terminal `tool-input-error` remains payload-free, and over-cap accumulation still becomes `invalid-json`.
+
+### Commits
+
+- RED `25e887cd81` `test(core): expose authoritative final input regression`
+- GREEN `4fe2313c48` `fix(core): trust normalized final tool input`
+
+### Evidence
+
+- Corrected terminal scalar, array, and object cases feed partial, stale, or malformed deltas followed by authoritative normalized terminal input. Each projects the exact semantic value with empty assistant tool content, no durable ordinary tool events, no `final_output` history, and no stale payload in event rows, messages, or compaction serialization.
+- The one-byte-over private raw accumulation case remains a payload-free `invalid-json` structured failure with no ordinary tool event or payload leakage.
+- Focused authoritative/lifecycle matrix: `14 pass`, `0 fail`, `69 expect() calls`.
+- Full structured Core matrix: `213 pass`, `0 fail`, `687 expect() calls`, 4 files.
+- Core: `1487 pass`, `0 fail`, `4588 expect() calls`, 155 files.
+- LLM: `305 pass`, `30 skip`, `0 fail`, `668 expect() calls`, 26 files.
+- CodeMode: `254 pass`, `0 fail`, `744 expect() calls`, 7 files.
+- Slopcode: `3105 pass`, `22 skip`, `1 todo`, `5 fail`, `8590 expect() calls`, 248 files. The failures remain the documented missing-session abort contract, PTY legacy-instance cleanup, and three worktree project lookup cases.
+- Core, LLM, CodeMode, Server, and Slopcode typechecks exited 0.
+- `bun install --frozen-lockfile` exited 0 with no changes.
+- No changes were pushed.
+
 All structured-final review findings are implemented and focused gates are green. Remaining concerns are the baseline-reproduced unrelated HTTP/worktree failures, the missing-session abort contract mismatch, and the branch-only listener timing threshold described above. No changes were pushed.
 
 ## Final Re-review Appendix
