@@ -35,7 +35,17 @@ function stream(events: object[]) {
   )
 }
 
-async function mount(input: { root: string; question?: string; fetch: typeof globalThis.fetch; onClose?: () => void }) {
+function separator(lines: string[], index: number) {
+  return (lines[index]?.match(/─/g) ?? []).length
+}
+
+async function mount(input: {
+  root: string
+  question?: string
+  width?: number
+  fetch: typeof globalThis.fetch
+  onClose?: () => void
+}) {
   const config = createTuiResolvedConfig()
   const state = path.join(input.root, "state")
   await mkdir(state, { recursive: true })
@@ -72,7 +82,7 @@ async function mount(input: { root: string; question?: string; fetch: typeof glo
     )
   }
 
-  return testRender(() => <Harness />, { width: 80, height: 20, kittyKeyboard: true })
+  return testRender(() => <Harness />, { width: input.width ?? 80, height: 20, kittyKeyboard: true })
 }
 
 test("opens a focused composer and streams an answer", async () => {
@@ -88,12 +98,23 @@ test("opens a focused composer and streams an answer", async () => {
 
   try {
     await wait(() => app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    await wait(() => app.captureCharFrame().includes("Side question"))
+    const composer = app.captureCharFrame().split("\n")
+    const composerTitle = composer.findIndex((line) => line.includes("Side question"))
+    const composerFooter = composer.findIndex((line) => line.includes("enter ask"))
+    expect(separator(composer, composerTitle - 1)).toBeGreaterThan(70)
+    expect(separator(composer, composerFooter + 1)).toBeGreaterThan(70)
+
     app.mockInput.typeText("What is happening?")
     app.mockInput.pressEnter()
     await wait(() => app.captureCharFrame().includes("The answer"))
 
     expect(body).toMatchObject({ question: "What is happening?", agent: "build" })
-    expect(app.captureCharFrame()).toContain("complete")
+    const lines = app.captureCharFrame().split("\n")
+    const title = lines.findIndex((line) => line.includes("Side question"))
+    const footer = lines.findIndex((line) => line.includes("complete"))
+    expect(separator(lines, title - 1)).toBeGreaterThan(70)
+    expect(separator(lines, footer + 1)).toBeGreaterThan(70)
   } finally {
     app.renderer.destroy()
   }
@@ -118,6 +139,27 @@ test("submits an inline question immediately and closes with escape", async () =
     await wait(() => app.captureCharFrame().includes("Existing answer"))
     app.mockInput.pressEscape()
     expect(closed).toBe(1)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("renders full-width separators in compact terminals", async () => {
+  await using tmp = await tmpdir()
+  const app = await mount({
+    root: tmp.path,
+    width: 40,
+    fetch: (() => Promise.reject(new Error("unexpected request"))) as unknown as typeof globalThis.fetch,
+  })
+
+  try {
+    await wait(() => app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    await wait(() => app.captureCharFrame().includes("Side question"))
+    const lines = app.captureCharFrame().split("\n")
+    const title = lines.findIndex((line) => line.includes("Side question"))
+    const footer = lines.findIndex((line) => line.includes("enter ask"))
+    expect(separator(lines, title - 1)).toBeGreaterThan(30)
+    expect(separator(lines, footer + 1)).toBeGreaterThan(30)
   } finally {
     app.renderer.destroy()
   }

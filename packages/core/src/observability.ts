@@ -2,6 +2,7 @@ export * as Observability from "./observability"
 
 import { NodeFileSystem } from "@effect/platform-node"
 import { Effect, Layer, Logger, References } from "effect"
+import * as Stream from "effect/Stream"
 import { FetchHttpClient } from "effect/unstable/http"
 import { OtlpSerialization } from "effect/unstable/observability"
 import { Logging } from "./observability/logging"
@@ -19,3 +20,14 @@ export const layer = Layer.unwrap(
     return Layer.merge(logs, yield* Effect.promise(Otlp.tracingLayer))
   }),
 )
+
+export function preserveStream<A, E, R>(stream: Stream.Stream<A, E, R>) {
+  return Effect.gen(function* () {
+    const loggers = yield* Effect.service(Logger.CurrentLoggers)
+    const level = yield* Effect.service(References.MinimumLogLevel)
+    return stream.pipe(
+      Stream.provideService(Logger.CurrentLoggers, loggers),
+      Stream.provideService(References.MinimumLogLevel, level),
+    )
+  })
+}

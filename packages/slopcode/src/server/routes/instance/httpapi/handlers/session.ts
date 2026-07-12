@@ -20,6 +20,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@slopcode-ai/core/util/error"
+import { Observability } from "@slopcode-ai/core/observability"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -361,7 +362,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* requireSession(ctx.params.sessionID)
       const instance = yield* InstanceState.context
       const workspaceID = yield* InstanceState.workspaceID
-      return HttpServerResponse.stream(
+      const stream = yield* Observability.preserveStream(
         sideSvc.ask({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
           Stream.provideService(InstanceRef, instance),
           Stream.provideService(WorkspaceRef, workspaceID),
@@ -376,15 +377,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           Stream.pipeThroughChannel(Sse.encode()),
           Stream.encodeText,
         ),
-        {
-          contentType: "text/event-stream",
-          headers: {
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-            "X-Content-Type-Options": "nosniff",
-          },
-        },
       )
+      return HttpServerResponse.stream(stream, {
+        contentType: "text/event-stream",
+        headers: {
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
+          "X-Content-Type-Options": "nosniff",
+        },
+      })
     })
 
     const shell = Effect.fn("SessionHttpApi.shell")(function* (ctx: {

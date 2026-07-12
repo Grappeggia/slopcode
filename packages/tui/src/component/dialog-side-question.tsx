@@ -140,53 +140,57 @@ export function SideQuestion(props: {
   onCleanup(() => controller?.abort())
 
   return (
-    <box border={["left"]} borderColor={theme.accent} paddingLeft={1} paddingRight={1} gap={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={theme.text}>
-          Side question
-        </text>
-        <text fg={theme.textMuted} onMouseUp={props.onClose}>
-          esc close
-        </text>
-      </box>
-      <textarea
-        ref={(value: TextareaRenderable) => {
-          input = value
-          setInputTarget(value)
-        }}
-        initialValue={props.question}
-        height={store.started ? 1 : 3}
-        placeholder="Ask a question about the current session"
-        placeholderColor={theme.textMuted}
-        textColor={store.loading || store.complete ? theme.textMuted : theme.text}
-        focusedTextColor={store.loading || store.complete ? theme.textMuted : theme.text}
-        onSubmit={() => {
-          if (store.error) setStore("error", undefined)
-          ask()
-        }}
-      />
-      <Show when={store.started}>
-        <scrollbox ref={(r: ScrollBoxRenderable) => (scroll = r)} height={4} scrollbarOptions={{ visible: false }}>
-          <Show when={store.answer} fallback={<text fg={theme.textMuted}>Thinking...</text>}>
-            <text fg={theme.text} wrapMode="word">
-              {store.answer}
-            </text>
-          </Show>
-          <Show when={store.error}>
-            <text fg={theme.error} wrapMode="word">
-              {store.error}
-            </text>
-          </Show>
-        </scrollbox>
-      </Show>
-      <box flexDirection="row" justifyContent="space-between">
-        <text fg={theme.textMuted}>
-          {store.loading ? "streaming" : store.complete ? "complete" : store.error ? "failed" : "enter ask"}
-        </text>
+    <>
+      <box height={1} flexShrink={0} border={["top"]} borderColor={theme.accent} />
+      <box border={["left"]} borderColor={theme.accent} paddingLeft={1} paddingRight={1} gap={1}>
+        <box flexDirection="row" justifyContent="space-between">
+          <text attributes={TextAttributes.BOLD} fg={theme.text}>
+            Side question
+          </text>
+          <text fg={theme.textMuted} onMouseUp={props.onClose}>
+            esc close
+          </text>
+        </box>
+        <textarea
+          ref={(value: TextareaRenderable) => {
+            input = value
+            setInputTarget(value)
+          }}
+          initialValue={props.question}
+          height={store.started ? 1 : 3}
+          placeholder="Ask a question about the current session"
+          placeholderColor={theme.textMuted}
+          textColor={store.loading || store.complete ? theme.textMuted : theme.text}
+          focusedTextColor={store.loading || store.complete ? theme.textMuted : theme.text}
+          onSubmit={() => {
+            if (store.error) setStore("error", undefined)
+            ask()
+          }}
+        />
         <Show when={store.started}>
-          <text fg={theme.textMuted}>c copy | up/down scroll</text>
+          <scrollbox ref={(r: ScrollBoxRenderable) => (scroll = r)} height={4} scrollbarOptions={{ visible: false }}>
+            <Show when={store.answer} fallback={<text fg={theme.textMuted}>Thinking...</text>}>
+              <text fg={theme.text} wrapMode="word">
+                {store.answer}
+              </text>
+            </Show>
+            <Show when={store.error}>
+              <text fg={theme.error} wrapMode="word">
+                {store.error}
+              </text>
+            </Show>
+          </scrollbox>
         </Show>
+        <box flexDirection="row" justifyContent="space-between">
+          <text fg={theme.textMuted}>
+            {store.loading ? "streaming" : store.complete ? "complete" : store.error ? "failed" : "enter ask"}
+          </text>
+          <Show when={store.started}>
+            <text fg={theme.textMuted}>c copy | up/down scroll</text>
+          </Show>
+        </box>
       </box>
-    </box>
+      <box height={1} flexShrink={0} border={["top"]} borderColor={theme.accent} />
+    </>
   )
 }
