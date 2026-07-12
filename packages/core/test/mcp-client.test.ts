@@ -6,7 +6,8 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { ConfigMCP } from "@slopcode-ai/core/config/mcp"
 import { MCPClient } from "@slopcode-ai/core/mcp/client"
-import { Effect } from "effect"
+import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
+import { Context, Effect, Layer } from "effect"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 import { z } from "zod"
@@ -145,6 +146,86 @@ it.live("connects Streamable HTTP with configured headers and falls back to lega
         yield* Effect.promise(() => sse.close())
         expect(fixture.headers).toContain("Bearer streamable")
         expect(fixture.headers).toContain("Bearer sse")
+      }),
+    ),
+  ),
+)
+
+it.live("fails auth-required before network or store mutation when credentials are unusable", () =>
+  Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((tmp) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          let requests = 0
+          const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => (requests++, new Response(null, { status: 401 })) })
+          return { server, requests: () => requests }
+        }),
+        (fixture) => Effect.sync(() => fixture.server.stop(true)),
+      ).pipe(
+        Effect.flatMap((fixture) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const store = MCPOAuthStore.make({ data: tmp.path })
+              const context = yield* Layer.build(
+                MCPClient.layer.pipe(Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store)))),
+              )
+              const clients = Context.get(context, MCPClient.Service)
+              const error = yield* clients.connect({
+                name: "missing",
+                directory: tmp.path,
+                timeout: 1_000,
+                config: new ConfigMCP.Remote({ type: "remote", url: `${fixture.server.url}mcp` }),
+              }).pipe(Effect.flip)
+              expect(error).toMatchObject({ code: "auth-required" })
+              expect(fixture.requests()).toBe(0)
+              expect(yield* Effect.promise(() => Bun.file(path.join(tmp.path, "mcp-oauth/store.json")).exists())).toBe(false)
+            }),
+          ),
+        ),
+      ),
+    ),
+  ),
+)
+
+it.live("does not leak configured authorization across redirects", () =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const received: Array<string | null> = []
+      const destination = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: (request) => {
+          received.push(request.headers.get("x-secret"))
+          return new Response("missing", { status: 404 })
+        },
+      })
+      const source = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: () => Response.redirect(`${destination.url}mcp`, 302),
+      })
+      return { source, destination, received }
+    }),
+    (fixture) => Effect.sync(() => {
+      fixture.source.stop(true)
+      fixture.destination.stop(true)
+    }),
+  ).pipe(
+    Effect.flatMap((fixture) =>
+      Effect.gen(function* () {
+        yield* (yield* MCPClient.Service).connect({
+          name: "redirect",
+          directory: "/tmp",
+          timeout: 1_000,
+          config: new ConfigMCP.Remote({
+            type: "remote",
+            url: `${fixture.source.url}mcp`,
+            oauth: false,
+            headers: { Authorization: "Bearer private", "X-Secret": "private" },
+          }),
+        }).pipe(Effect.ignore)
+        expect(fixture.received.length).toBeGreaterThan(0)
+        expect(fixture.received.every((value) => value === null)).toBe(true)
       }),
     ),
   ),
