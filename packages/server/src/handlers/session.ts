@@ -148,6 +148,17 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     }),
                   ),
                 ),
+                Effect.catchTag("Session.PromptFormatConflictError", (error) =>
+                  Effect.fail(
+                    new ConflictError({
+                      message: `Prompt format conflicts with the active activity: ${error.messageID}`,
+                      resource: error.messageID,
+                    }),
+                  ),
+                ),
+                Effect.catchTag("Session.StructuredFormatAdmissionError", (error) =>
+                  Effect.fail(new InvalidRequestError({ message: error.message, field: "prompt.format" })),
+                ),
                 Effect.catchTag("SessionRuntime.NotFound", (error) =>
                   Effect.fail(
                     new SessionNotFoundError({

@@ -35,6 +35,9 @@ import { SessionTask } from "./session/task"
 import { SessionCreate } from "./session/create"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SessionHistory } from "./session/history"
+import { SessionFormat } from "./session/format"
+
+export { AdmissionError as StructuredFormatAdmissionError } from "./session/format"
 
 // get project -> project.locations
 //
@@ -101,6 +104,14 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
   messageID: SessionMessage.ID,
 }) {}
 
+export class PromptFormatConflictError extends Schema.TaggedErrorClass<PromptFormatConflictError>()(
+  "Session.PromptFormatConflictError",
+  {
+    sessionID: SessionSchema.ID,
+    messageID: SessionMessage.ID,
+  },
+) {}
+
 export class CompactionConflictError extends Schema.TaggedErrorClass<CompactionConflictError>()(
   "Session.CompactionConflictError",
   {
@@ -158,6 +169,7 @@ export type Error =
   | NotFoundError
   | MessageDecodeError
   | PromptConflictError
+  | PromptFormatConflictError
   | ShellConflictError
   | CompactionConflictError
   | CompactionPromptUnsupportedError
@@ -165,6 +177,7 @@ export type Error =
   | AgentUnavailableError
   | SkillNotFoundError
   | ModelHistoryIncompatibleError
+  | SessionFormat.AdmissionError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
@@ -216,7 +229,10 @@ export interface Interface {
       resume?: boolean
     },
     guard?: Effect.Effect<void, E>,
-  ) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | E>
+  ) => Effect.Effect<
+    SessionInput.Admitted,
+    NotFoundError | PromptConflictError | PromptFormatConflictError | SessionFormat.AdmissionError | E
+  >
   readonly shell: <E = never>(
     input: {
       id?: SessionMessage.ID
@@ -234,7 +250,15 @@ export interface Interface {
       resume?: boolean
     },
     guard?: Effect.Effect<void, E>,
-  ) => Effect.Effect<SessionInput.Admitted, NotFoundError | SkillNotFoundError | PromptConflictError | E>
+  ) => Effect.Effect<
+    SessionInput.Admitted,
+    | NotFoundError
+    | SkillNotFoundError
+    | PromptConflictError
+    | PromptFormatConflictError
+    | SessionFormat.AdmissionError
+    | E
+  >
   readonly compact: <E = never>(
     input: CompactInput,
     guard?: Effect.Effect<void, E>,
@@ -419,6 +443,13 @@ export const layer = Layer.effect(
       prompt: Effect.fn("V2Session.prompt")((input, guard = Effect.void) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
+            const format = yield* SessionFormat.admit(input.prompt.format)
+            const prompt = new Prompt({
+              text: input.prompt.text,
+              ...(input.prompt.files === undefined ? {} : { files: input.prompt.files }),
+              ...(input.prompt.agents === undefined ? {} : { agents: input.prompt.agents }),
+              ...(format.type === "text" && input.prompt.format === undefined ? {} : { format }),
+            })
             yield* result.get(input.sessionID)
             const returnPrompt = Effect.fnUntraced(function* (admitted: SessionInput.Admitted) {
               if (input.resume !== false) yield* enqueueWake(admitted)
@@ -426,7 +457,29 @@ export const layer = Layer.effect(
             }, Effect.uninterruptible)
             const messageID = input.id ?? SessionMessage.ID.create()
             const delivery = input.delivery ?? "steer"
-            const expected = { sessionID: input.sessionID, messageID, prompt: input.prompt, delivery }
+            const expected = { sessionID: input.sessionID, messageID, prompt, delivery }
+            const existing = yield* SessionInput.find(db, messageID)
+            if (!existing && delivery === "steer") {
+              const pending = yield* SessionInput.pendingSteerFormats(db, input.sessionID)
+              const row = yield* db
+                .select({ state: SessionTable.runtime_state })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, input.sessionID))
+                .get()
+                .pipe(Effect.orDie)
+              const active =
+                row?.state === "draining"
+                  ? (yield* store.context(input.sessionID).pipe(Effect.orDie)).findLast(
+                      (message) => message.type === "user",
+                    )?.format
+                  : undefined
+              if (
+                [...pending, ...(active === undefined ? [] : [active])].some(
+                  (format) => !SessionFormat.equivalent(format, prompt.format),
+                )
+              )
+                return yield* new PromptFormatConflictError({ sessionID: input.sessionID, messageID })
+            }
             const admitted = yield* guardedCommit(
               (commit) =>
                 SessionInput.admit(
@@ -435,7 +488,7 @@ export const layer = Layer.effect(
                   {
                     id: messageID,
                     sessionID: input.sessionID,
-                    prompt: input.prompt,
+                    prompt,
                     delivery,
                   },
                   commit,

@@ -133,6 +133,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             text: event.data.prompt.text,
             files: event.data.prompt.files,
             agents: event.data.prompt.agents,
+            format: event.data.prompt.format,
             time: { created: event.data.timestamp },
           }),
         )
@@ -236,6 +237,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.next.step.ended": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          if (draft.structured !== undefined || draft.structuredError !== undefined) return
           draft.time.completed = event.data.timestamp
           draft.finish = event.data.finish
           draft.cost = event.data.cost
@@ -245,11 +247,45 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.next.step.failed": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          if (draft.structured !== undefined || draft.structuredError !== undefined) return
           draft.time.completed = event.data.timestamp
           draft.finish = "error"
           draft.error = event.data.error
         })
       },
+      "session.next.structured.retry": (event) =>
+        updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          draft.time.completed = event.data.timestamp
+          draft.finish = "structured-retry"
+          draft.structuredRetry = {
+            attempt: event.data.attempt,
+            remaining: event.data.remaining,
+            reason: event.data.reason,
+            message: event.data.message,
+          }
+        }),
+      "session.next.structured.result": (event) =>
+        updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          draft.time.completed = event.data.timestamp
+          draft.finish = "stop"
+          draft.structured = event.data.value
+          draft.structuredError = undefined
+          draft.structuredRetry = undefined
+        }),
+      "session.next.structured.failed": (event) =>
+        updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          draft.time.completed = event.data.timestamp
+          draft.finish = "error"
+          draft.structured = undefined
+          draft.structuredRetry = undefined
+          draft.structuredError = {
+            reason: event.data.reason,
+            attempts: event.data.attempts,
+            retryCount: event.data.retryCount,
+            exhausted: event.data.exhausted,
+            message: event.data.message,
+          }
+        }),
       "session.next.text.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(

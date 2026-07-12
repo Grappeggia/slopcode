@@ -453,6 +453,30 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
+  it.effect("rejects conflicting steer formats while preserving independent queued contracts", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const structured = new Prompt({
+        text: "structured",
+        format: { type: "json_schema", schema: { type: "number" }, retry_count: 2 },
+      })
+      const first = yield* session.prompt({ sessionID, prompt: structured, resume: false })
+
+      expect(
+        yield* session
+          .prompt({ sessionID, prompt: new Prompt({ text: "conflicting text" }), resume: false })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "Session.PromptFormatConflictError" })
+      expect(yield* session.prompt({ sessionID, prompt: structured, delivery: "queue", resume: false })).toMatchObject({
+        delivery: "queue",
+        prompt: { format: { type: "json_schema", retry_count: 2 } },
+      })
+      expect(yield* session.prompt({ id: first.id, sessionID, prompt: structured, resume: false })).toEqual(first)
+      expect(yield* admittedCount).toBe(2)
+    }),
+  )
+
   it.effect("returns one recorded message to concurrent exact retries", () =>
     Effect.gen(function* () {
       yield* setup

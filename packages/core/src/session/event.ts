@@ -305,6 +305,73 @@ export namespace Step {
   export type Failed = typeof Failed.Type
 }
 
+export namespace Structured {
+  export const FailureReason = Schema.Literals([
+    "invalid-json",
+    "schema",
+    "value-limit",
+    "stale",
+    "missing-final",
+    "interrupted",
+  ])
+
+  export const Candidate = EventV2.define({
+    type: "session.next.structured.candidate",
+    ...options,
+    schema: {
+      ...Base,
+      rootUserID: SessionMessageID.ID,
+      assistantMessageID: SessionMessageID.ID,
+      attempt: NonNegativeInt,
+      fingerprint: Schema.String,
+      value: Schema.Unknown.pipe(Schema.optional),
+      invalid: Schema.Boolean,
+    },
+  })
+
+  export const Retry = EventV2.define({
+    type: "session.next.structured.retry",
+    ...options,
+    schema: {
+      ...Base,
+      rootUserID: SessionMessageID.ID,
+      assistantMessageID: SessionMessageID.ID,
+      attempt: NonNegativeInt,
+      remaining: NonNegativeInt,
+      reason: FailureReason,
+      message: Schema.String,
+    },
+  })
+
+  export const Result = EventV2.define({
+    type: "session.next.structured.result",
+    ...options,
+    schema: {
+      ...Base,
+      rootUserID: SessionMessageID.ID,
+      assistantMessageID: SessionMessageID.ID,
+      value: Schema.Unknown,
+      attempts: NonNegativeInt,
+      retryCount: NonNegativeInt,
+    },
+  })
+
+  export const Failed = EventV2.define({
+    type: "session.next.structured.failed",
+    ...options,
+    schema: {
+      ...Base,
+      rootUserID: SessionMessageID.ID,
+      assistantMessageID: SessionMessageID.ID,
+      reason: FailureReason,
+      attempts: NonNegativeInt,
+      retryCount: NonNegativeInt,
+      exhausted: Schema.Boolean,
+      message: Schema.String,
+    },
+  })
+}
+
 export namespace Text {
   export const Started = EventV2.define({
     type: "session.next.text.started",
@@ -733,12 +800,16 @@ const DurableDefinitions = [
 ] as const
 const EphemeralDefinitions = [Text.Delta, Tool.Input.Delta, Reasoning.Delta, Compaction.Delta] as const
 
-export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" }).pipe(Schema.toTaggedUnion("type"))
-export type DurableEvent = typeof Durable.Type
-
-export const All = Schema.Union([Created, ...DurableDefinitions, ...EphemeralDefinitions], { mode: "oneOf" }).pipe(
+const StructuredDefinitions = [Structured.Retry, Structured.Result, Structured.Failed] as const
+const DurableBase = Schema.Union(DurableDefinitions, { mode: "oneOf" })
+const StructuredDurable = Schema.Union(StructuredDefinitions, { mode: "oneOf" })
+export const Durable = Schema.Union([DurableBase, StructuredDurable], { mode: "oneOf" }).pipe(
   Schema.toTaggedUnion("type"),
 )
+export type DurableEvent = typeof Durable.Type
+
+const AllBase = Schema.Union([Created, ...DurableDefinitions, ...EphemeralDefinitions], { mode: "oneOf" })
+export const All = Schema.Union([AllBase, StructuredDurable], { mode: "oneOf" }).pipe(Schema.toTaggedUnion("type"))
 export type Event = typeof All.Type
 export type Type = Event["type"]
 

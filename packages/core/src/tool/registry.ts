@@ -9,6 +9,7 @@ import {
 } from "@slopcode-ai/codemode"
 import {
   CustomToolDefinition,
+  ToolDefinition,
   ToolOutput,
   type AnyToolDefinition,
   type ToolCall,
@@ -82,15 +83,27 @@ export interface TurnTools {
   /** Ordered records permit adapters to compose overlays while detecting duplicate names. */
   readonly tools: Readonly<Record<string, AnyTool>> | ReadonlyArray<Readonly<Record<string, AnyTool>>>
   readonly direct?: ReadonlySet<string>
+  readonly final?: {
+    readonly schema: ToolDefinition["inputSchema"]
+    readonly fingerprint: string
+    readonly settle: (input: unknown) => Effect.Effect<FinalSettlement>
+  }
 }
+
+export type FinalSettlement =
+  | { readonly type: "success"; readonly value: unknown }
+  | { readonly type: "failure"; readonly reason: "invalid-json" | "schema" | "value-limit" | "stale" }
 
 export interface Settlement {
   readonly result: ToolResultValue
   readonly output?: ToolOutput
   readonly outputPaths?: ReadonlyArray<string>
+  readonly final?: FinalSettlement
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/ToolRegistry") {}
+
+export const FINAL_OUTPUT = "final_output"
 
 const registryLayer = Layer.effect(
   Service,
@@ -160,6 +173,11 @@ const registryLayer = Layer.effect(
       register: Effect.fn("ToolRegistry.register")(function* (tools, options?: RegistrationOptions) {
         const entries = Object.entries(tools)
         yield* Effect.forEach(entries, ([name]) => validateName(name), { discard: true })
+        if (entries.some(([name]) => name === FINAL_OUTPUT))
+          return yield* new RegistrationError({
+            name: FINAL_OUTPUT,
+            message: `${FINAL_OUTPUT} is reserved for structured Session turns`,
+          })
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
             const token = {}
@@ -223,6 +241,11 @@ const registryLayer = Layer.effect(
           : []
         const overlays = groups.flatMap((tools) => Object.entries(tools))
         yield* Effect.forEach(overlays, ([name]) => validateName(name), { discard: true })
+        if (overlays.some(([name]) => name === FINAL_OUTPUT))
+          return yield* new RegistrationError({
+            name: FINAL_OUTPUT,
+            message: `${FINAL_OUTPUT} is reserved for structured Session turns`,
+          })
         const names = new Set<string>()
         for (const [name, tool] of overlays) {
           if (names.has(name))
@@ -233,9 +256,10 @@ const registryLayer = Layer.effect(
           registrations.set(name, { registration: { identity: {}, tool }, overlay: true })
         }
         const direct = new Set(turn?.direct ?? [])
+        if (turn?.final) direct.add(FINAL_OUTPUT)
         yield* Effect.forEach(direct, validateName, { discard: true })
         for (const name of direct)
-          if (!registrations.has(name))
+          if (!registrations.has(name) && !(name === FINAL_OUTPUT && turn?.final))
             return yield* Effect.fail(new RegistrationError({ name, message: `Unknown direct tool name: ${name}` }))
         const mode = captured.mode ?? "function"
         if (mode !== "function" && (names.has("exec") || direct.has("exec")))
@@ -244,10 +268,29 @@ const registryLayer = Layer.effect(
           )
         for (const [name, entry] of registrations)
           if (whollyDisabled(permission(entry.registration.tool, name), rules)) registrations.delete(name)
-        const definitions = Object.freeze(
-          Array.from(registrations, ([name, entry]) => definition(name, entry.registration.tool, rules)),
-        )
+        const definitions = Object.freeze([
+          ...Array.from(registrations, ([name, entry]) => definition(name, entry.registration.tool, rules)),
+          ...(turn?.final
+            ? [
+                Object.freeze(
+                  new ToolDefinition({
+                    name: FINAL_OUTPUT,
+                    description:
+                      "Return the final schema-valid response exactly once after all other work is complete.",
+                    inputSchema: turn.final.schema,
+                    metadata: { fingerprint: turn.final.fingerprint },
+                  }),
+                ),
+              ]
+            : []),
+        ])
         const settleMaterialized = (input: ExecuteInput): Effect.Effect<Settlement, ToolOutputStore.Error> => {
+          if (input.call.name === FINAL_OUTPUT)
+            return turn?.final
+              ? turn.final
+                  .settle(input.call.input)
+                  .pipe(Effect.map((final) => ({ final, result: { type: "text" as const, value: "structured" } })))
+              : Effect.succeed({ result: { type: "error", value: `Unknown tool: ${FINAL_OUTPUT}` } })
           const entry = registrations.get(input.call.name)
           if (entry?.overlay) return settleWith(input, entry.registration, captured, rules)
           if (entry) {

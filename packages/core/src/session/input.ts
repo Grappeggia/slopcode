@@ -210,6 +210,25 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   return row !== undefined
 })
 
+export const pendingSteerFormats = Effect.fn("SessionInput.pendingSteerFormats")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const rows = yield* db
+    .select({ prompt: SessionInputTable.prompt })
+    .from(SessionInputTable)
+    .where(
+      and(
+        eq(SessionInputTable.session_id, sessionID),
+        isNull(SessionInputTable.promoted_seq),
+        eq(SessionInputTable.delivery, "steer"),
+      ),
+    )
+    .all()
+    .pipe(Effect.orDie)
+  return rows.map((row) => decodePrompt(row.prompt).format)
+})
+
 export type ShellRequest = {
   readonly admittedSeq: number
   readonly id: SessionMessage.ID
@@ -885,8 +904,7 @@ export const equivalent = (
 ) => input.delivery === expected.delivery && matchesPrompt(input, expected)
 
 const matchesPrompt = (input: Admitted, expected: { readonly sessionID: SessionSchema.ID; readonly prompt: Prompt }) =>
-  input.sessionID === expected.sessionID &&
-  JSON.stringify(encodePrompt(input.prompt)) === JSON.stringify(encodePrompt(expected.prompt))
+  input.sessionID === expected.sessionID && Prompt.equivalence(input.prompt, expected.prompt)
 
 export const guardReservedID = Effect.fn("SessionInput.guardReservedID")(function* (
   db: DatabaseService,
@@ -1073,5 +1091,6 @@ const toMessage = (input: Admitted) =>
     text: input.prompt.text,
     files: input.prompt.files,
     agents: input.prompt.agents,
+    format: input.prompt.format,
     time: { created: input.timeCreated },
   })

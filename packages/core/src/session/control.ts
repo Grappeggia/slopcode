@@ -10,6 +10,7 @@ import { SessionRuntime } from "./runtime"
 import { SessionRunner } from "./runner"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
+import { SessionFormat } from "./format"
 
 type PromptInput = {
   readonly id?: SessionMessage.ID
@@ -52,11 +53,19 @@ type ShellInput = {
 }
 
 export interface Interface {
+  readonly messages: (sessionID: SessionSchema.ID) => Effect.Effect<{
+    readonly info: SessionSchema.Info
+    readonly messages: SessionMessage.Message[]
+  }, SessionV2.NotFoundError | SessionV2.MessageDecodeError>
   readonly prompt: (
     input: PromptInput,
   ) => Effect.Effect<
     SessionInput.Admitted,
-    SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.PromptConflictError
+    | SessionRuntime.Error
+    | SessionV2.NotFoundError
+    | SessionV2.PromptConflictError
+    | SessionV2.PromptFormatConflictError
+    | SessionFormat.AdmissionError
   >
   readonly resume: (
     sessionID: SessionSchema.ID,
@@ -95,7 +104,12 @@ export interface Interface {
     input: SkillInput,
   ) => Effect.Effect<
     SessionInput.Admitted,
-    SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.SkillNotFoundError | SessionV2.PromptConflictError
+    | SessionRuntime.Error
+    | SessionV2.NotFoundError
+    | SessionV2.SkillNotFoundError
+    | SessionV2.PromptConflictError
+    | SessionV2.PromptFormatConflictError
+    | SessionFormat.AdmissionError
   >
 }
 
@@ -110,6 +124,12 @@ export const layer = Layer.effect(
       runtime.assert({ sessionID, owner: "v2", state: "ready", epoch })
 
     return Service.of({
+      messages: Effect.fn("SessionControl.messages")(function* (sessionID) {
+        return {
+          info: yield* sessions.get(sessionID),
+          messages: yield* sessions.messages({ sessionID, order: "asc" }),
+        }
+      }),
       prompt: Effect.fn("SessionControl.prompt")(function* (input) {
         const info = yield* assertV2(input.sessionID)
         return yield* sessions.prompt(input, assertV2(input.sessionID, info.epoch).pipe(Effect.asVoid))

@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema"
+import { SessionFormat } from "./format"
 
 export class Source extends Schema.Class<Source>("Prompt.Source")({
   start: Schema.Finite,
@@ -33,14 +34,20 @@ export class Prompt extends Schema.Class<Prompt>("Prompt")({
   text: Schema.String,
   files: Schema.Array(FileAttachment).pipe(Schema.optional),
   agents: Schema.Array(AgentAttachment).pipe(Schema.optional),
+  format: SessionFormat.Format.pipe(Schema.optional),
 }) {
-  static readonly equivalence = Schema.toEquivalence(Prompt)
+  static readonly equivalence = (left: Prompt, right: Prompt) =>
+    left.text === right.text &&
+    Schema.toEquivalence(Schema.Array(FileAttachment))(left.files ?? [], right.files ?? []) &&
+    Schema.toEquivalence(Schema.Array(AgentAttachment))(left.agents ?? [], right.agents ?? []) &&
+    SessionFormat.equivalent(left.format, right.format)
 
-  static fromUserMessage(input: Pick<Prompt, "text" | "files" | "agents">) {
+  static fromUserMessage(input: Pick<Prompt, "text" | "files" | "agents" | "format">) {
     return new Prompt({
       text: input.text,
       ...(input.files === undefined ? {} : { files: input.files }),
       ...(input.agents === undefined ? {} : { agents: input.agents }),
+      ...(input.format === undefined ? {} : { format: input.format }),
     })
   }
 }

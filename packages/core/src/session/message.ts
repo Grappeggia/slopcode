@@ -36,6 +36,7 @@ export class User extends Schema.Class<User>("Session.Message.User")({
   text: Prompt.fields.text,
   files: Prompt.fields.files,
   agents: Prompt.fields.agents,
+  format: Prompt.fields.format,
   type: Schema.Literal("user"),
   time: Schema.Struct({
     created: V2Schema.DateTimeUtcFromMillis,
@@ -167,6 +168,20 @@ export class Assistant extends Schema.Class<Assistant>("Session.Message.Assistan
     }),
   }).pipe(Schema.optional),
   error: SessionEvent.Step.Failed.data.fields.error.pipe(Schema.optional),
+  structured: Schema.Unknown.pipe(Schema.optional),
+  structuredError: Schema.Struct({
+    reason: SessionEvent.Structured.FailureReason,
+    attempts: Schema.Number,
+    retryCount: Schema.Number,
+    exhausted: Schema.Boolean,
+    message: Schema.String,
+  }).pipe(Schema.optional),
+  structuredRetry: Schema.Struct({
+    attempt: Schema.Number,
+    remaining: Schema.Number,
+    reason: SessionEvent.Structured.FailureReason,
+    message: Schema.String,
+  }).pipe(Schema.optional),
   time: Schema.Struct({
     created: V2Schema.DateTimeUtcFromMillis,
     completed: V2Schema.DateTimeUtcFromMillis.pipe(Schema.optional),

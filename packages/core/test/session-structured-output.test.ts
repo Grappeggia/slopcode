@@ -1,9 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Exit } from "effect"
 import { SessionFormat } from "@slopcode-ai/core/session/format"
-import { testEffect } from "./lib/effect"
-
-const it = testEffect()
+import { it } from "./lib/effect"
 
 describe("SessionFormat admission", () => {
   it.effect("normalizes text and the structured retry budget", () =>

@@ -25,6 +25,7 @@ import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
+import { SessionFormat } from "@slopcode-ai/core/session/format"
 import { FileAttachment, Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
@@ -717,6 +718,164 @@ const catalogModel = (
     limit: { context: 1_050_000, input: 922_000, output: 128_000 },
   })
 describe("SessionRunnerLLM", () => {
+  it.effect("terminates a structured turn through the reserved direct final tool", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      responses = [
+        [
+          LLMEvent.textStart({ id: "ignored" }),
+          LLMEvent.textDelta({ id: "ignored", text: "must not project" }),
+          LLMEvent.textEnd({ id: "ignored" }),
+          LLMEvent.toolCall({ id: "final-1", name: "final_output", input: { answer: 42 } }),
+          LLMEvent.textStart({ id: "late" }),
+          LLMEvent.textDelta({ id: "late", text: "late text" }),
+        ],
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Return the answer",
+          format: {
+            type: "json_schema",
+            schema: { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] },
+            retry_count: 2,
+          },
+        }),
+        resume: false,
+      })
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.toolChoice).toMatchObject({ type: "required" })
+      expect(requests[0]?.responseFormat).toBeUndefined()
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["echo", "defect", "final_output"])
+      const messages = yield* session.messages({ sessionID, order: "asc" })
+      const assistant = messages.findLast((message) => message.type === "assistant")
+      expect(assistant).toMatchObject({ structured: { answer: 42 }, finish: "stop", content: [] })
+      expect(JSON.stringify(messages)).not.toContain("must not project")
+      expect(JSON.stringify(messages)).not.toContain("late text")
+
+      requests.length = 0
+      responses = [fragmentFixture("text", "text-after-structured", ["Plain follow-up"]).completeEvents]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Reply normally" }), resume: false })
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.tools.map((tool) => tool.name)).not.toContain("final_output")
+      expect(requests[0]?.toolChoice).toBeUndefined()
+    }),
+  )
+
+  it.effect("uses exactly the configured additional structured attempts", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      responses = [
+        [LLMEvent.toolCall({ id: "final-bad", name: "final_output", input: { answer: "wrong" } })],
+        [LLMEvent.toolCall({ id: "final-good", name: "final_output", input: { answer: 7 } })],
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Return a number",
+          format: {
+            type: "json_schema",
+            schema: { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] },
+            retry_count: 1,
+          },
+        }),
+        resume: false,
+      })
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.messages.flatMap((message) => message.content).some((part) => part.type === "tool-call")).toBe(
+        true,
+      )
+      const assistants = (yield* session.messages({ sessionID, order: "asc" })).filter(
+        (message) => message.type === "assistant",
+      )
+      expect(assistants[0]).toMatchObject({ structuredRetry: { attempt: 1, remaining: 1, reason: "schema" } })
+      expect(assistants[1]).toMatchObject({ structured: { answer: 7 } })
+    }),
+  )
+
+  it.effect("persists exhaustion without an extra provider attempt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      responses = [[]]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Return a number",
+          format: { type: "json_schema", schema: { type: "number" }, retry_count: 0 },
+        }),
+        resume: false,
+      })
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect((yield* session.messages({ sessionID })).find((message) => message.type === "assistant")).toMatchObject({
+        structuredError: { reason: "missing-final", attempts: 1, retryCount: 0, exhausted: true },
+      })
+    }),
+  )
+
+  it.effect("recovers a durable final candidate before another provider request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const session = yield* SessionV2.Service
+      const format = yield* SessionFormat.admit({
+        type: "json_schema",
+        schema: { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] },
+        retry_count: 2,
+      })
+      if (format.type !== "json_schema") throw new Error("expected structured format")
+      const admitted = yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Recover candidate", format }),
+        resume: false,
+      })
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const assistantMessageID = SessionMessage.ID.make("msg_structured_candidate")
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        assistantMessageID,
+        timestamp: yield* DateTime.now,
+        agent: "build",
+        model: { providerID: ProviderV2.ID.make("fake"), id: ModelV2.ID.make("fake-model") },
+      })
+      yield* events.publish(
+        SessionEvent.Structured.Candidate,
+        {
+          sessionID,
+          rootUserID: admitted.id,
+          assistantMessageID,
+          timestamp: yield* DateTime.now,
+          attempt: 1,
+          fingerprint: SessionFormat.fingerprint(format),
+          value: { answer: 9 },
+          invalid: false,
+        },
+        { id: SessionFormat.candidateID(sessionID, admitted.id, 1) },
+      )
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toEqual([])
+      expect(yield* session.message({ sessionID, messageID: assistantMessageID })).toMatchObject({
+        structured: { answer: 9 },
+      })
+    }),
+  )
+
   it.effect("advertises and executes a globally attached application tool", () =>
     Effect.gen(function* () {
       yield* setup

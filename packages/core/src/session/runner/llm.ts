@@ -13,6 +13,7 @@ import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
+import { EventTable } from "../../event/sql"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
 import { ModelHarness } from "../../model-harness"
@@ -26,6 +27,7 @@ import { SkillGuidance } from "../../skill/guidance"
 import { ReferenceGuidance } from "../../reference/guidance"
 import { ShellCommand } from "../../shell"
 import { ToolRegistry } from "../../tool/registry"
+import { FINAL_OUTPUT } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
 import { Wildcard } from "../../util/wildcard"
 import { SessionContextEpoch } from "../context-epoch"
@@ -33,10 +35,13 @@ import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionFormat } from "../format"
+import { SessionMessage } from "../message"
 import { SessionRuntime } from "../runtime"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionTask } from "../task"
+import { eq } from "drizzle-orm"
 import { type RunError, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
@@ -265,6 +270,8 @@ export const layer = Layer.effect(
         super()
       }
     }
+
+    class StructuredSettled extends Error {}
 
     const rebuildPreparedTurn = (promotion?: SessionInput.Delivery) =>
       new TurnTransitionError({ _tag: "RebuildPreparedTurn", promotion })
@@ -516,6 +523,37 @@ export const layer = Layer.effect(
       const model = resolved.model
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const latest = context.findLast((message): message is SessionMessage.User => message.type === "user")
+      const boundary = context.findLastIndex(
+        (message) =>
+          message.type === "assistant" && message.time.completed !== undefined && message.structuredRetry === undefined,
+      )
+      const root =
+        latest?.format?.type === "json_schema"
+          ? context
+              .slice(boundary + 1)
+              .find(
+                (message): message is SessionMessage.User =>
+                  message.type === "user" && SessionFormat.equivalent(message.format, latest.format),
+              )
+          : undefined
+      const format = root?.format?.type === "json_schema" ? root.format : undefined
+      const rootIndex = root ? context.lastIndexOf(root) : -1
+      const retries =
+        rootIndex < 0
+          ? 0
+          : context.slice(rootIndex + 1).filter((message) => message.type === "assistant" && message.structuredRetry)
+              .length
+      const attempt = retries + 1
+      if (
+        format &&
+        context
+          .slice(rootIndex + 1)
+          .some(
+            (message) => message.type === "assistant" && (message.structured !== undefined || message.structuredError),
+          )
+      )
+        return false
       const instructions = resolved.harness ? yield* ModelHarness.instructions(resolved.harness) : undefined
       const permissions = [...(agent.info?.permissions ?? []), ...((yield* store.task(session.id))?.ceiling ?? [])]
       const plan = resolved.harness
@@ -526,6 +564,23 @@ export const layer = Layer.effect(
             multiAgent: resolved.harness.multiAgent,
           }
         : {}
+      const final = format
+        ? {
+            schema: SessionFormat.toolSchema(format),
+            fingerprint: SessionFormat.fingerprint(format),
+            settle: (value: unknown) =>
+              SessionFormat.safeValue(value).pipe(
+                Effect.map((value) =>
+                  SessionFormat.validate(format, value)
+                    ? ({ type: "success" as const, value })
+                    : ({ type: "failure" as const, reason: "schema" as const }),
+                ),
+                Effect.catch(() =>
+                  Effect.succeed({ type: "failure" as const, reason: "value-limit" as const }),
+                ),
+              ),
+          }
+        : undefined
       const toolMaterialization = yield* tools.materialize(permissions, {
         ...plan,
         ...(resolved.harness
@@ -543,7 +598,7 @@ export const layer = Layer.effect(
                 }),
             }
           : {}),
-      })
+      }, final ? { tools: {}, direct: new Set([FINAL_OUTPUT]), final } : { tools: {} }).pipe(Effect.orDie)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
         model,
@@ -558,11 +613,19 @@ export const layer = Layer.effect(
               }
             : { promptCacheKey },
         ),
-        system: [instructions, agent.info?.system, system.baseline]
+        system: [
+          instructions,
+          agent.info?.system,
+          system.baseline,
+          format
+            ? "The user requires structured output. Complete any necessary tool work first, then call final_output exactly once. Do not provide the final answer as ordinary text."
+            : undefined,
+        ]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
         messages: toLLMMessages(context, model),
         tools: toolMaterialization.definitions,
+        toolChoice: format ? "required" : undefined,
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(rebuildPreparedTurn())
@@ -574,6 +637,7 @@ export const layer = Layer.effect(
           providerID: ProviderV2.ID.make(model.provider),
           ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
         },
+        structured: format !== undefined,
       })
       const withPublication = Semaphore.makeUnsafe(1).withPermit
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
@@ -581,6 +645,132 @@ export const layer = Layer.effect(
           Effect.andThen(withPublication(publisher.publish(event, outputPaths))),
         )
       let overflowFailure: ProviderErrorEvent | undefined
+      let structuredSettled = false
+      let structuredValid = false
+      const terminalCommit = (candidate: EventV2.ID, fingerprint: string) =>
+        Effect.gen(function* () {
+          const [recorded, terminal] = yield* Effect.all([
+            db.select().from(EventTable).where(eq(EventTable.id, candidate)).get().pipe(Effect.orDie),
+            db
+              .select({ id: EventTable.id })
+              .from(EventTable)
+              .where(eq(EventTable.id, SessionFormat.terminalID(session.id, root!.id)))
+              .get()
+              .pipe(Effect.orDie),
+          ])
+          if (
+            !recorded ||
+            terminal ||
+            recorded.type !== `${SessionEvent.Structured.Candidate.type}.1` ||
+            !Object.hasOwn(recorded.data, "fingerprint") ||
+            recorded.data.fingerprint !== fingerprint
+          )
+            return yield* Effect.die("Structured terminal commit lost")
+        })
+      const settleStructured = Effect.fnUntraced(function* (
+        assistantMessageID: SessionMessage.ID,
+        reason: typeof SessionEvent.Structured.FailureReason.Type,
+      ) {
+        if (!format || !root) return
+        const remaining = Math.max(0, format.retry_count - attempt + 1)
+        const message =
+          reason === "missing-final"
+            ? "Call final_output exactly once with a value matching the requested schema."
+            : "Call final_output again with a valid value matching the requested schema."
+        if (remaining > 0) {
+          yield* events.publish(
+            SessionEvent.Structured.Retry,
+            {
+              sessionID: session.id,
+              timestamp: yield* DateTime.now,
+              rootUserID: root.id,
+              assistantMessageID,
+              attempt,
+              remaining,
+              reason,
+              message,
+            },
+            { id: SessionFormat.retryID(session.id, root.id, attempt) },
+          )
+          structuredSettled = true
+          return
+        }
+        yield* events.publish(
+          SessionEvent.Structured.Failed,
+          {
+            sessionID: session.id,
+            timestamp: yield* DateTime.now,
+            rootUserID: root.id,
+            assistantMessageID,
+            reason,
+            attempts: attempt,
+            retryCount: format.retry_count,
+            exhausted: true,
+            message: "Structured output attempts were exhausted without a valid final value.",
+          },
+          {
+            id: SessionFormat.terminalID(session.id, root.id),
+            ...(reason === "missing-final"
+              ? {}
+              : {
+                  commit: () =>
+                    terminalCommit(
+                      SessionFormat.candidateID(session.id, root.id, attempt),
+                      SessionFormat.fingerprint(format),
+                    ),
+                }),
+          },
+        )
+        structuredSettled = true
+      })
+      if (format && root) {
+        const terminal = yield* db
+          .select({ id: EventTable.id })
+          .from(EventTable)
+          .where(eq(EventTable.id, SessionFormat.terminalID(session.id, root.id)))
+          .get()
+          .pipe(Effect.orDie)
+        if (terminal) return false
+        const candidateID = SessionFormat.candidateID(session.id, root.id, attempt)
+        const recorded = yield* db.select().from(EventTable).where(eq(EventTable.id, candidateID)).get().pipe(Effect.orDie)
+        if (recorded?.type === `${SessionEvent.Structured.Candidate.type}.1`) {
+          const candidate = yield* Schema.decodeUnknownEffect(SessionEvent.Structured.Candidate.data)(recorded.data).pipe(
+            Effect.orDie,
+          )
+          const value =
+            !candidate.invalid && candidate.fingerprint === SessionFormat.fingerprint(format)
+              ? yield* SessionFormat.safeValue(candidate.value).pipe(Effect.option)
+              : Option.none()
+          if (Option.isSome(value) && SessionFormat.validate(format, value.value)) {
+            yield* events.publish(
+              SessionEvent.Structured.Result,
+              {
+                sessionID: session.id,
+                timestamp: yield* DateTime.now,
+                rootUserID: root.id,
+                assistantMessageID: candidate.assistantMessageID,
+                value: value.value,
+                attempts: attempt,
+                retryCount: format.retry_count,
+              },
+              {
+                id: SessionFormat.terminalID(session.id, root.id),
+                commit: () => terminalCommit(candidateID, candidate.fingerprint),
+              },
+            )
+            return false
+          }
+          yield* settleStructured(
+            candidate.assistantMessageID,
+            candidate.fingerprint === SessionFormat.fingerprint(format)
+              ? candidate.invalid
+                ? "value-limit"
+                : "schema"
+              : "stale",
+          )
+          return attempt <= format.retry_count
+        }
+      }
       if (!(yield* SessionContextEpoch.current(db, session.id, agent.id, system.revision)))
         return yield* Effect.die(rebuildPreparedTurn())
       if (beforeDispatch) yield* beforeDispatch
@@ -588,6 +778,61 @@ export const layer = Layer.effect(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
             if (overflowFailure || publisher.hasProviderError()) return
+            if (format && root && event.type === "tool-call" && event.name === FINAL_OUTPUT) {
+              const assistantMessageID = yield* publisher.startAssistant()
+              const candidate = yield* SessionFormat.safeValue(event.input).pipe(Effect.option)
+              yield* events.publish(
+                SessionEvent.Structured.Candidate,
+                {
+                  sessionID: session.id,
+                  timestamp: yield* DateTime.now,
+                  rootUserID: root.id,
+                  assistantMessageID,
+                  attempt,
+                  fingerprint: SessionFormat.fingerprint(format),
+                  ...(Option.isSome(candidate) ? { value: candidate.value } : {}),
+                  invalid: Option.isNone(candidate),
+                },
+                { id: SessionFormat.candidateID(session.id, root.id, attempt) },
+              )
+              const settlement = yield* toolMaterialization.settle({
+                sessionID: session.id,
+                agent: agent.id,
+                assistantMessageID,
+                call: event,
+              })
+              if (settlement.final?.type === "success") {
+                yield* FiberSet.clear(toolFibers)
+                yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
+                yield* events.publish(
+                  SessionEvent.Structured.Result,
+                  {
+                    sessionID: session.id,
+                    timestamp: yield* DateTime.now,
+                    rootUserID: root.id,
+                    assistantMessageID,
+                    value: settlement.final.value,
+                    attempts: attempt,
+                    retryCount: format.retry_count,
+                  },
+                  {
+                    id: SessionFormat.terminalID(session.id, root.id),
+                    commit: () =>
+                      terminalCommit(
+                        SessionFormat.candidateID(session.id, root.id, attempt),
+                        SessionFormat.fingerprint(format),
+                      ),
+                  },
+                )
+                structuredValid = true
+              } else {
+                const reason =
+                  settlement.final?.type === "failure" ? settlement.final.reason : "stale"
+                yield* settleStructured(assistantMessageID, reason)
+              }
+              structuredSettled = true
+              return yield* Effect.die(new StructuredSettled())
+            }
             if (LLMEvent.is.providerError(event)) {
               if (isContextOverflowFailure(event) && !publisher.hasAssistantStarted()) {
                 overflowFailure = event
@@ -694,6 +939,12 @@ export const layer = Layer.effect(
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const stream = yield* restore(providerStream).pipe(Effect.exit)
+          const finalStop =
+            stream._tag === "Failure" &&
+            stream.cause.reasons.some(
+              (reason) => Cause.isDieReason(reason) && reason.defect instanceof StructuredSettled,
+            )
+          if (finalStop) return !structuredValid && format !== undefined && attempt <= format.retry_count
           const failure =
             stream._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(stream.cause)) : undefined
           if (
@@ -739,9 +990,11 @@ export const layer = Layer.effect(
             yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
           if (stream._tag === "Success" && !publisher.hasProviderError())
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
+          if (stream._tag === "Success" && format && !structuredSettled)
+            yield* settleStructured(yield* publisher.startAssistant(), "missing-final")
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure") return yield* Effect.failCause(settled.cause)
-          return !publisher.hasProviderError() && needsContinuation
+          return !publisher.hasProviderError() && (needsContinuation || (format !== undefined && attempt <= format.retry_count))
         }),
       )
     }, Effect.scoped)

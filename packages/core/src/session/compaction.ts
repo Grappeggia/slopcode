@@ -94,7 +94,13 @@ const serialize = (message: SessionMessage.Message) => {
     return [`[User]: ${message.text}`, ...files].join("\n")
   }
   if (message.type === "assistant") {
-    return message.content
+    const semantic =
+      message.structured !== undefined
+        ? `[Assistant structured]: ${JSON.stringify(message.structured)}`
+        : message.structuredError
+          ? `[Assistant structured error]: ${message.structuredError.message}`
+          : ""
+    return [semantic, message.content
       .flatMap((part) => {
         if (part.type === "text") return [`[Assistant]: ${part.text}`]
         if (part.type === "reasoning") return part.text ? [`[Assistant reasoning]: ${part.text}`] : []
@@ -108,7 +114,7 @@ const serialize = (message: SessionMessage.Message) => {
           return [`[Assistant tool call]: ${part.name}(${input})`, `[Tool error]: ${part.state.error.message}`]
         return [`[Assistant tool call]: ${part.name}(${input})`]
       })
-      .join("\n")
+      .join("\n")].filter(Boolean).join("\n")
   }
   if (message.type === "system") return `[System update]: ${message.text}`
   if (message.type === "synthetic") return `[Synthetic context]: ${message.text}`
