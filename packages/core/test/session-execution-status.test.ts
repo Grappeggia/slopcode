@@ -52,8 +52,8 @@ describe("SessionExecutionStatus", () => {
       expect(duplicate.seq).toBe(first.seq)
       expect(yield* service.get(sessionID)).toMatchObject({ type: "busy", ...activity, phase: "preparing", epoch: 1 })
 
-      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1 })
-      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1 })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint: "a".repeat(64) })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint: "a".repeat(64) })
       yield* service.retry({
         ...fence,
         ...activity,
@@ -67,6 +67,7 @@ describe("SessionExecutionStatus", () => {
         code: "server",
         action: "retry-provider",
         message: "Provider unavailable",
+        fingerprint: "a".repeat(64),
       })
       expect(yield* service.get(sessionID)).toMatchObject({
         type: "retrying",
@@ -76,8 +77,8 @@ describe("SessionExecutionStatus", () => {
         maxAttempts: 5,
         nextAt: 12_000,
       })
-      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2 })
-      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2 })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2, fingerprint: "a".repeat(64), now: 12_000 })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2, fingerprint: "a".repeat(64) })
       yield* service.succeed({ ...fence, ...activity })
       expect(yield* service.get(sessionID)).toEqual({ type: "idle" })
     }),
@@ -192,6 +193,7 @@ describe("SessionExecutionStatus", () => {
         action: "retry-provider",
         message: "safe",
         recovery: "retry-provider",
+        fingerprint: "a".repeat(64),
       })
 
       const claims = yield* Effect.all(
@@ -202,11 +204,81 @@ describe("SessionExecutionStatus", () => {
           requestAttempt: 1,
           providerAttempt: 2,
           recovery: "retry-provider",
+          fingerprint: "a".repeat(64),
+          now: 0,
         })),
         { concurrency: "unbounded" },
       )
 
       expect(claims.filter((claim) => claim.claimed)).toHaveLength(1)
+    }),
+  )
+
+  it.effect("rejects early and mismatched retry claims without changing durable state", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const service = yield* SessionExecutionStatus.Service
+      const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+      const activity = { activityID: rootID, rootID, activity: "prompt" as const }
+      const fingerprint = "b".repeat(64)
+      yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      yield* service.retry({
+        ...fence,
+        ...activity,
+        phase: "provider",
+        requestAttempt: 1,
+        providerAttempt: 2,
+        attempt: 1,
+        maxAttempts: 5,
+        nextAt: 10_000,
+        code: "server",
+        action: "retry-provider",
+        message: "safe",
+        recovery: "retry-provider",
+        fingerprint,
+      })
+
+      for (const input of [
+        { requestAttempt: 1, providerAttempt: 2, fingerprint, now: 9_999 },
+        { requestAttempt: 2, providerAttempt: 2, fingerprint, now: 10_000 },
+        { requestAttempt: 1, providerAttempt: 3, fingerprint, now: 10_000 },
+        { requestAttempt: 1, providerAttempt: 2, fingerprint: "c".repeat(64), now: 10_000 },
+      ]) {
+        const exit = yield* service.dispatch({
+          ...fence,
+          ...activity,
+          phase: "provider",
+          recovery: "retry-provider",
+          ...input,
+        }).pipe(Effect.exit)
+        expect(exit._tag).toBe("Failure")
+        expect(yield* service.get(sessionID)).toMatchObject({ type: "retrying", nextAt: 10_000, fingerprint })
+      }
+    }),
+  )
+
+  it.effect("normalizes and caps messages at the status service boundary", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const service = yield* SessionExecutionStatus.Service
+      const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+      const activity = { activityID: rootID, rootID, activity: "prompt" as const }
+      const secret = "boundary-secret-canary"
+      yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      yield* service.fail({
+        ...fence,
+        ...activity,
+        phase: "settling",
+        code: "runner-failure",
+        message: `Basic ${secret} api_key = "${secret}" credential=${secret} ${"x".repeat(900)}`,
+        resultingEpoch: 2,
+      })
+      const terminal = yield* service.get(sessionID)
+      expect(terminal).toMatchObject({ type: "terminal-failure" })
+      expect(JSON.stringify(terminal)).not.toContain(secret)
+      expect(new TextEncoder().encode("message" in terminal ? terminal.message : "").byteLength).toBeLessThanOrEqual(512)
     }),
   )
 })

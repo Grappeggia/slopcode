@@ -6478,6 +6478,52 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  for (const item of [
+    { name: "nonretryable", event: LLMEvent.providerError({ message: "invalid provider response", retryable: false }), code: "provider-nonretryable" },
+    { name: "retry-exhausted", event: LLMEvent.providerError({ message: "provider overloaded", retryable: true }), code: "provider-exhausted" },
+  ] as const) {
+    it.effect(`terminal-fails waiters for a live ${item.name} provider-error stream`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const executionStatus = yield* SessionExecutionStatus.Service
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: item.name }), resume: false })
+        responses = item.name === "retry-exhausted" ? Array.from({ length: 6 }, () => [item.event]) : [[item.event]]
+
+        const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+        if (item.name === "retry-exhausted") yield* TestClock.adjust(60_000)
+        expect((yield* Fiber.await(run))._tag).toBe("Failure")
+        expect(requests).toHaveLength(item.name === "retry-exhausted" ? 6 : 1)
+        expect(yield* executionStatus.get(sessionID)).toMatchObject({ type: "terminal-failure", code: item.code })
+        expect(yield* session.wait(sessionID).pipe(Effect.flip)).toMatchObject({ code: item.code })
+      }),
+    )
+  }
+
+  it.effect("persists organic retry recovery identity before the retry deadline", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const executionStatus = yield* SessionExecutionStatus.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Organic retry identity" }), resume: false })
+      streamFailure = new LLMError({
+        module: "test",
+        method: "stream",
+        reason: new RateLimitReason({ message: "later", retryAfterMs: 1_000 }),
+      })
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while ((yield* executionStatus.get(sessionID)).type !== "retrying") yield* Effect.yieldNow
+      expect(yield* executionStatus.get(sessionID)).toMatchObject({
+        type: "retrying",
+        recovery: "retry-provider",
+        nextAt: 1_000,
+        fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      })
+      yield* Fiber.interrupt(run)
+    }),
+  )
+
   it.effect("reconstructs and claims one explicitly safe provider retry after restart", () =>
     Effect.gen(function* () {
       yield* setup

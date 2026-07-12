@@ -68,6 +68,14 @@ describe("SessionProviderRetry", () => {
       })),
     )
     expect(JSON.stringify(forbidden)).not.toMatch(/secret-(?:message|header|response|body|request-id|metadata)|secret\.example/)
+    for (const value of [
+      `Basic ${secret}`,
+      `Bearer ${secret}`,
+      `api-key: "${secret}"`,
+      `api_key = '${secret}'`,
+      `credential=${secret} with spaces`,
+      `{"authorization":"${secret}"}`,
+    ]) expect(SessionProviderRetry.sanitize(value)).not.toContain(secret)
   })
 
   test("allows exactly five additional provider attempts", () => {
