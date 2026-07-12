@@ -515,3 +515,38 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 - `7f1d1133e5` `test(core): seed exact OAuth recovery compatibility`
 - `6816ec3b15` `test(core): stabilize OAuth expiry races`
 - Final report evidence: the following `docs:` commit.
+
+## Retryable Startup Claim Settlement
+
+### Retryable Claim RED Evidence
+
+- Rejected startup-claim command: `0 pass`, `1 fail`, `1 expect() call`. Recovery correctly rejected incompatible V1 credentials, but `cancelTarget` then created an empty V2 destination bucket. A later compatible startup could no longer claim the unchanged V1 source, so rejection was not retryable.
+- `a771894c32` committed the failing startup/shutdown/retry contract before the production correction.
+
+### Retryable Claim Repair
+
+- `MCPOAuthStore.cancelTarget` now performs no write when the exact destination bucket is absent. Existing stale buckets retain their prior reset and cancellation behavior.
+- `MCPOAuth.recover` returns immediately when a rejected legacy claim leaves no destination entry, rather than materializing an empty target through reset cleanup.
+- The V1 source remains byte-for-byte unchanged after rejection and can be claimed by a later exact compatible startup. No compatibility check, stale-bucket cleanup, or ordinary cancellation behavior was weakened.
+
+### Retryable Claim Evidence
+
+- Rejected-startup then compatible-connect subset: `1 pass`, `0 fail`, `6 expect() calls`.
+- Existing stale endpoint reset subset: `1 pass`, `0 fail`, `2 expect() calls`.
+- A full parallel verification run exposed scheduler dependence in the cross-service observer's fixed 30 ms port-bind assertion. `5a4522e71d` replaced only that fixed delay with a 10 ms bind retry bounded to one second; durable state assertions remain immediate, and failure still surfaces the original bind error at the bound.
+- Final focused 13-file command: `140 pass`, `0 fail`, `586 expect() calls`.
+- Final full Core: `1428 pass`, `0 fail`, `4383 expect() calls`, 153 files.
+- Full CodeMode: `254 pass`, `0 fail`, `744 expect() calls`, 7 files.
+- V1 MCP HTTP/CLI evidence: `8 pass`, `0 fail`, `32 expect() calls`, 3 files.
+- Core typecheck: exit 0, `tsgo --noEmit`.
+- Server typecheck: exit 0, `tsgo --noEmit`.
+- Frozen install: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+- `git diff --check`: pass.
+- SlopCode typecheck remains red only at the unrelated existing diagnostics: `src/session/processor.ts(495,17)` assigns `Record<string, unknown>` to `string`; `src/session/prompt.ts(1382,39)` omits required `actualState` from `SessionRuntime.Mismatch`.
+
+### Retryable Claim Commits
+
+- `a771894c32` `test(core): preserve retryable V1 claim startup`
+- `88e6c0bff2` `fix(core): keep rejected V1 claims retryable`
+- `5a4522e71d` `test(core): bound OAuth observer port reuse`
+- Final report evidence: the following `docs:` commit.
