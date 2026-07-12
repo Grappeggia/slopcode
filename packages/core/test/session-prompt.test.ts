@@ -21,6 +21,7 @@ import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { ModelV2 } from "@slopcode-ai/core/model"
+import { MCP } from "@slopcode-ai/core/mcp"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { testEffect } from "./lib/effect"
 import { locationServices } from "./lib/location-services"
@@ -724,6 +725,59 @@ describe("SessionV2.prompt", () => {
       expect(executionCalls).toEqual([])
       expect(wakeCalls).toEqual([])
       expect(wakeSeqs).toEqual([])
+    }),
+  )
+})
+
+describe("MCP.resolveAndAdmit", () => {
+  const mcp = (text: string) =>
+    ({ getPrompt: () => Effect.succeed(new Prompt({ text })) }) as unknown as MCP.Interface
+
+  it.effect("uses the real admission transaction for guard failure without admission or wake", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const id = SessionMessage.ID.make("msg_mcp_guard_failure")
+      wakeCalls.length = 0
+      const failure = yield* MCP.resolveAndAdmit(
+        mcp("guarded"),
+        yield* SessionV2.Service,
+        { name: "server:prompt", sessionID, id },
+        Effect.fail("runtime changed"),
+      ).pipe(Effect.flip)
+      expect(failure).toBe("runtime changed")
+      expect(yield* admitted(id)).toBeUndefined()
+      expect(wakeCalls).toEqual([])
+    }),
+  )
+
+  it.effect("preserves real prompt idempotency and conflict propagation", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const sessions = yield* SessionV2.Service
+      const id = SessionMessage.ID.make("msg_mcp_retry")
+      const first = yield* MCP.resolveAndAdmit(mcp("stable"), sessions, {
+        name: "server:prompt",
+        sessionID,
+        id,
+        resume: false,
+      })
+      expect(
+        yield* MCP.resolveAndAdmit(mcp("stable"), sessions, {
+          name: "server:prompt",
+          sessionID,
+          id,
+          resume: false,
+        }),
+      ).toEqual(first)
+      expect(yield* admittedCount).toBe(1)
+      expect(
+        yield* MCP.resolveAndAdmit(mcp("changed"), sessions, {
+          name: "server:prompt",
+          sessionID,
+          id,
+          resume: false,
+        }).pipe(Effect.flip),
+      ).toBeInstanceOf(SessionV2.PromptConflictError)
     }),
   )
 })

@@ -70,6 +70,40 @@ describe("MCP content", () => {
     }),
   )
 
+  it.effect("rejects field-presence conflicts, wrong types, noncanonical base64, and unsupported prompt shapes", () =>
+    Effect.gen(function* () {
+      const resources = [
+        { contents: [{}] },
+        { contents: [{ uri: "file:///x", text: 1 }] },
+        { contents: [{ uri: "file:///x", text: "x", blob: 1 }] },
+        { contents: [{ uri: "file:///x", blob: "eA", mimeType: "application/octet-stream" }] },
+        { contents: [{ uri: "file:///x", blob: "eA===", mimeType: "application/octet-stream" }] },
+        { contents: [{ uri: "file:///x", blob: "eA==", mimeType: 1 }] },
+      ]
+      for (const value of resources)
+        expect(yield* MCP.normalizeResources("server", "resource", value).pipe(Effect.flip)).toBeInstanceOf(
+          MCP.ContentError,
+        )
+
+      const contents = [
+        { type: "text", text: 1 },
+        { type: "text", text: "x", data: "eA==" },
+        { type: "image", data: "eA==", mimeType: "image/png", text: "x" },
+        { type: "image", data: 1, mimeType: "image/png" },
+        { type: "resource", resource: { uri: "relative", text: "x" } },
+        { type: "resource", resource: { uri: "file:///x", blob: "eA", mimeType: "image/png" } },
+        { type: "audio", data: "eA==", mimeType: "audio/wav" },
+        { type: "resource_link", uri: "file:///x", name: "x" },
+      ]
+      for (const content of contents)
+        expect(
+          yield* MCP.normalizePrompt("server", "prompt", {
+            messages: [{ role: "user", content }],
+          }).pipe(Effect.flip),
+        ).toBeInstanceOf(MCP.ContentError)
+    }),
+  )
+
   it.effect("gates all client content operations and handlers by capability", () =>
     Effect.sync(() => {
       let calls = 0
