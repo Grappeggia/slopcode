@@ -412,3 +412,50 @@ Result before GREEN: `32 pass, 5 fail`, `103 expect()` calls. Failures were miss
 
 - Deleting or losing the installation key intentionally invalidates persisted in-flight request identities. Recovery then terminalizes with code `restart` before provider I/O; completed history and non-recovery behavior are unaffected.
 - The first full Slopcode attempt hit only the external 15-minute process ceiling. The completed rerun with the same package-level 30-second test timeout had no failures, so no Slopcode test gap remains.
+
+## Steering Root Final Remediation
+
+This section supersedes the steering-only branch of the preceding continuation reconstruction description.
+
+### Commits
+
+- RED: `4b71e4f54e test(core): expose stale steering recovery turn`
+- GREEN: `33f4fb71e9 fix(core): promote recovered steer before dispatch`
+- REPORT: recorded by the commit containing this section
+- Pushes: none
+
+### Root Cause And Fix
+
+- Steering-only startup proof previously reconstructed `ContinuationReady` on the completed activity. Runner selection treated that old activity as resumed and entered its first `runTurn` with no promotion, causing one stale old-context provider request before the pending steer was promoted.
+- Durable proof classification now distinguishes provider continuation from steering-only work. Settled local tools, structured retry, and successful overflow compaction retain provider-continuation precedence and the completed activity/root.
+- Steering-only proof publishes deterministic `Execution.Succeeded` for the completed activity with `release: false`. Event insertion and execution-status deletion remain in the synchronized event transaction, while the V2 runtime intentionally remains draining.
+- The rebuilt runner then claims a new runtime epoch, selects the pending steer, publishes `Execution.Started` with the steer message as both activity and root, promotes it before request construction, and performs its only provider dispatch.
+- Simultaneous steering never replaces local-tool or structured-retry proof. Those proofs retain `continue-provider` and the original root; steering remains pending for the normal continuation ordering.
+
+### RED Evidence
+
+Command from `packages/core`:
+
+```text
+bun test test/session-runner.test.ts -t "rebuilds a steering-only completion"
+```
+
+Result before GREEN: `0 pass, 1 fail`. The fake provider received two requests instead of one; the first used old context without the steer. The separate tool/structured precedence test already passed, isolating the defect to steering-only classification.
+
+### Added Coverage
+
+- A real `SessionRunnerLLM`/fake-provider test persists completed old activity plus an admitted steer without a continuation marker, builds a fresh `SessionExecutionLocal` graph, and waits for settlement.
+- It proves exactly one provider request, that request contains both prior history and the steer, no old-context-only request exists, the steer promotion event occurs exactly once, no pending steer remains, and execution roots transition from the completed root to the steer root.
+- A startup test combines pending steering separately with settled local-tool proof and durable structured-retry proof. Both retain `continue-provider`, the original root, and the still-pending steer, proving provider-work precedence.
+
+### Final Verification
+
+- Focused execution/runner command: `bun test test/session-execution-local.test.ts test/session-execution-status.test.ts test/session-runner.test.ts`; `244 pass, 0 fail`, `790 expect()` calls.
+- Core full: `bun test --only-failures`; `1535 pass, 0 fail`, 159 files, `4782 expect()` calls.
+- LLM full: `bun test --only-failures`; `305 pass, 30 skip, 0 fail`, 26 files, `668 expect()` calls.
+- Server full: `bun test --only-failures`; `4 pass, 0 fail`, `19 expect()` calls.
+- CodeMode full: `bun test --only-failures`; `254 pass, 0 fail`, 7 files, `744 expect()` calls.
+- Slopcode full with its declared `--timeout 30000`: `3111 pass, 22 skip, 1 todo, 0 fail`, 248 files, 50 snapshots, `8603 expect()` calls in 1114.71 seconds.
+- Core, LLM, server, Slopcode, and CodeMode passed `bun run typecheck`.
+- Repository-root `bun install --frozen-lockfile` passed with no changes.
+- `git diff --check` passed. The generated `.slopcode/package-lock.json` was inspected and removed; it is not retained.
