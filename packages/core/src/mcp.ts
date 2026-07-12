@@ -199,7 +199,7 @@ export const layer = Layer.effect(
         .pipe(
           Effect.ignore,
           Effect.andThen(
-            Effect.logWarning("MCP tool discovery failed", { server: server.name, type: server.config.type, error }),
+            Effect.logWarning("MCP discovery failed", { server: server.name, type: server.config.type, error }),
           ),
         )
     }
@@ -350,9 +350,12 @@ export const layer = Layer.effect(
         Effect.runFork(disconnected(server, client.value))
       })
       server.pending = client.value
-      const discovered = yield* Effect.exit(discoverAll(server, client.value, true))
+      const discovered = yield* Effect.exit(discoverInitial(server, client.value))
       if (Exit.isSuccess(discovered)) {
-        if (!closed) return { client: client.value, ...discovered.value, closed: () => closed }
+        if (!closed) {
+          yield* Effect.forEach(discovered.value.errors, (cause) => discoveryFailure(server, cause), { discard: true })
+          return { client: client.value, ...discovered.value, closed: () => closed }
+        }
         yield* close(server)
         yield* failure(server, "Connection closed")
         return undefined
@@ -656,19 +659,40 @@ function discover(client: Connection, timeout: number) {
   })
 }
 
-function discoverAll(server: Server, client: Connection, initial = false) {
+function discoverAll(server: Server, client: Connection) {
   const prompts = hasPrompts(client.capabilities) ? discoverPrompts(server, client) : Effect.succeed([])
   const resources = hasResources(client.capabilities) ? discoverResources(server, client) : Effect.succeed([])
   return Effect.all(
     {
       definitions: hasTools(client.capabilities) ? discover(client, server.timeout) : Effect.succeed([]),
-      // Content catalogs are independent from tools and one another. Their
-      // explicit/notification refresh paths surface typed failures and retain
-      // snapshots; initial failure publishes no partial catalog.
-      prompts: initial ? prompts.pipe(Effect.catch(() => Effect.succeed([]))) : prompts,
-      resources: initial ? resources.pipe(Effect.catch(() => Effect.succeed([]))) : resources,
+      prompts,
+      resources,
     },
     { concurrency: "unbounded" },
+  )
+}
+
+function discoverInitial(server: Server, client: Connection) {
+  const prompts = hasPrompts(client.capabilities)
+    ? discoverPrompts(server, client).pipe(Effect.exit)
+    : Effect.succeed(Exit.succeed([] as ReadonlyArray<PromptEntry>))
+  const resources = hasResources(client.capabilities)
+    ? discoverResources(server, client).pipe(Effect.exit)
+    : Effect.succeed(Exit.succeed([] as ReadonlyArray<ResourceEntry>))
+  return Effect.all(
+    {
+      definitions: hasTools(client.capabilities) ? discover(client, server.timeout) : Effect.succeed([]),
+      prompts,
+      resources,
+    },
+    { concurrency: "unbounded" },
+  ).pipe(
+    Effect.map((result) => ({
+      definitions: result.definitions,
+      prompts: Exit.isSuccess(result.prompts) ? result.prompts.value : [],
+      resources: Exit.isSuccess(result.resources) ? result.resources.value : [],
+      errors: [result.prompts, result.resources].flatMap((exit) => (Exit.isFailure(exit) ? [exit.cause] : [])),
+    })),
   )
 }
 
