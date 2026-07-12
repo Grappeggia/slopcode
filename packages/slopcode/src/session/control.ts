@@ -17,7 +17,10 @@ export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void, SessionRuntime.Error>
   readonly prompt: (
     input: SessionPrompt.PromptInput,
-  ) => Effect.Effect<SessionV1.WithParts | SessionInput.Admitted, Image.Error | SessionRuntime.Error | SessionV2.Error>
+  ) => Effect.Effect<
+    SessionV1.WithParts | SessionInput.Admitted,
+    Image.Error | SessionPrompt.AdmissionFailed | SessionRuntime.Error | SessionV2.Error
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/SessionControl") {}
