@@ -109,6 +109,7 @@ const registryLayer = Layer.effect(
     const order = new Map<object, number>()
     const active = new Map<object, Set<object>>()
     let sequence = 0
+    const visible = (name: string) => local.get(name)?.findLast((entry) => entry.visible())?.registration
 
     const settleWith = Effect.fn("ToolRegistry.settle")(function* (
       input: ExecuteInput,
@@ -211,8 +212,8 @@ const registryLayer = Layer.effect(
         const registrations = new Map<string, Captured>(
           Array.from(applications.entries(), ([name, registration]) => [name, { registration, overlay: false }] as const),
         )
-        for (const [name, entries] of local) {
-          const registration = entries.findLast((entry) => entry.visible())?.registration
+        for (const [name] of local) {
+          const registration = visible(name)
           if (registration) registrations.set(name, { registration, overlay: false })
         }
         const groups: ReadonlyArray<Readonly<Record<string, AnyTool>>> = turn
@@ -250,7 +251,7 @@ const registryLayer = Layer.effect(
           const entry = registrations.get(input.call.name)
           if (entry?.overlay) return settleWith(input, entry.registration, captured, rules)
           if (entry) {
-            const current = local.get(input.call.name)?.at(-1)?.registration ?? applications.entries().get(input.call.name)
+            const current = visible(input.call.name) ?? applications.entries().get(input.call.name)
             if (current?.identity !== entry.registration.identity)
               return Effect.succeed({ result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } })
             return settleWith(input, entry.registration, captured, rules)
