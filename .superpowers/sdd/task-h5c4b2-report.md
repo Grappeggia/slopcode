@@ -111,3 +111,103 @@ One intermediate full Core run exposed stricter V2 endpoint admission breaking a
 ## Remaining Concerns
 
 - The required `packages/slopcode` typecheck is red on two pre-existing non-MCP session typing errors. No H5C4B2 file imports or modifies those paths.
+
+## Rejected Review Settlement
+
+The rejected review was repaired without changing the V1 runtime or public surfaces.
+
+### Atomic Attempts
+
+- Added lock-scoped `claimAttempt`, `cancelAttempt`, `startExchange`, `finishExchange`, `finishAttempt`, and `cancelTarget` store operations with explicit CAS outcomes.
+- Callback delivery now retains its registration until the durable claim succeeds. A failed claim returns a generic failure and remains retryable; a replay after claim is rejected by persisted phase.
+- SDK exchange captures tokens in memory. One store transaction now verifies the exchanging winner, preserves refresh/scope semantics, publishes tokens, erases winner transients, and cancels every nonterminal sibling. A losing process rereads phase under the exchange flock and cannot issue another token request or overwrite tokens.
+- Deterministic same-attempt claims produced exactly one `claimed` and one `used`; a spawned two-process token race produced exactly `won`/`lost`, one complete attempt, and one cancelled sibling.
+
+### Staged Configuration
+
+- Each MCP server can own an unpublished auth candidate containing candidate config, timeout, and exact target. `authStatus` still gives an active client precedence, while `beginAuth` and completion validation target the candidate when one exists.
+- A successful manual or auto completion reconnects and publishes through the serialized MCP replacement path. Failed candidate connection/discovery retains the prior client, config, tools, prompts, resources, timeout, and registrations.
+- Endpoint, static client, scope, redirect, callback-port/mode, disable, remove, and subsequent replacement changes cancel exact attempts and invalidate only the incompatible bucket. Stale completion fails target comparison and cannot publish.
+- The MCP-level fixture proves a failed new endpoint remains hidden, old tools and connected runtime remain visible, and `beginAuth` receives the new endpoint, client, scope, and redirect.
+
+### Callback Ownership
+
+- Callback ownership is shared by the host callback service across Location-scoped service instances. Server identity includes literal bind address plus port; registration identity includes bind, port, exact path, and state.
+- Concurrent server startup and state registration have host reservations, preventing bind and duplicate-state races. Service close is scoped/refcounted and cannot close another Location's registrations.
+- IPv4 and IPv6 listeners are distinct, occupied external ports fail safely, duplicate state/code parameters fail, provider errors remain non-reflective, and rejected durable claims remain registered.
+- Auto completion notifies MCP through an internal callback. MCP fences the exact staged target, serializes candidate preparation/activation, and publishes a safe auth event after reconnect without introducing an import cycle.
+
+### Closed Store Schema
+
+- Replaced permissive nested checks with closed field sets for data, buckets, identities, entries, tokens, dynamic registration, discovery, authorization-server metadata, protected-resource metadata, and attempts.
+- Decode verifies the bucket key from explicit identity dimensions, exact normalized endpoint serialization, safe nested URLs, finite nonnegative timestamps, required attempt metadata/phase fields, and phase-specific transient presence/absence.
+- Writes validate before touching disk. Existing symlink/nonregular checks, mode repair, unique `wx` temporary files, fsync/rename, directory fsync, interruption-aware flocking, and temp cleanup remain enforced.
+- V1 claim now requires an exact closed version-2 document, exact bucket key/identity, exact normalized server key, exact stable field schemas, one match, and no workspace. Malformed/unknown/ambiguous data remains untouched and unclaimed.
+
+### Noninteractive Connect And Fetch
+
+- Normal OAuth connect reads and checks exact compatibility plus usable access/refresh material before provider construction. No credentials returns typed `auth-required` with zero network requests and no store file.
+- The connect provider is explicitly noninteractive and transient-disabled. It cannot persist verifier/state or create attempts, and its redirect callback always fails closed.
+- Outer lifecycle, SDK request, and `Request` AbortSignals are merged with `AbortSignal.any`. Closing a returned connection aborts the lifecycle signal before SDK close, covering active Streamable HTTP/SSE work.
+- Configured-header requests use manual redirects. Same-origin redirects are bounded; cross-origin redirects strip all configured header names and bearer authorization. SDK authorization-server requests never receive resource configured headers.
+
+### Cleanup And Status
+
+- All newly begun and recovered auto/manual attempts are owned. Graceful shutdown, reset, disable, remove, replacement, terminal completion, and expiry close listeners and erase transient state idempotently.
+- Store-only status now reports internal `credential-ready`, never `connected`. Public `connected` is derived only from `server.client`; expired/incompatible credentials produce auth-required/authorizing behavior and cannot short-circuit `beginAuth`.
+
+### Review RED Evidence
+
+All commands ran from `packages/core`.
+
+```text
+bun test test/mcp-oauth-store.test.ts test/mcp-oauth-callback.test.ts test/mcp-oauth-protocol.test.ts
+```
+
+Initial review RED: `7 pass`, `4 fail`, `44 expect() calls`. Failures were missing atomic store methods, unknown nested fields being accepted, Location-local callback port contention, and store credentials reporting connected.
+
+```text
+bun test test/mcp-client.test.ts
+```
+
+Transport RED: `4 pass`, `2 fail`, `20 expect() calls`. Missing credentials made a network request and returned generic OAuth failure; a configured `X-Secret` crossed an origin redirect.
+
+```text
+bun test test/mcp-oauth-protocol.test.ts
+```
+
+Replacement RED: `4 pass`, `1 fail`, `26 expect() calls`. A scope/redirect-incompatible second begin left the first attempt pending instead of cancelling it.
+
+```text
+bun test test/mcp-service-review.test.ts
+```
+
+Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old client still active after failed candidate connection, `beginAuth` returned old `connected` instead of the candidate's `authorizing` result.
+
+### Review GREEN Evidence
+
+- Required focused command: `94 pass`, `0 fail`, `363 expect() calls`, 12 files.
+- H5C4A/B1 regression command: `120 pass`, `0 fail`, `482 expect() calls`, 8 files.
+- Final full Core: `1396 pass`, `0 fail`, `4238 expect() calls`, 153 files.
+- Full CodeMode: `254 pass`, `0 fail`, `744 expect() calls`, 7 files.
+- V1 OAuth evidence: `40 pass`, `0 fail`, `123 expect() calls`, 5 files.
+- Core typecheck: exit 0, `tsgo --noEmit`.
+- Server typecheck: exit 0, `tsgo --noEmit`.
+- Frozen install: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+- SlopCode typecheck: exit 1 on the same unrelated diagnostics: `src/session/processor.ts(495,17)` assigns `Record<string, unknown>` to `string`; `src/session/prompt.ts(1382,39)` omits required `actualState` from `SessionRuntime.Mismatch`.
+- Source assertions: no V1/session MCP runtime import or call under `packages/core/src/mcp`, no browser launcher, and no server MCP auth route.
+- Linux IPv4 and IPv6 callback tests both ran and passed; no platform-specific OAuth test was skipped.
+
+### Review Commits
+
+- `622af0e8de` `test(core): expose MCP OAuth review races`
+- `b0b493924f` `test(core): expose MCP OAuth transport leaks`
+- `571c8c710a` `test(core): expose MCP OAuth replacement cleanup`
+- `43e7ab703f` `fix(core): harden MCP OAuth lifecycle`
+- `b85bf92f64` `fix(core): close MCP OAuth recovery gaps`
+- `500017fd73` `test(core): cover MCP OAuth host security`
+- Review report commit: the following `docs:` commit containing this appendix.
+
+### Review Concerns
+
+- The unrelated SlopCode package typecheck failures above remain outside H5C4B2. All H5C4B2-focused, preservation, full Core, V1 evidence, CodeMode, Core/server typecheck, and dependency gates pass.
