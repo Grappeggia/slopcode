@@ -263,6 +263,103 @@ describe("Formatter", () => {
     ),
   )
 
+  it.live("retries negative discovery and coalesces concurrent help probes", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(async () => {
+        const tmp = await tmpdir()
+        const bin = path.join(tmp.path, "bin")
+        await fs.mkdir(bin)
+        return { tmp, bin, path: process.env.PATH }
+      }),
+      ({ tmp, bin }) => {
+        process.env.PATH = bin
+        return withFormatter(
+          tmp.path,
+          [document(true)],
+          Effect.gen(function* () {
+            const formatter = yield* Formatter.Service
+            const go = path.join(tmp.path, "source.go")
+            yield* Effect.promise(() => fs.writeFile(go, "source"))
+            expect((yield* formatter.format({ canonical: go })).outcomes).toEqual([
+              { name: "gofmt", code: "unavailable" },
+            ])
+            yield* Effect.promise(() => fs.writeFile(
+              path.join(bin, "gofmt"),
+              `#!${process.execPath}\nrequire("fs").writeFileSync(process.argv.at(-1),"rediscovered")\n`,
+              { mode: 0o755 },
+            ))
+            expect((yield* formatter.format({ canonical: go })).outcomes[0]).toMatchObject({
+              name: "gofmt",
+              code: "formatted",
+            })
+            expect(yield* Effect.promise(() => fs.readFile(go, "utf8"))).toBe("rediscovered")
+
+            const probes = path.join(tmp.path, "probes")
+            yield* Effect.promise(() => fs.writeFile(
+              path.join(bin, "air"),
+              `#!${process.execPath}\nconst fs=require("fs");if(process.argv.includes("--help")){fs.appendFileSync(${JSON.stringify(probes)},"p");setTimeout(()=>{console.log("R language formatter");},50)}else{fs.writeFileSync(process.argv.at(-1),"air")}`,
+              { mode: 0o755 },
+            ))
+            const first = path.join(tmp.path, "first.R")
+            const second = path.join(tmp.path, "second.R")
+            yield* Effect.promise(() => Promise.all([fs.writeFile(first, "source"), fs.writeFile(second, "source")]))
+            yield* Effect.all([
+              formatter.format({ canonical: first }),
+              formatter.format({ canonical: second }),
+            ], { concurrency: "unbounded" })
+            expect(yield* Effect.promise(() => fs.readFile(probes, "utf8"))).toBe("p")
+          }),
+        )
+      },
+      ({ tmp, path: original }) => Effect.promise(async () => {
+        if (original === undefined) delete process.env.PATH
+        else process.env.PATH = original
+        await tmp[Symbol.asyncDispose]()
+      }),
+    ),
+  )
+
+  it.live("keeps external execution cwd and environment scoped to the active Location", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      ([active, outside]) => {
+        const target = path.join(outside.path, "external.scope")
+        const secret = "formatter-secret-canary"
+        const before = process.env.FORMATTER_SCOPE_TEST
+        return Effect.promise(() => fs.writeFile(target, "source")).pipe(
+          Effect.andThen(withFormatter(
+            active.path,
+            [document({
+              scoped: {
+                command: [
+                  process.execPath,
+                  "-e",
+                  "require('fs').writeFileSync(process.argv[1],JSON.stringify({cwd:process.cwd(),value:process.env.FORMATTER_SCOPE_TEST}));process.stdout.write(process.env.FORMATTER_SCOPE_TEST)",
+                  "$FILE",
+                ],
+                environment: { FORMATTER_SCOPE_TEST: secret },
+                extensions: [".scope"],
+              },
+            })],
+            Effect.gen(function* () {
+              const result = yield* (yield* Formatter.Service).format({ canonical: target })
+              expect(JSON.parse(yield* Effect.promise(() => fs.readFile(target, "utf8")))).toEqual({
+                cwd: active.path,
+                value: secret,
+              })
+              expect(JSON.stringify(result)).not.toContain(secret)
+              expect(process.env.FORMATTER_SCOPE_TEST).toBe(before)
+            }),
+          )),
+        )
+      },
+      ([active, outside]) => Effect.promise(() => Promise.all([
+        active[Symbol.asyncDispose](),
+        outside[Symbol.asyncDispose](),
+      ]).then(() => undefined)),
+    ),
+  )
+
   it.effect("keeps Core formatter sources isolated from V1 and Slopcode runtime imports", () =>
     Effect.promise(async () => {
       const source = await fs.readFile(new URL("../src/formatter.ts", import.meta.url), "utf8")

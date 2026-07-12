@@ -298,6 +298,101 @@ describe("mutation security review", () => {
     }),
   )
 
+  it.live("repairs formatter BOM changes without changing the approved BOM policy", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        for (const item of [
+          { name: "preserve.fmt", immediate: "\uFEFFbefore", formatted: "formatted", final: "\uFEFFformatted" },
+          { name: "remove.fmt", immediate: "before", formatted: "\uFEFF\uFEFFformatted", final: "formatted" },
+        ]) {
+          const approved = target(directory, item.name)
+          yield* Effect.promise(() => fs.writeFile(approved.canonical, "initial"))
+          const formatter: Formatter.Interface = {
+            list: () => Effect.succeed([]),
+            status: () => Effect.succeed([]),
+            format: (stage) => Effect.promise(async () => {
+              await fs.writeFile(stage.canonical, item.formatted)
+              return { matched: true, outcomes: [{ name: "test", code: "formatted" }] }
+            }),
+          }
+          yield* Effect.gen(function* () {
+            const files = yield* FileMutation.Service
+            yield* (yield* PostMutation.Service).run({
+              target: approved,
+              intent: "write",
+              mutation: files.write({ target: approved, content: item.immediate }),
+            })
+          }).pipe(Effect.provide(postLayer({ formatter })))
+          expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toBe(item.final)
+        }
+      }),
+    ),
+  )
+
+  it.live("cleans formatter staging and publishes nothing when interrupted", () =>
+    withTmp((directory) => {
+      const approved = target(directory, "interrupt.fmt")
+      let stage = ""
+      let events = 0
+      let diagnostics = 0
+      const started = Deferred.makeUnsafe<void>()
+      const formatter: Formatter.Interface = {
+        list: () => Effect.succeed([]),
+        status: () => Effect.succeed([]),
+        format: (value) => Effect.sync(() => {
+          stage = value.canonical
+        }).pipe(Effect.andThen(Deferred.succeed(started, undefined)), Effect.andThen(Effect.never)),
+      }
+      return Effect.gen(function* () {
+        yield* Effect.promise(() => fs.writeFile(approved.canonical, "before"))
+        const bus = yield* EventV2.Service
+        yield* bus.listen((event) =>
+          event.type === FileSystem.Event.Edited.type || event.type === Watcher.Event.Updated.type
+            ? Effect.sync(() => { events++ })
+            : Effect.void,
+        )
+        const files = yield* FileMutation.Service
+        const fiber = yield* (yield* PostMutation.Service).run({
+          target: approved,
+          intent: "write",
+          mutation: files.write({ target: approved, content: "changed" }),
+        }).pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        yield* Fiber.interrupt(fiber)
+        expect(stage).not.toBe("")
+        expect(yield* Effect.promise(() => fs.stat(path.dirname(stage)).then(() => true, () => false))).toBe(false)
+        expect([events, diagnostics]).toEqual([0, 0])
+      }).pipe(Effect.provide(postLayer({
+        formatter,
+        diagnostics: { notify: () => Effect.sync(() => { diagnostics++ }) },
+      })))
+    }),
+  )
+
+  it.live("publishes nothing when the supplied primitive fails", () =>
+    withTmp((directory) => {
+      const approved = target(directory)
+      let events = 0
+      let diagnostics = 0
+      return Effect.gen(function* () {
+        const bus = yield* EventV2.Service
+        yield* bus.listen((event) =>
+          event.type === FileSystem.Event.Edited.type || event.type === Watcher.Event.Updated.type
+            ? Effect.sync(() => { events++ })
+            : Effect.void,
+        )
+        yield* (yield* PostMutation.Service).run({
+          target: approved,
+          intent: "write",
+          mutation: Effect.fail(new Error("rejected")),
+        }).pipe(Effect.exit)
+        expect([events, diagnostics]).toEqual([0, 0])
+      }).pipe(Effect.provide(postLayer({
+        diagnostics: { notify: () => Effect.sync(() => { diagnostics++ }) },
+      })))
+    }),
+  )
+
   it.live("suppresses formatting, events, and diagnostics for a primitive no-op", () =>
     withTmp((directory) => {
       const approved = target(directory, "same.fmt")
