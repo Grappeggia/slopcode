@@ -263,3 +263,57 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 - `1496460ecc` `fix(core): serialize MCP OAuth refresh`
 - `4e5a0fffa5` `fix(core): commit OAuth exchange under lock`
 - Report appendix: the following `docs:` commit.
+
+## Final Review Settlement
+
+### Final RED Evidence
+
+- Initial readiness/rejection/store command: `23 pass`, `5 fail`, `1 test-file syntax error`, `119 expect() calls`. Behavioral failures showed pending attempts without an authorization URL, initializing attempts rejected by persistence, pending accepted without a verifier, and rejected credentials never reaching the seeded resource because the injected test store was not actually consumed. The syntax-only provider assertion was corrected before implementation evidence was accepted.
+- Minimal connect-provider command after the assertion correction: `1 pass`, `1 fail`, `7 expect() calls`. `clientInformation` remained exposed from normal-connect credentials.
+- V1 migration counterexample: `0 pass`, `1 fail`, 14 tests filtered. The migrated external redirect retained `callback_port: 19876` and failed V2 decoding.
+- Store/rejected-resource rerun after schema work: `15 pass`, `1 fail`, `81 expect() calls`. The remaining failure proved the test layer was not invoking the seeded store, leading to the explicit `MCPClient.layerWith(store)` construction used by all credential-path integration tests.
+
+### Final Repairs
+
+- Added durable `initializing` attempts. Only `readyAttempt` can atomically publish `pending`, and it requires state, mode, redirect, created/expires, a persisted verifier, and the exact authorization URL.
+- Closed attempt validation now distinguishes initializing, ready pending, received/exchanging, and scrubbed terminal phases. Pending without verifier or authorization is invalid.
+- Initialization interruption and restart both terminalize `initializing` as bounded discovery failure and erase state/verifier/code/authorization. Recovery never installs a listener for an initializing flow.
+- Normal transport receives no SDK OAuth provider. It receives only a snapshotted access token injected into resource requests. Refresh tokens, client registration, discovery, redirect, verifier, state, save, and invalidation hooks are absent. A resource 401 throws typed `auth-required` before SDK OAuth processing.
+- Proactive refresh remains before transport construction, persists refreshed tokens, uses an in-process reservation plus process flock, and rereads durable state inside the flock.
+- Automatic exchanges own abort controllers in the Location service. Shutdown aborts token fetches before terminalization; callback success/failure always schedules listener release, and exchange failure scrubs transients.
+- V1 migration now retains `callback_port` only for an explicit matching loopback HTTP redirect; external/manual and default-port redirects drop it deterministically.
+- Added explicit `MCPClient.layerWith(store)` so seeded credential integration tests cannot silently exercise the global fallback store.
+
+### Final Coverage
+
+- Successful begin persists `pending` only with verifier and returned authorization URL.
+- Restart terminalizes an initializing flow without listener rehydration.
+- Interruption during never-settling initialization leaves one scrubbed failed attempt.
+- Rejected access token with refresh token, absent discovery cache, and expired dynamic registration makes exactly one `/mcp` request, returns bounded `auth-required`, and preserves exact store bytes.
+- Failed automatic token exchange returns callback 400, records scrubbed exchange failure, and permits immediate port reuse.
+- Location shutdown aborts a never-settling exchange, settles callback 400, scrubs the attempt, and permits immediate port reuse.
+- In-process refresh makes exactly one token request while an interrupted waiter cannot cancel the owner.
+- Two spawned refresh processes make exactly one token request and observe the durable refreshed token.
+- Real Streamable HTTP traffic verifies bearer precedence, MCP session ID, protocol version, SSE retry/resumption, and `Last-Event-ID: event-1`.
+- Real OAuth SSE traffic verifies access-token precedence over configured authorization while preserving configured non-secret headers and SDK-generated event/message headers.
+- Store tests interrupt a flock waiter, preserve 20 concurrent independent fields, and repair directory/file modes to 0700/0600.
+- The arbitrary V1 migration property remains green and the external redirect counterexample decodes under V2.
+
+### Final Results
+
+- Focused 13-file command: `126 pass`, `0 fail`, `507 expect() calls`.
+- H5C4A/B1 preservation command: `124 pass`, `0 fail`, `499 expect() calls`.
+- Full Core: `1414 pass`, `0 fail`, `4304 expect() calls`, 153 files.
+- Full CodeMode: `254 pass`, `0 fail`, `744 expect() calls`.
+- V1 OAuth evidence: `40 pass`, `0 fail`, `123 expect() calls`.
+- Core typecheck: exit 0.
+- Server typecheck: exit 0.
+- Frozen install: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+- SlopCode typecheck remains red only at the unrelated existing `src/session/processor.ts(495,17)` and `src/session/prompt.ts(1382,39)` diagnostics.
+
+### Final Review Commits
+
+- `cde04968e1` `test(core): expose final MCP OAuth lifecycle gaps`
+- `40ac3310ce` `fix(core): finalize MCP OAuth lifecycle`
+- `c75c28e869` `test(core): cover final MCP OAuth recovery`
+- Final report appendix: the following `docs:` commit.
