@@ -6,6 +6,8 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { ConfigMCP } from "@slopcode-ai/core/config/mcp"
 import { MCPClient } from "@slopcode-ai/core/mcp/client"
+import { MCPOAuth } from "@slopcode-ai/core/mcp/oauth"
+import { MCPOAuthCallback } from "@slopcode-ai/core/mcp/oauth-callback"
 import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
 import { MCPOAuthProvider } from "@slopcode-ai/core/mcp/oauth-provider"
 import { Context, Effect, Fiber, Layer } from "effect"
@@ -254,6 +256,19 @@ it.live("claims exact V1 credentials and uses them for authenticated transport",
           })
           yield* Effect.promise(() => Bun.write(legacy, source))
           const store = MCPOAuthStore.make({ data: tmp.path, legacy })
+          const target = { directory: tmp.path, name: "legacy-connect", endpoint }
+          yield* Effect.scoped(Effect.gen(function* () {
+            const context = yield* Layer.build(MCPOAuth.layer.pipe(
+              Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+              Layer.provide(MCPOAuthCallback.layer),
+            ))
+            yield* Context.get(context, MCPOAuth.Service).recover({
+              target,
+              config: { client_id: "wrong-client", client_secret: "claimed-secret" },
+            })
+          }))
+          expect(yield* store.targets({ directory: tmp.path, name: "legacy-connect" })).toEqual([])
+          expect(yield* Effect.promise(() => Bun.file(legacy).text())).toBe(source)
           const context = yield* Layer.build(MCPClient.layerWith(store))
           const client = yield* Context.get(context, MCPClient.Service).connect({
             name: "legacy-connect",
@@ -267,7 +282,7 @@ it.live("claims exact V1 credentials and uses them for authenticated transport",
           })
           expect((yield* Effect.promise(() => client.list(undefined, 5_000))).tools.map((tool) => tool.name)).toContain("echo")
           expect(fixture.headers).toContain("Bearer claimed-access")
-          expect((yield* store.get({ directory: tmp.path, name: "legacy-connect", endpoint })).claim).toBe("v1-version-2")
+          expect((yield* store.get(target)).claim).toBe("v1-version-2")
           expect(yield* Effect.promise(() => Bun.file(legacy).text())).toBe(source)
           yield* Effect.promise(() => client.close())
         }))),
