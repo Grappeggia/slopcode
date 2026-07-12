@@ -2,7 +2,7 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { ConfigV1 } from "@slopcode-ai/core/v1/config/config"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Database } from "@slopcode-ai/core/database/database"
-import { eq } from "drizzle-orm"
+import { and, eq, gt } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
@@ -27,8 +27,9 @@ import { Memory } from "../../src/memory/memory"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
-import { EventTable } from "@slopcode-ai/core/event/sql"
+import { PartTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
+import { EventSequenceTable, EventTable } from "@slopcode-ai/core/event/sql"
+import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
@@ -250,12 +251,19 @@ const it = testEffect(makeHttp())
 const noLLMServer = testEffect(makeHttpNoLLMServer())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
 const admissionGates: Array<() => Effect.Effect<void>> = []
+const admissionMutations: Array<(output: unknown) => void> = []
 let admissionCalls = 0
 let admissionMcpReads = 0
+let admissionMcpFails = false
 const admissionPlugin = Layer.mock(Plugin.Service)({
   trigger: <Name extends string, Input, Output>(name: Name, _input: Input, output: Output) =>
     name === "chat.message"
       ? Effect.sync(() => admissionCalls++).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              admissionMutations.shift()?.(output)
+            }),
+          ),
           Effect.andThen(Effect.suspend(() => admissionGates.shift()?.() ?? Effect.void)),
           Effect.as(output),
         )
@@ -267,14 +275,17 @@ const admissionMcp = Layer.succeed(
   MCP.Service,
   MCP.Service.of({
     ...mcpService,
-    readResource: () =>
-      Effect.sync(() => {
-        admissionMcpReads++
-        return { contents: [{ uri: "resource://test", text: "resource" }] }
-      }),
+    readResource: () => {
+      admissionMcpReads++
+      if (admissionMcpFails) throw new Error("resource failed")
+      return Effect.succeed({ contents: [{ uri: "resource://test", text: "resource" }] })
+    },
   }),
 )
 const admissionServer = testEffect(makeHttpNoLLMServer({ plugin: admissionPlugin, mcp: admissionMcp }))
+const terminalRaceServer = testEffect(
+  makeHttpNoLLMServer({ processor: "blocking", plugin: admissionPlugin, mcp: admissionMcp }),
+)
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
 const unixNoLLMServer = process.platform !== "win32" ? noLLMServer.instance : noLLMServer.instance.skip
 
@@ -642,7 +653,7 @@ for (const change of ["owner", "state", "epoch"] as const) {
         admissionCalls = 0
         admissionMcpReads = 0
         const unsubscribe = yield* events.listen((event) =>
-          event.type === "internal.v1.prompt.admitted"
+          event.type === "internal.v1.prompt.requested"
             ? Deferred.succeed(admitted, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid)
             : Effect.void,
         )
@@ -717,7 +728,7 @@ admissionServer.instance(
       admissionCalls = 0
       let notifications = 0
       const unsubscribe = yield* events.listen((event) =>
-        event.type === "internal.v1.prompt.admitted"
+        event.type === "internal.v1.prompt.requested"
           ? Effect.sync(() => {
               notifications++
             })
@@ -743,12 +754,23 @@ admissionServer.instance(
           .from(EventTable)
           .where(eq(EventTable.aggregate_id, chat.id))
           .all()
-          .pipe(Effect.orDie)).filter((event) => event.type === "internal.v1.prompt.admitted.1"),
+          .pipe(Effect.orDie)).filter((event) => event.type === "internal.v1.prompt.requested.1"),
       ).toEqual([
         expect.objectContaining({
           aggregate_id: chat.id,
           data: expect.objectContaining({ messageID, sessionID: chat.id, identity: expect.any(String) }),
         }),
+      ])
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, chat.id)).all().pipe(Effect.orDie))
+          .filter((event) => event.type.startsWith("internal.v1.prompt."))
+          .map((event) => event.type)
+          .toSorted(),
+      ).toEqual([
+        "internal.v1.prompt.claimed.1",
+        "internal.v1.prompt.completed.1",
+        "internal.v1.prompt.prepared.1",
+        "internal.v1.prompt.requested.1",
       ])
     }),
   { config: cfg },
@@ -787,6 +809,298 @@ admissionServer.instance(
     }),
   { config: cfg },
 )
+
+terminalRaceServer.instance(
+  "concurrent exact retry returns at terminal while the admitted reply continues",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, chat } = yield* boot()
+      const events = yield* EventV2Bridge.Service
+      const runtime = yield* SessionRuntime.Service
+      const completed = yield* Deferred.make<void>()
+      const input = {
+        sessionID: chat.id,
+        messageID: MessageID.make("msg_admission_terminal_retry"),
+        agent: "build",
+        parts: [{ type: "text" as const, text: "reply" }],
+      }
+      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
+      admissionCalls = 0
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === "internal.v1.prompt.completed"
+          ? Deferred.succeed(completed, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const first = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
+      yield* Deferred.await(completed)
+      const retry = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+
+      expect(first.pollUnsafe()).toBeUndefined()
+      expect((yield* Fiber.join(retry)).info.id).toBe(input.messageID)
+      expect(admissionCalls).toBe(1)
+      yield* Fiber.interrupt(first)
+    }),
+  { config: cfg },
+)
+
+admissionServer.instance(
+  "prompt preparation failure settles a durable terminal failure without retrying side effects",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, chat } = yield* boot()
+      const { db } = yield* Database.Service
+      const runtime = yield* SessionRuntime.Service
+      const input = {
+        sessionID: chat.id,
+        messageID: MessageID.make("msg_admission_plugin_failure"),
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text" as const, text: "fail" }],
+      }
+      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
+      admissionCalls = 0
+      admissionGates.push(() => Effect.die("plugin failed"))
+
+      const first = yield* prompt.prompt(input, guard).pipe(Effect.exit)
+      yield* runtime.assign({ sessionID: chat.id, state: "migrating", expectedOwner: "v1", expectedEpoch: 0 })
+      const retry = yield* prompt.prompt(input, guard).pipe(Effect.exit)
+      const terminal = (yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)).filter((event) => event.type === "internal.v1.prompt.failed.1")
+
+      expect(Exit.isFailure(first)).toBe(true)
+      expect(Exit.isFailure(retry)).toBe(true)
+      if (Exit.isFailure(first) && Exit.isFailure(retry)) {
+        expect(Cause.squash(first.cause)).toMatchObject({
+          _tag: "SessionPrompt.AdmissionFailed",
+          reason: "preparation",
+        })
+        expect(Cause.squash(retry.cause)).toMatchObject({
+          _tag: "SessionPrompt.AdmissionFailed",
+          reason: "preparation",
+        })
+      }
+      expect(admissionCalls).toBe(1)
+      expect(terminal).toEqual([expect.objectContaining({ data: expect.objectContaining({ reason: "preparation" }) })])
+    }),
+  { config: cfg },
+)
+
+admissionServer.instance(
+  "interrupted prompt preparation settles failure before the fiber exits",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, chat } = yield* boot()
+      const { db } = yield* Database.Service
+      const runtime = yield* SessionRuntime.Service
+      const checked = yield* Deferred.make<void>()
+      const input = {
+        sessionID: chat.id,
+        messageID: MessageID.make("msg_admission_interrupted"),
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text" as const, text: "interrupt" }],
+      }
+      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
+      admissionCalls = 0
+      admissionGates.push(() => Deferred.succeed(checked, undefined).pipe(Effect.andThen(Effect.never), Effect.asVoid))
+      const fiber = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
+      yield* Deferred.await(checked)
+
+      yield* Fiber.interrupt(fiber)
+      const retry = yield* prompt.prompt(input, guard).pipe(Effect.exit)
+      const terminal = (yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)).find((event) => event.type === "internal.v1.prompt.failed.1")
+
+      expect(terminal?.data).toMatchObject({ reason: "preparation" })
+      expect(Exit.isFailure(retry)).toBe(true)
+      if (Exit.isFailure(retry)) expect(Cause.squash(retry.cause)).toMatchObject({ reason: "preparation" })
+      expect(admissionCalls).toBe(1)
+    }),
+  { config: cfg },
+)
+
+admissionServer.instance(
+  "prompt resource failure settles once without retrying the read or plugin",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, chat } = yield* boot()
+      const runtime = yield* SessionRuntime.Service
+      const input = {
+        sessionID: chat.id,
+        messageID: MessageID.make("msg_admission_resource_failure"),
+        agent: "build",
+        noReply: true,
+        parts: [
+          {
+            type: "file" as const,
+            mime: "text/plain",
+            filename: "resource.txt",
+            url: "mcp://resource",
+            source: {
+              type: "resource" as const,
+              clientName: "test",
+              uri: "resource://test",
+              text: { value: "resource", start: 0, end: 8 },
+            },
+          },
+        ],
+      }
+      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
+      admissionCalls = 0
+      admissionMcpReads = 0
+      admissionMcpFails = true
+      yield* Effect.addFinalizer(() => Effect.sync(() => (admissionMcpFails = false)).pipe(Effect.asVoid))
+
+      const first = yield* prompt.prompt(input, guard).pipe(Effect.exit)
+      const retry = yield* prompt.prompt(input, guard).pipe(Effect.exit)
+
+      expect(Exit.isFailure(first)).toBe(true)
+      expect(Exit.isFailure(retry)).toBe(true)
+      if (Exit.isFailure(first) && Exit.isFailure(retry)) {
+        expect(Cause.squash(first.cause)).toMatchObject({ reason: "preparation" })
+        expect(Cause.squash(retry.cause)).toMatchObject({ reason: "preparation" })
+      }
+      expect(admissionMcpReads).toBe(1)
+      expect(admissionCalls).toBe(0)
+    }),
+  { config: cfg },
+)
+
+admissionServer.instance(
+  "prompt persistence failure after preparation settles a typed terminal failure",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, chat } = yield* boot()
+      const runtime = yield* SessionRuntime.Service
+      const input = {
+        sessionID: chat.id,
+        messageID: MessageID.make("msg_admission_persistence_failure"),
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text" as const, text: "persist" }],
+      }
+      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
+      admissionCalls = 0
+      admissionMutations.push((output) => {
+        ;(output as { message: { model: unknown } }).message.model = {}
+      })
+
+      const first = yield* prompt.prompt(input, guard).pipe(Effect.exit)
+      const retry = yield* prompt.prompt(input, guard).pipe(Effect.exit)
+
+      expect(Exit.isFailure(first)).toBe(true)
+      expect(Exit.isFailure(retry)).toBe(true)
+      if (Exit.isFailure(first) && Exit.isFailure(retry)) {
+        expect(Cause.squash(first.cause)).toMatchObject({ reason: "persistence" })
+        expect(Cause.squash(retry.cause)).toMatchObject({ reason: "persistence" })
+      }
+      expect(admissionCalls).toBe(1)
+    }),
+  { config: cfg },
+)
+
+for (const window of ["requested", "prepared", "message", "parts"] as const) {
+  admissionServer.instance(
+    `prompt recovery settles the ${window} crash window without rerunning side effects`,
+    () =>
+      Effect.gen(function* () {
+        const { prompt, chat } = yield* boot()
+        const { db } = yield* Database.Service
+        const runtime = yield* SessionRuntime.Service
+        const messageID = MessageID.make(`msg_admission_crash_${window}`)
+        const input = {
+          sessionID: chat.id,
+          messageID,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text" as const, text: window }],
+        }
+        const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
+        admissionCalls = 0
+        const original = yield* prompt.prompt(input, guard)
+        const rows = yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, chat.id))
+          .all()
+          .pipe(Effect.orDie)
+        const cutoff = rows.findLast((event) => {
+          if (window === "requested") return event.type === "internal.v1.prompt.requested.1"
+          if (window === "prepared") return event.type === "internal.v1.prompt.prepared.1"
+          if (window === "message") return event.type === "message.updated.1"
+          return event.type === "message.part.updated.1"
+        })
+        if (!cutoff) return yield* Effect.die(`Missing ${window} crash cutoff`)
+        yield* db
+          .delete(EventTable)
+          .where(and(eq(EventTable.aggregate_id, chat.id), gt(EventTable.seq, cutoff.seq)))
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .update(EventSequenceTable)
+          .set({ seq: cutoff.seq })
+          .where(eq(EventSequenceTable.aggregate_id, chat.id))
+          .run()
+          .pipe(Effect.orDie)
+        const claimed = rows.find((event) => event.type === "internal.v1.prompt.claimed.1")
+        if (claimed && claimed.seq <= cutoff.seq) {
+          yield* db
+            .update(EventTable)
+            .set({ data: { ...claimed.data, started: 0 } })
+            .where(eq(EventTable.id, claimed.id))
+            .run()
+            .pipe(Effect.orDie)
+        }
+        if (window === "requested" || window === "prepared") {
+          yield* db
+            .delete(SessionMessageTable)
+            .where(eq(SessionMessageTable.id, SessionMessage.ID.make(messageID)))
+            .run()
+            .pipe(Effect.orDie)
+        }
+        if (window !== "parts") {
+          yield* db.delete(PartTable).where(eq(PartTable.message_id, messageID)).run().pipe(Effect.orDie)
+        }
+
+        const recovered = yield* prompt.prompt(input, guard).pipe(Effect.exit)
+        const terminal = (yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, chat.id))
+          .all()
+          .pipe(Effect.orDie)).filter((event) =>
+          ["internal.v1.prompt.completed.1", "internal.v1.prompt.failed.1"].includes(event.type),
+        )
+
+        expect(admissionCalls).toBe(1)
+        if (window === "parts") {
+          expect(Exit.isSuccess(recovered)).toBe(true)
+          if (Exit.isSuccess(recovered)) expect(recovered.value).toEqual(original)
+          expect(terminal.map((event) => event.type)).toEqual(["internal.v1.prompt.completed.1"])
+          return
+        }
+        expect(Exit.isFailure(recovered)).toBe(true)
+        if (Exit.isFailure(recovered)) {
+          expect(Cause.squash(recovered.cause)).toMatchObject({
+            _tag: "SessionPrompt.AdmissionFailed",
+            reason: "unknown",
+          })
+        }
+        expect(terminal.map((event) => event.type)).toEqual(["internal.v1.prompt.failed.1"])
+      }),
+    { config: cfg },
+  )
+}
 
 // Loop semantics
 
