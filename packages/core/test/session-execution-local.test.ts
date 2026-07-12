@@ -16,6 +16,7 @@ import { Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
@@ -129,6 +130,39 @@ const verify = (delivery?: SessionInput.Delivery, interrupted = false) =>
   })
 
 describe("SessionExecutionLocal startup recovery", () => {
+  it.effect("conservatively terminalizes an unsafe persisted provider retry without redispatch", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const events = yield* EventV2.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const status = yield* SessionExecutionStatus.make
+      const sessionID = SessionSchema.ID.make("ses_recovered_unsafe_retry")
+      const rootID = SessionMessage.ID.make("msg_recovered_unsafe_retry")
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
+      yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: sessionID, directory: "/project", title: "Recovered retry", version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
+      const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: 1, activityID: rootID, rootID, activity: "prompt" as const }
+      yield* status.start({ ...fence, phase: "preparing" })
+      yield* status.dispatch({ ...fence, phase: "provider", providerAttempt: 1, recovery: "interrupt" })
+      yield* status.complete({ ...fence, phase: "provider", providerAttempt: 1 })
+      yield* status.retry({ ...fence, phase: "provider", providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 50_000, code: "server", action: "retry-provider", message: "retry later", recovery: "interrupt" })
+      let runs = 0
+      const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run: () => Effect.sync(() => runs++) }))
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* SessionExecution.Service.pipe(Effect.provide(execution))
+
+      expect(runs).toBe(0)
+      expect(yield* status.get(sessionID)).toMatchObject({ type: "interrupted", code: "restart", message: "Provider retry cannot be reconstructed safely after restart" })
+      expect(yield* runtime.get(sessionID)).toMatchObject({ owner: "v2", state: "ready", epoch: 2 })
+    }),
+  )
   it.effect("recovers and drains durable pending input without a new prompt", () => verify("steer"))
   it.effect("recovers and drains queued durable input without a new prompt", () => verify("queue"))
   it.effect("leaves recovered sessions paused when no durable input is pending", () => verify())

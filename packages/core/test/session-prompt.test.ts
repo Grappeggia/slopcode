@@ -17,6 +17,7 @@ import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionControl } from "@slopcode-ai/core/session/control"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
@@ -141,6 +142,19 @@ const interruptEvent = Database.Service.use(({ db }) =>
 )
 
 describe("SessionV2.prompt", () => {
+  it.effect("surfaces a retained terminal to a waiter created after restart", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const db = (yield* Database.Service).db
+      const status = yield* SessionExecutionStatus.make
+      const rootID = SessionMessage.ID.make("msg_durable_wait_terminal")
+      yield* db.update(SessionTable).set({ runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      yield* status.start({ sessionID, owner: "v2", runtimeState: "draining", epoch: 1, activityID: rootID, rootID, activity: "prompt", phase: "preparing" })
+      yield* status.fail({ sessionID, owner: "v2", runtimeState: "draining", epoch: 1, activityID: rootID, rootID, activity: "prompt", phase: "settling", code: "runner-failure", message: "durable failure", resultingEpoch: 2 })
+
+      expect(yield* (yield* SessionV2.Service).wait(sessionID).pipe(Effect.flip)).toEqual(new SessionExecutionStatus.DurableTerminalError({ sessionID, code: "runner-failure", message: "durable failure" }))
+    }),
+  )
   it.effect("delegates execution continuation through SessionExecution", () =>
     Effect.gen(function* () {
       yield* setup

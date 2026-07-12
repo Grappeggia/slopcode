@@ -10,6 +10,8 @@ import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { DateTime, Effect, Layer } from "effect"
+import * as TestClock from "effect/testing/TestClock"
+import { EventTable } from "@slopcode-ai/core/event/sql"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -129,6 +131,43 @@ describe("SessionExecutionStatus", () => {
         resultingEpoch: 1,
       }).pipe(Effect.exit))._tag).toBe("Failure")
       expect(yield* service.get(sessionID)).toMatchObject({ type: "busy" })
+    }),
+  )
+
+  it.effect("stores real transition time once while duplicate publication stays idempotent", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const service = yield* SessionExecutionStatus.Service
+      const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+      const activity = { activityID: rootID, rootID, activity: "prompt" as const }
+      yield* TestClock.setTime(1_000)
+      const first = yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      yield* TestClock.setTime(9_000)
+      const duplicate = yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      const row = yield* (yield* Database.Service).db.select({ data: EventTable.data }).from(EventTable).where(eq(EventTable.id, first.id)).get().pipe(Effect.orDie)
+
+      expect(duplicate.seq).toBe(first.seq)
+      expect(row?.data).toMatchObject({ timestamp: 1_000 })
+    }),
+  )
+
+  it.effect("settles one root without releasing before a distinct root starts", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const service = yield* SessionExecutionStatus.Service
+      const db = (yield* Database.Service).db
+      const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+      const first = { activityID: rootID, rootID, activity: "prompt" as const }
+      const nextID = SessionMessage.ID.make("msg_execution_status_queued")
+      const next = { activityID: nextID, rootID: nextID, activity: "prompt" as const }
+
+      yield* service.start({ ...fence, ...first, phase: "preparing" })
+      yield* service.succeed({ ...fence, ...first, release: false })
+      expect(yield* service.get(sessionID)).toEqual({ type: "idle" })
+      expect(yield* db.select({ state: SessionTable.runtime_state, epoch: SessionTable.runtime_epoch }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)).toEqual({ state: "draining", epoch: 1 })
+
+      yield* service.start({ ...fence, ...next, phase: "preparing" })
+      expect(yield* service.get(sessionID)).toMatchObject({ type: "busy", activityID: nextID, epoch: 1 })
     }),
   )
 })

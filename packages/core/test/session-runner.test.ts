@@ -4436,7 +4436,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Start working" }), resume: false })
+      const initial = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Start working" }), resume: false })
 
       requests.length = 0
       responses = [
@@ -4461,8 +4461,8 @@ describe("SessionRunnerLLM", () => {
 
       const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
       yield* Deferred.await(streamStarted)
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Queue first" }), delivery: "queue" })
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Queue second" }), delivery: "queue" })
+      const queuedFirst = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Queue first" }), delivery: "queue" })
+      const queuedSecond = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Queue second" }), delivery: "queue" })
       yield* Deferred.succeed(streamGate, undefined)
       yield* Fiber.join(first)
       streamGate = undefined
@@ -4472,6 +4472,9 @@ describe("SessionRunnerLLM", () => {
       expect(userTexts(requests[0]!)).toEqual(["Start working"])
       expect(userTexts(requests[1]!)).toEqual(["Start working", "Queue first"])
       expect(userTexts(requests[2]!)).toEqual(["Start working", "Queue first", "Queue second"])
+      const lifecycle = yield* (yield* Database.Service).db.select({ type: EventTable.type, data: EventTable.data }).from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+      expect(lifecycle.filter((event) => event.type === "session.next.execution.started.1").map((event) => (event.data as { activityID: string }).activityID)).toEqual([initial.id, queuedFirst.id, queuedSecond.id])
+      expect(lifecycle.filter((event) => event.type === "session.next.execution.succeeded.1").map((event) => (event.data as { activityID: string }).activityID)).toEqual([initial.id, queuedFirst.id, queuedSecond.id])
     }),
   )
 
