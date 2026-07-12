@@ -155,3 +155,27 @@ it.effect("continues awaited process cleanup when the waiting Effect is interrup
     yield* Effect.promise(() => cleaned.promise)
   }),
 )
+
+it.effect("tracks close from acquisition and replays it exactly once to late handlers", () =>
+  Effect.sync(() => {
+    let notify: (() => void) | undefined
+    const client = MCPClient.make({
+      capabilities: {},
+      list: () => Promise.resolve({ tools: [] }),
+      call: () => Promise.resolve({ content: [] }),
+      closed: (handler) => {
+        notify = handler
+      },
+      close: () => Promise.resolve(),
+    })
+    expect(notify).toBeDefined()
+    notify!()
+    let first = 0
+    let second = 0
+    client.closed(() => first++)
+    client.closed(() => second++)
+    notify!()
+    expect(first).toBe(1)
+    expect(second).toBe(1)
+  }),
+)

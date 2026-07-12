@@ -76,14 +76,29 @@ export function make(input: {
   readonly close: Connection["close"]
 }): Connection {
   let closing: Promise<void> | undefined
+  let closed = false
+  const handlers = new Set<() => void>()
+  const notify = () => {
+    if (closed) return
+    closed = true
+    handlers.forEach((handler) => handler())
+    handlers.clear()
+  }
+  input.closed?.(notify)
   return {
     transport: input.transport ?? "local",
     capabilities: input.capabilities ?? {},
     list: input.list,
     call: input.call,
     changed: input.changed ?? (() => {}),
-    closed: input.closed ?? (() => {}),
-    close: () => (closing ??= Promise.resolve().then(input.close)),
+    closed: (handler) => {
+      if (closed) {
+        handler()
+        return
+      }
+      handlers.add(handler)
+    },
+    close: () => (closing ??= Promise.resolve().then(input.close).finally(notify)),
   }
 }
 

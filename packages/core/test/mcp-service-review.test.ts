@@ -37,6 +37,7 @@ function fixture(input: {
   readonly connect: MCPClient.Interface["connect"]
   readonly events?: Array<{ type: string; data: unknown }>
   readonly deny?: boolean
+  readonly wait?: boolean
 }) {
   const config = Layer.succeed(Config.Service, {
     entries: () =>
@@ -62,9 +63,52 @@ function fixture(input: {
     Layer.provide(plugins),
     Layer.provide(events),
   )
-  const ready = Layer.effectDiscard(MCP.Service.use((service) => service.ready())).pipe(Layer.provide(mcp))
+  const ready =
+    input.wait === false
+      ? Layer.empty
+      : Layer.effectDiscard(MCP.Service.use((service) => service.ready())).pipe(Layer.provide(mcp))
   return testEffect(Layer.mergeAll(mcp, ready, registry, permission, plugins, events, location, output))
 }
+
+const discoveryStarted = Promise.withResolvers<void>()
+const discoveryRelease = Promise.withResolvers<void>()
+let discoveryClosed: (() => void) | undefined
+let discoveryCleanup = 0
+fixture({
+  wait: false,
+  documents: [new ConfigMCP.Info({ servers: { race: new ConfigMCP.Local({ type: "local", command: ["race"] }) } })],
+  connect: () =>
+    Effect.succeed(
+      MCPClient.make({
+        capabilities: { tools: {} },
+        list: async () => {
+          discoveryStarted.resolve()
+          await discoveryRelease.promise
+          return { tools: [{ name: "late", inputSchema: { type: "object" } }] }
+        },
+        call: () => Promise.resolve({ content: [] }),
+        closed: (handler) => {
+          discoveryClosed = handler
+        },
+        close: async () => {
+          discoveryCleanup++
+        },
+      }),
+    ),
+}).effect("does not activate a connection closed after discovery starts", () =>
+  Effect.gen(function* () {
+    yield* Effect.promise(() => discoveryStarted.promise)
+    const observed = discoveryClosed !== undefined
+    discoveryClosed?.()
+    discoveryRelease.resolve()
+    const mcp = yield* MCP.Service
+    yield* mcp.ready()
+    expect(observed).toBe(true)
+    expect((yield* mcp.status()).race).not.toMatchObject({ status: "connected" })
+    expect((yield* (yield* ToolRegistry.Service).materialize()).definitions).toEqual([])
+    expect(discoveryCleanup).toBe(1)
+  }),
+)
 
 let hookResult: "error" | "success" | "replace" | "invalid" = "error"
 fixture({
@@ -437,6 +481,36 @@ fixture({
   }),
 )
 
+let imageMime = "text/plain"
+fixture({
+  documents: [new ConfigMCP.Info({ servers: { image: new ConfigMCP.Local({ type: "local", command: ["image"] }) } })],
+  connect: () =>
+    Effect.succeed(
+      MCPClient.make({
+        capabilities: { tools: {} },
+        list: () => Promise.resolve({ tools: [{ name: "mime", inputSchema: { type: "object" } }] }),
+        call: () =>
+          Promise.resolve({
+            content: [{ type: "image", data: Buffer.from("image").toString("base64"), mimeType: imageMime }],
+          }),
+        close: () => Promise.resolve(),
+      }),
+    ),
+}).effect("rejects non-image MIME for MCP image content", () =>
+  Effect.gen(function* () {
+    const tools = yield* (yield* ToolRegistry.Service).materialize()
+    for (const mime of ["text/plain", "application/octet-stream"]) {
+      imageMime = mime
+      expect(
+        (yield* tools.settle({
+          ...identity,
+          call: { type: "tool-call", id: `call-image-${mime}`, name: "image_mime", input: {} },
+        })).result,
+      ).toEqual({ type: "error", value: "MCP tool returned invalid image MIME" })
+    }
+  }),
+)
+
 const mutable = [
   new ConfigMCP.Info({
     servers: {
@@ -491,5 +565,60 @@ fixture({
       kept: { status: "connected", transport: "local" },
       added: { status: "connected", transport: "local" },
     })
+  }),
+)
+
+const collisionConfig = [
+  new ConfigMCP.Info({
+    servers: { keep: new ConfigMCP.Local({ type: "local", command: ["keep"] }) },
+  }),
+]
+let collisionRound = 0
+fixture({
+  documents: collisionConfig,
+  connect: (input) =>
+    Effect.succeed(
+      MCPClient.make({
+        capabilities: { tools: {} },
+        list: async () => {
+          if (input.name !== "keep") await Bun.sleep((input.name === "a b") === (collisionRound % 2 === 0) ? 20 : 1)
+          return { tools: [{ name: input.name === "keep" ? "stable" : "same", inputSchema: { type: "object" } }] }
+        },
+        call: () => Promise.resolve({ content: [] }),
+        close: () => Promise.resolve(),
+      }),
+    ),
+}).effect("reload rejects every batch collision regardless of discovery completion order", () =>
+  Effect.gen(function* () {
+    const mcp = yield* MCP.Service
+    for (collisionRound = 0; collisionRound < 2; collisionRound++) {
+      collisionConfig.splice(
+        0,
+        1,
+        new ConfigMCP.Info({
+          servers: {
+            keep: new ConfigMCP.Local({ type: "local", command: ["keep"] }),
+            "a b": new ConfigMCP.Local({ type: "local", command: [`left-${collisionRound}`] }),
+            "a@b": new ConfigMCP.Local({ type: "local", command: [`right-${collisionRound}`] }),
+          },
+        }),
+      )
+      yield* mcp.reload()
+      expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((tool) => tool.name)).toEqual([
+        "keep_stable",
+      ])
+      expect(yield* mcp.status()).toMatchObject({
+        "a b": { status: "failed" },
+        "a@b": { status: "failed" },
+      })
+      collisionConfig.splice(
+        0,
+        1,
+        new ConfigMCP.Info({
+          servers: { keep: new ConfigMCP.Local({ type: "local", command: ["keep"] }) },
+        }),
+      )
+      yield* mcp.reload()
+    }
   }),
 )

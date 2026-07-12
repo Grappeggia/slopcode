@@ -215,6 +215,17 @@ export const layer = Layer.effect(
 
     const refresh = (server: Server) => operations.withPermits(1)(server.lock.withPermits(1)(refreshUnlocked(server)))
 
+    const disconnected = (server: Server, client: Connection) =>
+      operations.withPermits(1)(
+        server.lock.withPermits(1)(
+          Effect.gen(function* () {
+            if (server.pending !== client && server.client !== client) return
+            yield* close(server)
+            yield* failure(server, "Connection closed")
+          }),
+        ),
+      )
+
     const prepare = Effect.fnUntraced(function* (server: Server) {
       if (server.config.disabled) {
         yield* publish(server, { status: "disabled" })
@@ -233,11 +244,25 @@ export const layer = Layer.effect(
           Effect.option,
         )
       if (client._tag === "None") return undefined
+      let closed = false
+      client.value.closed(() => {
+        closed = true
+        Effect.runFork(disconnected(server, client.value))
+      })
       server.pending = client.value
-      if (!hasTools(client.value.capabilities))
-        return { client: client.value, definitions: [] as ReadonlyArray<MCPTool> }
+      if (!hasTools(client.value.capabilities)) {
+        if (!closed) return { client: client.value, definitions: [] as ReadonlyArray<MCPTool>, closed: () => closed }
+        yield* close(server)
+        yield* failure(server, "Connection closed")
+        return undefined
+      }
       const discovered = yield* Effect.exit(discover(client.value, server.timeout))
-      if (Exit.isSuccess(discovered)) return { client: client.value, definitions: discovered.value }
+      if (Exit.isSuccess(discovered)) {
+        if (!closed) return { client: client.value, definitions: discovered.value, closed: () => closed }
+        yield* close(server)
+        yield* failure(server, "Connection closed")
+        return undefined
+      }
       server.pending = undefined
       yield* Effect.promise(() => client.value.close()).pipe(Effect.ignore)
       yield* failure(server, discovered.cause, true)
@@ -246,11 +271,17 @@ export const layer = Layer.effect(
 
     const activate = Effect.fnUntraced(function* (
       server: Server,
-      prepared: { readonly client: Connection; readonly definitions: ReadonlyArray<MCPTool> },
+      prepared: {
+        readonly client: Connection
+        readonly definitions: ReadonlyArray<MCPTool>
+        readonly closed: () => boolean
+      },
     ) {
       const client = prepared.client
-      if (server.pending !== client) {
+      if (server.pending !== client || prepared.closed()) {
         yield* Effect.promise(() => client.close()).pipe(Effect.ignore)
+        server.pending = undefined
+        yield* failure(server, "Connection closed")
         return
       }
       if (server.client && server.client !== client) yield* close(server)
@@ -263,22 +294,13 @@ export const layer = Layer.effect(
           return
         }
       }
+      if (prepared.closed()) {
+        yield* close(server)
+        yield* failure(server, "Connection closed")
+        return
+      }
       server.client = client
       server.pending = undefined
-      client.closed(() => {
-        Effect.runFork(
-          operations.withPermits(1)(
-            server.lock.withPermits(1)(
-              Effect.gen(function* () {
-                if (server.client !== client) return
-                server.client = undefined
-                yield* hide(server)
-                yield* failure(server, "Connection closed")
-              }),
-            ),
-          ),
-        )
-      })
       if (hasTools(client.capabilities))
         client.changed(() =>
           Effect.runPromise(refresh(server).pipe(Effect.catch((cause) => discoveryFailure(server, cause)))),
@@ -293,23 +315,29 @@ export const layer = Layer.effect(
 
     const connectOne = (server: Server) => server.lock.withPermits(1)(close(server).pipe(Effect.andThen(open(server))))
 
-    const connectAll = Effect.fnUntraced(function* () {
-      const ordered = [...servers.values()]
-      const discovered = yield* Effect.forEach(
-        ordered,
-        (server) => server.lock.withPermits(1)(close(server).pipe(Effect.andThen(prepare(server)))),
-        { concurrency: "unbounded" },
-      )
+    const activateBatch = Effect.fnUntraced(function* (
+      ordered: ReadonlyArray<Server>,
+      discovered: ReadonlyArray<
+        | {
+            readonly client: Connection
+            readonly definitions: ReadonlyArray<MCPTool>
+            readonly closed: () => boolean
+          }
+        | undefined
+      >,
+      unchanged: ReadonlyArray<Server> = [],
+    ) {
       const owners = new Map<string, Set<Server>>()
       discovered.forEach((prepared, index) =>
         prepared?.definitions.forEach((definition) => {
-          const tool = canonical(ordered[index]!.name, definition.name)
-          owners.set(tool, new Set([...(owners.get(tool) ?? []), ordered[index]!]))
+          const name = canonical(ordered[index]!.name, definition.name)
+          owners.set(name, new Set([...(owners.get(name) ?? []), ordered[index]!]))
         }),
       )
       const collisions = new Map<Server, string>()
-      owners.forEach((owners, tool) => {
-        if (owners.size > 1) owners.forEach((server) => collisions.set(server, tool))
+      owners.forEach((candidates, name) => {
+        if (candidates.size > 1 || unchanged.some((server) => server.names.has(name)))
+          candidates.forEach((server) => collisions.set(server, name))
       })
       yield* Effect.forEach(
         ordered,
@@ -329,6 +357,16 @@ export const layer = Layer.effect(
           ),
         { discard: true },
       )
+    })
+
+    const connectAll = Effect.fnUntraced(function* () {
+      const ordered = [...servers.values()]
+      const discovered = yield* Effect.forEach(
+        ordered,
+        (server) => server.lock.withPermits(1)(close(server).pipe(Effect.andThen(prepare(server)))),
+        { concurrency: "unbounded" },
+      )
+      yield* activateBatch(ordered, discovered)
     })
 
     const service = Service.of({
@@ -363,7 +401,20 @@ export const layer = Layer.effect(
             const next = yield* effective()
             const changed: Server[] = []
             const removed = [...servers.values()].filter((server) => !next.servers.has(server.name))
+            const replaced = [...next.servers].flatMap(([name, config]) => {
+              const server = servers.get(name)
+              if (
+                !server ||
+                (isDeepStrictEqual(server.config, config) && server.timeout === (config.timeout ?? next.timeout))
+              )
+                return []
+              return [server]
+            })
             yield* Effect.forEach(removed, (server) => server.lock.withPermits(1)(close(server)), {
+              concurrency: "unbounded",
+              discard: true,
+            })
+            yield* Effect.forEach(replaced, (server) => server.lock.withPermits(1)(close(server)), {
               concurrency: "unbounded",
               discard: true,
             })
@@ -377,7 +428,6 @@ export const layer = Layer.effect(
               )
                 continue
               if (existing) {
-                yield* existing.lock.withPermits(1)(close(existing))
                 existing.config = config
                 existing.timeout = config.timeout ?? next.timeout
                 changed.push(existing)
@@ -396,7 +446,14 @@ export const layer = Layer.effect(
               yield* anchor(server)
               changed.push(server)
             }
-            yield* Effect.forEach(changed, connectOne, { concurrency: "unbounded", discard: true })
+            const discovered = yield* Effect.forEach(changed, (server) => server.lock.withPermits(1)(prepare(server)), {
+              concurrency: "unbounded",
+            })
+            yield* activateBatch(
+              changed,
+              discovered,
+              [...servers.values()].filter((server) => !changed.includes(server)),
+            )
           }),
         )
       }),
@@ -580,7 +637,10 @@ function normalize(value: unknown): Effect.Effect<Normalized, Tool.Failure> {
 function content(value: unknown): Effect.Effect<Tool.Content, Tool.Failure> {
   if (!record(value) || typeof value.type !== "string") return invalid("content")
   if (value.type === "text" && typeof value.text === "string") return Effect.succeed({ type: "text", text: value.text })
-  if (value.type === "image") return file(value.data, value.mimeType, undefined, "image")
+  if (value.type === "image") {
+    if (typeof value.mimeType !== "string" || !value.mimeType.startsWith("image/")) return invalid("image MIME")
+    return file(value.data, value.mimeType, undefined, "image")
+  }
   if (value.type !== "resource" || !record(value.resource)) return invalid("content")
   const resource = value.resource
   if (typeof resource.uri !== "string") return invalid("resource URI")
