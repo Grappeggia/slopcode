@@ -2,7 +2,7 @@
 
 ## Result
 
-H5C4B2 is implemented in V2 Core. Remote MCP OAuth now has Location/workspace-scoped persistence, SDK-owned discovery/registration/PKCE/exchange/refresh, loopback callbacks, typed internal controls/status/events, authenticated Streamable HTTP with eligible SSE fallback, safe header precedence, restart recovery, and lifecycle cleanup. No public route, browser launch, or V1 runtime delegation was added.
+H5C4B2 is implemented in V2 Core. Remote MCP OAuth now has Location/workspace-scoped persistence, durable `initializing -> pending -> received -> exchanging -> terminal` attempts, SDK-owned discovery/registration/PKCE/exchange/refresh, loopback callbacks, typed internal controls/status/events, provider-free access-token snapshot resource transports, safe header precedence, restart recovery, and abort-before-close lifecycle cleanup. No public route, browser launch, or V1 runtime delegation was added.
 
 ## Design
 
@@ -11,12 +11,12 @@ H5C4B2 is implemented in V2 Core. Remote MCP OAuth now has Location/workspace-sc
 - Credential identity is the exact `(Location.directory, workspaceID, effective server name, normalized endpoint)` tuple. `normalizeEndpoint` uses `URL`, permits only credential-free fragment-free HTTP(S), canonicalizes URL serialization, and preserves path, trailing slash, and query distinctions.
 - Store entries contain only tokens with absolute expiry, full SDK client registration, SDK discovery state, a non-secret SHA-256 compatibility marker, exact attempt records, and an optional non-secret V1 claim marker.
 - The isolated V1 compatibility path reads but never writes `Global.data/mcp-auth.json`. It claims only exact version-2 stable token/client fields into an empty, workspace-less destination with matching directory, name, and normalized endpoint. It never claims verifier/state/transient fields or ambiguous records.
-- `MCPOAuthProvider` implements the SDK `OAuthClientProvider`. Static client configuration is authoritative; expired dynamic secrets are unavailable only when expiry is finite, positive, and elapsed. Token writes preserve omitted refresh token/scope and clear stale expiry when `expires_in` is omitted. All five SDK invalidation scopes are implemented.
-- `MCPOAuth` owns attempt coordination. IDs use 128 CSPRNG bits with an `mcp_auth_` prefix; state uses 256 bits. Attempts persist ten-minute wall-clock expiry and transition `pending -> received -> exchanging -> complete|failed`, with cancellation/expiry terminals erasing state, verifier, and code.
-- Exchange and proactive 60-second-skew refresh use identity-keyed inter-process single-flight locks and reread persisted state after lock acquisition. An interrupted operation keeps Effect interruption and aborts supported fetch work.
-- Recovery re-registers unexpired auto callbacks, resumes durable `received` records, and fails `exchanging` records with `indeterminate-exchange`. Graceful Location shutdown cancels owned pending attempts and closes listeners.
+- `MCPOAuthProvider` implements the SDK `OAuthClientProvider` only for interactive initialization/exchange and explicit noninteractive refresh. Static client configuration is authoritative; expired dynamic secrets are unavailable only when expiry is finite, positive, and elapsed. Token writes preserve omitted refresh token/scope and clear stale expiry when `expires_in` is omitted. All five SDK invalidation scopes are implemented.
+- `MCPOAuth` owns attempt coordination. IDs use 128 CSPRNG bits with an `mcp_auth_` prefix; state uses 256 bits. Attempts persist ten-minute wall-clock expiry and transition `initializing -> pending -> received -> exchanging -> complete|failed`, with cancellation/expiry terminals erasing state, verifier, code, and authorization URL. `pending` is published only after the verifier and exact authorization URL are durable.
+- Exchange and proactive 60-second-skew refresh use identity-keyed inter-process single-flight locks and reread persisted state after lock acquisition. Active callback exchanges are tracked by attempt with an abort controller and settlement promise. Remove, reset, stop, reload, replacement, and Location shutdown abort exchanges, await settlement, terminalize once, then close listeners.
+- Recovery terminalizes `initializing` and indeterminate `exchanging`, re-registers unexpired auto callbacks, and resumes durable `received` records. Fresh and recovered callback failures share terminal scrubbing and reliably scheduled registration cleanup.
 - `MCPOAuthCallback` binds explicit literal loopback addresses only, registers exact paths and states, accepts GET only, rejects duplicate/missing/unknown/replayed parameters, and returns fixed non-reflective pages with no-store, CSP, nosniff, and no-referrer headers. HTTPS and non-loopback redirects become manual mode.
-- `MCPClient` injects one provider into Streamable HTTP and SSE. Normal connect uses stored credentials and proactive refresh but cannot create an attempt, listener, authorization result, or browser action. Auth-required failures do not fall back; SSE fallback is limited to Streamable HTTP compatibility codes.
+- `MCPClient` passes no OAuth provider to Streamable HTTP or SSE. After explicit proactive refresh, it snapshots only the access token and injects bearer authorization at the resource fetch boundary. Refresh interaction maps to typed `auth-required`; other refresh failures map to bounded `refresh`. Normal connect cannot create an attempt, listener, authorization result, or browser action. Auth failures do not fall back; SSE fallback is limited to Streamable HTTP compatibility codes.
 - The remote fetch boundary adds configured headers only on the MCP resource origin, removes configured `Authorization` when OAuth is enabled, then overlays generated headers. Bearer, Accept, Content-Type, Last-Event-ID, session, and protocol headers therefore win. `oauth: false` retains prior explicit-header behavior.
 - `MCP.Interface` now exposes `authStatus`, `beginAuth`, `completeAuth`, `cancelAuth`, and `removeAuth`. Status/events contain only stable attempt IDs, modes, safe timestamps, and bounded status codes. The authorization URL is returned only by `beginAuth`.
 - Existing H5C4A/B1 candidate discovery, hidden tool registration, collision preflight, catalogs, timeout/config publication, stale-client fencing, and close ordering remain on their existing paths.
@@ -26,7 +26,7 @@ H5C4B2 is implemented in V2 Core. Remote MCP OAuth now has Location/workspace-sc
 - `packages/core/src/config/mcp.ts`: strict endpoint, OAuth client, callback port, and redirect admission.
 - `packages/core/src/location-layer.ts`: explicit scoped store/callback/OAuth/client wiring.
 - `packages/core/src/mcp.ts`: typed auth controls, status/events, recovery, workspace identity, and lifecycle coordination.
-- `packages/core/src/mcp/client.ts`: provider injection, proactive refresh, safe fetch boundary, and restricted fallback.
+- `packages/core/src/mcp/client.ts`: provider-free access-token snapshot transport, proactive refresh, safe fetch boundary, and restricted fallback.
 - `packages/core/src/mcp/oauth-store.ts`: secure versioned persistence, identity, invalidation, and exact V1 claim.
 - `packages/core/src/mcp/oauth-provider.ts`: SDK provider and compatibility enforcement.
 - `packages/core/src/mcp/oauth-callback.ts`: scoped loopback listener service.
@@ -100,7 +100,7 @@ One intermediate full Core run exposed stricter V2 endpoint admission breaking a
 - [x] Refresh preserves omitted fields, handles dynamic-secret expiry, uses 60-second skew, and is single-flight.
 - [x] Normal connect creates no attempt/listener/browser action and fails typed auth-required.
 - [x] Generated transport/auth headers win and configured secrets stay on the MCP resource origin.
-- [x] Both transports receive the provider; fallback excludes auth, interruption, and non-compatibility failures.
+- [x] Both resource transports receive only an access-token snapshot; fallback excludes auth, interruption, and non-compatibility failures.
 - [x] Auth controls, statuses, and events are typed, deterministic, and secret-free.
 - [x] Reload/remove/shutdown retain H5C4A/B1 hidden publication and stale-client fencing paths.
 - [x] Expected OAuth/store/callback failures are typed and sanitized; interruption remains interruption.
@@ -147,7 +147,7 @@ The rejected review was repaired without changing the V1 runtime or public surfa
 ### Noninteractive Connect And Fetch
 
 - Normal OAuth connect reads and checks exact compatibility plus usable access/refresh material before provider construction. No credentials returns typed `auth-required` with zero network requests and no store file.
-- The connect provider is explicitly noninteractive and transient-disabled. It cannot persist verifier/state or create attempts, and its redirect callback always fails closed.
+- Normal resource connect is provider-free. Explicit proactive refresh alone uses a noninteractive provider whose redirect callback throws typed `AuthRequired`; it cannot create attempts or listeners.
 - Outer lifecycle, SDK request, and `Request` AbortSignals are merged with `AbortSignal.any`. Closing a returned connection aborts the lifecycle signal before SDK close, covering active Streamable HTTP/SSE work.
 - Configured-header requests use manual redirects. Same-origin redirects are bounded; cross-origin redirects strip all configured header names and bearer authorization. SDK authorization-server requests never receive resource configured headers.
 
@@ -222,7 +222,7 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 
 ### Repairs
 
-- Added a snapshot-only connect provider. It has no redirect URL, client-registration writer, discovery writer, invalidation hook, state, or verifier persistence. Token save is inert and redirect/verifier requests fail closed. Normal 401 handling returns bounded `auth-required` without changing exact store bytes.
+- Replaced the intermediate snapshot-provider design with a provider-free access-token snapshot passed directly to the resource fetch boundary. Normal 401 handling returns bounded `auth-required` without changing exact store bytes.
 - Kept mutation-capable OAuth exclusively in proactive refresh and explicit begin/complete flows. Refresh now has a service-scoped in-process reservation in addition to the process flock, and the Location client layer requires the exact injected OAuth store rather than silently falling back to global storage.
 - Expanded closed validation for token numeric/string fields, registration timestamps/arrays/URLs/JWK JSON, authorization-server and OIDC arrays/booleans/URLs, protected-resource arrays/booleans/URLs, bounded attempt failures, compatibility hashes, claim literals, canonical legacy keys, and closed `legacy`/`recoverable` entries.
 - Config and runtime now reject every mixed callback-port/manual redirect, default-port redirect, and explicit mismatched-port case. Runtime parsing is wrapped in `Effect.try` and emits input-independent `invalid-redirect`.
@@ -280,7 +280,7 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 - Initialization interruption and restart both terminalize `initializing` as bounded discovery failure and erase state/verifier/code/authorization. Recovery never installs a listener for an initializing flow.
 - Normal transport receives no SDK OAuth provider. It receives only a snapshotted access token injected into resource requests. Refresh tokens, client registration, discovery, redirect, verifier, state, save, and invalidation hooks are absent. A resource 401 throws typed `auth-required` before SDK OAuth processing.
 - Proactive refresh remains before transport construction, persists refreshed tokens, uses an in-process reservation plus process flock, and rereads durable state inside the flock.
-- Automatic exchanges own abort controllers in the Location service. Shutdown aborts token fetches before terminalization; callback success/failure always schedules listener release, and exchange failure scrubs transients.
+- Automatic exchanges own attempt-keyed abort controllers and settlement promises in the Location service. Teardown aborts and awaits token fetch work before one terminal CAS and listener release; callback failure scrubs transients.
 - V1 migration now retains `callback_port` only for an explicit matching loopback HTTP redirect; external/manual and default-port redirects drop it deterministically.
 - Added explicit `MCPClient.layerWith(store)` so seeded credential integration tests cannot silently exercise the global fallback store.
 
@@ -317,3 +317,52 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 - `40ac3310ce` `fix(core): finalize MCP OAuth lifecycle`
 - `c75c28e869` `test(core): cover final MCP OAuth recovery`
 - Final report appendix: the following `docs:` commit.
+
+## Approval Review Settlement
+
+### Approval RED Evidence
+
+- The first approval protocol run was `15 pass`, `1 fail`, `66 expect() calls`. A just-expired pending attempt was durably terminalized but the same first `status` call returned `auth-required` because it continued using the stale pre-terminalization entry and ignored phase `expired` when selecting the latest failure.
+- The first bounded-refresh fixture run was `0 pass`, `1 fail`, `6 expect() calls`; it additionally exposed an invalid throwing server fixture, which was replaced with protocol responses before accepting refresh evidence.
+- `d916301b77` committed the active-exchange, recovered-failure, refresh, expiry, and spawned-process contracts before the production fix commit. The parent implementation closed listeners before awaiting active exchange settlement, had no bounded `refresh` code, returned stale expiry status, and lacked process-isolated independent-field evidence.
+- `e969512d90` committed the exact terminal `AuthChanged` payload/redaction contract before the direct terminal-status notification fix.
+
+### Approval Repairs
+
+- Every active callback exchange is tracked by attempt as `{ controller, settled }`. Shared quiescence aborts all matching exchanges first, awaits all settlement promises, CAS-terminalizes any remaining received/exchanging attempt exactly once, and only then closes registrations.
+- Remove, reset, stop, config reload, disable, endpoint/scope/redirect replacement, and Location finalization all flow through abort-before-close cleanup. Fresh and recovered handlers now both mark failure and schedule listener cleanup after the HTTP response can settle, avoiding self-close deadlock.
+- Proactive refresh redirect fallback throws the typed internal `AuthRequired`; invalid-grant and interaction-required paths become `auth-required`, while unexpected refresh defects become bounded `refresh`. Error bodies, URLs, tokens, and provider messages are never copied into public errors.
+- Expiry terminalization rereads the store before precedence selection and treats `expired` as a failed `attempt-expired` result, so the first call is deterministic.
+- A successful terminal failure CAS emits one internal safe `{ status: "failed", code }` notification. MCP publishes that as one `MCP.Event.AuthChanged`; duplicate terminal attempts cannot emit, and payloads contain no authorization URL, verifier, state, code, token, client, or provider text.
+- Added a real 12-process independent-field update race. All child writes survive one shared store bucket.
+
+### Approval Coverage
+
+- Hanging exchange teardown covers remove, reset, and stop directly; reload and replacement use the tested reset path. Callback response settles 400, attempts scrub once, and the callback port is immediately reusable.
+- A recovered callback exchange failure records bounded `exchange`, schedules registration cleanup, and immediately reuses the port.
+- Invalid-grant, malformed response, and interaction fallback return only `auth-required` or `refresh`, create no attempts/listeners, and do not expose private response text.
+- First-call expiry returns `{ status: "failed", code: "attempt-expired" }`, emits once, scrubs secrets, and a second status call emits nothing.
+- MCP-level event evidence asserts exactly one `mcp.auth.changed` payload containing only server and bounded failed status/code, with no authorization or client material.
+- Spawned store workers concurrently add 12 independent attempts with no lost fields.
+
+### Approval Results
+
+- Approval subset: `63 pass`, `0 fail`, `281 expect() calls`, 4 files.
+- Final focused 13-file command: `131 pass`, `0 fail`, `538 expect() calls`.
+- H5C4A/B1 regression command: `71 pass`, `0 fail`, `257 expect() calls`.
+- Full Core: `1419 pass`, `0 fail`, `4335 expect() calls`, 153 files.
+- Full CodeMode: `254 pass`, `0 fail`, `744 expect() calls`.
+- V1 MCP HTTP/CLI evidence: `8 pass`, `0 fail`, `32 expect() calls`; the prior broader V1 OAuth command remains `40 pass`, `0 fail`, `123 expect() calls`.
+- Core typecheck: exit 0.
+- Server typecheck: exit 0.
+- Frozen install: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+- SlopCode typecheck remains red only at the unrelated existing `src/session/processor.ts(495,17)` and `src/session/prompt.ts(1382,39)` diagnostics.
+
+### Approval Commits
+
+- `d916301b77` `test(core): expose MCP OAuth active cleanup gaps`
+- `4188e32f15` `fix(core): settle active MCP OAuth work`
+- `e969512d90` `test(core): verify terminal MCP auth events`
+- `973b351de1` `fix(core): publish exact terminal auth events`
+- `98ddea0754` `test(core): name interaction refresh coverage`
+- Approval report: the following `docs:` commit.
