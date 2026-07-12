@@ -1317,6 +1317,7 @@ let authChange: Parameters<MCPOAuth.Interface["onChange"]>[0] | undefined
 let authReset = (_target: MCPOAuthStore.Target) => Effect.void
 const authStore: MCPOAuthStore.Interface = {
   get: () => Effect.succeed({}),
+  targets: () => Effect.succeed([]),
   update: (_target, change) => Effect.succeed(change({})),
   remove: () => Effect.void,
   saveTokens: () => Effect.void,
@@ -1326,7 +1327,7 @@ const authStore: MCPOAuthStore.Interface = {
   cancelAttempt: () => Effect.succeed({ status: "missing" }),
   readyAttempt: () => Effect.succeed(undefined),
   startExchange: () => Effect.succeed(undefined),
-  finishExchange: () => Effect.succeed(false),
+  finishExchange: () => Effect.succeed({ won: false, cancelled: [] }),
   finishAttempt: () => Effect.succeed(false),
   cancelTarget: () => Effect.void,
 }
@@ -1436,19 +1437,56 @@ fixture({
 )
 
 let forbiddenRecovery = 0
+let forbiddenReset = 0
 fixture({
   documents: [new ConfigMCP.Info({ servers: {
     disabledRecovery: new ConfigMCP.Remote({ type: "remote", url: "https://disabled.example/mcp", disabled: true }),
     falseRecovery: new ConfigMCP.Remote({ type: "remote", url: "https://false.example/mcp", oauth: false }),
     localRecovery: new ConfigMCP.Local({ type: "local", command: ["local"] }),
   } })],
-  oauth: { ...stagedOAuth, recover: () => Effect.sync(() => forbiddenRecovery++).pipe(Effect.asVoid) },
-  oauthStore: authStore,
+  oauth: {
+    ...stagedOAuth,
+    recover: () => Effect.sync(() => forbiddenRecovery++).pipe(Effect.asVoid),
+    reset: () => Effect.sync(() => forbiddenReset++).pipe(Effect.asVoid),
+  },
+  oauthStore: {
+    ...authStore,
+    targets: (scope) => Effect.succeed([{ ...scope, endpoint: `https://${scope.name}.stored.example/mcp` }]),
+  },
   connect: () => Effect.fail(new MCPClient.ConnectionError({ message: "unused" })),
 }).effect("never recovers disabled oauth-false or local servers", () =>
   Effect.gen(function* () {
     yield* (yield* MCP.Service).ready()
     expect(forbiddenRecovery).toBe(0)
+    expect(forbiddenReset).toBe(3)
+  }),
+)
+
+const restartRecovered: MCPOAuthStore.Target[] = []
+const restartReset: MCPOAuthStore.Target[] = []
+fixture({
+  documents: [new ConfigMCP.Info({ servers: {
+    restart: new ConfigMCP.Remote({
+      type: "remote",
+      url: "https://new.example/mcp",
+      oauth: { client_id: "new", scope: "new", callback_port: 29999 },
+    }),
+  } })],
+  oauth: {
+    ...stagedOAuth,
+    recover: (input) => Effect.sync(() => restartRecovered.push(input.target)).pipe(Effect.asVoid),
+    reset: (target) => Effect.sync(() => restartReset.push(target)).pipe(Effect.asVoid),
+  },
+  oauthStore: {
+    ...authStore,
+    targets: (scope) => Effect.succeed([{ ...scope, endpoint: "https://old.example/mcp" }]),
+  },
+  connect: () => Effect.fail(new MCPClient.ConnectionError({ message: "MCP authentication is required", code: "auth-required" })),
+}).effect("cancels stale endpoint buckets before recovering exact restart config", () =>
+  Effect.gen(function* () {
+    yield* (yield* MCP.Service).ready()
+    expect(restartReset).toEqual([expect.objectContaining({ endpoint: "https://old.example/mcp" })])
+    expect(restartRecovered).toEqual([expect.objectContaining({ endpoint: "https://new.example/mcp" })])
   }),
 )
 

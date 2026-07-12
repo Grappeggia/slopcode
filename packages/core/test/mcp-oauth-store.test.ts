@@ -188,7 +188,7 @@ describe("MCP OAuth store", () => {
           expect((yield* first.startExchange(target, "winner", "code"))?.phase).toBe("exchanging")
           expect(yield* first.finishExchange(target, "winner", { access_token: "winning", token_type: "Bearer" }, 20)).toEqual({
             won: true,
-            cancelled: ["loser"],
+            cancelled: ["sibling"],
           })
           expect(yield* second.finishExchange(target, "winner", { access_token: "late", token_type: "Bearer" }, 21)).toEqual({
             won: false,
