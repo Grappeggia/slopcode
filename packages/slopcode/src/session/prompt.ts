@@ -117,6 +117,20 @@ export class AdmissionFailed extends Schema.TaggedErrorClass<AdmissionFailed>()(
   reason: Schema.Literals(["preparation", "persistence", "unknown"]),
 }) {}
 
+type AdmissionOutcome =
+  | { readonly success: true; readonly message: SessionV1.WithParts }
+  | { readonly success: false; readonly reason: AdmissionFailed["reason"] }
+type AdmissionOwner = { readonly identity: string; readonly terminal: Deferred.Deferred<AdmissionOutcome> }
+const registry = new WeakMap<object, Map<EventV2.ID, AdmissionOwner>>()
+
+function active(database: object) {
+  const existing = registry.get(database)
+  if (existing) return existing
+  const created = new Map<EventV2.ID, AdmissionOwner>()
+  registry.set(database, created)
+  return created
+}
+
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
 IMPORTANT:
@@ -182,13 +196,7 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
-    type AdmissionOutcome =
-      | { readonly success: true; readonly message: SessionV1.WithParts }
-      | { readonly success: false; readonly reason: AdmissionFailed["reason"] }
-    const admissions = new Map<
-      EventV2.ID,
-      { readonly identity: string; readonly terminal: Deferred.Deferred<AdmissionOutcome> }
-    >()
+    const admissions = active(db)
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),

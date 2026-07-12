@@ -4,9 +4,10 @@ import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Database } from "@slopcode-ai/core/database/database"
 import { and, eq, gt } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { EventV2 } from "@slopcode-ai/core/event"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
-import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@slopcode-ai/core/util/error"
@@ -28,6 +29,7 @@ import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
 import { PartTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
+import { ProjectTable } from "@slopcode-ai/core/project/sql"
 import { EventSequenceTable, EventTable } from "@slopcode-ai/core/event/sql"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { LLM } from "../../src/session/llm"
@@ -60,6 +62,7 @@ import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ModelV2 } from "@slopcode-ai/core/model"
+import { AbsolutePath } from "@slopcode-ai/core/schema"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -223,19 +226,19 @@ function makePrompt(input?: PromptOptions) {
     Layer.provideMerge(deps),
   )
   return SessionPrompt.layer.pipe(
-    Layer.provide(SessionRevert.defaultLayer),
-    Layer.provide(Image.defaultLayer),
-    Layer.provide(summary),
+    Layer.provideMerge(SessionRevert.defaultLayer),
+    Layer.provideMerge(Image.defaultLayer),
+    Layer.provideMerge(summary),
     Layer.provideMerge(run),
     Layer.provideMerge(compact),
     Layer.provideMerge(proc),
     Layer.provideMerge(registry),
     Layer.provideMerge(trunc),
-    Layer.provide(Instruction.defaultLayer),
-    Layer.provide(SystemPrompt.defaultLayer),
-    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provideMerge(Instruction.defaultLayer),
+    Layer.provideMerge(SystemPrompt.defaultLayer),
+    Layer.provideMerge(RuntimeFlags.layer({ experimentalEventSystem: true })),
     Layer.provideMerge(deps),
-    Layer.provide(summary),
+    Layer.provideMerge(summary),
   )
 }
 
@@ -479,6 +482,33 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
   const chat = yield* sessions.create(input ?? { title: "Pinned" })
   return { prompt, run, sessions, chat }
 })
+
+function buildPrompt<E, R>(layer: Layer.Layer<SessionPrompt.Service, E, R>) {
+  return Effect.gen(function* () {
+    const scope = yield* Scope.make()
+    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+    return Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionPrompt.Service)
+  })
+}
+
+function buildDatabase<E, R>(layer: Layer.Layer<Database.Service, E, R>) {
+  return Effect.gen(function* () {
+    const scope = yield* Scope.make()
+    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+    return Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), Database.Service)
+  })
+}
+
+function buildEvents<E, R>(layer: Layer.Layer<EventV2Bridge.Service, E, R>) {
+  return Effect.gen(function* () {
+    const scope = yield* Scope.make()
+    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+    return Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), EventV2Bridge.Service)
+  })
+}
+
+type Requirements<L> = L extends Layer.Layer<infer _A, infer _E, infer R> ? R : never
+type PromptRequirements = Requirements<typeof SessionPrompt.layer>
 
 noLLMServer.instance(
   "prompt guard rejects before persisting a user message",
@@ -807,6 +837,134 @@ admissionServer.instance(
   { config: cfg },
 )
 
+admissionServer.instance(
+  "independent prompt layers sharing one database coordinate exact retries",
+  () =>
+    Effect.gen(function* () {
+      const { chat } = yield* boot()
+      const context = (yield* Effect.context()) as Context.Context<PromptRequirements>
+      const layer = SessionPrompt.layer.pipe(Layer.provide(Layer.succeedContext(context)))
+      const firstPrompt = yield* buildPrompt(layer)
+      const retryPrompt = yield* buildPrompt(layer)
+      const checked = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const input = {
+        sessionID: chat.id,
+        messageID: MessageID.make("msg_admission_shared_layers"),
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text" as const, text: "shared" }],
+      }
+      admissionCalls = 0
+      admissionGates.push(() =>
+        Deferred.succeed(checked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
+      )
+      const first = yield* firstPrompt.prompt(input).pipe(Effect.forkChild)
+      yield* Deferred.await(checked)
+      const retry = yield* retryPrompt.prompt(input).pipe(Effect.forkChild)
+      yield* Effect.sleep("650 millis")
+
+      expect(retry.pollUnsafe()).toBeUndefined()
+      expect(admissionCalls).toBe(1)
+      yield* Deferred.succeed(release, undefined)
+      const original = yield* Fiber.join(first)
+      expect(yield* Fiber.join(retry)).toEqual(original)
+      expect(admissionCalls).toBe(1)
+
+      const after = yield* buildPrompt(layer)
+      expect(yield* after.prompt(input)).toEqual(original)
+      expect(admissionCalls).toBe(1)
+    }),
+  { config: cfg },
+)
+
+admissionServer.instance(
+  "same prompt ID on separate databases has independent ownership",
+  () =>
+    Effect.gen(function* () {
+      const { chat } = yield* boot()
+      const context = (yield* Effect.context()) as Context.Context<PromptRequirements>
+      const firstDatabase = yield* buildDatabase(Database.layerFromPath(":memory:"))
+      const secondDatabase = yield* buildDatabase(Database.layerFromPath(":memory:"))
+      yield* Effect.forEach([firstDatabase, secondDatabase], (database) =>
+        Effect.gen(function* () {
+          yield* database.db
+            .insert(ProjectTable)
+            .values({ id: chat.projectID!, worktree: AbsolutePath.make(chat.directory), sandboxes: [] })
+            .run()
+          yield* database.db
+            .insert(SessionTable)
+            .values({
+              id: chat.id,
+              project_id: chat.projectID,
+              slug: chat.slug,
+              directory: chat.directory,
+              title: chat.title,
+              version: chat.version,
+              runtime: "v1",
+              runtime_state: "ready",
+              runtime_epoch: 0,
+              agent: "build",
+              model: { providerID: ref.providerID, id: ref.modelID },
+            })
+            .run()
+        }),
+      )
+      const eventLayer = (database: typeof firstDatabase) =>
+        EventV2Bridge.layer.pipe(
+          Layer.provide(EventV2.layer.pipe(Layer.provide(Layer.succeed(Database.Service, database)))),
+        )
+      const firstEvents = yield* buildEvents(eventLayer(firstDatabase))
+      const secondEvents = yield* buildEvents(eventLayer(secondDatabase))
+      const firstPrompt = yield* buildPrompt(
+        SessionPrompt.layer.pipe(
+          Layer.provide(
+            Layer.succeedContext(
+              Context.add(Context.add(context, Database.Service, firstDatabase), EventV2Bridge.Service, firstEvents),
+            ),
+          ),
+        ),
+      )
+      const secondPrompt = yield* buildPrompt(
+        SessionPrompt.layer.pipe(
+          Layer.provide(
+            Layer.succeedContext(
+              Context.add(Context.add(context, Database.Service, secondDatabase), EventV2Bridge.Service, secondEvents),
+            ),
+          ),
+        ),
+      )
+      const firstChecked = yield* Deferred.make<void>()
+      const secondChecked = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const input = {
+        sessionID: chat.id,
+        messageID: MessageID.make("msg_admission_separate_databases"),
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text" as const, text: "separate" }],
+      }
+      admissionCalls = 0
+      admissionGates.push(
+        () => Deferred.succeed(firstChecked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
+        () => Deferred.succeed(secondChecked, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid),
+      )
+      const first = yield* firstPrompt.prompt(input, Effect.void).pipe(Effect.forkChild)
+      yield* Deferred.await(firstChecked)
+      const second = yield* secondPrompt.prompt(input, Effect.void).pipe(Effect.forkChild)
+      yield* Deferred.await(secondChecked)
+
+      expect(admissionCalls).toBe(2)
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(first)
+      yield* Fiber.join(second)
+      expect(admissionCalls).toBe(2)
+    }),
+  { config: cfg },
+)
+
 terminalRaceServer.instance(
   "concurrent exact retry returns at terminal while the admitted reply continues",
   () =>
@@ -892,7 +1050,11 @@ admissionServer.instance(
   "interrupted prompt preparation settles failure before the fiber exits",
   () =>
     Effect.gen(function* () {
-      const { prompt, chat } = yield* boot()
+      const { chat } = yield* boot()
+      const context = (yield* Effect.context()) as Context.Context<PromptRequirements>
+      const layer = SessionPrompt.layer.pipe(Layer.provide(Layer.succeedContext(context)))
+      const ownerPrompt = yield* buildPrompt(layer)
+      const retryPrompt = yield* buildPrompt(layer)
       const { db } = yield* Database.Service
       const runtime = yield* SessionRuntime.Service
       const checked = yield* Deferred.make<void>()
@@ -906,15 +1068,16 @@ admissionServer.instance(
       const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
       admissionCalls = 0
       admissionGates.push(() => Deferred.succeed(checked, undefined).pipe(Effect.andThen(Effect.never), Effect.asVoid))
-      const fiber = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
+      const fiber = yield* ownerPrompt.prompt(input, guard).pipe(Effect.forkChild)
       yield* Deferred.await(checked)
-      const waiting = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
+      const waiting = yield* retryPrompt.prompt(input, guard).pipe(Effect.forkChild)
       yield* Effect.yieldNow
       expect(waiting.pollUnsafe()).toBeUndefined()
 
       yield* Fiber.interrupt(fiber)
       const retry = yield* Fiber.await(waiting)
-      const terminalRetry = yield* prompt.prompt(input, guard).pipe(Effect.exit)
+      const terminalPrompt = yield* buildPrompt(layer)
+      const terminalRetry = yield* terminalPrompt.prompt(input, guard).pipe(Effect.exit)
       const terminal = (yield* db
         .select()
         .from(EventTable)
