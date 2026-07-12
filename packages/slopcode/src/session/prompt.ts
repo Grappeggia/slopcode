@@ -43,7 +43,7 @@ import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Semaphore, Types } from "effect"
+import { Cause, Deferred, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -78,16 +78,6 @@ const PromptRequested = EventV2.define({
     sessionID: SessionID,
     messageID: MessageID,
     identity: Schema.String,
-  },
-})
-const PromptClaimed = EventV2.define({
-  type: "internal.v1.prompt.claimed",
-  sync: { aggregate: "sessionID", version: 1 },
-  schema: {
-    sessionID: SessionID,
-    messageID: MessageID,
-    identity: Schema.String,
-    started: Schema.Finite,
   },
 })
 const PromptPrepared = EventV2.define({
@@ -192,18 +182,13 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
-    const started = Date.now()
-    const admissions = new Map<string, { lock: Semaphore.Semaphore; users: number }>()
-    const admission = (key: string) => {
-      const existing = admissions.get(key)
-      if (existing) {
-        existing.users++
-        return existing
-      }
-      const created = { lock: Semaphore.makeUnsafe(1), users: 1 }
-      admissions.set(key, created)
-      return created
-    }
+    type AdmissionOutcome =
+      | { readonly success: true; readonly message: SessionV1.WithParts }
+      | { readonly success: false; readonly reason: AdmissionFailed["reason"] }
+    const admissions = new Map<
+      EventV2.ID,
+      { readonly identity: string; readonly terminal: Deferred.Deferred<AdmissionOutcome> }
+    >()
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -1210,169 +1195,152 @@ export const layer = Layer.effect(
       const messageID = input.messageID ?? MessageID.ascending()
       const request = { ...input, messageID }
       const key = JSON.stringify([input.sessionID, messageID])
-      const entry = admission(key)
-      const admitted = yield* entry.lock
-        .withPermits(1)(
-          Effect.uninterruptibleMask((restore) =>
-            Effect.gen(function* () {
-              const identity = promptIdentity(request)
-              const requestedID = lifecycleID(key, "requested")
-              const claimedID = lifecycleID(key, "claimed")
-              const preparedID = lifecycleID(key, "prepared")
-              const terminalID = lifecycleID(key, "terminal")
-              const data = { sessionID: input.sessionID, messageID, identity }
-              const fail = Effect.fnUntraced(function* (reason: AdmissionFailed["reason"]) {
-                yield* events.publish(PromptFailed, { ...data, reason }, { id: terminalID, idempotent: true })
-                return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason })
-              })
-              const recover = Effect.fnUntraced(function* () {
-                const terminal = yield* record(terminalID)
-                if (terminal?.type === "internal.v1.prompt.failed.1") {
-                  const reason = terminal.data.reason
-                  return yield* new AdmissionFailed({
-                    sessionID: input.sessionID,
-                    messageID,
-                    reason:
-                      terminal.data.identity === identity &&
-                      (reason === "preparation" || reason === "persistence" || reason === "unknown")
-                        ? reason
-                        : "unknown",
-                  })
-                }
-                if (terminal?.type === "internal.v1.prompt.completed.1") {
-                  const manifest = terminal.data.manifest
-                  if (terminal.data.identity === identity && typeof manifest === "string") {
-                    const message = yield* complete(input.sessionID, messageID, manifest)
-                    if (message) return message
-                  }
-                  return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason: "unknown" })
-                }
-                const prepared = yield* record(preparedID)
-                if (
-                  prepared?.type === "internal.v1.prompt.prepared.1" &&
-                  prepared.data.identity === identity &&
-                  typeof prepared.data.manifest === "string"
-                ) {
-                  const message = yield* complete(input.sessionID, messageID, prepared.data.manifest)
-                  if (message) {
-                    yield* events.publish(
-                      PromptCompleted,
-                      { ...data, manifest: prepared.data.manifest },
-                      { id: terminalID, idempotent: true },
-                    )
-                    return message
-                  }
-                }
-                return yield* fail("unknown")
-              })
-              const wait = Effect.fnUntraced(function* () {
-                while (!(yield* record(terminalID))) yield* Effect.sleep("10 millis")
-                return yield* recover()
-              })
-              const claim = Effect.fnUntraced(function* () {
-                for (let attempt = 0; attempt < 50; attempt++) {
-                  const claimed = yield* record(claimedID)
-                  if (claimed) return claimed
-                  yield* Effect.sleep("10 millis")
-                }
-              })
+      const identity = promptIdentity(request)
+      const requestedID = lifecycleID(key, "requested")
+      const active = admissions.get(requestedID)
+      if (active) {
+        if (active.identity !== identity) return yield* Effect.die(`Conflicting prompt admission ${messageID}`)
+        const terminal = yield* Deferred.await(active.terminal)
+        if (terminal.success) return terminal.message
+        return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason: terminal.reason })
+      }
 
-              const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-              if (input.agent && !(yield* agents.get(input.agent))) {
-                const available = (yield* agents.list()).filter((agent) => !agent.hidden).map((agent) => agent.name)
-                const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-                throw new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
-              }
-              let requested = false
-              yield* events.publish(PromptRequested, data, {
-                id: requestedID,
-                idempotent: true,
-                guard: () => guard.pipe(Effect.orDie),
-                commit: () =>
-                  Effect.sync(() => {
-                    requested = true
-                  }),
-              })
-              if (!requested) {
-                if (yield* record(terminalID)) return { message: yield* recover(), resume: false }
-                const claimed = yield* restore(claim())
-                if (
-                  claimed?.type === "internal.v1.prompt.claimed.1" &&
-                  claimed.data.identity === identity &&
-                  typeof claimed.data.started === "number" &&
-                  claimed.data.started >= started
-                )
-                  return { message: yield* restore(wait()), resume: false }
-                return { message: yield* recover(), resume: false }
-              }
-
-              yield* events.publish(
-                PromptClaimed,
-                { ...data, started: Date.now() },
-                { id: claimedID, idempotent: true },
-              )
-
-              const state: { completed: boolean; reason: AdmissionFailed["reason"]; manifest?: string } = {
-                completed: false,
-                reason: "preparation",
-              }
-              const result = yield* restore(
-                Effect.gen(function* () {
-                  const message = yield* createUserMessage(request, (prepared) => {
-                    state.manifest = messageManifest(prepared)
-                    state.reason = "persistence"
-                    return events
-                      .publish(
-                        PromptPrepared,
-                        { ...data, manifest: state.manifest },
-                        { id: preparedID, idempotent: true },
-                      )
-                      .pipe(Effect.asVoid)
-                  })
-                  yield* revert.cleanup(session, message.info.id)
-                  yield* sessions.touch(input.sessionID)
-
-                  const permissions: PermissionV1.Rule[] = []
-                  for (const [t, enabled] of Object.entries(input.tools ?? {})) {
-                    permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
-                  }
-                  if (permissions.length > 0) {
-                    session.permission = permissions
-                    yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
-                  }
-
-                  if (!state.manifest) return yield* Effect.die("Prompt preparation did not produce a manifest")
-                  yield* events.publish(
-                    PromptCompleted,
-                    { ...data, manifest: state.manifest },
-                    {
-                      id: terminalID,
-                      idempotent: true,
-                      commit: () =>
-                        Effect.sync(() => {
-                          state.completed = true
-                        }),
-                    },
-                  )
-                  return message
-                }),
-              ).pipe(Effect.exit)
-              if (Exit.isFailure(result)) {
-                if (state.completed) return { message: yield* recover(), resume: false }
-                return yield* fail(state.reason)
-              }
-              return { message: result.value, resume: input.noReply !== true }
-            }),
-          ),
-        )
-        .pipe(
-          Effect.ensuring(
+      const owner = { identity, terminal: Deferred.makeUnsafe<AdmissionOutcome>() }
+      admissions.set(requestedID, owner)
+      const admitted = yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const preparedID = lifecycleID(key, "prepared")
+          const terminalID = lifecycleID(key, "terminal")
+          const data = { sessionID: input.sessionID, messageID, identity }
+          const settle = (outcome: AdmissionOutcome) =>
             Effect.sync(() => {
-              entry.users--
-              if (entry.users === 0) admissions.delete(key)
+              Deferred.doneUnsafe(owner.terminal, Effect.succeed(outcome))
+              if (admissions.get(requestedID) === owner) admissions.delete(requestedID)
+            })
+          const fail = Effect.fnUntraced(function* (reason: AdmissionFailed["reason"]) {
+            yield* events.publish(PromptFailed, { ...data, reason }, { id: terminalID, idempotent: true })
+            yield* settle({ success: false, reason })
+            return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason })
+          })
+          const recover = Effect.fnUntraced(function* () {
+            const terminal = yield* record(terminalID)
+            if (terminal?.type === "internal.v1.prompt.failed.1") {
+              const reason = terminal.data.reason
+              const safe =
+                terminal.data.identity === identity &&
+                (reason === "preparation" || reason === "persistence" || reason === "unknown")
+                  ? reason
+                  : "unknown"
+              yield* settle({ success: false, reason: safe })
+              return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason: safe })
+            }
+            if (terminal?.type === "internal.v1.prompt.completed.1") {
+              const manifest = terminal.data.manifest
+              if (terminal.data.identity === identity && typeof manifest === "string") {
+                const message = yield* complete(input.sessionID, messageID, manifest)
+                if (message) {
+                  yield* settle({ success: true, message })
+                  return message
+                }
+              }
+              yield* settle({ success: false, reason: "unknown" })
+              return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason: "unknown" })
+            }
+            const prepared = yield* record(preparedID)
+            if (
+              prepared?.type === "internal.v1.prompt.prepared.1" &&
+              prepared.data.identity === identity &&
+              typeof prepared.data.manifest === "string"
+            ) {
+              const message = yield* complete(input.sessionID, messageID, prepared.data.manifest)
+              if (message) {
+                yield* events.publish(
+                  PromptCompleted,
+                  { ...data, manifest: prepared.data.manifest },
+                  { id: terminalID, idempotent: true },
+                )
+                yield* settle({ success: true, message })
+                return message
+              }
+            }
+            return yield* fail("unknown")
+          })
+
+          const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+          if (input.agent && !(yield* agents.get(input.agent))) {
+            const available = (yield* agents.list()).filter((agent) => !agent.hidden).map((agent) => agent.name)
+            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+            throw new NamedError.Unknown({ message: `Agent not found: "${input.agent}".${hint}` })
+          }
+          let requested = false
+          yield* events.publish(PromptRequested, data, {
+            id: requestedID,
+            idempotent: true,
+            guard: () => guard.pipe(Effect.orDie),
+            commit: () =>
+              Effect.sync(() => {
+                requested = true
+              }),
+          })
+          if (!requested) return { message: yield* recover(), resume: false }
+
+          const state: { completed: boolean; reason: AdmissionFailed["reason"]; manifest?: string } = {
+            completed: false,
+            reason: "preparation",
+          }
+          const result = yield* restore(
+            Effect.gen(function* () {
+              const message = yield* createUserMessage(request, (prepared) => {
+                state.manifest = messageManifest(prepared)
+                state.reason = "persistence"
+                return events
+                  .publish(PromptPrepared, { ...data, manifest: state.manifest }, { id: preparedID, idempotent: true })
+                  .pipe(Effect.asVoid)
+              })
+              yield* revert.cleanup(session, message.info.id)
+              yield* sessions.touch(input.sessionID)
+
+              const permissions: PermissionV1.Rule[] = []
+              for (const [t, enabled] of Object.entries(input.tools ?? {})) {
+                permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
+              }
+              if (permissions.length > 0) {
+                session.permission = permissions
+                yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
+              }
+
+              if (!state.manifest) return yield* Effect.die("Prompt preparation did not produce a manifest")
+              yield* events.publish(
+                PromptCompleted,
+                { ...data, manifest: state.manifest },
+                {
+                  id: terminalID,
+                  idempotent: true,
+                  commit: () =>
+                    Effect.sync(() => {
+                      state.completed = true
+                    }),
+                },
+              )
+              yield* settle({ success: true, message })
+              return message
             }),
-          ),
-        )
+          ).pipe(Effect.exit)
+          if (Exit.isFailure(result)) {
+            if (state.completed) return { message: yield* recover(), resume: false }
+            return yield* fail(state.reason)
+          }
+          return { message: result.value, resume: input.noReply !== true }
+        }),
+      ).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (admissions.get(requestedID) !== owner) return
+            Deferred.doneUnsafe(owner.terminal, Effect.succeed({ success: false, reason: "unknown" }))
+            admissions.delete(requestedID)
+          }),
+        ),
+      )
       if (!admitted.resume) return admitted.message
       return yield* loop({ sessionID: input.sessionID })
     })
@@ -1925,7 +1893,7 @@ function messageManifest(message: SessionV1.WithParts) {
   return createHash("sha256").update(stableStringify(message)).digest("hex")
 }
 
-function lifecycleID(key: string, phase: "requested" | "claimed" | "prepared" | "terminal") {
+function lifecycleID(key: string, phase: "requested" | "prepared" | "terminal") {
   return EventV2.ID.fromExternal({ namespace: `slopcode.v1.prompt.${phase}`, key })
 }
 
