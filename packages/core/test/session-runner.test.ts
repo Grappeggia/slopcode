@@ -67,7 +67,7 @@ import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { SkillV2 } from "@slopcode-ai/core/skill"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
-import { asc, eq } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -906,6 +906,109 @@ describe("SessionRunnerLLM", () => {
       })
     }),
   )
+
+  it.effect("retries a malformed protocol final event without aborting the runner stream", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      responses = [
+        [LLMEvent.toolInputError({ id: "invalid-json", name: "final_output", reason: "invalid-json" })],
+        [LLMEvent.toolCall({ id: "valid-json", name: "final_output", input: { value: 9 } })],
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Return JSON",
+          format: { type: "json_schema", schema: { type: "number" }, retry_count: 1 },
+        }),
+        resume: false,
+      })
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect((yield* session.messages({ sessionID, order: "asc" })).filter((message) => message.type === "assistant")).toMatchObject([
+        { structuredRetry: { reason: "invalid-json", attempt: 1, remaining: 1 } },
+        { structured: 9 },
+      ])
+    }),
+  )
+
+  const lifecycle = [
+    {
+      name: "dispatch",
+      event: SessionEvent.Structured.Dispatched,
+      retryCount: 0,
+      output: [LLMEvent.toolCall({ id: "final-dispatch", name: "final_output", input: { value: 1 } })],
+    },
+    {
+      name: "candidate",
+      event: SessionEvent.Structured.Candidate,
+      retryCount: 0,
+      output: [LLMEvent.toolCall({ id: "final-candidate", name: "final_output", input: { value: 1 } })],
+    },
+    {
+      name: "retry",
+      event: SessionEvent.Structured.Retry,
+      retryCount: 1,
+      output: [LLMEvent.toolCall({ id: "final-retry", name: "final_output", input: { value: "bad" } })],
+    },
+    {
+      name: "result",
+      event: SessionEvent.Structured.Result,
+      retryCount: 0,
+      output: [LLMEvent.toolCall({ id: "final-result", name: "final_output", input: { value: 1 } })],
+    },
+    {
+      name: "failure",
+      event: SessionEvent.Structured.Failed,
+      retryCount: 0,
+      output: [LLMEvent.toolCall({ id: "final-failure", name: "final_output", input: { value: "bad" } })],
+    },
+  ] as const
+  const losses = [
+    { name: "owner", set: { runtime: "v1" as const } },
+    { name: "state", set: { runtime_state: "paused" as const } },
+    { name: "epoch", set: { runtime_epoch: sql`${SessionTable.runtime_epoch} + 1` } },
+  ] as const
+
+  for (const boundary of lifecycle)
+    for (const loss of losses)
+      it.effect(`fences structured ${boundary.name} publication on exact ${loss.name} loss`, () =>
+        Effect.gen(function* () {
+          yield* setup
+          const session = yield* SessionV2.Service
+          const events = yield* EventV2.Service
+          const { db } = yield* Database.Service
+          let armed = true
+          yield* events.beforeCommit((event) => {
+            if (!armed || !Schema.is(boundary.event)(event)) return Effect.void
+            armed = false
+            return db.update(SessionTable).set(loss.set).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+          })
+          responses = [boundary.output]
+          yield* session.prompt({
+            sessionID,
+            prompt: new Prompt({
+              text: `Fence ${boundary.name}`,
+              format: { type: "json_schema", schema: { type: "number" }, retry_count: boundary.retryCount },
+            }),
+            resume: false,
+          })
+
+          const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+          expect(Exit.isFailure(exit)).toBe(true)
+          expect(
+            yield* db
+              .select()
+              .from(EventTable)
+              .where(eq(EventTable.type, EventV2.versionedType(boundary.event.type, 1)))
+              .all()
+              .pipe(Effect.orDie),
+          ).toEqual([])
+        }),
+      )
 
   it.effect("commits only the first of duplicate final calls", () =>
     Effect.gen(function* () {
