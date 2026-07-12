@@ -330,6 +330,7 @@ export const layer = Layer.effect(
           Effect.forEach(
             Object.entries(entry.attempts ?? {}),
             ([attemptID, attempt]) => {
+              if (["pending", "received", "exchanging"].includes(attempt.phase ?? "")) owned.add(attemptID)
               if (attempt.phase === "exchanging")
                 return terminal(input.target, attemptID, "failed", "indeterminate-exchange")
               if (attempt.phase === "received" && attempt.code && attempt.state)

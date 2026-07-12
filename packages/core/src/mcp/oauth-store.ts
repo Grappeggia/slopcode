@@ -585,15 +585,26 @@ async function legacy(file: string, target: ReturnType<typeof legacyIdentity>): 
     .readFile(file, "utf8")
     .then(JSON.parse)
     .catch(() => undefined)
-  if (!record(raw) || raw.version !== 2 || !record(raw.entries)) return
-  const matches = Object.values(raw.entries).filter((value) => {
-    if (!record(value) || !record(value.identity) || !record(value.servers)) return false
-    return value.identity.instance === target.directory && value.identity.name === target.name
+  if (!legacyData(raw)) return
+  const matches = Object.entries(raw.entries).filter(([key, value]) => {
+    return (
+      key === JSON.stringify([value.identity.instance, value.identity.name]) &&
+      value.identity.instance === target.directory &&
+      value.identity.name === target.name
+    )
   })
   if (matches.length !== 1) return
-  const source = (matches[0] as { servers: Record<string, unknown> }).servers[target.endpoint]
-  if (!record(source)) return
-  const tokens = record(source.tokens)
+  const servers = matches[0]![1].servers
+  const sources = Object.entries(servers).filter(([endpoint]) => {
+    try {
+      return normalizeEndpoint(endpoint) === target.endpoint && endpoint === target.endpoint
+    } catch {
+      return false
+    }
+  })
+  if (sources.length !== 1) return
+  const source = sources[0]![1]
+  const tokens = source.tokens
     ? {
         access_token: source.tokens.accessToken,
         token_type: "Bearer",
@@ -604,7 +615,7 @@ async function legacy(file: string, target: ReturnType<typeof legacyIdentity>): 
           : {}),
       }
     : undefined
-  const client = record(source.clientInfo)
+  const client = source.clientInfo
     ? {
         client_id: source.clientInfo.clientId,
         client_secret: source.clientInfo.clientSecret,
@@ -629,6 +640,49 @@ async function legacy(file: string, target: ReturnType<typeof legacyIdentity>): 
     ...(tokens ? { tokens: tokens as Tokens } : {}),
     ...(client ? { client: client as OAuthClientInformationMixed } : {}),
   }
+}
+
+type LegacyEntry = {
+  readonly tokens?: { readonly accessToken: string; readonly refreshToken?: string; readonly expiresAt?: number; readonly scope?: string }
+  readonly clientInfo?: { readonly clientId: string; readonly clientSecret?: string; readonly clientIdIssuedAt?: number; readonly clientSecretExpiresAt?: number }
+  readonly codeVerifier?: string
+  readonly oauthState?: string
+}
+type LegacyData = {
+  readonly version: 2
+  readonly entries: Readonly<Record<string, { readonly identity: { readonly instance: string; readonly name: string }; readonly servers: Readonly<Record<string, LegacyEntry>> }>>
+  readonly legacy?: Readonly<Record<string, unknown>>
+  readonly recoverable?: Readonly<Record<string, unknown>>
+}
+
+function legacyData(value: unknown): value is LegacyData {
+  if (!exact(value, ["version", "entries", "legacy", "recoverable"]) || value.version !== 2 || !record(value.entries)) return false
+  return Object.values(value.entries).every((bucket) => {
+    if (!exact(bucket, ["identity", "servers"]) || !exact(bucket.identity, ["instance", "name"]) || !record(bucket.servers)) return false
+    if (typeof bucket.identity.instance !== "string" || typeof bucket.identity.name !== "string") return false
+    return Object.entries(bucket.servers).every(([endpoint, entry]) => {
+      if (!exact(entry, ["tokens", "clientInfo", "codeVerifier", "oauthState"])) return false
+      try {
+        if (normalizeEndpoint(endpoint) !== endpoint) return false
+      } catch {
+        return false
+      }
+      if (entry.codeVerifier !== undefined && typeof entry.codeVerifier !== "string") return false
+      if (entry.oauthState !== undefined && typeof entry.oauthState !== "string") return false
+      if (entry.tokens !== undefined) {
+        if (!exact(entry.tokens, ["accessToken", "refreshToken", "expiresAt", "scope"]) || typeof entry.tokens.accessToken !== "string") return false
+        if (entry.tokens.refreshToken !== undefined && typeof entry.tokens.refreshToken !== "string") return false
+        if (entry.tokens.scope !== undefined && typeof entry.tokens.scope !== "string") return false
+        if (!finite(entry.tokens.expiresAt)) return false
+      }
+      if (entry.clientInfo !== undefined) {
+        if (!exact(entry.clientInfo, ["clientId", "clientSecret", "clientIdIssuedAt", "clientSecretExpiresAt"]) || typeof entry.clientInfo.clientId !== "string") return false
+        if (entry.clientInfo.clientSecret !== undefined && typeof entry.clientInfo.clientSecret !== "string") return false
+        if (!finite(entry.clientInfo.clientIdIssuedAt) || !finite(entry.clientInfo.clientSecretExpiresAt)) return false
+      }
+      return true
+    })
+  })
 }
 
 function legacyIdentity(target: Target) {
