@@ -168,6 +168,15 @@ const setup = Effect.gen(function* () {
 })
 
 describe("SessionControl", () => {
+  test("stable control reuses the server-owned V2 session graph", async () => {
+    const source = await Bun.file(new URL("../../src/session/control.ts", import.meta.url)).text()
+    expect(source).toContain("sessionServices")
+    expect(source).not.toContain("Layer.fresh(SessionV2.layer)")
+    expect(source).not.toContain("SessionExecutionLocal.defaultLayer")
+    expect(source).not.toContain("SessionProjector.defaultLayer")
+    expect(source).not.toContain("LocationServiceMap.layer")
+  })
+
   test("projects V2 structured contracts, results, and failures for stable clients", () => {
     const created = DateTime.makeUnsafe(1)
     const user = new SessionMessage.User({
