@@ -348,3 +348,67 @@ Result before GREEN: `31 pass, 6 fail`, `130 expect()` calls. One replay test se
 
 - The domain-separated credential digest is intentionally unkeyed SHA-256, which satisfies stable cross-restart identity without installation-key lifecycle risk. It is persisted only inside the outer request fingerprint, not directly; low-entropy values are therefore not visible, although an installation-key HMAC would provide stronger defense if canonical identity were ever exposed internally.
 - The Slopcode aggregate suite could not produce a green run under current unrelated host contention. Core and every affected recovery/lifecycle test are green, but the fixed-timeout Slopcode failures remain an environmental verification gap and are not represented as passing.
+
+## Final Review Remediation
+
+This section supersedes the preceding unkeyed credential-digest concern and Slopcode full-suite verification gap.
+
+### Commits
+
+- RED: `82a6f334f4 test(core): expose final H5D2 recovery gaps`
+- GREEN: `a1aafad38c fix(core): close final recovery crash windows`
+- REPORT: recorded by the commit containing this section
+- Pushes: none
+
+### Continuation Reconstruction
+
+Startup reconstructs a missing `ContinuationReady` only for the current completed request/provider attempt and fingerprint. A later dispatch, retry schedule, execution terminal, or failed step disqualifies the evidence.
+
+- Local tool evidence requires at least one provider-unexecuted call in the completed attempt, every such call to have a matching provider-unexecuted durable success/failure settlement, and a durable successful step ending with `finish: tool-calls`.
+- Structured evidence requires a post-completion `Structured.Retry` for the current root with `remaining > 0` and no later structured result/failure consuming it.
+- Overflow evidence requires matching post-completion automatic compaction start/end records and no later compaction failure.
+- Steering evidence requires a durable pending admitted `steer` input. It is a distinct admitted root, not redispatch of generic provider completion.
+- Reconstructed proof publishes the deterministic `ContinuationReady` transition before one coordinator wake. Generic successful, failed-before-retry, and nonretryable-before-terminal `ProviderCompleted` windows without proof retain restart interruption behavior.
+- Crash-window tests persist each proof without its marker, rebuild the local execution graph, and observe exactly one continuation and one reconstructed marker per case.
+
+### Installation-Scoped Identity
+
+- `SessionRequestFingerprint` is now an injected service. It uses HMAC-SHA-256 for credential-named canonical fields, an installation-bound domain-separated HMAC tag in the outer canonical identity, and a final SHA-256 fingerprint.
+- The 32-byte key is stored under Global data at `identity/request-fingerprint.key`. The directory is checked as a non-symlink directory and forced to mode `0700`; the key is checked as a non-symlink regular file and forced to mode `0600`.
+- Creation writes and synchronizes a private uniquely named temporary file, then atomically hard-links it into place. Concurrent creators accept only the single installed key and remove their temporary files. Existing symlink paths are rejected.
+- The key is never logged or stored in events, execution status, or the database. Persisted recovery state remains only the outer 64-character fingerprint.
+- Tests cover concurrent creation, permissions, same-install restart stability, different credentials, distinct installations, directory/file symlink rejection, low-entropy/plaintext canaries, and a copied retry database whose missing key causes `RestartRequestMismatch`, terminal code `restart`, and zero recovery provider requests.
+
+### Canonical Events And Replay
+
+- `ContinuationReady` is included in `ExecutionDefinitions`, `Durable`, and `All`; the exhaustive message updater handles it as a no-op.
+- Canonical schema checks accept it, `SessionV2.events` streams it, and the execution projector remains deterministic.
+- Full projection removal/replay now covers continuation state, retained terminal failure, and successful row deletion/idle. Existing real tool/shell/task/compaction epoch replacement coverage remains green.
+
+### RED Evidence
+
+Command from `packages/core`:
+
+```text
+bun test test/session-execution-local.test.ts test/session-execution-status.test.ts test/session-request-fingerprint-key.test.ts
+```
+
+Result before GREEN: `32 pass, 5 fail`, `103 expect()` calls. Failures were missing proof reconstruction, omission from canonical event unions, and the absent installation-key service/lifecycle.
+
+### Final Verification
+
+- Focused Core: `bun test test/session-execution-local.test.ts test/session-execution-status.test.ts test/session-projector.test.ts test/session-request-fingerprint.test.ts test/session-request-fingerprint-key.test.ts test/session-runner.test.ts`; `261 pass, 0 fail`, `834 expect()` calls.
+- Core full: `bun test --only-failures`; `1533 pass, 0 fail`, 159 files, `4772 expect()` calls.
+- LLM full: `bun test --only-failures`; `305 pass, 30 skip, 0 fail`, 26 files, `668 expect()` calls.
+- Server full: `bun test --only-failures`; `4 pass, 0 fail`, `19 expect()` calls.
+- CodeMode full: `bun test --only-failures`; `254 pass, 0 fail`, 7 files, `744 expect()` calls.
+- Core, LLM, server, Slopcode, and CodeMode passed `bun run typecheck`.
+- Repository-root `bun install --frozen-lockfile` passed: `Checked 2372 installs across 2656 packages (no changes)`.
+- The first Slopcode `bun run test` attempt used the package's `--timeout 30000` but was externally terminated after 900 seconds before a result while still advancing through files.
+- The exact Slopcode package command was rerun with a longer process ceiling and completed: `3111 pass, 22 skip, 1 todo, 0 fail`, 248 files, 50 snapshots, `8601 expect()` calls in 868.83 seconds.
+- `git diff --check` passed. The generated `.slopcode/package-lock.json` was inspected and removed; it is not retained.
+
+### Concerns
+
+- Deleting or losing the installation key intentionally invalidates persisted in-flight request identities. Recovery then terminalizes with code `restart` before provider I/O; completed history and non-recovery behavior are unaffected.
+- The first full Slopcode attempt hit only the external 15-minute process ceiling. The completed rerun with the same package-level 30-second test timeout had no failures, so no Slopcode test gap remains.
