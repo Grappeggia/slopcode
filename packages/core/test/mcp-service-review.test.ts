@@ -764,6 +764,7 @@ let contentRound = 0
 const contentClosed: string[] = []
 let oldRequestFails = false
 let oldRequestTimeout = 0
+let stagedToolTimeout = 0
 fixture({
   documents: contentConfig,
   connect: (input) => {
@@ -771,7 +772,10 @@ fixture({
     return Effect.succeed(
       MCPClient.make({
         capabilities: { tools: {}, prompts: {} },
-        list: () => Promise.resolve({ tools: [{ name: version, inputSchema: { type: "object" } }] }),
+        list: (_cursor, timeout) => {
+          if (version === "broken") stagedToolTimeout = timeout
+          return Promise.resolve({ tools: [{ name: version, inputSchema: { type: "object" } }] })
+        },
         call: () => Promise.resolve({ content: [] }),
         listPrompts: async () => {
           if (version === "broken") throw new Error("replacement discovery failed")
@@ -845,11 +849,97 @@ fixture({
     expect((yield* mcp.prompts()).map((item) => item.name)).toEqual(["same_server:stable"])
     expect((yield* mcp.getPrompt({ name: "same_server:stable" })).text).toBe("[user]\nold:stable")
     expect(oldRequestTimeout).toBe(111)
+    expect(stagedToolTimeout).toBe(222)
     expect((yield* registry.materialize()).definitions.map((item) => item.name)).toContain("same_server_old")
     oldRequestFails = true
     const failure = yield* mcp.getPrompt({ name: "same_server:stable" }).pipe(Effect.flip)
     expect(failure).toMatchObject({ message: "[REDACTED] request failed" })
     expect(JSON.stringify(failure)).not.toContain("old-secret")
+  }),
+)
+
+const disabledConfig = [
+  new ConfigMCP.Info({ servers: { disabled: new ConfigMCP.Local({ type: "local", command: ["enabled"] }) } }),
+]
+const disabledClose = Promise.withResolvers<void>()
+const disabledRelease = Promise.withResolvers<void>()
+fixture({
+  documents: disabledConfig,
+  connect: () =>
+    Effect.succeed(
+      MCPClient.make({
+        capabilities: { tools: {}, prompts: {}, resources: {} },
+        list: () => Promise.resolve({ tools: [{ name: "tool", inputSchema: { type: "object" } }] }),
+        call: () => Promise.resolve({ content: [] }),
+        listPrompts: () => Promise.resolve({ prompts: [{ name: "prompt" }] }),
+        getPrompt: () => Promise.resolve({ messages: [] }),
+        listResources: () => Promise.resolve({ resources: [{ name: "resource", uri: "file:///resource" }] }),
+        readResource: () => Promise.resolve({ contents: [] }),
+        close: async () => {
+          disabledClose.resolve()
+          await disabledRelease.promise
+        },
+      }),
+    ),
+}).effect("atomically hides an enabled runtime before slow disabled replacement cleanup", () =>
+  Effect.gen(function* () {
+    const mcp = yield* MCP.Service
+    disabledConfig.splice(
+      0,
+      1,
+      new ConfigMCP.Info({
+        servers: { disabled: new ConfigMCP.Local({ type: "local", command: ["disabled"], disabled: true }) },
+      }),
+    )
+    const reload = yield* mcp.reload().pipe(Effect.forkChild)
+    const started = yield* Effect.promise(() =>
+      Promise.race([disabledClose.promise.then(() => true), Bun.sleep(50).then(() => false)]),
+    )
+    const definitions = (yield* (yield* ToolRegistry.Service).materialize()).definitions
+    const prompts = yield* mcp.prompts()
+    const resources = yield* mcp.resources()
+    const status = (yield* mcp.status()).disabled
+    disabledRelease.resolve()
+    yield* Fiber.join(reload)
+    expect(started).toBe(true)
+    expect(definitions).toEqual([])
+    expect(prompts).toEqual([])
+    expect(resources).toEqual([])
+    expect(status).toEqual({ status: "disabled" })
+  }),
+)
+
+const contentOnlyConfig = [
+  new ConfigMCP.Info({ servers: { contentOnly: new ConfigMCP.Local({ type: "local", command: ["tools"] }) } }),
+]
+fixture({
+  documents: contentOnlyConfig,
+  connect: (input) => {
+    const contentOnly = input.config.type === "local" && input.config.command.at(-1) === "content"
+    return Effect.succeed(
+      MCPClient.make({
+        capabilities: contentOnly ? { prompts: {} } : { tools: {}, prompts: {} },
+        list: () => Promise.resolve({ tools: [{ name: "old", inputSchema: { type: "object" } }] }),
+        call: () => Promise.resolve({ content: [] }),
+        listPrompts: () => Promise.resolve({ prompts: [{ name: contentOnly ? "new" : "old" }] }),
+        getPrompt: ({ name }) =>
+          Promise.resolve({ messages: [{ role: "user", content: { type: "text", text: name } }] }),
+        close: () => Promise.resolve(),
+      }),
+    )
+  },
+}).effect("removes stale tools when replacing a tool server with content-only", () =>
+  Effect.gen(function* () {
+    const mcp = yield* MCP.Service
+    contentOnlyConfig.splice(
+      0,
+      1,
+      new ConfigMCP.Info({ servers: { contentOnly: new ConfigMCP.Local({ type: "local", command: ["content"] }) } }),
+    )
+    yield* mcp.reload()
+    expect((yield* (yield* ToolRegistry.Service).materialize()).definitions).toEqual([])
+    expect((yield* mcp.prompts()).map((item) => item.rawName)).toEqual(["new"])
+    expect((yield* mcp.getPrompt({ name: "contentOnly:new" })).text).toBe("[user]\nnew")
   }),
 )
 
