@@ -9,6 +9,13 @@ import { AgentAttachment, FileAttachment, Prompt, Source } from "@slopcode-ai/co
 import { SessionFormat } from "@slopcode-ai/core/session/format"
 import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import * as SessionExecutionLocal from "@slopcode-ai/core/session/execution/local"
+import { SessionStore } from "@slopcode-ai/core/session/store"
+import { SessionProjector } from "@slopcode-ai/core/session/projector"
+import { EventV2 } from "@slopcode-ai/core/event"
+import { Database } from "@slopcode-ai/core/database/database"
+import { ProjectV2 } from "@slopcode-ai/core/project"
+import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Context, Effect, Layer } from "effect"
 import { Image } from "@/image/image"
@@ -49,8 +56,9 @@ export const layer = Layer.effect(
         yield* control.wait(input.sessionID)
         const result = yield* control.messages(input.sessionID)
         const projected = projectV2(input.sessionID, result.messages, result.info)
-        const root = projected.findIndex((message) => String(message.info.id) === String(admitted.id))
-        const message = projected.slice(root + 1).findLast((message) => message.info.role === "assistant")
+        const message = projected.find(
+          (message) => message.info.role === "assistant" && String(message.info.parentID) === String(admitted.id),
+        )
         if (!message) return yield* Effect.die("V2 prompt completed without a projected message")
         return message
       }
@@ -93,7 +101,19 @@ export const defaultLayer = layer.pipe(
   ),
 )
 
-const sessions = LayerNode.make(SessionV2.defaultLayer, [])
+const sessions = LayerNode.make(
+  Layer.fresh(SessionV2.layer).pipe(
+    Layer.provide(SessionExecutionLocal.defaultLayer),
+    Layer.provide(SessionStore.defaultLayer),
+    Layer.provide(SessionProjector.defaultLayer),
+    Layer.provide(EventV2.defaultLayer),
+    Layer.provide(Database.defaultLayer),
+    Layer.provide(ProjectV2.defaultLayer),
+    Layer.provide(LocationServiceMap.layer),
+    Layer.orDie,
+  ),
+  [],
+)
 const control = LayerNode.make(CoreSessionControl.layer, [SessionRuntime.node, sessions])
 
 export const node = LayerNode.make(layer, [SessionRuntime.node, control, SessionPrompt.node])

@@ -226,6 +226,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             new SessionMessage.Assistant({
               id: event.data.assistantMessageID,
               type: "assistant",
+              rootUserID: event.data.rootUserID,
               agent: event.data.agent,
               model: event.data.model,
               time: { created: event.data.timestamp },

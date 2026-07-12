@@ -143,7 +143,7 @@ export const layer = Layer.effect(
         yield* sessions.interrupt(sessionID, assertV2(sessionID, info.epoch).pipe(Effect.asVoid))
       }),
       wait: Effect.fn("SessionControl.wait")(function* (sessionID) {
-        yield* assertV2(sessionID)
+        yield* runtime.assert({ sessionID, owner: "v2" })
         yield* sessions.wait(sessionID)
       }),
       compact: Effect.fn("SessionControl.compact")(function* (input) {

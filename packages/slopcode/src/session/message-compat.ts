@@ -87,7 +87,7 @@ export function projectV2(
           id,
           sessionID,
           role: "assistant",
-          parentID: parent,
+          parentID: MessageID.make(message.rootUserID ?? parent),
           modelID: message.model.id,
           providerID: message.model.providerID,
           mode: message.agent,

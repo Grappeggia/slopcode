@@ -529,8 +529,11 @@ export const layer = Layer.effect(
         (message) =>
           message.type === "assistant" && message.time.completed !== undefined && message.structuredRetry === undefined,
       )
+      const activity = context
+        .slice(boundary + 1)
+        .find((message): message is SessionMessage.User => message.type === "user")
       const root =
-        latest?.format?.type === "json_schema"
+        activity && latest?.format?.type === "json_schema"
           ? context
               .slice(boundary + 1)
               .find(
@@ -633,6 +636,7 @@ export const layer = Layer.effect(
           ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
         },
         structured: format !== undefined,
+        rootUserID: activity?.id,
       })
       const withPublication = Semaphore.makeUnsafe(1).withPermit
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
@@ -814,6 +818,7 @@ export const layer = Layer.effect(
               {
                 sessionID: session.id,
                 assistantMessageID,
+                rootUserID: root.id,
                 timestamp: yield* DateTime.now,
                 agent: agent.id,
                 model: {

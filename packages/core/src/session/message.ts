@@ -149,6 +149,7 @@ export type AssistantContent = Schema.Schema.Type<typeof AssistantContent>
 export class Assistant extends Schema.Class<Assistant>("Session.Message.Assistant")({
   ...Base,
   type: Schema.Literal("assistant"),
+  rootUserID: SessionMessageID.ID.pipe(Schema.optional),
   agent: Schema.String,
   model: SessionEvent.Step.Started.data.fields.model,
   content: AssistantContent.pipe(Schema.Array),

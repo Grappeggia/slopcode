@@ -98,7 +98,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
       return yield* SessionError.mapStorageNotFound(session.get(sessionID))
     })
-
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
       return yield* requireSession(ctx.params.sessionID)
     })
@@ -125,21 +124,44 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       query: typeof MessagesQuery.Type
     }) {
       if (ctx.query.before && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
-      if (ctx.query.before) {
-        const before = ctx.query.before
-        yield* Effect.try({
-          try: () => MessageV2.cursor.decode(before),
+      const before = ctx.query.before
+        ? yield* Effect.try({
+          try: () => MessageV2.cursor.decode(ctx.query.before!),
           catch: () => new HttpApiError.BadRequest({}),
         })
-      }
-      yield* requireSession(ctx.params.sessionID)
+        : undefined
       const projected = yield* controlSvc.messages(ctx.params.sessionID).pipe(
         Effect.mapError(() => new HttpApiError.BadRequest({})),
       )
       if (projected) {
-        const items = projected
-        return ctx.query.limit === undefined || ctx.query.limit === 0 ? items : items.slice(-ctx.query.limit)
+        if (ctx.query.limit === undefined || ctx.query.limit === 0) return projected
+        const rows = projected
+          .filter((item) =>
+            !before || item.info.time.created < before.time ||
+            (item.info.time.created === before.time && item.info.id < before.id),
+          )
+          .toSorted((left, right) =>
+            right.info.time.created - left.info.time.created || right.info.id.localeCompare(left.info.id),
+          )
+        const more = rows.length > ctx.query.limit
+        const selected = rows.slice(0, ctx.query.limit)
+        const items = selected.toReversed()
+        const tail = selected.at(-1)
+        if (!more || !tail) return items
+        const cursor = MessageV2.cursor.encode({ id: tail.info.id, time: tail.info.time.created })
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
+        url.searchParams.set("limit", ctx.query.limit.toString())
+        url.searchParams.set("before", cursor)
+        return HttpServerResponse.jsonUnsafe(items, {
+          headers: {
+            "Access-Control-Expose-Headers": "Link, X-Next-Cursor",
+            Link: `<${url.toString()}>; rel="next"`,
+            "X-Next-Cursor": cursor,
+          },
+        })
       }
+      yield* requireSession(ctx.params.sessionID)
       if (ctx.query.limit === undefined || ctx.query.limit === 0) {
         return yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       }
@@ -177,6 +199,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       if (projected)
         return projected.find((item) => item.info.id === ctx.params.messageID) ??
           (yield* new HttpApiError.BadRequest({}))
+      yield* requireSession(ctx.params.sessionID)
       return yield* SessionError.mapStorageNotFound(
         MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
       )
@@ -326,7 +349,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      const compatible = yield* controlSvc
+        .messages(ctx.params.sessionID)
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      if (!compatible)
+        yield* requireSession(ctx.params.sessionID)
       const message = yield* controlSvc
         .prompt({
           ...ctx.payload,
@@ -342,7 +369,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      if (
+        !(yield* controlSvc
+          .messages(ctx.params.sessionID)
+          .pipe(Effect.mapError(() => new HttpApiError.BadRequest({}))))
+      )
+        yield* requireSession(ctx.params.sessionID)
       yield* controlSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {

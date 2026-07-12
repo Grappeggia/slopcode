@@ -171,13 +171,13 @@ test("Tool.Called V2 only decodes raw custom calls", () => {
     provider: { executed: false },
   }
 
-  expect(Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)({ ...base, toolType: "custom", input: "return 42" })._tag).toBe(
+  expect(Schema.decodeUnknownOption(SessionEvent.Tool.CalledV2.data)({ ...base, toolType: "custom", input: "return 42" })._tag).toBe(
     "Some",
   )
-  expect(Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)({ ...base, toolType: "custom", input: {} })._tag).toBe(
+  expect(Schema.decodeUnknownOption(SessionEvent.Tool.CalledV2.data)({ ...base, toolType: "custom", input: {} })._tag).toBe(
     "None",
   )
-  expect(Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)({ ...base, toolType: "function", input: {} })._tag).toBe(
+  expect(Schema.decodeUnknownOption(SessionEvent.Tool.CalledV2.data)({ ...base, toolType: "function", input: {} })._tag).toBe(
     "None",
   )
 })

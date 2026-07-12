@@ -866,12 +866,13 @@ describe("session HttpApi", () => {
       })
       yield* llm.tool("final_output", { value: { answer: 42 } })
       yield* llm.text("queued answer")
+      const stableID = MessageID.ascending()
 
       const response = yield* request(`/session/${id}/message`, {
         method: "POST",
         headers,
         body: JSON.stringify({
-          messageID: "msg_stable_structured",
+          messageID: stableID,
           parts: [{ type: "text", text: "structured now" }],
           format: {
             type: "json_schema",
@@ -886,9 +887,9 @@ describe("session HttpApi", () => {
       })
 
       const body = yield* responseJson(response)
-      expect({ status: response.status, body }).toMatchObject({ status: 200 })
+      expect(response.status).toBe(200)
       expect(body).toMatchObject({
-        info: { role: "assistant", parentID: "msg_stable_structured", structured: { answer: 42 } },
+        info: { role: "assistant", parentID: stableID, structured: { answer: 42 } },
       })
       const first = yield* request(`/session/${id}/message?limit=1`, { headers })
       const cursor = first.headers["x-next-cursor"]

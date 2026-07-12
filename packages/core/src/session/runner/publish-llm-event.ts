@@ -11,6 +11,7 @@ type Input = {
   readonly agent: string
   readonly model: ModelV2.Ref
   readonly structured?: boolean
+  readonly rootUserID?: SessionMessage.ID
 }
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
@@ -332,7 +333,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
           },
         }
         if (event.toolType === "custom") {
-          yield* events.publish(SessionEvent.Tool.Called, { ...data, input: event.input, toolType: "custom" })
+          yield* events.publish(SessionEvent.Tool.CalledV2, { ...data, input: event.input, toolType: "custom" })
           return
         }
         yield* events.publish(SessionEvent.Tool.CalledV1, { ...data, input: record(event.input) })

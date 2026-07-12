@@ -264,6 +264,7 @@ export namespace Step {
     schema: {
       ...Base,
       assistantMessageID: SessionMessageID.ID,
+      rootUserID: SessionMessageID.ID.pipe(Schema.optional),
       agent: Schema.String,
       model: ModelV2.Ref,
       snapshot: Schema.String.pipe(Schema.optional),
@@ -499,8 +500,7 @@ export namespace Tool {
     export type Ended = typeof Ended.Type
   }
 
-  // Retain the V1 decoder so stored function-tool calls remain replayable.
-  export const CalledV1 = EventV2.define({
+  export const Called = EventV2.define({
     type: "session.next.tool.called",
     ...options,
     schema: {
@@ -513,8 +513,9 @@ export namespace Tool {
       }),
     },
   })
+  export const CalledV1 = Called
 
-  export const Called = EventV2.define({
+  export const CalledV2 = EventV2.define({
     type: "session.next.tool.called",
     sync: { aggregate: "sessionID", version: 2 },
     schema: {
@@ -528,7 +529,7 @@ export namespace Tool {
       }),
     },
   })
-  export type Called = typeof Called.Type
+  export type Called = typeof Called.Type | typeof CalledV2.Type
 
   /**
    * Replayable bounded running-tool state. Tools should checkpoint semantic
@@ -766,8 +767,8 @@ export namespace Compaction {
 
 const ShellEndedV1 = Shell.EndedV1.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
 const ShellEnded = Shell.Ended.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
-const ToolCalledV1 = Tool.CalledV1.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
-const ToolCalled = Tool.Called.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
+const ToolCalledV1 = Tool.Called.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
+const ToolCalled = Tool.CalledV2.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
 
 const DurableDefinitions = [
   AgentSwitched,
