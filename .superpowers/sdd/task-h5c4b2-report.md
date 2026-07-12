@@ -13,8 +13,8 @@ H5C4B2 is implemented in V2 Core. Remote MCP OAuth now has Location/workspace-sc
 - The isolated V1 compatibility path reads but never writes `Global.data/mcp-auth.json`. It claims only exact version-2 stable token/client fields into an empty, workspace-less destination with matching directory, name, and normalized endpoint. It never claims verifier/state/transient fields or ambiguous records.
 - `MCPOAuthProvider` implements the SDK `OAuthClientProvider` only for interactive initialization/exchange and explicit noninteractive refresh. Static client configuration is authoritative; expired dynamic secrets are unavailable only when expiry is finite, positive, and elapsed. Token writes preserve omitted refresh token/scope and clear stale expiry when `expires_in` is omitted. All five SDK invalidation scopes are implemented.
 - `MCPOAuth` owns attempt coordination. IDs use 128 CSPRNG bits with an `mcp_auth_` prefix; state uses 256 bits. Attempts persist ten-minute wall-clock expiry and transition `initializing -> pending -> received -> exchanging -> complete|failed`, with cancellation/expiry terminals erasing state, verifier, code, and authorization URL. `pending` is published only after the verifier and exact authorization URL are durable.
-- Exchange and proactive 60-second-skew refresh use identity-keyed inter-process single-flight locks and reread persisted state after lock acquisition. Active callback exchanges are tracked by attempt with an abort controller and settlement promise. Remove, reset, stop, reload, replacement, and Location shutdown abort exchanges, await settlement, terminalize once, then close listeners.
-- Recovery terminalizes `initializing` and indeterminate `exchanging`, re-registers unexpired auto callbacks, and resumes durable `received` records. Fresh and recovered callback failures share terminal scrubbing and reliably scheduled registration cleanup.
+- Exchange and proactive 60-second-skew refresh use identity-keyed inter-process single-flight locks and reread persisted state after lock acquisition. Active callback exchanges are tracked by attempt with an abort controller and settlement promise. Remove, reset, stop, reload, disable, replacement, and Location shutdown abort exchanges, await settlement, terminalize once, then close listeners.
+- Every owned initializing/pending attempt has a wall-clock expiry timer derived from its persisted expiry. Recovery terminalizes `initializing` and indeterminate `exchanging`, re-registers unexpired auto callbacks, schedules their remaining duration, and resumes durable `received` records. Fresh and recovered callback failures share terminal scrubbing and reliably scheduled registration cleanup.
 - `MCPOAuthCallback` binds explicit literal loopback addresses only, registers exact paths and states, accepts GET only, rejects duplicate/missing/unknown/replayed parameters, and returns fixed non-reflective pages with no-store, CSP, nosniff, and no-referrer headers. HTTPS and non-loopback redirects become manual mode.
 - `MCPClient` passes no OAuth provider to Streamable HTTP or SSE. After explicit proactive refresh, it snapshots only the access token and injects bearer authorization at the resource fetch boundary. Refresh interaction maps to typed `auth-required`; other refresh failures map to bounded `refresh`. Normal connect cannot create an attempt, listener, authorization result, or browser action. Auth failures do not fall back; SSE fallback is limited to Streamable HTTP compatibility codes.
 - The remote fetch boundary adds configured headers only on the MCP resource origin, removes configured `Authorization` when OAuth is enabled, then overlays generated headers. Bearer, Accept, Content-Type, Last-Event-ID, session, and protocol headers therefore win. `oauth: false` retains prior explicit-header behavior.
@@ -368,3 +368,53 @@ Staged-control RED: `23 pass`, `1 fail`, `98 expect() calls`. With the old clien
 - `710a47849c` `test(core): fence OAuth reset during replacement`
 - `415c925597` `test(core): preserve delayed cleanup fixture`
 - Approval report: the following `docs:` commit.
+
+## Final Four Findings Settlement
+
+### Final Four RED Evidence
+
+- Exact proactive refresh command: `0 pass`, `2 fail`, `2 expect() calls`. Noninteractive `redirectToAuthorization` returned its own generic error instead of the supplied typed redirect error, and the interaction-required refresh case returned `refresh` instead of exact `auth-required`.
+- Exchange-event/timer command: `0 pass`, `3 fail`, `7 expect() calls`. Fresh and recovered exchanges were already durably failed by a direct store CAS before notification-aware cleanup ran, so both emitted zero terminal changes. A recovered pending callback remained pending with state/verifier/authorization after its wall-clock expiry.
+- Enabled-to-disabled command: `0 pass`, `1 fail`, `10 expect() calls`. An unchanged OAuth identity skipped reset entirely when only `disabled` changed.
+- `1d27db73fe` committed these failing exact contracts before the production changes. `6e10fed65b` then tightened exact mappings and added fresh-timer/protocol-event assertions before `bc26926484` completed the implementation.
+
+### Final Four Repairs
+
+- `MCPOAuthProvider.redirectToAuthorization` always delegates to the supplied callback. Noninteractive refresh supplies the typed internal `AuthRequired` callback, so SDK fallback to interaction cannot become a generic provider error.
+- Invalid-grant refresh retry, malformed/server refresh fallback, and explicit interaction-required all map exactly to bounded `auth-required` in current SDK behavior. Explicit `interaction_required` OAuth errors are also recognized before public mapping. Noninteraction refresh defects retain bounded `refresh`; no server description/body is exposed.
+- Exchange `tapError` now calls the same notification-aware atomic `mark` CAS used by all terminal failures. Fresh, recovered, and manual completion failures emit only when that CAS wins; callback cleanup, timer, status, quiescence, and duplicate retry CAS misses emit nothing.
+- Enabled-to-disabled transitions collect both active and staged exact targets regardless of OAuth identity equality. Tools are hidden first, then every target reset is awaited before client cleanup/public disabled status, preserving hide-before-close while aborting pending and active exchanges without deadlock.
+- Every fresh initializing attempt receives a scoped wall-clock timer immediately after persistence. Fresh pending attempts retain that timer; recovered pending/manual attempts schedule the remaining persisted duration after listener registration. Timer CAS accepts only initializing/pending, emits one safe expiry event, scrubs transients, and closes the listener.
+- Completion, cancellation, failure, remove/reset/stop, replacement, disable, and Location shutdown all close ownership and clear the attempt timer. A timer racing received/exchanging work cannot close its listener because a failed expiry CAS performs no cleanup.
+
+### Final Four Coverage
+
+- Provider evidence proves a noninteractive redirect returns the exact supplied typed error object.
+- Refresh evidence expects exact `auth-required` independently for invalid grant, malformed fallback, and `interaction_required`; each case creates zero attempts and exposes no private description.
+- Real protocol evidence proves fresh and recovered exchange failure each emit exactly one bounded terminal change, and status/cleanup retries emit none.
+- Production MCP integration runs actual resource/auth discovery, loopback callback, failed token exchange, `MCP.locationLayer`, and `EventV2.Service`. It observes one normal authorizing event and exactly one safe terminal `mcp.auth.changed` exchange event with no callback code or authorization URL.
+- Disable composition proves same-identity enabled-to-disabled reload invokes OAuth reset and reaches disabled state. Existing pending/hanging reset tests prove callback cancellation, active exchange abort/settlement, and immediate port reuse behind that reset.
+- Fresh and restart-recovered pending auto attempts expire without status or callback activity, emit once, erase state/verifier/authorization, close listeners, and immediately release callback ports.
+
+### Final Four Results
+
+- Exact refresh/provider subset: `2 pass`, `0 fail`, `10 expect() calls`.
+- Exact protocol/event/timer subset: `4 pass`, `0 fail`, `19 expect() calls`.
+- Exact disable subset: `1 pass`, `0 fail`, `13 expect() calls`.
+- Final focused 13-file command: `135 pass`, `0 fail`, `559 expect() calls`.
+- H5C4A/B1 preservation command: `71 pass`, `0 fail`, `260 expect() calls`.
+- Full Core after production event integration: `1423 pass`, `0 fail`, `4356 expect() calls`, 153 files.
+- Full CodeMode: `254 pass`, `0 fail`, `744 expect() calls`.
+- V1 MCP HTTP/CLI evidence: `8 pass`, `0 fail`, `32 expect() calls`.
+- Core typecheck: exit 0.
+- Server typecheck: exit 0.
+- Frozen install: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+- SlopCode typecheck remains red only at the unrelated existing `src/session/processor.ts(495,17)` and `src/session/prompt.ts(1382,39)` diagnostics.
+
+### Final Four Commits
+
+- `1d27db73fe` `test(core): expose final MCP OAuth approval gaps`
+- `6e10fed65b` `test(core): tighten final MCP OAuth evidence`
+- `bc26926484` `fix(core): finalize MCP OAuth terminal lifecycle`
+- `18d94420f7` `test(core): integrate real MCP OAuth failure event`
+- Final report evidence: the following `docs:` commit.
