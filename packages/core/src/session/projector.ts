@@ -16,6 +16,7 @@ import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
 import { SessionCreate } from "./create"
+import { SessionExecutionStatus } from "./execution-status"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -496,6 +497,7 @@ export const layer = Layer.effectDiscard(
         yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, seq)
       })
     })
+    yield* SessionExecutionStatus.project(events, db)
   }),
 )
 

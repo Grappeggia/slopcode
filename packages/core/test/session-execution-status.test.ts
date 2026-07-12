@@ -10,6 +10,7 @@ import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { DateTime, Effect, Layer } from "effect"
+import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -50,6 +51,7 @@ describe("SessionExecutionStatus", () => {
       expect(yield* service.get(sessionID)).toMatchObject({ type: "busy", ...activity, phase: "preparing", epoch: 1 })
 
       yield* service.dispatch({ ...fence, ...activity, phase: "provider", providerAttempt: 1 })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", providerAttempt: 1 })
       yield* service.retry({
         ...fence,
         ...activity,
@@ -71,7 +73,8 @@ describe("SessionExecutionStatus", () => {
         maxAttempts: 5,
         nextAt: 12_000,
       })
-      yield* service.complete({ ...fence, ...activity, phase: "provider", providerAttempt: 1 })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", providerAttempt: 2 })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", providerAttempt: 2 })
       yield* service.succeed({ ...fence, ...activity })
       expect(yield* service.get(sessionID)).toEqual({ type: "idle" })
     }),
@@ -84,14 +87,20 @@ describe("SessionExecutionStatus", () => {
       const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
       const activity = { activityID: rootID, rootID, activity: "shell" as const }
       yield* service.start({ ...fence, ...activity, phase: "shell" })
-      yield* service.interrupt({ ...fence, ...activity, code: "interrupted", message: "Stopped", resultingEpoch: 2 })
+      yield* service.interrupt({ ...fence, ...activity, phase: "shell", code: "interrupted", message: "Stopped", resultingEpoch: 2 })
       expect(yield* service.get(sessionID)).toMatchObject({ type: "interrupted", code: "interrupted", epoch: 2 })
 
+      yield* (yield* Database.Service).db.update(SessionTable).set({ runtime_state: "draining", runtime_epoch: 3 }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      yield* service.start({ ...fence, epoch: 3, ...activity, phase: "shell" })
+      expect(yield* service.get(sessionID)).toMatchObject({ type: "busy", activityID: rootID, epoch: 3 })
+      yield* service.interrupt({ ...fence, epoch: 3, ...activity, phase: "shell", code: "interrupted", message: "Stopped again", resultingEpoch: 4 })
+
       const next = SessionMessage.ID.make("msg_execution_status_next")
+      yield* (yield* Database.Service).db.update(SessionTable).set({ runtime_state: "draining", runtime_epoch: 5 }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
       yield* service.start({
         sessionID,
         owner: "v2",
-        epoch: 2,
+        epoch: 5,
         runtimeState: "draining",
         activityID: next,
         rootID: next,

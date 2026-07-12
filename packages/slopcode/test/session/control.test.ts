@@ -13,6 +13,7 @@ import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
+import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
@@ -107,6 +108,8 @@ const sessions = Layer.succeed(
         yield* commit ?? Effect.void
         interruptCalls.push(SessionID.make(id))
       }),
+    executionStatus: () => Effect.die("unused"),
+    executionStatuses: () => Effect.succeed([]),
   }),
 )
 const core = CoreSessionControl.layer.pipe(Layer.provide(runtime), Layer.provide(sessions))
@@ -119,6 +122,7 @@ const control = SessionControl.layer.pipe(
 const it = testEffect(Layer.mergeAll(database, runtime, legacy, sessions, core, control))
 
 const realEvents = EventV2.layer.pipe(Layer.provide(database))
+const realStatus = SessionExecutionStatus.layer.pipe(Layer.provide(database), Layer.provide(realEvents))
 const realStore = SessionStore.layer.pipe(Layer.provide(database))
 const realExecution = Layer.mock(SessionExecution.Service, {
   interrupt: (id) => Effect.sync(() => realInterruptCalls.push(SessionID.make(id))),
@@ -129,6 +133,7 @@ const realSessions = SessionV2.layer.pipe(
   Layer.provide(realStore),
   Layer.provide(Project.defaultLayer),
   Layer.provide(realExecution),
+  Layer.provide(realStatus),
   Layer.provide(LocationServiceMap.layer),
 )
 

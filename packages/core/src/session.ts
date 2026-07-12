@@ -36,6 +36,7 @@ import { SessionCreate } from "./session/create"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SessionHistory } from "./session/history"
 import { SessionFormat } from "./session/format"
+import { SessionExecutionStatus } from "./session/execution-status"
 
 export { AdmissionError as StructuredFormatAdmissionError } from "./session/format"
 
@@ -269,6 +270,8 @@ export interface Interface {
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: <E = never>(sessionID: SessionSchema.ID, guard?: Effect.Effect<void, E>) => Effect.Effect<void, E>
+  readonly executionStatus: (sessionID: SessionSchema.ID) => Effect.Effect<SessionExecutionStatus.Info, SessionExecutionStatus.NotFound>
+  readonly executionStatuses: (input?: { readonly nonIdle?: boolean }) => Effect.Effect<ReadonlyArray<{ readonly sessionID: SessionSchema.ID; readonly status: SessionExecutionStatus.Info }>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/Session") {}
@@ -298,6 +301,7 @@ export const layer = Layer.effect(
     const projects = yield* ProjectV2.Service
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
+    const status = yield* SessionExecutionStatus.make
     const locations = yield* LocationServiceMap
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
@@ -821,6 +825,8 @@ export const layer = Layer.effect(
           }),
         ),
       ),
+      executionStatus: status.get,
+      executionStatuses: (input) => status.list({ owner: "v2", nonIdle: input?.nonIdle }),
     })
 
     return result
@@ -833,6 +839,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(SessionExecution.noopLayer),
     Layer.provide(SessionStore.defaultLayer),
     Layer.provide(SessionProjector.defaultLayer),
+    Layer.provide(SessionExecutionStatus.defaultLayer),
     Layer.provide(EventV2.defaultLayer),
     Layer.provide(Database.defaultLayer),
     Layer.provide(ProjectV2.defaultLayer),

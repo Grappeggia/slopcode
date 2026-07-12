@@ -49,6 +49,7 @@ import { QuestionV2 } from "./question"
 import { LLMClient } from "@slopcode-ai/llm"
 import { RequestExecutor } from "@slopcode-ai/llm/route"
 import * as SessionRunnerLLM from "./session/runner/llm"
+import { SessionExecutionStatus } from "./session/execution-status"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { FetchHttpClient } from "effect/unstable/http"
@@ -152,6 +153,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       Layer.provide(services),
       Layer.provide(model),
       Layer.provide(SessionRuntime.layer),
+      Layer.provide(SessionExecutionStatus.layer),
       Layer.provide(skillGuidance),
       Layer.provide(referenceGuidance),
     )

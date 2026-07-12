@@ -11,6 +11,7 @@ import { SessionRunner } from "./runner"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 import { SessionFormat } from "./format"
+import { SessionExecutionStatus } from "./execution-status"
 
 type PromptInput = {
   readonly id?: SessionMessage.ID
@@ -111,6 +112,8 @@ export interface Interface {
     | SessionV2.PromptFormatConflictError
     | SessionFormat.AdmissionError
   >
+  readonly executionStatus: (sessionID: SessionSchema.ID) => Effect.Effect<SessionExecutionStatus.Info, SessionRuntime.Error | SessionExecutionStatus.NotFound>
+  readonly executionStatuses: (input?: { readonly nonIdle?: boolean }) => Effect.Effect<ReadonlyArray<{ readonly sessionID: SessionSchema.ID; readonly status: SessionExecutionStatus.Info }>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/SessionControl") {}
@@ -166,6 +169,11 @@ export const layer = Layer.effect(
         const runtime = yield* assertV2(input.sessionID, input.epoch)
         return yield* sessions.skill(input, assertV2(input.sessionID, runtime.epoch).pipe(Effect.asVoid))
       }),
+      executionStatus: Effect.fn("SessionControl.executionStatus")(function* (sessionID) {
+        yield* runtime.assert({ sessionID, owner: "v2" })
+        return yield* sessions.executionStatus(sessionID)
+      }),
+      executionStatuses: (input) => sessions.executionStatuses(input),
     })
   }),
 )

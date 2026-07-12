@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import {
   AuthenticationReason,
   InvalidRequestReason,

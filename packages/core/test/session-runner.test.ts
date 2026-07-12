@@ -4,6 +4,7 @@ import {
   LLMError,
   LLMEvent,
   Model,
+  RateLimitReason,
   TransportReason,
   InvalidRequestReason,
   type LLMClientShape,
@@ -24,6 +25,7 @@ import { ContextSnapshotDecodeError } from "@slopcode-ai/core/session/error"
 import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionFormat } from "@slopcode-ai/core/session/format"
 import { SessionCompaction } from "@slopcode-ai/core/session/compaction"
@@ -73,6 +75,7 @@ import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
+const status = SessionExecutionStatus.layer.pipe(Layer.provide(database), Layer.provide(events))
 const questions = QuestionV2.layer.pipe(Layer.provide(events))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
@@ -313,6 +316,7 @@ const config = Layer.succeed(
   }),
 )
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(status),
   Layer.provide(database),
   Layer.provide(store),
   Layer.provide(runtime),
@@ -343,6 +347,7 @@ const execution = Layer.effect(
   ),
 ).pipe(Layer.provide(coordinator))
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(status),
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
@@ -373,6 +378,7 @@ const it = testEffect(
     skillGuidance,
     config,
     processLayer,
+    status,
     runner,
     runtime,
     coordinator,
@@ -1490,6 +1496,7 @@ describe("SessionRunnerLLM", () => {
       response = []
 
       const message = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run automatically" }) })
+      yield* (yield* SessionRunCoordinator.Service).awaitIdle(sessionID)
 
       expect(requests).toHaveLength(1)
       expect(yield* session.messages({ sessionID })).toMatchObject([
@@ -4629,7 +4636,7 @@ describe("SessionRunnerLLM", () => {
       streamFailure = undefined
       streamGate = undefined
       streamStarted = undefined
-      yield* Effect.yieldNow
+      yield* (yield* SessionRunCoordinator.Service).awaitIdle(sessionID)
 
       expect(requests).toHaveLength(2)
       expect(userTexts(requests[1]!)).toEqual(["Start working", "Recover with this"])
@@ -5906,7 +5913,7 @@ describe("SessionRunnerLLM", () => {
       const first = yield* session.resume(sessionID).pipe(Effect.forkChild)
       yield* Deferred.await(streamStarted)
       const second = yield* session.resume(otherSessionID).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
+      while (requests.length < 2) yield* Effect.yieldNow
 
       expect(requests).toHaveLength(2)
       expect(requests.map((request) => request.providerOptions?.openai?.promptCacheKey)).toEqual([
@@ -6442,6 +6449,49 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("retries five additional Core provider dispatches before durable exhaustion", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const executionStatus = yield* SessionExecutionStatus.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Exhaust provider retries" }), resume: false })
+      requests.length = 0
+      streamFailure = new LLMError({
+        module: "test",
+        method: "stream",
+        reason: new RateLimitReason({ message: "limited", retryAfterMs: 0 }),
+      })
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(streamFailure)
+      expect(requests).toHaveLength(6)
+      expect(yield* executionStatus.get(sessionID)).toMatchObject({
+        type: "terminal-failure",
+        code: "provider-exhausted",
+      })
+    }),
+  )
+
+  it.effect("does not retry a transient provider failure after assistant output starts", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const failure = new LLMError({
+        module: "test",
+        method: "stream",
+        reason: new RateLimitReason({ message: "limited", retryAfterMs: 0 }),
+      })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Do not repeat partial output" }), resume: false })
+      requests.length = 0
+      responseStream = Stream.concat(
+        Stream.fromIterable([LLMEvent.textStart({ id: "partial" }), LLMEvent.textDelta({ id: "partial", text: "started" })]),
+        Stream.fail(failure),
+      )
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
   it.effect("does not continue automatically after a provider error follows a local tool call", () =>
     Effect.gen(function* () {
       yield* setup
@@ -6616,6 +6666,7 @@ describe("SessionRunnerLLM", () => {
       streamGate = undefined
       streamStarted = undefined
       response = [LLMEvent.textStart({ id: "text-1" }), LLMEvent.textStart({ id: "text-1" })]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Reject duplicate text" }), resume: false })
 
       expect(yield* session.resume(sessionID).pipe(Effect.catchDefect(Effect.succeed))).toBe(
         "Duplicate text start: text-1",
@@ -6942,6 +6993,7 @@ describe("SessionRunnerLLM", () => {
       streamGate = undefined
       streamStarted = undefined
       response = [LLMEvent.toolInputDelta({ id: "call-1", name: "read", text: "{}" })]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Reject malformed tool input" }), resume: false })
 
       expect(yield* session.resume(sessionID).pipe(Effect.catchDefect(Effect.succeed))).toBe(
         "Tool input delta before start: call-1",

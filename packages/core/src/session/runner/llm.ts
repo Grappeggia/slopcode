@@ -8,7 +8,7 @@ import {
   type ProviderErrorEvent,
 } from "@slopcode-ai/llm"
 import { OpenAIProviderOptions } from "@slopcode-ai/llm/providers/openai"
-import { Cause, DateTime, Effect, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
+import { Cause, Clock, DateTime, Effect, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -42,6 +42,8 @@ import { SessionRuntime } from "../runtime"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionTask } from "../task"
+import { SessionExecutionStatus } from "../execution-status"
+import { SessionProviderRetry } from "../provider-retry"
 import { eq } from "drizzle-orm"
 import { type RunError, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
@@ -149,6 +151,7 @@ export const layer = Layer.effect(
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const runtime = yield* SessionRuntime.Service
+    const status = yield* SessionExecutionStatus.Service
     const location = yield* Location.Service
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
@@ -886,12 +889,16 @@ export const layer = Layer.effect(
           },
         )
       if (beforeDispatch) yield* beforeDispatch
-      const providerStream = llm.stream(request).pipe(
-        Stream.runForEach((event) =>
+      let protocolFailure: ProviderErrorEvent | undefined
+      const processProviderEvent = (event: LLMEvent) =>
           Effect.gen(function* () {
             if (overflowFailure || publisher.hasProviderError()) return
             const current = format ? finalStreamEvent(event) : event
             if (!current) return
+            if (LLMEvent.is.providerError(current) && SessionProviderRetry.classify(current) && !publisher.hasAssistantStarted()) {
+              protocolFailure = current
+              return
+            }
             if (
               format &&
               root &&
@@ -1055,14 +1062,79 @@ export const layer = Layer.effect(
                 ),
               ),
             ).pipe(FiberSet.run(toolFibers))
-          }),
-        ),
-        Effect.ensuring(withPublication(publisher.flush())),
-      )
+          })
+
+      const providerStream = Effect.fnUntraced(function* (providerAttempt = 1): Effect.fn.Return<void, RunError> {
+        const current = yield* status.get(sessionID).pipe(Effect.orDie)
+        const identity = current && current.type !== "idle" ? current : undefined
+        if (identity) {
+          yield* assertRuntime(sessionID, runtimeEpoch)
+          yield* status.dispatch({
+            sessionID,
+            owner: "v2",
+            runtimeState: "draining",
+            epoch: runtimeEpoch,
+            activityID: identity.activityID,
+            rootID: identity.rootID,
+            activity: identity.activity,
+            phase: "provider",
+            providerAttempt,
+            ...(format ? { structuredAttempt: attempt } : {}),
+          })
+        }
+        protocolFailure = undefined
+        const exit = yield* llm.stream(request).pipe(
+          Stream.runForEach(processProviderEvent),
+          Effect.ensuring(withPublication(publisher.flush())),
+          Effect.exit,
+        )
+        if (identity)
+          yield* status.complete({
+            sessionID,
+            owner: "v2",
+            runtimeState: "draining",
+            epoch: runtimeEpoch,
+            activityID: identity.activityID,
+            rootID: identity.rootID,
+            activity: identity.activity,
+            phase: "provider",
+            providerAttempt,
+            ...(format ? { structuredAttempt: attempt } : {}),
+          })
+        const failure = protocolFailure ?? (exit._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined)
+        const retry = SessionProviderRetry.classify(failure)
+        const additional = providerAttempt
+        if (!retry || !SessionProviderRetry.canRetry(additional) || publisher.hasAssistantStarted()) {
+          if (protocolFailure) yield* publish(protocolFailure)
+          if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
+          return
+        }
+        const now = yield* Clock.currentTimeMillis
+        const wait = SessionProviderRetry.delay(additional, SessionProviderRetry.hints(failure), now)
+        if (identity)
+          yield* status.retry({
+            sessionID,
+            owner: "v2",
+            runtimeState: "draining",
+            epoch: runtimeEpoch,
+            activityID: identity.activityID,
+            rootID: identity.rootID,
+            activity: identity.activity,
+            phase: "provider",
+            providerAttempt: providerAttempt + 1,
+            ...(format ? { structuredAttempt: attempt } : {}),
+            attempt: additional,
+            maxAttempts: SessionProviderRetry.MAX_ADDITIONAL_ATTEMPTS,
+            nextAt: now + wait,
+            ...retry,
+          })
+        yield* Effect.sleep(wait)
+        return yield* providerStream(providerAttempt + 1)
+      })
 
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const stream = yield* restore(providerStream).pipe(Effect.exit)
+          const stream = yield* restore(providerStream()).pipe(Effect.exit)
           const finalStop =
             stream._tag === "Failure" &&
             stream.cause.reasons.some(
@@ -1243,56 +1315,88 @@ export const layer = Layer.effect(
         return yield* Effect.failCause(assigned.cause)
       }
       const active = assigned.value
-      yield* Effect.gen(function* () {
-        yield* failInterruptedTools(fencedEvents(input.sessionID, active.epoch), input.sessionID)
-        if (shell) {
-          yield* drainShells(input.sessionID, active.epoch)
-          if (yield* SessionInput.hasPendingCompaction(db, input.sessionID))
-            yield* drainManualCompactions(input.sessionID, active.epoch)
-          return
-        }
-        if (manual) {
-          yield* drainManualCompactions(input.sessionID, active.epoch)
-          return
-        }
-        let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
-        let openActivity = input.force === true || hasSteer || hasQueue || task
-        while (openActivity) {
-          yield* assertRuntime(input.sessionID, active.epoch)
-          let needsContinuation = true
-          for (let step = 0; step < MAX_STEPS; step++) {
-            needsContinuation = yield* runTurn(input.sessionID, promotion, active.epoch)
-            promotion = "steer"
-            yield* assertRuntime(input.sessionID, active.epoch)
-            if (!needsContinuation && (yield* SessionInput.hasPendingCompaction(db, input.sessionID))) {
-              yield* drainManualCompactions(input.sessionID, active.epoch)
-              return
-            }
-            if (!needsContinuation && (yield* SessionInput.hasPendingShell(db, input.sessionID))) {
+      const promoted = shell ?? manual ?? (hasSteer
+        ? yield* SessionInput.pending(db, input.sessionID, "steer")
+        : hasQueue
+          ? yield* SessionInput.pending(db, input.sessionID, "queue")
+          : undefined)
+      const contextRoot = promoted ? undefined : (yield* getContext(input.sessionID)).findLast((message) => message.type === "user")
+      const rootID = promoted?.id ?? contextRoot?.id
+      if (!rootID) {
+        yield* runtime.assign({ sessionID: input.sessionID, state: "ready", expectedOwner: "v2", expectedEpoch: active.epoch })
+        return
+      }
+      const activity = shell ? "shell" as const : manual ? "compaction" as const : (yield* store.task(input.sessionID)) ? "task" as const : "prompt" as const
+      const identity = { activityID: rootID, rootID, activity }
+      yield* status.start({
+        sessionID: input.sessionID,
+        owner: "v2",
+        runtimeState: "draining",
+        epoch: active.epoch,
+        ...identity,
+        phase: shell ? "shell" : manual ? "compaction" : activity === "task" ? "task" : "preparing",
+      })
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const exit = yield* restore(Effect.gen(function* () {
+            yield* failInterruptedTools(fencedEvents(input.sessionID, active.epoch), input.sessionID)
+            if (shell) {
               yield* drainShells(input.sessionID, active.epoch)
               if (yield* SessionInput.hasPendingCompaction(db, input.sessionID))
                 yield* drainManualCompactions(input.sessionID, active.epoch)
               return
             }
-            if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
-            if (!needsContinuation) break
+            if (manual) {
+              yield* drainManualCompactions(input.sessionID, active.epoch)
+              return
+            }
+            let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
+            let openActivity = input.force === true || hasSteer || hasQueue || task
+            while (openActivity) {
+              yield* assertRuntime(input.sessionID, active.epoch)
+              let needsContinuation = true
+              for (let step = 0; step < MAX_STEPS; step++) {
+                needsContinuation = yield* runTurn(input.sessionID, promotion, active.epoch)
+                promotion = "steer"
+                yield* assertRuntime(input.sessionID, active.epoch)
+                if (!needsContinuation && (yield* SessionInput.hasPendingCompaction(db, input.sessionID))) {
+                  yield* drainManualCompactions(input.sessionID, active.epoch)
+                  return
+                }
+                if (!needsContinuation && (yield* SessionInput.hasPendingShell(db, input.sessionID))) {
+                  yield* drainShells(input.sessionID, active.epoch)
+                  if (yield* SessionInput.hasPendingCompaction(db, input.sessionID))
+                    yield* drainManualCompactions(input.sessionID, active.epoch)
+                  return
+                }
+                if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+                if (!needsContinuation) break
+              }
+              if (needsContinuation)
+                return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: MAX_STEPS })
+              openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
+              promotion = openActivity ? "queue" : undefined
+            }
+          })).pipe(Effect.exit)
+          if (exit._tag === "Success") {
+            yield* status.succeed({ sessionID: input.sessionID, owner: "v2", runtimeState: "draining", epoch: active.epoch, ...identity })
+            return
           }
-          if (needsContinuation)
-            return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: MAX_STEPS })
-          openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
-          promotion = openActivity ? "queue" : undefined
-        }
-      }).pipe(
-        Effect.ensuring(
-          runtime
-            .assign({
-              sessionID: input.sessionID,
-              state: "ready",
-              expectedOwner: "v2",
-              expectedEpoch: active.epoch,
-            })
-            .pipe(Effect.catch(() => Effect.void)),
-        ),
+          const failure = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+          const phase = shell ? "shell" as const : manual ? "compaction" as const : "settling" as const
+          const base = { sessionID: input.sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: active.epoch, ...identity, phase, resultingEpoch: active.epoch + 1 }
+          if (Cause.hasInterrupts(exit.cause))
+            yield* status.interrupt({ ...base, code: "interrupted", message: "Session activity was interrupted" }).pipe(Effect.exit)
+          if (!Cause.hasInterrupts(exit.cause)) {
+            const retry = SessionProviderRetry.classify(failure)
+            yield* status.fail({
+              ...base,
+              code: failure instanceof StepLimitExceededError ? "step-limit" : retry ? "provider-exhausted" : failure instanceof LLMError ? "provider-nonretryable" : "runner-failure",
+              message: SessionProviderRetry.sanitize(failure instanceof Error ? failure.message : "Session runner failed"),
+            }).pipe(Effect.exit)
+          }
+          return yield* Effect.failCause(exit.cause)
+        }),
       )
     })
 

@@ -16,6 +16,7 @@ import { Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionMessageUpdater } from "@slopcode-ai/core/session/message-updater"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
+import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
@@ -25,6 +26,7 @@ import { locationServices } from "./lib/location-services"
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
+const status = SessionExecutionStatus.layer.pipe(Layer.provide(database), Layer.provide(events))
 const it = testEffect(Layer.mergeAll(database, events, projector))
 const sessionID = SessionV2.ID.make("ses_projector_test")
 const created = DateTime.makeUnsafe(0)
@@ -202,6 +204,7 @@ describe("SessionProjector", () => {
     }).pipe(
       Effect.provide(
         SessionV2.layer.pipe(
+          Layer.provide(status),
           Layer.provide(events),
           Layer.provide(database),
           Layer.provide(Project.defaultLayer),
@@ -457,6 +460,7 @@ describe("SessionProjector", () => {
     }).pipe(
       Effect.provide(
         SessionV2.layer.pipe(
+          Layer.provide(status),
           Layer.provide(events),
           Layer.provide(database),
           Layer.provide(Project.defaultLayer),

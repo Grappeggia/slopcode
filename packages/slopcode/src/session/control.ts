@@ -21,6 +21,7 @@ import { Image } from "@/image/image"
 import { SessionPrompt } from "./prompt"
 import { SessionID } from "./schema"
 import { projectV2 } from "./message-compat"
+import type { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void, SessionRuntime.Error>
@@ -31,6 +32,7 @@ export interface Interface {
     SessionV1.WithParts | SessionInput.Admitted,
     Image.Error | SessionPrompt.AdmissionFailed | SessionRuntime.Error | SessionV2.Error | SessionRunner.RunError
   >
+  readonly statuses: () => Effect.Effect<ReadonlyArray<{ readonly sessionID: SessionID; readonly status: SessionExecutionStatus.Info }>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/SessionControl") {}
@@ -90,7 +92,14 @@ export const layer = Layer.effect(
       )
     })
 
-    return Service.of({ cancel, messages, prompt })
+    return Service.of({
+      cancel,
+      messages,
+      prompt,
+      statuses: () => control.executionStatuses().pipe(
+        Effect.map((items) => items.map((item) => ({ sessionID: SessionID.make(item.sessionID), status: item.status }))),
+      ),
+    })
   }),
 )
 

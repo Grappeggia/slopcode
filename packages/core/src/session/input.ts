@@ -210,6 +210,28 @@ export const hasPending = Effect.fn("SessionInput.hasPending")(function* (
   return row !== undefined
 })
 
+export const pending = Effect.fn("SessionInput.pending")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  delivery: Delivery,
+) {
+  const row = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(
+      and(
+        eq(SessionInputTable.session_id, sessionID),
+        isNull(SessionInputTable.promoted_seq),
+        eq(SessionInputTable.delivery, delivery),
+      ),
+    )
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  return row ? fromRow(row) : undefined
+})
+
 export const pendingSteerFormats = Effect.fn("SessionInput.pendingSteerFormats")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,

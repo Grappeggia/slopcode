@@ -174,6 +174,18 @@ export default {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_execution_status\` (
+          \`session_id\` text PRIMARY KEY,
+          \`activity_id\` text NOT NULL,
+          \`root_id\` text NOT NULL,
+          \`owner\` text NOT NULL,
+          \`epoch\` integer NOT NULL,
+          \`seq\` integer NOT NULL,
+          \`data\` text NOT NULL,
+          CONSTRAINT \`fk_session_execution_status_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_input\` (
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,
@@ -277,6 +289,9 @@ export default {
       )
       yield* tx.run(`CREATE INDEX \`part_message_id_id_idx\` ON \`part\` (\`message_id\`,\`id\`);`)
       yield* tx.run(`CREATE INDEX \`part_session_idx\` ON \`part\` (\`session_id\`);`)
+      yield* tx.run(
+        `CREATE INDEX \`session_execution_status_owner_state_idx\` ON \`session_execution_status\` (\`owner\`,\`epoch\`,\`session_id\`);`,
+      )
       yield* tx.run(
         `CREATE INDEX \`session_input_session_pending_delivery_seq_idx\` ON \`session_input\` (\`session_id\`,\`promoted_seq\`,\`delivery\`,\`admitted_seq\`);`,
       )

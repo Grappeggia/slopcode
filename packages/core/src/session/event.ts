@@ -385,6 +385,104 @@ export namespace Structured {
   })
 }
 
+export namespace Execution {
+  export const Activity = Schema.Literals(["prompt", "shell", "compaction", "task"])
+  export const Phase = Schema.Literals(["preparing", "provider", "tool", "shell", "compaction", "task", "settling"])
+  export const TerminalCode = Schema.Literals([
+    "interrupted",
+    "restart",
+    "runtime-replaced",
+    "provider-nonretryable",
+    "provider-exhausted",
+    "runner-failure",
+    "step-limit",
+  ])
+  export const RetryCode = Schema.Literals(["rate-limit", "server", "explicit", "dispatch-uncertain"])
+  export type RetryCode = typeof RetryCode.Type
+  export const RetryAction = Schema.Literal("retry-provider")
+  export type RetryAction = typeof RetryAction.Type
+  const Identity = {
+    ...Base,
+    owner: Schema.Literal("v2"),
+    epoch: NonNegativeInt,
+    activityID: SessionMessageID.ID,
+    rootID: SessionMessageID.ID,
+    activity: Activity,
+  }
+  const Active = {
+    ...Identity,
+    phase: Phase,
+    providerAttempt: NonNegativeInt.pipe(Schema.optional),
+    structuredAttempt: NonNegativeInt.pipe(Schema.optional),
+  }
+
+  export const Started = EventV2.define({
+    type: "session.next.execution.started",
+    ...options,
+    schema: Active,
+  })
+  export type Started = typeof Started.Type
+
+  export const ProviderDispatched = EventV2.define({
+    type: "session.next.execution.provider.dispatched",
+    ...options,
+    schema: {
+      ...Active,
+      providerAttempt: NonNegativeInt,
+      recovery: Schema.Literals(["retry-provider", "interrupt"]),
+    },
+  })
+  export type ProviderDispatched = typeof ProviderDispatched.Type
+
+  export const ProviderCompleted = EventV2.define({
+    type: "session.next.execution.provider.completed",
+    ...options,
+    schema: { ...Active, providerAttempt: NonNegativeInt },
+  })
+  export type ProviderCompleted = typeof ProviderCompleted.Type
+
+  export const RetryScheduled = EventV2.define({
+    type: "session.next.execution.retry.scheduled",
+    ...options,
+    schema: {
+      ...Active,
+      attempt: NonNegativeInt,
+      maxAttempts: NonNegativeInt,
+      nextAt: NonNegativeInt,
+      code: RetryCode,
+      action: RetryAction,
+      message: Schema.String,
+    },
+  })
+  export type RetryScheduled = typeof RetryScheduled.Type
+
+  export const Succeeded = EventV2.define({
+    type: "session.next.execution.succeeded",
+    ...options,
+    schema: Identity,
+  })
+  export type Succeeded = typeof Succeeded.Type
+
+  const Terminal = {
+    ...Active,
+    code: TerminalCode,
+    message: Schema.String,
+    resultingEpoch: NonNegativeInt,
+  }
+  export const Interrupted = EventV2.define({
+    type: "session.next.execution.interrupted",
+    ...options,
+    schema: Terminal,
+  })
+  export type Interrupted = typeof Interrupted.Type
+  export const Failed = EventV2.define({
+    type: "session.next.execution.failed",
+    ...options,
+    schema: Terminal,
+  })
+  export type Failed = typeof Failed.Type
+}
+
 export namespace Text {
   export const Started = EventV2.define({
     type: "session.next.text.started",
@@ -814,15 +912,25 @@ const DurableDefinitions = [
 const EphemeralDefinitions = [Text.Delta, Tool.Input.Delta, Reasoning.Delta, Compaction.Delta] as const
 
 const StructuredDefinitions = [Structured.Dispatched, Structured.Retry, Structured.Result, Structured.Failed] as const
+const ExecutionDefinitions = [
+  Execution.Started,
+  Execution.ProviderDispatched,
+  Execution.ProviderCompleted,
+  Execution.RetryScheduled,
+  Execution.Succeeded,
+  Execution.Interrupted,
+  Execution.Failed,
+] as const
 const DurableBase = Schema.Union(DurableDefinitions, { mode: "oneOf" })
 const StructuredDurable = Schema.Union(StructuredDefinitions, { mode: "oneOf" })
-export const Durable = Schema.Union([DurableBase, StructuredDurable], { mode: "oneOf" }).pipe(
+const ExecutionDurable = Schema.Union(ExecutionDefinitions, { mode: "oneOf" })
+export const Durable = Schema.Union([DurableBase, StructuredDurable, ExecutionDurable], { mode: "oneOf" }).pipe(
   Schema.toTaggedUnion("type"),
 )
 export type DurableEvent = typeof Durable.Type
 
 const AllBase = Schema.Union([Created, ...DurableDefinitions, ...EphemeralDefinitions], { mode: "oneOf" })
-export const All = Schema.Union([AllBase, StructuredDurable], { mode: "oneOf" }).pipe(Schema.toTaggedUnion("type"))
+export const All = Schema.Union([AllBase, StructuredDurable, ExecutionDurable], { mode: "oneOf" }).pipe(Schema.toTaggedUnion("type"))
 export type Event = typeof All.Type
 export type Type = Event["type"]
 

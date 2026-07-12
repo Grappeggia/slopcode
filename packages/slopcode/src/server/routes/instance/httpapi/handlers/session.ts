@@ -92,7 +92,19 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const status = Effect.fn("SessionHttpApi.status")(function* () {
-      return Object.fromEntries(yield* statusSvc.list())
+      const result = yield* statusSvc.list()
+      for (const item of yield* controlSvc.statuses()) {
+        result.delete(item.sessionID)
+        if (item.status.type === "busy") result.set(item.sessionID, { type: "busy" })
+        if (item.status.type === "retrying")
+          result.set(item.sessionID, {
+            type: "retry",
+            attempt: item.status.attempt,
+            message: item.status.message,
+            next: item.status.nextAt,
+          })
+      }
+      return Object.fromEntries(result)
     })
 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
