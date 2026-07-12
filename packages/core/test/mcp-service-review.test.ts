@@ -1310,6 +1310,8 @@ const authDocuments = [
 ]
 const authBegins: Array<{ target: MCPOAuthStore.Target; config: typeof ConfigMCP.OAuth.Type }> = []
 const authRemoves: MCPOAuthStore.Target[] = []
+const authEvents: Array<{ type: string; data: unknown }> = []
+let authChange: Parameters<MCPOAuth.Interface["onChange"]>[0] | undefined
 const authStore: MCPOAuthStore.Interface = {
   get: () => Effect.succeed({}),
   update: (_target, change) => Effect.succeed(change({})),
@@ -1346,12 +1348,15 @@ const stagedOAuth: MCPOAuth.Interface = {
   stop: () => Effect.void,
   recover: () => Effect.void,
   onComplete: () => Effect.void,
-  onChange: () => Effect.void,
+  onChange: (handler) => Effect.sync(() => {
+    authChange = handler
+  }).pipe(Effect.asVoid),
 }
 fixture({
   documents: authDocuments,
   oauth: stagedOAuth,
   oauthStore: authStore,
+  events: authEvents,
   connect: (input) =>
     input.config.type === "remote" && input.config.url === "https://new.example/mcp"
       ? Effect.fail(new MCPClient.ConnectionError({ message: "MCP authentication is required", code: "auth-required" }))
@@ -1384,6 +1389,13 @@ fixture({
       target: { endpoint: "https://new.example/mcp" },
       config: { client_id: "new-client", scope: "new-scope", redirect_uri: "https://client.example/new" },
     })
+    authEvents.length = 0
+    authChange?.(authBegins.at(-1)!.target, { status: "failed", code: "provider-error" })
+    const changed = authEvents.filter((event) => event.type === MCP.Event.AuthChanged.type)
+    expect(changed).toHaveLength(1)
+    expect(changed[0]?.data).toEqual({ server: "staged", status: { status: "failed", code: "provider-error" } })
+    expect(JSON.stringify(changed)).not.toContain("authorize")
+    expect(JSON.stringify(changed)).not.toContain("new-client")
     yield* mcp.removeAuth("staged")
     expect(authRemoves.map((target) => target.endpoint).toSorted()).toEqual([
       "https://new.example/mcp",
