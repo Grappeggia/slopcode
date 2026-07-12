@@ -30,7 +30,7 @@ export interface Interface {
     input: SessionPrompt.PromptInput,
   ) => Effect.Effect<
     SessionV1.WithParts | SessionInput.Admitted,
-    Image.Error | SessionPrompt.AdmissionFailed | SessionRuntime.Error | SessionV2.Error | SessionRunner.RunError
+    Image.Error | SessionPrompt.AdmissionFailed | SessionRuntime.Error | SessionV2.Error | SessionRunner.RunError | SessionExecutionStatus.DurableTerminalError
   >
   readonly statuses: () => Effect.Effect<ReadonlyArray<{ readonly sessionID: SessionID; readonly status: SessionExecutionStatus.Info }>>
 }
@@ -85,7 +85,8 @@ export const layer = Layer.effect(
 
     const cancel = Effect.fn("SessionControl.cancel")(function* (sessionID: SessionID) {
       const info = yield* runtime.get(sessionID)
-      if (info?.owner === "v2") return yield* control.interrupt(sessionID)
+      if (!info) return
+      if (info.owner === "v2") return yield* control.interrupt(sessionID)
       const current = yield* runtime.assert({ sessionID, owner: "v1", state: "ready", epoch: info?.epoch })
       yield* legacy.cancel(sessionID, (cancel) =>
         runtime.claim({ sessionID, owner: "v1", state: "ready", epoch: current.epoch }, cancel).pipe(Effect.asVoid),

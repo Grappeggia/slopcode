@@ -25,7 +25,7 @@ import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Database } from "@slopcode-ai/core/database/database"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
+import { SessionExecutionStatusTable, SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
@@ -255,6 +255,36 @@ afterEach(async () => {
 })
 
 describe("session HttpApi", () => {
+  it.instance(
+    "projects native busy and retry status while omitting retained terminals",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-slopcode-directory": test.directory }
+        const session = yield* createSession({ title: "native status" })
+        const db = (yield* Database.Service).db
+        yield* assignV2Runtime(session.id)
+        const active = {
+          activityID: SessionMessage.ID.make("msg_native_status"),
+          rootID: SessionMessage.ID.make("msg_native_status"),
+          activity: "prompt",
+          phase: "provider",
+          owner: "v2",
+          epoch: 1,
+          seq: 1,
+          providerAttempt: 1,
+        }
+        yield* db.insert(SessionExecutionStatusTable).values({ session_id: session.id, activity_id: active.activityID, root_id: active.rootID, owner: "v2", epoch: 1, seq: 1, data: { type: "busy", ...active } }).run().pipe(Effect.orDie)
+        expect(yield* requestJson<Record<string, unknown>>(SessionPaths.status, { headers })).toEqual({ [session.id]: { type: "busy" } })
+
+        yield* db.update(SessionExecutionStatusTable).set({ data: { type: "retrying", ...active, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 12_000, code: "server", action: "retry-provider", message: "safe", recovery: "interrupt" } }).where(eq(SessionExecutionStatusTable.session_id, session.id)).run().pipe(Effect.orDie)
+        expect(yield* requestJson<Record<string, unknown>>(SessionPaths.status, { headers })).toEqual({ [session.id]: { type: "retry", attempt: 1, message: "safe", next: 12_000 } })
+
+        yield* db.update(SessionExecutionStatusTable).set({ data: { type: "terminal-failure", ...active, code: "provider-exhausted", message: "safe" } }).where(eq(SessionExecutionStatusTable.session_id, session.id)).run().pipe(Effect.orDie)
+        expect(yield* requestJson<Record<string, unknown>>(SessionPaths.status, { headers })).toEqual({})
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
   it.effect("maps busy sessions to public session busy errors", () =>
     Effect.gen(function* () {
       const sessionID = SessionID.descending()
