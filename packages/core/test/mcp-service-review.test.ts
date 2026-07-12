@@ -1408,6 +1408,11 @@ fixture({
     expect(changed[0]?.data).toEqual({ server: "staged", status: { status: "failed", code: "provider-error" } })
     expect(JSON.stringify(changed)).not.toContain("authorize")
     expect(JSON.stringify(changed)).not.toContain("new-client")
+    yield* mcp.removeAuth("staged")
+    expect(authRemoves.map((target) => target.endpoint).toSorted()).toEqual([
+      "https://new.example/mcp",
+      "https://old.example/mcp",
+    ])
     let disabledReset = 0
     authReset = () => Effect.sync(() => disabledReset++)
     authDocuments[0] = new ConfigMCP.Info({
@@ -1424,11 +1429,6 @@ fixture({
     expect(disabledReset).toBeGreaterThan(0)
     expect((yield* mcp.status()).staged).toEqual({ status: "disabled" })
     authReset = () => Effect.void
-    yield* mcp.removeAuth("staged")
-    expect(authRemoves.map((target) => target.endpoint).toSorted()).toEqual([
-      "https://new.example/mcp",
-      "https://old.example/mcp",
-    ])
     expect(() => Schema.decodeUnknownSync(MCP.AuthStatus)({ status: "failed", code: "remote-body" })).toThrow()
   }),
 )

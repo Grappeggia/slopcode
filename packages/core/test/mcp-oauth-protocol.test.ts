@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { ConfigMCP } from "@slopcode-ai/core/config/mcp"
+import { MCP } from "@slopcode-ai/core/mcp"
 import { MCPClient } from "@slopcode-ai/core/mcp/client"
 import { MCPOAuthProvider } from "@slopcode-ai/core/mcp/oauth-provider"
 import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
@@ -506,7 +507,11 @@ describe("MCP OAuth protocol boundary", () => {
                 )
                 const oauth = Context.get(context, MCPOAuth.Service)
                 const changes: Array<{ status: "failed"; code: string }> = []
-                yield* oauth.onChange((_target, status) => changes.push(status))
+                const events: Array<{ type: string; data: unknown }> = []
+                yield* oauth.onChange((target, status) => {
+                  changes.push(status)
+                  events.push({ type: MCP.Event.AuthChanged.type, data: { server: target.name, status } })
+                })
                 const started = yield* oauth.begin({
                   target: { directory: tmp.path, name: "failed-auto", endpoint: `${fixture.url}/mcp` },
                   config: { client_id: "static-client", callback_port: port },
@@ -520,6 +525,12 @@ describe("MCP OAuth protocol boundary", () => {
                 yield* Effect.sleep("20 millis")
                 expect((yield* store.findAttempt(started.attemptID))?.attempt).toMatchObject({ phase: "failed", error: "exchange" })
                 expect(changes).toEqual([{ status: "failed", code: "exchange" }])
+                expect(events).toEqual([{
+                  type: "mcp.auth.changed",
+                  data: { server: "failed-auto", status: { status: "failed", code: "exchange" } },
+                }])
+                expect(JSON.stringify(events)).not.toContain("bad")
+                expect(JSON.stringify(events)).not.toContain("authorize")
                 yield* oauth.status({ directory: tmp.path, name: "failed-auto", endpoint: `${fixture.url}/mcp` })
                 expect(changes).toHaveLength(1)
                 const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
@@ -625,6 +636,43 @@ describe("MCP OAuth protocol boundary", () => {
             expect(reused.port).toBe(port)
             reused.stop(true)
           }),
+        ),
+      ),
+    ),
+  )
+
+  it.live("expires a fresh automatic attempt without callback activity", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+                const port = reserve.port
+                reserve.stop(true)
+                const target = { directory: tmp.path, name: "fresh-timer", endpoint: `${fixture.url}/mcp` }
+                const store = MCPOAuthStore.make({ data: tmp.path })
+                const context = yield* Layer.build(
+                  MCPOAuth.layerWith({ maxAge: 80 }).pipe(
+                    Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                    Layer.provide(MCPOAuthCallback.layer),
+                  ),
+                )
+                const oauth = Context.get(context, MCPOAuth.Service)
+                const changes: Array<{ status: "failed"; code: string }> = []
+                yield* oauth.onChange((_target, status) => changes.push(status))
+                const started = yield* oauth.begin({ target, config: { client_id: "static-client", callback_port: port } })
+                if (started.status !== "authorizing") throw new Error("authorization did not start")
+                yield* Effect.sleep("150 millis")
+                expect((yield* store.findAttempt(started.attemptID))?.attempt).toMatchObject({ phase: "expired", error: "attempt-expired" })
+                expect(changes).toEqual([{ status: "failed", code: "attempt-expired" }])
+                const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+                expect(reused.port).toBe(port)
+                reused.stop(true)
+              }),
+            ),
+          ),
         ),
       ),
     ),

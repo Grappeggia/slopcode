@@ -459,7 +459,7 @@ it.live("bounds invalid grant malformed and interaction refresh failures", () =>
                   timeout: 1_000,
                   config: new ConfigMCP.Remote({ type: "remote", url: target.endpoint, oauth: { client_id: "static" } }),
                 }).pipe(Effect.flip)
-                expect(error.code).toBe(mode === "malformed" ? "refresh" : "auth-required")
+                expect(error.code).toBe("auth-required")
                 expect(error.message).not.toContain("invalid_grant")
                 expect((yield* store.get(target)).attempts).toBeUndefined()
               }),
@@ -507,7 +507,7 @@ function refreshFailure(mode: "invalid" | "malformed" | "interaction") {
       if (new URL(request.url).pathname !== "/token") return new Response("missing", { status: 404 })
       if (mode === "invalid") return Response.json({ error: "invalid_grant", error_description: "private" }, { status: 400 })
       if (mode === "malformed") return new Response("private malformed body", { status: 500 })
-      return Response.json({ error: "invalid_request", error_description: "private" }, { status: 400 })
+      return Response.json({ error: "interaction_required", error_description: "private" }, { status: 400 })
     },
   })
 }
