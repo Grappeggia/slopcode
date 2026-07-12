@@ -4,7 +4,6 @@ import {
   LLMError,
   LLMEvent,
   SystemPart,
-  ToolDefinition,
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@slopcode-ai/llm"
@@ -108,6 +107,7 @@ export const layer = Layer.effect(
     const llm = yield* LLMClient.Service
     const agents = yield* AgentV2.Service
     const tools = yield* ToolRegistry.Service
+    const structuredTools = yield* ToolRegistry.StructuredService
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
     const runtime = yield* SessionRuntime.Service
@@ -126,10 +126,10 @@ export const layer = Layer.effect(
           ? events.publish(definition, data, options)
           : events.publish(definition, data, {
               ...options,
-              commit: (seq) =>
+              guard: (seq) =>
                 runtime
                   .assert({ sessionID, owner: "v2", state: "draining", epoch })
-                  .pipe(Effect.andThen(options?.commit?.(seq) ?? Effect.void), Effect.orDie),
+                  .pipe(Effect.andThen(options?.guard?.(seq) ?? Effect.void), Effect.orDie),
             }),
     })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
@@ -178,7 +178,7 @@ export const layer = Layer.effect(
                     )
                   : tool.state.input,
               ...(tool.toolType === undefined ? {} : { toolType: tool.toolType }),
-            } as ToolRegistry.ExecuteInput["call"]
+            } as Extract<ToolRegistry.ExecuteInput["call"], { readonly type: "tool-call" }>
             if (tool.state.status === "pending")
               yield* events.publish(SessionEvent.Tool.CalledV1, {
                 sessionID,
@@ -568,11 +568,11 @@ export const layer = Layer.effect(
             multiAgent: resolved.harness.multiAgent,
           }
         : {}
-      const toolMaterialization = yield* tools.materialize(permissions, {
+      const toolPlan = {
         ...plan,
         ...(resolved.harness
           ? {
-              progress: (input, progress) =>
+              progress: (input: ToolRegistry.ExecuteInput, progress: ToolRegistry.ChildProgress) =>
                 Effect.gen(function* () {
                   yield* events.publish(SessionEvent.Tool.Progress, {
                     sessionID: input.sessionID,
@@ -585,18 +585,10 @@ export const layer = Layer.effect(
                 }),
             }
           : {}),
-      })
-      const definitions = format
-        ? [
-            ...toolMaterialization.definitions,
-            new ToolDefinition({
-              name: FINAL_OUTPUT,
-              description: "Return the final schema-valid response exactly once after all other work is complete.",
-              inputSchema: SessionFormat.toolSchema(format),
-              metadata: { fingerprint: SessionFormat.fingerprint(format) },
-            }),
-          ]
-        : toolMaterialization.definitions
+      }
+      const toolMaterialization = format
+        ? yield* structuredTools.materialize(permissions, toolPlan, format)
+        : yield* tools.materialize(permissions, toolPlan)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       const request = LLM.request({
         model,
@@ -622,7 +614,7 @@ export const layer = Layer.effect(
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
         messages: toLLMMessages(context, model),
-        tools: definitions,
+        tools: toolMaterialization.definitions,
         toolChoice: format ? "required" : undefined,
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
@@ -858,9 +850,21 @@ export const layer = Layer.effect(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
             if (overflowFailure || publisher.hasProviderError()) return
-            if (format && root && event.type === "tool-call" && event.name === FINAL_OUTPUT) {
+            if (
+              format &&
+              root &&
+              (event.type === "tool-call" || event.type === "tool-input-error") &&
+              event.name === FINAL_OUTPUT
+            ) {
               const assistantMessageID = yield* publisher.startAssistant()
-              const candidate = yield* SessionFormat.toolValue(event.input).pipe(Effect.exit)
+              const settlement = yield* toolMaterialization.settle({
+                sessionID: session.id,
+                agent: agent.id,
+                assistantMessageID,
+                call: event,
+              })
+              const final = settlement.final
+              if (!final) return yield* Effect.die("Structured final did not use canonical registry settlement")
               yield* events.publish(
                 SessionEvent.Structured.Candidate,
                 {
@@ -870,18 +874,16 @@ export const layer = Layer.effect(
                   assistantMessageID,
                   attempt,
                   fingerprint: SessionFormat.fingerprint(format),
-                  ...(candidate._tag === "Success" ? { value: candidate.value } : {}),
-                  invalid: candidate._tag === "Failure",
-                  ...(candidate._tag === "Failure"
-                    ? { invalidReason: Option.getOrThrow(Cause.findErrorOption(candidate.cause)).reason }
-                    : {}),
+                  ...(final.type === "success" || final.type === "schema" ? { value: final.value } : {}),
+                  invalid: final.type === "invalid" || final.type === "stale",
+                  ...(final.type === "invalid" ? { invalidReason: final.reason } : {}),
                 },
                 {
                   id: SessionFormat.candidateID(session.id, root.id, attempt),
                   commit: () => attemptCommit(SessionFormat.fingerprint(format)),
                 },
               )
-              if (candidate._tag === "Success" && SessionFormat.validate(format, candidate.value)) {
+              if (final.type === "success") {
                 yield* FiberSet.clear(toolFibers)
                 yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
                 yield* events.publish(
@@ -891,7 +893,7 @@ export const layer = Layer.effect(
                     timestamp: yield* DateTime.now,
                     rootUserID: root.id,
                     assistantMessageID,
-                    value: candidate.value,
+                    value: final.value,
                     attempts: attempt,
                     retryCount: format.retry_count,
                   },
@@ -907,9 +909,7 @@ export const layer = Layer.effect(
                 structuredValid = true
               } else {
                 const reason =
-                  candidate._tag === "Failure"
-                    ? Option.getOrThrow(Cause.findErrorOption(candidate.cause)).reason
-                    : "schema"
+                  final.type === "invalid" ? final.reason : final.type === "schema" ? "schema" : "stale"
                 yield* settleStructured(assistantMessageID, reason)
               }
               structuredSettled = true

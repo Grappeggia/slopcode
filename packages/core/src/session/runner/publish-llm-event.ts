@@ -309,6 +309,29 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       case "tool-input-end":
         yield* endToolInput(event)
         return
+      case "tool-input-error": {
+        if (!tools.has(event.id)) yield* startToolInput(event)
+        const tool = tools.get(event.id)!
+        if (!tool.inputEnded) yield* endToolInput(event)
+        if (tool.name !== event.name)
+          return yield* Effect.die(`Tool input error name changed for ${event.id}: ${tool.name} -> ${event.name}`)
+        if (tool.toolType !== event.toolType)
+          return yield* Effect.die(`Tool input error kind changed for ${event.id}: ${tool.toolType} -> ${event.toolType}`)
+        if (tool.settled) return yield* Effect.die(`Duplicate tool input error: ${event.id}`)
+        tool.settled = true
+        yield* events.publish(SessionEvent.Tool.Failed, {
+          sessionID: input.sessionID,
+          timestamp: yield* timestamp,
+          assistantMessageID: tool.assistantMessageID,
+          callID: event.id,
+          error: { type: "unknown", message: "Provider returned malformed tool input" },
+          provider: {
+            executed: false,
+            ...(event.providerMetadata === undefined ? {} : { metadata: event.providerMetadata }),
+          },
+        })
+        return
+      }
       case "tool-call": {
         if (!tools.has(event.id)) yield* startToolInput(event)
         const tool = tools.get(event.id)!
