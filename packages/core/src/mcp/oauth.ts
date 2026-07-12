@@ -525,6 +525,7 @@ export const layerWith = (options: { readonly maxAge?: number; readonly observeI
           scope: input.config.scope,
         }), input.target)
         const entry = yield* safe(store.get(input.target), input.target)
+        if (Object.keys(entry).length === 0) return
         const compatible = entry.compatibility === compatibility && Object.values(entry.attempts ?? {}).every((attempt) =>
           !["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "") ||
           attempt.redirect === redirect.url)

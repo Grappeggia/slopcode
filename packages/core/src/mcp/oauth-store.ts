@@ -479,15 +479,26 @@ export function make(input: { readonly data: string; readonly legacy?: string })
     })
 
   const cancelTarget: Interface["cancelTarget"] = (target, invalidate = false) =>
-    update(target, (entry) => ({
-      ...(invalidate ? {} : entry),
-      attempts: Object.fromEntries(
-        Object.entries(entry.attempts ?? {}).map(([id, attempt]) => [
-          id,
-          ["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "") ? ended(attempt, "cancelled") : attempt,
-        ]),
-      ),
-    })).pipe(Effect.asVoid)
+    transact(async (data) => {
+      const name = key(target)
+      const bucket = data.buckets[name]
+      if (!bucket) return { value: undefined }
+      const entry = {
+        ...(invalidate ? {} : bucket.entry),
+        attempts: Object.fromEntries(
+          Object.entries(bucket.entry.attempts ?? {}).map(([id, attempt]) => [
+            id,
+            ["initializing", "pending", "received", "exchanging"].includes(attempt.phase ?? "")
+              ? ended(attempt, "cancelled")
+              : attempt,
+          ]),
+        ),
+      }
+      return {
+        data: { ...data, buckets: { ...data.buckets, [name]: { ...bucket, entry } } },
+        value: undefined,
+      }
+    })
 
   return {
     get,
