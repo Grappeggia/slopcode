@@ -4634,6 +4634,50 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("rebuilds a steering-only completion into one new-root request containing the steer", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const executionStatus = yield* SessionExecutionStatus.Service
+      const root = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Old completed context" }), resume: false })
+      yield* SessionInput.promoteSteers(database.db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const active = yield* runtime.assign({ sessionID, state: "draining", expectedOwner: "v2", expectedEpoch: 0 })
+      const fingerprint = "c".repeat(64)
+      const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: active.epoch, activityID: root.id, rootID: root.id, activity: "prompt" as const }
+      yield* executionStatus.start({ ...fence, phase: "preparing" })
+      yield* executionStatus.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      const assistantMessageID = SessionMessage.ID.make("msg_rebuilt_steer_completed_assistant")
+      yield* events.publish(SessionEvent.Step.Started, { sessionID, timestamp: yield* DateTime.now, assistantMessageID, rootUserID: root.id, agent: "build", model: { providerID: ProviderV2.ID.make("fake"), id: ModelV2.ID.make("fake-model") } })
+      yield* events.publish(SessionEvent.Step.Ended, { sessionID, timestamp: yield* DateTime.now, assistantMessageID, finish: "stop", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
+      yield* executionStatus.complete({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      const steer = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Recovered steer" }), resume: false })
+      requests.length = 0
+      response = fragmentFixture("text", "text-rebuilt-steer", ["settled"]).completeEvents
+      const rebuilt = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.gen(function* () {
+        const execution = yield* SessionExecution.Service
+        yield* execution.wait(sessionID)
+      }).pipe(Effect.provide(Layer.fresh(rebuilt)))
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toEqual(["Old completed context", "Recovered steer"])
+      expect(yield* SessionInput.hasPending(database.db, sessionID, "steer")).toBe(false)
+      const promoted = yield* database.db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)
+      expect(promoted.filter((event) => event.type === "session.next.prompt.promoted.1" && event.data.messageID === steer.id)).toHaveLength(1)
+      expect(promoted.filter((event) => event.type === "session.next.execution.started.1").map((event) => event.data.rootID)).toEqual([root.id, steer.id])
+    }),
+  )
+
   it.effect("runs steering input accepted while the active provider turn fails", () =>
     Effect.gen(function* () {
       yield* setup
