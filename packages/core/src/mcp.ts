@@ -984,16 +984,10 @@ const baseLayer = Layer.effect(
         ),
       )
     })
-    yield* oauth.onChange((target) => {
+    yield* oauth.onChange((target, status) => {
       const server = servers.get(target.name)
       if (!server || JSON.stringify(authTarget(server)) !== JSON.stringify(target)) return
-      Effect.runFork(
-        oauth.status(target).pipe(
-          Effect.map((status) => status.status === "credential-ready" ? ({ status: "auth-required" } as const) : status),
-          Effect.flatMap((status) => publishAuth(server.name, status)),
-          Effect.ignore,
-        ),
-      )
+      Effect.runFork(publishAuth(server.name, status))
     })
     yield* Effect.addFinalizer(() =>
       operations.withPermits(1)(

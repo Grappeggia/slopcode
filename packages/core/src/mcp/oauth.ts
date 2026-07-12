@@ -93,7 +93,9 @@ export interface Interface {
     readonly config: typeof ConfigMCP.OAuth.Type
   }) => Effect.Effect<void, AuthError>
   readonly onComplete: (handler: (target: MCPOAuthStore.Target) => void) => Effect.Effect<void>
-  readonly onChange: (handler: (target: MCPOAuthStore.Target) => void) => Effect.Effect<void>
+  readonly onChange: (
+    handler: (target: MCPOAuthStore.Target, status: { readonly status: "failed"; readonly code: FailureCode }) => void,
+  ) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/MCPOAuth") {}
@@ -121,8 +123,9 @@ export const layer = Layer.effect(
       })
     const later = (attemptID: string) =>
       setTimeout(() => Effect.runPromise(close(attemptID)).catch(() => undefined), 0)
-    const changes = new Set<(target: MCPOAuthStore.Target) => void>()
-    const changed = (target: MCPOAuthStore.Target) => Effect.sync(() => changes.forEach((handler) => handler(target)))
+    const changes = new Set<Parameters<Interface["onChange"]>[0]>()
+    const changed = (target: MCPOAuthStore.Target, code: FailureCode) =>
+      Effect.sync(() => changes.forEach((handler) => handler(target, { status: "failed", code })))
     const mark = (
       target: MCPOAuthStore.Target,
       attemptID: string,
@@ -131,7 +134,7 @@ export const layer = Layer.effect(
       expected?: ReadonlyArray<MCPOAuthStore.Attempt["phase"]>,
     ) =>
       safe(store.finishAttempt(target, attemptID, phase, error, expected), target).pipe(
-        Effect.flatMap((updated) => (updated ? changed(target) : Effect.void)),
+        Effect.flatMap((updated) => (updated ? changed(target, error) : Effect.void)),
       )
     const terminal = (
       target: MCPOAuthStore.Target,
@@ -315,7 +318,7 @@ export const layer = Layer.effect(
                   receive: async (result) => {
                     if (!result.code) {
                       await Effect.runPromise(
-                        safe(store.finishAttempt(input.target, attemptID, "failed", "provider-error", ["pending"]), input.target),
+                        mark(input.target, attemptID, "failed", "provider-error", ["pending"]),
                       )
                       later(attemptID)
                       return true
@@ -429,7 +432,7 @@ export const layer = Layer.effect(
                     receive: async (result) => {
                       if (!result.code) {
                         await Effect.runPromise(
-                          safe(store.finishAttempt(input.target, attemptID, "failed", "provider-error", ["pending"]), input.target),
+                          mark(input.target, attemptID, "failed", "provider-error", ["pending"]),
                         )
                         later(attemptID)
                         return true
