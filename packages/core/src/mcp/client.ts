@@ -5,7 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { auth, UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import {
   CallToolResultSchema,
   GetPromptResultSchema,
@@ -298,6 +298,11 @@ export const layer = Layer.effect(
                 attemptID: "mcp_auth_connect",
                 state: "connect",
                 redirectUrl: callback(input.config.oauth),
+                compatibility: MCPOAuthProvider.compatibility(
+                  url.toString(),
+                  typeof input.config.oauth === "object" ? input.config.oauth : {},
+                  callback(input.config.oauth),
+                ),
                 config: typeof input.config.oauth === "object" ? input.config.oauth : {},
                 transient: false,
                 onRedirect: async () => {
@@ -331,7 +336,8 @@ export const layer = Layer.effect(
           const remote = await connect(first, "remote", input.timeout, signal).catch((cause) => {
             if (signal.aborted) throw cause
             if (cause instanceof UnauthorizedError || cause instanceof AuthRequired) throw new AuthRequired()
-            return undefined
+            if (cause instanceof StreamableHTTPError && [-1, 404, 405].includes(cause.code ?? 0)) return undefined
+            throw cause
           })
           if (remote) return remote
           return connect(

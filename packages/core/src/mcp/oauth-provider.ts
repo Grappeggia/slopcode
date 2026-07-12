@@ -9,6 +9,7 @@ import type {
 import { Effect } from "effect"
 import type { ConfigMCP } from "../config/mcp"
 import type { MCPOAuthStore } from "./oauth-store"
+import { createHash } from "node:crypto"
 
 export function make(input: {
   readonly store: MCPOAuthStore.Interface
@@ -20,6 +21,7 @@ export function make(input: {
   readonly onRedirect: (url: URL) => Promise<void>
   readonly now?: () => number
   readonly transient?: boolean
+  readonly compatibility?: string
 }): OAuthClientProvider {
   const run = <A>(effect: Effect.Effect<A, MCPOAuthStore.StoreError>) => Effect.runPromise(effect)
   const now = input.now ?? (() => Date.now() / 1000)
@@ -41,16 +43,24 @@ export function make(input: {
           client_id: input.config.client_id,
           ...(input.config.client_secret === undefined ? {} : { client_secret: input.config.client_secret }),
         }
-      const client = (await run(input.store.get(input.target))).client
+      const entry = await run(input.store.get(input.target))
+      const client = entry.compatibility === input.compatibility ? entry.client : undefined
       if (!client) return undefined
       const expiry = client.client_secret_expires_at
       if (expiry !== undefined && Number.isFinite(expiry) && expiry > 0 && expiry <= now()) return undefined
       return client
     },
     saveClientInformation: (client: OAuthClientInformationMixed) =>
-      run(input.store.update(input.target, (entry) => ({ ...entry, client }))).then(() => undefined),
+      run(
+        input.store.update(input.target, (entry) => ({
+          ...entry,
+          client,
+          ...(input.compatibility ? { compatibility: input.compatibility } : {}),
+        })),
+      ).then(() => undefined),
     tokens: async () => {
-      const tokens = (await run(input.store.get(input.target))).tokens
+      const entry = await run(input.store.get(input.target))
+      const tokens = entry.compatibility === input.compatibility ? entry.tokens : undefined
       if (!tokens) return undefined
       return {
         access_token: tokens.access_token,
@@ -61,7 +71,15 @@ export function make(input: {
         ...(tokens.expires_at === undefined ? {} : { expires_in: Math.max(0, Math.floor(tokens.expires_at - now())) }),
       } satisfies OAuthTokens
     },
-    saveTokens: (tokens) => run(input.store.saveTokens(input.target, tokens, now())),
+    saveTokens: (tokens) =>
+      run(input.store.saveTokens(input.target, tokens, now())).then(() =>
+        run(
+          input.store.update(input.target, (entry) => ({
+            ...entry,
+            ...(input.compatibility ? { compatibility: input.compatibility } : {}),
+          })),
+        ).then(() => undefined),
+      ),
     redirectToAuthorization: input.onRedirect,
     saveCodeVerifier: (verifier) =>
       input.transient === false
@@ -83,4 +101,18 @@ export function make(input: {
       run(input.store.update(input.target, (entry) => ({ ...entry, discovery }))).then(() => undefined),
     invalidateCredentials: (scope) => run(input.store.invalidate(input.target, scope, input.attemptID)),
   }
+}
+
+export function compatibility(endpoint: string, config: typeof ConfigMCP.OAuth.Type, redirectUrl: string) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        endpoint,
+        config.client_id ?? null,
+        config.client_secret ?? null,
+        config.scope ?? null,
+        redirectUrl,
+      ]),
+    )
+    .digest("hex")
 }

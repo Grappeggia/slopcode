@@ -194,6 +194,7 @@ export const layer = Layer.effect(
           attemptID: input.attemptID,
           state: input.state,
           redirectUrl: attempt.redirect!,
+          compatibility: MCPOAuthProvider.compatibility(input.target.endpoint, input.config, attempt.redirect!),
           config: input.config,
           onRedirect: async () => {
             throw failure("exchange", input.target, input.attemptID)
@@ -235,12 +236,19 @@ export const layer = Layer.effect(
     const begin: Interface["begin"] = (input) =>
       Effect.gen(function* () {
         const existing = yield* safe(store.get(input.target), input.target)
-        if (existing.tokens?.access_token) return { status: "connected" } as const
+        const redirect = redirectFor(input.config)
+        const compatibility = MCPOAuthProvider.compatibility(input.target.endpoint, input.config, redirect.url)
+        if (existing.compatibility === compatibility && existing.tokens?.access_token)
+          return { status: "connected" } as const
+        if (existing.compatibility && existing.compatibility !== compatibility)
+          yield* safe(
+            store.update(input.target, (entry) => ({ ...entry, tokens: undefined, client: undefined, compatibility })),
+            input.target,
+          )
         const attemptID = `mcp_auth_${randomBytes(16).toString("hex")}` as AttemptID
         const state = randomBytes(32).toString("base64url")
         const created = Date.now()
         const expires = created + MAX_AGE
-        const redirect = redirectFor(input.config)
         const requested = input.mode ?? "auto"
         const mode = requested === "auto" && redirect.local ? "auto" : "manual"
         yield* safe(
@@ -287,6 +295,7 @@ export const layer = Layer.effect(
           attemptID,
           state,
           redirectUrl: redirect.url,
+          compatibility,
           config: input.config,
           onRedirect: async (url) => {
             authorizationUrl = url.toString()
