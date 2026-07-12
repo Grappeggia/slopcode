@@ -145,3 +145,31 @@ The first full Core attempt was run concurrently with the other verification job
 ### Re-Review Commit
 
 - `735eca7d22 fix(core): fence MCP reload activation`
+
+## Final Review Corrections
+
+### Implementation
+
+- Stdio teardown now starts SDK close and process-tree discovery concurrently. It issues TERM without waiting for SDK close, waits a bounded 500 ms, escalates surviving descendants with KILL, and waits only a final bounded 100 ms for close settlement. A never-settling or late-rejecting SDK close is safely observed without blocking finalization; non-stdio close is capped at one second.
+- MCP after-hook normalization now distinguishes metadata/title edits from explicit output/attachment edits. Metadata-only and title-only hooks retain the exact normalized content array, including mixed text, image, embedded text resource, and blob-resource ordering and boundaries.
+- Explicit output or attachment changes still reconstruct canonical content from the hook projection, while `structuredContent`, `_meta`, and `isError` retain the validated preservation rules.
+- A non-empty after-hook title publishes durable `SessionEvent.Tool.Progress` with the canonical call identity and metadata, matching plugin-tool behavior without changing model content.
+
+### RED Evidence
+
+- `bun test test/mcp-review.test.ts test/mcp-service-review.test.ts --timeout 3000` from `packages/core`: 19 pass, 2 fail, 50 assertions. The never-settling close test timed out at 3000 ms before TERM/KILL, and metadata-only hook output collapsed three text boundaries and moved both files.
+
+### GREEN Evidence
+
+- `bun test test/mcp-review.test.ts test/mcp-service-review.test.ts test/mcp.test.ts test/mcp-client.test.ts test/location-layer.test.ts` from `packages/core`: 38 pass, 0 fail, 116 assertions.
+- `bun test --timeout 10000` from `packages/core`: 1358 pass, 0 fail, 4029 assertions across 148 files.
+- `bun test` from `packages/codemode`: 254 pass, 0 fail, 744 assertions.
+- `bun run typecheck` from `packages/core`: pass.
+- `bun run typecheck` from `packages/server`: pass.
+- `bun install --frozen-lockfile` from the repository root: pass, 2372 installs checked, no changes.
+- `bunx prettier --check packages/core/src/mcp.ts packages/core/src/mcp/client.ts packages/core/test/mcp-review.test.ts packages/core/test/mcp-service-review.test.ts`: pass.
+- `git diff --check`: pass.
+
+### Final Review Commit
+
+- `3e69b6aa0b fix(core): bound MCP teardown and preserve content`
