@@ -3,7 +3,7 @@ import { GlobalBus } from "@/bus/global"
 import { serviceUse } from "@slopcode-ai/core/effect/service-use"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { InstanceRef } from "@/effect/instance-ref"
-import { disposeInstance as runDisposers } from "@/effect/instance-registry"
+import { disposeInstance as runDisposers, registerInstanceStore } from "@/effect/instance-registry"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
 import { type InstanceContext } from "./instance-context"
@@ -185,6 +185,9 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
     const disposeAll = Effect.fn("InstanceStore.disposeAll")(function* () {
       return yield* cachedDisposeAll
     })
+
+    const unregister = registerInstanceStore(() => Effect.runPromise(disposeAll()))
+    yield* Effect.addFinalizer(() => Effect.sync(unregister))
 
     const provide = <A, E, R>(input: LoadInput, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
       load(input).pipe(Effect.flatMap((ctx) => effect.pipe(Effect.provideService(InstanceRef, ctx))))
