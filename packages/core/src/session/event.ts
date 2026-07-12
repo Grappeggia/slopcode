@@ -412,6 +412,7 @@ export namespace Execution {
   const Active = {
     ...Identity,
     phase: Phase,
+    requestAttempt: NonNegativeInt.pipe(Schema.optional),
     providerAttempt: NonNegativeInt.pipe(Schema.optional),
     structuredAttempt: NonNegativeInt.pipe(Schema.optional),
   }
@@ -428,6 +429,7 @@ export namespace Execution {
     ...options,
     schema: {
       ...Active,
+      requestAttempt: NonNegativeInt,
       providerAttempt: NonNegativeInt,
       recovery: Schema.Literals(["retry-provider", "interrupt"]),
     },
@@ -437,7 +439,7 @@ export namespace Execution {
   export const ProviderCompleted = EventV2.define({
     type: "session.next.execution.provider.completed",
     ...options,
-    schema: { ...Active, providerAttempt: NonNegativeInt },
+    schema: { ...Active, requestAttempt: NonNegativeInt, providerAttempt: NonNegativeInt },
   })
   export type ProviderCompleted = typeof ProviderCompleted.Type
 
@@ -446,12 +448,14 @@ export namespace Execution {
     ...options,
     schema: {
       ...Active,
+      requestAttempt: NonNegativeInt,
       attempt: NonNegativeInt,
       maxAttempts: NonNegativeInt,
       nextAt: NonNegativeInt,
       code: RetryCode,
       action: RetryAction,
       message: Schema.String,
+      recovery: Schema.Literals(["retry-provider", "interrupt"]),
     },
   })
   export type RetryScheduled = typeof RetryScheduled.Type

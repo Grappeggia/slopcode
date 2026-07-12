@@ -24,6 +24,7 @@ import { SessionTask } from "@slopcode-ai/core/session/task"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { DateTime, Deferred, Effect, Fiber, Layer } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -130,6 +131,71 @@ const verify = (delivery?: SessionInput.Delivery, interrupted = false) =>
   })
 
 describe("SessionExecutionLocal startup recovery", () => {
+  it.effect("interrupts busy activities before and after an uncertain provider dispatch", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const status = yield* SessionExecutionStatus.make
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
+      const ids = ["before_dispatch", "after_dispatch"] as const
+      for (const kind of ids) {
+        const sessionID = SessionSchema.ID.make(`ses_recovered_${kind}`)
+        const rootID = SessionMessage.ID.make(`msg_recovered_${kind}`)
+        yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: sessionID, directory: "/project", title: kind, version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
+        const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: 1, activityID: rootID, rootID, activity: "prompt" as const }
+        yield* status.start({ ...fence, phase: "preparing" })
+        if (kind === "after_dispatch") yield* status.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, recovery: "interrupt" })
+      }
+      let runs = 0
+      const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run: () => Effect.sync(() => runs++) }))
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.scoped(Layer.build(execution))
+
+      expect(runs).toBe(0)
+      for (const kind of ids) {
+        const sessionID = SessionSchema.ID.make(`ses_recovered_${kind}`)
+        expect(yield* status.get(sessionID)).toMatchObject({ type: "interrupted", code: "restart" })
+        expect(yield* runtime.get(sessionID)).toMatchObject({ state: "ready", epoch: 2 })
+      }
+    }),
+  )
+  it.effect("pauses a stale execution epoch and records runtime replacement without running", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const status = yield* SessionExecutionStatus.make
+      const sessionID = SessionSchema.ID.make("ses_recovered_stale_execution")
+      const rootID = SessionMessage.ID.make("msg_recovered_stale_execution")
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
+      yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: sessionID, directory: "/project", title: "stale", version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
+      yield* status.start({ sessionID, owner: "v2", runtimeState: "draining", epoch: 1, activityID: rootID, rootID, activity: "prompt", phase: "preparing" })
+      yield* runtime.assign({ sessionID, state: "migrating", expectedOwner: "v2", expectedEpoch: 1 })
+      let runs = 0
+      const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run: () => Effect.sync(() => runs++) }))
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.scoped(Layer.build(execution))
+
+      expect(runs).toBe(0)
+      expect(yield* runtime.get(sessionID)).toMatchObject({ owner: "v2", state: "paused", epoch: 3 })
+      expect(yield* status.get(sessionID)).toMatchObject({ type: "interrupted", code: "runtime-replaced", epoch: 3 })
+    }),
+  )
   it.effect("conservatively terminalizes an unsafe persisted provider retry without redispatch", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -144,9 +210,9 @@ describe("SessionExecutionLocal startup recovery", () => {
       yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: sessionID, directory: "/project", title: "Recovered retry", version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
       const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: 1, activityID: rootID, rootID, activity: "prompt" as const }
       yield* status.start({ ...fence, phase: "preparing" })
-      yield* status.dispatch({ ...fence, phase: "provider", providerAttempt: 1, recovery: "interrupt" })
-      yield* status.complete({ ...fence, phase: "provider", providerAttempt: 1 })
-      yield* status.retry({ ...fence, phase: "provider", providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 50_000, code: "server", action: "retry-provider", message: "retry later", recovery: "interrupt" })
+      yield* status.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, recovery: "interrupt" })
+      yield* status.complete({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1 })
+      yield* status.retry({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 50_000, code: "server", action: "retry-provider", message: "retry later", recovery: "interrupt" })
       let runs = 0
       const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run: () => Effect.sync(() => runs++) }))
       const execution = SessionExecutionLocal.layer.pipe(
@@ -156,11 +222,48 @@ describe("SessionExecutionLocal startup recovery", () => {
         Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
       )
 
-      yield* SessionExecution.Service.pipe(Effect.provide(execution))
+      yield* Effect.all([
+        Effect.scoped(Layer.build(Layer.fresh(execution))),
+        Effect.scoped(Layer.build(Layer.fresh(execution))),
+      ], { concurrency: "unbounded", discard: true })
 
       expect(runs).toBe(0)
       expect(yield* status.get(sessionID)).toMatchObject({ type: "interrupted", code: "restart", message: "Provider retry cannot be reconstructed safely after restart" })
       expect(yield* runtime.get(sessionID)).toMatchObject({ owner: "v2", state: "ready", epoch: 2 })
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.type, "session.next.execution.interrupted.1")).all().pipe(Effect.orDie)).toHaveLength(1)
+    }),
+  )
+  it.effect("registers a future durable retry without dispatching before its deadline", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const db = database.db
+      const store = yield* SessionStore.Service
+      const runtime = yield* SessionRuntime.Service
+      const status = yield* SessionExecutionStatus.make
+      const sessionID = SessionSchema.ID.make("ses_recovered_future_retry")
+      const rootID = SessionMessage.ID.make("msg_recovered_future_retry")
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
+      yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: sessionID, directory: "/project", title: "future", version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
+      const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: 1, activityID: rootID, rootID, activity: "prompt" as const }
+      yield* status.start({ ...fence, phase: "preparing" })
+      yield* status.retry({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 1_000, code: "server", action: "retry-provider", message: "safe", recovery: "retry-provider" })
+      let runs = 0
+      const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ run: () => Effect.sync(() => runs++) }))
+      const execution = SessionExecutionLocal.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(SessionStore.Service, store)),
+        Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
+        Layer.provide(Layer.mock(LocationServiceMap, { get: () => runner })),
+      )
+
+      yield* Effect.gen(function* () {
+        yield* SessionExecution.Service
+        yield* TestClock.adjust(999)
+        expect(runs).toBe(0)
+        yield* TestClock.adjust(1)
+        yield* Effect.yieldNow
+        expect(runs).toBe(1)
+      }).pipe(Effect.provide(execution))
     }),
   )
   it.effect("recovers and drains durable pending input without a new prompt", () => verify("steer"))

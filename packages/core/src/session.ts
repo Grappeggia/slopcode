@@ -267,7 +267,7 @@ export interface Interface {
     void,
     NotFoundError | CompactionConflictError | CompactionPromptUnsupportedError | CompactionFailedError | E
   >
-  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
+  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError | SessionExecutionStatus.DurableTerminalError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: <E = never>(sessionID: SessionSchema.ID, guard?: Effect.Effect<void, E>) => Effect.Effect<void, E>
   readonly executionStatus: (sessionID: SessionSchema.ID) => Effect.Effect<SessionExecutionStatus.Info, SessionExecutionStatus.NotFound>
@@ -738,6 +738,13 @@ export const layer = Layer.effect(
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)
         yield* execution.wait(sessionID)
+        const current = yield* status.get(sessionID).pipe(Effect.orDie)
+        if (current.type === "interrupted" || current.type === "terminal-failure")
+          return yield* new SessionExecutionStatus.DurableTerminalError({
+            sessionID,
+            code: current.code,
+            message: current.message,
+          })
       }),
       resume: Effect.fn("V2Session.resume")(function* (sessionID) {
         yield* result.get(sessionID)

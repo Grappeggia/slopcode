@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
   AuthenticationReason,
+  HttpContext,
+  HttpRequestDetails,
+  HttpResponseDetails,
   InvalidRequestReason,
   LLMError,
   ProviderInternalReason,
@@ -51,6 +54,20 @@ describe("SessionProviderRetry", () => {
     expect(value.message).not.toContain("\u0000")
     expect(new TextEncoder().encode(value.message).byteLength).toBeLessThanOrEqual(512)
     expect(value).toEqual({ code: "rate-limit", action: "retry-provider", message: value.message })
+    const forbidden = SessionProviderRetry.notice(
+      error(new RateLimitReason({
+        message: "authorization=secret-message",
+        retryAfterMs: 0,
+        http: new HttpContext({
+          request: new HttpRequestDetails({ method: "POST", url: "https://secret.example/prompt", headers: { authorization: "secret-header" } }),
+          response: new HttpResponseDetails({ status: 429, headers: { "x-secret": "secret-response" } }),
+          body: "secret-body",
+          requestId: "secret-request-id",
+        }),
+        providerMetadata: { private: { value: "secret-metadata" } },
+      })),
+    )
+    expect(JSON.stringify(forbidden)).not.toMatch(/secret-(?:message|header|response|body|request-id|metadata)|secret\.example/)
   })
 
   test("allows exactly five additional provider attempts", () => {

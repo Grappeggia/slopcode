@@ -3,6 +3,9 @@ import {
   LLMClient,
   LLMError,
   LLMEvent,
+  HttpContext,
+  HttpRequestDetails,
+  HttpResponseDetails,
   Model,
   RateLimitReason,
   TransportReason,
@@ -69,6 +72,7 @@ import { AppProcess } from "@slopcode-ai/core/process"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { SkillV2 } from "@slopcode-ai/core/skill"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { ChildProcess } from "effect/unstable/process"
 import { asc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -6474,6 +6478,65 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("reconstructs and claims one explicitly safe provider retry after restart", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const executionStatus = yield* SessionExecutionStatus.Service
+      const admitted = yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Recover provider retry" }), resume: false })
+      yield* SessionInput.promoteSteers((yield* Database.Service).db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      const active = yield* runtime.assign({ sessionID, state: "draining", expectedOwner: "v2", expectedEpoch: 0 })
+      const fence = { sessionID, owner: "v2" as const, runtimeState: "draining" as const, epoch: active.epoch, activityID: admitted.id, rootID: admitted.id, activity: "prompt" as const }
+      yield* executionStatus.start({ ...fence, phase: "preparing" })
+      yield* executionStatus.dispatch({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1, recovery: "retry-provider" })
+      yield* executionStatus.complete({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 1 })
+      yield* executionStatus.retry({ ...fence, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 0, code: "server", action: "retry-provider", message: "safe", recovery: "retry-provider" })
+      response = fragmentFixture("text", "text-recovered-retry", ["recovered"]).completeEvents
+      requests.length = 0
+
+      yield* (yield* SessionRunner.Service).run({ sessionID, force: true })
+
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toEqual(["Recover provider retry"])
+      expect(yield* executionStatus.get(sessionID)).toEqual({ type: "idle" })
+      expect(yield* runtime.get(sessionID)).toMatchObject({ state: "ready", epoch: active.epoch + 1 })
+    }),
+  )
+
+  it.effect("persists no forbidden provider retry metadata", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const executionStatus = yield* SessionExecutionStatus.Service
+      const canaries = ["secret-message", "secret-header", "secret-response", "secret-body", "secret-request", "secret-metadata", "secret.example"]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Redact retry metadata" }), resume: false })
+      streamFailure = new LLMError({
+        module: "test",
+        method: "stream",
+        reason: new RateLimitReason({
+          message: "authorization=secret-message",
+          retryAfterMs: 0,
+          http: new HttpContext({
+            request: new HttpRequestDetails({ method: "POST", url: "https://secret.example/prompt", headers: { authorization: "secret-header" } }),
+            response: new HttpResponseDetails({ status: 429, headers: { "x-secret": "secret-response" } }),
+            body: "secret-body",
+            requestId: "secret-request",
+          }),
+          providerMetadata: { private: { value: "secret-metadata" } },
+        }),
+      })
+
+      yield* session.resume(sessionID).pipe(Effect.exit)
+      const persisted = JSON.stringify({
+        events: yield* (yield* Database.Service).db.select({ data: EventTable.data }).from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
+        status: yield* executionStatus.get(sessionID),
+      })
+      for (const canary of canaries) expect(persisted).not.toContain(canary)
+    }),
+  )
+
   it.effect("does not retry a transient provider failure after assistant output starts", () =>
     Effect.gen(function* () {
       yield* setup
@@ -6492,6 +6555,60 @@ describe("SessionRunnerLLM", () => {
 
       expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
       expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("cancels a persisted retry timer when the runtime attachment is replaced", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const executionStatus = yield* SessionExecutionStatus.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Replace retry attachment" }), resume: false })
+      requests.length = 0
+      streamFailure = new LLMError({
+        module: "test",
+        method: "stream",
+        reason: new RateLimitReason({ message: "limited", retryAfterMs: 1_000 }),
+      })
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while ((yield* executionStatus.get(sessionID)).type !== "retrying") yield* Effect.yieldNow
+      const active = yield* runtime.assert({ sessionID, owner: "v2", state: "draining" })
+      const replacement = yield* runtime.assign({ sessionID, owner: "v1", state: "migrating", expectedOwner: "v2", expectedEpoch: active.epoch })
+      yield* TestClock.adjust(25)
+      expect(yield* Fiber.await(run)).toMatchObject({ _tag: "Failure" })
+      expect(requests).toHaveLength(1)
+      expect(yield* executionStatus.get(sessionID)).toMatchObject({ type: "interrupted", code: "runtime-replaced", epoch: replacement.epoch })
+      yield* TestClock.adjust(2_000)
+      expect(requests).toHaveLength(1)
+      yield* runtime.assign({ sessionID, owner: "v2", state: "ready", expectedOwner: "v1", expectedEpoch: replacement.epoch })
+      streamFailure = undefined
+    }),
+  )
+
+  it.effect("interrupts a blocked provider stream when the runtime attachment is replaced", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const runtime = yield* SessionRuntime.Service
+      const executionStatus = yield* SessionExecutionStatus.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Replace stream attachment" }), resume: false })
+      requests.length = 0
+      responseStream = Stream.never
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length === 0) yield* Effect.yieldNow
+      const active = yield* runtime.assert({ sessionID, owner: "v2", state: "draining" })
+      const replacement = yield* runtime.assign({ sessionID, owner: "v1", state: "migrating", expectedOwner: "v2", expectedEpoch: active.epoch })
+      yield* TestClock.adjust(25)
+
+      expect(yield* Fiber.await(run)).toMatchObject({ _tag: "Failure" })
+      expect(requests).toHaveLength(1)
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toEqual([])
+      expect(yield* executionStatus.get(sessionID)).toMatchObject({ type: "interrupted", code: "runtime-replaced", epoch: replacement.epoch })
+      yield* runtime.assign({ sessionID, owner: "v2", state: "ready", expectedOwner: "v1", expectedEpoch: replacement.epoch })
+      responseStream = undefined
     }),
   )
 

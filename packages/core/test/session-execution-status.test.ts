@@ -52,12 +52,13 @@ describe("SessionExecutionStatus", () => {
       expect(duplicate.seq).toBe(first.seq)
       expect(yield* service.get(sessionID)).toMatchObject({ type: "busy", ...activity, phase: "preparing", epoch: 1 })
 
-      yield* service.dispatch({ ...fence, ...activity, phase: "provider", providerAttempt: 1 })
-      yield* service.complete({ ...fence, ...activity, phase: "provider", providerAttempt: 1 })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1 })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1 })
       yield* service.retry({
         ...fence,
         ...activity,
         phase: "provider",
+        requestAttempt: 1,
         providerAttempt: 2,
         attempt: 1,
         maxAttempts: 5,
@@ -75,8 +76,8 @@ describe("SessionExecutionStatus", () => {
         maxAttempts: 5,
         nextAt: 12_000,
       })
-      yield* service.dispatch({ ...fence, ...activity, phase: "provider", providerAttempt: 2 })
-      yield* service.complete({ ...fence, ...activity, phase: "provider", providerAttempt: 2 })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2 })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2 })
       yield* service.succeed({ ...fence, ...activity })
       expect(yield* service.get(sessionID)).toEqual({ type: "idle" })
     }),
@@ -168,6 +169,44 @@ describe("SessionExecutionStatus", () => {
 
       yield* service.start({ ...fence, ...next, phase: "preparing" })
       expect(yield* service.get(sessionID)).toMatchObject({ type: "busy", activityID: nextID, epoch: 1 })
+    }),
+  )
+
+  it.effect("claims one retry dispatch under concurrent wake attempts", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const service = yield* SessionExecutionStatus.Service
+      const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+      const activity = { activityID: rootID, rootID, activity: "prompt" as const }
+      yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      yield* service.retry({
+        ...fence,
+        ...activity,
+        phase: "provider",
+        requestAttempt: 1,
+        providerAttempt: 2,
+        attempt: 1,
+        maxAttempts: 5,
+        nextAt: 0,
+        code: "server",
+        action: "retry-provider",
+        message: "safe",
+        recovery: "retry-provider",
+      })
+
+      const claims = yield* Effect.all(
+        Array.from({ length: 4 }, () => service.dispatch({
+          ...fence,
+          ...activity,
+          phase: "provider",
+          requestAttempt: 1,
+          providerAttempt: 2,
+          recovery: "retry-provider",
+        })),
+        { concurrency: "unbounded" },
+      )
+
+      expect(claims.filter((claim) => claim.claimed)).toHaveLength(1)
     }),
   )
 })
