@@ -2,7 +2,7 @@
 
 `FileMutation` remains the deterministic byte-level primitive. It performs one approved create, write, conditional write, or remove under a canonical-target lock. It does not discover formatters, start processes, publish events, inspect Session epochs, run diagnostics, or claim a multi-file transaction.
 
-Before touching bytes, each primitive revalidates the approved canonical target or canonical parent. A target replaced by an escaping symlink after approval fails closed with `FileMutation.TargetChangedError`.
+On Linux, mutation walks the absolute parent from a no-follow root directory handle, opens each directory with `O_DIRECTORY | O_NOFOLLOW`, and mutates only through the verified parent or file handle. Existing targets are opened with `O_NOFOLLOW`, checked against the approved canonical identity, and written through that handle. Creation uses an exclusive no-follow child open relative to the verified parent handle. Removal opens the child without following links and compares the named identity with the opened identity immediately before unlink. A pathname substituted after a handle opens is never followed. Platforms without an equivalent adapter fail closed with `FileMutation.UnsupportedPlatformError`.
 
 ## Post-Mutation Order
 
@@ -11,24 +11,24 @@ Write, edit, and apply_patch resolve paths and complete `external_directory` and
 1. Checks the optional Session runtime fence.
 2. Registers direct-event ownership before touching bytes.
 3. Executes exactly one `FileMutation` primitive.
-4. Reads immediate bytes for a nondeleted target and checks the fence.
-5. Runs every matching formatter sequentially; deletes skip formatting.
-6. Restores exact UTF-8 BOM presence, reads final bytes, and compares them with immediate bytes.
-7. Checks the fence, then publishes canonical events.
-8. Completes event reconciliation and invokes the typed diagnostics seam.
+4. Takes the primitive's opaque immediate-byte and file-revision snapshot and checks the fence.
+5. Copies bounded immediate bytes into a private same-extension staging file and runs every matching formatter sequentially there; deletes and primitive no-ops skip formatting.
+6. Restores exact UTF-8 BOM presence in staging and conditionally commits final bytes through the descriptor-safe formatter commit only if the approved target still has the primitive revision and bytes.
+7. Checks the fence immediately before each canonical semantic and watcher event.
+8. Completes event reconciliation, checks the fence, and invokes the typed diagnostics seam.
 9. Checks the fence immediately before returning durable tool success.
 
 The diagnostics service is a Location-scoped no-op in H5E1. H5E2 may replace it without changing this order. This contract adds no LSP implementation.
 
 ## Result And BOM Policy
 
-The internal result contains primitive operation, canonical target, model-facing resource, existence state, add/change/unlink event, whether a formatter matched, ordered bounded formatter outcomes, whether final bytes differ from immediate bytes, and final byte count. It is not a public API.
+The internal result contains primitive operation, canonical target, model-facing resource, exact `none`/`created`/`changed`/`deleted` identity, add/change/unlink event, whether an event was emitted, whether a formatter matched, ordered bounded formatter outcomes, whether final bytes differ from immediate bytes, and final byte count. Primitive results carry an opaque service-local capability tied to their immediate bytes and revision; the coordinator rejects forged or mismatched operation, target, or resource results. It is not a public API.
 
-The coordinator records whether immediate post-mutation bytes have a UTF-8 BOM. After every formatter attempt it strips all leading BOMs and restores exactly one only when the immediate bytes had one. BOM repair uses the primitive service but remains inside the same coordinator settlement. Deleted targets have zero final bytes.
+The coordinator records whether immediate post-mutation bytes have a UTF-8 BOM. After every formatter attempt it strips all leading BOMs and restores exactly one only when the immediate bytes had one. BOM repair occurs in staging. The final descriptor-safe conditional commit is distinct coordinator settlement work, not a recursive `FileMutation` primitive invocation or event. Deleted targets have zero final bytes.
 
 ## Events
 
-A successful nondelete publishes one `file.edited` event and every successful mutation publishes one watcher `add`, `change`, or `unlink`. Both use the approved canonical target; model output continues using the approved resource. Events occur only after formatter and BOM work settle.
+A successful changed nondelete publishes one `file.edited` event and every successful changed mutation publishes one watcher `add`, `change`, or `unlink`. Both use the approved canonical target; model output continues using the approved resource. Same-content writes and missing deletes publish no event or diagnostics. A formatter that leaves final bytes equal to immediate bytes still publishes because the primitive changed. Events occur only after formatter and BOM work settle.
 
 Direct mutation owns the semantic event. `MutationEvents` suppresses in-flight native updates and retains the final filesystem identity after settlement. Delayed native add/change/unlink observations are suppressed while the actual identity still matches, not by elapsed-time debounce. A genuinely different later filesystem identity clears suppression and publishes normally. Paths are normalized, and Location shutdown clears active and settled ownership. Direct events remain available when native watching is disabled or unavailable.
 
