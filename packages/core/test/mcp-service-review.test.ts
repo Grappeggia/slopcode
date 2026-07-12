@@ -750,11 +750,20 @@ fixture({
 
 const contentConfig = [
   new ConfigMCP.Info({
-    servers: { "same server": new ConfigMCP.Local({ type: "local", command: ["old"] }) },
+    servers: {
+      "same server": new ConfigMCP.Local({
+        type: "local",
+        command: ["old"],
+        timeout: 111,
+        environment: { TOKEN: "old-secret" },
+      }),
+    },
   }),
 ]
 let contentRound = 0
 const contentClosed: string[] = []
+let oldRequestFails = false
+let oldRequestTimeout = 0
 fixture({
   documents: contentConfig,
   connect: (input) => {
@@ -769,8 +778,12 @@ fixture({
           if (version !== "old") await Bun.sleep((version === "left") === (contentRound % 2 === 0) ? 20 : 1)
           return { prompts: [{ name: version === "old" ? "stable" : "same" }] }
         },
-        getPrompt: ({ name }) =>
-          Promise.resolve({ messages: [{ role: "user", content: { type: "text", text: `${version}:${name}` } }] }),
+        getPrompt: ({ name }, options) => {
+          if (version === "old") oldRequestTimeout = options.timeout
+          return oldRequestFails && version === "old"
+            ? Promise.reject(new Error("old-secret request failed"))
+            : Promise.resolve({ messages: [{ role: "user", content: { type: "text", text: `${version}:${name}` } }] })
+        },
         close: async () => {
           contentClosed.push(version)
         },
@@ -802,7 +815,14 @@ fixture({
         0,
         1,
         new ConfigMCP.Info({
-          servers: { "same server": new ConfigMCP.Local({ type: "local", command: ["old"] }) },
+          servers: {
+            "same server": new ConfigMCP.Local({
+              type: "local",
+              command: ["old"],
+              timeout: 111,
+              environment: { TOKEN: "old-secret" },
+            }),
+          },
         }),
       )
       yield* mcp.reload()
@@ -811,17 +831,83 @@ fixture({
       0,
       1,
       new ConfigMCP.Info({
-        servers: { "same server": new ConfigMCP.Local({ type: "local", command: ["broken"] }) },
+        servers: {
+          "same server": new ConfigMCP.Local({
+            type: "local",
+            command: ["broken"],
+            timeout: 222,
+            environment: { TOKEN: "new-secret" },
+          }),
+        },
       }),
     )
     yield* mcp.reload()
     expect((yield* mcp.prompts()).map((item) => item.name)).toEqual(["same_server:stable"])
     expect((yield* mcp.getPrompt({ name: "same_server:stable" })).text).toBe("[user]\nold:stable")
+    expect(oldRequestTimeout).toBe(111)
     expect((yield* registry.materialize()).definitions.map((item) => item.name)).toContain("same_server_old")
+    oldRequestFails = true
+    const failure = yield* mcp.getPrompt({ name: "same_server:stable" }).pipe(Effect.flip)
+    expect(failure).toMatchObject({ message: "[REDACTED] request failed" })
+    expect(JSON.stringify(failure)).not.toContain("old-secret")
+  }),
+)
+
+const closedReplacementConfig = [
+  new ConfigMCP.Info({ servers: { closed: new ConfigMCP.Local({ type: "local", command: ["old"] }) } }),
+]
+let replacementClose: (() => void) | undefined
+fixture({
+  documents: closedReplacementConfig,
+  connect: (input) => {
+    const version = input.config.type === "local" ? input.config.command.at(-1)! : "remote"
+    return Effect.succeed(
+      MCPClient.make({
+        capabilities: { tools: {}, prompts: {} },
+        list: () => {
+          if (version === "old")
+            return Promise.resolve({ tools: [{ name: "old", inputSchema: { type: "object" } }] })
+          const tool = { name: "new" } as { name: string; inputSchema: Readonly<Record<string, unknown>> }
+          Object.defineProperty(tool, "inputSchema", {
+            enumerable: true,
+            get: () => {
+              replacementClose?.()
+              return { type: "object" }
+            },
+          })
+          return Promise.resolve({ tools: [tool] })
+        },
+        call: ({ name }) => Promise.resolve({ content: [{ type: "text", text: `${version}:${name}` }] }),
+        listPrompts: () => Promise.resolve({ prompts: [{ name: version }] }),
+        getPrompt: ({ name }) =>
+          Promise.resolve({ messages: [{ role: "user", content: { type: "text", text: `${version}:${name}` } }] }),
+        closed: (handler) => {
+          if (version === "new") replacementClose = handler
+        },
+        close: () => Promise.resolve(),
+      }),
+    )
+  },
+}).effect("restores the complete old runtime when replacement closes during tool installation", () =>
+  Effect.gen(function* () {
+    const mcp = yield* MCP.Service
+    closedReplacementConfig.splice(
+      0,
+      1,
+      new ConfigMCP.Info({ servers: { closed: new ConfigMCP.Local({ type: "local", command: ["new"] }) } }),
+    )
+    yield* mcp.reload()
+    expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toEqual([
+      "closed_old",
+    ])
+    expect((yield* mcp.prompts()).map((item) => item.rawName)).toEqual(["old"])
+    expect((yield* mcp.getPrompt({ name: "closed:old" })).text).toBe("[user]\nold:old")
+    expect((yield* mcp.status()).closed).toEqual({ status: "connected", transport: "local" })
   }),
 )
 
 let contentPages = 0
+let resourcePages = 0
 fixture({
   documents: [
     new ConfigMCP.Info({
@@ -849,7 +935,27 @@ fixture({
           return Promise.resolve({ prompts: [{ name: "same name" }, { name: "same@name" }] })
         },
         getPrompt: () => Promise.resolve({ messages: [] }),
-        listResources: () => Promise.resolve({ resources: [] }),
+        listResources: () => {
+          if (input.name === "repeated")
+            return Promise.resolve({ resources: [], nextCursor: "resource-same" })
+          if (input.name === "overflow") {
+            resourcePages++
+            return Promise.resolve({ resources: [], nextCursor: String(resourcePages) })
+          }
+          if (input.name === "duplicate")
+            return Promise.resolve({
+              resources: [
+                { name: "same", uri: "file:///one" },
+                { name: "same", uri: "file:///two" },
+              ],
+            })
+          return Promise.resolve({
+            resources: [
+              { name: "same name", uri: "file:///one" },
+              { name: "same@name", uri: "file:///two" },
+            ],
+          })
+        },
         readResource: () => Promise.resolve({ contents: [] }),
         close: () => Promise.resolve(),
       }),
@@ -860,7 +966,9 @@ fixture({
     Effect.gen(function* () {
       const mcp = yield* MCP.Service
       expect(yield* mcp.prompts()).toEqual([])
+      expect(yield* mcp.resources()).toEqual([])
       expect(contentPages).toBe(1000)
+      expect(resourcePages).toBe(1000)
       expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toEqual([
         "repeated_tool",
         "overflow_tool",
@@ -873,18 +981,22 @@ fixture({
 
 let staleConnection = 0
 const staleHandlers: Array<() => void | Promise<void>> = []
+const staleResourceHandlers: Array<() => void | Promise<void>> = []
 fixture({
   documents: [new ConfigMCP.Info({ servers: { stale: new ConfigMCP.Local({ type: "local", command: ["stale"] }) } })],
   connect: () => {
     const id = ++staleConnection
     return Effect.succeed(
       MCPClient.make({
-        capabilities: { prompts: { listChanged: true } },
+        capabilities: { prompts: { listChanged: true }, resources: { listChanged: true } },
         list: () => Promise.resolve({ tools: [] }),
         call: () => Promise.resolve({ content: [] }),
         listPrompts: () => Promise.resolve({ prompts: [{ name: `prompt_${id}` }] }),
         getPrompt: () => Promise.resolve({ messages: [] }),
+        listResources: () => Promise.resolve({ resources: [{ name: `resource_${id}`, uri: `file:///${id}` }] }),
+        readResource: () => Promise.resolve({ contents: [] }),
         promptsChanged: (handler) => staleHandlers.push(handler),
+        resourcesChanged: (handler) => staleResourceHandlers.push(handler),
         close: () => Promise.resolve(),
       }),
     )
@@ -893,10 +1005,14 @@ fixture({
   Effect.gen(function* () {
     const mcp = yield* MCP.Service
     const stale = staleHandlers[0]!
+    const staleResource = staleResourceHandlers[0]!
     yield* mcp.reconnect("stale")
     expect((yield* mcp.prompts()).map((item) => item.rawName)).toEqual(["prompt_2"])
+    expect((yield* mcp.resources()).map((item) => item.rawName)).toEqual(["resource_2"])
     yield* Effect.promise(() => Promise.resolve(stale()))
+    yield* Effect.promise(() => Promise.resolve(staleResource()))
     expect((yield* mcp.prompts()).map((item) => item.rawName)).toEqual(["prompt_2"])
+    expect((yield* mcp.resources()).map((item) => item.rawName)).toEqual(["resource_2"])
   }),
 )
 
