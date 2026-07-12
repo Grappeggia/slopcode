@@ -452,4 +452,26 @@ describe("MCP OAuth store", () => {
       ),
     ),
   )
+
+  it.live("preserves independent fields across spawned process updates", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const worker = path.join(import.meta.dir, "fixture/mcp-oauth-update-worker.ts")
+          const children = Array.from({ length: 12 }, (_, index) => Bun.spawn(["bun", worker, tmp.path, String(index)], {
+            cwd: path.dirname(import.meta.dir),
+          }))
+          expect(yield* Effect.promise(() => Promise.all(children.map((child) => child.exited)))).toEqual(Array(12).fill(0))
+          const entry = yield* MCPOAuthStore.make({ data: tmp.path }).get({
+            directory: "/workspace",
+            name: "spawn-update",
+            endpoint: "https://example.com/mcp",
+          })
+          expect(Object.keys(entry.attempts ?? {}).toSorted()).toEqual(
+            Array.from({ length: 12 }, (_, index) => `attempt-${index}`).toSorted(),
+          )
+        }),
+      ),
+    ),
+  )
 })

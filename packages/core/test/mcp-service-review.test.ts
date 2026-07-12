@@ -1319,6 +1319,7 @@ const authStore: MCPOAuthStore.Interface = {
   findAttempt: () => Effect.succeed(undefined),
   claimAttempt: () => Effect.succeed({ status: "missing" }),
   cancelAttempt: () => Effect.succeed({ status: "missing" }),
+  readyAttempt: () => Effect.succeed(undefined),
   startExchange: () => Effect.succeed(undefined),
   finishExchange: () => Effect.succeed(false),
   finishAttempt: () => Effect.succeed(false),
@@ -1345,6 +1346,7 @@ const stagedOAuth: MCPOAuth.Interface = {
   stop: () => Effect.void,
   recover: () => Effect.void,
   onComplete: () => Effect.void,
+  onChange: () => Effect.void,
 }
 fixture({
   documents: authDocuments,

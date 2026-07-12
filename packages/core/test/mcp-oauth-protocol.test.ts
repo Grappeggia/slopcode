@@ -527,6 +527,56 @@ describe("MCP OAuth protocol boundary", () => {
     ),
   )
 
+  it.live("releases a recovered callback registration after exchange failure", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+                const port = reserve.port
+                reserve.stop(true)
+                fixture.failToken = true
+                const target = { directory: tmp.path, name: "recovered-failure", endpoint: `${fixture.url}/mcp` }
+                const store = MCPOAuthStore.make({ data: tmp.path })
+                yield* store.update(target, () => ({
+                  attempts: {
+                    recovered: {
+                      state: "recovered-state",
+                      verifier: "recovered-verifier",
+                      authorization: `${fixture.url}/authorize`,
+                      mode: "auto",
+                      redirect: `http://127.0.0.1:${port}/mcp/oauth/callback`,
+                      created: 1,
+                      expires: Date.now() + 60_000,
+                      phase: "pending",
+                    },
+                  },
+                }))
+                const context = yield* Layer.build(
+                  MCPOAuth.layer.pipe(
+                    Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                    Layer.provide(MCPOAuthCallback.layer),
+                  ),
+                )
+                yield* Context.get(context, MCPOAuth.Service).recover({ target, config: { client_id: "static-client" } })
+                expect((yield* Effect.promise(() => fetch(
+                  `http://127.0.0.1:${port}/mcp/oauth/callback?state=recovered-state&code=bad`,
+                ))).status).toBe(400)
+                yield* Effect.sleep("20 millis")
+                expect((yield* store.findAttempt("recovered"))?.attempt).toMatchObject({ phase: "failed", error: "exchange" })
+                const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+                expect(reused.port).toBe(port)
+                reused.stop(true)
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  )
+
   it.live("aborts a callback exchange and releases its port on Location shutdown", () =>
     Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
       Effect.flatMap((tmp) =>
@@ -566,6 +616,91 @@ describe("MCP OAuth protocol boundary", () => {
               reused.stop(true)
             }),
           ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("aborts active callback exchange before remove reset and stop complete", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.forEach(["remove", "reset", "stop"] as const, (action, index) =>
+          Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+            Effect.flatMap((fixture) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+                  const port = reserve.port
+                  reserve.stop(true)
+                  fixture.hangToken = true
+                  const store = MCPOAuthStore.make({ data: tmp.path })
+                  const target = { directory: tmp.path, name: `teardown-${index}`, endpoint: `${fixture.url}/mcp` }
+                  const context = yield* Layer.build(
+                    MCPOAuth.layer.pipe(
+                      Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                      Layer.provide(MCPOAuthCallback.layer),
+                    ),
+                  )
+                  const oauth = Context.get(context, MCPOAuth.Service)
+                  const started = yield* oauth.begin({ target, config: { client_id: "static-client", callback_port: port } })
+                  if (started.status !== "authorizing") throw new Error("authorization did not start")
+                  const authorization = new URL(started.authorizationUrl)
+                  fixture.challenge = authorization.searchParams.get("code_challenge")!
+                  const callback = fetch(
+                    `http://127.0.0.1:${port}/mcp/oauth/callback?state=${authorization.searchParams.get("state")}&code=hang`,
+                  )
+                  yield* Effect.promise(() => fixture.tokenStarted)
+                  yield* oauth[action](target)
+                  expect((yield* Effect.promise(() => callback)).status).toBe(400)
+                  if (action !== "remove")
+                    expect((yield* store.findAttempt(started.attemptID))?.attempt).toMatchObject({ phase: "failed", error: "exchange" })
+                  const reused = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() })
+                  expect(reused.port).toBe(port)
+                  reused.stop(true)
+                }),
+              ),
+            ),
+          ), { discard: true }),
+      ),
+    ),
+  )
+
+  it.live("returns expired failure on the first status call and emits one safe change", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const store = MCPOAuthStore.make({ data: tmp.path })
+            const target = { directory: tmp.path, name: "expired", endpoint: "https://example.com/mcp" }
+            yield* store.update(target, () => ({
+              attempts: {
+                expired: {
+                  state: "secret-state",
+                  verifier: "secret-verifier",
+                  authorization: "https://auth.example/authorize?secret=value",
+                  mode: "manual",
+                  redirect: "https://client.example/callback",
+                  created: 1,
+                  expires: 2,
+                  phase: "pending",
+                },
+              },
+            }))
+            const context = yield* Layer.build(
+              MCPOAuth.layer.pipe(
+                Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                Layer.provide(MCPOAuthCallback.layer),
+              ),
+            )
+            const oauth = Context.get(context, MCPOAuth.Service)
+            const changes: MCPOAuthStore.Target[] = []
+            yield* oauth.onChange((value) => changes.push(value))
+            expect(yield* oauth.status(target)).toEqual({ status: "failed", code: "attempt-expired" })
+            expect(changes).toEqual([target])
+            expect(JSON.stringify(yield* store.get(target))).not.toContain("secret")
+            expect(yield* oauth.status(target)).toEqual({ status: "failed", code: "attempt-expired" })
+            expect(changes).toHaveLength(1)
+          }),
         ),
       ),
     ),

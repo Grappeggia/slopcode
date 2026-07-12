@@ -441,6 +441,35 @@ it.live("single-flights proactive refresh across spawned processes", () =>
   ),
 )
 
+it.live("bounds invalid grant malformed and unavailable refresh failures", () =>
+  Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+    Effect.flatMap((tmp) =>
+      Effect.forEach(["invalid", "malformed", "interaction"] as const, (mode, index) =>
+        Effect.acquireRelease(Effect.sync(() => refreshFailure(mode)), (server) => Effect.sync(() => server.stop(true))).pipe(
+          Effect.flatMap((server) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const store = MCPOAuthStore.make({ data: path.join(tmp.path, String(index)) })
+                const target = { directory: path.join(tmp.path, String(index)), name: mode, endpoint: `${server.url}mcp` }
+                yield* seedRefresh(store, target, server.url.origin)
+                const context = yield* Layer.build(MCPClient.layerWith(store))
+                const error = yield* Context.get(context, MCPClient.Service).connect({
+                  name: target.name,
+                  directory: target.directory,
+                  timeout: 1_000,
+                  config: new ConfigMCP.Remote({ type: "remote", url: target.endpoint, oauth: { client_id: "static" } }),
+                }).pipe(Effect.flip)
+                expect(["auth-required", "refresh"]).toContain(error.code)
+                expect(error.message).not.toContain("invalid_grant")
+                expect((yield* store.get(target)).attempts).toBeUndefined()
+              }),
+            ),
+          ),
+        ), { discard: true }),
+    ),
+  ),
+)
+
 function mcp() {
   const server = new McpServer({ name: "http-test", version: "1" })
   server.registerTool("echo", { inputSchema: { value: z.string().optional() } }, ({ value }) => ({
@@ -468,6 +497,19 @@ function refreshFixture() {
     },
   })
   return { server, started: started.promise, release: release.resolve, refreshes: () => refreshes }
+}
+
+function refreshFailure(mode: "invalid" | "malformed" | "interaction") {
+  return Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (request) => {
+      if (new URL(request.url).pathname !== "/token") return new Response("missing", { status: 404 })
+      if (mode === "invalid") return Response.json({ error: "invalid_grant", error_description: "private" }, { status: 400 })
+      if (mode === "malformed") return new Response("private malformed body", { status: 500 })
+      return Response.json({ error: "invalid_request", error_description: "private" }, { status: 400 })
+    },
+  })
 }
 
 function seedRefresh(store: MCPOAuthStore.Interface, target: MCPOAuthStore.Target, authorization: string) {
