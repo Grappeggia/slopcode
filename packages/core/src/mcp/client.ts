@@ -22,7 +22,7 @@ import {
   type Resource as SDKResource,
   type Tool as SDKTool,
 } from "@modelcontextprotocol/sdk/types.js"
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import type { ConfigMCP } from "../config/mcp"
 import { Global } from "../global"
 import { InstallationVersion } from "../installation/version"
@@ -267,11 +267,11 @@ export async function cleanup(pid: number | null, close: () => Promise<void>, ad
   if (outcome && "error" in outcome) throw outcome.error
 }
 
-export const layer = Layer.effect(
+export const locationLayer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const available = yield* Effect.serviceOption(MCPOAuthStore.Service)
-    const store = Option.getOrElse(available, () => MCPOAuthStore.make({ data: Global.Path.data }))
+    const store = yield* MCPOAuthStore.Service
+    const refreshes = new Map<string, Promise<void>>()
     return Service.of({
       connect: (input) =>
         interruptible(async (signal) => {
@@ -314,34 +314,42 @@ export const layer = Layer.effect(
             throw new AuthRequired()
           if (enabled) {
             if (entry!.tokens!.expires_at !== undefined && entry!.tokens!.expires_at <= Date.now() / 1000 + 60) {
-              await Flock.withLock(
-                `mcp-oauth-refresh:${JSON.stringify(target)}`,
-                async () => {
-                  const latest = await Effect.runPromise(store.get(target))
-                  if (latest.tokens?.expires_at === undefined || latest.tokens.expires_at > Date.now() / 1000 + 60)
-                    return
-                  if (!latest.tokens.refresh_token) throw new AuthRequired()
-                  const result = await auth(MCPOAuthProvider.make({
-                    store,
-                    target,
-                    attemptID: "mcp_auth_refresh",
-                    state: "refresh",
-                    redirectUrl: redirect,
-                    compatibility,
-                    config: oauth,
-                    transient: false,
-                    interactive: false,
-                    onRedirect: async () => {
-                      throw new AuthRequired()
-                    },
-                  }), {
-                    serverUrl: url,
-                    fetchFn: network(url, undefined, true, signal),
-                  })
-                  if (result !== "AUTHORIZED") throw new AuthRequired()
-                },
-                { signal },
-              )
+              const key = JSON.stringify(target)
+              const pending = refreshes.get(key) ?? (() => {
+                const reserved = Promise.withResolvers<void>()
+                refreshes.set(key, reserved.promise)
+                void Flock.withLock(`mcp-oauth-refresh:${key}`, async () => {
+                      const latest = await Effect.runPromise(store.get(target))
+                      if (latest.tokens?.expires_at === undefined || latest.tokens.expires_at > Date.now() / 1000 + 60)
+                        return
+                      if (!latest.tokens.refresh_token) throw new AuthRequired()
+                      const result = await auth(MCPOAuthProvider.make({
+                        store,
+                        target,
+                        attemptID: "mcp_auth_refresh",
+                        state: "refresh",
+                        redirectUrl: redirect,
+                        compatibility,
+                        config: oauth,
+                        transient: false,
+                        interactive: false,
+                        onRedirect: async () => {
+                          throw new AuthRequired()
+                        },
+                      }), {
+                        serverUrl: url,
+                        fetchFn: (input, init) => fetch(input, {
+                          ...init,
+                          signal: merge(signal, init?.signal, input instanceof Request ? input.signal : undefined),
+                        }),
+                      })
+                      if (result !== "AUTHORIZED") throw new AuthRequired()
+                    }, { signal, dir: path.join(input.directory, ".mcp-oauth-refresh-locks") })
+                  .then(reserved.resolve, reserved.reject)
+                  .finally(() => refreshes.delete(key))
+                return reserved.promise
+              })()
+              await pending
             }
           }
           const current = enabled ? await Effect.runPromise(store.get(target)) : undefined
@@ -378,6 +386,10 @@ export const layer = Layer.effect(
         ),
     })
   }),
+)
+
+export const layer = locationLayer.pipe(
+  Layer.provide(MCPOAuthStore.layer.pipe(Layer.provide(Global.defaultLayer))),
 )
 
 async function connect(

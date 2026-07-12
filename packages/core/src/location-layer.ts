@@ -137,7 +137,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     const oauthStore = MCPOAuthStore.layer
     const oauthCallback = MCPOAuthCallback.locationLayer
     const oauth = MCPOAuth.layer.pipe(Layer.provide(oauthStore), Layer.provide(oauthCallback))
-    const mcpClient = MCPClient.layer.pipe(Layer.provide(oauthStore))
+    const mcpClient = MCPClient.locationLayer.pipe(Layer.provide(oauthStore))
     const mcp = MCP.locationLayer.pipe(
       Layer.provide(services),
       Layer.provide(oauthStore),

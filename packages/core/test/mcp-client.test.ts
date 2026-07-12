@@ -147,6 +147,12 @@ it.live("connects Streamable HTTP with configured headers and falls back to lega
         yield* Effect.promise(() => sse.close())
         expect(fixture.headers).toContain("Bearer streamable")
         expect(fixture.headers).toContain("Bearer sse")
+        expect(fixture.requests).toEqual(expect.arrayContaining([
+          expect.objectContaining({ method: "POST", path: "/mcp", contentType: expect.stringContaining("application/json") }),
+          expect.objectContaining({ method: "GET", path: "/sse", accept: "text/event-stream" }),
+          expect.objectContaining({ method: "GET", path: "/mcp", accept: "text/event-stream" }),
+          expect.objectContaining({ method: "POST", path: "/messages", contentType: expect.stringContaining("application/json") }),
+        ]))
       }),
     ),
   ),
@@ -168,7 +174,7 @@ it.live("fails auth-required before network or store mutation when credentials a
             Effect.gen(function* () {
               const store = MCPOAuthStore.make({ data: tmp.path })
               const context = yield* Layer.build(
-                MCPClient.layer.pipe(Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store)))),
+                MCPClient.locationLayer.pipe(Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store)))),
               )
               const clients = Context.get(context, MCPClient.Service)
               const error = yield* clients.connect({
@@ -267,7 +273,7 @@ it.live("leaves the exact store bytes unchanged when a server rejects a stored a
               const file = path.join(tmp.path, "mcp-oauth/store.json")
               const before = yield* Effect.promise(() => Bun.file(file).bytes())
               const context = yield* Layer.build(
-                MCPClient.layer.pipe(Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store)))),
+                MCPClient.locationLayer.pipe(Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store)))),
               )
               const error = yield* Context.get(context, MCPClient.Service).connect({
                 name: target.name,
@@ -297,11 +303,18 @@ function mcp() {
 async function server() {
   const app = createMcpExpressApp()
   const headers: string[] = []
+  const requests: Array<{ method: string; path: string; accept: string | undefined; contentType: string | undefined }> = []
   const streams = new Map<string, SSEServerTransport>()
   const servers = new Set<McpServer>()
   app.use((request, _response, next) => {
     const authorization = request.headers.authorization
     if (authorization) headers.push(authorization)
+    requests.push({
+      method: request.method,
+      path: request.path,
+      accept: request.headers.accept,
+      contentType: request.headers["content-type"],
+    })
     next()
   })
   app.post("/mcp", async (request, response) => {
@@ -340,6 +353,7 @@ async function server() {
   return {
     url: `http://127.0.0.1:${address.port}`,
     headers,
+    requests,
     close: async () => {
       await Promise.all([...servers].map((server) => server.close()))
       await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
