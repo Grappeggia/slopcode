@@ -455,7 +455,7 @@ fixture({
 testEffect(Layer.empty).effect("closes a delayed connect result when the Location scope shuts down", () =>
   Effect.gen(function* () {
     const pending = Promise.withResolvers<MCPClient.Connection>()
-    const started = Promise.withResolvers<void>()
+    const resetStarted = Promise.withResolvers<void>()
     let closed = 0
     const config = Layer.succeed(Config.Service, {
       entries: () =>
@@ -1312,6 +1312,7 @@ const authBegins: Array<{ target: MCPOAuthStore.Target; config: typeof ConfigMCP
 const authRemoves: MCPOAuthStore.Target[] = []
 const authEvents: Array<{ type: string; data: unknown }> = []
 let authChange: Parameters<MCPOAuth.Interface["onChange"]>[0] | undefined
+let authReset = (_target: MCPOAuthStore.Target) => Effect.void
 const authStore: MCPOAuthStore.Interface = {
   get: () => Effect.succeed({}),
   update: (_target, change) => Effect.succeed(change({})),
@@ -1344,7 +1345,7 @@ const stagedOAuth: MCPOAuth.Interface = {
   complete: () => Effect.fail(new MCPOAuth.AuthError({ code: "attempt-invalid", message: "unused" })),
   cancel: () => Effect.void,
   remove: (target) => Effect.sync(() => authRemoves.push(target)).pipe(Effect.asVoid),
-  reset: () => Effect.void,
+  reset: (target) => authReset(target),
   stop: () => Effect.void,
   recover: () => Effect.void,
   onComplete: () => Effect.void,
@@ -1371,6 +1372,13 @@ fixture({
 }).effect("keeps active runtime while auth controls own the failed replacement candidate", () =>
   Effect.gen(function* () {
     const mcp = yield* MCP.Service
+    const resetStarted = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    authReset = (target) => Effect.promise(async () => {
+      expect(target.endpoint).toBe("https://old.example/mcp")
+      resetStarted.resolve()
+      await release.promise
+    })
     authDocuments[0] = new ConfigMCP.Info({
       servers: {
         staged: new ConfigMCP.Remote({
@@ -1380,7 +1388,11 @@ fixture({
         }),
       },
     })
-    yield* mcp.reload()
+    const reload = yield* mcp.reload().pipe(Effect.forkChild)
+    yield* Effect.promise(() => resetStarted.promise)
+    release.resolve()
+    yield* Fiber.join(reload)
+    authReset = () => Effect.void
     expect((yield* mcp.status()).staged).toMatchObject({ status: "connected" })
     expect((yield* (yield* ToolRegistry.Service).materialize()).definitions.map((item) => item.name)).toContain("staged_old")
     const started = yield* mcp.beginAuth({ name: "staged", mode: "manual" })
