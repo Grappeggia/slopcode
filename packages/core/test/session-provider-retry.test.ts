@@ -40,6 +40,17 @@ describe("SessionProviderRetry", () => {
     expect(SessionProviderRetry.classify(LLMEvent.providerError({ message: "rate limit 500", retryable: false }))).toBeUndefined()
     expect(SessionProviderRetry.classify(error(new AuthenticationReason({ message: "no", kind: "invalid" })))).toBeUndefined()
     expect(SessionProviderRetry.classify(error(new InvalidRequestReason({ message: "too large", classification: "context-overflow" })))).toBeUndefined()
+    expect(SessionProviderRetry.classify(error(new ProviderInternalReason({ message: "lower", status: 500 })))).toBeDefined()
+    expect(SessionProviderRetry.classify(error(new ProviderInternalReason({ message: "upper", status: 599 })))).toBeDefined()
+    expect(SessionProviderRetry.classify(error(new ProviderInternalReason({ message: "outside", status: 600 })))).toBeUndefined()
+  })
+
+  test("rejects malformed and negative hints while honoring present and future dates", () => {
+    expect(SessionProviderRetry.delay(1, { retryAfterMs: -1 }, 1_000)).toBe(2_000)
+    expect(SessionProviderRetry.delay(1, { headers: { "retry-after-ms": "-1" } }, 1_000)).toBe(2_000)
+    expect(SessionProviderRetry.delay(1, { headers: { "retry-after": "not-a-date" } }, 1_000)).toBe(2_000)
+    expect(SessionProviderRetry.delay(1, { headers: { "retry-after": "Thu, 01 Jan 1970 00:00:00 GMT" } }, 1_000)).toBe(2_000)
+    expect(SessionProviderRetry.delay(1, { headers: { "retry-after": "Thu, 01 Jan 1970 00:00:31 GMT" } }, 1_000)).toBe(30_000)
   })
 
   test("sanitizes bounded durable retry metadata", () => {

@@ -5,14 +5,15 @@ import { Project } from "@slopcode-ai/core/project"
 import { ProjectTable } from "@slopcode-ai/core/project/sql"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
+import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionMessage } from "@slopcode-ai/core/session/message"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
-import { SessionTable } from "@slopcode-ai/core/session/sql"
+import { SessionExecutionStatusTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { DateTime, Effect, Exit, Layer } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { EventTable } from "@slopcode-ai/core/event/sql"
-import { eq } from "drizzle-orm"
+import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -216,6 +217,55 @@ describe("SessionExecutionStatus", () => {
     }),
   )
 
+  it.effect("rolls back the status claim when deterministic dispatch event insertion fails", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const service = yield* SessionExecutionStatus.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+      const activity = { activityID: rootID, rootID, activity: "prompt" as const }
+      const fingerprint = "d".repeat(64)
+      yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      yield* service.retry({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 0, code: "server", action: "retry-provider", message: "safe", fingerprint })
+      const before = yield* db.select().from(SessionExecutionStatusTable).where(eq(SessionExecutionStatusTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      yield* events.beforeCommit((event) => event.type === SessionEvent.Execution.ProviderDispatched.type ? Effect.die("forced dispatch insertion failure") : Effect.void)
+
+      expect((yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2, fingerprint, now: 0 }).pipe(Effect.exit))._tag).toBe("Failure")
+      const after = yield* db.select().from(SessionExecutionStatusTable).where(eq(SessionExecutionStatusTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      expect(after).toEqual(before)
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.id, SessionExecutionStatus.eventID({ ...fence, ...activity, kind: SessionEvent.Execution.ProviderDispatched.type, requestAttempt: 1, providerAttempt: 2 }))).get().pipe(Effect.orDie)).toBeUndefined()
+    }),
+  )
+
+  it.effect("rebuilds the complete execution status projection from its event log", () =>
+    Effect.gen(function* () {
+      const service = yield* SessionExecutionStatus.Service
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const replayID = SessionSchema.ID.make("ses_execution_status_replay")
+      const replayRoot = SessionMessage.ID.make("msg_execution_status_replay")
+      yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).onConflictDoNothing().run().pipe(Effect.orDie)
+      yield* db.insert(SessionTable).values({ id: replayID, project_id: Project.ID.global, slug: replayID, directory: "/project", title: "replay", version: "test", runtime: "v2", runtime_state: "draining", runtime_epoch: 1 }).run().pipe(Effect.orDie)
+      const fence = { sessionID: replayID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+      const activity = { activityID: replayRoot, rootID: replayRoot, activity: "prompt" as const }
+      const fingerprint = "e".repeat(64)
+      yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      yield* service.dispatch({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      yield* service.complete({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 1, fingerprint })
+      yield* service.retry({ ...fence, ...activity, phase: "provider", requestAttempt: 1, providerAttempt: 2, attempt: 1, maxAttempts: 5, nextAt: 9_000, code: "server", action: "retry-provider", message: "safe", fingerprint })
+      const expected = yield* service.get(replayID)
+      const recorded = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, replayID)).orderBy(asc(EventTable.seq)).all().pipe(Effect.orDie)
+
+      yield* events.remove(replayID)
+      yield* db.delete(SessionExecutionStatusTable).where(eq(SessionExecutionStatusTable.session_id, replayID)).run().pipe(Effect.orDie)
+      yield* events.replayAll(recorded.map((event) => ({ id: event.id, aggregateID: event.aggregate_id, seq: event.seq, type: event.type, data: event.data })))
+      expect(yield* service.get(replayID)).toEqual(expected)
+    }),
+  )
+
   it.effect("rejects early and mismatched retry claims without changing durable state", () =>
     Effect.gen(function* () {
       yield* setup
@@ -281,6 +331,30 @@ describe("SessionExecutionStatus", () => {
       expect(terminal).toMatchObject({ type: "terminal-failure" })
       expect(JSON.stringify(terminal)).not.toContain(secret)
       expect(new TextEncoder().encode("message" in terminal ? terminal.message : "").byteLength).toBeLessThanOrEqual(512)
+    }),
+  )
+
+  it.effect("enforces the 512-byte UTF-8 message bound during synchronized publication", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const service = yield* SessionExecutionStatus.Service
+      const events = yield* EventV2.Service
+      const fence = { sessionID, owner: "v2" as const, epoch: 1, runtimeState: "draining" as const }
+      const activity = { activityID: rootID, rootID, activity: "prompt" as const }
+      yield* service.start({ ...fence, ...activity, phase: "preparing" })
+      const data = {
+        sessionID,
+        owner: "v2" as const,
+        epoch: 1,
+        ...activity,
+        phase: "settling" as const,
+        code: "runner-failure" as const,
+        resultingEpoch: 2,
+        timestamp: yield* DateTime.now,
+      }
+
+      yield* events.publish(SessionEvent.Execution.Failed, { ...data, message: "😀".repeat(128) })
+      expect((yield* events.publish(SessionEvent.Execution.Failed, { ...data, message: "😀".repeat(129) }).pipe(Effect.exit))._tag).toBe("Failure")
     }),
   )
 })
