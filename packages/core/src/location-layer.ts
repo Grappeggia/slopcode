@@ -51,6 +51,8 @@ import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { FetchHttpClient } from "effect/unstable/http"
+import { MCP } from "./mcp"
+import { MCPClient } from "./mcp/client"
 
 export const dependencies = [
   Project.defaultLayer,
@@ -73,6 +75,7 @@ export const dependencies = [
   FetchHttpClient.layer,
   ToolOutputStore.defaultCleanupLayer,
   ApplicationTools.layer,
+  MCPClient.layer,
 ] as const
 
 export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("@slopcode/example/LocationServiceMap", {
@@ -128,6 +131,11 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       // Discovery starts only after application/built-in Location tools exist.
       Layer.provide(builtInTools),
     )
+    const mcp = MCP.layer.pipe(
+      Layer.provide(services),
+      // MCP has the final Location registration precedence after plugins.
+      Layer.provide(pluginTools),
+    )
     const model = SessionRunnerModel.locationLayer.pipe(Layer.provide(services))
     const runner = SessionRunnerLLM.defaultLayer.pipe(
       Layer.provide(services),
@@ -153,6 +161,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
       runner,
       builtInTools,
       pluginTools,
+      mcp,
       referenceGuidance,
       projectCopyRefresh,
     ).pipe(Layer.fresh)
