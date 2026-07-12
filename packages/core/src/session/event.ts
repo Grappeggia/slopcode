@@ -315,6 +315,17 @@ export namespace Structured {
     "interrupted",
   ])
 
+  export const Dispatched = EventV2.define({
+    type: "session.next.structured.dispatched",
+    ...options,
+    schema: {
+      ...Base,
+      rootUserID: SessionMessageID.ID,
+      attempt: NonNegativeInt,
+      fingerprint: Schema.String,
+    },
+  })
+
   export const Candidate = EventV2.define({
     type: "session.next.structured.candidate",
     ...options,
@@ -326,6 +337,7 @@ export namespace Structured {
       fingerprint: Schema.String,
       value: Schema.Unknown.pipe(Schema.optional),
       invalid: Schema.Boolean,
+      invalidReason: Schema.Literals(["invalid-json", "value-limit"]).pipe(Schema.optional),
     },
   })
 
@@ -800,7 +812,7 @@ const DurableDefinitions = [
 ] as const
 const EphemeralDefinitions = [Text.Delta, Tool.Input.Delta, Reasoning.Delta, Compaction.Delta] as const
 
-const StructuredDefinitions = [Structured.Retry, Structured.Result, Structured.Failed] as const
+const StructuredDefinitions = [Structured.Dispatched, Structured.Retry, Structured.Result, Structured.Failed] as const
 const DurableBase = Schema.Union(DurableDefinitions, { mode: "oneOf" })
 const StructuredDurable = Schema.Union(StructuredDefinitions, { mode: "oneOf" })
 export const Durable = Schema.Union([DurableBase, StructuredDurable], { mode: "oneOf" }).pipe(

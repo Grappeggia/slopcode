@@ -464,6 +464,7 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Step.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Failed, (event) => run(db, event))
+    yield* events.project(SessionEvent.Structured.Dispatched, () => Effect.void)
     yield* events.project(SessionEvent.Structured.Candidate, () => Effect.void)
     yield* events.project(SessionEvent.Structured.Retry, (event) => run(db, event))
     yield* events.project(SessionEvent.Structured.Result, (event) => run(db, event))

@@ -952,6 +952,17 @@ describe("SessionRunnerLLM", () => {
       })
       yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
       const assistantMessageID = SessionMessage.ID.make("msg_structured_candidate")
+      yield* events.publish(
+        SessionEvent.Structured.Dispatched,
+        {
+          sessionID,
+          rootUserID: admitted.id,
+          timestamp: yield* DateTime.now,
+          attempt: 1,
+          fingerprint: SessionFormat.fingerprint(format),
+        },
+        { id: SessionFormat.dispatchID(sessionID, admitted.id, 1) },
+      )
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
         assistantMessageID,

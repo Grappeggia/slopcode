@@ -253,6 +253,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           draft.error = event.data.error
         })
       },
+      "session.next.structured.dispatched": () => Effect.void,
       "session.next.structured.retry": (event) =>
         updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.time.completed = event.data.timestamp

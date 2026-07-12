@@ -128,7 +128,7 @@ export const layer = Layer.effect(
               ...options,
               commit: (seq) =>
                 runtime
-                  .assert({ sessionID, owner: "v2", epoch })
+                  .assert({ sessionID, owner: "v2", state: "draining", epoch })
                   .pipe(Effect.andThen(options?.commit?.(seq) ?? Effect.void), Effect.orDie),
             }),
     })
@@ -294,7 +294,7 @@ export const layer = Layer.effect(
       }).pipe(Effect.map(SystemContext.combine))
 
     const assertRuntime = (sessionID: SessionSchema.ID, epoch: number) =>
-      runtime.assert({ sessionID, owner: "v2", epoch }).pipe(Effect.asVoid)
+      runtime.assert({ sessionID, owner: "v2", state: "draining", epoch }).pipe(Effect.asVoid)
 
     class ShellStartLost extends Error {}
     class ShellContinuationStartLost extends Error {}
@@ -642,18 +642,51 @@ export const layer = Layer.effect(
       let overflowFailure: ProviderErrorEvent | undefined
       let structuredSettled = false
       let structuredValid = false
-      const terminalCommit = (candidate: EventV2.ID, fingerprint: string) =>
+      const structuredEvent = Effect.fnUntraced(function* (id: EventV2.ID) {
+        return yield* db.select().from(EventTable).where(eq(EventTable.id, id)).get().pipe(Effect.orDie)
+      })
+      const dispatchCommit = (fingerprint: string) =>
         Effect.gen(function* () {
-          const [recorded, terminal] = yield* Effect.all([
-            db.select().from(EventTable).where(eq(EventTable.id, candidate)).get().pipe(Effect.orDie),
-            db
-              .select({ id: EventTable.id })
-              .from(EventTable)
-              .where(eq(EventTable.id, SessionFormat.terminalID(session.id, root!.id)))
-              .get()
-              .pipe(Effect.orDie),
+          const terminal = yield* structuredEvent(SessionFormat.terminalID(session.id, root!.id))
+          if (terminal) return yield* Effect.die("Structured dispatch commit lost")
+          const previous =
+            attempt === 1
+              ? undefined
+              : yield* structuredEvent(SessionFormat.retryID(session.id, root!.id, attempt - 1))
+          if (
+            attempt > 1 &&
+            (!previous || previous.type !== `${SessionEvent.Structured.Retry.type}.1` ||
+              !Object.hasOwn(previous.data, "rootUserID") || previous.data.rootUserID !== root!.id)
+          )
+            return yield* Effect.die("Structured dispatch has no matching retry")
+          if (fingerprint !== SessionFormat.fingerprint(format!))
+            return yield* Effect.die("Structured dispatch contract changed")
+        })
+      const attemptCommit = (fingerprint: string) =>
+        Effect.gen(function* () {
+          const [dispatch, terminal] = yield* Effect.all([
+            structuredEvent(SessionFormat.dispatchID(session.id, root!.id, attempt)),
+            structuredEvent(SessionFormat.terminalID(session.id, root!.id)),
           ])
           if (
+            !dispatch ||
+            terminal ||
+            dispatch.type !== `${SessionEvent.Structured.Dispatched.type}.1` ||
+            !Object.hasOwn(dispatch.data, "fingerprint") ||
+            dispatch.data.fingerprint !== fingerprint
+          )
+            return yield* Effect.die("Structured attempt commit lost")
+        })
+      const terminalCommit = (candidate: EventV2.ID, fingerprint: string) =>
+        Effect.gen(function* () {
+          const [dispatch, recorded, terminal] = yield* Effect.all([
+            structuredEvent(SessionFormat.dispatchID(session.id, root!.id, attempt)),
+            structuredEvent(candidate),
+            structuredEvent(SessionFormat.terminalID(session.id, root!.id)),
+          ])
+          if (
+            !dispatch ||
+            dispatch.type !== `${SessionEvent.Structured.Dispatched.type}.1` ||
             !recorded ||
             terminal ||
             recorded.type !== `${SessionEvent.Structured.Candidate.type}.1` ||
@@ -685,7 +718,10 @@ export const layer = Layer.effect(
               reason,
               message,
             },
-            { id: SessionFormat.retryID(session.id, root.id, attempt) },
+            {
+              id: SessionFormat.retryID(session.id, root.id, attempt),
+              commit: () => attemptCommit(SessionFormat.fingerprint(format)),
+            },
           )
           structuredSettled = true
           return
@@ -706,7 +742,7 @@ export const layer = Layer.effect(
           {
             id: SessionFormat.terminalID(session.id, root.id),
             ...(reason === "missing-final"
-              ? {}
+              ? { commit: () => attemptCommit(SessionFormat.fingerprint(format)) }
               : {
                   commit: () =>
                     terminalCommit(
@@ -759,15 +795,59 @@ export const layer = Layer.effect(
             candidate.assistantMessageID,
             candidate.fingerprint === SessionFormat.fingerprint(format)
               ? candidate.invalid
-                ? "value-limit"
+                ? (candidate.invalidReason ?? "value-limit")
                 : "schema"
               : "stale",
+          )
+          return attempt <= format.retry_count
+        }
+        const dispatched = yield* structuredEvent(SessionFormat.dispatchID(session.id, root.id, attempt))
+        if (dispatched?.type === `${SessionEvent.Structured.Dispatched.type}.1`) {
+          const data = yield* Schema.decodeUnknownEffect(SessionEvent.Structured.Dispatched.data)(dispatched.data).pipe(
+            Effect.orDie,
+          )
+          const assistantMessageID = SessionFormat.recoveryMessageID(session.id, root.id, attempt)
+          const stepID = SessionFormat.recoveryStepID(session.id, root.id, attempt)
+          if (!(yield* structuredEvent(stepID)))
+            yield* events.publish(
+              SessionEvent.Step.Started,
+              {
+                sessionID: session.id,
+                assistantMessageID,
+                timestamp: yield* DateTime.now,
+                agent: agent.id,
+                model: {
+                  id: ModelV2.ID.make(model.id),
+                  providerID: ProviderV2.ID.make(model.provider),
+                  ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
+                },
+              },
+              { id: stepID },
+            )
+          yield* settleStructured(
+            assistantMessageID,
+            data.fingerprint === SessionFormat.fingerprint(format) ? "interrupted" : "stale",
           )
           return attempt <= format.retry_count
         }
       }
       if (!(yield* SessionContextEpoch.current(db, session.id, agent.id, system.revision)))
         return yield* Effect.die(rebuildPreparedTurn())
+      if (format && root)
+        yield* events.publish(
+          SessionEvent.Structured.Dispatched,
+          {
+            sessionID: session.id,
+            rootUserID: root.id,
+            timestamp: yield* DateTime.now,
+            attempt,
+            fingerprint: SessionFormat.fingerprint(format),
+          },
+          {
+            id: SessionFormat.dispatchID(session.id, root.id, attempt),
+            commit: () => dispatchCommit(SessionFormat.fingerprint(format)),
+          },
+        )
       if (beforeDispatch) yield* beforeDispatch
       const providerStream = llm.stream(request).pipe(
         Stream.runForEach((event) =>
@@ -775,7 +855,7 @@ export const layer = Layer.effect(
             if (overflowFailure || publisher.hasProviderError()) return
             if (format && root && event.type === "tool-call" && event.name === FINAL_OUTPUT) {
               const assistantMessageID = yield* publisher.startAssistant()
-              const candidate = yield* SessionFormat.toolValue(event.input).pipe(Effect.option)
+              const candidate = yield* SessionFormat.toolValue(event.input).pipe(Effect.exit)
               yield* events.publish(
                 SessionEvent.Structured.Candidate,
                 {
@@ -785,12 +865,18 @@ export const layer = Layer.effect(
                   assistantMessageID,
                   attempt,
                   fingerprint: SessionFormat.fingerprint(format),
-                  ...(Option.isSome(candidate) ? { value: candidate.value } : {}),
-                  invalid: Option.isNone(candidate),
+                  ...(candidate._tag === "Success" ? { value: candidate.value } : {}),
+                  invalid: candidate._tag === "Failure",
+                  ...(candidate._tag === "Failure"
+                    ? { invalidReason: Option.getOrThrow(Cause.findErrorOption(candidate.cause)).reason }
+                    : {}),
                 },
-                { id: SessionFormat.candidateID(session.id, root.id, attempt) },
+                {
+                  id: SessionFormat.candidateID(session.id, root.id, attempt),
+                  commit: () => attemptCommit(SessionFormat.fingerprint(format)),
+                },
               )
-              if (Option.isSome(candidate) && SessionFormat.validate(format, candidate.value)) {
+              if (candidate._tag === "Success" && SessionFormat.validate(format, candidate.value)) {
                 yield* FiberSet.clear(toolFibers)
                 yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
                 yield* events.publish(
@@ -815,7 +901,10 @@ export const layer = Layer.effect(
                 )
                 structuredValid = true
               } else {
-                const reason = Option.isNone(candidate) ? "value-limit" : "schema"
+                const reason =
+                  candidate._tag === "Failure"
+                    ? Option.getOrThrow(Cause.findErrorOption(candidate.cause)).reason
+                    : "schema"
                 yield* settleStructured(assistantMessageID, reason)
               }
               structuredSettled = true

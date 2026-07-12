@@ -129,11 +129,21 @@ export const toolSchema = (format: JsonFormat) => {
   }) as JsonSchema.JsonSchema
 }
 
+export class ToolValueError extends Schema.TaggedErrorClass<ToolValueError>()("SessionFormat.ToolValueError", {
+  reason: Schema.Literals(["invalid-json", "value-limit"]),
+}) {}
+
 export const toolValue = Effect.fn("SessionFormat.toolValue")(function* (input: unknown) {
-  const value = yield* safeValue(input)
+  if (typeof input === "string")
+    return yield* Effect.fail(new ToolValueError({ reason: "invalid-json" }))
+  const value = yield* safeValue(input).pipe(
+    Effect.mapError(() => new ToolValueError({ reason: "value-limit" })),
+  )
   if (!record(value) || Object.keys(value).length !== 1 || !Object.hasOwn(value, "value"))
-    return yield* Effect.fail(new Error("Structured final tool input must contain exactly one value field"))
-  return yield* safeValue(value.value)
+    return yield* Effect.fail(new ToolValueError({ reason: "value-limit" }))
+  return yield* safeValue(value.value).pipe(
+    Effect.mapError(() => new ToolValueError({ reason: "value-limit" })),
+  )
 })
 
 export const fingerprint = (format: JsonFormat) =>
@@ -145,8 +155,14 @@ const id = (sessionID: SessionSchema.ID, root: SessionMessage.ID, suffix: string
 export const terminalID = (sessionID: SessionSchema.ID, root: SessionMessage.ID) => id(sessionID, root, "terminal")
 export const candidateID = (sessionID: SessionSchema.ID, root: SessionMessage.ID, attempt: number) =>
   id(sessionID, root, `candidate:${attempt}`)
+export const dispatchID = (sessionID: SessionSchema.ID, root: SessionMessage.ID, attempt: number) =>
+  id(sessionID, root, `dispatch:${attempt}`)
 export const retryID = (sessionID: SessionSchema.ID, root: SessionMessage.ID, attempt: number) =>
   id(sessionID, root, `retry:${attempt}`)
+export const recoveryMessageID = (sessionID: SessionSchema.ID, root: SessionMessage.ID, attempt: number) =>
+  `msg_structured_${createHash("sha256").update(`${sessionID}\0${root}\0recovery:${attempt}`).digest("hex")}` as SessionMessage.ID
+export const recoveryStepID = (sessionID: SessionSchema.ID, root: SessionMessage.ID, attempt: number) =>
+  id(sessionID, root, `recovery-step:${attempt}`)
 
 export const equivalent = (left: Format | undefined, right: Format | undefined) => {
   const a = left ?? ({ type: "text" } as const)
