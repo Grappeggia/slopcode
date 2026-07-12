@@ -381,7 +381,8 @@ describe("SessionExecutionLocal startup recovery", () => {
 
       yield* Effect.scoped(Layer.build(execution))
       expect(runs.sort()).toEqual(cases.map((kind) => SessionSchema.ID.make(`ses_recovered_proof_${kind}`)).sort())
-      expect(yield* db.select().from(EventTable).where(eq(EventTable.type, "session.next.execution.continuation.ready.1")).all().pipe(Effect.orDie)).toHaveLength(4)
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.type, "session.next.execution.continuation.ready.1")).all().pipe(Effect.orDie)).toHaveLength(3)
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, SessionSchema.ID.make("ses_recovered_proof_steer"))).all().pipe(Effect.orDie)).toContainEqual(expect.objectContaining({ type: "session.next.execution.succeeded.1", data: expect.objectContaining({ rootID: SessionMessage.ID.make("msg_recovered_proof_steer") }) }))
     }),
   )
   it.effect("gives tool and structured proof precedence over simultaneous steering", () =>

@@ -81,8 +81,8 @@ export const layer = Layer.effect(
         after.some((started) => started.seq < ended.seq && started.type === `${SessionEvent.Compaction.Started.type}.1` && started.data.reason === "auto" && started.data.messageID === ended.data.messageID) &&
         !after.some((failed) => failed.seq > ended.seq && failed.type === `${SessionEvent.Compaction.Failed.type}.1`)
       )
-      const steering = yield* SessionInput.hasPending(db, sessionID, "steer")
-      return tools || structured || compacted || steering
+      if (tools || structured || compacted) return "provider" as const
+      if (yield* SessionInput.hasPending(db, sessionID, "steer")) return "steer" as const
     })
     yield* Effect.forEach(
       recovered,
@@ -183,7 +183,24 @@ export const layer = Layer.effect(
           (current.activity === "compaction" && (yield* SessionInput.hasPendingCompaction(db, info.sessionID))) ||
           (current.activity === "task" && (yield* SessionTask.hasPending(store, info.sessionID)))
         )
-        if (current.type === "busy" && current.recovery === undefined && (yield* continuation(info.sessionID, current))) {
+        const proof = current.type === "busy" && current.recovery === undefined
+          ? yield* continuation(info.sessionID, current)
+          : undefined
+        if (current.type === "busy" && proof === "steer") {
+          yield* status.succeed({
+            sessionID: info.sessionID,
+            owner: "v2",
+            runtimeState: "draining",
+            epoch: current.epoch,
+            activityID: current.activityID,
+            rootID: current.rootID,
+            activity: current.activity,
+            release: false,
+          })
+          continuations.push(info.sessionID)
+          return
+        }
+        if (current.type === "busy" && proof === "provider") {
           yield* status.continue({
             sessionID: info.sessionID,
             owner: "v2",
