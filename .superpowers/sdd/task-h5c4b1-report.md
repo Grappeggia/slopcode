@@ -110,3 +110,78 @@ An accidental workspace-root `bun run typecheck` was also attempted while format
 ## Remaining Concerns
 
 None for H5C4B1. The unrelated workspace-root TUI typecheck failure is recorded above and does not affect the required package checks.
+
+## Rejection Fixes
+
+### Findings Resolved
+
+- Cross-server content collisions now abort prepared replacements as a complete batch while retaining the prior client, tool registration, prompt snapshot, resource snapshot, and connected status. New servers may still activate tool-safe with the failed catalog unpublished. Discovery failure during replacement follows the same retention path.
+- Reload no longer closes replaced clients before discovery and batch preflight. Successful replacement installs first, then synchronously publishes the new client and snapshots before closing the old transport.
+- Prompt/resource snapshots and their owning `server.client` are assigned without an Effect yield, preventing catalog readers from observing unresolvable entries.
+- Resource normalization uses own-field presence for `text`/`blob`, rejects both/neither even when one is wrongly typed, validates selected field types, and rejects unsupported extra fields.
+- Prompt text, image, and embedded-resource content enforce exact supported field sets before normalization.
+- Direct tests now cover content pagination repetition/overflow, duplicate raw/sanitized names, cross-server timing-independent collision replacement, failed replacement retention, stale callbacks, lifecycle hiding, request interruption, typed/redacted failures, strict normalization shapes, and real durable resolve-and-admit guard/idempotency/conflict behavior.
+
+### Review RED Evidence
+
+Command:
+
+```text
+cd packages/core && bun test test/mcp-content.test.ts test/session-prompt.test.ts
+```
+
+Result before fixes: `40 pass`, `1 fail`, `179 expect() calls`. Representative failure: the new field-presence test expected `MCP.ContentError`, but `{ uri: "file:///x", text: "x", blob: 1 }` was accepted and returned `Prompt({"text":"x","files":[]})`.
+
+The RED tests were committed in `4133a53ab4` before the production fix.
+
+### Review GREEN Evidence
+
+Covering command:
+
+```text
+cd packages/core && bun test test/mcp-content.test.ts test/mcp-client.test.ts test/mcp.test.ts test/mcp-review.test.ts test/mcp-service-review.test.ts test/session-prompt.test.ts
+```
+
+Result after fixes: `79 pass`, `0 fail`, `333 expect() calls`, 6 files.
+
+Required broad verification after fixes:
+
+```text
+cd packages/core && bun test
+```
+
+Result: `1370 pass`, `0 fail`, `4109 expect() calls`, 149 files.
+
+```text
+cd packages/codemode && bun test
+```
+
+Result: `254 pass`, `0 fail`, `744 expect() calls`, 7 files.
+
+```text
+cd packages/core && bun run typecheck
+```
+
+Result: exit 0, `tsgo --noEmit`.
+
+```text
+cd packages/server && bun run typecheck
+```
+
+Result: exit 0, `tsgo --noEmit`.
+
+```text
+cd ../.. && bun install --frozen-lockfile
+```
+
+Result: exit 0, `Checked 2372 installs across 2656 packages (no changes)`.
+
+### Review Fix Commits
+
+- `4133a53ab4` `test(core): cover rejected MCP content contracts`
+- `79d21daeba` `fix(core): make MCP content replacement atomic`
+- Report update: the following `docs:` commit containing this appendix.
+
+### Post-Fix Concerns
+
+None.
