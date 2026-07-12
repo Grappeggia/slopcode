@@ -192,14 +192,69 @@ The only intentional H5D2 deferrals are those allowed by the brief: provider-ind
 
 No commits were pushed.
 
+## Rejected Review Remediation
+
+Status: `DONE`
+
+The H5D2 rejection was reproduced RED-first and fixed without changing H5D1 ownership or retry-count policy.
+
+### Commits
+
+- RED: `772fd3a1be test(core): expose rejected durable recovery gaps`
+- GREEN: `662fe33e2b fix(core): harden durable provider recovery`
+- REPORT: recorded by the commit containing this section
+- Pushes: none
+
+### Protocol And Recovery Results
+
+- Retry-exhausted and nonretryable live `provider-error` streams now fail the runner, retain `terminal-failure`, release the runtime epoch, and fail current and rebuilt waiters with bounded safe messages. They cannot settle as success/idle.
+- Every organic retry stores `recovery: retry-provider`, exact request/provider counters, due time, and a 64-character SHA-256 request fingerprint. A test creates this row through the real runner, builds a fresh `SessionExecutionLocal` graph over the same database and process clock, and proves no request before the deadline and exactly one request at the deadline.
+- The fingerprint covers agent, selected model/provider/API/variant, harness, system/messages, tool definitions/tool choice, provider options, HTTP/generation/response/cache metadata, and non-secret catalog request configuration. Canonical object keys are sorted and credential-named fields are excluded before hashing; no request, prompt, header, body, URL, or auth value is persisted.
+- Restart retry reconstruction computes the same fingerprint before claim or provider I/O. A mismatch terminal-fails with code `restart` and sends no request. Unit canaries prove distinct fingerprints for model, API, variant, request configuration, context, tools, and agent mutations; the runner test proves a forged restart fingerprint terminal-fails without dispatch.
+- Startup recovery now wakes safe pre-dispatch work and provider-completed/tool continuation even with no newly admitted input. Explicit startup tests cover a pending local tool continuation, automatic compaction activity, and child task activity; existing full runner/task/shell suites cover interrupted local tools, durable results, shell/manual compaction, and task lifecycle settlement.
+- Retry dispatch claim is a database CAS over exact projection sequence, activity/root/epoch/owner plus closed request/provider/fingerprint/due validation. Early or mismatched claims fail without dispatch, and separate rebuilt graphs racing at the deadline produce one winner.
+- Retry and terminal messages are normalized at `SessionExecutionStatus`, not only at retry classification. Event/projection schemas cap messages and constrain fingerprints. Redaction covers Basic/Bearer, API key, token, secret, credential, authorization, quoted JSON, quoted assignment, control characters, and optional known secret values. Durable event/status and stable log canaries contain no raw credentials.
+- Projection replay, restarted terminal waits, queued roots, local tool/task/shell/compaction recovery, and runtime epoch replacement regressions remain green in the complete Core suite.
+
+### RED Evidence
+
+Command from `packages/core`:
+
+```text
+bun test test/session-execution-status.test.ts test/session-provider-retry.test.ts test/session-runner.test.ts
+```
+
+Result before GREEN: `214 pass, 5 fail`, `700 expect()` calls. Failures were early retry claim acceptance, unsanitized service-boundary terminal persistence, nonretryable provider-error false success, retry-exhausted provider-error false success, and organic retry state missing safe recovery/fingerprint.
+
+### Final Verification
+
+All test commands were run from package directories, and every listed path exists.
+
+- Core comprehensive recovery command: `bun test test/session-execution-status.test.ts test/session-provider-retry.test.ts test/session-request-fingerprint.test.ts test/session-execution-local.test.ts test/session-runner.test.ts test/session-projector.test.ts test/session-structured-output.test.ts test/session-structured-output-recovery.test.ts test/session-shell-lifecycle.test.ts test/tool-task.test.ts test/session-prompt.test.ts test/session-logging.test.ts`; final component reruns were `207 pass` runner, `20 pass` fingerprint/local recovery, `8 pass` status CAS, `4 pass` retry policy, and `3 pass` logging, all with `0 fail`.
+- Core full: `bun test`; `1518 pass, 0 fail`, 158 files, `4706 expect()` calls. This includes migration/schema verification: `16 pass`, including `declared schema has no ungenerated migrations`.
+- LLM full: `bun test`; `305 pass, 30 skip, 0 fail`, 26 files, `668 expect()` calls.
+- LLM corrected focused paths: `bun test test/executor.test.ts test/provider/openai-chat.test.ts test/provider/openai-responses.test.ts test/provider/anthropic-messages.test.ts test/provider/bedrock-converse.test.ts`; `169 pass, 0 fail`, 5 files, `314 expect()` calls.
+- Slopcode focused: `bun test --timeout 30000 test/session/retry.test.ts test/session/prompt.test.ts test/session/control.test.ts test/server/httpapi-session.test.ts test/cli/run/stream.transport.test.ts`; `184 pass, 1 skip, 0 fail`, `648 expect()` calls.
+- Slopcode full authoritative rerun: `bun test --timeout 30000`; `3111 pass, 22 skip, 1 todo, 0 fail`, 248 files, 50 snapshots, `8603 expect()` calls. The first full attempt showed no failure but exceeded a 600-second tool timeout; it is not counted as evidence.
+- CodeMode full: `bun test`; `254 pass, 0 fail`, 7 files, `744 expect()` calls.
+- Typecheck: `bun run typecheck` passed in Core, LLM, server, Slopcode, and CodeMode.
+- Frozen dependency verification: repository-root `bun install --frozen-lockfile`; passed with `Checked 2372 installs across 2656 packages (no changes)`.
+- `git diff --check` passed.
+- Generated `.slopcode/package-lock.json` was removed with `apply_patch` and is not retained.
+
+### Concerns
+
+- The request identity is intentionally a one-way canonical fingerprint rather than a persisted request snapshot. This avoids durable prompt/config/auth material while still making any covered semantic mutation fail closed.
+- Lower LLM transport retries and repeated-identical-tool-call limiting remain the previously documented H6/deferred scope; this change does not alter those policies.
+
 ## Final Verification
 
 All tests were run from package directories. `--timeout 30000` was added to Slopcode runs because its HTTP integration tests legitimately exceed Bun's default per-test timeout.
 
 - Core comprehensive H5D2 focused command from `packages/core`: `bun test test/session-execution-status.test.ts test/session-provider-retry.test.ts test/session-execution-local.test.ts test/session-runner.test.ts test/session-projector.test.ts test/session-structured-output.test.ts test/session-structured-output-recovery.test.ts test/session-shell-lifecycle.test.ts test/session-prompt.test.ts`; `338 pass, 0 fail`, 9 files.
-- Core brief-adjusted final rerun from `packages/core`: `bun test test/session-execution-status.test.ts test/session-provider-retry.test.ts test/session-execution-local.test.ts test/session-runner.test.ts test/session-projector.test.ts test/session-structured-output.test.ts test/session-structured-output-recovery.test.ts test/session-shell-lifecycle.test.ts test/session-task.test.ts`; nonexistent `test/session-task.test.ts` was ignored by Bun, yielding `258 pass, 0 fail`, 8 existing files, `847 expect()` calls.
+- Corrected Core task lifecycle path is `test/tool-task.test.ts`; the authoritative remediation command above includes it and all listed paths exist.
 - Core full command from `packages/core`: `bun test`; `1509 pass, 0 fail`.
-- LLM final focused command from `packages/llm`: `bun test test/route/executor.test.ts test/provider/openai-chat.test.ts test/provider/openai-responses.test.ts test/provider/anthropic-messages.test.ts test/provider/bedrock-converse.test.ts`; nonexistent `test/route/executor.test.ts` was ignored by Bun, yielding `154 pass, 0 fail`, 4 existing files, `257 expect()` calls.
+- Corrected LLM focused command from `packages/llm`: `bun test test/executor.test.ts test/provider/openai-chat.test.ts test/provider/openai-responses.test.ts test/provider/anthropic-messages.test.ts test/provider/bedrock-converse.test.ts`; `169 pass, 0 fail`, 5 files, `314 expect()` calls.
 - LLM full command from `packages/llm`: `bun test`; `305 pass, 30 skip, 0 fail`.
 - Slopcode focused command from `packages/slopcode`: `bun test --timeout 30000 test/session/retry.test.ts test/session/prompt.test.ts test/session/control.test.ts test/server/httpapi-session.test.ts test/cli/run/stream.transport.test.ts`; `184 pass, 1 skip, 0 fail`, 5 files, `648 expect()` calls.
 - Slopcode full command from `packages/slopcode`: `bun test --timeout 30000`; `3111 pass, 22 skip, 1 todo, 0 fail`, 248 files, 50 snapshots, `8602 expect()` calls.
