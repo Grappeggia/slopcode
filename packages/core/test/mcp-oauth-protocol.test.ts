@@ -49,6 +49,18 @@ describe("MCP OAuth protocol boundary", () => {
             Effect.gen(function* () {
               const store = MCPOAuthStore.make({ data: tmp.path })
               const target = { directory: tmp.path, name: "protocol", endpoint: `${fixture.url}/mcp` }
+              yield* store.update(target, () => ({
+                attempts: {
+                  mcp_auth_protocol: {
+                    state: "exact-state",
+                    mode: "manual",
+                    redirect: "http://127.0.0.1:19876/callback",
+                    created: 1,
+                    expires: Date.now() + 60_000,
+                    phase: "pending",
+                  },
+                },
+              }))
               let authorization: URL | undefined
               const provider = MCPOAuthProvider.make({
                 store,
@@ -131,7 +143,7 @@ describe("MCP OAuth protocol boundary", () => {
                     code: "authorization-code",
                     state: url.searchParams.get("state")!,
                   }),
-                ).toEqual({ status: "connected" })
+                ).toEqual({ status: "credential-ready" })
                 expect(yield* oauth.status(target)).toEqual({ status: "credential-ready" })
                 expect(
                   yield* oauth
@@ -152,6 +164,51 @@ describe("MCP OAuth protocol boundary", () => {
                 expect(yield* oauth.status(target)).toEqual({ status: "auth-required" })
               }),
             ),
+          ),
+        ),
+      ),
+    ),
+  )
+
+  it.live("cancels incompatible attempts and all owned manual attempts on shutdown", () =>
+    Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.acquireRelease(Effect.sync(protocol), (fixture) => Effect.sync(() => fixture.stop())).pipe(
+          Effect.flatMap((fixture) =>
+            Effect.gen(function* () {
+              const store = MCPOAuthStore.make({ data: tmp.path })
+              const target = { directory: tmp.path, name: "lifecycle", endpoint: `${fixture.url}/mcp` }
+              let first = ""
+              let second = ""
+              yield* Effect.scoped(
+                Effect.gen(function* () {
+                  const context = yield* Layer.build(
+                    MCPOAuth.layer.pipe(
+                      Layer.provide(Layer.succeed(MCPOAuthStore.Service, MCPOAuthStore.Service.of(store))),
+                      Layer.provide(MCPOAuthCallback.layer),
+                    ),
+                  )
+                  const oauth = Context.get(context, MCPOAuth.Service)
+                  const one = yield* oauth.begin({
+                    target,
+                    config: { client_id: "static-client", scope: "one", redirect_uri: "https://client.example/one" },
+                    mode: "manual",
+                  })
+                  if (one.status !== "authorizing") throw new Error("first authorization did not start")
+                  first = one.attemptID
+                  const two = yield* oauth.begin({
+                    target,
+                    config: { client_id: "static-client", scope: "two", redirect_uri: "https://client.example/two" },
+                    mode: "manual",
+                  })
+                  if (two.status !== "authorizing") throw new Error("second authorization did not start")
+                  second = two.attemptID
+                  expect((yield* store.findAttempt(first))?.attempt.phase).toBe("cancelled")
+                }),
+              )
+              expect((yield* store.findAttempt(second))?.attempt.phase).toBe("cancelled")
+              expect((yield* store.findAttempt(second))?.attempt.state).toBeUndefined()
+            }),
           ),
         ),
       ),
