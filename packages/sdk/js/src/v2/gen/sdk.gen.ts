@@ -219,6 +219,7 @@ import type {
   SessionShellResponses,
   SessionSideQuestionErrors,
   SessionSideQuestionResponses,
+  SessionSideQuestionTurn,
   SessionStatusErrors,
   SessionStatusResponses,
   SessionSummarizeErrors,
@@ -4337,6 +4338,7 @@ export class Session2 extends HeyApiClient {
       directory?: string
       workspace?: string
       question?: string
+      turns?: Array<SessionSideQuestionTurn>
       agent?: string
       model?: {
         providerID: string
@@ -4355,6 +4357,7 @@ export class Session2 extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "question" },
+            { in: "body", key: "turns" },
             { in: "body", key: "agent" },
             { in: "body", key: "model" },
             { in: "body", key: "variant" },

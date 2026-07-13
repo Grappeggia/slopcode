@@ -5065,6 +5065,11 @@ export type ProjectDirectories = Array<{
   strategy?: string
 }>
 
+export type SessionSideQuestionTurn = {
+  question: string
+  answer: string
+}
+
 export type LocationInfo = {
   directory: string
   workspaceID?: string
@@ -10528,6 +10533,7 @@ export type SessionCommandResponse = SessionCommandResponses[keyof SessionComman
 export type SessionSideQuestionData = {
   body?: {
     question: string
+    turns?: Array<SessionSideQuestionTurn>
     agent: string
     model: {
       providerID: string

@@ -2,13 +2,19 @@ import { LayerNode } from "@slopcode-ai/core/effect/layer-node"
 import { Database } from "@slopcode-ai/core/database/database"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
+import type { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Context, Effect, Layer, Schema } from "effect"
 import * as Stream from "effect/Stream"
+import type { ModelMessage } from "ai"
 import { Agent } from "@/agent/agent"
+import { Config } from "@/config/config"
 import { Plugin } from "@/plugin"
 import { Provider } from "@/provider/provider"
+import { Token } from "@/util/token"
+import { Instruction } from "./instruction"
 import { LLM } from "./llm"
 import { MessageV2 } from "./message-v2"
+import * as SessionOverflow from "./overflow"
 import { MessageID, SessionID } from "./schema"
 import { Session } from "./session"
 import { SystemPrompt } from "./system"
@@ -22,9 +28,18 @@ Rules:
 - If the answer is not available from context, say you do not have enough context.
 - Keep the answer concise.`
 
+const Text = Schema.Trim.check(Schema.isMinLength(1))
+
+export const Turn = Schema.Struct({
+  question: Text,
+  answer: Text,
+}).annotate({ identifier: "SessionSideQuestion.Turn" })
+export type Turn = typeof Turn.Type
+
 export const Input = Schema.Struct({
   sessionID: SessionID,
-  question: Schema.String,
+  question: Text,
+  turns: Schema.optional(Schema.Array(Turn)),
   agent: Schema.String,
   model: Schema.Struct({
     providerID: ProviderV2.ID,
@@ -55,7 +70,9 @@ export const layer = Layer.effect(
     const sessions = yield* Session.Service
     const plugin = yield* Plugin.Service
     const sys = yield* SystemPrompt.Service
+    const instruction = yield* Instruction.Service
     const llm = yield* LLM.Service
+    const config = yield* Config.Service
     const database = yield* Database.Service
 
     const ask: Interface["ask"] = (input) =>
@@ -63,6 +80,13 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const question = input.question.trim()
           if (!question) throw new Error("Side question cannot be empty")
+          const turns = (input.turns ?? []).map((turn) => ({
+            question: turn.question.trim(),
+            answer: turn.answer.trim(),
+          }))
+          if (turns.some((turn) => !turn.question || !turn.answer)) {
+            throw new Error("Side question turns must include a question and answer")
+          }
 
           const session = yield* sessions.get(input.sessionID)
           const agent = yield* agents.get(input.agent)
@@ -82,13 +106,87 @@ export const layer = Layer.effect(
             },
           }
 
-          const messages = yield* MessageV2.filterCompactedEffect(input.sessionID).pipe(
+          const stored = yield* MessageV2.stream(input.sessionID).pipe(
             Effect.provideService(Database.Service, database),
           )
+          const revert = session.revert
+          const bounded = revert
+            ? stored.flatMap((message) => {
+                if (message.info.id < revert.messageID) return [message]
+                if (message.info.id > revert.messageID || !revert.partID) return []
+                const index = message.parts.findIndex((part) => part.id === revert.partID)
+                if (index < 0) return [message]
+                return [{ info: message.info, parts: message.parts.slice(0, index) }]
+              })
+            : stored
+          const messages = structuredClone(MessageV2.filterCompacted(bounded))
           yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages })
 
-          const system = [...(yield* sys.environment(model)), PROMPT]
-          const modelMessages = yield* MessageV2.toModelMessagesEffect(messages, model)
+          const goal = session.metadata?.goal
+          const constraint =
+            goal &&
+            typeof goal === "object" &&
+            "text" in goal &&
+            typeof goal.text === "string" &&
+            goal.text.trim() &&
+            (!("status" in goal) || goal.status !== "paused")
+              ? `<system-reminder>\nCurrent session goal: ${goal.text.trim()}\nUse this as the north star unless the user explicitly changes it.\n</system-reminder>`
+              : undefined
+          const system = [
+            ...(yield* sys.environment(model)),
+            ...(yield* instruction.system()),
+            ...(constraint ? [constraint] : []),
+            PROMPT,
+          ]
+          const thread: ModelMessage[] = turns.flatMap((turn) => [
+            { role: "user", content: turn.question },
+            { role: "assistant", content: turn.answer },
+          ])
+          const groups: { messages: SessionV1.WithParts[]; model: ModelMessage[]; summary: boolean }[] = []
+          for (const message of messages) {
+            const group = message.info.role === "user" || groups.length === 0 ? undefined : groups.at(-1)
+            if (group) {
+              group.messages.push(message)
+              group.summary ||= message.info.role === "assistant" && message.info.summary === true
+              continue
+            }
+            groups.push({
+              messages: [message],
+              model: [],
+              summary: message.info.role === "assistant" && message.info.summary === true,
+            })
+          }
+          yield* Effect.forEach(
+            groups,
+            Effect.fnUntraced(function* (group) {
+              group.model = yield* MessageV2.toModelMessagesEffect(group.messages, model, {
+                stripMedia: true,
+                toolOutputMaxChars: 2_000,
+              })
+            }),
+            { discard: true },
+          )
+          const usable = SessionOverflow.usable({ cfg: yield* config.get(), model })
+          const limit = model.limit.context === 0 ? Infinity : Math.floor(usable * 0.75)
+          const fixed = Token.estimate(JSON.stringify([...system, ...thread, { role: "user", content: question }]))
+          const selected = new Set<number>()
+          const mandatory = groups.flatMap((group, index) =>
+            group.summary || index === groups.length - 1 ? [index] : [],
+          )
+          const cost = (index: number) => Token.estimate(JSON.stringify(groups[index]?.model ?? []))
+          const reserved = mandatory.reduce((total, index) => {
+            selected.add(index)
+            return total + cost(index)
+          }, fixed)
+          let remaining = Math.max(0, limit - reserved)
+          for (let index = groups.length - 1; index >= 0; index--) {
+            if (selected.has(index)) continue
+            const size = cost(index)
+            if (size > remaining) break
+            selected.add(index)
+            remaining -= size
+          }
+          const modelMessages = groups.flatMap((group, index) => (selected.has(index) ? group.model : []))
 
           return llm
             .stream({
@@ -97,7 +195,7 @@ export const layer = Layer.effect(
               sessionID: input.sessionID,
               parentSessionID: session.parentID,
               system,
-              messages: [...modelMessages, { role: "user", content: question }],
+              messages: [...modelMessages, ...thread, { role: "user", content: question }],
               tools: {},
               toolChoice: "none",
               model,
@@ -120,7 +218,9 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Session.defaultLayer),
   Layer.provide(Plugin.defaultLayer),
   Layer.provide(SystemPrompt.defaultLayer),
+  Layer.provide(Instruction.defaultLayer),
   Layer.provide(LLM.defaultLayer),
+  Layer.provide(Config.defaultLayer),
 )
 
 export const node = LayerNode.make(layer, [
@@ -130,7 +230,9 @@ export const node = LayerNode.make(layer, [
   Session.node,
   Plugin.node,
   SystemPrompt.node,
+  Instruction.node,
   LLM.node,
+  Config.node,
 ])
 
 export * as SessionSideQuestion from "./side-question"
