@@ -10,7 +10,7 @@ import { MCPOAuth } from "@slopcode-ai/core/mcp/oauth"
 import { MCPOAuthCallback } from "@slopcode-ai/core/mcp/oauth-callback"
 import { MCPOAuthStore } from "@slopcode-ai/core/mcp/oauth-store"
 import { MCPOAuthProvider } from "@slopcode-ai/core/mcp/oauth-provider"
-import { Context, Effect, Fiber, Layer } from "effect"
+import { Context, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
 import { z } from "zod"
@@ -474,7 +474,7 @@ it.live("leaves the exact store bytes unchanged when a server rejects a stored a
   ),
 )
 
-it.live("single-flights proactive refresh in-process and preserves an interrupted waiter", () =>
+it.live("bounds Location shutdown for a shared proactive refresh waiter", () =>
   Effect.acquireRelease(Effect.promise(tmpdir), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]())).pipe(
     Effect.flatMap((tmp) =>
       Effect.acquireRelease(Effect.sync(refreshFixture), (fixture) =>
@@ -503,9 +503,10 @@ it.live("single-flights proactive refresh in-process and preserves an interrupte
                   .pipe(Effect.exit)
               const owner = yield* connect().pipe(Effect.forkChild)
               yield* Effect.promise(() => fixture.started)
-              const waiter = yield* connect().pipe(Effect.forkChild)
+              const scope = yield* Scope.make()
+              yield* connect().pipe(Effect.forkIn(scope))
               yield* Effect.sleep("20 millis")
-              yield* Fiber.interrupt(waiter).pipe(Effect.timeout("250 millis"))
+              yield* Scope.close(scope, Exit.void).pipe(Effect.timeout("250 millis"))
               expect(fixture.refreshes()).toBe(1)
               fixture.release()
               yield* Fiber.join(owner)
