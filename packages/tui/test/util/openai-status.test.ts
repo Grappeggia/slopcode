@@ -83,13 +83,21 @@ describe("OpenAI status helpers", () => {
     }
   })
 
-  test("falls back to legacy when V2 is disconnected", async () => {
+  test("invokes V2 before legacy when V2 is disconnected", async () => {
+    const calls: string[] = []
     expect(
       await loadOpenAIUsage(
-        async () => ({ status: "disconnected" }),
-        async () => ({ status: "oauth", plan: "plus", capturedAt: 1 }),
+        async () => {
+          calls.push("v2")
+          return { status: "disconnected" }
+        },
+        async () => {
+          calls.push("legacy")
+          return { status: "oauth", plan: "plus", capturedAt: 1 }
+        },
       ),
     ).toEqual({ status: "oauth", plan: "plus", capturedAt: 1 })
+    expect(calls).toEqual(["v2", "legacy"])
   })
 
   test("falls back to legacy when V2 transport fails", async () => {
