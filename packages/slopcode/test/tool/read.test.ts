@@ -15,9 +15,11 @@ import { Permission } from "../../src/permission"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Instruction } from "../../src/session/instruction"
 import { ReadTool } from "../../src/tool/read"
+import { SideQuestionReader } from "../../src/session/side-question-reader"
 import { Truncate } from "@/tool/truncate"
 import { Tool } from "@/tool/tool"
 import { Filesystem } from "@/util/filesystem"
+import type { ToolExecutionOptions } from "ai"
 import {
   disposeAllInstances,
   provideInstance,
@@ -55,7 +57,7 @@ const readLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     Truncate.defaultLayer,
   )
 
-const it = testEffect(Layer.mergeAll(readLayer(), testInstanceStoreLayer))
+const it = testEffect(Layer.mergeAll(readLayer(), Permission.defaultLayer, testInstanceStoreLayer))
 
 const init = Effect.fn("ReadToolTest.init")(function* () {
   const info = yield* ReadTool
@@ -300,6 +302,50 @@ describe("tool.read external_directory permission", () => {
       const read = items.find((item) => item.permission === "read")
       expect(read).toBeDefined()
       expect(read!.patterns).toEqual([path.join("src", "secret.ts")])
+    }),
+  )
+
+  it.live("uses the exact normal read resource for side ask and deny rules in non-git projects", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const target = path.join(dir, "secret.txt")
+      yield* put(target, "secret")
+
+      const { items, next } = asks()
+      yield* exec(dir, { filePath: target }, next)
+      const resource = items.find((item) => item.permission === "read")?.patterns[0]
+      expect(resource).toBe(path.relative("/", target))
+      if (!resource) return yield* Effect.die("normal read did not request permission")
+
+      for (const action of ["ask", "deny"] as const) {
+        const checked = yield* provideInstance(dir)(
+          Effect.gen(function* () {
+            const reader = yield* SideQuestionReader.make({
+              ruleset: [
+                { permission: "read", pattern: "*", action: "allow" },
+                { permission: "read", pattern: resource, action },
+              ],
+              reference: () => Effect.succeed(undefined),
+            })
+            if (!reader.tool.execute) return yield* Effect.die("private read tool is not executable")
+            const result = yield* Effect.promise(() =>
+              Promise.resolve(
+                reader.tool.execute!({ path: "secret.txt" }, {
+                  toolCallId: `side_${action}`,
+                  messages: [],
+                  abortSignal: new AbortController().signal,
+                } as ToolExecutionOptions),
+              ).then(
+                () => "read unexpectedly succeeded",
+                (error: unknown) => (error instanceof Error ? error.message : String(error)),
+              ),
+            )
+            return { result, pending: yield* (yield* Permission.Service).list() }
+          }),
+        )
+        expect(checked.result).toMatch(/unavailable/i)
+        expect(checked.pending).toEqual([])
+      }
     }),
   )
 

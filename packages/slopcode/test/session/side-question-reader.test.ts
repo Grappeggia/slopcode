@@ -150,12 +150,14 @@ describe("SideQuestionReader", () => {
         await fs.writeFile(path.join(fixture.directory, "target.txt"), "secret")
         await fs.symlink("target.txt", path.join(fixture.directory, "alias.txt"))
       })
+      const alias = path.relative("/", path.join(fixture.directory, "alias.txt"))
+      const target = path.relative("/", path.join(fixture.directory, "target.txt"))
       const requested = yield* SideQuestionReader.make({
-        ruleset: [...allow, { permission: "read", pattern: "alias.txt", action: "deny" }],
+        ruleset: [...allow, { permission: "read", pattern: alias, action: "deny" }],
         reference: () => Effect.succeed(undefined),
       })
       const canonical = yield* SideQuestionReader.make({
-        ruleset: [...allow, { permission: "read", pattern: "target.txt", action: "ask" }],
+        ruleset: [...allow, { permission: "read", pattern: target, action: "ask" }],
         reference: () => Effect.succeed(undefined),
       })
 
@@ -177,7 +179,7 @@ describe("SideQuestionReader", () => {
         await fs.mkdir(docs)
         await fs.writeFile(path.join(docs, "guide.txt"), "reference secret")
       })
-      const resource = path.relative(fixture.directory, path.join(docs, "guide.txt")).replaceAll("\\", "/")
+      const resource = path.relative("/", path.join(docs, "guide.txt")).replaceAll("\\", "/")
       const reader = yield* SideQuestionReader.make({
         ruleset: [
           ...allow,
@@ -213,7 +215,14 @@ describe("SideQuestionReader", () => {
         },
       })
       const reader = yield* SideQuestionReader.make({
-        ruleset: [...allow, { permission: "read", pattern: "*.txt", action: "deny" }],
+        ruleset: [
+          ...allow,
+          ...[existing, missing].map((target) => ({
+            permission: "read" as const,
+            pattern: path.relative("/", target),
+            action: "deny" as const,
+          })),
+        ],
         reference: () => Effect.succeed(undefined),
       }).pipe(Effect.provideService(FSUtil.Service, guarded))
       const messages = yield* Effect.promise(() =>

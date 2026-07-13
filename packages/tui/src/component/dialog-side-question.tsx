@@ -12,6 +12,27 @@ import { density, isDense } from "../util/density"
 import { useToast } from "../ui/toast"
 
 const INACTIVITY_TIMEOUT = 30_000
+const MAX_TURNS = 32
+const MAX_TEXT = 64_000
+
+function context(items: SessionSideQuestionTurn[]) {
+  const selected = items.slice(-MAX_TURNS)
+  const questions = selected.filter((turn) => turn.question.length > MAX_TEXT).length
+  const answers = selected.filter((turn) => turn.answer.length > MAX_TEXT).length
+  const omitted = items.length - selected.length
+  const notes = [
+    ...(omitted ? [`${omitted} older ${omitted === 1 ? "turn" : "turns"} omitted`] : []),
+    ...(questions ? [`${questions} oversized ${questions === 1 ? "question" : "questions"} truncated`] : []),
+    ...(answers ? [`${answers} oversized ${answers === 1 ? "answer" : "answers"} truncated`] : []),
+  ]
+  return {
+    turns: selected.map((turn) => ({
+      question: turn.question.slice(0, MAX_TEXT),
+      answer: turn.answer.slice(0, MAX_TEXT),
+    })),
+    note: notes.length ? `Carried context limited: ${notes.join("; ")}. Full transcript remains visible.` : undefined,
+  }
+}
 
 export function SideQuestion(props: {
   sessionID: string
@@ -34,6 +55,7 @@ export function SideQuestion(props: {
     question?: string
     answer: string
     error?: string
+    context?: string
     loading: boolean
     started: boolean
     used: number
@@ -68,15 +90,26 @@ export function SideQuestion(props: {
     if (store.loading) return
     const question = input.plainText.trim()
     if (!question) return
+    if (question.length > MAX_TEXT) {
+      setStore({
+        error: `Side question cannot exceed ${MAX_TEXT.toLocaleString("en-US")} characters. Shorten it and press enter to retry.`,
+        context: undefined,
+        loading: false,
+        started: true,
+      })
+      bottom()
+      return
+    }
 
     controller?.abort()
     const ctrl = new AbortController()
     controller = ctrl
-    const turns = store.turns.map((turn) => ({ question: turn.question, answer: turn.answer }))
+    const carried = context(store.turns)
     setStore({
       question,
       answer: "",
       error: undefined,
+      context: carried.note,
       loading: true,
       started: true,
       used: 0,
@@ -105,7 +138,7 @@ export function SideQuestion(props: {
         {
           sessionID: props.sessionID,
           question,
-          turns: turns.length ? turns : undefined,
+          turns: carried.turns.length ? carried.turns : undefined,
           agent: props.agent,
           model: props.model,
           variant: props.variant,
@@ -298,6 +331,11 @@ export function SideQuestion(props: {
             </text>
           </Show>
         </scrollbox>
+      </Show>
+      <Show when={store.context}>
+        <text fg={theme.textMuted} wrapMode="word">
+          {store.context}
+        </text>
       </Show>
       <box flexDirection={dense() ? "column" : "row"} justifyContent="space-between">
         <text fg={theme.textMuted}>

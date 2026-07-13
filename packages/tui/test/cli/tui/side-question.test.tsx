@@ -216,6 +216,104 @@ test("keeps a transcript and sends exact completed turns on follow-up", async ()
   }
 })
 
+test("keeps all visible turns while carrying only the newest 32 on the 33rd follow-up", async () => {
+  await using tmp = await tmpdir()
+  const requests: Array<Record<string, unknown>> = []
+  const app = await mount({
+    root: tmp.path,
+    fetch: (async (request: RequestInfo | URL) => {
+      requests.push(
+        (await (request instanceof Request ? request : new Request(request)).json()) as Record<string, unknown>,
+      )
+      return stream([{ type: "text", text: `Answer ${requests.length}` }, { type: "done" }])
+    }) as unknown as typeof globalThis.fetch,
+  })
+
+  try {
+    await wait(() => app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    for (let index = 1; index <= 34; index++) {
+      app.mockInput.typeText(`Question ${index}`)
+      app.mockInput.pressEnter()
+      await wait(() => requests.length === index)
+      await wait(() => (app.renderer.currentFocusedEditor as TextareaRenderable | undefined)?.plainText === "")
+    }
+
+    const turns = requests[33]?.turns as Array<{ question: string; answer: string }>
+    expect(turns).toHaveLength(32)
+    expect(turns[0]).toEqual({ question: "Question 2", answer: "Answer 2" })
+    expect(turns.at(-1)).toEqual({ question: "Question 33", answer: "Answer 33" })
+    await wait(() => app.captureCharFrame().includes("older turn omitted"))
+    const scroll = findScroll(app.renderer.root)
+    if (!scroll) throw new Error("expected side transcript scrollbox")
+    scroll.scrollTo(0)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("Question 1")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("bounds an oversized completed answer in carried context without hiding the transcript", async () => {
+  await using tmp = await tmpdir()
+  const requests: Array<Record<string, unknown>> = []
+  const answer = `start-${"x".repeat(64_000)}-visible-end`
+  const app = await mount({
+    root: tmp.path,
+    fetch: (async (request: RequestInfo | URL) => {
+      requests.push(
+        (await (request instanceof Request ? request : new Request(request)).json()) as Record<string, unknown>,
+      )
+      return stream([{ type: "text", text: requests.length === 1 ? answer : "next answer" }, { type: "done" }])
+    }) as unknown as typeof globalThis.fetch,
+  })
+
+  try {
+    await wait(() => app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    app.mockInput.typeText("First")
+    app.mockInput.pressEnter()
+    await wait(() => (app.renderer.currentFocusedEditor as TextareaRenderable | undefined)?.plainText === "")
+    await wait(() => app.captureCharFrame().includes("visible-end"))
+    app.mockInput.typeText("Second")
+    app.mockInput.pressEnter()
+    await wait(() => requests.length === 2)
+
+    const turns = requests[1]?.turns as Array<{ question: string; answer: string }>
+    expect(turns[0]?.answer).toHaveLength(64_000)
+    expect(turns[0]?.answer.startsWith("start-")).toBe(true)
+    await wait(() => app.captureCharFrame().includes("oversized answer truncated"))
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("rejects an oversized current question locally and recovers without a doomed request", async () => {
+  await using tmp = await tmpdir()
+  let requests = 0
+  const app = await mount({
+    root: tmp.path,
+    fetch: (async () => {
+      requests++
+      return stream([{ type: "text", text: "Recovered" }, { type: "done" }])
+    }) as unknown as typeof globalThis.fetch,
+  })
+
+  try {
+    await wait(() => app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    const editor = app.renderer.currentFocusedEditor as TextareaRenderable
+    editor.setText("x".repeat(64_001))
+    app.mockInput.pressEnter()
+    await wait(() => app.captureCharFrame().includes("cannot exceed 64,000 characters"))
+    expect(requests).toBe(0)
+
+    editor.setText("short retry")
+    app.mockInput.pressEnter()
+    await wait(() => app.captureCharFrame().includes("Recovered"))
+    expect(requests).toBe(1)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("scrolls an overflowing completed transcript with up and down", async () => {
   await using tmp = await tmpdir()
   let requests = 0

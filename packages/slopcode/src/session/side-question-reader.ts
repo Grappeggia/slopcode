@@ -247,7 +247,7 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
         const requested = path.resolve(lexical, params.path)
         if (!FSUtil.contains(lexical, requested))
           return yield* Effect.fail(new Error("Read path escapes its configured root"))
-        const requestedResource = path.relative(root, requested)
+        const requestedResource = path.relative(instance.worktree, requested)
         if (
           (yield* permission.query({ permission: "read", pattern: requestedResource, ruleset: input.ruleset })) !==
           "allow"
@@ -257,7 +257,7 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
         const canonical = yield* filesystem.realPath(requested).pipe(Effect.mapError(() => new Error(UNAVAILABLE)))
         if (!FSUtil.contains(base, canonical)) return yield* Effect.fail(new Error(UNAVAILABLE))
 
-        const canonicalResource = path.relative(root, canonical)
+        const canonicalResource = path.relative(instance.worktree, canonical)
         if (
           canonicalResource !== requestedResource &&
           (yield* permission.query({ permission: "read", pattern: canonicalResource, ruleset: input.ruleset })) !==

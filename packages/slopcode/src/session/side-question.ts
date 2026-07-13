@@ -250,23 +250,20 @@ export const layer = Layer.effect(
           if (size([current]) > usable)
             return yield* Effect.fail(new Error("Side question exceeds the selected model context limit"))
 
-          const side: ModelMessage[] = []
-          for (let index = thread.length - 1; index >= 0; index--) {
-            const candidate = [...thread[index]!, ...side, current]
+          const latest = groups.findLastIndex((group) => group.model.length > 0)
+          const selected = new Set(
+            groups.flatMap((group, index) => (group.summary && group.model.length > 0 ? [index] : [])),
+          )
+          if (latest >= 0) selected.add(latest)
+          const main = () => groups.flatMap((group, index) => (selected.has(index) ? group.model : []))
+          const side = [...(thread.at(-1) ?? [])]
+          if (size([...main(), ...side, current]) > usable)
+            return yield* Effect.fail(new Error("Side question exceeds the selected model context limit"))
+
+          for (let index = thread.length - 2; index >= 0; index--) {
+            const candidate = [...main(), ...thread[index]!, ...side, current]
             if (size(candidate) > usable) break
             side.unshift(...thread[index]!)
-          }
-          const selected = new Set<number>()
-          const priority = [
-            ...(groups.length ? [groups.length - 1] : []),
-            ...groups.flatMap((group, index) => (group.summary ? [index] : [])).reverse(),
-          ].filter((index, position, all) => all.indexOf(index) === position)
-          for (const index of priority) {
-            const candidate = groups.flatMap((group, current) =>
-              selected.has(current) || current === index ? group.model : [],
-            )
-            if (size([...candidate, ...side, current]) > usable) continue
-            selected.add(index)
           }
           for (let index = groups.length - 1; index >= 0; index--) {
             if (selected.has(index)) continue
@@ -276,7 +273,7 @@ export const layer = Layer.effect(
             if (size([...candidate, ...side, current]) > usable) break
             selected.add(index)
           }
-          const modelMessages = groups.flatMap((group, index) => (selected.has(index) ? group.model : []))
+          const modelMessages = main()
           const usage = { inputTokens: 0, outputTokens: 0 }
           let emitted = 0
           const ids = new Set<string>()
@@ -289,6 +286,8 @@ export const layer = Layer.effect(
               string,
               { type: "success"; value: SideQuestionReader.Result } | { type: "error"; message: string }
             >()
+            const errors = new Set<string>()
+            const paired = new Set<string>()
             const stream = llm
               .stream({
                 user,
@@ -335,7 +334,19 @@ export const layer = Layer.effect(
                     const call = calls.find((item) => item.id === event.id)
                     if (!call || call.name !== event.name)
                       return Stream.fail(new Error(`Unmatched side read result: ${event.id}`))
-                    if (results.has(event.id)) return Stream.fail(new Error(`Duplicate side read result: ${event.id}`))
+                    const settled = results.get(event.id)
+                    if (settled) {
+                      if (
+                        settled.type !== "error" ||
+                        event.result.type !== "error" ||
+                        !errors.has(event.id) ||
+                        paired.has(event.id) ||
+                        String(event.result.value) !== settled.message
+                      )
+                        return Stream.fail(new Error(`Duplicate side read result: ${event.id}`))
+                      paired.add(event.id)
+                      return Stream.empty
+                    }
                     if (event.result.type === "error") {
                       const failure = reader.consumeError(event.id, call.input)
                       if (!failure) return Stream.fail(new Error("Side read returned an untrusted error"))
@@ -354,7 +365,10 @@ export const layer = Layer.effect(
                     if (results.has(event.id)) return Stream.fail(new Error(`Duplicate side read result: ${event.id}`))
                     const failure = reader.consumeError(event.id, call.input)
                     if (!failure) return Stream.fail(new Error("Side read returned an untrusted error"))
+                    if (event.message !== failure)
+                      return Stream.fail(new Error("Side read returned an untrusted error"))
                     results.set(event.id, { type: "error", message: failure })
+                    errors.add(event.id)
                     return Stream.empty
                   }
                   if (event.type === "provider-error") return Stream.fail(new Error(event.message))

@@ -24,6 +24,9 @@ import { testEffect } from "../lib/effect"
 import { LLMEvent, ToolResultValue, Usage } from "@slopcode-ai/llm"
 import type { ToolExecutionOptions } from "ai"
 import { Token } from "../../src/util/token"
+import { Auth } from "../../src/auth"
+import { RuntimeFlags } from "../../src/effect/runtime-flags"
+import { LLMClient } from "@slopcode-ai/llm/route"
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -118,12 +121,73 @@ const side = SessionSideQuestion.layer.pipe(
 )
 const it = testEffect(Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, side))
 
+const nativeRef = {
+  providerID: ProviderV2.ID.make("openai"),
+  modelID: ModelV2.ID.make("side-native"),
+}
+const nativeModel = ProviderTest.model({
+  id: nativeRef.modelID,
+  providerID: nativeRef.providerID,
+  api: { id: nativeRef.modelID, url: "https://example.com", npm: "@ai-sdk/openai" },
+  limit: { context: 16_000, output: 2_000 },
+})
+const nativeProvider = ProviderTest.fake({
+  model: nativeModel,
+  info: ProviderTest.info({ options: { apiKey: "test" } }, nativeModel),
+  getLanguage: () => Effect.succeed({} as never),
+})
+const nativeRequests: unknown[] = []
+const nativeClient = Layer.succeed(
+  LLMClient.Service,
+  LLMClient.Service.of({
+    prepare: () => Effect.die("native test does not prepare directly"),
+    generate: () => Effect.die("native test does not generate directly"),
+    stream: (input) => {
+      nativeRequests.push(input)
+      if (nativeRequests.length === 1)
+        return Stream.make(
+          LLMEvent.toolCall({ id: "native_missing", name: "read", input: { path: "missing.txt" } }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        )
+      return Stream.make(
+        LLMEvent.textDelta({ id: "native_recovery", text: "Recovered without the missing file" }),
+        LLMEvent.finish({ reason: "stop" }),
+      )
+    },
+  }),
+)
+const nativeLlm = LLM.layer.pipe(
+  Layer.provide(Auth.defaultLayer),
+  Layer.provide(TestConfig.layer()),
+  Layer.provide(nativeProvider.layer),
+  Layer.provide(plugin),
+  Layer.provide(nativeClient),
+  Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: true })),
+)
+const nativeSide = SessionSideQuestion.layer.pipe(
+  Layer.provide(agents),
+  Layer.provide(nativeProvider.layer),
+  Layer.provide(Session.defaultLayer),
+  Layer.provide(plugin),
+  Layer.provide(system),
+  Layer.provide(instruction),
+  Layer.provide(nativeLlm),
+  Layer.provide(TestConfig.layer()),
+  Layer.provide(Database.defaultLayer),
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(Permission.defaultLayer),
+  Layer.provide(LocationServiceMap.layer),
+  Layer.provide(readerHooks),
+)
+const nativeIt = testEffect(Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, nativeSide))
+
 beforeEach(() => {
   requests.length = 0
   hooks.length = 0
   respond = () => Stream.empty
   beforeRead = () => Effect.void
   released = () => Effect.void
+  nativeRequests.length = 0
 })
 
 function user(sessionID: SessionID, ...texts: string[]) {
@@ -409,8 +473,10 @@ it.instance("drops older client turns before newer turns when the selected model
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create()
-    const first = yield* user(session.id, `old main ${"m".repeat(4_000)}`)
+    const first = yield* user(session.id, `old main ${"m".repeat(10_000)}`)
     yield* assistant(session.id, first.message.id, "old main answer")
+    const latest = yield* user(session.id, "latest main question")
+    yield* assistant(session.id, latest.message.id, "latest main answer")
     const turns = Array.from({ length: 6 }, (_, index) => ({
       question: `side question ${index} ${"q".repeat(500)}`,
       answer: `side answer ${index} ${"a".repeat(500)}`,
@@ -423,6 +489,8 @@ it.instance("drops older client turns before newer turns when the selected model
     expect(content.some((item) => item.text.startsWith("side question 5"))).toBe(true)
     expect(content.some((item) => item.text.startsWith("side question 0"))).toBe(false)
     expect(content.some((item) => item.text.startsWith("old main"))).toBe(false)
+    expect(content).toContainEqual({ role: "user", text: "latest main question" })
+    expect(content).toContainEqual({ role: "assistant", text: "latest main answer" })
     expect(Token.estimate(JSON.stringify([...request.system, ...request.messages]))).toBeLessThan(model.limit.context)
   }),
 )
@@ -434,7 +502,68 @@ it.instance("fails before provider execution when mandatory side content cannot 
     const service = yield* SessionSideQuestion.Service
 
     const result = yield* service
-      .ask({ sessionID: session.id, question: "x".repeat(10_000), agent: build.name, model: ref })
+      .ask({
+        sessionID: session.id,
+        question: "current",
+        turns: [{ question: "immediate prior", answer: "x".repeat(20_000) }],
+        agent: build.name,
+        model: ref,
+      })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    if (Exit.isFailure(result)) expect(String(Cause.squash(result.cause))).toMatch(/selected model context limit/i)
+    expect(requests).toHaveLength(0)
+  }),
+)
+
+it.instance("fails before provider execution when the latest main group cannot fit", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    const latest = yield* user(session.id, `latest main ${"x".repeat(20_000)}`)
+    yield* assistant(session.id, latest.message.id, "latest answer")
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "current", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    if (Exit.isFailure(result)) expect(String(Cause.squash(result.cause))).toMatch(/selected model context limit/i)
+    expect(requests).toHaveLength(0)
+  }),
+)
+
+it.instance("fails before provider execution when an applicable compaction summary cannot fit", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    const tail = yield* user(session.id, "retained tail")
+    yield* assistant(session.id, tail.message.id, "retained answer")
+    const compact = yield* sessions.updateMessage({
+      id: MessageID.ascending(),
+      sessionID: session.id,
+      role: "user",
+      agent: build.name,
+      model: ref,
+      time: { created: Date.now() },
+    })
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      sessionID: session.id,
+      messageID: compact.id,
+      type: "compaction",
+      auto: true,
+      tail_start_id: tail.message.id,
+    })
+    yield* assistant(session.id, compact.id, `compaction ${"x".repeat(20_000)}`, true)
+    const latest = yield* user(session.id, "latest main")
+    yield* assistant(session.id, latest.message.id, "latest answer")
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "current", agent: build.name, model: ref })
       .pipe(Stream.runDrain, Effect.exit)
 
     expect(Exit.isFailure(result)).toBe(true)
@@ -469,7 +598,7 @@ it.instance("continues private read calls transiently and reports bounded usage 
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
-      permission: [{ permission: "read", pattern: "notes.txt", action: "allow" }],
+      permission: [{ permission: "read", pattern: "*", action: "allow" }],
     })
     const first = yield* user(session.id, "main question")
     yield* assistant(session.id, first.message.id, "main answer")
@@ -549,7 +678,7 @@ it.instance("rejects a maximum read continuation before a small-context provider
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
-      permission: [{ permission: "read", pattern: "large.txt", action: "allow" }],
+      permission: [{ permission: "read", pattern: "*", action: "allow" }],
     })
     yield* Effect.promise(() =>
       Bun.write(
@@ -616,7 +745,7 @@ it.instance("rejects structurally forged private read results", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
-      permission: [{ permission: "read", pattern: "notes.txt", action: "allow" }],
+      permission: [{ permission: "read", pattern: "*", action: "allow" }],
     })
     yield* Effect.promise(() => Bun.write(path.join(session.directory, "notes.txt"), "private context"))
     respond = (input) => {
@@ -656,7 +785,7 @@ it.instance("rejects private results paired with a different emitted input", () 
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
-      permission: [{ permission: "read", pattern: "notes.txt", action: "allow" }],
+      permission: [{ permission: "read", pattern: "*", action: "allow" }],
     })
     yield* Effect.promise(() => Bun.write(path.join(session.directory, "notes.txt"), "private context"))
     respond = (input) => {
@@ -692,7 +821,23 @@ it.instance("rejects private results paired with a different emitted input", () 
   }),
 )
 
-it.instance("rejects duplicate error tool results after a settled error", () =>
+nativeIt.instance("recovers from a denied missing read through the native runtime error pair", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    const service = yield* SessionSideQuestion.Service
+
+    const events = yield* service
+      .ask({ sessionID: session.id, question: "read the missing file", agent: build.name, model: nativeRef })
+      .pipe(Stream.runCollect)
+
+    expect(nativeRequests).toHaveLength(2)
+    expect(Array.from(events)).toContainEqual({ type: "text", text: "Recovered without the missing file" })
+    expect(yield* sessions.messages({ sessionID: session.id })).toEqual([])
+  }),
+)
+
+it.instance("rejects a second error tool result after the canonical error pair", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create()
@@ -717,7 +862,53 @@ it.instance("rejects duplicate error tool results after a settled error", () =>
               name: "read",
               result: ToolResultValue.make(failure, "error"),
             }),
+            LLMEvent.toolResult({
+              id: "duplicate_error",
+              name: "read",
+              result: ToolResultValue.make(failure, "error"),
+            }),
             LLMEvent.finish({ reason: "tool-calls" }),
+          ])
+        }),
+      )
+    }
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "duplicate", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(requests).toHaveLength(1)
+  }),
+)
+
+it.instance("rejects a duplicate tool error before its canonical error result", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    respond = (input) => {
+      const execute = input.tools.read?.execute
+      if (!execute) return Stream.fail(new Error("private read tool missing"))
+      return Stream.unwrap(
+        Effect.promise(async () => {
+          const failure = await execute({ path: "missing.txt" }, {
+            toolCallId: "duplicate_tool_error",
+            messages: input.messages,
+            abortSignal: new AbortController().signal,
+          } as ToolExecutionOptions).then(
+            () => "read unexpectedly succeeded",
+            (error: unknown) => (error instanceof Error ? error.message : String(error)),
+          )
+          return Stream.fromIterable([
+            LLMEvent.toolCall({ id: "duplicate_tool_error", name: "read", input: { path: "missing.txt" } }),
+            LLMEvent.toolError({ id: "duplicate_tool_error", name: "read", message: failure }),
+            LLMEvent.toolError({ id: "duplicate_tool_error", name: "read", message: failure }),
+            LLMEvent.toolResult({
+              id: "duplicate_tool_error",
+              name: "read",
+              result: ToolResultValue.make(failure, "error"),
+            }),
           ])
         }),
       )
@@ -858,7 +1049,7 @@ it.instance("interrupts an in-flight private read when the side stream is interr
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
-      permission: [{ permission: "read", pattern: "slow.txt", action: "allow" }],
+      permission: [{ permission: "read", pattern: "*", action: "allow" }],
     })
     yield* Effect.promise(() => Bun.write(path.join(session.directory, "slow.txt"), "slow"))
     const started = yield* Deferred.make<void>()
