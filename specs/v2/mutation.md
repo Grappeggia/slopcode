@@ -2,7 +2,9 @@
 
 `FileMutation` remains the deterministic byte-level primitive. It performs one approved create, write, conditional write, or remove under a canonical-target lock. It does not discover formatters, start processes, publish events, inspect Session epochs, run diagnostics, or claim a multi-file transaction.
 
-On Linux, mutation walks the absolute parent from a no-follow root directory handle, opens each directory with `O_DIRECTORY | O_NOFOLLOW`, and mutates only through the verified parent or file handle. Existing targets are opened with `O_NOFOLLOW`, checked against the approved canonical identity, and written through that handle. Creation uses an exclusive no-follow child open relative to the verified parent handle. Removal opens the child without following links and compares the named identity with the opened identity immediately before unlink. A pathname substituted after a handle opens is never followed. Platforms without an equivalent adapter fail closed with `FileMutation.UnsupportedPlatformError`.
+On Linux/Bun, mutation walks the absolute parent from a no-follow root directory handle, opens each directory with `O_DIRECTORY | O_NOFOLLOW`, and mutates only through the verified parent or file handle. Existing targets are opened with `O_NOFOLLOW`, checked against the approved canonical identity, and written through that handle. Creation uses an exclusive no-follow child open relative to the verified parent handle. Removal creates an unpredictable exclusive placeholder under the verified dirfd, atomically exchanges the public child and quarantine with `renameat2(RENAME_EXCHANGE)`, verifies the quarantined inode, restores a mismatched replacement by exchange, and unlinks only verified quarantines with `unlinkat`. Placeholder cleanup is itself moved with `RENAME_NOREPLACE` and identity-verified before unlink. There is no identity-check/pathname-unlink gap.
+
+The explicit platform adapter marks other runtimes as insecure for descriptor settlement. Those adapters retain existing primitive create/write/edit/delete behavior rather than breaking mutation tools, but post-mutation formatting is skipped with the bounded `unsupported-security` outcome. No insecure formatter commit is attempted.
 
 ## Post-Mutation Order
 
@@ -12,8 +14,8 @@ Write, edit, and apply_patch resolve paths and complete `external_directory` and
 2. Registers direct-event ownership before touching bytes.
 3. Executes exactly one `FileMutation` primitive.
 4. Takes the primitive's opaque immediate-byte and file-revision snapshot and checks the fence.
-5. Copies bounded immediate bytes into a private same-extension staging file and runs every matching formatter sequentially there; deletes and primitive no-ops skip formatting.
-6. Restores exact UTF-8 BOM presence in staging and conditionally commits final bytes through the descriptor-safe formatter commit only if the approved target still has the primitive revision and bytes.
+5. Creates an unpredictable exclusive `0600` hidden stage beside the target through its stable verified directory handle, copies immediate bytes, and runs every matching formatter sequentially there; deletes and primitive no-ops skip formatting.
+6. Checks the runtime fence after formatter return and immediately before commit. It restores exact UTF-8 BOM presence in staging and conditionally commits final bytes through the descriptor-safe formatter commit only if the approved target still has the primitive revision and bytes; the same guard is checked inside the locked commit.
 7. Checks the fence immediately before each canonical semantic and watcher event.
 8. Completes event reconciliation, checks the fence, and invokes the typed diagnostics seam.
 9. Checks the fence immediately before returning durable tool success.
@@ -30,7 +32,7 @@ The coordinator records whether immediate post-mutation bytes have a UTF-8 BOM. 
 
 A successful changed nondelete publishes one `file.edited` event and every successful changed mutation publishes one watcher `add`, `change`, or `unlink`. Both use the approved canonical target; model output continues using the approved resource. Same-content writes and missing deletes publish no event or diagnostics. A formatter that leaves final bytes equal to immediate bytes still publishes because the primitive changed. Events occur only after formatter and BOM work settle.
 
-Direct mutation owns the semantic event. `MutationEvents` suppresses in-flight native updates and retains the final filesystem identity after settlement. Delayed native add/change/unlink observations are suppressed while the actual identity still matches, not by elapsed-time debounce. A genuinely different later filesystem identity clears suppression and publishes normally. Paths are normalized, and Location shutdown clears active and settled ownership. Direct events remain available when native watching is disabled or unavailable.
+Direct mutation owns the semantic event. `MutationEvents` receives the exact validated/committed final fingerprint and never rereads the pathname during completion. Delayed native add/change/unlink observations are suppressed while the actual identity still matches, not by elapsed-time debounce. A replacement before completion therefore differs from the supplied identity and remains publishable. Private `.slopcode-` stage events are ignored by the watcher adapter. Paths are normalized, and Location shutdown clears active and settled ownership. Direct events remain available when native watching is disabled or unavailable.
 
 ## Batches And Failure
 
