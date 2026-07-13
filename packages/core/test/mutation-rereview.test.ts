@@ -1,4 +1,5 @@
 import fs from "fs/promises"
+import { mkdirSync, renameSync } from "fs"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
@@ -468,100 +469,117 @@ describe("mutation rejection re-review", () => {
   )
 
   it.live("surfaces exact recovery state for every post-exchange operation failure", () =>
-    withTmp((directory) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          if (process.platform !== "linux") return
-          const native = yield* makePlatform
-          for (const failure of ["approved-unlink", "placeholder-move", "placeholder-unlink"] as const) {
-            const approved = target(directory, `${failure}.txt`)
-            yield* Effect.promise(() => fs.writeFile(approved.canonical, "approved"))
-            let unlinks = 0
-            const platform: FileMutation.PlatformInterface = {
-              ...native,
-              unlink: (fd, child) => {
-                unlinks++
-                if (failure === "approved-unlink" && unlinks === 1) return false
-                if (failure === "placeholder-unlink" && unlinks === 2) return false
-                return native.unlink!(fd, child)
-              },
-              move: (fd, left, right) => (failure === "placeholder-move" ? false : native.move!(fd, left, right)),
+    withTmp((directory) => Effect.scoped(Effect.gen(function* () {
+      if (process.platform !== "linux") return
+      const native = yield* makePlatform
+      for (const failure of ["approved-unlink", "placeholder-move", "placeholder-unlink"] as const) {
+        const parent = path.join(directory, failure)
+        const relocated = `${parent}-relocated`
+        yield* Effect.promise(() => fs.mkdir(parent))
+        const approved = target(parent, `${failure}.txt`)
+        yield* Effect.promise(() => fs.writeFile(approved.canonical, "approved"))
+        let unlinks = 0
+        const relocate = () => {
+          renameSync(parent, relocated)
+          mkdirSync(parent)
+        }
+        const platform: FileMutation.PlatformInterface = {
+          ...native,
+          unlink: (fd, child) => {
+            unlinks++
+            if (failure === "approved-unlink" && unlinks === 1) {
+              relocate()
+              return false
             }
-            const error = yield* Effect.gen(function* () {
-              return yield* (yield* FileMutation.Service).remove({ target: approved })
-            }).pipe(Effect.provide(mutation(undefined, platform)), Effect.flip)
-            expect(error).toMatchObject({
-              _tag: "FileMutation.RecoveryConflictError",
-              path: approved.canonical,
-              state: failure,
-            })
-            expect(error.recoveries.length).toBeGreaterThan(0)
-            for (const [index, recovery] of error.recoveries.entries()) {
-              const stat = yield* Effect.promise(() => fs.lstat(recovery, { bigint: true }))
-              expect(`${stat.dev}:${stat.ino}`).toBe(error.identities[index])
+            if (failure === "placeholder-unlink" && unlinks === 2) {
+              relocate()
+              return false
             }
-          }
-        }),
-      ),
-    ),
+            return native.unlink!(fd, child)
+          },
+          move: (fd, left, right) => {
+            if (failure !== "placeholder-move") return native.move!(fd, left, right)
+            relocate()
+            return false
+          },
+        }
+        const error = yield* Effect.gen(function* () {
+          return yield* (yield* FileMutation.Service).remove({ target: approved })
+        }).pipe(Effect.provide(mutation(undefined, platform)), Effect.flip)
+        expect(error).toMatchObject({
+          _tag: "FileMutation.RecoveryConflictError",
+          path: approved.canonical,
+          state: failure,
+        })
+        expect(error.recoveries.length).toBeGreaterThan(0)
+        for (const [index, recovery] of error.recoveries.entries()) {
+          expect(recovery.startsWith(`${relocated}${path.sep}`)).toBe(true)
+          const stat = yield* Effect.promise(() => fs.lstat(recovery, { bigint: true }))
+          expect(`${stat.dev}:${stat.ino}`).toBe(error.identities[index])
+        }
+      }
+    }))),
   )
 
   it.live("surfaces rollback exchange and rollback placeholder unlink failures", () =>
-    withTmp((directory) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          if (process.platform !== "linux") return
-          const native = yield* makePlatform
-          for (const failure of ["rollback-exchange", "rollback-placeholder-unlink"] as const) {
-            const approved = target(directory, `${failure}.txt`)
-            const original = path.join(directory, `${failure}-original.txt`)
-            const replacement = path.join(directory, `${failure}-replacement.txt`)
-            yield* Effect.promise(() =>
-              Promise.all([fs.writeFile(approved.canonical, "approved"), fs.writeFile(replacement, "replacement")]),
-            )
-            let exchanges = 0
-            const platform: FileMutation.PlatformInterface = {
-              ...native,
-              exchange: (fd, left, right) => {
-                exchanges++
-                if (failure === "rollback-exchange" && exchanges === 2) return false
-                return native.exchange!(fd, left, right)
-              },
-              unlink: (fd, child) => (failure === "rollback-placeholder-unlink" ? false : native.unlink!(fd, child)),
+    withTmp((directory) => Effect.scoped(Effect.gen(function* () {
+      if (process.platform !== "linux") return
+      const native = yield* makePlatform
+      for (const failure of ["rollback-exchange", "rollback-placeholder-unlink"] as const) {
+        const parent = path.join(directory, failure)
+        const relocated = `${parent}-relocated`
+        yield* Effect.promise(() => fs.mkdir(parent))
+        const approved = target(parent, `${failure}.txt`)
+        const original = path.join(parent, `${failure}-original.txt`)
+        const replacement = path.join(parent, `${failure}-replacement.txt`)
+        yield* Effect.promise(() => Promise.all([
+          fs.writeFile(approved.canonical, "approved"),
+          fs.writeFile(replacement, "replacement"),
+        ]))
+        let exchanges = 0
+        const relocate = () => {
+          renameSync(parent, relocated)
+          mkdirSync(parent)
+        }
+        const platform: FileMutation.PlatformInterface = {
+          ...native,
+          exchange: (fd, left, right) => {
+            exchanges++
+            if (failure === "rollback-exchange" && exchanges === 2) {
+              relocate()
+              return false
             }
-            const error = yield* Effect.gen(function* () {
-              return yield* (yield* FileMutation.Service).remove({ target: approved })
-            }).pipe(
-              Effect.provide(
-                mutation(
-                  {
-                    pause: (phase) =>
-                      phase === "before-remove-atomic"
-                        ? Effect.promise(async () => {
-                            await fs.rename(approved.canonical, original)
-                            await fs.rename(replacement, approved.canonical)
-                          })
-                        : Effect.void,
-                  },
-                  platform,
-                ),
-              ),
-              Effect.flip,
-            )
-            expect(error).toMatchObject({
-              _tag: "FileMutation.RecoveryConflictError",
-              path: approved.canonical,
-              state: failure,
-            })
-            expect(yield* Effect.promise(() => fs.readFile(original, "utf8"))).toBe("approved")
-            for (const [index, recovery] of error.recoveries.entries()) {
-              const stat = yield* Effect.promise(() => fs.lstat(recovery, { bigint: true }))
-              expect(`${stat.dev}:${stat.ino}`).toBe(error.identities[index])
-            }
-          }
-        }),
-      ),
-    ),
+            return native.exchange!(fd, left, right)
+          },
+          unlink: (fd, child) => {
+            if (failure !== "rollback-placeholder-unlink") return native.unlink!(fd, child)
+            relocate()
+            return false
+          },
+        }
+        const error = yield* Effect.gen(function* () {
+          return yield* (yield* FileMutation.Service).remove({ target: approved })
+        }).pipe(Effect.provide(mutation({
+          pause: (phase) => phase === "before-remove-atomic"
+            ? Effect.promise(async () => {
+                await fs.rename(approved.canonical, original)
+                await fs.rename(replacement, approved.canonical)
+              })
+            : Effect.void,
+        }, platform)), Effect.flip)
+        expect(error).toMatchObject({
+          _tag: "FileMutation.RecoveryConflictError",
+          path: approved.canonical,
+          state: failure,
+        })
+        expect(yield* Effect.promise(() => fs.readFile(path.join(relocated, path.basename(original)), "utf8"))).toBe("approved")
+        for (const [index, recovery] of error.recoveries.entries()) {
+          expect(recovery.startsWith(`${relocated}${path.sep}`)).toBe(true)
+          const stat = yield* Effect.promise(() => fs.lstat(recovery, { bigint: true }))
+          expect(`${stat.dev}:${stat.ino}`).toBe(error.identities[index])
+        }
+      }
+    }))),
   )
 
   it.live("reports only observed recovery entries when a failed operation already removed its source", () =>

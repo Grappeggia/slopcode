@@ -159,6 +159,32 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("keeps internal durable versions out of the public registry", () =>
+    Effect.gen(function* () {
+      const Public = EventV2.define({
+        type: "test.registration-boundary",
+        sync: { version: 1, aggregate: "id" },
+        schema: { id: Schema.String, input: Schema.Record(Schema.String, Schema.Unknown) },
+      })
+      const Internal = EventV2.define({
+        type: "test.registration-boundary",
+        sync: { version: 2, aggregate: "id" },
+        registration: "internal",
+        schema: { id: Schema.String, input: Schema.String },
+      })
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+
+      yield* events.publish(Internal, { id: "internal", input: "raw" })
+
+      expect(EventV2.registry.get(Public.type)).toBe(Public)
+      expect(EventV2.registry.get(Public.type)).not.toBe(Internal)
+      expect((yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, "internal")).get())?.type).toBe(
+        "test.registration-boundary.2",
+      )
+    }),
+  )
+
   it.effect("publishes to typed and wildcard subscriptions", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service
