@@ -135,6 +135,27 @@ describe("ShellParser PowerShell resources", () => {
     expect(await powershell("& { git status }")).toEqual(["git status"])
   })
 
+  test.each(["Get-Content $env:WINDIR/win.ini", "Get-Content ${env:WINDIR}/win.ini"])(
+    "preserves an environment path argument: %s",
+    async (command) => {
+      expect(await powershell(command)).toEqual([command])
+    },
+  )
+
+  test("does not let environment path normalization hide another command", async () => {
+    expect(await powershell("Get-Content $env:WINDIR/win.ini; Remove-Item target")).toEqual([
+      "Get-Content $env:WINDIR/win.ini",
+      "Remove-Item target",
+    ])
+  })
+
+  test.each(['Get-Content $env:WINDIR/win.ini "', 'Get-Content ${env:WINDIR}/win.ini "'])(
+    "fails closed on malformed syntax after an environment path: %s",
+    async (command) => {
+      await expect(powershell(command)).rejects.toBeInstanceOf(ShellParser.SyntaxError)
+    },
+  )
+
   test("keeps executable expressions and their redirects opaque", async () => {
     expect(await powershell('"hi" > target')).toEqual(['"hi" > target'])
     expect(await powershell('[IO.File]::Delete("target")')).toEqual(['[IO.File]::Delete("target")'])

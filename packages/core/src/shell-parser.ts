@@ -83,23 +83,41 @@ export function opaque(shell: string, command: string) {
   return `[opaque shell statement] shell-utf8=${encode(shell)} source-utf8=${encode(command)}`
 }
 
-export async function parse(command: string, language: Language) {
-  const tree = (await parser())[language].parse(command)
-  if (!tree || tree.rootNode.hasError) {
-    tree?.delete()
-    throw new SyntaxError(language)
-  }
-  return tree
+const powershellInput = (command: string) => {
+  // The grammar cannot parse variables concatenated with path suffixes. Same-length
+  // placeholders preserve offsets so authorization still reads the original source.
+  return command.replace(/\$(?:env:[A-Za-z_][A-Za-z0-9_]*|\{env:[^}\r\n]+\})(?=[\\/])/gi, (value) =>
+    "x".repeat(value.length),
+  )
 }
 
-const item = (node: Node, source = node): Resource => ({
-  text: source.text.trim(),
+export async function parse(command: string, language: Language) {
+  const syntax = (await parser())[language]
+  const tree = syntax.parse(command)
+  if (tree && !tree.rootNode.hasError) return tree
+  if (language === "powershell") {
+    const input = powershellInput(command)
+    if (input !== command) {
+      const fallback = syntax.parse(input)
+      if (fallback && !fallback.rootNode.hasError) {
+        tree?.delete()
+        return fallback
+      }
+      fallback?.delete()
+    }
+  }
+  tree?.delete()
+  throw new SyntaxError(language)
+}
+
+const item = (command: string, node: Node, source = node): Resource => ({
+  text: command.slice(source.startIndex, source.endIndex).trim(),
   start: source.startIndex,
   end: source.endIndex,
 })
 
-const through = (node: Node, end: Node): Resource => ({
-  text: node.text.slice(0, end.endIndex - node.startIndex).trim(),
+const through = (command: string, node: Node, end: Node): Resource => ({
+  text: command.slice(node.startIndex, end.endIndex).trim(),
   start: node.startIndex,
   end: end.endIndex,
 })
@@ -125,23 +143,23 @@ const within = (node: Node, types: Set<string>) => {
   return false
 }
 
-const bashResources = (tree: Tree) => {
+const bashResources = (tree: Tree, command: string) => {
   const atoms = new Set(["command", "declaration_command", "test_command", "unset_command", "variable_assignments"])
   const nodes = descendants(tree.rootNode, [...atoms, "variable_assignment"])
     .filter((node) => node.type !== "variable_assignment" || !within(node, atoms))
     .map((node) => {
       const parent = node.parent
-      if (parent?.type !== "redirected_statement") return item(node)
-      return parent.childForFieldName("body")?.id === node.id ? item(node, parent) : item(node)
+      if (parent?.type !== "redirected_statement") return item(command, node)
+      return parent.childForFieldName("body")?.id === node.id ? item(command, node, parent) : item(command, node)
     })
   const redirects = descendants(tree.rootNode, ["redirected_statement"]).flatMap((node) => {
     const body = node.childForFieldName("body")
     if (body && (atoms.has(body.type) || body.type === "variable_assignment")) return []
-    return [item(node)]
+    return [item(command, node)]
   })
   const functions = descendants(tree.rootNode, ["function_definition"])
     .filter((node) => node.childForFieldName("redirect") !== null)
-    .map((node) => item(node))
+    .map((node) => item(command, node))
   return unique([...nodes, ...redirects, ...functions])
 }
 
@@ -154,19 +172,19 @@ const scriptBlock = (node: Node) => {
 const redirected = (node: Node) =>
   node.childForFieldName("command_elements")?.namedChildren.some((child) => child?.type === "redirection") ?? false
 
-const powershellResources = (tree: Tree) => {
+const powershellResources = (tree: Tree, command: string) => {
   const commands = descendants(tree.rootNode, ["command", "data_command"])
     .filter((node) => node.type !== "command" || !scriptBlock(node) || redirected(node))
-    .map((node) => item(node))
+    .map((node) => item(command, node))
   const expressions = descendants(tree.rootNode, ["pipeline_chain"]).flatMap((node) => {
     const children = node.namedChildren.filter((child): child is Node => child !== null)
     const first = children[0]
     if (!first || first.type === "command") return []
     const redirects = children.find((child) => child.type === "redirections")
-    return [redirects ? through(node, redirects) : item(first)]
+    return [redirects ? through(command, node, redirects) : item(command, first)]
   })
-  const assignments = descendants(tree.rootNode, ["assignment_expression"]).map((node) => item(node))
-  const invocations = descendants(tree.rootNode, ["invokation_expression"]).map((node) => item(node))
+  const assignments = descendants(tree.rootNode, ["assignment_expression"]).map((node) => item(command, node))
+  const invocations = descendants(tree.rootNode, ["invokation_expression"]).map((node) => item(command, node))
   return unique([...commands, ...expressions, ...assignments, ...invocations])
 }
 
@@ -249,7 +267,7 @@ export async function resources(command: string, shell: string) {
   if (family === "posix") return posixResources(command, shell)
   const tree = await parse(command, family)
   try {
-    const result = family === "bash" ? bashResources(tree) : powershellResources(tree)
+    const result = family === "bash" ? bashResources(tree, command) : powershellResources(tree, command)
     return result.length ? result : [opaque(shell, command)]
   } finally {
     tree.delete()
