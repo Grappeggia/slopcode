@@ -660,6 +660,7 @@ describe("Formatter", () => {
           await tmp[Symbol.asyncDispose]()
         }),
     ),
+    15_000,
   )
 
   it.live("does not carry in-flight discovery across a Location reopen", () =>

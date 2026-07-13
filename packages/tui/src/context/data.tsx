@@ -312,6 +312,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             )
             if (!match) return
             match.time.ran = event.properties.timestamp
+            match.toolType = event.properties.toolType
             match.provider = event.properties.provider
             match.state = { status: "running", input: event.properties.input, structured: {}, content: [] }
           })
@@ -359,7 +360,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             match.state = {
               status: "error",
               error: event.properties.error,
-              input: typeof match.state.input === "string" ? {} : match.state.input,
+              input:
+                match.toolType === "custom"
+                  ? match.state.input
+                  : typeof match.state.input === "string"
+                    ? {}
+                    : match.state.input,
               structured: match.state.status === "running" ? match.state.structured : {},
               content: match.state.status === "running" ? match.state.content : [],
               result: event.properties.result,
