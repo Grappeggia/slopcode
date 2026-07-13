@@ -310,9 +310,6 @@ jobs:
           git clean -ffdx
           bun install --frozen-lockfile
 
-      - name: Restore canonical release controller
-        run: git show refs/remotes/origin/dev:script/publish.ts > script/publish.ts
-
       - name: Login to GitHub Container Registry
         if: false # Non-npm publishing channel disabled
         uses: docker/login-action@v3
