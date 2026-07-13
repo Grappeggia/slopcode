@@ -180,6 +180,38 @@ describe("ShellParser PowerShell resources", () => {
     ).toBe("'${env:WINDIR`}/win.ini'")
   })
 
+  test("expands environment paths after embedded comment markers", async () => {
+    expect(ShellParser.expandEnv("marker#$env:ÉROOT/path", (key) => `/../../${key}`)).toBe("marker#/../../ÉROOT/path")
+    expect(ShellParser.expandEnv("marker<#$env:ÉROOT/path", (key) => `/../../${key}`)).toBe("marker<#/../../ÉROOT/path")
+    expect(await powershell("Get-Content marker#$env:ÉROOT/path; Remove-Item target")).toEqual([
+      "Get-Content marker#$env:ÉROOT/path",
+      "Remove-Item target",
+    ])
+  })
+
+  test("over-approximates comments without expanding literals or escapes", async () => {
+    const text = [
+      "# $env:COMMENT/path",
+      "<# $env:BLOCK/path #>",
+      "'#$env:LITERAL/path'",
+      "`#$env:ESCAPED_HASH/path",
+      "# `$env:ESCAPED_ENV/path",
+      '"#$env:QUOTED/path"',
+    ].join("\n")
+    expect(ShellParser.expandEnv(text, (key) => `[${key}]`)).toBe(
+      [
+        "# [COMMENT]/path",
+        "<# [BLOCK]/path #>",
+        "'#$env:LITERAL/path'",
+        "`#[ESCAPED_HASH]/path",
+        "# `$env:ESCAPED_ENV/path",
+        '"#[QUOTED]/path"',
+      ].join("\n"),
+    )
+    expect(await powershell("Write-Output ok # $env:COMMENT/path")).toEqual(["Write-Output ok"])
+    expect(await powershell("Write-Output ok <# $env:BLOCK/path #>")).toEqual(["Write-Output ok"])
+  })
+
   test("does not let environment path normalization hide another command", async () => {
     expect(await powershell("Get-Content $env:WINDIR/win.ini; Remove-Item target")).toEqual([
       "Get-Content $env:WINDIR/win.ini",

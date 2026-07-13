@@ -119,18 +119,6 @@ function powershellEnv(text: string) {
       quote = "'"
       continue
     }
-    if (!quote && text.startsWith("<#", i)) {
-      const end = text.indexOf("#>", i + 2)
-      if (end === -1) break
-      i = end + 1
-      continue
-    }
-    if (!quote && char === "#") {
-      const end = text.indexOf("\n", i + 1)
-      if (end === -1) break
-      i = end
-      continue
-    }
     if (!quote && text.startsWith("--%", i) && (i === 0 || /\s/.test(text[i - 1]))) break
     if (char !== "$") continue
 
