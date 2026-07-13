@@ -621,6 +621,29 @@ describe("mutation rejection re-review", () => {
     }))),
   )
 
+  it.live("preserves recovery under Location when the held parent has no stable pathname", () =>
+    withTmp((directory) => Effect.scoped(Effect.gen(function* () {
+      if (process.platform !== "linux") return
+      const native = yield* makePlatform
+      const approved = { ...target(directory, "unlocated.txt"), staging: directory }
+      yield* Effect.promise(() => fs.writeFile(approved.canonical, "approved"))
+      let locates = 0
+      const platform: FileMutation.PlatformInterface = {
+        ...native,
+        locate: (fd) => ++locates <= 2 ? Promise.resolve(undefined) : native.locate!(fd),
+        unlink: () => false,
+      }
+      const error = yield* Effect.gen(function* () {
+        return yield* (yield* FileMutation.Service).remove({ target: approved })
+      }).pipe(Effect.provide(mutation(undefined, platform)), Effect.flip)
+
+      expect(error).toMatchObject({ _tag: "FileMutation.RecoveryConflictError", state: "approved-unlink" })
+      expect(error.recovery.startsWith(path.join(directory, ".slopcode", "recovery"))).toBe(true)
+      const stat = yield* Effect.promise(() => fs.lstat(error.recovery, { bigint: true }))
+      expect(`${stat.dev}:${stat.ino}`).toBe(error.identities[0])
+    }))),
+  )
+
   it.live("rejects a reconstructed target with alternate staging authority before formatting", () =>
     withTmp((directory) =>
       withTmp((alternate) => {

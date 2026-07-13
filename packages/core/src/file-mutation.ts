@@ -8,6 +8,7 @@ import crypto from "crypto"
 import { Context, Effect, Layer, Option, Schema, Scope } from "effect"
 import { KeyedMutex } from "./effect/keyed-mutex"
 import { FSUtil } from "./fs-util"
+import { Location } from "./location"
 import { Platform, make as makePlatform } from "./file-mutation-platform"
 import { MutationEvents } from "./mutation-events"
 
@@ -204,6 +205,7 @@ export const layer = Layer.effect(
     const hooks = Option.getOrElse(option, () => Hooks.of({ pause: () => Effect.void }))
     const configured = yield* Effect.serviceOption(Platform)
     const platform = Option.isSome(configured) ? configured.value : yield* makePlatform
+    const location = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
     const data = new WeakMap<WriteResult | RemoveResult, Private>()
     const safe = <A>(target: Target, run: () => Promise<A>) =>
       Effect.tryPromise({
@@ -627,7 +629,7 @@ export const layer = Layer.effect(
                         return current?.dev === expected.dev && current.ino === expected.ino
                       }
                       const conflict = Effect.fnUntraced(function* (label: string, names: readonly string[]) {
-                        const entries = yield* Effect.promise(() =>
+                        const observed = yield* Effect.promise(() =>
                           Promise.all(
                             [...new Set(names)].map(async (child) => {
                               const current = await fs
@@ -635,7 +637,7 @@ export const layer = Layer.effect(
                                 .catch(() => undefined)
                               return current
                                 ? {
-                                    path: path.join(path.dirname(input.target.canonical), child),
+                                    child,
                                     identity: `${current.dev}:${current.ino}`,
                                   }
                                 : undefined
@@ -644,13 +646,85 @@ export const layer = Layer.effect(
                             values.filter((value): value is NonNullable<typeof value> => value !== undefined),
                           ),
                         )
-                        if (!entries.length)
+                        if (!observed.length)
                           return yield* new OperationFailureError({ path: input.target.canonical, state: label })
+                        const entries = yield* Effect.promise(async () => {
+                          for (let attempt = 0; attempt < 2; attempt++) {
+                            const parent = await platform.locate?.(directory.fd)
+                            if (!parent) continue
+                            const entries = (
+                              await Promise.all(
+                                observed.map(async (entry) => {
+                                  const recovery = path.join(parent, entry.child)
+                                  const current = await fs.lstat(recovery, { bigint: true }).catch(() => undefined)
+                                  return current && `${current.dev}:${current.ino}` === entry.identity
+                                    ? { path: recovery, identity: entry.identity }
+                                    : undefined
+                                }),
+                              )
+                            ).filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
+                            if (entries.length === observed.length) return entries
+                          }
+                          return []
+                        })
+                        const authority = input.target.staging ?? location?.directory
+                        const recoveries = entries.length
+                          ? entries
+                          : authority
+                            ? yield* Effect.suspend(() => {
+                                const root = path.join(authority, ".slopcode", "recovery")
+                                return parent(
+                                  {
+                                    canonical: path.join(root, crypto.randomBytes(16).toString("hex")),
+                                    resource: "recovery",
+                                    staging: root,
+                                  },
+                                  true,
+                                ).pipe(
+                                  Effect.flatMap((recovery) =>
+                                    Effect.promise(async () => {
+                                      const named = observed.map((entry) => ({
+                                        ...entry,
+                                        name: crypto.randomBytes(16).toString("hex"),
+                                      }))
+                                      const linked = named.every((entry) =>
+                                        platform.link?.(directory.fd, entry.child, recovery.fd, entry.name),
+                                      )
+                                      const located = linked ? await platform.locate?.(recovery.fd) : undefined
+                                      if (!located) {
+                                        named.forEach((entry) => platform.unlink?.(recovery.fd, entry.name))
+                                        return []
+                                      }
+                                      const preserved = await Promise.all(
+                                        named.map(async (entry) => {
+                                          const path = `${located}/${entry.name}`
+                                          const current = await fs.lstat(path, { bigint: true }).catch(() => undefined)
+                                          return current && `${current.dev}:${current.ino}` === entry.identity
+                                            ? { path, identity: entry.identity }
+                                            : undefined
+                                        }),
+                                      )
+                                      if (preserved.some((entry) => !entry)) {
+                                        named.forEach((entry) => platform.unlink?.(recovery.fd, entry.name))
+                                        return []
+                                      }
+                                      return preserved as Array<{ path: string; identity: string }>
+                                    }),
+                                  ),
+                                  Effect.catch(() => Effect.succeed([])),
+                                )
+                              })
+                            : []
+                        if (!recoveries.length)
+                          return yield* new OperationFailureError({
+                            path: input.target.canonical,
+                            state: `${label}-unlocated`,
+                          })
                         return yield* new RecoveryConflictError({
                           path: input.target.canonical,
-                          recovery: entries[0]!.path,
-                          recoveries: entries.map((entry) => entry.path),
-                          identities: entries.map((entry) => entry.identity),
+                          recovery: recoveries[0]!.path,
+                          recoveries: recoveries.map((entry) => entry.path),
+                          identities: recoveries.map((entry) => entry.identity),
                           state: label,
                         })
                       })
