@@ -85,17 +85,17 @@ export const layer = Layer.effect(
       pattern: string
       ruleset: PermissionV1.Ruleset
     }) {
-      const approved = (yield* InstanceState.get(state)).approved
-      return evaluate(input.permission, input.pattern, input.ruleset, approved).action
+      return evaluate(input.permission, input.pattern, input.ruleset).action
     })
 
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
       const pending = (yield* InstanceState.get(state)).pending
       const { ruleset, ...request } = input
       let needsAsk = false
+      const approved = (yield* InstanceState.get(state)).approved
 
       for (const pattern of request.patterns) {
-        const action = yield* query({ permission: request.permission, pattern, ruleset })
+        const action = evaluate(request.permission, pattern, ruleset, approved).action
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action })
         if (action === "deny") {
           return yield* new PermissionV1.DeniedError({

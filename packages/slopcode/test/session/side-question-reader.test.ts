@@ -120,10 +120,12 @@ describe("SideQuestionReader", () => {
       const reference = (name: string) => Effect.succeed(name === "docs" ? docs : undefined)
       const blocked = yield* SideQuestionReader.make({ ruleset: allow, reference })
       yield* Effect.promise(async () =>
-        expect(execute(blocked, { path: "guide.txt", reference: "docs" }, "blocked")).rejects.toThrow(/not allowed/i),
+        expect(execute(blocked, { path: "guide.txt", reference: "docs" }, "blocked")).rejects.toThrow(/unavailable/i),
       )
       yield* Effect.promise(async () =>
-        expect(execute(blocked, { path: "guide.txt", reference: "missing" }, "missing")).rejects.toThrow(/unknown/i),
+        expect(execute(blocked, { path: "guide.txt", reference: "missing" }, "missing")).rejects.toThrow(
+          /unavailable/i,
+        ),
       )
 
       const reader = yield* SideQuestionReader.make({
@@ -136,6 +138,98 @@ describe("SideQuestionReader", () => {
         expect(execute(reader, { path: "../secret.txt", reference: "docs" }, "escape")).rejects.toThrow(/escapes/i),
       )
       yield* Effect.promise(() => fs.rm(docs, { recursive: true, force: true }))
+      expect(yield* (yield* Permission.Service).list()).toEqual([])
+    }),
+  )
+
+  it.instance("authorizes requested and canonical worktree-relative aliases", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return
+      const fixture = yield* TestInstance
+      yield* Effect.promise(async () => {
+        await fs.writeFile(path.join(fixture.directory, "target.txt"), "secret")
+        await fs.symlink("target.txt", path.join(fixture.directory, "alias.txt"))
+      })
+      const requested = yield* SideQuestionReader.make({
+        ruleset: [...allow, { permission: "read", pattern: "alias.txt", action: "deny" }],
+        reference: () => Effect.succeed(undefined),
+      })
+      const canonical = yield* SideQuestionReader.make({
+        ruleset: [...allow, { permission: "read", pattern: "target.txt", action: "ask" }],
+        reference: () => Effect.succeed(undefined),
+      })
+
+      yield* Effect.promise(async () =>
+        expect(execute(requested, { path: "alias.txt" }, "requested_alias")).rejects.toThrow(/unavailable/i),
+      )
+      yield* Effect.promise(async () =>
+        expect(execute(canonical, { path: "alias.txt" }, "canonical_alias")).rejects.toThrow(/unavailable/i),
+      )
+      expect(yield* (yield* Permission.Service).list()).toEqual([])
+    }),
+  )
+
+  it.instance("uses normal read resources for configured references", () =>
+    Effect.gen(function* () {
+      const fixture = yield* TestInstance
+      const docs = path.join(path.dirname(fixture.directory), `resource-${path.basename(fixture.directory)}`)
+      yield* Effect.promise(async () => {
+        await fs.mkdir(docs)
+        await fs.writeFile(path.join(docs, "guide.txt"), "reference secret")
+      })
+      const resource = path.relative(fixture.directory, path.join(docs, "guide.txt")).replaceAll("\\", "/")
+      const reader = yield* SideQuestionReader.make({
+        ruleset: [
+          ...allow,
+          { permission: "read", pattern: resource, action: "deny" },
+          { permission: "external_directory", pattern: path.join(docs, "*"), action: "allow" },
+        ],
+        reference: (name) => Effect.succeed(name === "docs" ? docs : undefined),
+      })
+
+      yield* Effect.promise(async () =>
+        expect(execute(reader, { path: "guide.txt", reference: "docs" }, "reference_resource")).rejects.toThrow(
+          /unavailable/i,
+        ),
+      )
+      expect(yield* (yield* Permission.Service).list()).toEqual([])
+      yield* Effect.promise(() => fs.rm(docs, { recursive: true, force: true }))
+    }),
+  )
+
+  it.instance("checks permission before target existence and hides denied existence", () =>
+    Effect.gen(function* () {
+      const fixture = yield* TestInstance
+      const existing = path.join(fixture.directory, "existing.txt")
+      const missing = path.join(fixture.directory, "missing.txt")
+      yield* Effect.promise(() => fs.writeFile(existing, "secret"))
+      const live = yield* FSUtil.Service
+      const targets: string[] = []
+      const guarded = FSUtil.Service.of({
+        ...live,
+        realPath: (value) => {
+          if (value === existing || value === missing) targets.push(value)
+          return live.realPath(value)
+        },
+      })
+      const reader = yield* SideQuestionReader.make({
+        ruleset: [...allow, { permission: "read", pattern: "*.txt", action: "deny" }],
+        reference: () => Effect.succeed(undefined),
+      }).pipe(Effect.provideService(FSUtil.Service, guarded))
+      const messages = yield* Effect.promise(() =>
+        Promise.all(
+          ["existing.txt", "missing.txt"].map((name, index) =>
+            execute(reader, { path: name }, `hidden_${index}`).then(
+              () => "read unexpectedly succeeded",
+              (cause: unknown) => (cause instanceof Error ? cause.message : String(cause)),
+            ),
+          ),
+        ),
+      )
+
+      expect(messages[0]).toBe(messages[1])
+      expect(messages[0]).toMatch(/unavailable/i)
+      expect(targets).toEqual([])
       expect(yield* (yield* Permission.Service).list()).toEqual([])
     }),
   )

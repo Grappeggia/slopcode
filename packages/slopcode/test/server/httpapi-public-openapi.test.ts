@@ -11,6 +11,9 @@ type OpenApiSchema = {
   readonly enum?: readonly unknown[]
   readonly properties?: Record<string, OpenApiSchema>
   readonly required?: readonly string[]
+  readonly items?: OpenApiSchema
+  readonly maxLength?: number
+  readonly maxItems?: number
 }
 type OpenApiResponse = {
   readonly description?: string
@@ -25,7 +28,10 @@ type OpenApiOperation = {
     readonly schema?: { readonly type?: string }
   }>
   readonly responses?: Record<string, OpenApiResponse>
-  readonly requestBody?: { readonly required?: boolean }
+  readonly requestBody?: {
+    readonly required?: boolean
+    readonly content?: Record<string, { readonly schema?: OpenApiSchema }>
+  }
   readonly security?: unknown
 }
 type OpenApiPathItem = Partial<Record<Method, OpenApiOperation>>
@@ -101,6 +107,19 @@ describe("PublicApi OpenAPI v2 errors", () => {
       "error",
       "done",
     ])
+  })
+
+  test("documents bounded side-question turns and text", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const body =
+      spec.paths["/session/{sessionID}/side-question"]?.post?.requestBody?.content?.["application/json"]?.schema
+    const turns = body?.properties?.turns
+    const turn = turns?.items?.$ref ? spec.components.schemas[componentName(turns.items.$ref)] : turns?.items
+
+    expect(body?.properties?.question?.maxLength).toBe(64_000)
+    expect(turns?.maxItems).toBe(32)
+    expect(turn?.properties?.question?.maxLength).toBe(64_000)
+    expect(turn?.properties?.answer?.maxLength).toBe(64_000)
   })
 
   test("documents nested legacy global sync events", () => {

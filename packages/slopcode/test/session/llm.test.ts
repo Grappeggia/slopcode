@@ -27,6 +27,8 @@ import { LLMAISDK } from "@/session/llm/ai-sdk"
 import { Session as SessionNs } from "@/session/session"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ModelV2 } from "@slopcode-ai/core/model"
+import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
+import { ProviderTest } from "../fake/provider"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
@@ -200,6 +202,95 @@ describe("session.llm.hasToolCalls", () => {
     ] as ModelMessage[]
     expect(LLM.hasToolCalls(messages)).toBe(true)
   })
+})
+
+describe("session.llm side runtime isolation", () => {
+  it.instance("fails closed on cached GitLab workflow models before mutation or provider execution", () =>
+    Effect.gen(function* () {
+      const model = ProviderTest.model({
+        id: ModelV2.ID.make("duo-workflow-test"),
+        providerID: ProviderV2.ID.gitlab,
+        api: { id: ModelV2.ID.make("duo-workflow-test"), url: "https://gitlab.test", npm: "gitlab-ai-provider" },
+      })
+      const language = new GitLabWorkflowLanguageModel("duo-workflow", {
+        provider: "gitlab.workflow",
+        instanceUrl: "https://gitlab.test",
+        getHeaders: () => ({}),
+      })
+      let executions = 0
+      Object.defineProperty(language, "doStream", {
+        configurable: true,
+        value: async () => {
+          executions += 1
+          throw new Error("workflow provider executed")
+        },
+      })
+      language.sessionID = "main-session"
+      language.systemPrompt = "main-system"
+      language.sessionPreapprovedTools = ["main-tool"]
+      language.toolExecutor = async () => ({ result: "main-result" })
+      language.approvalHandler = async () => ({ approved: true })
+      const executor = language.toolExecutor
+      const approval = language.approvalHandler
+      const provider = ProviderTest.fake({
+        model,
+        getLanguage: () => Effect.succeed(language),
+      })
+      const layer = LLM.layer.pipe(
+        Layer.provide(Auth.defaultLayer),
+        Layer.provide(Config.defaultLayer),
+        Layer.provide(provider.layer),
+        Layer.provide(Plugin.defaultLayer),
+        Layer.provide(
+          LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
+        ),
+        Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: false })),
+      )
+      const sessionID = SessionID.make("ses_side_workflow")
+      const agent = {
+        name: "build",
+        mode: "primary",
+        permission: [],
+        options: {},
+      } satisfies Agent.Info
+      const input = {
+        user: {
+          id: MessageID.make("msg_side_workflow"),
+          sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: model.providerID, modelID: model.id },
+        } satisfies SessionV1.User,
+        sessionID,
+        model,
+        agent,
+        system: ["side-system"],
+        messages: [{ role: "user" as const, content: "side question" }],
+        tools: {
+          read: tool({
+            description: "private reader",
+            inputSchema: z.object({ path: z.string() }),
+            execute: async () => ({ output: "private" }),
+          }),
+        },
+        toolChoice: "auto" as const,
+        runtime: "side" as const,
+      }
+
+      const result = yield* drainWith(layer, input).pipe(Effect.exit)
+
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result))
+        expect(String(Cause.squash(result.cause))).toMatch(/private local reads cannot be isolated/i)
+      expect(executions).toBe(0)
+      expect(language.sessionID).toBe("main-session")
+      expect(language.systemPrompt).toBe("main-system")
+      expect(language.sessionPreapprovedTools).toEqual(["main-tool"])
+      expect(language.toolExecutor).toBe(executor)
+      expect(language.approvalHandler).toBe(approval)
+    }),
+  )
 })
 
 describe("session.llm.ai-sdk adapter", () => {

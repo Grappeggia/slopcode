@@ -1390,7 +1390,6 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/session/{sessionID}/side-question", "session.side_question")
     .withLlm()
-    .stream()
     .seeded((ctx) =>
       Effect.gen(function* () {
         const session = yield* ctx.session({ title: "Side question session" })

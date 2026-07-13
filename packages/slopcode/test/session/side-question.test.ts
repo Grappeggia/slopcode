@@ -23,6 +23,7 @@ import { TestConfig } from "../fixture/config"
 import { testEffect } from "../lib/effect"
 import { LLMEvent, ToolResultValue, Usage } from "@slopcode-ai/llm"
 import type { ToolExecutionOptions } from "ai"
+import { Token } from "../../src/util/token"
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -33,8 +34,11 @@ const model = ProviderTest.model({
   id: ref.modelID,
   providerID: ref.providerID,
   api: { id: ref.modelID, url: "https://example.com", npm: "@ai-sdk/openai" },
-  limit: { context: 800, output: 100 },
+  limit: { context: 4_000, output: 500 },
 })
+
+const MAX_SIDE_TURNS = 32
+const MAX_SIDE_TEXT = 64_000
 
 const build = {
   name: "build",
@@ -231,6 +235,28 @@ describe("SessionSideQuestion schemas", () => {
     expect(() => decode({ ...base, question: "current", turns: [{ question: " ", answer: "answer" }] })).toThrow()
     expect(() => decode({ ...base, question: "current", turns: [{ question: "question", answer: "\n" }] })).toThrow()
   })
+
+  test("bounds client-carried turn count and text sizes", () => {
+    const base = { sessionID: SessionID.make("ses_test"), agent: "build", model: ref }
+    expect(() => decode({ ...base, question: "x".repeat(MAX_SIDE_TEXT + 1) })).toThrow()
+    expect(() =>
+      decode({
+        ...base,
+        question: "current",
+        turns: [{ question: "question", answer: "x".repeat(MAX_SIDE_TEXT + 1) }],
+      }),
+    ).toThrow()
+    expect(() =>
+      decode({
+        ...base,
+        question: "current",
+        turns: Array.from({ length: MAX_SIDE_TURNS + 1 }, (_, index) => ({
+          question: `question ${index}`,
+          answer: `answer ${index}`,
+        })),
+      }),
+    ).toThrow()
+  })
 })
 
 it.instance("orders persisted context, side turns, and the current question without writing session history", () =>
@@ -379,6 +405,44 @@ it.instance("budgets old main history while preserving compaction context and th
   }),
 )
 
+it.instance("drops older client turns before newer turns when the selected model context is small", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    const first = yield* user(session.id, `old main ${"m".repeat(4_000)}`)
+    yield* assistant(session.id, first.message.id, "old main answer")
+    const turns = Array.from({ length: 6 }, (_, index) => ({
+      question: `side question ${index} ${"q".repeat(500)}`,
+      answer: `side answer ${index} ${"a".repeat(500)}`,
+    }))
+
+    const request = yield* ask(session.id, { question: "mandatory current question", turns })
+    const content = texts(request.messages)
+
+    expect(content.at(-1)).toEqual({ role: "user", text: "mandatory current question" })
+    expect(content.some((item) => item.text.startsWith("side question 5"))).toBe(true)
+    expect(content.some((item) => item.text.startsWith("side question 0"))).toBe(false)
+    expect(content.some((item) => item.text.startsWith("old main"))).toBe(false)
+    expect(Token.estimate(JSON.stringify([...request.system, ...request.messages]))).toBeLessThan(model.limit.context)
+  }),
+)
+
+it.instance("fails before provider execution when mandatory side content cannot fit", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "x".repeat(10_000), agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    if (Exit.isFailure(result)) expect(String(Cause.squash(result.cause))).toMatch(/selected model context limit/i)
+    expect(requests).toHaveLength(0)
+  }),
+)
+
 it.instance("rejects untrimmed empty input when the service is called directly", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
@@ -465,6 +529,7 @@ it.instance("continues private read calls transiently and reports bounded usage 
       role: "tool",
       content: [expect.objectContaining({ type: "tool-result", toolName: "read", toolCallId: "read_1" })],
     })
+    expect(list[0]).toEqual({ type: "status", status: "generating", round: 1 })
     expect(list).toContainEqual(expect.objectContaining({ type: "status", status: "reading", round: 1 }))
     expect(list).toContainEqual(
       expect.objectContaining({ type: "read", path: "notes.txt", lines: 1, files: 1, callID: "read_1" }),
@@ -477,6 +542,49 @@ it.instance("continues private read calls transiently and reports bounded usage 
     expect(hooks.filter((name) => name.startsWith("tool."))).toEqual([])
     expect(yield* sessions.messages({ sessionID: session.id })).toEqual(messages)
     expect(yield* sessions.get(session.id)).toEqual(before)
+  }),
+)
+
+it.instance("rejects a maximum read continuation before a small-context provider request", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      permission: [{ permission: "read", pattern: "large.txt", action: "allow" }],
+    })
+    yield* Effect.promise(() =>
+      Bun.write(
+        path.join(session.directory, "large.txt"),
+        Array.from({ length: 200 }, () => "x".repeat(1024)).join("\n"),
+      ),
+    )
+    respond = (input) => {
+      if (requests.length > 1) return Stream.make(LLMEvent.textDelta({ id: "unsafe", text: "continued" }))
+      const execute = input.tools.read?.execute
+      if (!execute) return Stream.fail(new Error("private read tool missing"))
+      return Stream.unwrap(
+        Effect.promise(async () => {
+          const result = await execute({ path: "large.txt", limit: 200 }, {
+            toolCallId: "large_read",
+            messages: input.messages,
+            abortSignal: new AbortController().signal,
+          } as ToolExecutionOptions)
+          return Stream.fromIterable([
+            LLMEvent.toolCall({ id: "large_read", name: "read", input: { path: "large.txt", limit: 200 } }),
+            LLMEvent.toolResult({ id: "large_read", name: "read", result: ToolResultValue.make(result) }),
+            LLMEvent.finish({ reason: "tool-calls" }),
+          ])
+        }),
+      )
+    }
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "read the large file", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    if (Exit.isFailure(result)) expect(String(Cause.squash(result.cause))).toMatch(/selected model context limit/i)
+    expect(requests).toHaveLength(1)
   }),
 )
 

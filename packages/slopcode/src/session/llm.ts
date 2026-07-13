@@ -29,6 +29,7 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { Token } from "@/util/token"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -45,6 +46,8 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  runtime?: "side"
+  maxInputTokens?: number
 }
 
 export type StreamRequest = StreamInput & {
@@ -58,6 +61,19 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@slopcode/LLM") {}
 
 export const use = serviceUse(Service)
+
+export function contextTokens(input: { system: string[]; messages: ModelMessage[]; tools: Record<string, Tool> }) {
+  const system = input.messages.some((message) => message.role === "system") ? [] : input.system
+  const tools = Object.entries(input.tools).map(([name, item]) => ({
+    name,
+    description: item.description,
+    inputSchema:
+      item.inputSchema && typeof item.inputSchema === "object" && "jsonSchema" in item.inputSchema
+        ? item.inputSchema.jsonSchema
+        : item.inputSchema,
+  }))
+  return Token.estimate(JSON.stringify({ system, messages: input.messages, tools }))
+}
 
 const live: Layer.Layer<
   Service,
@@ -92,6 +108,12 @@ const live: Layer.Layer<
         mode: input.agent.mode,
       })
 
+      if (input.runtime === "side") {
+        const tools = Object.keys(input.tools)
+        if (tools.length !== 1 || tools[0] !== "read" || !input.tools.read?.execute || input.toolChoice !== "auto")
+          return yield* Effect.fail(new Error("Side questions require exactly one executable private read tool"))
+      }
+
       const [language, cfg, item, info] = yield* Effect.all(
         [
           provider.getLanguage(input.model),
@@ -103,6 +125,12 @@ const live: Layer.Layer<
       )
 
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
+      if (input.runtime === "side" && isWorkflow)
+        return yield* Effect.fail(
+          new Error(
+            "Side questions are unavailable for GitLab workflow models because private local reads cannot be isolated",
+          ),
+        )
       const prepared = yield* LLMRequestPrep.prepare({
         ...input,
         provider: item,
@@ -111,6 +139,20 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+      if (input.runtime === "side") {
+        const hard =
+          input.model.limit.context === 0
+            ? Infinity
+            : Math.min(
+                input.model.limit.input ?? Infinity,
+                Math.max(0, input.model.limit.context - (prepared.params.maxOutputTokens ?? 0)),
+              )
+        if (
+          contextTokens({ system: prepared.system, messages: prepared.messages, tools: prepared.tools }) >
+          Math.min(input.maxInputTokens ?? Infinity, hard)
+        )
+          return yield* Effect.fail(new Error("Side question exceeds the selected model context limit"))
+      }
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via slopcode's tool system

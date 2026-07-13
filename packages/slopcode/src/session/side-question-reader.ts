@@ -19,6 +19,7 @@ export const MAX_LINES = 4_000
 export const MAX_READ_LINES = 1_000
 export const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_LINE_BYTES = 8 * 1024
+const UNAVAILABLE = "Side read is unavailable"
 
 export type Input = {
   path: string
@@ -240,30 +241,33 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
           return yield* Effect.fail(new Error(`Read limit cannot exceed ${MAX_READ_LINES} lines`))
 
         const name = params.reference?.trim()
-        const selected = name
-          ? yield* input
-              .reference(name)
-              .pipe(Effect.mapError((cause) => error(cause, `Cannot resolve project reference: ${name}`)))
-          : root
-        if (name && !selected) return yield* Effect.fail(new Error(`Unknown project reference: ${name}`))
-        if (!selected) return yield* Effect.fail(new Error("Cannot resolve read root"))
-        const base = yield* filesystem
-          .realPath(selected)
-          .pipe(Effect.mapError(() => new Error(`Cannot resolve read root: ${name}`)))
-        const requested = path.resolve(base, params.path)
-        if (!FSUtil.contains(base, requested))
+        const selected = name ? yield* input.reference(name).pipe(Effect.mapError(() => new Error(UNAVAILABLE))) : root
+        if (!selected) return yield* Effect.fail(new Error(UNAVAILABLE))
+        const lexical = path.resolve(selected)
+        const requested = path.resolve(lexical, params.path)
+        if (!FSUtil.contains(lexical, requested))
           return yield* Effect.fail(new Error("Read path escapes its configured root"))
-        const canonical = yield* filesystem
-          .realPath(requested)
-          .pipe(Effect.mapError(() => new Error(`File not found: ${params.path}`)))
-        if (!FSUtil.contains(base, canonical))
-          return yield* Effect.fail(new Error("Read path escapes its configured root"))
+        const requestedResource = path.relative(root, requested)
+        if (
+          (yield* permission.query({ permission: "read", pattern: requestedResource, ruleset: input.ruleset })) !==
+          "allow"
+        )
+          return yield* Effect.fail(new Error(UNAVAILABLE))
+        const base = yield* filesystem.realPath(selected).pipe(Effect.mapError(() => new Error(UNAVAILABLE)))
+        const canonical = yield* filesystem.realPath(requested).pipe(Effect.mapError(() => new Error(UNAVAILABLE)))
+        if (!FSUtil.contains(base, canonical)) return yield* Effect.fail(new Error(UNAVAILABLE))
+
+        const canonicalResource = path.relative(root, canonical)
+        if (
+          canonicalResource !== requestedResource &&
+          (yield* permission.query({ permission: "read", pattern: canonicalResource, ruleset: input.ruleset })) !==
+            "allow"
+        )
+          return yield* Effect.fail(new Error(UNAVAILABLE))
 
         const resource = name
           ? `${name}:${path.relative(base, canonical).replaceAll("\\", "/")}`
           : path.relative(root, canonical).replaceAll("\\", "/")
-        if ((yield* permission.query({ permission: "read", pattern: resource, ruleset: input.ruleset })) !== "allow")
-          return yield* Effect.fail(new Error(`Read is not allowed for resource: ${resource}`))
         if (!FSUtil.contains(root, canonical)) {
           const pattern = FSUtil.normalizePathPattern(path.join(path.dirname(canonical), "*"))
           if (
@@ -273,7 +277,7 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
               ruleset: input.ruleset,
             })) !== "allow"
           )
-            return yield* Effect.fail(new Error(`External read is not allowed for resource: ${resource}`))
+            return yield* Effect.fail(new Error(UNAVAILABLE))
         }
 
         const mime = FSUtil.mimeType(canonical)

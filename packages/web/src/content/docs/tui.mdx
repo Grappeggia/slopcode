@@ -89,11 +89,15 @@ Ask a quick question without interrupting your main session. Include the questio
 
 After an answer, use the same composer to ask follow-ups. Every question reloads the latest main-session context and adds the completed side turns, while the agent, model, and variant selected when you opened the panel stay pinned.
 
+Requests accept up to 32 completed side turns and 64,000 characters per question or answer. The selected model's input limit is also enforced: newer side turns are preferred, older side turns and main history may be omitted, and a request fails before generation if its required content or a read continuation cannot fit.
+
 Side questions can read at most five unique, regular UTF-8 text files per question. Repeated reads of the same file count once, and the limit resets for every follow-up.
 
 Reads require an exact, known workspace-relative path or a named configured reference already allowed by your read permissions. They never prompt for access and cannot search, list directories, edit files, or run commands.
 
 Secure side reads work on Linux and macOS and fail closed on other platforms.
+
+GitLab workflow models currently fail closed for `/btw` because their hosted workflow tools cannot safely provide an isolated private local reader. Other GitLab chat models remain supported.
 
 If a question fails, times out, or its stream ends early, press **Enter** to retry it. Completed turns remain available, but any partial answer from the failed attempt is dropped.
 

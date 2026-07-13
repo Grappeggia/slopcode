@@ -9,7 +9,7 @@ import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { Reference } from "@slopcode-ai/core/reference"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import type { SessionV1 } from "@slopcode-ai/core/v1/session"
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema, SchemaTransformation } from "effect"
 import * as Stream from "effect/Stream"
 import type { ModelMessage } from "ai"
 import { Agent } from "@/agent/agent"
@@ -18,7 +18,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
 import { Plugin } from "@/plugin"
 import { Provider } from "@/provider/provider"
-import { Token } from "@/util/token"
+import { ProviderTransform } from "@/provider/transform"
 import { Instruction } from "./instruction"
 import { LLM } from "./llm"
 import { MessageV2 } from "./message-v2"
@@ -39,8 +39,15 @@ Rules:
 - Keep the answer concise.`
 
 export const MAX_ROUNDS = 4
+export const MAX_TURNS = 32
+export const MAX_TEXT = 64_000
 
-const Text = Schema.Trim.check(Schema.isMinLength(1))
+const Text = Schema.String.check(Schema.isMaxLength(MAX_TEXT)).pipe(
+  Schema.decodeTo(
+    Schema.Trimmed.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_TEXT)),
+    SchemaTransformation.trim(),
+  ),
+)
 
 export const Turn = Schema.Struct({
   question: Text,
@@ -51,7 +58,7 @@ export type Turn = typeof Turn.Type
 export const Input = Schema.Struct({
   sessionID: SessionID,
   question: Text,
-  turns: Schema.optional(Schema.Array(Turn)),
+  turns: Schema.optional(Schema.Array(Turn).check(Schema.isMaxLength(MAX_TURNS))),
   agent: Schema.String,
   model: Schema.Struct({
     providerID: ProviderV2.ID,
@@ -122,13 +129,17 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const question = input.question.trim()
           if (!question) throw new Error("Side question cannot be empty")
+          if (question.length > MAX_TEXT) throw new Error(`Side question cannot exceed ${MAX_TEXT} characters`)
           const turns = (input.turns ?? []).map((turn) => ({
             question: turn.question.trim(),
             answer: turn.answer.trim(),
           }))
+          if (turns.length > MAX_TURNS) throw new Error(`Side questions cannot include more than ${MAX_TURNS} turns`)
           if (turns.some((turn) => !turn.question || !turn.answer)) {
             throw new Error("Side question turns must include a question and answer")
           }
+          if (turns.some((turn) => turn.question.length > MAX_TEXT || turn.answer.length > MAX_TEXT))
+            throw new Error(`Side question turn text cannot exceed ${MAX_TEXT} characters`)
 
           const session = yield* sessions.get(input.sessionID)
           const agent = yield* agents.get(input.agent)
@@ -180,7 +191,7 @@ export const layer = Layer.effect(
             ...(constraint ? [constraint] : []),
             PROMPT,
           ]
-          const thread: ModelMessage[] = turns.flatMap((turn) => [
+          const thread = turns.map((turn): ModelMessage[] => [
             { role: "user", content: turn.question },
             { role: "assistant", content: turn.answer },
           ])
@@ -208,27 +219,6 @@ export const layer = Layer.effect(
             }),
             { discard: true },
           )
-          const usable = SessionOverflow.usable({ cfg: yield* config.get(), model })
-          const limit = model.limit.context === 0 ? Infinity : Math.floor(usable * 0.75)
-          const fixed = Token.estimate(JSON.stringify([...system, ...thread, { role: "user", content: question }]))
-          const selected = new Set<number>()
-          const mandatory = groups.flatMap((group, index) =>
-            group.summary || index === groups.length - 1 ? [index] : [],
-          )
-          const cost = (index: number) => Token.estimate(JSON.stringify(groups[index]?.model ?? []))
-          const reserved = mandatory.reduce((total, index) => {
-            selected.add(index)
-            return total + cost(index)
-          }, fixed)
-          let remaining = Math.max(0, limit - reserved)
-          for (let index = groups.length - 1; index >= 0; index--) {
-            if (selected.has(index)) continue
-            const size = cost(index)
-            if (size > remaining) break
-            selected.add(index)
-            remaining -= size
-          }
-          const modelMessages = groups.flatMap((group, index) => (selected.has(index) ? group.model : []))
           const ruleset = Permission.merge(agent.permission, session.permission ?? [])
           const reader = yield* SideQuestionReader.make({
             ruleset,
@@ -243,11 +233,57 @@ export const layer = Layer.effect(
                 }).pipe(Effect.provide(layer))
               }),
           }).pipe(Effect.provideService(FSUtil.Service, fs), Effect.provideService(Permission.Service, permission))
+          const contextSystem = [...(agent.prompt ? [agent.prompt] : SystemPrompt.provider(model)), ...system]
+          const usable =
+            model.limit.context === 0
+              ? Infinity
+              : Math.min(
+                  SessionOverflow.usable({ cfg: yield* config.get(), model }),
+                  Math.min(
+                    model.limit.input ?? Infinity,
+                    Math.max(0, model.limit.context - ProviderTransform.maxOutputTokens(model)),
+                  ),
+                )
+          const current: ModelMessage = { role: "user", content: question }
+          const size = (value: ModelMessage[]) =>
+            LLM.contextTokens({ system: contextSystem, messages: value, tools: reader.tools })
+          if (size([current]) > usable)
+            return yield* Effect.fail(new Error("Side question exceeds the selected model context limit"))
+
+          const side: ModelMessage[] = []
+          for (let index = thread.length - 1; index >= 0; index--) {
+            const candidate = [...thread[index]!, ...side, current]
+            if (size(candidate) > usable) break
+            side.unshift(...thread[index]!)
+          }
+          const selected = new Set<number>()
+          const priority = [
+            ...(groups.length ? [groups.length - 1] : []),
+            ...groups.flatMap((group, index) => (group.summary ? [index] : [])).reverse(),
+          ].filter((index, position, all) => all.indexOf(index) === position)
+          for (const index of priority) {
+            const candidate = groups.flatMap((group, current) =>
+              selected.has(current) || current === index ? group.model : [],
+            )
+            if (size([...candidate, ...side, current]) > usable) continue
+            selected.add(index)
+          }
+          for (let index = groups.length - 1; index >= 0; index--) {
+            if (selected.has(index)) continue
+            const candidate = groups.flatMap((group, current) =>
+              selected.has(current) || current === index ? group.model : [],
+            )
+            if (size([...candidate, ...side, current]) > usable) break
+            selected.add(index)
+          }
+          const modelMessages = groups.flatMap((group, index) => (selected.has(index) ? group.model : []))
           const usage = { inputTokens: 0, outputTokens: 0 }
           let emitted = 0
           const ids = new Set<string>()
-          const initial: ModelMessage[] = [...modelMessages, ...thread, { role: "user", content: question }]
+          const initial: ModelMessage[] = [...modelMessages, ...side, current]
           const run = (messages: ModelMessage[], round: number): Stream.Stream<Event, unknown> => {
+            if (size(messages) > usable)
+              return Stream.fail(new Error("Side question exceeds the selected model context limit"))
             const calls: Extract<LLMEvent, { type: "tool-call" }>[] = []
             const results = new Map<
               string,
@@ -265,6 +301,8 @@ export const layer = Layer.effect(
                 toolChoice: "auto",
                 permission: [{ permission: "read", pattern: "*", action: "allow" }],
                 model,
+                runtime: "side",
+                ...(usable === Infinity ? {} : { maxInputTokens: usable }),
               })
               .pipe(
                 Stream.tap((event) =>
@@ -390,7 +428,7 @@ export const layer = Layer.effect(
 
           return run(initial, 1)
         }),
-      ).pipe(Stream.scoped)
+      ).pipe(Stream.prepend([{ type: "status", status: "generating", round: 1 } satisfies Event]), Stream.scoped)
 
     return Service.of({ ask })
   }),
