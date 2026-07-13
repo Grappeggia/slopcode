@@ -2,7 +2,9 @@ import fs from "fs/promises"
 import path from "path"
 import { fileURLToPath } from "url"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
+import { AppProcess } from "@slopcode-ai/core/process"
+import { Config } from "@slopcode-ai/core/config"
 import { FileMutation } from "@slopcode-ai/core/file-mutation"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { Formatter } from "@slopcode-ai/core/formatter"
@@ -74,7 +76,11 @@ const hooks = Layer.succeed(FileMutation.Hooks, FileMutation.Hooks.of({
   pause: (phase, target) => phase === "before-write" ? Effect.sync(() => writes.push(target)) : Effect.void,
 }))
 
-const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>) => {
+const withTool = <A, E, R>(
+  directory: string,
+  body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>,
+  actual = false,
+) => {
   const activeLocation = Layer.succeed(
     Location.Service,
     Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
@@ -83,11 +89,30 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
   const mutation = FileMutation.layer.pipe(Layer.provide(filesystem), Layer.provide(hooks))
   const events = EventV2.defaultLayer
   const reconcile = MutationEvents.layer.pipe(Layer.provide(filesystem))
-  const formatter = Layer.succeed(Formatter.Service, Formatter.Service.of({
-    format: () => Effect.succeed({ matched: false, outcomes: [] }),
-    list: () => Effect.succeed([]),
-    status: () => Effect.succeed([]),
-  }))
+  const formatter = actual
+    ? Formatter.layer.pipe(
+        Layer.provide(AppProcess.defaultLayer),
+        Layer.provide(filesystem),
+        Layer.provide(activeLocation),
+        Layer.provide(Layer.succeed(Config.Service, Config.Service.of({
+          entries: () => Effect.succeed([new Config.Document({
+            type: "document",
+            info: Schema.decodeUnknownSync(Config.Info)({
+              formatter: {
+                integration: {
+                  command: [process.execPath, "-e", "require('fs').appendFileSync(process.argv[1],'!')", "$FILE"],
+                  extensions: [".fmt"],
+                },
+              },
+            }),
+          })]),
+        }))),
+      )
+    : Layer.succeed(Formatter.Service, Formatter.Service.of({
+        format: () => Effect.succeed({ matched: false, outcomes: [] }),
+        list: () => Effect.succeed([]),
+        status: () => Effect.succeed([]),
+      }))
   const post = PostMutation.layer.pipe(
     Layer.provide(mutation), Layer.provide(formatter), Layer.provide(filesystem), Layer.provide(events),
     Layer.provide(reconcile), Layer.provide(PostMutation.diagnosticsLayer),
@@ -401,6 +426,27 @@ describe("EditTool", () => {
               expect(writes).toEqual([])
             }),
           ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("runs the real formatter layer through edit settlement", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        const file = path.join(tmp.path, "actual.fmt")
+        return Effect.promise(() => fs.writeFile(file, "before")).pipe(
+          Effect.andThen(withTool(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              expect(yield* executeTool(registry, call({
+                path: "actual.fmt",
+                oldString: "before",
+                newString: "after",
+              }))).toMatchObject({ type: "text" })
+              expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("after!")
+            }), true)),
         )
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),

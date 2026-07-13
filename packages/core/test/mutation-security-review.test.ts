@@ -455,7 +455,7 @@ describe("mutation security review", () => {
           let watcher = 0
           let diagnostics = 0
           yield* Effect.gen(function* () {
-            const fail = boundary === "semantic" ? 3 : boundary === "watcher" ? 4 : boundary === "diagnostics" ? 5 : 6
+            const fail = boundary === "semantic" ? 5 : boundary === "watcher" ? 6 : boundary === "diagnostics" ? 7 : 8
             const events = yield* EventV2.Service
             yield* events.listen((event) => {
               if (event.type === FileSystem.Event.Edited.type) return Effect.sync(() => { semantic++ })

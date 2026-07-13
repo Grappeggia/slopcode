@@ -360,6 +360,49 @@ describe("Formatter", () => {
     ),
   )
 
+  it.live("drops cached discovery when the actual Location formatter scope reopens", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(async () => {
+        const tmp = await tmpdir()
+        const first = path.join(tmp.path, "first")
+        const second = path.join(tmp.path, "second")
+        await Promise.all([fs.mkdir(first), fs.mkdir(second)])
+        const make = (directory: string, value: string) => fs.writeFile(
+          path.join(directory, "ruff"),
+          `#!${process.execPath}\nrequire("fs").writeFileSync(process.argv.at(-1),${JSON.stringify(value)})\n`,
+          { mode: 0o755 },
+        )
+        await Promise.all([
+          make(first, "first"),
+          make(second, "second"),
+          fs.writeFile(path.join(tmp.path, "pyproject.toml"), "[tool.ruff]\n"),
+        ])
+        return { tmp, first, second, path: process.env.PATH }
+      }),
+      ({ tmp, first, second }) => Effect.gen(function* () {
+        const file = path.join(tmp.path, "source.py")
+        process.env.PATH = `${first}${path.delimiter}${process.env.PATH ?? ""}`
+        yield* Effect.promise(() => fs.writeFile(file, "source"))
+        yield* withFormatter(tmp.path, [document(true)], Effect.gen(function* () {
+          yield* (yield* Formatter.Service).format({ canonical: file })
+        }))
+        expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("first")
+
+        process.env.PATH = `${second}${path.delimiter}${process.env.PATH ?? ""}`
+        yield* Effect.promise(() => fs.writeFile(file, "source"))
+        yield* withFormatter(tmp.path, [document(true)], Effect.gen(function* () {
+          yield* (yield* Formatter.Service).format({ canonical: file })
+        }))
+        expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("second")
+      }),
+      ({ tmp, path: original }) => Effect.promise(async () => {
+        if (original === undefined) delete process.env.PATH
+        else process.env.PATH = original
+        await tmp[Symbol.asyncDispose]()
+      }),
+    ),
+  )
+
   it.effect("keeps Core formatter sources isolated from V1 and Slopcode runtime imports", () =>
     Effect.promise(async () => {
       const source = await fs.readFile(new URL("../src/formatter.ts", import.meta.url), "utf8")

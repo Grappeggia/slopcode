@@ -1,8 +1,5 @@
 export * as PostMutation from "./post-mutation"
 
-import fs from "fs/promises"
-import os from "os"
-import path from "path"
 import { Context, Effect, Layer, Schema } from "effect"
 import { KeyedMutex } from "./effect/keyed-mutex"
 import { EventV2 } from "./event"
@@ -11,8 +8,6 @@ import { FileSystem } from "./filesystem"
 import { Watcher } from "./filesystem/watcher"
 import { Formatter } from "./formatter"
 import { MutationEvents } from "./mutation-events"
-
-export const STAGE_LIMIT = 16 * 1024 * 1024
 
 export interface Fence { readonly check: Effect.Effect<void, unknown> }
 export const current: Fence = { check: Effect.void }
@@ -24,11 +19,6 @@ export const diagnosticsLayer = Layer.succeed(Diagnostics, Diagnostics.of({ noti
 
 export class ResultMismatchError extends Schema.TaggedErrorClass<ResultMismatchError>()("PostMutation.ResultMismatchError", {
   path: Schema.String,
-}) {}
-
-export class StageLimitError extends Schema.TaggedErrorClass<StageLimitError>()("PostMutation.StageLimitError", {
-  path: Schema.String,
-  bytes: Schema.Number,
 }) {}
 
 type Mutation = FileMutation.WriteResult | FileMutation.RemoveResult
@@ -65,29 +55,16 @@ export const layer = Layer.effect(
     const diagnostics = yield* Diagnostics
     const locks = KeyedMutex.makeUnsafe<string>()
 
-    const staged = (target: Input<Mutation>["target"], immediate: Uint8Array) => Effect.acquireUseRelease(
+    const staged = (target: Input<Mutation>["target"], immediate: Uint8Array, fence: Fence) => Effect.scoped(
       Effect.gen(function* () {
-        if (immediate.length > STAGE_LIMIT) {
-          return yield* new StageLimitError({ path: target.canonical, bytes: immediate.length })
+        const stage = yield* files.stage({ target, content: immediate })
+        if (!stage) return {
+          formatted: { matched: false, outcomes: [{ name: "security", code: "unsupported-security" as const }] },
+          final: immediate,
         }
-        return yield* Effect.tryPromise({
-          try: async () => {
-            const directory = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-format-"))
-            const file = path.join(directory, `stage${path.extname(target.canonical)}`)
-            const handle = await fs.open(file, "wx", 0o600)
-            await handle.writeFile(immediate)
-            await handle.close()
-            return { directory, file }
-          },
-          catch: (cause) => cause,
-        })
-      }),
-      (stage) => Effect.gen(function* () {
-        const formatted = yield* formatter.format({ canonical: stage.file })
-        const output = yield* Effect.tryPromise({
-          try: () => fs.readFile(stage.file),
-          catch: (cause) => cause,
-        })
+        const formatted = yield* formatter.format({ canonical: stage.canonical })
+        yield* fence.check
+        const output = yield* stage.read
         const wanted = hasBom(immediate)
         let offset = 0
         while (hasBom(output.slice(offset))) offset += 3
@@ -97,8 +74,13 @@ export const layer = Layer.effect(
           final: wanted ? new Uint8Array([0xef, 0xbb, 0xbf, ...body]) : body,
         }
       }),
-      (stage) => Effect.promise(() => fs.rm(stage.directory, { recursive: true, force: true })).pipe(Effect.ignore),
-    )
+    ).pipe(Effect.catchIf(
+      (error) => error instanceof FileMutation.StageUnavailableError,
+      () => Effect.succeed({
+        formatted: { matched: false, outcomes: [{ name: "stage", code: "unavailable" as const }] },
+        final: immediate,
+      }),
+    ))
 
     const run = <A extends Mutation>(input: Input<A>) => locks.withLock(input.target.canonical)(
       Effect.uninterruptibleMask((restore) =>
@@ -139,21 +121,33 @@ export const layer = Layer.effect(
             yield* fence.check
             const output = deleted
               ? { formatted: { matched: false, outcomes: [] }, final: new Uint8Array() }
-              : yield* restore(staged(input.target, immediate))
-            if (!deleted && output.formatted.matched) {
-              yield* files.commit({
-                target: input.target,
-                expected: immediate,
-                content: output.final,
-                revision: snapshot.revision,
-              })
-            }
+              : yield* restore(staged(input.target, immediate, fence))
+            const final = deleted
+              ? undefined
+              : output.formatted.matched
+                ? yield* Effect.gen(function* () {
+                    yield* fence.check
+                    return yield* files.commit({
+                      target: input.target,
+                      expected: immediate,
+                      content: output.final,
+                      revision: snapshot.revision,
+                      guard: fence.check,
+                    })
+                  })
+                : undefined
+            const fingerprint = deleted
+              ? MutationEvents.missingFingerprint
+              : final
+                ? files.fingerprint(final)
+                : yield* files.validate(mutated as FileMutation.WriteResult, fence.check)
+            if (!fingerprint) return yield* new ResultMismatchError({ path: input.target.canonical })
 
             yield* fence.check
             if (!deleted) yield* events.publish(FileSystem.Event.Edited, { file: input.target.canonical })
             yield* fence.check
             yield* events.publish(Watcher.Event.Updated, { file: input.target.canonical, event })
-            yield* owner.complete(event)
+            yield* owner.complete(event, fingerprint)
             complete = true
             yield* fence.check
             yield* diagnostics.notify({ canonical: input.target.canonical, event })

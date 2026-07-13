@@ -56,6 +56,7 @@ function protecteds(dir: string) {
 }
 
 export const hasNativeBinding = () => !!watcher()
+export const isMutationStage = (file: string) => path.basename(file).startsWith(".") && path.basename(file).includes(".slopcode-")
 
 export interface Interface {}
 
@@ -101,6 +102,7 @@ export const layer = Layer.effect(
     }
     const callback: ParcelWatcher.SubscribeCallback = (_error, updates) => {
       for (const update of updates) {
+        if (isMutationStage(update.path)) continue
         if (update.type === "create") runFork(publish(update.path, "add"))
         if (update.type === "update") runFork(publish(update.path, "change"))
         if (update.type === "delete") runFork(publish(update.path, "unlink"))
@@ -124,7 +126,7 @@ export const layer = Layer.effect(
       .flatMap((item) => item.info.watcher?.ignore ?? [])
     if (yield* Flag.SLOPCODE_EXPERIMENTAL_FILEWATCHER) {
       yield* Effect.forkScoped(
-        subscribe(location.directory, [...Ignore.PATTERNS, ...config, ...protecteds(location.directory)]),
+        subscribe(location.directory, ["**/.slopcode-*", ...Ignore.PATTERNS, ...config, ...protecteds(location.directory)]),
       )
     }
 

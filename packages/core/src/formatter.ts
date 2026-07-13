@@ -22,7 +22,7 @@ export type Entry = {
   readonly environment?: Readonly<Record<string, string>>
   readonly builtin: boolean
 }
-export type Code = "formatted" | "unavailable" | "spawn-error" | "timeout" | "nonzero"
+export type Code = "formatted" | "unavailable" | "unsupported-security" | "spawn-error" | "timeout" | "nonzero"
 export type Outcome = {
   readonly name: string
   readonly code: Code

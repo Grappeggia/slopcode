@@ -1,11 +1,15 @@
 export * as FileMutation from "./file-mutation"
+export { Platform, type PlatformInterface } from "./file-mutation-platform"
 
 import { constants, type BigIntStats } from "fs"
 import fs, { type FileHandle } from "fs/promises"
 import path from "path"
+import crypto from "crypto"
 import { Context, Effect, Layer, Option, Schema, Scope } from "effect"
 import { KeyedMutex } from "./effect/keyed-mutex"
 import { FSUtil } from "./fs-util"
+import { Platform, make as makePlatform } from "./file-mutation-platform"
+import { MutationEvents } from "./mutation-events"
 
 export interface Target {
   readonly canonical: string
@@ -31,7 +35,16 @@ export interface RemoveInput {
 }
 
 export type Change = "none" | "created" | "changed" | "deleted"
-export type HookPhase = "parent-opened" | "file-opened" | "before-write" | "before-remove" | "before-commit"
+export type HookPhase =
+  | "parent-opened"
+  | "file-opened"
+  | "before-write"
+  | "before-remove"
+  | "before-remove-atomic"
+  | "before-commit"
+  | "stage-before-open"
+  | "stage-created"
+  | "stage-written"
 export interface HooksInterface {
   readonly pause: (phase: HookPhase, target: string) => Effect.Effect<void>
 }
@@ -53,6 +66,10 @@ export class UnsupportedPlatformError extends Schema.TaggedErrorClass<Unsupporte
   platform: Schema.String,
 }) {}
 
+export class StageUnavailableError extends Schema.TaggedErrorClass<StageUnavailableError>()("FileMutation.StageUnavailableError", {
+  path: Schema.String,
+}) {}
+
 type Revision = {
   readonly dev: bigint
   readonly ino: bigint
@@ -64,6 +81,12 @@ type Revision = {
 type Private = {
   readonly revision?: Revision
   readonly content: Uint8Array
+  readonly secure: boolean
+}
+
+export interface Stage {
+  readonly canonical: string
+  readonly read: Effect.Effect<Uint8Array, Error>
 }
 
 export interface WriteResult {
@@ -82,15 +105,21 @@ export interface RemoveResult {
   readonly change: "none" | "deleted"
 }
 
-export type Error = StaleContentError | TargetExistsError | TargetChangedError | UnsupportedPlatformError | FSUtil.Error
+export type Error = StaleContentError | TargetExistsError | TargetChangedError | UnsupportedPlatformError | StageUnavailableError | FSUtil.Error
 
 export interface Interface {
   readonly create: (input: WriteInput) => Effect.Effect<WriteResult, Error>
-  readonly write: (input: WriteInput) => Effect.Effect<WriteResult, Error>
-  readonly writeTextPreservingBom: (input: TextWriteInput) => Effect.Effect<WriteResult, Error>
-  readonly writeIfUnchanged: (input: ConditionalWriteInput) => Effect.Effect<WriteResult, Error>
+  readonly write: (input: WriteInput) => Effect.Effect<WriteResult, unknown>
+  readonly writeTextPreservingBom: (input: TextWriteInput) => Effect.Effect<WriteResult, unknown>
+  readonly writeIfUnchanged: (input: ConditionalWriteInput) => Effect.Effect<WriteResult, unknown>
   /** Internal formatter settlement, distinct from the supplied primitive effect. */
-  readonly commit: (input: ConditionalWriteInput & { readonly revision: unknown }) => Effect.Effect<WriteResult, Error>
+  readonly commit: (input: ConditionalWriteInput & {
+    readonly revision: unknown
+    readonly guard?: Effect.Effect<void, unknown>
+  }) => Effect.Effect<WriteResult, Error | unknown>
+  readonly validate: (result: WriteResult, guard?: Effect.Effect<void, unknown>) => Effect.Effect<string, Error | unknown>
+  readonly stage: (input: WriteInput) => Effect.Effect<Stage | undefined, Error, Scope.Scope>
+  readonly fingerprint: (result: WriteResult) => string | undefined
   readonly remove: (input: RemoveInput) => Effect.Effect<RemoveResult, Error>
   readonly private: (result: WriteResult | RemoveResult) => Private | undefined
 }
@@ -115,6 +144,9 @@ const sameRevision = (left: Revision, right: Revision) =>
   left.dev === right.dev && left.ino === right.ino && left.size === right.size &&
   left.mtime === right.mtime && left.ctime === right.ctime
 
+const revisionIdentity = (value: Revision) =>
+  `${value.dev}:${value.ino}:${value.size}:${value.mtime}:${value.ctime}`
+
 const code = (error: unknown) =>
   typeof error === "object" && error !== null && "code" in error ? String(error.code) : undefined
 
@@ -126,14 +158,16 @@ export const layer = Layer.effect(
     const locks = KeyedMutex.makeUnsafe<string>()
     const option = yield* Effect.serviceOption(Hooks)
     const hooks = Option.getOrElse(option, () => Hooks.of({ pause: () => Effect.void }))
+    const configured = yield* Effect.serviceOption(Platform)
+    const platform = Option.isSome(configured) ? configured.value : yield* makePlatform
     const data = new WeakMap<WriteResult | RemoveResult, Private>()
     const safe = <A>(target: Target, run: () => Promise<A>) => Effect.tryPromise({
       try: run,
       catch: () => new TargetChangedError({ path: target.canonical }),
     })
-    const supported = (target: Target) => process.platform === "linux"
+    const supported = (target: Target) => platform.secure
       ? Effect.void
-      : Effect.fail(new UnsupportedPlatformError({ platform: process.platform }))
+      : Effect.fail(new UnsupportedPlatformError({ platform: platform.name }))
     const withLock = <A, E>(target: Target, effect: Effect.Effect<A, E, Scope.Scope>) =>
       locks.withLock(target.canonical)(Effect.uninterruptible(Effect.scoped(effect)))
 
@@ -200,7 +234,7 @@ export const layer = Layer.effect(
     const result = (target: Target, existed: boolean, change: WriteResult["change"], content: Uint8Array, current: Revision) => {
       const value = { operation: "write", target: target.canonical, resource: target.resource, existed } as WriteResult
       Object.defineProperty(value, "change", { value: change, enumerable: false })
-      data.set(value, { revision: current, content })
+      data.set(value, { revision: current, content, secure: platform.secure })
       return value
     }
 
@@ -212,9 +246,36 @@ export const layer = Layer.effect(
         existed,
       } as RemoveResult
       Object.defineProperty(value, "change", { value: existed ? "deleted" : "none", enumerable: false })
-      data.set(value, { content: new Uint8Array() })
+      data.set(value, { content: new Uint8Array(), secure: platform.secure })
       return value
     }
+
+    const fallbackWrite = (input: WriteInput, expected?: Uint8Array, exclusive = false) => Effect.tryPromise({
+      try: async () => {
+        await fs.mkdir(path.dirname(input.target.canonical), { recursive: true })
+        const current = await fs.readFile(input.target.canonical).catch((error) => {
+          if (code(error) === "ENOENT") return undefined
+          throw error
+        })
+        if (exclusive && current) throw new TargetExistsError({ path: input.target.canonical })
+        if (expected && (!current || !same(current, expected))) throw new StaleContentError({ path: input.target.canonical })
+        const content = bytes(input.content)
+        if (current && same(current, content)) {
+          return result(input.target, true, "none", current, revision(await fs.stat(input.target.canonical, { bigint: true })))
+        }
+        await fs.writeFile(input.target.canonical, content, exclusive ? { flag: "wx", mode: 0o644 } : { mode: 0o644 })
+        return result(
+          input.target,
+          current !== undefined,
+          current ? "changed" : "created",
+          content,
+          revision(await fs.stat(input.target.canonical, { bigint: true })),
+        )
+      },
+      catch: (error) => error instanceof TargetExistsError || error instanceof StaleContentError
+        ? error
+        : new TargetChangedError({ path: input.target.canonical }),
+    })
 
     const createHandle = (target: Target, content: Uint8Array) => parent(target, true).pipe(
       Effect.flatMap((directory) => Effect.acquireRelease(
@@ -244,6 +305,7 @@ export const layer = Layer.effect(
       expected?: Uint8Array,
       wanted?: Revision,
       createDirs = false,
+      guard: Effect.Effect<void, unknown> = Effect.void,
     ) => open(target, createDirs).pipe(
       Effect.flatMap((handle) => Effect.gen(function* () {
         const stat = yield* safe(target, () => handle.stat({ bigint: true }))
@@ -252,6 +314,7 @@ export const layer = Layer.effect(
         if (wanted && !sameRevision(revision(stat), wanted)) return yield* new StaleContentError({ path: target.canonical })
         if (same(current, content)) return result(target, true, "none", current, revision(stat))
         yield* hooks.pause(wanted ? "before-commit" : "before-write", target.canonical)
+        yield* guard
         yield* safe(target, async () => {
           await handle.truncate(0)
           await handle.write(content, 0, content.length, 0)
@@ -261,18 +324,30 @@ export const layer = Layer.effect(
       })),
     )
 
-    const write = Effect.fn("FileMutation.write")((input: WriteInput) => withLock(input.target,
+    const write = Effect.fn("FileMutation.write")((input: WriteInput) => !platform.secure
+      ? fallbackWrite(input)
+      : withLock(input.target,
       writeOpen(input.target, bytes(input.content), undefined, undefined, true).pipe(
         Effect.catchIf((error) => error instanceof Missing, () => createHandle(input.target, bytes(input.content))),
       ),
     ))
 
-    const create = Effect.fn("FileMutation.create")((input: WriteInput) =>
-      withLock(input.target, createHandle(input.target, bytes(input.content))),
-    )
+    const create = Effect.fn("FileMutation.create")(function* (input: WriteInput) {
+      return yield* platform.secure
+        ? withLock(input.target, createHandle(input.target, bytes(input.content)))
+        : fallbackWrite(input, undefined, true)
+    })
 
-    const writeTextPreservingBom = Effect.fn("FileMutation.writeTextPreservingBom")((input: TextWriteInput) =>
-      withLock(input.target,
+    const writeTextPreservingBom = Effect.fn("FileMutation.writeTextPreservingBom")(function* (input: TextWriteInput) {
+      if (!platform.secure) {
+        const current = yield* Effect.promise(() => fs.readFile(input.target.canonical).catch(() => undefined))
+        const next = splitBom(input.content)
+        return yield* fallbackWrite({
+          target: input.target,
+          content: joinBom(next.text, Boolean(current && hasUtf8Bom(current)) || next.bom),
+        })
+      }
+      return yield* withLock(input.target,
         open(input.target, true).pipe(
           Effect.flatMap((handle) => Effect.gen(function* () {
             const current = yield* safe(input.target, () => handle.readFile())
@@ -293,24 +368,128 @@ export const layer = Layer.effect(
             return createHandle(input.target, bytes(joinBom(next.text, next.bom)))
           }),
         ),
-      ),
-    )
+      )
+    })
 
-    const writeIfUnchanged = Effect.fn("FileMutation.writeIfUnchanged")((input: ConditionalWriteInput) =>
-      withLock(input.target, writeOpen(input.target, bytes(input.content), input.expected).pipe(
+    const writeIfUnchanged = Effect.fn("FileMutation.writeIfUnchanged")(function* (input: ConditionalWriteInput) {
+      if (!platform.secure) return yield* fallbackWrite(input, input.expected)
+      return yield* withLock(input.target, writeOpen(input.target, bytes(input.content), input.expected).pipe(
         Effect.catchIf((error) => error instanceof Missing, () => Effect.fail(new TargetChangedError({ path: input.target.canonical }))),
-      )),
-    )
+      ))
+    })
 
-    const commit = Effect.fn("FileMutation.commit")((input: ConditionalWriteInput & { readonly revision: unknown }) =>
+    const commit = Effect.fn("FileMutation.commit")((input: ConditionalWriteInput & {
+      readonly revision: unknown
+      readonly guard?: Effect.Effect<void, unknown>
+    }) =>
       withLock(input.target, input.revision && typeof input.revision === "object"
-        ? writeOpen(input.target, bytes(input.content), input.expected, input.revision as Revision).pipe(
+        ? writeOpen(
+            input.target,
+            bytes(input.content),
+            input.expected,
+            input.revision as Revision,
+            false,
+            input.guard,
+          ).pipe(
             Effect.catchIf((error) => error instanceof Missing, () => Effect.fail(new StaleContentError({ path: input.target.canonical }))),
           )
         : Effect.fail(new StaleContentError({ path: input.target.canonical }))),
     )
 
-    const remove = Effect.fn("FileMutation.remove")((input: RemoveInput) => withLock(input.target,
+    const validate = Effect.fn("FileMutation.validate")(function* (
+      value: WriteResult,
+      guard: Effect.Effect<void, unknown> = Effect.void,
+    ) {
+      const snapshot = data.get(value)
+      if (!snapshot?.revision) return yield* new StaleContentError({ path: value.target })
+      const target = { canonical: value.target, resource: value.resource }
+      if (!platform.secure) return yield* Effect.tryPromise({
+        try: async () => {
+          const current = await fs.readFile(value.target)
+          const stat = revision(await fs.stat(value.target, { bigint: true }))
+          if (!same(current, snapshot.content) || !sameRevision(stat, snapshot.revision!)) {
+            throw new StaleContentError({ path: value.target })
+          }
+          await Effect.runPromise(guard)
+          return MutationEvents.fileFingerprint(current, revisionIdentity(stat))
+        },
+        catch: (error) => error instanceof StaleContentError ? error : new StaleContentError({ path: value.target }),
+      })
+      return yield* withLock(target, open(target, false).pipe(
+        Effect.flatMap((handle) => Effect.gen(function* () {
+          const current = yield* safe(target, () => handle.readFile())
+          const stat = revision(yield* safe(target, () => handle.stat({ bigint: true })))
+          if (!same(current, snapshot.content) || !sameRevision(stat, snapshot.revision!)) {
+            return yield* new StaleContentError({ path: value.target })
+          }
+          yield* guard
+          return MutationEvents.fileFingerprint(current, revisionIdentity(stat))
+        })),
+        Effect.catchIf((error) => error instanceof Missing, () =>
+          Effect.fail(new StaleContentError({ path: value.target }))),
+      ))
+    })
+
+    const stage = Effect.fn("FileMutation.stage")(function* (input: WriteInput) {
+      if (!platform.secure) return undefined
+      return yield* parent(input.target, false).pipe(
+        Effect.flatMap((directory) => Effect.gen(function* () {
+          const extension = path.extname(input.target.canonical)
+          const base = path.basename(input.target.canonical, extension).replaceAll(/[^a-zA-Z0-9_-]/g, "_")
+          const name = `.${base}.slopcode-${crypto.randomBytes(16).toString("hex")}${extension}`
+          const child = `/proc/self/fd/${directory.fd}/${name}`
+          const executable = `/proc/${process.pid}/fd/${directory.fd}/${name}`
+          yield* hooks.pause("stage-before-open", input.target.canonical)
+          const handle = yield* Effect.tryPromise({
+            try: () => fs.open(
+              child,
+              constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+              0o600,
+            ),
+            catch: () => new StageUnavailableError({ path: input.target.canonical }),
+          })
+          yield* Effect.addFinalizer(() => Effect.promise(async () => {
+            await handle.close().catch(() => {})
+            if (platform.unlink) platform.unlink(directory.fd, name)
+            else await fs.unlink(child).catch(() => {})
+          }))
+          yield* hooks.pause("stage-created", input.target.canonical)
+          yield* Effect.tryPromise({
+            try: async () => {
+              await handle.writeFile(bytes(input.content))
+              await handle.sync()
+            },
+            catch: () => new StageUnavailableError({ path: input.target.canonical }),
+          })
+          yield* hooks.pause("stage-written", input.target.canonical)
+          yield* close(handle)
+          return {
+            canonical: executable,
+            read: Effect.acquireUseRelease(
+              Effect.tryPromise({
+                try: () => fs.open(child, constants.O_RDONLY | constants.O_NOFOLLOW),
+                catch: () => new TargetChangedError({ path: input.target.canonical }),
+              }),
+              (opened) => safe(input.target, () => opened.readFile()),
+              close,
+            ),
+          } satisfies Stage
+        })),
+      )
+    })
+
+    const remove = Effect.fn("FileMutation.remove")((input: RemoveInput) => !platform.secure
+      ? Effect.tryPromise({
+          try: async () => {
+            const existed = await fs.unlink(input.target.canonical).then(() => true).catch((error) => {
+              if (code(error) === "ENOENT") return false
+              throw error
+            })
+            return removed(input.target, existed)
+          },
+          catch: () => new TargetChangedError({ path: input.target.canonical }),
+        })
+      : withLock(input.target,
       parent(input.target, false).pipe(
         Effect.flatMap((directory) => Effect.acquireRelease(
           Effect.tryPromise({
@@ -326,7 +505,47 @@ export const layer = Layer.effect(
             const opened = yield* safe(input.target, () => handle.stat({ bigint: true }))
             const named = yield* safe(input.target, () => fs.lstat(`/proc/self/fd/${directory.fd}/${path.basename(input.target.canonical)}`, { bigint: true }))
             if (opened.dev !== named.dev || opened.ino !== named.ino) return yield* new TargetChangedError({ path: input.target.canonical })
-            yield* safe(input.target, () => fs.unlink(`/proc/self/fd/${directory.fd}/${path.basename(input.target.canonical)}`))
+            if (!platform.exchange || !platform.move || !platform.unlink) return yield* new UnsupportedPlatformError({ platform: platform.name })
+            const name = path.basename(input.target.canonical)
+            const quarantine = `.slopcode-delete-${crypto.randomBytes(16).toString("hex")}`
+            const placeholder = yield* safe(input.target, () => fs.open(
+              `/proc/self/fd/${directory.fd}/${quarantine}`,
+              constants.O_RDONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+              0o600,
+            ))
+            const placeholderIdentity = yield* safe(input.target, () => placeholder.stat({ bigint: true }))
+            yield* Effect.addFinalizer(() => Effect.sync(() => { platform.unlink?.(directory.fd, quarantine) }))
+            yield* hooks.pause("before-remove-atomic", input.target.canonical)
+            if (!platform.exchange(directory.fd, name, quarantine)) {
+              return yield* new TargetChangedError({ path: input.target.canonical })
+            }
+            const quarantined = yield* safe(input.target, () => fs.lstat(
+              `/proc/self/fd/${directory.fd}/${quarantine}`,
+              { bigint: true },
+            ))
+            if (opened.dev !== quarantined.dev || opened.ino !== quarantined.ino) {
+              if (!platform.exchange(directory.fd, name, quarantine)) {
+                return yield* new TargetChangedError({ path: input.target.canonical })
+              }
+              yield* close(placeholder)
+              platform.unlink(directory.fd, quarantine)
+              return yield* new TargetChangedError({ path: input.target.canonical })
+            }
+            yield* close(placeholder)
+            if (!platform.unlink(directory.fd, quarantine)) {
+              return yield* new TargetChangedError({ path: input.target.canonical })
+            }
+            const cleanup = `.slopcode-delete-${crypto.randomBytes(16).toString("hex")}`
+            if (!platform.move(directory.fd, name, cleanup)) return yield* new TargetChangedError({ path: input.target.canonical })
+            const moved = yield* safe(input.target, () => fs.lstat(
+              `/proc/self/fd/${directory.fd}/${cleanup}`,
+              { bigint: true },
+            ))
+            if (placeholderIdentity.dev !== moved.dev || placeholderIdentity.ino !== moved.ino) {
+              platform.move(directory.fd, cleanup, name)
+              return yield* new TargetChangedError({ path: input.target.canonical })
+            }
+            if (!platform.unlink(directory.fd, cleanup)) return yield* new TargetChangedError({ path: input.target.canonical })
             return removed(input.target, true)
           })
         }))),
@@ -340,6 +559,14 @@ export const layer = Layer.effect(
       writeTextPreservingBom,
       writeIfUnchanged,
       commit,
+      validate,
+      stage,
+      fingerprint: (value) => {
+        const snapshot = data.get(value)
+        return snapshot?.revision
+          ? MutationEvents.fileFingerprint(snapshot.content, revisionIdentity(snapshot.revision))
+          : undefined
+      },
       remove,
       private: (value) => data.get(value),
     })

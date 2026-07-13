@@ -18,7 +18,7 @@ describe("MutationEvents", () => {
           const ownership = yield* events.begin(target)
           yield* Effect.promise(() => fs.writeFile(target, "one"))
           expect(yield* events.native(target, "add")).toBe(false)
-          yield* ownership.complete("add")
+          yield* ownership.complete("add", yield* MutationEvents.currentFingerprint(target))
           expect(yield* events.native(target, "add")).toBe(false)
           expect(yield* events.native(target, "change")).toBe(false)
           expect(yield* events.native(target, "unlink")).toBe(false)

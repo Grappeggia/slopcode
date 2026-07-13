@@ -1,15 +1,21 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Fiber, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Schema } from "effect"
+import { AppProcess } from "@slopcode-ai/core/process"
+import { Config } from "@slopcode-ai/core/config"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { FileMutation } from "@slopcode-ai/core/file-mutation"
 import { FileSystem } from "@slopcode-ai/core/filesystem"
 import { Watcher } from "@slopcode-ai/core/filesystem/watcher"
 import { Formatter } from "@slopcode-ai/core/formatter"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
+import { Location } from "@slopcode-ai/core/location"
 import { MutationEvents } from "@slopcode-ai/core/mutation-events"
+import { Npm } from "@slopcode-ai/core/npm"
 import { PostMutation } from "@slopcode-ai/core/post-mutation"
+import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { location } from "./fixture/location"
 import { tmpdir } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 
@@ -133,6 +139,73 @@ describe("mutation rejection re-review", () => {
     }),
   )
 
+  it.live("preserves real Prettier config discovery and explicit hidden-file formatting", () =>
+    withTmp((directory) => {
+      const nested = path.join(directory, "nested")
+      const approved = target(nested, "source.js")
+      const active = Layer.succeed(
+        Location.Service,
+        Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
+      )
+      const config = Layer.succeed(Config.Service, Config.Service.of({
+        entries: () => Effect.succeed([
+          new Config.Document({
+            type: "document",
+            info: Schema.decodeUnknownSync(Config.Info)({ formatter: true }),
+          }),
+        ]),
+      }))
+      const npm = Layer.succeed(Npm.Service, Npm.Service.of({
+        add: () => Effect.die("unused"),
+        install: () => Effect.die("unused"),
+        which: (name) => Effect.succeed(name === "prettier"
+          ? Option.some(path.resolve(import.meta.dir, "../../../node_modules/.bin/prettier"))
+          : Option.none()),
+      }))
+      const formatting = Formatter.layer.pipe(
+        Layer.provide(AppProcess.defaultLayer),
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(active),
+        Layer.provide(config),
+        Layer.provide(npm),
+      )
+      const files = mutation()
+      const events = EventV2.defaultLayer
+      const layer = Layer.mergeAll(
+        files,
+        events,
+        PostMutation.layer.pipe(
+          Layer.provide(files),
+          Layer.provide(formatting),
+          Layer.provide(events),
+          Layer.provide(MutationEvents.layer.pipe(Layer.provide(FSUtil.defaultLayer))),
+          Layer.provide(PostMutation.diagnosticsLayer),
+        ),
+      )
+      return Effect.gen(function* () {
+        yield* Effect.promise(async () => {
+          await fs.mkdir(nested)
+          await fs.writeFile(path.join(directory, "package.json"), JSON.stringify({ dependencies: { prettier: "1" } }))
+          await fs.writeFile(path.join(nested, ".prettierrc"), JSON.stringify({ tabWidth: 7, printWidth: 10, semi: false }))
+          await fs.writeFile(approved.canonical, "before")
+        })
+        const service = yield* FileMutation.Service
+        const result = yield* (yield* PostMutation.Service).run({
+          target: approved,
+          intent: "write",
+          mutation: service.write({ target: approved, content: "const value={nested:true}" }),
+        })
+        expect(result.formatters).toEqual(expect.arrayContaining([
+          expect.objectContaining({ name: "prettier", code: "formatted" }),
+        ]))
+        const output = yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))
+        expect(output).toContain("       nested: true")
+        expect(output).not.toContain(";")
+        expect((yield* Effect.promise(() => fs.readdir(nested))).some((name) => name.includes("slopcode"))).toBe(false)
+      }).pipe(Effect.provide(layer))
+    }),
+  )
+
   it.live("checks the fence after formatter return and before commit", () =>
     withTmp((directory) => {
       const approved = target(directory, "fenced.fmt")
@@ -210,20 +283,21 @@ describe("mutation rejection re-review", () => {
   it.live("cleans every partially acquired in-directory stage", () =>
     withTmp((directory) =>
       Effect.gen(function* () {
-        for (const phase of ["stage-created", "stage-written"] as const) {
+        for (const phase of ["stage-before-open", "stage-created", "stage-written"] as const) {
           const approved = target(directory, `${phase}.fmt`)
           yield* Effect.promise(() => fs.writeFile(approved.canonical, "before"))
-          yield* Effect.gen(function* () {
+          const exit = yield* Effect.gen(function* () {
             const files = yield* FileMutation.Service
-            yield* (yield* PostMutation.Service).run({
+            return yield* (yield* PostMutation.Service).run({
               target: approved,
               intent: "write",
               mutation: files.write({ target: approved, content: "primitive" }),
-            }).pipe(Effect.exit)
+            })
           }).pipe(Effect.provide(post({
             formatter: none,
             hooks: { pause: (current) => current === phase ? Effect.die(`fail-${phase}`) : Effect.void },
-          })))
+          })), Effect.exit)
+          expect(exit._tag).toBe("Failure")
           expect((yield* Effect.promise(() => fs.readdir(directory))).filter((name) => name.includes("slopcode"))).toEqual([])
         }
       }),
@@ -232,23 +306,31 @@ describe("mutation rejection re-review", () => {
 
   it.live("preserves primitive parity and skips formatting on insecure platform adapters", () =>
     withTmp((directory) => {
-      const approved = target(directory, "portable.fmt")
       let formats = 0
-      const platform: FileMutation.PlatformInterface = { name: "darwin", secure: false }
       return Effect.gen(function* () {
-        const files = yield* FileMutation.Service
-        const result = yield* (yield* PostMutation.Service).run({
-          target: approved,
-          intent: "write",
-          mutation: files.write({ target: approved, content: "portable" }),
-        })
-        expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toBe("portable")
-        expect(result.formatters).toEqual([{ name: "security", code: "unsupported-security" }])
+        for (const name of ["darwin", "win32"]) {
+          const approved = target(directory, `${name}.fmt`)
+          const platform: FileMutation.PlatformInterface = { name, secure: false }
+          yield* Effect.gen(function* () {
+            const files = yield* FileMutation.Service
+            const result = yield* (yield* PostMutation.Service).run({
+              target: approved,
+              intent: "write",
+              mutation: files.write({ target: approved, content: "portable" }),
+            })
+            expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toBe("portable")
+            expect(result.formatters).toEqual([{ name: "security", code: "unsupported-security" }])
+            const expected = new TextEncoder().encode("portable")
+            expect((yield* files.writeIfUnchanged({ target: approved, expected, content: "edited" })).change).toBe("changed")
+            expect((yield* files.remove({ target: approved })).change).toBe("deleted")
+            expect(yield* Effect.promise(() => fs.stat(approved.canonical).then(() => true, () => false))).toBe(false)
+          }).pipe(Effect.provide(post({
+            platform,
+            formatter: { ...none, format: () => Effect.sync(() => { formats++; return { matched: true, outcomes: [] } }) },
+          })))
+        }
         expect(formats).toBe(0)
-      }).pipe(Effect.provide(post({
-        platform,
-        formatter: { ...none, format: () => Effect.sync(() => { formats++; return { matched: true, outcomes: [] } }) },
-      })))
+      })
     }),
   )
 
@@ -264,6 +346,46 @@ describe("mutation rejection re-review", () => {
         yield* owner.complete("add", expected)
         expect(yield* events.native(approved.canonical, "change")).toBe(true)
       }).pipe(Effect.provide(MutationEvents.layer.pipe(Layer.provide(FSUtil.defaultLayer))))
+    }),
+  )
+
+  it.effect("marks private formatter stages as watcher-internal", () =>
+    Effect.sync(() => {
+      expect(Watcher.isMutationStage("/project/.source.slopcode-0123456789abcdef.ts")).toBe(true)
+      expect(Watcher.isMutationStage("/project/source.ts")).toBe(false)
+      expect(Watcher.isMutationStage("/project/.slopcode/config.json")).toBe(false)
+    }),
+  )
+
+  it.live("keeps formatter timeout nonfatal and does not replay after reopening", () =>
+    withTmp((directory) => {
+      const approved = target(directory, "timeout.fmt")
+      let formats = 0
+      const formatter: Formatter.Interface = {
+        ...none,
+        format: () => Effect.sync(() => {
+          formats++
+          return { matched: true, outcomes: [{ name: "actual", code: "timeout" as const }] }
+        }),
+      }
+      return Effect.gen(function* () {
+        yield* Effect.promise(() => fs.writeFile(approved.canonical, "before"))
+        yield* Effect.gen(function* () {
+          const files = yield* FileMutation.Service
+          const result = yield* (yield* PostMutation.Service).run({
+            target: approved,
+            intent: "write",
+            mutation: files.write({ target: approved, content: "primitive" }),
+          })
+          expect(result.formatters).toEqual([{ name: "actual", code: "timeout" }])
+        }).pipe(Effect.provide(post({ formatter })))
+        expect(formats).toBe(1)
+        yield* Effect.scoped(Effect.gen(function* () {
+          yield* PostMutation.Service
+        }).pipe(Effect.provide(post({ formatter }))))
+        expect(formats).toBe(1)
+        expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toBe("primitive")
+      })
     }),
   )
 })
