@@ -9,6 +9,7 @@ import { ProjectV2 } from "@slopcode-ai/core/project"
 import { SessionRunnerModel } from "@slopcode-ai/core/session/runner/model"
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { ModelHarness } from "@slopcode-ai/core/model-harness"
 import { it } from "./lib/effect"
 
 type Api =
@@ -51,6 +52,16 @@ const provider = (api: ProviderV2.Info["api"]) =>
     request: { headers: {}, body: {} },
   })
 
+const harnessModel = (api: Api = { type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" }) => {
+  const base = model(api)
+  return new ModelV2.Info({
+    ...base,
+    id: ModelV2.ID.make("gpt-5.6-sol"),
+    api: { ...base.api, id: ModelV2.ID.make("gpt-5.6-sol") },
+    limit: { context: 1_050_000, output: 128_000 },
+  })
+}
+
 describe("SessionRunnerModel", () => {
   it.effect("maps catalog OpenAI AI SDK models into native Responses routes", () =>
     Effect.gen(function* () {
@@ -70,6 +81,44 @@ describe("SessionRunnerModel", () => {
           http: { body: { custom_extension: { enabled: true } } },
         },
       })
+    }),
+  )
+
+  it.effect("overrides only the executable context limit for harnessed GPT-5.6", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(harnessModel())
+
+      expect(resolved.route.defaults.limits).toEqual({ context: 372_000, output: 128_000 })
+    }),
+  )
+
+  it.effect("fails closed when a harness profile resolves to a non-Responses route", () =>
+    Effect.gen(function* () {
+      const catalog = harnessModel({
+        type: "aisdk",
+        package: "@ai-sdk/openai-compatible",
+        url: "https://compatible.example/v1",
+      })
+      const failure = yield* SessionRunnerModel.resolve(
+        SessionV2.Info.make({
+          id: SessionV2.ID.make("ses_harness_incompatible"),
+          projectID: ProjectV2.ID.global,
+          title: "test",
+          model: { id: catalog.id, providerID: catalog.providerID },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+          location: { directory: AbsolutePath.make("/project") },
+        }),
+        catalog,
+      ).pipe(Effect.flip)
+
+      expect(failure).toEqual(
+        new ModelHarness.IncompatibilityError({
+          profileID: "gpt-5.6-sol",
+          missing: ["responses-lite"],
+        }),
+      )
     }),
   )
 
@@ -143,10 +192,10 @@ describe("SessionRunnerModel", () => {
       })
 
       const resolved = yield* SessionRunnerModel.resolve(session, catalog)
-      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }))
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved.model, prompt: "Hello" }))
 
-      expect(resolved.route.defaults.headers).toMatchObject({ "x-test": "header", "x-variant": "high" })
-      expect(resolved.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
+      expect(resolved.model.route.defaults.headers).toMatchObject({ "x-test": "header", "x-variant": "high" })
+      expect(resolved.model.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
       expect(prepared.body).toMatchObject({
         store: false,
         service_tier: "priority",
@@ -183,9 +232,9 @@ describe("SessionRunnerModel", () => {
       })
 
       const resolved = yield* SessionRunnerModel.resolve(session, catalog)
-      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }))
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved.model, prompt: "Hello" }))
 
-      expect(resolved.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
+      expect(resolved.model.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
       expect(prepared.body).toMatchObject({
         store: false,
         reasoning_effort: "high",
@@ -217,9 +266,9 @@ describe("SessionRunnerModel", () => {
       })
 
       const resolved = yield* SessionRunnerModel.resolve(session, catalog)
-      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }))
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved.model, prompt: "Hello" }))
 
-      expect(resolved.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
+      expect(resolved.model.route.defaults.http?.body).toEqual({ custom_extension: { enabled: true } })
       expect(prepared.body).toMatchObject({
         thinking: { type: "enabled", budget_tokens: 12000 },
       })

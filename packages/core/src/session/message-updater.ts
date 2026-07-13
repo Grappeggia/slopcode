@@ -1,5 +1,5 @@
 import { castDraft, produce, type WritableDraft } from "immer"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 
@@ -100,6 +100,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
 
   return Effect.gen(function* () {
     yield* SessionEvent.All.match(event, {
+      "session.next.created": () => Effect.void,
       "session.next.agent.switched": (event) => {
         return adapter.appendMessage(
           new SessionMessage.AgentSwitched({
@@ -159,18 +160,33 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }),
         )
       },
-      "session.next.shell.started": (event) => {
-        return adapter.appendMessage(
+      "session.next.shell.requested": (event) =>
+        adapter.appendMessage(
           new SessionMessage.Shell({
             id: event.data.messageID,
             type: "shell",
             metadata: event.metadata,
-            callID: event.data.callID,
+            callID: event.data.messageID,
             command: event.data.command,
             output: "",
             time: { created: event.data.timestamp },
           }),
-        )
+        ),
+      "session.next.shell.started": (event) => {
+        return Effect.gen(function* () {
+          if (yield* adapter.getCurrentShell(event.data.callID)) return
+          yield* adapter.appendMessage(
+            new SessionMessage.Shell({
+              id: event.data.messageID,
+              type: "shell",
+              metadata: event.metadata,
+              callID: event.data.callID,
+              command: event.data.command,
+              output: "",
+              time: { created: event.data.timestamp },
+            }),
+          )
+        })
       },
       "session.next.shell.ended": (event) => {
         return Effect.gen(function* () {
@@ -180,11 +196,21 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
               produce(currentShell, (draft) => {
                 draft.output = event.data.output
                 draft.time.completed = event.data.timestamp
+                if (Schema.is(SessionEvent.Shell.Ended)(event) && event.version === 2) {
+                  draft.status = event.data.status
+                  draft.exitCode = event.data.exitCode
+                  draft.truncated = event.data.truncated
+                  draft.stdoutTruncated = event.data.stdoutTruncated
+                  draft.stderrTruncated = event.data.stderrTruncated
+                }
               }),
             )
           }
         })
       },
+      "session.next.shell.continued": () => Effect.void,
+      "session.next.shell.continuation.started": () => Effect.void,
+      "session.next.shell.continuation.unknown": () => Effect.void,
       "session.next.step.started": (event) => {
         return Effect.gen(function* () {
           const currentAssistant = yield* adapter.getCurrentAssistant()
@@ -269,6 +295,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestTool(draft, event.data.callID)
           if (match) {
+            match.toolType = "toolType" in event.data && event.data.toolType === "custom" ? "custom" : undefined
             match.provider = event.data.provider
             match.time.ran = event.data.timestamp
             match.state = castDraft(
@@ -328,7 +355,12 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
               new SessionMessage.ToolStateError({
                 status: "error",
                 error: event.data.error,
-                input: typeof match.state.input === "string" ? {} : match.state.input,
+                input:
+                  match.toolType === "custom"
+                    ? match.state.input
+                    : typeof match.state.input === "string"
+                      ? {}
+                      : match.state.input,
                 structured: match.state.status === "running" ? match.state.structured : {},
                 content: match.state.status === "running" ? match.state.content : [],
                 result: event.data.result,
@@ -337,6 +369,9 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }
         })
       },
+      "session.next.task.prepared": () => Effect.void,
+      "session.next.task.requested": () => Effect.void,
+      "session.next.task.interrupted": () => Effect.void,
       "session.next.reasoning.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(
@@ -367,6 +402,9 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         })
       },
       "session.next.retried": () => Effect.void,
+      "session.next.compaction.requested": () => Effect.void,
+      "session.next.compaction.skipped": () => Effect.void,
+      "session.next.compaction.failed": () => Effect.void,
       "session.next.compaction.started": () => Effect.void,
       "session.next.compaction.delta": () => Effect.void,
       "session.next.compaction.ended": (event) => {

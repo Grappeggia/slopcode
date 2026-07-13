@@ -3,14 +3,26 @@ export * as Tool from "./tool"
 import { ToolDefinition, ToolFailure, ToolOutput, type ToolCall } from "@slopcode-ai/llm"
 import { Effect, JsonSchema, Schema } from "effect"
 import type { AgentV2 } from "../agent"
+import type { PermissionV2 } from "../permission"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
+import type { SessionEvent } from "../session/event"
 
 export interface Context {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly toolCallID: string
+  readonly multiAgent?: "v1" | "v2"
+  readonly permissions: PermissionV2.Ruleset
+  readonly plan: {
+    readonly mode?: "function" | "code-preferred" | "code-only"
+    readonly shell?: "shell_command"
+    readonly patch?: "freeform"
+    readonly multiAgent?: "v1" | "v2"
+  }
+  readonly task?: SessionEvent.Task.Requested["data"]
+  readonly prepared?: SessionEvent.Task.Prepared["data"]
 }
 
 export type SchemaType<A> = Schema.Codec<A, any, never, never>
@@ -37,23 +49,50 @@ export type Content =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "file"; readonly data: string; readonly mime: string; readonly name?: string }
 
+const DynamicContent = Schema.Array(
+  Schema.Union([
+    Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+    Schema.Struct({
+      type: Schema.Literal("file"),
+      data: Schema.String,
+      mime: Schema.String,
+      name: Schema.optional(Schema.String),
+    }),
+  ]),
+) as Schema.Codec<ReadonlyArray<Content>, ReadonlyArray<Content>, never, never>
+
 type Config<Input extends SchemaType<any>, Output extends SchemaType<any>> = {
-  readonly description: string
+  readonly description: string | ((permissions: PermissionV2.Ruleset) => string)
   readonly input: Input
   readonly output: Output
   readonly execute: (
     input: Schema.Schema.Type<Input>,
     context: Context,
   ) => Effect.Effect<Schema.Schema.Type<Output>, ToolFailure>
+  readonly validateInput?: (input: unknown) => string | undefined
   readonly toModelOutput?: (input: {
     readonly input: Schema.Schema.Type<Input>
     readonly output: Output["Encoded"]
   }) => ReadonlyArray<Content>
 }
 
+type DynamicConfig<Input, Output, Encoded> = {
+  readonly description: string | ((permissions: PermissionV2.Ruleset) => string)
+  readonly inputSchema: JsonSchema.JsonSchema
+  readonly outputSchema?: JsonSchema.JsonSchema
+  readonly decodeInput: (input: unknown) => Effect.Effect<Input, ToolFailure>
+  readonly encodeOutput: (output: Output) => Effect.Effect<Encoded, ToolFailure>
+  readonly execute: (input: Input, context: Context) => Effect.Effect<Output, ToolFailure>
+  readonly toModelOutput?: (input: {
+    readonly input: Input
+    readonly value: Output
+    readonly output: Encoded
+  }) => ReadonlyArray<Content>
+}
+
 type Runtime = {
   readonly permission?: string
-  readonly definition: (name: string) => ToolDefinition
+  readonly definition: (name: string, permissions: PermissionV2.Ruleset) => ToolDefinition
   readonly settle: (call: ToolCall, context: Context) => Effect.Effect<ToolOutput, ToolFailure>
 }
 
@@ -65,47 +104,127 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
   const tool = Object.freeze({}) as Definition<Input, Output>
   const definitions = new Map<string, ToolDefinition>()
   runtimes.set(tool, {
-    definition: (name) => {
-      const cached = definitions.get(name)
+    definition: (name, permissions) => {
+      const description = typeof config.description === "string" ? config.description : config.description(permissions)
+      const key = `${name}\u0000${description}`
+      const cached = definitions.get(key)
       if (cached) return cached
       const definition = new ToolDefinition({
         name,
-        description: config.description,
+        description,
         inputSchema: toJsonSchema(config.input),
         outputSchema: toJsonSchema(config.output),
       })
-      definitions.set(name, definition)
+      definitions.set(key, definition)
       return definition
     },
-    settle: (call, context) =>
-      Schema.decodeUnknownEffect(config.input)(call.input).pipe(
-        Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
-        Effect.flatMap((input) =>
-          config.execute(input, context).pipe(
-            Effect.flatMap((output) =>
-              Schema.encodeEffect(config.output)(output).pipe(
-                Effect.mapError(
-                  (error) =>
-                    new ToolFailure({
-                      message: `Tool returned an invalid value for its output schema: ${error.message}`,
-                    }),
+    settle: (call, context) => {
+      const error = config.validateInput?.(call.input)
+      return error
+        ? Effect.fail(new ToolFailure({ message: error }))
+        : Schema.decodeUnknownEffect(config.input)(call.input).pipe(
+            Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
+            Effect.flatMap((input) =>
+              config.execute(input, context).pipe(
+                Effect.flatMap((output) =>
+                  Schema.encodeEffect(config.output)(output).pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new ToolFailure({
+                          message: `Tool returned an invalid value for its output schema: ${error.message}`,
+                        }),
+                    ),
+                  ),
                 ),
+                Effect.map((output) => ({
+                  structured: output,
+                  content:
+                    config.toModelOutput?.({ input, output }).map((part) =>
+                      part.type === "text"
+                        ? { type: "text" as const, text: part.text }
+                        : {
+                            type: "file" as const,
+                            uri: `data:${part.mime};base64,${part.data}`,
+                            mime: part.mime,
+                            name: part.name,
+                          },
+                    ) ?? (typeof output === "string" ? [{ type: "text" as const, text: output }] : []),
+                })),
               ),
             ),
-            Effect.map((output) => ({
-              structured: output,
-              content:
-                config.toModelOutput?.({ input, output }).map((part) =>
-                  part.type === "text"
-                    ? { type: "text" as const, text: part.text }
-                    : {
-                        type: "file" as const,
-                        uri: `data:${part.mime};base64,${part.data}`,
-                        mime: part.mime,
-                        name: part.name,
-                      },
-                ) ?? (typeof output === "string" ? [{ type: "text" as const, text: output }] : []),
-            })),
+          )
+    },
+  })
+  return tool
+}
+
+export function dynamic<Input, Output, Encoded>(
+  config: DynamicConfig<Input, Output, Encoded>,
+): Definition<SchemaType<Input>, SchemaType<Output>> {
+  const description = config.description
+  const decode = config.decodeInput
+  const encode = config.encodeOutput
+  const execute = config.execute
+  const project = config.toModelOutput
+  const inputSchema = jsonSchema(config.inputSchema, "inputSchema")
+  const outputSchema = config.outputSchema === undefined ? undefined : jsonSchema(config.outputSchema, "outputSchema")
+  const tool = Object.freeze({}) as Definition<SchemaType<Input>, SchemaType<Output>>
+  const definitions = new Map<string, ToolDefinition>()
+  runtimes.set(tool, {
+    definition: (name, permissions) => {
+      const detail = typeof description === "string" ? description : description(permissions)
+      const key = `${name}\u0000${detail}`
+      const cached = definitions.get(key)
+      if (cached) return cached
+      const value = new ToolDefinition({
+        name,
+        description: detail,
+        inputSchema,
+        outputSchema,
+      })
+      freeze(value.inputSchema)
+      if (value.outputSchema) freeze(value.outputSchema)
+      Object.freeze(value)
+      definitions.set(key, value)
+      return value
+    },
+    settle: (call, context) =>
+      decode(call.input).pipe(
+        Effect.flatMap((input) =>
+          execute(input, context).pipe(
+            Effect.flatMap((value) => encode(value).pipe(Effect.map((output) => ({ value, output })))),
+            Effect.flatMap(({ value, output }) => {
+              const content: Effect.Effect<ToolOutput["content"], ToolFailure> = project
+                ? Schema.decodeUnknownEffect(DynamicContent)(project({ input, value, output })).pipe(
+                    Effect.mapError(
+                      (error) => new ToolFailure({ message: `Tool returned an invalid ToolOutput: ${error.message}` }),
+                    ),
+                    Effect.map((content) =>
+                      content.map((part) =>
+                        part.type === "text"
+                          ? { type: "text" as const, text: part.text }
+                          : {
+                              type: "file" as const,
+                              uri: `data:${part.mime};base64,${part.data}`,
+                              mime: part.mime,
+                              name: part.name,
+                            },
+                      ),
+                    ),
+                  )
+                : Effect.succeed(typeof output === "string" ? [{ type: "text" as const, text: output }] : [])
+              return Effect.map(content, (content) => ({ structured: output, content }))
+            }),
+            Effect.flatMap(Schema.decodeUnknownEffect(ToolOutput)),
+            Effect.mapError(
+              (error) =>
+                new ToolFailure({
+                  message:
+                    error instanceof ToolFailure
+                      ? error.message
+                      : `Tool returned an invalid ToolOutput: ${error.message}`,
+                }),
+            ),
           ),
         ),
       ),
@@ -113,7 +232,7 @@ export function make<Input extends SchemaType<any>, Output extends SchemaType<an
   return tool
 }
 
-export const validateName = (name: string) =>
+export const validateName = (name: string): Effect.Effect<void, RegistrationError> =>
   /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name)
     ? Effect.void
     : Effect.fail(new RegistrationError({ name, message: `Invalid tool name: ${name}` }))
@@ -128,7 +247,8 @@ export const withPermission = <Input extends SchemaType<any>, Output extends Sch
 }
 
 export const permission = (tool: AnyTool, name: string) => runtimeOf(tool).permission ?? name
-export const definition = (name: string, tool: AnyTool) => runtimeOf(tool).definition(name)
+export const definition = (name: string, tool: AnyTool, permissions: PermissionV2.Ruleset = []) =>
+  runtimeOf(tool).definition(name, permissions)
 export const settle = (tool: AnyTool, call: ToolCall, context: Context) => runtimeOf(tool).settle(call, context)
 
 function runtimeOf(tool: AnyTool) {
@@ -141,4 +261,37 @@ function toJsonSchema(schema: Schema.Top): JsonSchema.JsonSchema {
   const document = Schema.toJsonSchemaDocument(schema)
   if (Object.keys(document.definitions).length === 0) return document.schema
   return { ...document.schema, $defs: document.definitions }
+}
+
+function jsonSchema(value: JsonSchema.JsonSchema, name: string): JsonSchema.JsonSchema {
+  const clone = json(value, name, new Set())
+  if (typeof clone !== "object" || clone === null || Array.isArray(clone))
+    throw new TypeError(`${name} must be a JSON Schema object`)
+  return clone as JsonSchema.JsonSchema
+}
+
+function json(value: unknown, name: string, seen: Set<object>): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value !== "object") throw new TypeError(`${name} must be a JSON Schema object`)
+  if (seen.has(value)) throw new TypeError(`${name} must be a JSON Schema object`)
+  seen.add(value)
+  if (Array.isArray(value)) {
+    const clone = Object.freeze(value.map((item) => json(item, name, seen)))
+    seen.delete(value)
+    return clone
+  }
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
+    throw new TypeError(`${name} must be a JSON Schema object`)
+  const clone = Object.freeze(
+    Object.fromEntries(Object.entries(value).map(([key, item]) => [key, json(item, name, seen)])),
+  )
+  seen.delete(value)
+  return clone
+}
+
+function freeze(value: unknown): void {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return
+  Object.values(value).forEach(freeze)
+  Object.freeze(value)
 }

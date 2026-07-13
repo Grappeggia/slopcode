@@ -1,7 +1,7 @@
 export * as SessionMessage from "./message"
 
 import { Schema } from "effect"
-import { ProviderMetadata, ToolContent } from "@slopcode-ai/llm"
+import { ProviderMetadata, ToolContent, ToolType } from "@slopcode-ai/llm"
 import { ModelV2 } from "../model"
 import { V2Schema } from "../v2-schema"
 import { SessionEvent } from "./event"
@@ -61,6 +61,11 @@ export class Shell extends Schema.Class<Shell>("Session.Message.Shell")({
   callID: SessionEvent.Shell.Started.data.fields.callID,
   command: SessionEvent.Shell.Started.data.fields.command,
   output: Schema.String,
+  status: SessionEvent.Shell.Status.pipe(Schema.optional),
+  exitCode: Schema.Number.pipe(Schema.optional),
+  truncated: Schema.Boolean.pipe(Schema.optional),
+  stdoutTruncated: Schema.Boolean.pipe(Schema.optional),
+  stderrTruncated: Schema.Boolean.pipe(Schema.optional),
   time: Schema.Struct({
     created: V2Schema.DateTimeUtcFromMillis,
     completed: V2Schema.DateTimeUtcFromMillis.pipe(Schema.optional),
@@ -74,14 +79,14 @@ export class ToolStatePending extends Schema.Class<ToolStatePending>("Session.Me
 
 export class ToolStateRunning extends Schema.Class<ToolStateRunning>("Session.Message.ToolState.Running")({
   status: Schema.Literal("running"),
-  input: Schema.Record(Schema.String, Schema.Unknown),
+  input: Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.String]),
   structured: Schema.Record(Schema.String, Schema.Any),
   content: ToolContent.pipe(Schema.Array),
 }) {}
 
 export class ToolStateCompleted extends Schema.Class<ToolStateCompleted>("Session.Message.ToolState.Completed")({
   status: Schema.Literal("completed"),
-  input: Schema.Record(Schema.String, Schema.Unknown),
+  input: Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.String]),
   attachments: SessionEvent.FileAttachment.pipe(Schema.Array, Schema.optional),
   content: ToolContent.pipe(Schema.Array),
   outputPaths: SessionEvent.Tool.Success.data.fields.outputPaths,
@@ -91,7 +96,7 @@ export class ToolStateCompleted extends Schema.Class<ToolStateCompleted>("Sessio
 
 export class ToolStateError extends Schema.Class<ToolStateError>("Session.Message.ToolState.Error")({
   status: Schema.Literal("error"),
-  input: Schema.Record(Schema.String, Schema.Unknown),
+  input: Schema.Union([Schema.Record(Schema.String, Schema.Unknown), Schema.String]),
   content: ToolContent.pipe(Schema.Array),
   structured: Schema.Record(Schema.String, Schema.Any),
   error: SessionEvent.UnknownError,
@@ -105,6 +110,7 @@ export type ToolState = Schema.Schema.Type<typeof ToolState>
 
 export class AssistantTool extends Schema.Class<AssistantTool>("Session.Message.Assistant.Tool")({
   type: Schema.Literal("tool"),
+  toolType: ToolType.pipe(Schema.optional),
   id: Schema.String,
   name: Schema.String,
   provider: Schema.Struct({

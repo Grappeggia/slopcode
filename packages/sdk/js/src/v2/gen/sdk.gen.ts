@@ -155,6 +155,8 @@ import type {
   ProviderOauthAuthorizeResponses,
   ProviderOauthCallbackErrors,
   ProviderOauthCallbackResponses,
+  ProviderOpenaiUsageErrors,
+  ProviderOpenaiUsageResponses,
   PtyConnectErrors,
   PtyConnectResponses,
   PtyConnectTokenErrors,
@@ -3278,6 +3280,38 @@ export class Permission extends HeyApiClient {
   }
 }
 
+export class Openai extends HeyApiClient {
+  /**
+   * Get OpenAI usage
+   *
+   * Get safe normalized OpenAI authentication and ChatGPT usage status.
+   */
+  public usage<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProviderOpenaiUsageResponses, ProviderOpenaiUsageErrors, ThrowOnError>({
+      url: "/provider/openai/usage",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Oauth extends HeyApiClient {
   /**
    * Start OAuth authorization
@@ -3431,6 +3465,11 @@ export class Provider extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _openai?: Openai
+  get openai(): Openai {
+    return (this._openai ??= new Openai({ client: this.client }))
   }
 
   private _oauth?: Oauth
@@ -5551,19 +5590,37 @@ export class Session3 extends HeyApiClient {
   /**
    * Compact session
    *
-   * Compact a session conversation.
+   * Durably compact a session conversation with an optional text-only summary instruction.
    */
   public compact<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
+      id?: string
+      prompt?: Prompt
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "id" },
+            { in: "body", key: "prompt" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).post<V2SessionCompactResponses, V2SessionCompactErrors, ThrowOnError>({
       url: "/api/session/{sessionID}/compact",
       ...options,
       ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 

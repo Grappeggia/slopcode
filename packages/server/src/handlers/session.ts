@@ -7,6 +7,7 @@ import { Api } from "../api"
 import { SessionsCursor } from "../groups/session"
 import {
   ConflictError,
+  InvalidRequestError,
   InvalidCursorError,
   ServiceUnavailableError,
   SessionNotFoundError,
@@ -163,7 +164,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
-          yield* control.compact({ sessionID: ctx.params.sessionID }).pipe(
+          yield* control.compact({
+            sessionID: ctx.params.sessionID,
+            id: ctx.payload.id,
+            prompt: ctx.payload.prompt,
+          }).pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
                 new SessionNotFoundError({
@@ -172,13 +177,19 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 }),
               ),
             ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
+            Effect.catchTag("Session.CompactionConflictError", (error) =>
               Effect.fail(
-                new ServiceUnavailableError({
-                  message: `Session ${error.operation} is not available yet`,
-                  service: `session.${error.operation}`,
+                new ConflictError({
+                  message: `Compaction message ID conflicts with an existing durable record: ${error.messageID}`,
+                  resource: error.messageID,
                 }),
               ),
+            ),
+            Effect.catchTag("Session.CompactionPromptUnsupportedError", (error) =>
+              Effect.fail(new InvalidRequestError({ message: error.message, field: "prompt" })),
+            ),
+            Effect.catchTag("Session.CompactionFailedError", (error) =>
+              Effect.fail(new UnknownError({ message: error.message, ref: error.messageID })),
             ),
             Effect.catchTag("SessionRuntime.NotFound", (error) =>
               Effect.fail(
@@ -188,7 +199,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 }),
               ),
             ),
-            Effect.catchTag("SessionRuntime.Mismatch", (error) => Effect.fail(runtimeUnavailable(error))),
+            Effect.catchTag("SessionRuntime.Mismatch", () =>
+              Effect.fail(new UnknownError({ message: "Session runtime changed during compaction; retry the request" })),
+            ),
           )
           return HttpApiSchema.NoContent.make()
         }),
@@ -197,19 +210,23 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.wait",
         Effect.fn(function* (ctx) {
           yield* control.wait(ctx.params.sessionID).pipe(
+            Effect.tapError((error) =>
+              error._tag === "Session.NotFoundError" || error._tag === "SessionRuntime.NotFound"
+                ? Effect.void
+                : Effect.logError("session wait failed").pipe(
+                    Effect.annotateLogs({ sessionID: ctx.params.sessionID, error }),
+                  ),
+            ),
+            Effect.mapError((error) =>
+              error._tag === "Session.NotFoundError" || error._tag === "SessionRuntime.NotFound"
+                ? error
+                : new UnknownError({ message: "Session execution failed. Check server logs for details." }),
+            ),
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
                 new SessionNotFoundError({
                   sessionID: error.sessionID,
                   message: `Session not found: ${error.sessionID}`,
-                }),
-              ),
-            ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
-              Effect.fail(
-                new ServiceUnavailableError({
-                  message: `Session ${error.operation} is not available yet`,
-                  service: `session.${error.operation}`,
                 }),
               ),
             ),
@@ -221,7 +238,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 }),
               ),
             ),
-            Effect.catchTag("SessionRuntime.Mismatch", (error) => Effect.fail(runtimeUnavailable(error))),
           )
           return HttpApiSchema.NoContent.make()
         }),

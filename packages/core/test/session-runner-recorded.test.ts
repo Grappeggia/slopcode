@@ -6,6 +6,7 @@ import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { EventTable } from "@slopcode-ai/core/event/sql"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
+import { AppProcess } from "@slopcode-ai/core/process"
 import { AgentV2 } from "@slopcode-ai/core/agent"
 import { Config } from "@slopcode-ai/core/config"
 import { Project } from "@slopcode-ai/core/project"
@@ -32,6 +33,7 @@ import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import path from "node:path"
 import { testEffect } from "./lib/effect"
+import { locationServices } from "./lib/location-services"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
@@ -69,7 +71,7 @@ const model = OpenAIChat.route
     generation: { maxTokens: 20, temperature: 0 },
   })
   .model({ id: "gpt-4o-mini" })
-const models = SessionRunnerModel.layerWith(() => Effect.succeed(model))
+const models = SessionRunnerModel.layerWithModel(() => Effect.succeed(model))
 const systemContext = SystemContextRegistry.layer
 const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
@@ -89,6 +91,7 @@ const runner = SessionRunnerLLM.defaultLayer.pipe(
   Layer.provide(skillGuidance),
   Layer.provide(referenceGuidance),
   Layer.provide(config),
+  Layer.provide(AppProcess.defaultLayer),
 )
 const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
 const execution = Layer.effect(
@@ -98,6 +101,7 @@ const execution = Layer.effect(
       SessionExecution.Service.of({
         resume: coordinator.run,
         wake: coordinator.wake,
+        wait: coordinator.awaitIdle,
         interrupt: coordinator.interrupt,
       }),
     ),
@@ -109,6 +113,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(store),
   Layer.provide(Project.defaultLayer),
   Layer.provide(execution),
+  Layer.provide(locationServices),
 )
 const it = testEffect(
   Layer.mergeAll(

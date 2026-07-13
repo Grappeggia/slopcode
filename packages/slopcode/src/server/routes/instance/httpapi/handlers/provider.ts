@@ -10,6 +10,8 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { ProviderAuthApiError } from "../groups/provider"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
+import { Auth } from "@/auth"
+import { getUsage } from "@/plugin/openai/usage"
 
 function mapProviderAuthError<A, R>(self: Effect.Effect<A, ProviderAuth.Error, R>) {
   return self.pipe(
@@ -36,6 +38,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     const cfg = yield* Config.Service
     const provider = yield* Provider.Service
     const svc = yield* ProviderAuth.Service
+    const credentials = yield* Auth.Service
 
     const list = Effect.fn("ProviderHttpApi.list")(function* () {
       const config = yield* cfg.get()
@@ -60,6 +63,11 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
 
     const auth = Effect.fn("ProviderHttpApi.auth")(function* () {
       return yield* svc.methods()
+    })
+
+    const openaiUsage = Effect.fn("ProviderHttpApi.openaiUsage")(function* () {
+      const stored = yield* credentials.get("openai").pipe(Effect.orElseSucceed(() => undefined))
+      return yield* Effect.promise(() => getUsage(stored, (auth) => Effect.runPromise(credentials.set("openai", auth))))
     })
 
     const authorize = Effect.fn("ProviderHttpApi.authorize")(function* (ctx: {
@@ -107,6 +115,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     return handlers
       .handle("list", list)
       .handle("auth", auth)
+      .handle("openaiUsage", openaiUsage)
       .handleRaw("authorize", authorizeRaw)
       .handle("callback", callback)
   }),

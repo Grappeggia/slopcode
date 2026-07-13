@@ -60,6 +60,8 @@ import { ModelsDev } from "@slopcode-ai/core/models-dev"
 import { Npm } from "@slopcode-ai/core/npm"
 import { ProjectV2 } from "@slopcode-ai/core/project"
 import { ProjectCopy } from "@slopcode-ai/core/project/copy"
+import { LocationServiceMap, withPluginHost } from "@slopcode-ai/core/location-layer"
+import { PluginPackage } from "@slopcode-ai/core/plugin/package"
 import { PtyTicket } from "@slopcode-ai/core/pty/ticket"
 import { Ripgrep } from "@slopcode-ai/core/ripgrep"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
@@ -269,7 +271,20 @@ const app = LayerNode.group([
 
 export function createRoutes(
   corsOptions?: CorsOptions,
+  host?: Layer.Layer<PluginPackage.Host>,
+  observe?: (locations: Context.Service.Shape<typeof LocationServiceMap>) => void,
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
+  const locations = host ? withPluginHost(host) : LocationServiceMap.layer
+  const locationLayer = observe
+    ? Layer.effect(
+        LocationServiceMap,
+        Effect.gen(function* () {
+          const service = yield* LocationServiceMap
+          yield* Effect.sync(() => observe(service))
+          return service
+        }),
+      ).pipe(Layer.provide(locations))
+    : locations
   return Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,
@@ -290,6 +305,7 @@ export function createRoutes(
       HttpServer.layerServices,
     ]),
     Layer.provide(LayerNode.buildLayer(app)),
+    Layer.provide(locationLayer),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provide(Observability.layer),
   )
@@ -297,12 +313,20 @@ export function createRoutes(
 
 export const routes = createRoutes()
 
-export const webHandler = lazy(() =>
-  HttpRouter.toWebHandler(routes, {
+export function makeWebHandler(
+  host?: Layer.Layer<PluginPackage.Host>,
+  options?: {
+    readonly memoMap?: Layer.MemoMap
+    readonly observe?: (locations: Context.Service.Shape<typeof LocationServiceMap>) => void
+  },
+) {
+  return HttpRouter.toWebHandler(createRoutes(undefined, host, options?.observe), {
     disableLogger: true,
-    memoMap,
+    memoMap: options?.memoMap ?? memoMap,
     middleware: disposeMiddleware,
-  }),
-)
+  })
+}
+
+export const webHandler = lazy(() => makeWebHandler())
 
 export * as HttpApiApp from "./server"

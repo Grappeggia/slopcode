@@ -5,12 +5,15 @@ import { Headers, HttpClientRequest } from "effect/unstable/http"
 import {
   InvalidProviderOutputReason,
   InvalidRequestReason,
+  isCustomToolDefinition,
+  isFunctionToolDefinition,
   LLMError,
   type ContentPart,
   type LLMRequest,
   type MediaPart,
   type ToolFileContent,
   type TextPart,
+  type ToolDefinition,
   type ToolResultPart,
 } from "../schema"
 import { isRecord } from "../utils/record"
@@ -186,6 +189,20 @@ export const wrappedSystemUpdate = Effect.fn("ProviderShared.wrappedSystemUpdate
  */
 export const parseToolInput = (route: string, name: string, raw: string) =>
   parseJson(route, raw || "{}", `Invalid JSON input for ${route} tool call ${name}`)
+
+export const functionToolDefinitions = Effect.fn("ProviderShared.functionToolDefinitions")(function* (
+  route: string,
+  request: LLMRequest,
+) {
+  const custom = request.tools.find(isCustomToolDefinition)
+  const part = request.messages.flatMap((message) => message.content).find((item) => {
+    if (item.type !== "tool-call" && item.type !== "tool-result") return false
+    return item.toolType === "custom"
+  })
+  if (custom || part || request.toolChoice?.toolType === "custom")
+    return yield* invalidRequest(`${route} does not support custom tools`)
+  return request.tools.filter(isFunctionToolDefinition)
+})
 
 export const IMAGE_MIMES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const
 export const MAX_MEDIA_ENCODED_BYTES = 8 * 1024 * 1024

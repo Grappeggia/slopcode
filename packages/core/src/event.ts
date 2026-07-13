@@ -138,10 +138,14 @@ export function definitions() {
 
 export interface PublishOptions {
   readonly id?: ID
+  /** Treat an existing event with the same ID, aggregate, type, and data as an exact retry. */
+  readonly idempotent?: boolean
   readonly metadata?: Record<string, unknown>
   readonly location?: Location.Ref
   /** Local operational projection committed atomically with a new synchronized event. Not replayed or serialized. */
   readonly commit?: (seq: number) => Effect.Effect<void>
+  /** Validation run inside the synchronized event transaction before projectors mutate durable state. */
+  readonly guard?: (seq: number) => Effect.Effect<void>
 }
 
 export interface Interface {
@@ -221,9 +225,14 @@ export const layerWith = (options?: LayerOptions) =>
           readonly strictOwner?: boolean
         },
         commit?: (seq: number) => Effect.Effect<void>,
+        guard?: (seq: number) => Effect.Effect<void>,
+        idempotent?: boolean,
       ) {
         return Effect.gen(function* () {
-          const definition = registry.get(event.type)
+          const definition =
+            event.version === undefined
+              ? registry.get(event.type)
+              : syncRegistry.get(versionedType(event.type, event.version))
           const sync = definition?.sync
           if (sync) {
             if (event.version !== sync.version) {
@@ -318,11 +327,24 @@ export const layerWith = (options?: LayerOptions) =>
                             )
                           }
                           const stored = yield* db
-                            .select({ aggregateID: EventTable.aggregate_id, seq: EventTable.seq })
+                            .select({
+                              aggregateID: EventTable.aggregate_id,
+                              seq: EventTable.seq,
+                              type: EventTable.type,
+                              data: EventTable.data,
+                            })
                             .from(EventTable)
                             .where(eq(EventTable.id, event.id))
                             .get()
                             .pipe(Effect.orDie)
+                          if (
+                            stored &&
+                            idempotent &&
+                            stored.aggregateID === aggregateID &&
+                            stored.type === versionedType(definition.type, sync.version) &&
+                            isDeepStrictEqual(stored.data, encoded)
+                          )
+                            return { aggregateID, seq: stored.seq, created: false }
                           if (stored)
                             yield* Effect.die(
                               new InvalidSyncEventError({
@@ -333,6 +355,7 @@ export const layerWith = (options?: LayerOptions) =>
                           for (const guard of commitGuards) {
                             yield* guard(event)
                           }
+                          if (guard) yield* guard(seq)
                           for (const projector of list) {
                             yield* projector({ ...event, seq } as Payload)
                           }
@@ -362,12 +385,12 @@ export const layerWith = (options?: LayerOptions) =>
                             ])
                             .run()
                             .pipe(Effect.orDie)
-                          return { aggregateID, seq }
+                          return { aggregateID, seq, created: true }
                         }),
                       { behavior: "immediate" },
                     )
                     .pipe(Effect.orDie)
-                  if (committed) {
+                  if (committed?.created) {
                     yield* Effect.forEach(
                       synchronized.get(committed.aggregateID) ?? [],
                       (pubsub) => PubSub.publish(pubsub, undefined),
@@ -382,10 +405,15 @@ export const layerWith = (options?: LayerOptions) =>
         })
       }
 
-      function publishEvent<D extends Definition>(event: Payload<D>, commit?: PublishOptions["commit"]) {
+      function publishEvent<D extends Definition>(
+        event: Payload<D>,
+        commit?: PublishOptions["commit"],
+        guard?: PublishOptions["guard"],
+        idempotent?: PublishOptions["idempotent"],
+      ) {
         return Effect.gen(function* () {
           const durable = registry.get(event.type)?.sync !== undefined
-          if (!durable && commit)
+          if (!durable && (commit || guard))
             return yield* Effect.die(
               new InvalidSyncEventError({
                 type: event.type,
@@ -393,9 +421,10 @@ export const layerWith = (options?: LayerOptions) =>
               }),
             )
           if (durable) {
-            const committed = yield* commitSyncEvent(event as Payload, undefined, commit)
+            const committed = yield* commitSyncEvent(event as Payload, undefined, commit, guard, idempotent)
             if (committed) {
               event = { ...event, seq: committed.seq }
+              if (!committed.created) return event
               yield* Effect.forEach(syncHandlers, (sync) => observe(event as Payload, "sync", sync), { discard: true })
               yield* notify(event as Payload, true)
               return event
@@ -450,6 +479,8 @@ export const layerWith = (options?: LayerOptions) =>
               data: payloadData,
             } as Payload<D>,
             options?.commit,
+            options?.guard,
+            options?.idempotent,
           )
         })
       }

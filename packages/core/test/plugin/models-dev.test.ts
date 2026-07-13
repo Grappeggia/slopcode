@@ -207,7 +207,7 @@ describe("ModelsDevPlugin", () => {
             location: { directory: AbsolutePath.make("/project") },
           })
           const resolved = yield* SessionRunnerModel.resolve(session, fast)
-          const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }))
+          const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved.model, prompt: "Hello" }))
 
           expect(prepared.body).toMatchObject({
             model: "gpt-5.6",

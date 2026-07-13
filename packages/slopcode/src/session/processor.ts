@@ -492,7 +492,8 @@ export const layer = Layer.effect(
                 assistantMessageID,
                 callID: value.id,
                 tool: value.name,
-                input,
+                input: toolCall.call.raw,
+                toolType: "custom",
                 provider: {
                   executed: toolCall.part.metadata?.providerExecuted === true,
                   ...(value.providerMetadata ? { metadata: value.providerMetadata } : {}),

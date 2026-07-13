@@ -68,4 +68,19 @@ describe("control-plane/adapters", () => {
       directory: "/two",
     })
   })
+
+  test("cleanup removes only its owned registration", async () => {
+    const type = `demo-${Math.random().toString(36).slice(2)}`
+    const id = ProjectV2.ID.make(`project-${Math.random().toString(36).slice(2)}`)
+    const first = registerAdapter(id, type, adapter("/one"))
+    const second = registerAdapter(id, type, adapter("/two"))
+
+    first()
+    expect(await (await getAdapter(id, type)).target(info(id, type))).toEqual({
+      type: "local",
+      directory: "/two",
+    })
+    second()
+    expect(() => getAdapter(id, type)).toThrow(`Unknown workspace adapter: ${type}`)
+  })
 })

@@ -298,7 +298,8 @@ const thinkingConfig = (request: LLMRequest) => {
 }
 
 const fromRequest = Effect.fn("Gemini.fromRequest")(function* (request: LLMRequest) {
-  const toolsEnabled = request.tools.length > 0 && request.toolChoice?.type !== "none"
+  const definitions = yield* ProviderShared.functionToolDefinitions("Gemini", request)
+  const toolsEnabled = definitions.length > 0 && request.toolChoice?.type !== "none"
   const generation = request.generation
   const generationConfig = {
     maxOutputTokens: generation?.maxTokens,
@@ -313,7 +314,7 @@ const fromRequest = Effect.fn("Gemini.fromRequest")(function* (request: LLMReque
     contents: yield* lowerMessages(request),
     systemInstruction:
       request.system.length === 0 ? undefined : { parts: [{ text: ProviderShared.joinText(request.system) }] },
-    tools: toolsEnabled ? [{ functionDeclarations: request.tools.map(lowerTool) }] : undefined,
+    tools: toolsEnabled ? [{ functionDeclarations: definitions.map(lowerTool) }] : undefined,
     toolConfig: toolsEnabled && request.toolChoice ? yield* lowerToolConfig(request.toolChoice) : undefined,
     generationConfig: Object.values(generationConfig).some((value) => value !== undefined)
       ? generationConfig

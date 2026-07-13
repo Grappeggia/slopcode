@@ -19,6 +19,7 @@ const media = (file: FileAttachment): ContentPart => ({
 })
 
 const toolInput = (tool: SessionMessage.AssistantTool) => {
+  if (tool.toolType === "custom") return tool.state.input
   if (tool.state.status !== "pending") return tool.state.input
   try {
     return JSON.parse(tool.state.input) as unknown
@@ -27,14 +28,18 @@ const toolInput = (tool: SessionMessage.AssistantTool) => {
   }
 }
 
-const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined): ContentPart =>
-  ToolCallPart.make({
+const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined): ContentPart => {
+  const input = toolInput(tool)
+  const common = {
     id: tool.id,
     name: tool.name,
-    input: toolInput(tool),
     providerExecuted: tool.provider?.executed,
     providerMetadata,
-  })
+  }
+  if (tool.toolType !== "custom") return ToolCallPart.make({ ...common, input, toolType: tool.toolType })
+  if (typeof input !== "string") throw new TypeError(`Custom tool input is not raw text: ${tool.id}`)
+  return ToolCallPart.make({ ...common, input, toolType: "custom" })
+}
 
 const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined) => {
   if (tool.state.status === "completed") {
@@ -48,6 +53,7 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
       id: tool.id,
       name: tool.name,
       result,
+      toolType: tool.toolType,
       providerExecuted: tool.provider?.executed,
       providerMetadata,
     })
@@ -60,6 +66,7 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
         tool.provider?.executed === true && tool.state.result !== undefined
           ? tool.state.result
           : { error: tool.state.error, content: tool.state.content, structured: tool.state.structured },
+      toolType: tool.toolType,
       resultType: "error",
       providerExecuted: tool.provider?.executed,
       providerMetadata,

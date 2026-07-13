@@ -204,17 +204,22 @@ describe("PublicApi OpenAPI v2 errors", () => {
     }
   })
 
-  test("documents v2 unfinished session mutation errors", () => {
+  test("documents v2 manual compaction errors", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const responses = spec.paths["/api/session/{sessionID}/compact"]?.post?.responses
 
-    for (const route of [
-      ["post", "/api/session/{sessionID}/compact"],
-      ["post", "/api/session/{sessionID}/wait"],
-    ] as const) {
-      expect(componentName(responseRef(spec.paths[route[1]]?.[route[0]]?.responses?.["503"]) ?? "")).toBe(
-        "ServiceUnavailableError",
-      )
-    }
+    expect(componentNames(responses?.["400"])).toContain("InvalidRequestError")
+    expect(componentNames(responses?.["409"])).toContain("ConflictError")
+    expect(componentNames(responses?.["500"]).some((name) => /^UnknownError\d*$/.test(name))).toBeTrue()
+    expect(responses?.["503"]).toBeUndefined()
+  })
+
+  test("documents v2 wait execution errors", () => {
+    const responses = (OpenApi.fromApi(PublicApi) as OpenApiSpec).paths["/api/session/{sessionID}/wait"]?.post
+      ?.responses
+
+    expect(componentName(responseRef(responses?.["500"]) ?? "")).toMatch(/^UnknownError\d*$/)
+    expect(responses?.["503"]).toBeUndefined()
   })
 
   test("documents v2 session read data errors", () => {

@@ -10,6 +10,14 @@ import { HttpApiApp } from "./routes/instance/httpapi/server"
 import { disposeMiddleware } from "./routes/instance/httpapi/lifecycle"
 import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
 import { PublicApi } from "./routes/instance/httpapi/public"
+import { ServerAuth } from "./auth"
+import { PluginServer } from "@slopcode-ai/server/plugin"
+import { Location } from "@slopcode-ai/core/location"
+import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
+import { ProjectV2 } from "@slopcode-ai/core/project"
+import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { registerAdapter } from "@/control-plane/adapters"
+import type { WorkspaceAdapter } from "@/control-plane/types"
 import type { CorsOptions } from "./cors"
 import { lazy } from "@/util/lazy"
 
@@ -53,21 +61,39 @@ class ListenerServerService extends Context.Service<ListenerServerService, Liste
 ) {}
 
 export const Default = lazy(() => {
-  const handler = HttpApiApp.webHandler().handler
+  const local = new URL("http://localhost:4096")
+  let handler: ReturnType<typeof HttpApiApp.makeWebHandler>["handler"] | undefined
+  let locations: Context.Service.Shape<typeof LocationServiceMap> | undefined
+  const plugins = pluginHost(local, (request, init) => {
+    if (!handler) return Promise.reject(new Error("Server handler is not initialized"))
+    return handler(authenticated(request, init), HttpApiApp.context)
+  })
+  const web = HttpApiApp.makeWebHandler(plugins.layer, {
+    memoMap: Layer.makeMemoMapUnsafe(),
+    observe: (service) => (locations = service),
+  })
+  handler = web.handler
   const app: ServerApp = {
-    fetch: (request: Request) => handler(request, HttpApiApp.context),
+    fetch: (request: Request) => web.handler(request, HttpApiApp.context),
     request(input, init) {
-      return app.fetch(input instanceof Request ? input : new Request(new URL(input, "http://localhost"), init))
+      return app.fetch(input instanceof Request ? input : new Request(new URL(input, local), init))
     },
   }
-  return { app }
+  return {
+    app,
+    dispose: web.dispose,
+    invalidate: (directory: string) =>
+      locations
+        ? Effect.runPromise(locations.invalidate(Location.Ref.make({ directory: AbsolutePath.make(directory) })))
+        : Promise.resolve(),
+  }
 })
 
 export async function openapi() {
   return OpenApi.fromApi(PublicApi)
 }
 
-export let url: URL
+export let url: URL | undefined
 
 export async function listen(opts: ListenOptions): Promise<Listener> {
   const listener = await Effect.runPromise(listenEffect(opts))
@@ -75,15 +101,23 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
     hostname: listener.hostname,
     port: listener.port,
     url: listener.url,
-    stop: (close?: boolean) => Effect.runPromiseExit(listener.stop(close)).then(() => undefined),
+    stop: (close?: boolean) =>
+      Effect.runPromiseExit(listener.stop(close)).then(() => {
+        if (url === listener.url) url = undefined
+      }),
   }
 }
 
 const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unknown> = Effect.fn("Server.listen")(
   function* (opts: ListenOptions) {
-    const state = yield* startWithPortFallback(opts)
+    const target: { url?: URL } = {}
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    )
+    const state = yield* startWithPortFallback(opts, target, env)
     const address = yield* tcpAddress(state)
     const listenerUrl = makeURL(opts.hostname, address.port)
+    target.url = listenerUrl
     url = listenerUrl
 
     const unpublishMdns = yield* setupMdns(opts, address.port, state.scope)
@@ -97,8 +131,13 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
   },
 )
 
-function listenerLayer(opts: ListenOptions, port: number) {
-  return HttpRouter.serve(HttpApiApp.createRoutes(opts), {
+function listenerLayer(opts: ListenOptions, port: number, target: { url?: URL }, env: Record<string, string>) {
+  const credentials = { password: env.SLOPCODE_SERVER_PASSWORD, username: env.SLOPCODE_SERVER_USERNAME ?? "slopcode" }
+  const plugins = pluginHost(
+    () => target.url ?? makeURL(opts.hostname, port),
+    (request, init) => fetch(authenticated(request, init, credentials)),
+  )
+  return HttpRouter.serve(HttpApiApp.createRoutes(opts, plugins.layer), {
     middleware: disposeMiddleware,
     disableLogger: true,
     disableListenLog: true,
@@ -110,20 +149,40 @@ function listenerLayer(opts: ListenOptions, port: number) {
     // `ConfigProvider` snapshots `process.env` on first read and caches the
     // result on a module-singleton Reference; without overriding it here,
     // every later `Server.listen()` keeps observing that initial snapshot.
-    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv())),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
   )
 }
 
-function startWithPortFallback(opts: ListenOptions) {
-  if (opts.port !== 0) return startListener(opts, opts.port)
-  // Match the legacy listener port-resolution behavior: explicit `0` prefers
-  // 4096 first, then any free port.
-  return startListener(opts, 4096).pipe(Effect.catch(() => startListener(opts, 0)))
+function pluginHost(baseUrl: URL | (() => URL), fetch: Parameters<typeof PluginServer.runtime>[0]["fetch"]) {
+  return PluginServer.runtime({
+    baseUrl,
+    fetch,
+    register: (projectID, type, adapter) =>
+      registerAdapter(ProjectV2.ID.make(projectID), type, adapter as WorkspaceAdapter),
+  })
 }
 
-function startListener(opts: ListenOptions, port: number) {
+function authenticated(input: RequestInfo | URL, init?: RequestInit, credentials?: ServerAuth.Credentials) {
+  const request = new Request(input, init)
+  const authorization = credentials
+    ? credentials.password
+      ? ServerAuth.header(credentials)
+      : undefined
+    : ServerAuth.header()
+  if (authorization) request.headers.set("authorization", authorization)
+  return request
+}
+
+function startWithPortFallback(opts: ListenOptions, target: { url?: URL }, env: Record<string, string>) {
+  if (opts.port !== 0) return startListener(opts, opts.port, target, env)
+  // Match the legacy listener port-resolution behavior: explicit `0` prefers
+  // 4096 first, then any free port.
+  return startListener(opts, 4096, target, env).pipe(Effect.catch(() => startListener(opts, 0, target, env)))
+}
+
+function startListener(opts: ListenOptions, port: number, target: { url?: URL }, env: Record<string, string>) {
   const scope = Scope.makeUnsafe()
-  return Layer.buildWithMemoMap(listenerLayer(opts, port), Layer.makeMemoMapUnsafe(), scope).pipe(
+  return Layer.buildWithMemoMap(listenerLayer(opts, port, target, env), Layer.makeMemoMapUnsafe(), scope).pipe(
     Effect.provide(HttpApiApp.context),
     Effect.onError(() => Scope.close(scope, Exit.void).pipe(Effect.ignore)),
     Effect.map(

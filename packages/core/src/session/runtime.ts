@@ -33,6 +33,8 @@ export class Mismatch extends Schema.TaggedErrorClass<Mismatch>()("SessionRuntim
   sessionID: SessionSchema.ID,
   expectedOwner: Owner.pipe(Schema.optional),
   actualOwner: Owner,
+  expectedState: State.pipe(Schema.optional),
+  actualState: State,
   expectedEpoch: NonNegativeInt.pipe(Schema.optional),
   actualEpoch: NonNegativeInt,
 }) {}
@@ -45,8 +47,18 @@ export interface Interface {
   readonly assert: (input: {
     readonly sessionID: SessionSchema.ID
     readonly owner: Owner
+    readonly state?: State
     readonly epoch?: number
   }) => Effect.Effect<Info, Error>
+  readonly claim: (
+    input: {
+      readonly sessionID: SessionSchema.ID
+      readonly owner: Owner
+      readonly state?: State
+      readonly epoch?: number
+    },
+    coordinate?: Effect.Effect<void>,
+  ) => Effect.Effect<Info, Error>
   readonly assign: (input: {
     readonly sessionID: SessionSchema.ID
     readonly owner?: Owner
@@ -69,12 +81,14 @@ const info = (row: typeof SessionTable.$inferSelect) =>
 
 const mismatch = (
   row: typeof SessionTable.$inferSelect,
-  expected: { readonly owner?: Owner; readonly epoch?: number },
+  expected: { readonly owner?: Owner; readonly state?: State; readonly epoch?: number },
 ) =>
   new Mismatch({
     sessionID: SessionSchema.ID.make(row.id),
     expectedOwner: expected.owner,
     actualOwner: row.runtime,
+    expectedState: expected.state,
+    actualState: row.runtime_state,
     expectedEpoch: expected.epoch,
     actualEpoch: row.runtime_epoch,
   })
@@ -92,6 +106,7 @@ export const layer = Layer.effect(
     const assert = Effect.fn("SessionRuntime.assert")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly owner: Owner
+      readonly state?: State
       readonly epoch?: number
     }) {
       const row = yield* db
@@ -101,8 +116,12 @@ export const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (!row) return yield* new NotFound({ sessionID: input.sessionID })
-      if (row.runtime !== input.owner || (input.epoch !== undefined && row.runtime_epoch !== input.epoch))
-        return yield* mismatch(row, { owner: input.owner, epoch: input.epoch })
+      if (
+        row.runtime !== input.owner ||
+        (input.state !== undefined && row.runtime_state !== input.state) ||
+        (input.epoch !== undefined && row.runtime_epoch !== input.epoch)
+      )
+        return yield* mismatch(row, { owner: input.owner, state: input.state, epoch: input.epoch })
       return info(row)
     })
 
@@ -131,6 +150,27 @@ export const layer = Layer.effect(
           )
       }),
       assert,
+      claim: Effect.fn("SessionRuntime.claim")(function* (
+        input: {
+          readonly sessionID: SessionSchema.ID
+          readonly owner: Owner
+          readonly state?: State
+          readonly epoch?: number
+        },
+        coordinate: Effect.Effect<void> = Effect.void,
+      ) {
+        return yield* db
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                const current = yield* assert(input)
+                yield* coordinate
+                return current
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.catchTag("SqlError", Effect.die))
+      }),
       assign: Effect.fn("SessionRuntime.assign")(function* (input) {
         const updated = DateTime.toEpochMillis(yield* DateTime.now)
         const row = yield* db

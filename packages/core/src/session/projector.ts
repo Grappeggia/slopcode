@@ -15,6 +15,7 @@ import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
+import { SessionCreate } from "./create"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -214,6 +215,41 @@ export const layer = Layer.effectDiscard(
     const events = yield* EventV2.Service
     const { db } = yield* Database.Service
     yield* events.beforeCommit((event) => SessionInput.guardReservedID(db, event))
+    yield* events.project(SessionEvent.Created, (event) =>
+      Effect.gen(function* () {
+        const stored = yield* db
+          .insert(SessionTable)
+          .values({
+            id: event.data.sessionID,
+            parent_id: event.data.parentID,
+            project_id: event.data.projectID,
+            workspace_id: event.data.location.workspaceID,
+            slug: event.data.slug,
+            directory: event.data.location.directory,
+            path: event.data.subpath,
+            title: event.data.title,
+            version: event.data.version,
+            agent: event.data.agent,
+            model: event.data.model,
+            metadata: event.data.metadata,
+            runtime: event.data.runtime,
+            time_created: DateTime.toEpochMillis(event.data.timestamp),
+            time_updated: DateTime.toEpochMillis(event.data.timestamp),
+          })
+          .onConflictDoNothing()
+          .returning({ sessionID: SessionTable.id })
+          .get()
+          .pipe(Effect.orDie)
+        if (!stored) return yield* Effect.die(new SessionCreate.AlreadyProjected())
+        if (!event.data.location.workspaceID) return
+        yield* db
+          .update(WorkspaceTable)
+          .set({ time_used: Date.now() })
+          .where(eq(WorkspaceTable.id, event.data.location.workspaceID))
+          .run()
+          .pipe(Effect.orDie)
+      }),
+    )
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
         const stored = yield* db
@@ -419,8 +455,12 @@ export const layer = Layer.effectDiscard(
       )
     })
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
+    yield* events.project(SessionEvent.Shell.Requested, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Ended, (event) => run(db, event))
+    yield* events.project(SessionEvent.Shell.Continued, () => Effect.void)
+    yield* events.project(SessionEvent.Shell.ContinuationStarted, () => Effect.void)
+    yield* events.project(SessionEvent.Shell.ContinuationUnknown, () => Effect.void)
     yield* events.project(SessionEvent.Step.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Failed, (event) => run(db, event))
@@ -432,9 +472,15 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Tool.Progress, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Success, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Failed, (event) => run(db, event))
+    yield* events.project(SessionEvent.Task.Prepared, () => Effect.void)
+    yield* events.project(SessionEvent.Task.Requested, () => Effect.void)
+    yield* events.project(SessionEvent.Task.Interrupted, () => Effect.void)
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))
     // yield* events.project(SessionEvent.Retried, (event) => run(db, event))
+    yield* events.project(SessionEvent.Compaction.Requested, () => Effect.void)
+    yield* events.project(SessionEvent.Compaction.Skipped, () => Effect.void)
+    yield* events.project(SessionEvent.Compaction.Failed, () => Effect.void)
     yield* events.project(SessionEvent.Compaction.Ended, (event) => {
       if (event.version === 1) return Effect.void
       const seq = event.seq

@@ -9,6 +9,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 import { produce } from "immer"
 import { AgentV2 } from "../../agent"
 import { Catalog } from "../../catalog"
+import { ModelHarness } from "../../model-harness"
 import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
 import { PluginBoot } from "../../plugin/boot"
@@ -36,15 +37,34 @@ export type Error =
   | Catalog.ModelNotFoundError
   | ModelNotSelectedError
   | UnsupportedApiError
+  | ModelHarness.IncompatibilityError
+  | ModelHarness.UnsupportedReasoningError
 
 export interface Interface {
-  readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>
+  readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Resolved, Error>
+}
+
+export interface Resolved {
+  readonly model: Model
+  readonly catalog: ModelV2.Info
+  readonly harness: ModelHarness.Profile | undefined
+  readonly reasoning: ModelHarness.Reasoning | undefined
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/SessionRunnerModel") {}
 
-/** Test or embedding seam for supplying a model resolver directly. */
 export const layerWith = (resolve: Interface["resolve"]) => Layer.succeed(Service, Service.of({ resolve }))
+
+/** Test seam for callers that only need to supply an executable model. */
+export const layerWithModel = (resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>) =>
+  layerWith((session) =>
+    resolve(session).pipe(
+      Effect.map((model) => {
+        const catalog = ModelV2.Info.empty(ProviderV2.ID.make(model.provider), ModelV2.ID.make(model.id))
+        return { model, catalog, harness: ModelHarness.resolve(catalog), reasoning: undefined }
+      }),
+    ),
+  )
 
 const apiKey = (model: ModelV2.Info, provider?: ProviderV2.Info) => {
   const value = model.request.body.apiKey ?? model.api.settings?.apiKey
@@ -66,7 +86,7 @@ const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {
     generation: model.request.generation,
     providerOptions: namespace && Object.keys(options).length > 0 ? { [namespace]: options } : undefined,
     http: { body: httpBody },
-    limits: { context: model.limit.context, output: model.limit.output },
+    limits: { context: ModelHarness.resolve(model)?.context.limit ?? model.limit.context, output: model.limit.output },
   })
 }
 
@@ -122,7 +142,19 @@ export const resolve = (
   model: ModelV2.Info,
   provider?: ProviderV2.Info,
   variant = session.model?.variant,
-) => fromCatalogModel(withVariant(model, variant), provider)
+) =>
+  Effect.gen(function* () {
+    const harness = ModelHarness.resolve(model)
+    const resolved = yield* fromCatalogModel(withVariant(model, variant), provider)
+    if (!harness) return { model: resolved, catalog: model, harness, reasoning: undefined }
+    yield* ModelHarness.validate(harness, ["code-mode", ...resolved.route.capabilities])
+    return {
+      model: resolved,
+      catalog: model,
+      harness,
+      reasoning: yield* ModelHarness.reasoning(harness, variant),
+    }
+  })
 
 export const supported = (model: ModelV2.Info) =>
   model.api.type === "aisdk" &&

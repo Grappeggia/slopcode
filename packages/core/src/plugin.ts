@@ -2,11 +2,12 @@ export * as PluginV2 from "./plugin"
 
 import { createDraft, finishDraft, type Draft } from "immer"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
-import { Context, Effect, Exit, Layer, Schema, Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Layer, Schema, Scope } from "effect"
 import type { ModelV2 } from "./model"
 import type { Catalog } from "./catalog"
 import { EventV2 } from "./event"
 import { KeyedMutex } from "./effect/keyed-mutex"
+import type { PluginTool } from "./plugin/tool"
 
 export const ID = Schema.String.pipe(Schema.brand("Plugin.ID"))
 export type ID = typeof ID.Type
@@ -16,6 +17,27 @@ export const Event = {
     type: "plugin.added",
     schema: {
       id: ID,
+    },
+  }),
+  Failed: EventV2.define({
+    type: "plugin.failed",
+    schema: {
+      id: ID.pipe(Schema.optional),
+      source: Schema.String,
+      package: Schema.String.pipe(Schema.optional),
+      stage: Schema.Literals(["install", "entrypoint", "compatibility", "import", "factory", "hook-shape"]).pipe(
+        Schema.optional,
+      ),
+      message: Schema.String,
+    },
+  }),
+  Warning: EventV2.define({
+    type: "plugin.warning",
+    schema: {
+      id: ID.pipe(Schema.optional),
+      source: Schema.String,
+      package: Schema.String,
+      message: Schema.String,
     },
   }),
 }
@@ -45,6 +67,30 @@ type HookSpec = {
       sdk?: any
     }
   }
+  "tool.execute.before": {
+    input: {
+      tool: string
+      sessionID: string
+      callID: string
+    }
+    output: {
+      args: unknown
+    }
+  }
+  "tool.execute.after": {
+    input: {
+      tool: string
+      sessionID: string
+      callID: string
+      args: unknown
+    }
+    output: {
+      title?: string
+      output: string
+      metadata?: Record<string, unknown>
+      attachments?: ReadonlyArray<PluginTool.Attachment>
+    }
+  }
 }
 
 export type Hooks = {
@@ -59,20 +105,50 @@ export type HookFunctions = {
   [key in keyof Hooks]?: (input: Hooks[key]) => Effect.Effect<void>
 }
 
+export type Registration = HookFunctions & {
+  readonly tool?: Readonly<Record<string, PluginTool.Definition>>
+  readonly dispose?: () => void | Promise<void>
+}
+
 export type HookInput<Name extends keyof Hooks> = HookSpec[Name]["input"]
 export type HookOutput<Name extends keyof Hooks> = HookSpec[Name]["output"]
 
-export type Effect<R = never> = Effect.Effect<HookFunctions | void, never, R | Scope.Scope>
+export type Effect<R = never> = Effect.Effect<Registration | void, never, R | Scope.Scope>
 
-export function define<R>(input: { id: ID; effect: Effect.Effect<HookFunctions | void, never, R> }) {
+export function define<R>(input: { id: ID; effect: Effect.Effect<Registration | void, never, R> }) {
   return input
 }
+
+type ToolAdapter = (
+  id: ID,
+  tools: Readonly<Record<string, PluginTool.Definition>>,
+  slot: object,
+) => Effect.Effect<void, PluginTool.LoadError, Scope.Scope>
+
+const adapters = new WeakMap<Interface, { adapter?: ToolAdapter; ready: Deferred.Deferred<void> }>()
+
+export const attachTools = (service: Interface, adapter: ToolAdapter) =>
+  Effect.acquireRelease(
+    Effect.gen(function* () {
+      const state = adapters.get(service)
+      if (!state) return yield* Effect.die("Plugin service is not initialized")
+      state.adapter = adapter
+      yield* Deferred.succeed(state.ready, undefined)
+    }),
+    () =>
+      Effect.sync(() => {
+        const state = adapters.get(service)
+        if (state) state.adapter = undefined
+      }),
+  )
 
 export interface Interface {
   readonly add: (input: {
     id: ID
-    effect: Effect.Effect<void | HookFunctions, never, Scope.Scope>
-  }) => Effect.Effect<void, never, never>
+    effect: Effect.Effect<void | Registration, never, Scope.Scope>
+    reportFailure?: boolean
+    transfer?: () => void
+  }) => Effect.Effect<void, PluginTool.LoadError, never>
   readonly remove: (id: ID) => Effect.Effect<void>
   readonly triggerFor: <Name extends keyof Hooks>(
     id: ID,
@@ -96,37 +172,74 @@ export const layer = Layer.effect(
       id: ID
       hooks: HookFunctions
       scope: Scope.Closeable
+      slot: object
+      reserved: boolean
     }[] = []
     const events = yield* EventV2.Service
     const scope = yield* Scope.Scope
     const locks = KeyedMutex.makeUnsafe<ID>()
+    const ready = yield* Deferred.make<void>()
 
     const svc = Service.of({
       add: Effect.fn("Plugin.add")(function* (input) {
         yield* locks.withLock(input.id)(
-          Effect.gen(function* () {
-            const existing = hooks.find((item) => item.id === input.id)
-            if (existing) yield* Scope.close(existing.scope, Exit.void).pipe(Effect.ignore)
-            const childScope = yield* Scope.fork(scope)
-            const result = yield* input.effect.pipe(
-              Scope.provide(childScope),
-              Effect.withSpan("Plugin.load", {
-                attributes: {
-                  "plugin.id": input.id,
-                },
-              }),
-              Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(childScope, exit) : Effect.void)),
-            )
-            hooks = [
-              ...hooks.filter((item) => item.id !== input.id),
-              {
-                id: input.id,
-                hooks: result ?? {},
-                scope: childScope,
-              },
-            ]
-            yield* events.publish(Event.Added, { id: input.id })
-          }),
+          Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const existing = hooks.find((item) => item.id === input.id)
+              const slot = existing?.slot ?? {}
+              const childScope = yield* Scope.fork(scope)
+              let installed = false
+              yield* Effect.gen(function* () {
+                const result = yield* restore(
+                  input.effect.pipe(
+                    Scope.provide(childScope),
+                    Effect.withSpan("Plugin.load", {
+                      attributes: {
+                        "plugin.id": input.id,
+                      },
+                    }),
+                  ),
+                )
+                if (result?.dispose)
+                  yield* Effect.addFinalizer(() =>
+                    Effect.promise(() => Promise.resolve(result.dispose?.())).pipe(Effect.orDie),
+                  ).pipe(Scope.provide(childScope))
+                const reserve =
+                  adapters.get(svc)?.adapter !== undefined || existing?.reserved === true || result?.tool !== undefined
+                if (reserve) {
+                  if (!adapters.get(svc)?.adapter) yield* restore(Deferred.await(ready))
+                  const adapter = adapters.get(svc)?.adapter
+                  if (!adapter) return yield* Effect.die("Plugin tool adapter is unavailable")
+                  yield* restore(
+                    adapter(input.id, result?.tool ?? {}, slot).pipe(
+                      Scope.provide(childScope),
+                      Effect.tapError((error) =>
+                        input.reportFailure === false
+                          ? Effect.void
+                          : events.publish(Event.Failed, {
+                              id: input.id,
+                              source: `plugin:${input.id}`,
+                              message: error.message,
+                            }),
+                      ),
+                    ),
+                  )
+                }
+                const item = { id: input.id, hooks: result ?? {}, scope: childScope, slot, reserved: reserve }
+                yield* Effect.sync(() => {
+                  input.transfer?.()
+                  hooks = existing ? hooks.map((current) => (current === existing ? item : current)) : [...hooks, item]
+                  installed = true
+                })
+                if (existing) yield* restore(Scope.close(existing.scope, Exit.void).pipe(Effect.ignore))
+                yield* restore(events.publish(Event.Added, { id: input.id }))
+              }).pipe(
+                Effect.onExit((exit) =>
+                  Exit.isFailure(exit) && !installed ? Scope.close(childScope, exit) : Effect.void,
+                ),
+              )
+            }),
+          ),
         )
       }),
       trigger: Effect.fn("Plugin.trigger")(function* (name, input, output) {
@@ -161,7 +274,7 @@ export const layer = Layer.effect(
         }
 
         for (const [field, draft] of draftEntries) {
-          event[field] = finishDraft(draft)
+          if (event[field] === draft) event[field] = finishDraft(draft)
         }
 
         return event as any
@@ -176,6 +289,7 @@ export const layer = Layer.effect(
         )
       }),
     })
+    adapters.set(svc, { ready })
     return svc
   }),
 )

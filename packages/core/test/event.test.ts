@@ -231,6 +231,35 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("deduplicates exact synchronized publishes and rejects conflicting event identity", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const id = EventV2.ID.fromExternal({ namespace: "test.event.retry", key: aggregateID })
+      const projected: string[] = []
+      const committed: number[] = []
+      yield* events.project(SyncMessage, (event) => Effect.sync(() => projected.push(event.data.text)))
+      const options = {
+        id,
+        idempotent: true,
+        commit: (seq: number) => Effect.sync(() => committed.push(seq)).pipe(Effect.asVoid),
+      }
+
+      const first = yield* events.publish(SyncMessage, { id: aggregateID, text: "same" }, options)
+      const retry = yield* events.publish(SyncMessage, { id: aggregateID, text: "same" }, options)
+      const conflict = yield* events
+        .publish(SyncMessage, { id: aggregateID, text: "different" }, options)
+        .pipe(Effect.exit)
+
+      expect(retry.seq).toBe(first.seq)
+      expect(Exit.isFailure(conflict)).toBe(true)
+      expect(projected).toEqual(["same"])
+      expect(committed).toEqual([0])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.id, id)).all()).toHaveLength(1)
+    }),
+  )
+
   it.effect("rejects local commit hooks on live-only events", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

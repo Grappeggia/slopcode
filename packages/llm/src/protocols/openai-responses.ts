@@ -5,8 +5,10 @@ import { Endpoint } from "../route/endpoint"
 import { HttpTransport, WebSocketTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
+  isCustomToolDefinition,
   LLMEvent,
   Usage,
+  type AnyToolDefinition,
   type FinishReason,
   type LLMRequest,
   type ProviderMetadata,
@@ -41,6 +43,12 @@ const OpenAIResponsesInputImage = Schema.Struct({
 const OpenAIResponsesInputContent = Schema.Union([OpenAIResponsesInputText, OpenAIResponsesInputImage])
 type OpenAIResponsesInputContent = Schema.Schema.Type<typeof OpenAIResponsesInputContent>
 
+const OpenAIResponsesDeveloperMessage = Schema.Struct({
+  type: Schema.tag("message"),
+  role: Schema.tag("developer"),
+  content: Schema.Array(OpenAIResponsesInputText),
+})
+
 const OpenAIResponsesOutputText = Schema.Struct({
   type: Schema.tag("output_text"),
   text: Schema.String,
@@ -73,7 +81,7 @@ const OpenAIResponsesFunctionCallOutput = Schema.Union([
   Schema.Array(OpenAIResponsesFunctionCallOutputContent),
 ])
 
-const OpenAIResponsesInputItem = Schema.Union([
+const OpenAIResponsesHistoryItem = Schema.Union([
   Schema.Struct({ role: Schema.tag("system"), content: Schema.String }),
   Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenAIResponsesInputContent) }),
   Schema.Struct({ role: Schema.tag("assistant"), content: Schema.Array(OpenAIResponsesOutputText) }),
@@ -90,8 +98,20 @@ const OpenAIResponsesInputItem = Schema.Union([
     call_id: Schema.String,
     output: OpenAIResponsesFunctionCallOutput,
   }),
+  Schema.Struct({
+    type: Schema.tag("custom_tool_call"),
+    id: Schema.optional(Schema.String),
+    call_id: Schema.String,
+    name: Schema.String,
+    input: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.tag("custom_tool_call_output"),
+    call_id: Schema.String,
+    output: OpenAIResponsesFunctionCallOutput,
+  }),
 ])
-type OpenAIResponsesInputItem = Schema.Schema.Type<typeof OpenAIResponsesInputItem>
+type OpenAIResponsesInputItem = Schema.Schema.Type<typeof OpenAIResponsesHistoryItem>
 
 // Mutable counterpart of the schema reasoning item so `lowerMessages` can fold
 // multiple streamed summary parts into the same item before flushing.
@@ -102,18 +122,44 @@ type OpenAIResponsesReasoningInput = {
   encrypted_content?: string | null
 }
 
-const OpenAIResponsesTool = Schema.Struct({
+const OpenAIResponsesFunctionTool = Schema.Struct({
   type: Schema.tag("function"),
   name: Schema.String,
   description: Schema.String,
   parameters: JsonObject,
   strict: Schema.optional(Schema.Boolean),
 })
+const OpenAIResponsesCustomTool = Schema.Struct({
+  type: Schema.tag("custom"),
+  name: Schema.String,
+  description: Schema.String,
+  format: Schema.optional(
+    Schema.Struct({
+      type: Schema.tag("grammar"),
+      syntax: Schema.Literal("lark"),
+      definition: Schema.String,
+    }),
+  ),
+})
+const OpenAIResponsesTool = Schema.Union([OpenAIResponsesFunctionTool, OpenAIResponsesCustomTool])
 type OpenAIResponsesTool = Schema.Schema.Type<typeof OpenAIResponsesTool>
+
+const OpenAIResponsesAdditionalTools = Schema.Struct({
+  type: Schema.tag("additional_tools"),
+  role: Schema.tag("developer"),
+  tools: Schema.Array(OpenAIResponsesTool),
+})
+
+const OpenAIResponsesInputItem = Schema.Union([
+  OpenAIResponsesAdditionalTools,
+  OpenAIResponsesDeveloperMessage,
+  OpenAIResponsesHistoryItem,
+])
 
 const OpenAIResponsesToolChoice = Schema.Union([
   Schema.Literals(["auto", "none", "required"]),
   Schema.Struct({ type: Schema.tag("function"), name: Schema.String }),
+  Schema.Struct({ type: Schema.tag("custom"), name: Schema.String }),
 ])
 
 // Fields shared between the HTTP body and the WebSocket `response.create`
@@ -126,6 +172,8 @@ const OpenAIResponsesCoreFields = {
   instructions: Schema.optional(Schema.String),
   tools: optionalArray(OpenAIResponsesTool),
   tool_choice: Schema.optional(OpenAIResponsesToolChoice),
+  parallel_tool_calls: Schema.optional(Schema.Boolean),
+  truncation: Schema.optional(OpenAIOptions.OpenAITruncation),
   store: Schema.optional(Schema.Boolean),
   service_tier: Schema.optional(OpenAIOptions.OpenAIServiceTier),
   prompt_cache_key: Schema.optional(Schema.String),
@@ -134,6 +182,7 @@ const OpenAIResponsesCoreFields = {
     Schema.Struct({
       effort: Schema.optional(OpenAIOptions.OpenAIReasoningEffort),
       summary: Schema.optional(Schema.Literal("auto")),
+      context: Schema.optional(OpenAIOptions.OpenAIReasoningContext),
     }),
   ),
   text: Schema.optional(
@@ -152,10 +201,15 @@ const OpenAIResponsesBody = Schema.Struct({
 })
 export type OpenAIResponsesBody = Schema.Schema.Type<typeof OpenAIResponsesBody>
 
+const OpenAIResponsesClientMetadata = Schema.Struct({
+  ws_request_header_x_openai_internal_codex_responses_lite: Schema.Literal("true"),
+})
+
 const OpenAIResponsesWebSocketMessage = Schema.StructWithRest(
   Schema.Struct({
     type: Schema.tag("response.create"),
     ...OpenAIResponsesCoreFields,
+    client_metadata: Schema.optional(OpenAIResponsesClientMetadata),
   }),
   [Schema.Record(Schema.String, Schema.Unknown)],
 )
@@ -177,6 +231,7 @@ const OpenAIResponsesStreamItem = Schema.Struct({
   call_id: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
   arguments: Schema.optional(Schema.String),
+  input: Schema.optional(Schema.String),
   // Hosted (provider-executed) tool fields. Each hosted tool item carries its
   // own subset of these — we capture them generically so we can surface the
   // call's typed input portion and round-trip the full result payload without
@@ -253,26 +308,55 @@ const invalid = ProviderShared.invalidRequest
 // =============================================================================
 // Request Lowering
 // =============================================================================
-const lowerTool = (tool: ToolDefinition): OpenAIResponsesTool => ({
-  type: "function",
-  name: tool.name,
-  description: tool.description,
-  parameters: ProviderShared.openAiToolInputSchema(tool.inputSchema),
-})
+const lowerTool = (tool: AnyToolDefinition): OpenAIResponsesTool => {
+  if (isCustomToolDefinition(tool))
+    return {
+      type: "custom",
+      name: tool.name,
+      description: tool.description,
+      format: tool.format,
+    }
+  return {
+    type: "function",
+    name: tool.name,
+    description: tool.description,
+    parameters: ProviderShared.openAiToolInputSchema(tool.inputSchema),
+  }
+}
 
 const lowerToolChoice = (toolChoice: NonNullable<LLMRequest["toolChoice"]>) =>
   ProviderShared.matchToolChoice("OpenAI Responses", toolChoice, {
     auto: () => "auto" as const,
     none: () => "none" as const,
     required: () => "required" as const,
-    tool: (name) => ({ type: "function" as const, name }),
+    tool: (name) => ({ type: toolChoice.toolType === "custom" ? ("custom" as const) : ("function" as const), name }),
   })
 
-const lowerToolCall = (part: ToolCallPart): OpenAIResponsesInputItem => ({
-  type: "function_call",
-  call_id: part.id,
-  name: part.name,
-  arguments: ProviderShared.encodeJson(part.input),
+const openAIItemID = (part: ToolCallPart | ToolResultPart) => {
+  const openai = part.providerMetadata?.openai
+  return ProviderShared.isRecord(openai) && typeof openai.itemId === "string" && openai.itemId.length > 0
+    ? openai.itemId
+    : undefined
+}
+
+const lowerToolCall = Effect.fn("OpenAIResponses.lowerToolCall")(function* (part: ToolCallPart) {
+  if (part.toolType === "custom") {
+    if (typeof part.input !== "string")
+      return yield* invalid(`OpenAI Responses custom tool call ${part.name} input must be a string`)
+    return {
+      type: "custom_tool_call" as const,
+      id: openAIItemID(part),
+      call_id: part.id,
+      name: part.name,
+      input: part.input,
+    }
+  }
+  return {
+    type: "function_call" as const,
+    call_id: part.id,
+    name: part.name,
+    arguments: ProviderShared.encodeJson(part.input),
+  }
 })
 
 const lowerReasoning = (part: ReasoningPart): OpenAIResponsesReasoningInput | undefined => {
@@ -294,10 +378,7 @@ const lowerReasoning = (part: ReasoningPart): OpenAIResponsesReasoningInput | un
 }
 
 const hostedToolItemID = (part: ToolResultPart) => {
-  const openai = part.providerMetadata?.openai
-  return ProviderShared.isRecord(openai) && typeof openai.itemId === "string" && openai.itemId.length > 0
-    ? openai.itemId
-    : undefined
+  return openAIItemID(part)
 }
 
 const lowerUserContent = Effect.fn("OpenAIResponses.lowerUserContent")(function* (
@@ -338,9 +419,11 @@ const lowerToolResultOutput = Effect.fn("OpenAIResponses.lowerToolResultOutput")
   return yield* Effect.forEach(content, lowerToolResultContentItem)
 })
 
-const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest) {
+const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest, includeSystem = true) {
   const system: OpenAIResponsesInputItem[] =
-    request.system.length === 0 ? [] : [{ role: "system", content: ProviderShared.joinText(request.system) }]
+    !includeSystem || request.system.length === 0
+      ? []
+      : [{ role: "system", content: ProviderShared.joinText(request.system) }]
   const input: OpenAIResponsesInputItem[] = [...system]
   const store = OpenAIOptions.store(request)
 
@@ -400,7 +483,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
         if (part.type === "tool-call") {
           flushText()
           if (part.providerExecuted === true) continue
-          input.push(lowerToolCall(part))
+          input.push(yield* lowerToolCall(part))
           continue
         }
         if (part.type === "tool-result" && part.providerExecuted === true) {
@@ -426,7 +509,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
       if (!ProviderShared.supportsContent(part, ["tool-result"]))
         return yield* ProviderShared.unsupportedContent("OpenAI Responses", "tool", ["tool-result"])
       input.push({
-        type: "function_call_output",
+        type: part.toolType === "custom" ? "custom_tool_call_output" : "function_call_output",
         call_id: part.id,
         output: yield* lowerToolResultOutput(part),
       })
@@ -444,34 +527,85 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
 })
 
 const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (request: LLMRequest) {
+  const lite = OpenAIOptions.responsesMode(request) === "lite"
   const store = OpenAIOptions.store(request)
   const promptCacheKey = OpenAIOptions.promptCacheKey(request)
   const effort = OpenAIOptions.reasoningEffort(request)
   if (effort && !OpenAIOptions.isReasoningEffort(effort))
     return yield* invalid(`OpenAI Responses does not support reasoning effort ${effort}`)
   const summary = OpenAIOptions.reasoningSummary(request)
+  const context = lite ? ("all_turns" as const) : OpenAIOptions.reasoningContext(request)
   const include = OpenAIOptions.include(request)
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
+  const parallelToolCalls = OpenAIOptions.parallelToolCalls(request)
+  const truncation = OpenAIOptions.truncation(request)
   return {
-    ...(instructions ? { instructions } : {}),
+    ...(lite ? { instructions: "" } : instructions ? { instructions } : {}),
     ...(store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     ...(include ? { include } : {}),
-    ...(effort || summary ? { reasoning: { effort, summary } } : {}),
+    ...(effort || summary === "auto" || context
+      ? {
+          reasoning: {
+            ...(effort ? { effort: effort === "ultra" ? ("max" as const) : effort } : {}),
+            ...(summary === "auto" ? { summary } : {}),
+            ...(context ? { context } : {}),
+          },
+        }
+      : {}),
     ...(verbosity ? { text: { verbosity } } : {}),
     ...(serviceTier ? { service_tier: serviceTier } : {}),
+    ...(lite
+      ? { parallel_tool_calls: false }
+      : parallelToolCalls !== undefined
+        ? { parallel_tool_calls: parallelToolCalls }
+        : {}),
+    ...(truncation ? { truncation } : {}),
   }
 })
 
 const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request: LLMRequest) {
   const generation = request.generation
+  const lite = OpenAIOptions.responsesMode(request) === "lite"
+  if (lite && !request.model.route.capabilities.includes("responses-lite"))
+    return yield* invalid(`${request.model.provider}/${request.model.route.id} does not support Responses Lite`)
+  const custom =
+    request.tools.some((tool) => "type" in tool && tool.type === "custom") ||
+    request.messages.some((message) =>
+      message.content.some(
+        (part) => (part.type === "tool-call" || part.type === "tool-result") && part.toolType === "custom",
+      ),
+    ) ||
+    request.toolChoice?.toolType === "custom"
+  if (custom && !request.model.route.capabilities.includes("custom-tools"))
+    return yield* invalid(`${request.model.provider}/${request.model.route.id} does not support custom tools`)
+  const tools = request.tools.map(lowerTool)
+  const messages = yield* lowerMessages(request, !lite)
+  const instructions = OpenAIOptions.instructions(request)
+  const developer = [instructions, ...request.system.map((part) => part.text)].filter(
+    (part): part is string => part !== undefined && part.length > 0,
+  )
   const options = yield* lowerOptions(request)
   return {
     model: request.model.id,
-    input: yield* lowerMessages(request),
-    tools: request.tools.length === 0 ? undefined : request.tools.map(lowerTool),
+    input: lite
+      ? [
+          { type: "additional_tools" as const, role: "developer" as const, tools },
+          ...(developer.length > 0
+            ? [
+                {
+                  type: "message" as const,
+                  role: "developer" as const,
+                  content: developer.map((text) => ({ type: "input_text" as const, text })),
+                },
+              ]
+            : []),
+          ...messages,
+        ]
+      : messages,
+    ...(!lite && tools.length > 0 ? { tools } : {}),
     tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice) : undefined,
     stream: true as const,
     max_output_tokens: generation?.maxTokens,
@@ -653,8 +787,9 @@ const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): Ste
       events,
     ]
   }
-  if (item?.type !== "function_call" || !item.id) return [state, NO_EVENTS]
+  if ((item?.type !== "function_call" && item?.type !== "custom_tool_call") || !item.id) return [state, NO_EVENTS]
   const providerMetadata = openaiMetadata({ itemId: item.id })
+  const toolType = item.type === "custom_tool_call" ? ("custom" as const) : undefined
   const events: LLMEvent[] = []
   const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
   return [
@@ -665,11 +800,20 @@ const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): Ste
       tools: ToolStream.start(state.tools, item.id, {
         id: item.call_id ?? item.id,
         name: item.name ?? "",
-        input: item.arguments ?? "",
+        input: item.type === "custom_tool_call" ? (item.input ?? "") : (item.arguments ?? ""),
+        toolType,
         providerMetadata,
       }),
     },
-    [...events, LLMEvent.toolInputStart({ id: item.call_id ?? item.id, name: item.name ?? "", providerMetadata })],
+    [
+      ...events,
+      LLMEvent.toolInputStart({
+        id: item.call_id ?? item.id,
+        name: item.name ?? "",
+        toolType,
+        providerMetadata,
+      }),
+    ],
   ]
 }
 
@@ -796,15 +940,20 @@ const onOutputItemDone = Effect.fn("OpenAIResponses.onOutputItemDone")(function*
   const item = event.item
   if (!item) return [state, NO_EVENTS] satisfies StepResult
 
-  if (item.type === "function_call") {
+  if (item.type === "function_call" || item.type === "custom_tool_call") {
     if (!item.id || !item.call_id || !item.name) return [state, NO_EVENTS] satisfies StepResult
     const tools = state.tools[item.id]
       ? state.tools
-      : ToolStream.start(state.tools, item.id, { id: item.call_id, name: item.name })
+      : ToolStream.start(state.tools, item.id, {
+          id: item.call_id,
+          name: item.name,
+          toolType: item.type === "custom_tool_call" ? "custom" : undefined,
+        })
+    const input = item.type === "custom_tool_call" ? item.input : item.arguments
     const result =
-      item.arguments === undefined
+      input === undefined
         ? yield* ToolStream.finish(ADAPTER, tools, item.id)
-        : yield* ToolStream.finishWithInput(ADAPTER, tools, item.id, item.arguments)
+        : yield* ToolStream.finishWithInput(ADAPTER, tools, item.id, input)
     const events: LLMEvent[] = []
     const resultEvents = result.events ?? []
     const lifecycle = resultEvents.length ? Lifecycle.stepStart(state.lifecycle, events) : state.lifecycle
@@ -923,7 +1072,8 @@ const step = (state: ParserState, event: OpenAIResponsesEvent) => {
   if (event.type === "response.reasoning_summary_part.done")
     return Effect.succeed(onReasoningSummaryPartDone(state, event))
   if (event.type === "response.output_item.added") return Effect.succeed(onOutputItemAdded(state, event))
-  if (event.type === "response.function_call_arguments.delta") return onFunctionCallArgumentsDelta(state, event)
+  if (event.type === "response.function_call_arguments.delta" || event.type === "response.custom_tool_call_input.delta")
+    return onFunctionCallArgumentsDelta(state, event)
   if (event.type === "response.output_item.done") return onOutputItemDone(state, event)
   if (event.type === "response.completed" || event.type === "response.incomplete")
     return Effect.succeed(onResponseFinish(state, event))
@@ -965,23 +1115,38 @@ const auth = Auth.none
 
 export const httpTransport = HttpTransport.sseJson.with<OpenAIResponsesBody>()
 
+const headers = ({ request }: { readonly request: LLMRequest }): Record<string, string> =>
+  OpenAIOptions.responsesMode(request) === "lite" ? { "x-openai-internal-codex-responses-lite": "true" } : {}
+
 export const route = Route.make({
   id: ADAPTER,
   provider: "openai",
   protocol,
   endpoint,
   auth,
+  headers,
   transport: httpTransport,
+  capabilities: ["responses-lite", "custom-tools"],
 })
 
 const decodeWebSocketMessage = ProviderShared.validateWith(Schema.decodeUnknownEffect(OpenAIResponsesWebSocketMessage))
 
-const webSocketMessage = (body: OpenAIResponsesBody | Record<string, unknown>) =>
+const webSocketMessage = (body: OpenAIResponsesBody | Record<string, unknown>, request: LLMRequest) =>
   Effect.gen(function* () {
     if (!ProviderShared.isRecord(body))
       return yield* ProviderShared.invalidRequest("OpenAI Responses WebSocket body must be a JSON object")
     const { stream: _stream, ...message } = body
-    return yield* decodeWebSocketMessage({ ...message, type: "response.create" })
+    return yield* decodeWebSocketMessage({
+      ...message,
+      type: "response.create",
+      ...(OpenAIOptions.responsesMode(request) === "lite"
+        ? {
+            client_metadata: {
+              ws_request_header_x_openai_internal_codex_responses_lite: "true",
+            },
+          }
+        : {}),
+    })
   })
 
 export const webSocketTransport = WebSocketTransport.jsonTransport.with<
@@ -998,7 +1163,9 @@ export const webSocketRoute = Route.make({
   protocol,
   endpoint,
   auth,
+  headers,
   transport: webSocketTransport,
+  capabilities: ["responses-lite", "custom-tools"],
 })
 
 export * as OpenAIResponses from "./openai-responses"

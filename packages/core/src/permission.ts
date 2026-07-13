@@ -55,6 +55,7 @@ export const AssertInput = Schema.Struct({
   id: ID.pipe(Schema.optional),
   ...RequestFields,
   agent: AgentV2.ID.pipe(Schema.optional),
+  rules: PermissionSchema.Ruleset.pipe(Schema.optional),
 }).annotate({ identifier: "PermissionV2.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
 
@@ -129,6 +130,7 @@ export class Service extends Context.Service<Service, Interface>()("@slopcode/v2
 interface Pending {
   readonly request: Request
   readonly agent?: AgentV2.ID
+  readonly rules?: Ruleset
   readonly deferred: Deferred.Deferred<void, RejectedError | CorrectedError>
 }
 
@@ -163,15 +165,44 @@ export const layer = Layer.effect(
     const configured = EffectRuntime.fn("PermissionV2.configured")(function* (
       sessionID: SessionV2.ID,
       agentID?: AgentV2.ID,
+      rules?: Ruleset,
     ) {
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionV2.NotFoundError({ sessionID })
       const agent = yield* agents.resolve(agentID ?? session.agent)
-      return agent?.permissions ?? missingAgentPermissions
+      return {
+        rules: rules ?? agent?.permissions ?? missingAgentPermissions,
+        ceiling: (yield* sessions.task(sessionID))?.ceiling ?? [],
+      }
     })
 
     function denied(input: AssertInput, rules: Ruleset) {
       return input.resources.some((resource) => evaluate(input.action, resource, rules).effect === "deny")
+    }
+
+    function ceilingDenied(input: AssertInput, rules: Ruleset) {
+      return input.resources.some((resource) =>
+        rules.some(
+          (rule) =>
+            rule.effect === "deny" &&
+            Wildcard.match(input.action, rule.action) &&
+            Wildcard.match(resource, rule.resource),
+        ),
+      )
+    }
+
+    function ceilingAsks(input: AssertInput, rules: Ruleset) {
+      return (
+        input.action === "external_directory" &&
+        input.resources.some((resource) =>
+          rules.some(
+            (rule) =>
+              rule.effect === "ask" &&
+              Wildcard.match(input.action, rule.action) &&
+              Wildcard.match(resource, rule.resource),
+          ),
+        )
+      )
     }
 
     function relevant(input: AssertInput, rules: Ruleset) {
@@ -179,12 +210,15 @@ export const layer = Layer.effect(
     }
 
     const evaluateInput = EffectRuntime.fnUntraced(function* (input: AssertInput) {
-      const rules = yield* configured(input.sessionID, input.agent)
-      if (denied(input, rules)) return { effect: "deny" as const, rules }
-      const all = [...rules, ...(yield* savedRules())]
+      const configuredRules = yield* configured(input.sessionID, input.agent, input.rules)
+      const combined = [...configuredRules.rules, ...configuredRules.ceiling]
+      if (denied(input, configuredRules.rules) || ceilingDenied(input, configuredRules.ceiling))
+        return { effect: "deny" as const, rules: combined }
+      if (ceilingAsks(input, configuredRules.ceiling)) return { effect: "ask" as const, rules: combined }
+      const all = [...configuredRules.rules, ...(yield* savedRules())]
       const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
       const effect: Effect = effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow"
-      return { effect, rules: all }
+      return { effect, rules: [...all, ...configuredRules.ceiling] }
     })
 
     function request(input: AssertInput): Request {
@@ -199,11 +233,11 @@ export const layer = Layer.effect(
       }
     }
 
-    const create = (request: Request, agent?: AgentV2.ID) =>
+    const create = (request: Request, agent?: AgentV2.ID, rules?: Ruleset) =>
       EffectRuntime.uninterruptible(
         EffectRuntime.gen(function* () {
           const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
-          const item = { request, agent, deferred }
+          const item = { request, agent, rules, deferred }
           if (pending.has(request.id)) return yield* EffectRuntime.die(`Duplicate pending permission ID: ${request.id}`)
           pending.set(request.id, item)
           yield* events
@@ -216,7 +250,7 @@ export const layer = Layer.effect(
     const ask = EffectRuntime.fn("PermissionV2.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
       const value = request(input)
-      if (result.effect === "ask") yield* create(value, input.agent)
+      if (result.effect === "ask") yield* create(value, input.agent, input.rules)
       return { id: value.id, effect: result.effect }
     })
 
@@ -230,7 +264,7 @@ export const layer = Layer.effect(
             })
           }
           if (result.effect === "allow") return
-          const item = yield* create(request(input), input.agent)
+          const item = yield* create(request(input), input.agent, input.rules)
           return yield* restore(Deferred.await(item.deferred)).pipe(
             EffectRuntime.ensuring(
               EffectRuntime.sync(() => {
@@ -286,12 +320,17 @@ export const layer = Layer.effect(
           const rememberedRules = yield* savedRules()
           for (const [id, item] of pending) {
             const input = { ...item.request }
-            const rules = yield* configured(item.request.sessionID, item.agent).pipe(
+            const configuredRules = yield* configured(item.request.sessionID, item.agent, item.rules).pipe(
               EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
             )
-            if (!rules) continue
-            if (denied(input, rules)) continue
-            const effective = [...rules, ...rememberedRules]
+            if (!configuredRules) continue
+            if (
+              denied(input, configuredRules.rules) ||
+              ceilingDenied(input, configuredRules.ceiling) ||
+              ceilingAsks(input, configuredRules.ceiling)
+            )
+              continue
+            const effective = [...configuredRules.rules, ...rememberedRules]
             if (
               !item.request.resources.every(
                 (resource) => evaluate(item.request.action, resource, effective).effect === "allow",
