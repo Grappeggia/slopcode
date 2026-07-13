@@ -7750,11 +7750,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Success",
+            "description": "Side-question event stream",
             "content": {
               "text/event-stream": {
                 "schema": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/SessionSideQuestionEvent"
                 }
               }
             }
@@ -7787,7 +7787,7 @@
             }
           }
         },
-        "description": "Ask an ephemeral side question against the current session context without writing history.",
+        "description": "Ask an ephemeral side question with optional completed turns, streaming generation, bounded read activity, usage, errors, and completion without writing session history.",
         "summary": "Ask side question",
         "requestBody": {
           "content": {
@@ -7796,7 +7796,15 @@
                 "type": "object",
                 "properties": {
                   "question": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64000
+                  },
+                  "turns": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/SessionSideQuestionTurn"
+                    },
+                    "maxItems": 32
                   },
                   "agent": {
                     "type": "string"
@@ -30995,6 +31003,149 @@
           "required": ["directory"],
           "additionalProperties": false
         }
+      },
+      "SessionSideQuestionTurn": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 64000
+          },
+          "answer": {
+            "type": "string",
+            "maxLength": 64000
+          }
+        },
+        "required": ["question", "answer"],
+        "additionalProperties": false
+      },
+      "SessionSideQuestionEvent": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["status"]
+              },
+              "status": {
+                "type": "string",
+                "enum": ["generating", "reading"]
+              },
+              "round": {
+                "type": "number"
+              }
+            },
+            "required": ["type", "status", "round"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["read"]
+              },
+              "callID": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              },
+              "offset": {
+                "type": "number"
+              },
+              "limit": {
+                "type": "number"
+              },
+              "lines": {
+                "type": "number"
+              },
+              "bytes": {
+                "type": "number"
+              },
+              "files": {
+                "type": "number"
+              }
+            },
+            "required": ["type", "callID", "path", "offset", "limit", "lines", "bytes", "files"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["usage"]
+              },
+              "rounds": {
+                "type": "number"
+              },
+              "calls": {
+                "type": "number"
+              },
+              "files": {
+                "type": "number"
+              },
+              "lines": {
+                "type": "number"
+              },
+              "bytes": {
+                "type": "number"
+              },
+              "inputTokens": {
+                "type": "number"
+              },
+              "outputTokens": {
+                "type": "number"
+              }
+            },
+            "required": ["type", "rounds", "calls", "files", "lines", "bytes", "inputTokens", "outputTokens"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["text"]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "text"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["error"]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "message"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["done"]
+              }
+            },
+            "required": ["type"],
+            "additionalProperties": false
+          }
+        ]
       },
       "LocationInfo": {
         "type": "object",
