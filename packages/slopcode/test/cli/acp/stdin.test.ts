@@ -33,6 +33,30 @@ test("ACP transport observes stdin EOF emitted before listener setup", async () 
   transport.dispose()
 })
 
+test("ACP transport observes stdin close before listener setup", async () => {
+  const input = new PassThrough()
+  input.destroy()
+  await once(input, "close")
+
+  const transport = createTransport(input, new PassThrough())
+  await timeout(transport.closed)
+
+  expect(input.destroyed).toBe(true)
+  expect(await transport.stream.readable.getReader().read()).toEqual({ done: true, value: undefined })
+  transport.dispose()
+})
+
+test("ACP transport observes stdin close after listener setup", async () => {
+  const input = new PassThrough()
+  const transport = createTransport(input, new PassThrough())
+  input.destroy()
+
+  await timeout(transport.closed)
+  expect(input.destroyed).toBe(true)
+  expect(await transport.stream.readable.getReader().read()).toEqual({ done: true, value: undefined })
+  transport.dispose()
+})
+
 test("ACP transport closes when stdout closes while stdin remains open", async () => {
   const input = new PassThrough()
   const output = new PassThrough()
@@ -59,26 +83,29 @@ test("ACP transport removes process stream listeners on close", async () => {
   const input = new PassThrough()
   const output = new PassThrough()
   const before = {
+    close: input.listenerCount("close"),
     data: input.listenerCount("data"),
     end: input.listenerCount("end"),
     inputError: input.listenerCount("error"),
-    close: output.listenerCount("close"),
+    outputClose: output.listenerCount("close"),
     outputError: output.listenerCount("error"),
   }
   const transport = createTransport(input, output)
 
+  expect(input.listenerCount("close")).toBe(before.close + 1)
   expect(input.listenerCount("data")).toBe(before.data + 1)
   expect(input.listenerCount("end")).toBe(before.end + 1)
   expect(input.listenerCount("error")).toBe(before.inputError + 1)
-  expect(output.listenerCount("close")).toBe(before.close + 1)
+  expect(output.listenerCount("close")).toBe(before.outputClose + 1)
   expect(output.listenerCount("error")).toBe(before.outputError + 1)
 
   transport.close()
   await timeout(transport.closed)
+  expect(input.listenerCount("close")).toBe(before.close)
   expect(input.listenerCount("data")).toBe(before.data)
   expect(input.listenerCount("end")).toBe(before.end)
   expect(input.listenerCount("error")).toBe(before.inputError)
-  expect(output.listenerCount("close")).toBe(before.close)
+  expect(output.listenerCount("close")).toBe(before.outputClose)
   expect(output.listenerCount("error")).toBe(before.outputError)
 })
 

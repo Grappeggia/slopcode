@@ -1,11 +1,20 @@
 import { describe, expect, it } from "bun:test"
 import type { AgentSideConnection } from "@agentclientprotocol/sdk"
-import type { Event, Message, SlopcodeClient, Part, SessionMessageResponse, ToolPart } from "@slopcode-ai/sdk/v2"
+import {
+  abortableSleep,
+  type Event,
+  type Message,
+  type SlopcodeClient,
+  type Part,
+  type SessionMessageResponse,
+  type ToolPart,
+} from "@slopcode-ai/sdk/v2"
 import { Effect, ManagedRuntime } from "effect"
 import { ACPEvent } from "@/acp/event"
 import * as ACPService from "@/acp/service"
 import { Directory } from "@/acp/directory"
 import { ACPSession } from "@/acp/session"
+import { createSseClient } from "../../../sdk/js/src/v2/gen/core/serverSentEvents.gen"
 
 type SessionUpdateParams = Parameters<AgentSideConnection["sessionUpdate"]>[0]
 type ToolSessionUpdateParams = SessionUpdateParams & {
@@ -394,6 +403,54 @@ describe("acp event routing", () => {
     expect(harness.calls.eventSubscribe).toBe(1)
     subscription?.stop()
     harness.events.close()
+  })
+
+  it("stops immediately during capped SSE retry backoff", async () => {
+    const waiting = Promise.withResolvers<void>()
+    const delays: number[] = []
+    const state = { active: 0 }
+    const harness = createHarness()
+    const sdk = {
+      global: {
+        event: (options?: { signal?: AbortSignal }) =>
+          Promise.resolve(
+            createSseClient({
+              url: "http://127.0.0.1/events",
+              signal: options?.signal,
+              fetch: Object.assign(
+                async () => {
+                  throw new Error("offline")
+                },
+                { preconnect: () => undefined },
+              ),
+              sseDefaultRetryDelay: 10_000,
+              sseMaxRetryDelay: 30_000,
+              sseSleepFn: async (ms, signal) => {
+                delays.push(ms)
+                if (delays.length < 3) return
+                state.active++
+                waiting.resolve()
+                await abortableSleep(ms, signal)
+                state.active--
+              },
+            }),
+          ),
+      },
+    } as unknown as SlopcodeClient
+    const subscription = new ACPEvent.Subscription({
+      sdk,
+      connection: harness.connection,
+      session: harness.session,
+    })
+    subscription.start()
+    await waiting.promise
+    const started = performance.now()
+
+    await subscription.stop()
+
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(delays).toEqual([10_000, 20_000, 30_000])
+    expect(state.active).toBe(0)
   })
 
   it("does not call sdk.session.message repeatedly when metadata is known", async () => {

@@ -1,12 +1,13 @@
 import type { AgentSideConnection } from "@agentclientprotocol/sdk"
-import type {
-  Event,
-  EventMessagePartDelta,
-  EventMessagePartUpdated,
-  SlopcodeClient,
-  Part,
-  SessionMessageResponse,
-  ToolPart,
+import {
+  abortableSleep,
+  type Event,
+  type EventMessagePartDelta,
+  type EventMessagePartUpdated,
+  type SlopcodeClient,
+  type Part,
+  type SessionMessageResponse,
+  type ToolPart,
 } from "@slopcode-ai/sdk/v2"
 import { Effect } from "effect"
 import { ACPSession } from "./session"
@@ -125,7 +126,7 @@ export class Subscription {
         if (!event.payload) continue
         await this.handle(event.payload).catch(() => {})
       }
-      if (!this.abort.signal.aborted) await new Promise((resolve) => setTimeout(resolve, 1000))
+      if (!this.abort.signal.aborted) await abortableSleep(1000, this.abort.signal)
     }
   }
 

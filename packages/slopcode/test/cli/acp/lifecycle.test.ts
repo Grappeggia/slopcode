@@ -33,11 +33,10 @@ describe("slopcode acp lifecycle subprocess", () => {
         const started = performance.now()
         handle.close()
 
-        // The generated SSE client observes abort after its 3s retry sleep; this
-        // remains a teardown-only bound, separate from the cold-start allowance.
-        const code = yield* Effect.promise(() => handle.exited).pipe(Effect.timeout(Duration.seconds(5)))
+        // This teardown-only bound is separate from the cold-start allowance.
+        const code = yield* Effect.promise(() => handle.exited).pipe(Effect.timeout(Duration.seconds(3)))
         expect(code).toBe(0)
-        expect(performance.now() - started).toBeLessThan(5_000)
+        expect(performance.now() - started).toBeLessThan(3_000)
       }),
     60_000,
   )

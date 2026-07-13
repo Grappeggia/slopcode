@@ -13,6 +13,7 @@ export function createTransport(input: Readable, output: Writable) {
   const state = { closed: false }
   let controller: ReadableStreamDefaultController<Uint8Array>
   const cleanup = () => {
+    input.off("close", onClose)
     input.off("data", onData)
     input.off("end", onEnd)
     input.off("error", onError)
@@ -34,11 +35,12 @@ export function createTransport(input: Readable, output: Writable) {
   const readable = new ReadableStream<Uint8Array>({
     start(next) {
       controller = next
+      input.on("close", onClose)
       input.on("end", onEnd)
       input.on("error", onError)
       output.on("close", onClose)
       output.on("error", onError)
-      if (input.readableEnded || output.closed || output.destroyed) {
+      if (input.readableEnded || input.destroyed || output.closed || output.destroyed) {
         close()
         return
       }

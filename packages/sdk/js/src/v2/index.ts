@@ -1,5 +1,6 @@
 export * from "./client.js"
 export * from "./server.js"
+export { abortableSleep } from "../sse.js"
 
 import { createSlopcodeClient } from "./client.js"
 import { createSlopcodeServer } from "./server.js"
