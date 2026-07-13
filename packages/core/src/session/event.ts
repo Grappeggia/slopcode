@@ -641,6 +641,7 @@ export namespace Tool {
 
   export const CalledV2 = EventV2.define({
     type: "session.next.tool.called",
+    registration: "internal",
     sync: { aggregate: "sessionID", version: 2 },
     schema: {
       ...ToolBase,

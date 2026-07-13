@@ -95,6 +95,7 @@ const syncCodec = (definition: Definition) => definition.data as Schema.Codec<un
 
 export function define<const Type extends string, Fields extends Schema.Struct.Fields>(input: {
   readonly type: Type
+  readonly registration?: "public" | "internal"
   readonly sync?: {
     readonly version: number
     readonly aggregate: string
@@ -117,7 +118,10 @@ export function define<const Type extends string, Fields extends Schema.Struct.F
     data: Data,
   })
   const existing = registry.get(input.type)
-  if (input.sync === undefined || existing?.sync === undefined || input.sync.version >= existing.sync.version) {
+  if (
+    input.registration !== "internal" &&
+    (input.sync === undefined || existing?.sync === undefined || input.sync.version >= existing.sync.version)
+  ) {
     registry.set(input.type, definition)
   }
   if (input.sync)
@@ -134,6 +138,12 @@ export function define<const Type extends string, Fields extends Schema.Struct.F
 
 export function definitions() {
   return registry.values().toArray()
+}
+
+export function isPublic(event: Pick<Payload, "type" | "version">) {
+  const definition = registry.get(event.type)
+  if (!definition) return false
+  return event.version === undefined ? definition.sync === undefined : definition.sync?.version === event.version
 }
 
 export interface PublishOptions {
@@ -416,7 +426,7 @@ export const layerWith = (options?: LayerOptions) =>
         equivalent?: PublishOptions["equivalent"],
       ) {
         return Effect.gen(function* () {
-          const durable = registry.get(event.type)?.sync !== undefined
+          const durable = event.version !== undefined && syncRegistry.has(versionedType(event.type, event.version))
           if (!durable && (commit || guard))
             return yield* Effect.die(
               new InvalidSyncEventError({

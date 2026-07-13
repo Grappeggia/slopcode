@@ -68,6 +68,18 @@ function isBuiltInEndpointError(name: string) {
 }
 
 describe("PublicApi OpenAPI v2 errors", () => {
+  test("keeps function tool calls on the public V1 object schema", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const payload = spec.components.schemas.GlobalEvent?.properties?.payload
+    const called = payload?.anyOf?.find((schema) => schema.properties?.type?.enum?.includes("session.next.tool.called"))
+
+    expect(called?.properties?.properties?.properties?.input?.type).toBe("object")
+    expect(called?.properties?.properties?.properties).not.toHaveProperty("toolType")
+    expect(spec.components.schemas.SyncEventSessionNextToolCalled?.properties?.syncEvent?.properties?.type?.enum).toEqual([
+      "session.next.tool.called.1",
+    ])
+  })
+
   test("documents nested legacy global sync events", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
     const schema = spec.components.schemas.SyncEventSessionCreated

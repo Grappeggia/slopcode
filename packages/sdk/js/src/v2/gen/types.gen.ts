@@ -1460,8 +1460,9 @@ export type GlobalEvent = {
           assistantMessageID: string
           callID: string
           tool: string
-          input: string
-          toolType: "custom"
+          input: {
+            [key: string]: unknown
+          }
           provider: {
             executed: boolean
             metadata?: {
@@ -4654,7 +4655,7 @@ export type SyncEventSessionNextToolCalled = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.next.tool.called.2"
+    type: "session.next.tool.called.1"
     id: string
     seq: number
     aggregateID: string
@@ -4664,8 +4665,9 @@ export type SyncEventSessionNextToolCalled = {
       assistantMessageID: string
       callID: string
       tool: string
-      input: string
-      toolType: "custom"
+      input: {
+        [key: string]: unknown
+      }
       provider: {
         executed: boolean
         metadata?: {
@@ -6459,8 +6461,9 @@ export type EventSessionNextToolCalled = {
     assistantMessageID: string
     callID: string
     tool: string
-    input: string
-    toolType: "custom"
+    input: {
+      [key: string]: unknown
+    }
     provider: {
       executed: boolean
       metadata?: {

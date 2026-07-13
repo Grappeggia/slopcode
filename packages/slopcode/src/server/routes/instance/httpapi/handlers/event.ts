@@ -34,6 +34,7 @@ function eventResponse(events: EventV2.Interface) {
     const stream = Stream.fromQueue(queue).pipe(
       Stream.filter(
         (event) =>
+          EventV2.isPublic(event) &&
           event.location?.directory === instance.directory &&
           (event.location.workspaceID === undefined || event.location.workspaceID === workspaceID),
       ),

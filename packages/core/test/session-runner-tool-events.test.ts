@@ -157,6 +157,9 @@ test("function tool calls retain the V1 persisted shape", async () => {
   expect(called?.data).toMatchObject({ input: { path: "pixel.png" } })
   expect(called?.data).not.toHaveProperty("toolType")
   expect(published.some((event) => event.type === "session.next.tool.called.2")).toBe(false)
+  expect(EventV2.registry.get(SessionEvent.Tool.Called.type)).toBe(SessionEvent.Tool.Called)
+  expect(EventV2.isPublic({ type: SessionEvent.Tool.Called.type, version: 1 })).toBe(true)
+  expect(EventV2.isPublic({ type: SessionEvent.Tool.CalledV2.type, version: 2 })).toBe(false)
 })
 
 test("Tool.Called V2 only decodes raw custom calls", () => {

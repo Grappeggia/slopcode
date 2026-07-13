@@ -269,9 +269,8 @@ test("settles pending tools when a live failure arrives", async () => {
         timestamp: 2,
         assistantMessageID: "msg_explicit_assistant_9",
         callID: "call-1",
-        tool: "custom",
-        input: "{}",
-        toolType: "custom",
+        tool: "bash",
+        input: {},
         provider: { executed: false, metadata: { fake: { call: true } } },
       },
     })
@@ -307,7 +306,7 @@ test("settles pending tools when a live failure arrives", async () => {
     expect(tool.state.status).toBe("error")
     if (tool.state.status !== "error") return
     expect(tool.state.error).toEqual({ type: "unknown", message: "aborted" })
-    expect(tool.state.input).toBe("{}")
+    expect(tool.state.input).toEqual({})
     expect(tool.state.structured).toEqual({})
     expect(tool.state.content).toEqual([])
     expect(tool.provider).toEqual({
