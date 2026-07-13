@@ -24,6 +24,8 @@ const target = (directory: string, name = "target.txt") => ({
   resource: name,
 })
 
+const exists = (file: string) => fs.stat(file).then(() => true, () => false)
+
 const withTmp = <A, E, R>(run: (directory: string) => Effect.Effect<A, E, R>) =>
   Effect.acquireUseRelease(
     Effect.promise(() => tmpdir()),
@@ -105,6 +107,43 @@ describe("mutation rejection re-review", () => {
         expect(yield* Fiber.join(fiber)).toMatchObject({ _tag: "FileMutation.TargetChangedError" })
         expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toBe("replacement")
         expect(yield* Effect.promise(() => fs.readFile(original, "utf8"))).toBe("approved")
+      }),
+    ),
+  )
+
+  it.live("surfaces rollback recovery while preserving both placeholder replacements", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        if (process.platform !== "linux") return
+        const approved = target(directory)
+        const displaced = path.join(directory, "displaced.txt")
+        yield* Effect.promise(() => fs.writeFile(approved.canonical, "approved"))
+        const moved = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const fiber = yield* Effect.gen(function* () {
+          return yield* (yield* FileMutation.Service).remove({ target: approved })
+        }).pipe(
+          Effect.provide(mutation({
+            pause: (phase) => phase === "remove-placeholder-moved"
+              ? Deferred.succeed(moved, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : phase === "remove-exchanged"
+                ? Effect.promise(async () => {
+                    await fs.rename(approved.canonical, displaced)
+                    await fs.writeFile(approved.canonical, "replacement-a")
+                  })
+                : Effect.void,
+          })),
+          Effect.flip,
+          Effect.forkChild,
+        )
+        yield* Deferred.await(moved)
+        yield* Effect.promise(() => fs.writeFile(approved.canonical, "replacement-b"))
+        yield* Deferred.succeed(release, undefined)
+        const error = yield* Fiber.join(fiber)
+        expect(error).toMatchObject({ _tag: "FileMutation.RecoveryConflictError", path: approved.canonical })
+        expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toBe("replacement-b")
+        expect(yield* Effect.promise(() => fs.readFile(error.recovery, "utf8"))).toBe("replacement-a")
+        expect(yield* Effect.promise(() => fs.readFile(displaced, "utf8"))).toBe("")
       }),
     ),
   )
@@ -304,26 +343,26 @@ describe("mutation rejection re-review", () => {
     ),
   )
 
-  it.live("preserves primitive parity and skips formatting on insecure platform adapters", () =>
+  it.live("rejects adapters without secure mutation capability instead of using pathname fallback", () =>
     withTmp((directory) => {
       let formats = 0
       return Effect.gen(function* () {
         for (const name of ["darwin", "win32"]) {
           const approved = target(directory, `${name}.fmt`)
-          const platform: FileMutation.PlatformInterface = { name, secure: false }
+          const platform: FileMutation.PlatformInterface = {
+            name,
+            capabilities: { mutation: false, staging: false, exchange: false },
+            path: (directory, child) => path.join(`/mock-fd/${directory}`, child),
+          }
           yield* Effect.gen(function* () {
             const files = yield* FileMutation.Service
-            const result = yield* (yield* PostMutation.Service).run({
+            const error = yield* (yield* PostMutation.Service).run({
               target: approved,
               intent: "write",
               mutation: files.write({ target: approved, content: "portable" }),
-            })
-            expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toBe("portable")
-            expect(result.formatters).toEqual([{ name: "security", code: "unsupported-security" }])
-            const expected = new TextEncoder().encode("portable")
-            expect((yield* files.writeIfUnchanged({ target: approved, expected, content: "edited" })).change).toBe("changed")
-            expect((yield* files.remove({ target: approved })).change).toBe("deleted")
-            expect(yield* Effect.promise(() => fs.stat(approved.canonical).then(() => true, () => false))).toBe(false)
+            }).pipe(Effect.flip)
+            expect(error).toMatchObject({ _tag: "FileMutation.UnsupportedPlatformError", platform: name })
+            expect(yield* Effect.promise(() => exists(approved.canonical))).toBe(false)
           }).pipe(Effect.provide(post({
             platform,
             formatter: { ...none, format: () => Effect.sync(() => { formats++; return { matched: true, outcomes: [] } }) },
@@ -332,6 +371,76 @@ describe("mutation rejection re-review", () => {
         expect(formats).toBe(0)
       })
     }),
+  )
+
+  it.live("stages external targets under Location authority and ignores external formatter config", () =>
+    withTmp((directory) => withTmp((outside) => {
+      const approved = {
+        ...target(outside, "external.js"),
+        externalDirectory: {
+          action: "external_directory" as const,
+          directory: outside,
+          resource: `${outside}/*`,
+          save: `${outside}/*`,
+        },
+        staging: path.join(directory, ".slopcode", "staging"),
+      }
+      const active = Layer.succeed(
+        Location.Service,
+        Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
+      )
+      const config = Layer.succeed(Config.Service, Config.Service.of({
+        entries: () => Effect.succeed([
+          new Config.Document({
+            type: "document",
+            info: Schema.decodeUnknownSync(Config.Info)({ formatter: true }),
+          }),
+        ]),
+      }))
+      const npm = Layer.succeed(Npm.Service, Npm.Service.of({
+        add: () => Effect.die("unused"),
+        install: () => Effect.die("unused"),
+        which: (name) => Effect.succeed(name === "prettier"
+          ? Option.some(path.resolve(import.meta.dir, "../../../node_modules/.bin/prettier"))
+          : Option.none()),
+      }))
+      const formatting = Formatter.layer.pipe(
+        Layer.provide(AppProcess.defaultLayer),
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(active),
+        Layer.provide(config),
+        Layer.provide(npm),
+      )
+      const files = mutation()
+      const events = EventV2.defaultLayer
+      const layer = Layer.mergeAll(files, events, PostMutation.layer.pipe(
+        Layer.provide(files),
+        Layer.provide(formatting),
+        Layer.provide(events),
+        Layer.provide(MutationEvents.layer.pipe(Layer.provide(FSUtil.defaultLayer))),
+        Layer.provide(PostMutation.diagnosticsLayer),
+      ))
+      return Effect.gen(function* () {
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(directory, ".slopcode", "staging"), { recursive: true, mode: 0o700 })
+          await fs.writeFile(path.join(directory, "package.json"), JSON.stringify({ dependencies: { prettier: "1" } }))
+          await fs.writeFile(path.join(directory, ".prettierrc"), JSON.stringify({ tabWidth: 2, semi: false }))
+          await fs.writeFile(path.join(outside, ".prettierrc"), JSON.stringify({ plugins: ["./malicious.cjs"], tabWidth: 8 }))
+          await fs.writeFile(path.join(outside, "malicious.cjs"), "throw new Error('external plugin loaded')")
+          await fs.writeFile(approved.canonical, "before")
+        })
+        const service = yield* FileMutation.Service
+        const result = yield* (yield* PostMutation.Service).run({
+          target: approved,
+          intent: "write",
+          mutation: service.write({ target: approved, content: "const value={nested:true}" }),
+        })
+        expect(result.formatters).toContainEqual(expect.objectContaining({ name: "prettier", code: "formatted" }))
+        expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toContain("  nested: true")
+        expect((yield* Effect.promise(() => fs.readdir(outside))).some((name) => name.includes("slopcode"))).toBe(false)
+        expect(yield* Effect.promise(() => fs.readdir(approved.staging))).toEqual([])
+      }).pipe(Effect.provide(layer))
+    })),
   )
 
   it.live("event completion retains the validated identity instead of adopting replacement bytes", () =>
@@ -343,8 +452,36 @@ describe("mutation rejection re-review", () => {
         yield* Effect.promise(() => fs.writeFile(approved.canonical, "approved"))
         const expected = MutationEvents.fileFingerprint(new TextEncoder().encode("approved"))
         yield* Effect.promise(() => fs.writeFile(approved.canonical, "replacement"))
+        const published: MutationEvents.Kind[] = []
+        yield* events.native(
+          approved.canonical,
+          "change",
+          Effect.sync(() => { published.push("change") }),
+        )
         yield* owner.complete("add", expected)
-        expect(yield* events.native(approved.canonical, "change")).toBe(true)
+        expect(published).toEqual(["change"])
+      }).pipe(Effect.provide(MutationEvents.layer.pipe(Layer.provide(FSUtil.defaultLayer))))
+    }),
+  )
+
+  it.live("routes a callback-before-complete replacement through the actual watcher adapter", () =>
+    withTmp((directory) => {
+      const approved = target(directory)
+      return Effect.gen(function* () {
+        const ownership = yield* MutationEvents.Service
+        const owner = yield* ownership.begin(approved.canonical)
+        yield* Effect.promise(() => fs.writeFile(approved.canonical, "direct"))
+        const expected = yield* MutationEvents.currentFingerprint(approved.canonical)
+        yield* Effect.promise(() => fs.writeFile(approved.canonical, "replacement"))
+        const published: MutationEvents.Kind[] = ["add"]
+        const callback = Watcher.callback({
+          ownership,
+          publish: (_file, event) => Effect.sync(() => { published.push(event) }),
+          run: (effect) => { Effect.runSync(effect) },
+        })
+        callback(null, [{ path: approved.canonical, type: "update" }])
+        yield* owner.complete("add", expected)
+        expect(published).toEqual(["add", "change"])
       }).pipe(Effect.provide(MutationEvents.layer.pipe(Layer.provide(FSUtil.defaultLayer))))
     }),
   )
