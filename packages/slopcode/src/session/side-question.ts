@@ -9,7 +9,7 @@ import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { Reference } from "@slopcode-ai/core/reference"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import type { SessionV1 } from "@slopcode-ai/core/v1/session"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import type { ModelMessage } from "ai"
 import { Agent } from "@/agent/agent"
@@ -115,6 +115,7 @@ export const layer = Layer.effect(
     const locations = yield* LocationServiceMap
     const fs = yield* FSUtil.Service
     const permission = yield* Permission.Service
+    const readerHooks = Option.getOrUndefined(yield* Effect.serviceOption(SideQuestionReader.ReaderHooks))
 
     const ask: Interface["ask"] = (input) =>
       Stream.unwrap(
@@ -231,6 +232,7 @@ export const layer = Layer.effect(
           const ruleset = Permission.merge(agent.permission, session.permission ?? [])
           const reader = yield* SideQuestionReader.make({
             ruleset,
+            hooks: readerHooks,
             reference: (name) =>
               Effect.gen(function* () {
                 const ctx = yield* InstanceState.context
@@ -242,10 +244,15 @@ export const layer = Layer.effect(
               }),
           }).pipe(Effect.provideService(FSUtil.Service, fs), Effect.provideService(Permission.Service, permission))
           const usage = { inputTokens: 0, outputTokens: 0 }
+          let emitted = 0
+          const ids = new Set<string>()
           const initial: ModelMessage[] = [...modelMessages, ...thread, { role: "user", content: question }]
           const run = (messages: ModelMessage[], round: number): Stream.Stream<Event, unknown> => {
             const calls: Extract<LLMEvent, { type: "tool-call" }>[] = []
-            const results = new Map<string, Extract<LLMEvent, { type: "tool-result" | "tool-error" }>>()
+            const results = new Map<
+              string,
+              { type: "success"; value: SideQuestionReader.Result } | { type: "error"; message: string }
+            >()
             const stream = llm
               .stream({
                 user,
@@ -262,8 +269,6 @@ export const layer = Layer.effect(
               .pipe(
                 Stream.tap((event) =>
                   Effect.sync(() => {
-                    if (event.type === "tool-call") calls.push(event)
-                    if (event.type === "tool-result" || event.type === "tool-error") results.set(event.id, event)
                     if (event.type === "finish") {
                       usage.inputTokens += event.usage?.inputTokens ?? 0
                       usage.outputTokens += event.usage?.outputTokens ?? 0
@@ -276,21 +281,44 @@ export const layer = Layer.effect(
                     if (event.name !== "read") return Stream.fail(new Error(`Unexpected side tool call: ${event.name}`))
                     if (event.providerExecuted)
                       return Stream.fail(new Error("Provider-executed side reads are not allowed"))
+                    if (emitted >= SideQuestionReader.MAX_CALLS)
+                      return Stream.fail(
+                        new Error(`Side question tool-call limit reached (${SideQuestionReader.MAX_CALLS})`),
+                      )
+                    if (ids.has(event.id)) return Stream.fail(new Error(`Duplicate side read call ID: ${event.id}`))
+                    emitted += 1
+                    ids.add(event.id)
+                    calls.push(event)
                     return Stream.make({ type: "status", status: "reading", round })
                   }
                   if (event.type === "tool-result") {
                     if (event.providerExecuted)
                       return Stream.fail(new Error("Provider-executed side reads are not allowed"))
-                    const value = event.result.value
-                    if (!value || typeof value !== "object" || !("metadata" in value))
-                      return Stream.fail(new Error("Side read returned an untrusted result"))
-                    const metadata = value.metadata
-                    if (!metadata || typeof metadata !== "object" || !("sideRead" in metadata))
-                      return Stream.fail(new Error("Side read returned an untrusted result"))
-                    const read = metadata.sideRead
-                    if (!read || typeof read !== "object")
-                      return Stream.fail(new Error("Side read returned an untrusted result"))
-                    return Stream.make({ type: "read", ...read } as Event)
+                    const call = calls.find((item) => item.id === event.id)
+                    if (!call || call.name !== event.name)
+                      return Stream.fail(new Error(`Unmatched side read result: ${event.id}`))
+                    if (event.result.type === "error" && results.get(event.id)?.type === "error") return Stream.empty
+                    if (results.has(event.id)) return Stream.fail(new Error(`Duplicate side read result: ${event.id}`))
+                    if (event.result.type === "error") {
+                      const failure = reader.consumeError(event.id, call.input)
+                      if (!failure) return Stream.fail(new Error("Side read returned an untrusted error"))
+                      results.set(event.id, { type: "error", message: failure })
+                      return Stream.empty
+                    }
+                    const value = reader.consume(event.id, call.input, event.result.value)
+                    if (!value) return Stream.fail(new Error("Side read returned an untrusted result"))
+                    results.set(event.id, { type: "success", value })
+                    return Stream.make({ type: "read", ...value.metadata.sideRead })
+                  }
+                  if (event.type === "tool-error") {
+                    const call = calls.find((item) => item.id === event.id)
+                    if (!call || call.name !== event.name)
+                      return Stream.fail(new Error(`Unmatched side read error: ${event.id}`))
+                    if (results.has(event.id)) return Stream.fail(new Error(`Duplicate side read result: ${event.id}`))
+                    const failure = reader.consumeError(event.id, call.input)
+                    if (!failure) return Stream.fail(new Error("Side read returned an untrusted error"))
+                    results.set(event.id, { type: "error", message: failure })
+                    return Stream.empty
                   }
                   if (event.type === "provider-error") return Stream.fail(new Error(event.message))
                   return Stream.empty
@@ -302,7 +330,7 @@ export const layer = Layer.effect(
                 const summary: Event = {
                   type: "usage",
                   rounds: round,
-                  calls: read.calls,
+                  calls: emitted,
                   files: read.files,
                   lines: read.lines,
                   bytes: read.bytes,
@@ -310,6 +338,11 @@ export const layer = Layer.effect(
                   outputTokens: usage.outputTokens,
                 }
                 if (calls.length === 0) return Stream.make(summary)
+                if (results.size !== calls.length)
+                  return Stream.concat(
+                    Stream.make(summary),
+                    Stream.fail(new Error("Side read did not return a correlated result")),
+                  )
                 if (round >= MAX_ROUNDS)
                   return Stream.concat(
                     Stream.make(summary),
@@ -328,14 +361,14 @@ export const layer = Layer.effect(
                   role: "tool",
                   content: calls.map((call) => {
                     const result = results.get(call.id)
-                    if (!result || result.type === "tool-error") {
+                    if (!result || result.type === "error") {
                       return {
                         type: "tool-result" as const,
                         toolCallId: call.id,
                         toolName: call.name,
                         output: {
                           type: "error-text" as const,
-                          value: result?.message ?? "Read did not return a result",
+                          value: result?.message ?? "Read did not return a correlated result",
                         },
                       }
                     }
@@ -343,12 +376,7 @@ export const layer = Layer.effect(
                       type: "tool-result" as const,
                       toolCallId: call.id,
                       toolName: call.name,
-                      output:
-                        result.result.type === "error"
-                          ? { type: "error-text" as const, value: String(result.result.value) }
-                          : result.result.type === "text"
-                            ? { type: "text" as const, value: String(result.result.value) }
-                            : { type: "json" as const, value: result.result.value as never },
+                      output: { type: "json" as const, value: result.value as never },
                     }
                   }),
                 }

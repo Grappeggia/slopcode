@@ -56,16 +56,53 @@ describe("SideQuestionReader", () => {
       })
       const reader = yield* SideQuestionReader.make({ ruleset: allow, reference: () => Effect.succeed(undefined) })
 
-      for (const input of [
+      for (const [index, input] of [
         { path: "../outside.txt" },
         { path: outside },
         { path: "escape.txt" },
         { path: "folder" },
         { path: "binary.dat" },
         { path: "image.png" },
-      ]) {
-        yield* Effect.promise(async () => expect(execute(reader, input)).rejects.toThrow())
+      ].entries()) {
+        yield* Effect.promise(async () => expect(execute(reader, input, `rejected_${index}`)).rejects.toThrow())
       }
+      yield* Effect.promise(() => fs.rm(outside, { force: true }))
+    }),
+  )
+
+  it.instance("rejects a file replaced by a symlink after canonical authorization", () =>
+    Effect.gen(function* () {
+      const fixture = yield* TestInstance
+      const target = path.join(fixture.directory, "target.txt")
+      const backup = path.join(fixture.directory, "target.original.txt")
+      const outside = path.join(path.dirname(fixture.directory), `secret-${path.basename(fixture.directory)}.txt`)
+      yield* Effect.promise(async () => {
+        await fs.writeFile(target, "inside")
+        await fs.writeFile(outside, "outside secret")
+      })
+      const live = yield* FSUtil.Service
+      let swapped = false
+      const raced = FSUtil.Service.of({
+        ...live,
+        realPath: (value) =>
+          live.realPath(value).pipe(
+            Effect.tap(() => {
+              if (value !== target || swapped) return Effect.void
+              swapped = true
+              return Effect.promise(async () => {
+                await fs.rename(target, backup)
+                await fs.symlink(outside, target)
+              })
+            }),
+          ),
+      })
+      const reader = yield* SideQuestionReader.make({
+        ruleset: allow,
+        reference: () => Effect.succeed(undefined),
+      }).pipe(Effect.provideService(FSUtil.Service, raced))
+
+      yield* Effect.promise(async () => expect(execute(reader, { path: "target.txt" })).rejects.toThrow())
+      expect(reader.usage().files).toBe(0)
       yield* Effect.promise(() => fs.rm(outside, { force: true }))
     }),
   )
@@ -81,20 +118,20 @@ describe("SideQuestionReader", () => {
       const reference = (name: string) => Effect.succeed(name === "docs" ? docs : undefined)
       const blocked = yield* SideQuestionReader.make({ ruleset: allow, reference })
       yield* Effect.promise(async () =>
-        expect(execute(blocked, { path: "guide.txt", reference: "docs" })).rejects.toThrow(/not allowed/i),
+        expect(execute(blocked, { path: "guide.txt", reference: "docs" }, "blocked")).rejects.toThrow(/not allowed/i),
       )
       yield* Effect.promise(async () =>
-        expect(execute(blocked, { path: "guide.txt", reference: "missing" })).rejects.toThrow(/unknown/i),
+        expect(execute(blocked, { path: "guide.txt", reference: "missing" }, "missing")).rejects.toThrow(/unknown/i),
       )
 
       const reader = yield* SideQuestionReader.make({
         ruleset: [...allow, { permission: "external_directory", pattern: path.join(docs, "*"), action: "allow" }],
         reference,
       })
-      const result = yield* Effect.promise(() => execute(reader, { path: "guide.txt", reference: "docs" }))
+      const result = yield* Effect.promise(() => execute(reader, { path: "guide.txt", reference: "docs" }, "guide"))
       expect(result.output).toContain("reference guide")
       yield* Effect.promise(async () =>
-        expect(execute(reader, { path: "../secret.txt", reference: "docs" })).rejects.toThrow(/escapes/i),
+        expect(execute(reader, { path: "../secret.txt", reference: "docs" }, "escape")).rejects.toThrow(/escapes/i),
       )
       yield* Effect.promise(() => fs.rm(docs, { recursive: true, force: true }))
       expect(yield* (yield* Permission.Service).list()).toEqual([])
@@ -154,6 +191,23 @@ describe("SideQuestionReader", () => {
     }),
   )
 
+  it.instance("counts hard links as one opened file identity", () =>
+    Effect.gen(function* () {
+      const fixture = yield* TestInstance
+      const original = path.join(fixture.directory, "original.txt")
+      yield* Effect.promise(async () => {
+        await fs.writeFile(original, "same file")
+        await fs.link(original, path.join(fixture.directory, "alias.txt"))
+      })
+      const reader = yield* SideQuestionReader.make({ ruleset: allow, reference: () => Effect.succeed(undefined) })
+
+      yield* Effect.promise(() => execute(reader, { path: "original.txt" }, "original"))
+      yield* Effect.promise(() => execute(reader, { path: "alias.txt" }, "alias"))
+
+      expect(reader.usage().files).toBe(1)
+    }),
+  )
+
   it.instance("enforces call and cumulative line limits", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
@@ -186,6 +240,23 @@ describe("SideQuestionReader", () => {
     }),
   )
 
+  it.instance("reserves invalid attempts before validation", () =>
+    Effect.gen(function* () {
+      const fixture = yield* TestInstance
+      yield* Effect.promise(() => fs.writeFile(path.join(fixture.directory, "valid.txt"), "valid"))
+      const reader = yield* SideQuestionReader.make({ ruleset: allow, reference: () => Effect.succeed(undefined) })
+
+      for (let index = 0; index < SideQuestionReader.MAX_CALLS; index++) {
+        yield* Effect.promise(async () => expect(execute(reader, { path: "" }, `invalid_${index}`)).rejects.toThrow())
+      }
+
+      expect(reader.usage().calls).toBe(SideQuestionReader.MAX_CALLS)
+      yield* Effect.promise(async () =>
+        expect(execute(reader, { path: "valid.txt" }, "over_limit")).rejects.toThrow(/call limit/i),
+      )
+    }),
+  )
+
   it.instance("caps cumulative returned bytes before another chunk is exposed", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
@@ -197,11 +268,14 @@ describe("SideQuestionReader", () => {
       )
       const reader = yield* SideQuestionReader.make({ ruleset: allow, reference: () => Effect.succeed(undefined) })
 
-      yield* Effect.promise(() => execute(reader, { path: "bytes.txt", limit: 200 }))
+      const result = yield* Effect.promise(() => execute(reader, { path: "bytes.txt", limit: 200 }, "bytes"))
 
-      expect(reader.usage().bytes).toBe(SideQuestionReader.MAX_BYTES)
+      expect(reader.usage().bytes).toBe(Buffer.byteLength(JSON.stringify(result)))
+      expect(reader.usage().bytes).toBeLessThanOrEqual(SideQuestionReader.MAX_BYTES)
       yield* Effect.promise(async () =>
-        expect(execute(reader, { path: "bytes.txt", offset: 129, limit: 1 })).rejects.toThrow(/byte limit/i),
+        expect(execute(reader, { path: "bytes.txt", offset: 200, limit: 1 }, "bytes_over")).rejects.toThrow(
+          /byte limit/i,
+        ),
       )
     }),
   )
@@ -210,24 +284,25 @@ describe("SideQuestionReader", () => {
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       yield* Effect.promise(() => fs.writeFile(path.join(fixture.directory, "slow.txt"), "slow"))
-      const live = yield* FSUtil.Service
+      const started = yield* Deferred.make<void>()
       const stopped = yield* Deferred.make<void>()
-      const delayed = FSUtil.Service.of({
-        ...live,
-        readFile: () => Effect.never.pipe(Effect.onInterrupt(() => Deferred.succeed(stopped, undefined))),
-      })
       const reader = yield* SideQuestionReader.make({
         ruleset: allow,
         reference: () => Effect.succeed(undefined),
-      }).pipe(Effect.provideService(FSUtil.Service, delayed))
+        hooks: {
+          beforeRead: () =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.succeed(stopped, undefined)),
+            ),
+        },
+      })
       const ctrl = new AbortController()
 
-      yield* Effect.promise(async () => {
-        const result = execute(reader, { path: "slow.txt" }, "slow", ctrl.signal)
-        await Bun.sleep(20)
-        ctrl.abort()
-        await expect(result).rejects.toThrow(/abort/i)
-      })
+      const result = execute(reader, { path: "slow.txt" }, "slow", ctrl.signal)
+      yield* Deferred.await(started)
+      ctrl.abort()
+      yield* Effect.promise(async () => expect(result).rejects.toThrow(/abort/i))
       yield* Deferred.await(stopped)
     }),
   )

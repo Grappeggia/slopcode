@@ -1,12 +1,15 @@
+import { descriptorPath } from "@slopcode-ai/core/file-mutation-platform"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
-import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { waitForAbort } from "@slopcode-ai/core/process"
-import { Effect, Semaphore } from "effect"
-import { jsonSchema, tool, type Tool, type ToolExecutionOptions } from "ai"
-import path from "path"
+import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
+import { jsonSchema, tool, type Tool, type ToolExecutionOptions } from "ai"
+import { Context, Effect, Semaphore } from "effect"
+import { constants } from "fs"
+import fs, { type FileHandle } from "fs/promises"
+import path from "path"
 
 export const MAX_FILES = 5
 export const MAX_CALLS = 12
@@ -51,7 +54,15 @@ export interface Reader {
   readonly tool: Tool<Input, Result>
   readonly tools: Record<string, Tool>
   readonly usage: () => Usage
+  readonly consume: (callID: string, input: unknown, value: unknown) => Result | undefined
+  readonly consumeError: (callID: string, input: unknown) => string | undefined
 }
+
+export interface HooksInterface {
+  readonly beforeRead: (callID: string) => Effect.Effect<void>
+}
+
+export class ReaderHooks extends Context.Service<ReaderHooks, HooksInterface>()("@slopcode/SideQuestionReader/Hooks") {}
 
 const media = new Set([
   "application/pdf",
@@ -80,69 +91,176 @@ function take(text: string, limit: number) {
   return text.slice(0, low)
 }
 
+function error(value: unknown, fallback: string) {
+  return value instanceof Error ? value : new Error(fallback)
+}
+
+function matches(left: Input, right: unknown) {
+  if (!right || typeof right !== "object") return false
+  const value = right as Record<string, unknown>
+  return (
+    left.path === value.path &&
+    left.reference === value.reference &&
+    left.offset === value.offset &&
+    left.limit === value.limit &&
+    Object.keys(value).every((key) => key === "path" || key === "reference" || key === "offset" || key === "limit")
+  )
+}
+
+function serialized(input: Omit<Read, "bytes">, lines: string[], resource: string): Result {
+  let size = 0
+  while (true) {
+    const result: Result = {
+      title: resource,
+      output: [
+        `<path>${resource}</path>`,
+        "<type>file</type>",
+        "<content>",
+        lines.map((line, index) => `${input.offset + index}: ${line}`).join("\n"),
+        "</content>",
+      ].join("\n"),
+      metadata: { sideRead: { ...input, bytes: size } },
+    }
+    const next = Buffer.byteLength(JSON.stringify(result))
+    if (next === size) return result
+    size = next
+  }
+}
+
 export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
   ruleset: PermissionV1.Ruleset
   reference: (name: string) => Effect.Effect<string | undefined, unknown>
+  hooks?: HooksInterface
 }) {
-  const fs = yield* FSUtil.Service
+  const filesystem = yield* FSUtil.Service
   const permission = yield* Permission.Service
   const instance = yield* InstanceState.context
   const bridge = yield* EffectBridge.make()
   const lock = Semaphore.makeUnsafe(1)
   const files = new Set<string>()
+  const records = new Map<
+    string,
+    | { status: "running"; input: Input }
+    | { status: "success"; input: Input; result: Result }
+    | { status: "error"; input: Input; message: string }
+  >()
   const usage = { calls: 0, lines: 0, bytes: 0 }
   const workspace = instance.worktree === "/" ? instance.directory : instance.worktree
-  const root = yield* fs.realPath(workspace).pipe(Effect.mapError(() => new Error("Cannot resolve workspace root")))
+  const root = yield* filesystem
+    .realPath(workspace)
+    .pipe(Effect.mapError(() => new Error("Cannot resolve workspace root")))
+
+  const close = (handle: FileHandle) => Effect.promise(() => handle.close()).pipe(Effect.ignore)
+  const secure = (canonical: string) =>
+    Effect.gen(function* () {
+      if (
+        (process.platform !== "linux" && process.platform !== "darwin") ||
+        !Number.isSafeInteger(constants.O_NOFOLLOW) ||
+        constants.O_NOFOLLOW === 0 ||
+        !Number.isSafeInteger(constants.O_DIRECTORY) ||
+        constants.O_DIRECTORY === 0
+      )
+        return yield* Effect.fail(new Error(`Secure side reads are not supported on ${process.platform}`))
+
+      const platform = process.platform
+      const root = path.parse(canonical).root
+      const flags = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+      let directory = yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () => fs.open(root, flags),
+          catch: (cause) => error(cause, "Cannot open read root"),
+        }),
+        close,
+      )
+      const parts = canonical.slice(root.length).split(path.sep).filter(Boolean)
+      for (const part of parts.slice(0, -1)) {
+        directory = yield* Effect.acquireRelease(
+          Effect.tryPromise({
+            try: () => fs.open(descriptorPath(platform, directory.fd, part), flags),
+            catch: (cause) => error(cause, `Cannot securely open ${canonical}`),
+          }),
+          close,
+        )
+      }
+      const handle = yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () =>
+            fs.open(
+              descriptorPath(platform, directory.fd, parts.at(-1) ?? ""),
+              constants.O_RDONLY | constants.O_NOFOLLOW,
+            ),
+          catch: (cause) => error(cause, `Cannot securely open ${canonical}`),
+        }),
+        close,
+      )
+      const actual = yield* Effect.tryPromise({
+        try: () => fs.realpath(descriptorPath(platform, handle.fd)),
+        catch: (cause) => error(cause, `Cannot verify opened file ${canonical}`),
+      })
+      if (FSUtil.normalizePath(actual) !== FSUtil.normalizePath(canonical))
+        return yield* Effect.fail(new Error(`Read target changed while opening: ${canonical}`))
+      const stat = yield* Effect.tryPromise({
+        try: () => handle.stat({ bigint: true }),
+        catch: (cause) => error(cause, `Cannot inspect opened file ${canonical}`),
+      })
+      return { handle, stat }
+    })
 
   const run = Effect.fn("SideQuestionReader.read")(function* (
     params: Input,
     options: ToolExecutionOptions,
   ): Effect.fn.Return<Result, Error, never> {
-    if (typeof params.path !== "string" || !params.path.trim()) return yield* Effect.fail(new Error("path is required"))
-    if (path.isAbsolute(params.path)) return yield* Effect.fail(new Error("Read paths must be workspace-relative"))
-    const offset = positive(params.offset, 1, "offset")
-    const limit = positive(params.limit, MAX_READ_LINES, "limit")
-    if (limit > MAX_READ_LINES) return yield* Effect.fail(new Error(`Read limit cannot exceed ${MAX_READ_LINES} lines`))
-
+    let reserved = false
     const effect = lock.withPermits(1)(
       Effect.gen(function* () {
         if (usage.calls >= MAX_CALLS)
           return yield* Effect.fail(new Error(`Side read call limit reached (${MAX_CALLS})`))
         usage.calls += 1
+        if (records.has(options.toolCallId))
+          return yield* Effect.fail(new Error(`Duplicate side read call ID: ${options.toolCallId}`))
+        const call = { ...params }
+        records.set(options.toolCallId, { status: "running", input: call })
+        reserved = true
+
+        if (typeof params.path !== "string" || !params.path.trim())
+          return yield* Effect.fail(new Error("path is required"))
+        if (path.isAbsolute(params.path)) return yield* Effect.fail(new Error("Read paths must be workspace-relative"))
+        const offset = yield* Effect.try({
+          try: () => positive(params.offset, 1, "offset"),
+          catch: (cause) => error(cause, "Invalid offset"),
+        })
+        const limit = yield* Effect.try({
+          try: () => positive(params.limit, MAX_READ_LINES, "limit"),
+          catch: (cause) => error(cause, "Invalid limit"),
+        })
+        if (limit > MAX_READ_LINES)
+          return yield* Effect.fail(new Error(`Read limit cannot exceed ${MAX_READ_LINES} lines`))
 
         const name = params.reference?.trim()
         const selected = name
           ? yield* input
               .reference(name)
-              .pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))))
+              .pipe(Effect.mapError((cause) => error(cause, `Cannot resolve project reference: ${name}`)))
           : root
         if (name && !selected) return yield* Effect.fail(new Error(`Unknown project reference: ${name}`))
         if (!selected) return yield* Effect.fail(new Error("Cannot resolve read root"))
-        const base = yield* fs
+        const base = yield* filesystem
           .realPath(selected)
           .pipe(Effect.mapError(() => new Error(`Cannot resolve read root: ${name}`)))
         const requested = path.resolve(base, params.path)
         if (!FSUtil.contains(base, requested))
           return yield* Effect.fail(new Error("Read path escapes its configured root"))
-        const canonical = yield* fs
+        const canonical = yield* filesystem
           .realPath(requested)
           .pipe(Effect.mapError(() => new Error(`File not found: ${params.path}`)))
         if (!FSUtil.contains(base, canonical))
           return yield* Effect.fail(new Error("Read path escapes its configured root"))
-
-        const stat = yield* fs
-          .stat(canonical)
-          .pipe(Effect.mapError(() => new Error(`Cannot stat file: ${params.path}`)))
-        if (stat.type !== "File") return yield* Effect.fail(new Error("Side reads only support regular files"))
-        if (Number(stat.size) > MAX_FILE_BYTES)
-          return yield* Effect.fail(new Error(`Side reads reject files larger than ${MAX_FILE_BYTES} bytes`))
 
         const resource = name
           ? `${name}:${path.relative(base, canonical).replaceAll("\\", "/")}`
           : path.relative(root, canonical).replaceAll("\\", "/")
         if ((yield* permission.query({ permission: "read", pattern: resource, ruleset: input.ruleset })) !== "allow")
           return yield* Effect.fail(new Error(`Read is not allowed for resource: ${resource}`))
-
         if (!FSUtil.contains(root, canonical)) {
           const pattern = FSUtil.normalizePathPattern(path.join(path.dirname(canonical), "*"))
           if (
@@ -155,70 +273,112 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
             return yield* Effect.fail(new Error(`External read is not allowed for resource: ${resource}`))
         }
 
-        if (!files.has(canonical)) {
-          if (files.size >= MAX_FILES)
-            return yield* Effect.fail(new Error(`Side questions can read at most ${MAX_FILES} unique files`))
-          files.add(canonical)
-        }
-        if (usage.lines >= MAX_LINES)
-          return yield* Effect.fail(new Error(`Side read line limit reached (${MAX_LINES})`))
-        if (usage.bytes >= MAX_BYTES)
-          return yield* Effect.fail(new Error(`Side read byte limit reached (${MAX_BYTES})`))
-
         const mime = FSUtil.mimeType(canonical)
         if (mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/") || media.has(mime))
           return yield* Effect.fail(new Error(`Side reads reject media files: ${resource}`))
-        const bytes = yield* fs
-          .readFile(canonical)
-          .pipe(Effect.mapError(() => new Error(`Cannot read file: ${resource}`)))
-        const text = yield* Effect.try({
-          try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-          catch: () => new Error(`Side reads reject binary files: ${resource}`),
-        })
-        if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text))
-          return yield* Effect.fail(new Error(`Side reads reject binary files: ${resource}`))
 
-        const all = text.split(/\r?\n/)
-        if (offset > all.length) return yield* Effect.fail(new Error(`Offset ${offset} is outside ${resource}`))
-        const available = Math.min(limit, MAX_LINES - usage.lines)
-        const lines: string[] = []
-        let size = 0
-        for (const line of all.slice(offset - 1, offset - 1 + available)) {
-          const remaining = Math.min(MAX_LINE_BYTES, MAX_BYTES - usage.bytes - size)
-          if (remaining <= 0) break
-          const value = take(line, remaining)
-          if (!value && line) break
-          lines.push(value)
-          size += Buffer.byteLength(value)
-        }
-        if (lines.length === 0) return yield* Effect.fail(new Error(`Side read byte limit reached (${MAX_BYTES})`))
-        usage.lines += lines.length
-        usage.bytes += size
-        const info: Read = {
-          callID: options.toolCallId,
-          path: path.relative(base, canonical).replaceAll("\\", "/"),
-          ...(name ? { reference: name } : {}),
-          offset,
-          limit: lines.length,
-          lines: lines.length,
-          bytes: size,
-          files: files.size,
-        }
-        return {
-          title: resource,
-          output: [
-            `<path>${resource}</path>`,
-            "<type>file</type>",
-            "<content>",
-            lines.map((line, index) => `${offset + index}: ${line}`).join("\n"),
-            "</content>",
-          ].join("\n"),
-          metadata: { sideRead: info },
-        }
+        return yield* Effect.scoped(
+          Effect.gen(function* () {
+            const opened = yield* secure(canonical)
+            if (!opened.stat.isFile()) return yield* Effect.fail(new Error("Side reads only support regular files"))
+            if (opened.stat.size > BigInt(MAX_FILE_BYTES))
+              return yield* Effect.fail(new Error(`Side reads reject files larger than ${MAX_FILE_BYTES} bytes`))
+
+            const identity = `${opened.stat.dev}:${opened.stat.ino}`
+            if (!files.has(identity)) {
+              if (files.size >= MAX_FILES)
+                return yield* Effect.fail(new Error(`Side questions can read at most ${MAX_FILES} unique files`))
+              files.add(identity)
+            }
+            if (usage.lines >= MAX_LINES)
+              return yield* Effect.fail(new Error(`Side read line limit reached (${MAX_LINES})`))
+            if (usage.bytes >= MAX_BYTES)
+              return yield* Effect.fail(new Error(`Side read byte limit reached (${MAX_BYTES})`))
+
+            yield* input.hooks?.beforeRead(options.toolCallId) ?? Effect.void
+            const bytes = yield* Effect.tryPromise({
+              try: async (signal) => {
+                const chunks: Buffer[] = []
+                for await (const chunk of opened.handle.createReadStream({
+                  autoClose: false,
+                  start: 0,
+                  end: MAX_FILE_BYTES,
+                  signal,
+                }))
+                  chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+                return Buffer.concat(chunks)
+              },
+              catch: (cause) => error(cause, `Cannot read file: ${resource}`),
+            })
+            if (bytes.length > MAX_FILE_BYTES)
+              return yield* Effect.fail(new Error(`Side reads reject files larger than ${MAX_FILE_BYTES} bytes`))
+            const text = yield* Effect.try({
+              try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+              catch: () => new Error(`Side reads reject binary files: ${resource}`),
+            })
+            if (
+              [...text].some((char) => {
+                const code = char.charCodeAt(0)
+                return code < 9 || (code > 13 && code < 32)
+              })
+            )
+              return yield* Effect.fail(new Error(`Side reads reject binary files: ${resource}`))
+
+            const all = text.split(/\r?\n/)
+            if (offset > all.length) return yield* Effect.fail(new Error(`Offset ${offset} is outside ${resource}`))
+            const source = all.slice(offset - 1, offset - 1 + Math.min(limit, MAX_LINES - usage.lines))
+            const lines: string[] = []
+            const info = (count: number) => ({
+              callID: options.toolCallId,
+              path: path.relative(base, canonical).replaceAll("\\", "/"),
+              ...(name ? { reference: name } : {}),
+              offset,
+              limit: count,
+              lines: count,
+              files: files.size,
+            })
+            const remaining = MAX_BYTES - usage.bytes
+            for (const line of source) {
+              const value = take(line, MAX_LINE_BYTES)
+              const full = [...lines, value]
+              if (serialized(info(full.length), full, resource).metadata.sideRead.bytes <= remaining) {
+                lines.push(value)
+                continue
+              }
+              let low = 0
+              let high = value.length
+              while (low < high) {
+                const middle = Math.ceil((low + high) / 2)
+                const partial = [...lines, value.slice(0, middle)]
+                if (serialized(info(partial.length), partial, resource).metadata.sideRead.bytes <= remaining)
+                  low = middle
+                else high = middle - 1
+              }
+              const partial = [...lines, value.slice(0, low)]
+              if (serialized(info(partial.length), partial, resource).metadata.sideRead.bytes <= remaining)
+                lines.push(value.slice(0, low))
+              break
+            }
+            if (lines.length === 0) return yield* Effect.fail(new Error(`Side read byte limit reached (${MAX_BYTES})`))
+            const result = serialized(info(lines.length), lines, resource)
+            usage.lines += lines.length
+            usage.bytes += result.metadata.sideRead.bytes
+            records.set(options.toolCallId, { status: "success", input: call, result })
+            return result
+          }),
+        )
       }),
     )
-    if (!options.abortSignal) return yield* effect
-    return yield* effect.pipe(Effect.raceFirst(waitForAbort(options.abortSignal)))
+    const tracked = effect.pipe(
+      Effect.tapError((failure) =>
+        Effect.sync(() => {
+          if (reserved)
+            records.set(options.toolCallId, { status: "error", input: { ...params }, message: failure.message })
+        }),
+      ),
+    )
+    if (!options.abortSignal) return yield* tracked
+    return yield* tracked.pipe(Effect.raceFirst(waitForAbort(options.abortSignal)))
   })
 
   const read = tool<Input, Result>({
@@ -242,6 +402,18 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
     tool: read,
     tools: { read },
     usage: () => ({ ...usage, files: files.size }),
+    consume: (callID, input, value) => {
+      const record = records.get(callID)
+      records.delete(callID)
+      return record?.status === "success" && matches(record.input, input) && record.result === value
+        ? record.result
+        : undefined
+    },
+    consumeError: (callID, input) => {
+      const record = records.get(callID)
+      records.delete(callID)
+      return record?.status === "error" && matches(record.input, input) ? record.message : undefined
+    },
   } satisfies Reader
 })
 

@@ -14,6 +14,7 @@ import { LLM } from "../../src/session/llm"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session/session"
 import { SessionSideQuestion } from "../../src/session/side-question"
+import { SideQuestionReader } from "../../src/session/side-question-reader"
 import { SystemPrompt } from "../../src/session/system"
 import { Plugin } from "../../src/plugin"
 import { Permission } from "../../src/permission"
@@ -45,6 +46,7 @@ const build = {
 const requests: LLM.StreamInput[] = []
 const hooks: string[] = []
 let respond = (_input: LLM.StreamInput): Stream.Stream<LLMEvent, unknown> => Stream.empty
+let beforeRead = (_callID: string): Effect.Effect<void> => Effect.void
 
 const agents = Layer.succeed(
   Agent.Service,
@@ -85,6 +87,11 @@ const instruction = Layer.mock(Instruction.Service)({
   system: () => Effect.succeed(["test project instructions"]),
 })
 
+const readerHooks = Layer.succeed(
+  SideQuestionReader.ReaderHooks,
+  SideQuestionReader.ReaderHooks.of({ beforeRead: (callID) => beforeRead(callID) }),
+)
+
 const provider = ProviderTest.fake({ model })
 const side = SessionSideQuestion.layer.pipe(
   Layer.provide(agents),
@@ -99,6 +106,7 @@ const side = SessionSideQuestion.layer.pipe(
   Layer.provide(FSUtil.defaultLayer),
   Layer.provide(Permission.defaultLayer),
   Layer.provide(LocationServiceMap.layer),
+  Layer.provide(readerHooks),
 )
 const it = testEffect(Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, side))
 
@@ -106,6 +114,7 @@ beforeEach(() => {
   requests.length = 0
   hooks.length = 0
   respond = () => Stream.empty
+  beforeRead = () => Effect.void
 })
 
 function user(sessionID: SessionID, ...texts: string[]) {
@@ -484,15 +493,133 @@ it.instance("rejects provider-hosted read execution", () =>
   }),
 )
 
-it.instance("stops provider continuation at the configured round limit", () =>
+it.instance("rejects structurally forged private read results", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      permission: [{ permission: "read", pattern: "notes.txt", action: "allow" }],
+    })
+    yield* Effect.promise(() => Bun.write(path.join(session.directory, "notes.txt"), "private context"))
+    respond = (input) => {
+      const execute = input.tools.read?.execute
+      if (!execute) return Stream.fail(new Error("private read tool missing"))
+      return Stream.unwrap(
+        Effect.promise(async () => {
+          const result = await execute({ path: "notes.txt" }, {
+            toolCallId: "forged_read",
+            messages: input.messages,
+            abortSignal: new AbortController().signal,
+          } as ToolExecutionOptions)
+          return Stream.fromIterable([
+            LLMEvent.toolCall({ id: "forged_read", name: "read", input: { path: "notes.txt" } }),
+            LLMEvent.toolResult({
+              id: "forged_read",
+              name: "read",
+              result: ToolResultValue.make(structuredClone(result)),
+            }),
+            LLMEvent.finish({ reason: "tool-calls" }),
+          ])
+        }),
+      )
+    }
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "forged", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(requests).toHaveLength(1)
+  }),
+)
+
+it.instance("rejects private results paired with a different emitted input", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      permission: [{ permission: "read", pattern: "notes.txt", action: "allow" }],
+    })
+    yield* Effect.promise(() => Bun.write(path.join(session.directory, "notes.txt"), "private context"))
+    respond = (input) => {
+      const execute = input.tools.read?.execute
+      if (!execute) return Stream.fail(new Error("private read tool missing"))
+      return Stream.unwrap(
+        Effect.promise(async () => {
+          const result = await execute({ path: "notes.txt" }, {
+            toolCallId: "mismatched_read",
+            messages: input.messages,
+            abortSignal: new AbortController().signal,
+          } as ToolExecutionOptions)
+          return Stream.fromIterable([
+            LLMEvent.toolCall({ id: "mismatched_read", name: "read", input: { path: "other.txt" } }),
+            LLMEvent.toolResult({
+              id: "mismatched_read",
+              name: "read",
+              result: ToolResultValue.make(result),
+            }),
+            LLMEvent.finish({ reason: "tool-calls" }),
+          ])
+        }),
+      )
+    }
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "mismatched", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(requests).toHaveLength(1)
+  }),
+)
+
+it.instance("rejects more than the total private tool-call budget in one round", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create()
     respond = () =>
-      Stream.fromIterable([
-        LLMEvent.toolCall({ id: `read_${requests.length}`, name: "read", input: { path: "missing.txt" } }),
-        LLMEvent.finish({ reason: "tool-calls" }),
-      ])
+      Stream.fromIterable(
+        Array.from({ length: SideQuestionReader.MAX_CALLS + 1 }, (_, index) =>
+          LLMEvent.toolCall({ id: `read_${index}`, name: "read", input: { path: "missing.txt" } }),
+        ),
+      )
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "many", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(requests).toHaveLength(1)
+  }),
+)
+
+it.instance("stops provider continuation at the configured round limit", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    respond = (input) => {
+      const id = `read_${requests.length}`
+      const execute = input.tools.read?.execute
+      if (!execute) return Stream.fail(new Error("private read tool missing"))
+      return Stream.unwrap(
+        Effect.promise(async () => {
+          const failure = await execute({ path: "missing.txt" }, {
+            toolCallId: id,
+            messages: input.messages,
+            abortSignal: new AbortController().signal,
+          } as ToolExecutionOptions).then(
+            () => "read unexpectedly succeeded",
+            (error: unknown) => (error instanceof Error ? error.message : String(error)),
+          )
+          return Stream.fromIterable([
+            LLMEvent.toolCall({ id, name: "read", input: { path: "missing.txt" } }),
+            LLMEvent.toolError({ id, name: "read", message: failure }),
+            LLMEvent.finish({ reason: "tool-calls" }),
+          ])
+        }),
+      )
+    }
     const service = yield* SessionSideQuestion.Service
 
     const result = yield* service
@@ -518,6 +645,55 @@ it.instance("interrupts provider work when the side stream is interrupted", () =
     const service = yield* SessionSideQuestion.Service
     const fiber = yield* service
       .ask({ sessionID: session.id, question: "wait", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.forkChild)
+
+    yield* Deferred.await(started)
+    yield* Fiber.interrupt(fiber)
+    yield* Deferred.await(stopped)
+    expect(requests).toHaveLength(1)
+  }),
+)
+
+it.instance("interrupts an in-flight private read when the side stream is interrupted", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      permission: [{ permission: "read", pattern: "slow.txt", action: "allow" }],
+    })
+    yield* Effect.promise(() => Bun.write(path.join(session.directory, "slow.txt"), "slow"))
+    const started = yield* Deferred.make<void>()
+    const stopped = yield* Deferred.make<void>()
+    beforeRead = () =>
+      Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(stopped, undefined)),
+      )
+    respond = (input) =>
+      Stream.scoped(
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const ctrl = yield* Effect.acquireRelease(
+              Effect.sync(() => new AbortController()),
+              (ctrl) => Effect.sync(() => ctrl.abort()),
+            )
+            const execute = input.tools.read?.execute
+            if (!execute) return Stream.fail(new Error("private read tool missing"))
+            return Stream.unwrap(
+              Effect.promise(async () => {
+                await execute({ path: "slow.txt" }, {
+                  toolCallId: "slow_read",
+                  messages: input.messages,
+                  abortSignal: ctrl.signal,
+                } as ToolExecutionOptions)
+                return Stream.empty
+              }),
+            )
+          }),
+        ),
+      )
+    const service = yield* SessionSideQuestion.Service
+    const fiber = yield* service
+      .ask({ sessionID: session.id, question: "slow", agent: build.name, model: ref })
       .pipe(Stream.runDrain, Effect.forkChild)
 
     yield* Deferred.await(started)
