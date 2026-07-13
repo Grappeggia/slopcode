@@ -148,10 +148,15 @@ describe("OpenAI OAuth refresh", () => {
     const ready = new Promise<void>((resolve) => {
       release = resolve
     })
+    let start: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      start = resolve
+    })
     let refreshes = 0
     const request = async (input: RequestInfo | URL) => {
       if (String(input).endsWith("/oauth/token")) {
         refreshes++
+        start!()
         await ready
         return Response.json({ access_token: jwt({}), refresh_token: "refresh-new", expires_in: 60 })
       }
@@ -170,7 +175,7 @@ describe("OpenAI OAuth refresh", () => {
       async (auth) => void second.push(auth),
       options,
     )
-    await Bun.sleep(5)
+    await started
     expect(refreshes).toBe(1)
     release!()
     expect((await one).status).toBe("oauth")

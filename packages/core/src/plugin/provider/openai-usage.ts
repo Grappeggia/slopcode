@@ -80,7 +80,13 @@ export type Options = {
 
 type RecordValue = Record<string, unknown>
 
-const pending = new Map<string, Promise<TokenResponse>>()
+type Pending = {
+  readonly controller: AbortController
+  readonly promise: Promise<TokenResponse>
+  waiters: number
+}
+
+const pending = new Map<string, Pending>()
 
 function record(input: unknown): RecordValue | undefined {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return
@@ -191,53 +197,81 @@ export function extractAccountID(tokens: TokenResponse): string | undefined {
   return access ? extractAccountIDFromClaims(access) : undefined
 }
 
-export async function refreshAccessToken(refresh: string, options: Options = {}) {
+function wait(entry: Pending, key: string, signal?: AbortSignal) {
+  entry.waiters++
+  return new Promise<TokenResponse>((resolve, reject) => {
+    let active = true
+    const finish = (done: () => void) => {
+      if (!active) return
+      active = false
+      signal?.removeEventListener("abort", cancel)
+      entry.waiters--
+      done()
+    }
+    const cancel = () => {
+      finish(() => reject(signal?.reason ?? new DOMException("The operation was aborted", "AbortError")))
+      if (entry.waiters !== 0 || pending.get(key) !== entry) return
+      pending.delete(key)
+      entry.controller.abort()
+    }
+    if (signal) {
+      signal.addEventListener("abort", cancel, { once: true })
+      if (signal.aborted) {
+        cancel()
+        return
+      }
+    }
+    void entry.promise.then(
+      (tokens) => finish(() => resolve(tokens)),
+      (cause) => finish(() => reject(cause)),
+    )
+  })
+}
+
+export function refreshAccessToken(refresh: string, options: Options = {}) {
   const base = options.issuer ?? issuer
   const key = `${base}\0${refresh}`
   const current = pending.get(key)
-  if (current) return current
+  if (current) return wait(current, key, options.signal)
   const request = options.fetch ?? fetch
-  const result = request(`${base}/oauth/token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": `slopcode/${InstallationVersion}`,
-    },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refresh,
-      client_id: clientID,
-    }).toString(),
-    signal: options.signal
-      ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeout ?? timeout)])
-      : AbortSignal.timeout(options.timeout ?? timeout),
-  }).then(async (response) => {
-    if (!response.ok) throw new Error(`Token refresh failed: ${response.status}`)
-    const value = record(await response.json())
-    if (!value || typeof value.access_token !== "string" || !value.access_token) {
-      throw new Error("Token refresh missing access token")
-    }
-    return {
-      access_token: value.access_token,
-      ...(typeof value.id_token === "string" && { id_token: value.id_token }),
-      ...(typeof value.refresh_token === "string" && { refresh_token: value.refresh_token }),
-      ...(typeof value.expires_in === "number" &&
-        Number.isFinite(value.expires_in) && { expires_in: value.expires_in }),
-    }
-  })
-  let shared: Promise<TokenResponse>
+  const controller = new AbortController()
+  const promise = Promise.resolve()
+    .then(() =>
+      request(`${base}/oauth/token`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": `slopcode/${InstallationVersion}`,
+        },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refresh,
+          client_id: clientID,
+        }).toString(),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(options.timeout ?? timeout)]),
+      }),
+    )
+    .then(async (response) => {
+      if (!response.ok) throw new Error(`Token refresh failed: ${response.status}`)
+      const value = record(await response.json())
+      if (!value || typeof value.access_token !== "string" || !value.access_token) {
+        throw new Error("Token refresh missing access token")
+      }
+      return {
+        access_token: value.access_token,
+        ...(typeof value.id_token === "string" && { id_token: value.id_token }),
+        ...(typeof value.refresh_token === "string" && { refresh_token: value.refresh_token }),
+        ...(typeof value.expires_in === "number" &&
+          Number.isFinite(value.expires_in) && { expires_in: value.expires_in }),
+      }
+    })
+  const entry = { controller, promise, waiters: 0 }
   const clear = () => {
-    if (pending.get(key) === shared) pending.delete(key)
+    if (pending.get(key) === entry) pending.delete(key)
   }
-  shared = result.finally(clear)
-  pending.set(key, shared)
-  if (options.signal) {
-    options.signal.addEventListener("abort", clear, { once: true })
-    if (options.signal.aborted) clear()
-    const cleanup = () => options.signal?.removeEventListener("abort", clear)
-    void shared.then(cleanup, cleanup)
-  }
-  return shared
+  pending.set(key, entry)
+  void promise.then(clear, clear)
+  return wait(entry, key, options.signal)
 }
 
 export async function refreshOAuth(auth: OAuth, options: Options = {}) {

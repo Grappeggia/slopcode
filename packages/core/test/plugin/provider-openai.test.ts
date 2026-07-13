@@ -6,6 +6,7 @@ import { ModelV2 } from "@slopcode-ai/core/model"
 import { PluginV2 } from "@slopcode-ai/core/plugin"
 import { OpenAIPlugin } from "@slopcode-ai/core/plugin/provider/openai"
 import { browser } from "@slopcode-ai/core/plugin/provider/openai-auth"
+import { getUsage } from "@slopcode-ai/core/plugin/provider/openai-usage"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { Credential } from "@slopcode-ai/core/credential"
 import { fakeSelectorSdk, it, model, provider } from "./provider-helper"
@@ -88,6 +89,58 @@ describe("OpenAIPlugin", () => {
       expect(aborts).toBe(1)
       expect((yield* browser.refresh!(value)).access).toBe("access-retried")
       expect(calls).toBe(2)
+    }),
+  )
+
+  it.live("keeps a shared refresh alive when one waiter cancels", () =>
+    Effect.gen(function* () {
+      const original = globalThis.fetch
+      let started: (() => void) | undefined
+      const ready = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      let release: ((response: Response) => void) | undefined
+      let calls = 0
+      let aborts = 0
+      globalThis.fetch = async (input, init) => {
+        if (!String(input).endsWith("/oauth/token")) return Response.json({ plan_type: "plus" })
+        calls++
+        return new Promise((resolve, reject) => {
+          release = resolve
+          started!()
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              aborts++
+              reject(init.signal?.reason)
+            },
+            { once: true },
+          )
+        })
+      }
+      yield* Effect.addFinalizer(() => Effect.sync(() => void (globalThis.fetch = original)))
+      const value = new Credential.OAuth({
+        type: "oauth",
+        methodID: Integration.MethodID.make("chatgpt-browser"),
+        access: "expired",
+        refresh: "refresh-shared-cancel",
+        expires: 0,
+      })
+      const interrupted = yield* browser.refresh!(value).pipe(Effect.forkChild)
+      yield* Effect.promise(() => ready)
+      const saved: unknown[] = []
+      const usage = getUsage(
+        { type: "oauth", access: "expired", refresh: value.refresh, expires: 0 },
+        async (auth) => void saved.push(auth),
+        { now: () => 1000 },
+      )
+      yield* Fiber.interrupt(interrupted)
+
+      expect(aborts).toBe(0)
+      release!(Response.json({ access_token: "access-shared", refresh_token: "refresh-next", expires_in: 60 }))
+      expect((yield* Effect.promise(() => usage)).status).toBe("oauth")
+      expect(calls).toBe(1)
+      expect(saved).toEqual([{ type: "oauth", access: "access-shared", refresh: "refresh-next", expires: 61_000 }])
     }),
   )
 
