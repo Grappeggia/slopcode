@@ -164,8 +164,9 @@ export function expandEnv(text: string, value: (key: string) => string) {
 const powershellInput = (command: string) => {
   // The grammar cannot parse variables concatenated with path suffixes. Same-length
   // placeholders preserve offsets so authorization still reads the original source.
-  return powershellEnv(command)
-    .filter((item) => command[item.end] === "\\" || command[item.end] === "/")
+  const env = powershellEnv(command).filter((item) => command[item.end] === "\\" || command[item.end] === "/")
+  if (env.some((item) => /[#;<>&|'"$\r\n]/.test(item.key))) throw new SyntaxError("powershell")
+  return env
     .toReversed()
     .reduce(
       (result, item) => result.slice(0, item.start) + "x".repeat(item.end - item.start) + result.slice(item.end),

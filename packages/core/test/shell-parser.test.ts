@@ -155,9 +155,7 @@ describe("ShellParser PowerShell resources", () => {
       const node = tree.rootNode.descendantsOfType("command")[0]
       const elements = node?.childForFieldName("command_elements")
       expect(
-        elements?.namedChildren.flatMap((child) =>
-          child ? [command.slice(child.startIndex, child.endIndex)] : [],
-        ),
+        elements?.namedChildren.flatMap((child) => (child ? [command.slice(child.startIndex, child.endIndex)] : [])),
       ).toContain("$env:ÉROOT/path")
     } finally {
       tree.delete()
@@ -233,6 +231,12 @@ describe("ShellParser PowerShell resources", () => {
       "Get-Content $env:WINDIR/win.ini",
       "Remove-Item target",
     ])
+  })
+
+  test("rejects environment names that could hide commands across block comments", async () => {
+    await expect(powershell("Write-Output ok <# ${env:X#>; Remove-Item target; <#}/path #>")).rejects.toBeInstanceOf(
+      ShellParser.SyntaxError,
+    )
   })
 
   test("maps fallback parser offsets to the original source", async () => {
