@@ -227,6 +227,28 @@ export function interruptible(run: (signal: AbortSignal) => Promise<Connection>)
   })
 }
 
+function wait<T>(promise: Promise<T>, signal: AbortSignal) {
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise<T>((resolve, reject) => {
+    const done = () => signal.removeEventListener("abort", abort)
+    const abort = () => {
+      done()
+      reject(signal.reason)
+    }
+    signal.addEventListener("abort", abort, { once: true })
+    promise.then(
+      (value) => {
+        done()
+        resolve(value)
+      },
+      (error) => {
+        done()
+        reject(error)
+      },
+    )
+  })
+}
+
 export function headers(generated?: HeadersInit, configured?: Readonly<Record<string, string>>, oauth = false) {
   const result = new Headers(oauth ? undefined : generated)
   Object.entries(configured ?? {}).forEach(([name, value]) => {
@@ -389,7 +411,7 @@ function service(store: MCPOAuthStore.Interface) {
                   .finally(() => refreshes.delete(key))
                 return reserved.promise
               })()
-            await pending
+            await wait(pending, signal)
           }
         }
         const current = enabled ? await Effect.runPromise(store.get(target)) : undefined
