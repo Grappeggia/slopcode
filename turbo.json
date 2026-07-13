@@ -20,6 +20,10 @@
     "@slopcode-ai/ui#test": {
       "dependsOn": ["^build"],
       "outputs": []
+    },
+    "@slopcode-ai/stats-core#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
     }
   }
 }

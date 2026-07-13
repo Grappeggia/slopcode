@@ -109,7 +109,7 @@ describe("ShareNext", () => {
         Effect.gen(function* () {
           const req = yield* svc.request()
 
-          expect(req.baseUrl).toBe("https://opncd.ai")
+          expect(req.baseUrl).toBe("https://slopcode.dev")
           expect(req.api.create).toBe("/api/share")
           expect(req.headers).toEqual({})
         }),

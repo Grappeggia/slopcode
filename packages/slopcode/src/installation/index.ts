@@ -156,7 +156,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
 
     const upgradeCurl = Effect.fnUntraced(
       function* (target: string) {
-        const response = yield* httpOk.execute(HttpClientRequest.get("https://slopcode.ai/install"))
+        const response = yield* httpOk.execute(HttpClientRequest.get("https://slopcode.dev/install"))
         const body = yield* response.text
         const bodyBytes = new TextEncoder().encode(body)
         const shell = yield* upgradeScriptShell()
@@ -265,7 +265,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         }
 
         const response = yield* httpOk.execute(
-          HttpClientRequest.get("https://api.github.com/repos/anomalyco/slopcode/releases/latest").pipe(
+          HttpClientRequest.get("https://api.github.com/repos/teamslop/slopcode/releases/latest").pipe(
             HttpClientRequest.acceptJson,
           ),
         )

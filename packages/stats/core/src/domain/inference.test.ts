@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { toGeoAggregate, toModelAggregate, toProviderAggregate } from "./inference"
+import { buildStatsQuery, toGeoAggregate, toModelAggregate, toProviderAggregate } from "./inference"
 import { modelAuthor, normalizeInferenceModel, statModel, statProvider } from "./model-normalization"
+
+process.env.SST_RESOURCES_JSON ??= JSON.stringify({
+  App: { name: "stats-test", stage: "test" },
+  InferenceEvent: { catalog: "catalog", database: "database", table: "inference" },
+  StatsSyncConfig: { dataset: "zen" },
+})
 
 describe("inference stat normalization", () => {
   test("normalizes model suffixes used by router/provider variants", () => {
@@ -28,17 +34,19 @@ describe("inference stat normalization", () => {
     expect(modelAuthor("alpha-gpt-next")).toBeUndefined()
   })
 
-  test("uses provider.model to resolve opencode route providers", () => {
+  test("uses provider.model and model authors to resolve router providers", () => {
     expect(statModel("big-pickle", "claude-sonnet-4-5")).toBe("claude-sonnet-4-5")
     expect(statModel("big-pickle", "gpt-5-free")).toBe("gpt-5")
     expect(statModel("big-pickle", "")).toBe("unknown")
-    expect(statProvider("big-pickle", "claude-sonnet-4-5", "opencode")).toBe("anthropic")
-    expect(statProvider("big-pickle", "gpt-5", "opencode")).toBe("openai")
-    expect(statProvider("big-pickle", "", "opencode")).toBe("unknown")
+    for (const provider of ["slopcode", "opencode"]) {
+      expect(statProvider("big-pickle", "claude-sonnet-4-5", provider)).toBe("anthropic")
+      expect(statProvider("gpt-5", "", provider)).toBe("openai")
+      expect(statProvider("big-pickle", "", provider)).toBe("unknown")
+    }
     expect(statProvider("unknown", "", "custom-provider")).toBe("custom-provider")
   })
 
-  test("model aggregates prefer provider.model and use normalized model", () => {
+  test("model aggregates prefer provider.model without exposing router providers", () => {
     expect(toModelAggregate(aggregate("alpha-gpt-next", "openai"))).toEqual([])
 
     expect(toModelAggregate(aggregate("deepseek-v4-flash-free", "not-public-provider"))).toMatchObject([
@@ -49,28 +57,48 @@ describe("inference stat normalization", () => {
       },
     ])
 
-    expect(
-      toModelAggregate({ ...aggregate("big-pickle", "opencode"), provider_model: "claude-sonnet-4-5" }),
-    ).toMatchObject([
-      {
-        provider: "anthropic",
-        model: "claude-sonnet-4-5",
-        provider_model: "claude-sonnet-4-5",
-      },
-    ])
+    for (const provider of ["slopcode", "opencode"]) {
+      expect(
+        toModelAggregate({ ...aggregate("big-pickle", provider), provider_model: "claude-sonnet-4-5" }),
+      ).toMatchObject([
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-5",
+          provider_model: "claude-sonnet-4-5",
+        },
+      ])
+      expect(toModelAggregate(aggregate("big-pickle", provider))).toMatchObject([
+        { provider: "unknown", model: "unknown" },
+      ])
+    }
   })
 
-  test("provider aggregates never keep opencode as the provider", () => {
-    expect(toProviderAggregate({ ...aggregate("big-pickle", "opencode"), provider_model: "gpt-5" })).toMatchObject([
-      { provider: "openai" },
-    ])
-    expect(toProviderAggregate(aggregate("big-pickle", "opencode"))).toMatchObject([{ provider: "unknown" }])
+  test("provider aggregates never expose router providers", () => {
+    for (const provider of ["slopcode", "opencode"]) {
+      expect(toProviderAggregate({ ...aggregate("big-pickle", provider), provider_model: "gpt-5" })).toMatchObject([
+        { provider: "openai" },
+      ])
+      expect(toProviderAggregate(aggregate("big-pickle", provider))).toMatchObject([{ provider: "unknown" }])
+    }
   })
 
-  test("geo aggregates never keep opencode or big-pickle dimensions", () => {
-    expect(toGeoAggregate({ ...aggregate("big-pickle", "opencode"), country: "US" })).toMatchObject([
-      { provider: "unknown", model: "unknown", country: "US" },
-    ])
+  test("geo aggregates never expose router provider or model dimensions", () => {
+    for (const provider of ["slopcode", "opencode"]) {
+      expect(toGeoAggregate({ ...aggregate("big-pickle", provider), country: "US" })).toMatchObject([
+        { provider: "unknown", model: "unknown", country: "US" },
+      ])
+    }
+  })
+
+  test("keeps Go tier and normalizes Paid tier to Zen", () => {
+    expect(toModelAggregate({ ...aggregate("gpt-5", "openai"), tier: "Go" })).toMatchObject([{ tier: "Go" }])
+    expect(toModelAggregate(aggregate("gpt-5", "openai"))).toMatchObject([{ tier: "Zen" }])
+  })
+
+  test("buildStatsQuery remains constrained to lite inference events", () => {
+    const query = buildStatsQuery(new Date("2026-05-20T00:00:00.000Z"), new Date("2026-05-21T00:00:00.000Z"), "model")
+
+    expect(query).toContain("\n    AND source = 'lite'\n")
   })
 
   test("model aggregates use ISO week period keys", () => {
