@@ -1,5 +1,6 @@
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { Location } from "@slopcode-ai/core/location"
+import { Usage as OpenAIUsage } from "@slopcode-ai/core/plugin/provider/openai-usage"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { ProviderNotFoundError, ServiceUnavailableError } from "../errors"
@@ -18,6 +19,20 @@ export const ProviderGroup = HttpApiGroup.make("server.provider")
           identifier: "v2.provider.list",
           summary: "List providers",
           description: "Retrieve active AI providers so clients can show provider availability and configuration.",
+        }),
+      ),
+  )
+  .add(
+    HttpApiEndpoint.get("provider.openaiUsage", "/api/provider/openai/usage", {
+      query: LocationQuery,
+      success: Location.response(OpenAIUsage),
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.provider.openai.usage",
+          summary: "Get OpenAI usage",
+          description: "Get safe normalized OpenAI authentication and ChatGPT usage status.",
         }),
       ),
   )

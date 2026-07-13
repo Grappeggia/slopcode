@@ -3,6 +3,7 @@ import { Deferred, Effect } from "effect"
 import { Integration } from "../../integration"
 import { Credential } from "../../credential"
 import { InstallationVersion } from "../../installation/version"
+import { extractAccountID, refreshOAuth, type TokenResponse as SharedTokenResponse } from "./openai-usage"
 
 const clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const issuer = "https://auth.openai.com"
@@ -14,17 +15,9 @@ type Pkce = {
   challenge: string
 }
 
-type TokenResponse = {
+type TokenResponse = SharedTokenResponse & {
   id_token: string
-  access_token: string
   refresh_token: string
-  expires_in?: number
-}
-
-type Claims = {
-  chatgpt_account_id?: string
-  organizations?: Array<{ id: string }>
-  "https://api.openai.com/auth"?: { chatgpt_account_id?: string }
 }
 
 const browserMethodID = Integration.MethodID.make("chatgpt-browser")
@@ -164,22 +157,28 @@ function exchange(code: string, redirect: string, pkce: Pkce) {
 }
 
 function refresh(value: Credential.OAuth) {
-  return request<TokenResponse>(`${issuer}/oauth/token`, {
-    method: "POST",
-    headers: headers("application/x-www-form-urlencoded"),
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: value.refresh,
-      client_id: clientID,
-    }).toString(),
+  return Effect.tryPromise({
+    try: () =>
+      refreshOAuth({
+        type: "oauth",
+        refresh: value.refresh,
+        access: value.access,
+        expires: value.expires,
+        ...(value.metadata?.accountID && { accountID: value.metadata.accountID }),
+      }),
+    catch: (cause) => cause,
   }).pipe(
-    Effect.map((tokens) => {
-      const next = credential(value.methodID, tokens)
-      return new Credential.OAuth({
-        ...next,
-        metadata: next.metadata ?? value.metadata,
-      })
-    }),
+    Effect.map(
+      (result) =>
+        new Credential.OAuth({
+          type: "oauth",
+          methodID: value.methodID,
+          refresh: result.auth.refresh,
+          access: result.auth.access,
+          expires: result.auth.expires,
+          metadata: result.auth.accountID ? { ...value.metadata, accountID: result.auth.accountID } : value.metadata,
+        }),
+    ),
   )
 }
 
@@ -230,25 +229,6 @@ function authorizeURL(redirect: string, pkce: Pkce, state: string) {
     state,
     originator: "slopcode",
   })}`
-}
-
-function extractAccountID(tokens: TokenResponse) {
-  return claim(tokens.id_token) ?? claim(tokens.access_token)
-}
-
-function claim(token: string) {
-  const part = token.split(".")[1]
-  if (!part) return
-  try {
-    const claims = JSON.parse(Buffer.from(part, "base64url").toString()) as Claims
-    return (
-      claims.chatgpt_account_id ??
-      claims["https://api.openai.com/auth"]?.chatgpt_account_id ??
-      claims.organizations?.[0]?.id
-    )
-  } catch {
-    return
-  }
 }
 
 const successPage =

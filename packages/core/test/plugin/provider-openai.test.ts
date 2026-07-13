@@ -5,7 +5,9 @@ import { Integration } from "@slopcode-ai/core/integration"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { PluginV2 } from "@slopcode-ai/core/plugin"
 import { OpenAIPlugin } from "@slopcode-ai/core/plugin/provider/openai"
+import { browser } from "@slopcode-ai/core/plugin/provider/openai-auth"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
+import { Credential } from "@slopcode-ai/core/credential"
 import { fakeSelectorSdk, it, model, provider } from "./provider-helper"
 
 function add(plugin: PluginV2.Interface, integrations: Integration.Interface) {
@@ -16,6 +18,37 @@ function add(plugin: PluginV2.Interface, integrations: Integration.Interface) {
 }
 
 describe("OpenAIPlugin", () => {
+  it.live("refreshes V2 OAuth while preserving method and metadata", () =>
+    Effect.gen(function* () {
+      const original = globalThis.fetch
+      globalThis.fetch = async () =>
+        Response.json({
+          access_token: `e30.${Buffer.from(JSON.stringify({ chatgpt_account_id: "account-new" })).toString("base64url")}.signature`,
+          expires_in: 60,
+        })
+      yield* Effect.addFinalizer(() => Effect.sync(() => void (globalThis.fetch = original)))
+      const methodID = Integration.MethodID.make("chatgpt-browser")
+      const refreshed = yield* browser.refresh!(
+        new Credential.OAuth({
+          type: "oauth",
+          methodID,
+          access: "expired",
+          refresh: "refresh-preserved",
+          expires: 0,
+          metadata: { accountID: "account-old", workspace: "work" },
+        }),
+      )
+
+      expect(refreshed).toMatchObject({
+        type: "oauth",
+        methodID,
+        access: expect.any(String),
+        refresh: "refresh-preserved",
+        metadata: { accountID: "account-new", workspace: "work" },
+      })
+    }),
+  )
+
   it.effect("registers browser and headless ChatGPT OAuth methods", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service

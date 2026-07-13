@@ -340,7 +340,7 @@ describe("plugin.codex", () => {
     expect(refreshRequests).toBe(1)
     expect(saved).toHaveLength(1)
     expect(saved[0]).toMatchObject({ access: "access-shared", refresh: "refresh-next", accountId: "account-old" })
-    expect(updates).toHaveLength(0)
+    expect(updates).toHaveLength(1)
     expect(requests).toEqual([
       { path: "/usage", authorization: "Bearer access-shared", accountId: "account-old" },
       { path: "/backend-api/codex/responses", authorization: "Bearer access-shared", accountId: "account-old" },
