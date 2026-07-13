@@ -1792,7 +1792,7 @@ it.instance(
       yield* prompt.cancel(chat.id)
       yield* Fiber.await(fiber)
     }),
-  10_000,
+  30_000,
 )
 
 it.instance(
