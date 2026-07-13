@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@slopcode-ai/codemode",
-  "version": "0.2.196",
+  "version": "0.2.197",
   "description": "Effect-native confined code execution over schema-described tools",
   "private": true,
   "type": "module",
