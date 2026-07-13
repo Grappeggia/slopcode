@@ -58,6 +58,20 @@ function protecteds(dir: string) {
 export const hasNativeBinding = () => !!watcher()
 export const isMutationStage = (file: string) => path.basename(file).startsWith(".") && path.basename(file).includes(".slopcode-")
 
+export const callback = (input: {
+  readonly ownership?: MutationEvents.Interface
+  readonly publish: (file: string, event: MutationEvents.Kind) => Effect.Effect<void>
+  readonly run: (effect: Effect.Effect<void>) => void
+}): ParcelWatcher.SubscribeCallback => (_error, updates) => {
+  for (const update of updates) {
+    if (isMutationStage(update.path)) continue
+    const event = update.type === "create" ? "add" : update.type === "update" ? "change" : "unlink"
+    const file = FSUtil.normalizePath(update.path)
+    const publish = input.publish(file, event)
+    input.run(input.ownership ? input.ownership.native(file, event, publish).pipe(Effect.asVoid) : publish)
+  }
+}
+
 export interface Interface {}
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/FileWatcher") {}
@@ -92,25 +106,14 @@ export const layer = Layer.effect(
       Effect.promise(() => Promise.allSettled(subscriptions.map((subscription) => subscription.unsubscribe()))),
     )
 
-    const publish = (input: string, event: MutationEvents.Kind) => {
-      const file = FSUtil.normalizePath(input)
-      return Option.isNone(reconciler)
-        ? events.publish(Event.Updated, { file, event })
-        : reconciler.value.native(file, event).pipe(
-            Effect.flatMap((allowed) => allowed ? events.publish(Event.Updated, { file, event }) : Effect.void),
-          )
-    }
-    const callback: ParcelWatcher.SubscribeCallback = (_error, updates) => {
-      for (const update of updates) {
-        if (isMutationStage(update.path)) continue
-        if (update.type === "create") runFork(publish(update.path, "add"))
-        if (update.type === "update") runFork(publish(update.path, "change"))
-        if (update.type === "delete") runFork(publish(update.path, "unlink"))
-      }
-    }
+    const onUpdate = callback({
+      ownership: Option.getOrUndefined(reconciler),
+      publish: (file, event) => events.publish(Event.Updated, { file, event }),
+      run: (effect) => { runFork(effect) },
+    })
 
     const subscribe = (directory: string, ignore: string[]) => {
-      const pending = w.subscribe(directory, callback, { ignore, backend })
+      const pending = w.subscribe(directory, onUpdate, { ignore, backend })
       return Effect.promise(() => pending).pipe(
         Effect.tap((subscription) => Effect.sync(() => subscriptions.push(subscription))),
         Effect.timeout(SUBSCRIBE_TIMEOUT_MS),

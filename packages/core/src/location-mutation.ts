@@ -46,6 +46,8 @@ export interface Target {
   /** Permission resource: Location-relative for internal paths, canonical for external paths. */
   readonly resource: string
   readonly externalDirectory?: ExternalDirectoryAuthorization
+  /** Location-owned stage root used to isolate external files from external formatter configuration. */
+  readonly staging?: string
 }
 
 export interface Interface {
@@ -145,6 +147,7 @@ export const layer = Layer.effect(
               save: externalResource,
             }
           : undefined,
+        staging: external ? locationRoot : undefined,
       } satisfies Target
     })
 

@@ -23,7 +23,7 @@ export class ResultMismatchError extends Schema.TaggedErrorClass<ResultMismatchE
 
 type Mutation = FileMutation.WriteResult | FileMutation.RemoveResult
 export interface Input<A extends Mutation> {
-  readonly target: { readonly canonical: string; readonly resource: string }
+  readonly target: FileMutation.Target
   readonly intent: "write" | "edit" | "add" | "update" | "delete"
   readonly mutation: Effect.Effect<A, unknown>
   readonly fence?: Fence
@@ -59,7 +59,7 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const stage = yield* files.stage({ target, content: immediate })
         if (!stage) return {
-          formatted: { matched: false, outcomes: [{ name: "security", code: "unsupported-security" as const }] },
+          formatted: { matched: false, outcomes: [{ name: "stage", code: "unavailable" as const }] },
           final: immediate,
         }
         const formatted = yield* formatter.format({ canonical: stage.canonical })

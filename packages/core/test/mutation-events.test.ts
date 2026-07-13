@@ -17,13 +17,16 @@ describe("MutationEvents", () => {
           const events = yield* MutationEvents.Service
           const ownership = yield* events.begin(target)
           yield* Effect.promise(() => fs.writeFile(target, "one"))
-          expect(yield* events.native(target, "add")).toBe(false)
+          const published: string[] = []
+          expect(yield* events.native(target, "add", Effect.sync(() => { published.push("echo") }))).toBe(false)
           yield* ownership.complete("add", yield* MutationEvents.currentFingerprint(target))
+          expect(published).toEqual([])
           expect(yield* events.native(target, "add")).toBe(false)
           expect(yield* events.native(target, "change")).toBe(false)
           expect(yield* events.native(target, "unlink")).toBe(false)
           yield* Effect.promise(() => fs.writeFile(target, "two"))
-          expect(yield* events.native(target, "change")).toBe(true)
+          expect(yield* events.native(target, "change", Effect.sync(() => { published.push("change") }))).toBe(true)
+          expect(published).toEqual(["change"])
         }).pipe(Effect.provide(MutationEvents.layer.pipe(Layer.provide(FSUtil.defaultLayer))))
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),

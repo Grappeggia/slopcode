@@ -373,6 +373,14 @@ describe("mutation rejection re-review", () => {
     }),
   )
 
+  it.effect("selects stable descriptor namespaces behind explicit platform capabilities", () =>
+    Effect.sync(() => {
+      expect(FileMutation.descriptorPath("linux", 7, "target.txt")).toBe("/proc/self/fd/7/target.txt")
+      expect(FileMutation.descriptorPath("darwin", 7, "target.txt")).toBe("/dev/fd/7/target.txt")
+      expect(FileMutation.unsupported("win32").capabilities).toEqual({ mutation: false, staging: false, exchange: false })
+    }),
+  )
+
   it.live("stages external targets under Location authority and ignores external formatter config", () =>
     withTmp((directory) => withTmp((outside) => {
       const approved = {
@@ -383,7 +391,7 @@ describe("mutation rejection re-review", () => {
           resource: `${outside}/*`,
           save: `${outside}/*`,
         },
-        staging: path.join(directory, ".slopcode", "staging"),
+        staging: directory,
       }
       const active = Layer.succeed(
         Location.Service,
@@ -422,9 +430,8 @@ describe("mutation rejection re-review", () => {
       ))
       return Effect.gen(function* () {
         yield* Effect.promise(async () => {
-          await fs.mkdir(path.join(directory, ".slopcode", "staging"), { recursive: true, mode: 0o700 })
           await fs.writeFile(path.join(directory, "package.json"), JSON.stringify({ dependencies: { prettier: "1" } }))
-          await fs.writeFile(path.join(directory, ".prettierrc"), JSON.stringify({ tabWidth: 2, semi: false }))
+          await fs.writeFile(path.join(directory, ".prettierrc"), JSON.stringify({ tabWidth: 2, printWidth: 10, semi: false }))
           await fs.writeFile(path.join(outside, ".prettierrc"), JSON.stringify({ plugins: ["./malicious.cjs"], tabWidth: 8 }))
           await fs.writeFile(path.join(outside, "malicious.cjs"), "throw new Error('external plugin loaded')")
           await fs.writeFile(approved.canonical, "before")
@@ -438,7 +445,7 @@ describe("mutation rejection re-review", () => {
         expect(result.formatters).toContainEqual(expect.objectContaining({ name: "prettier", code: "formatted" }))
         expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toContain("  nested: true")
         expect((yield* Effect.promise(() => fs.readdir(outside))).some((name) => name.includes("slopcode"))).toBe(false)
-        expect(yield* Effect.promise(() => fs.readdir(approved.staging))).toEqual([])
+        expect((yield* Effect.promise(() => fs.readdir(approved.staging))).some((name) => name.includes("slopcode"))).toBe(false)
       }).pipe(Effect.provide(layer))
     })),
   )
@@ -474,12 +481,14 @@ describe("mutation rejection re-review", () => {
         const expected = yield* MutationEvents.currentFingerprint(approved.canonical)
         yield* Effect.promise(() => fs.writeFile(approved.canonical, "replacement"))
         const published: MutationEvents.Kind[] = ["add"]
+        const runs: Promise<void>[] = []
         const callback = Watcher.callback({
           ownership,
           publish: (_file, event) => Effect.sync(() => { published.push(event) }),
-          run: (effect) => { Effect.runSync(effect) },
+          run: (effect) => { runs.push(Effect.runPromise(effect)) },
         })
         callback(null, [{ path: approved.canonical, type: "update" }])
+        yield* Effect.promise(() => Promise.all(runs))
         yield* owner.complete("add", expected)
         expect(published).toEqual(["add", "change"])
       }).pipe(Effect.provide(MutationEvents.layer.pipe(Layer.provide(FSUtil.defaultLayer))))
