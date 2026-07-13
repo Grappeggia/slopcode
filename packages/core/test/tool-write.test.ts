@@ -2,8 +2,14 @@ import fs from "fs/promises"
 import path from "path"
 import { fileURLToPath } from "url"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
+import { AppProcess } from "@slopcode-ai/core/process"
+import { Config } from "@slopcode-ai/core/config"
 import { FileMutation } from "@slopcode-ai/core/file-mutation"
+import { EventV2 } from "@slopcode-ai/core/event"
+import { Formatter } from "@slopcode-ai/core/formatter"
+import { MutationEvents } from "@slopcode-ai/core/mutation-events"
+import { PostMutation } from "@slopcode-ai/core/post-mutation"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { Location } from "@slopcode-ai/core/location"
 import { LocationMutation } from "@slopcode-ai/core/location-mutation"
@@ -45,35 +51,86 @@ const reset = () => {
   denyAction = undefined
 }
 
-const filesystem = Layer.effect(
-  FSUtil.Service,
-  Effect.gen(function* () {
-    const fs = yield* FSUtil.Service
-    return FSUtil.Service.of({
-      ...fs,
-      writeWithDirs: (target, content, mode) =>
-        Effect.sync(() => writes.push(target)).pipe(Effect.andThen(fs.writeWithDirs(target, content, mode))),
-    })
+const filesystem = FSUtil.defaultLayer
+const hooks = Layer.succeed(
+  FileMutation.Hooks,
+  FileMutation.Hooks.of({
+    pause: (phase, target) => (phase === "before-write" ? Effect.sync(() => writes.push(target)) : Effect.void),
   }),
-).pipe(Layer.provide(FSUtil.defaultLayer))
+)
 
-const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>) => {
+const withTool = <A, E, R>(
+  directory: string,
+  body: (registry: ToolRegistry.Interface) => Effect.Effect<A, E, R>,
+  actual = false,
+) => {
   const activeLocation = Layer.succeed(
     Location.Service,
     Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
   )
   const resolution = LocationMutation.layer.pipe(Layer.provide(filesystem), Layer.provide(activeLocation))
-  const mutation = FileMutation.layer.pipe(Layer.provide(filesystem))
+  const mutation = FileMutation.layer.pipe(Layer.provide(filesystem), Layer.provide(hooks))
+  const events = EventV2.defaultLayer
+  const reconcile = MutationEvents.layer.pipe(Layer.provide(filesystem))
+  const formatter = actual
+    ? Formatter.layer.pipe(
+        Layer.provide(AppProcess.defaultLayer),
+        Layer.provide(filesystem),
+        Layer.provide(activeLocation),
+        Layer.provide(
+          Layer.succeed(
+            Config.Service,
+            Config.Service.of({
+              entries: () =>
+                Effect.succeed([
+                  new Config.Document({
+                    type: "document",
+                    info: Schema.decodeUnknownSync(Config.Info)({
+                      formatter: {
+                        integration: {
+                          command: [
+                            process.execPath,
+                            "-e",
+                            "require('fs').appendFileSync(process.argv[1],'!')",
+                            "$FILE",
+                          ],
+                          extensions: [".fmt"],
+                        },
+                      },
+                    }),
+                  }),
+                ]),
+            }),
+          ),
+        ),
+      )
+    : Layer.succeed(
+        Formatter.Service,
+        Formatter.Service.of({
+          format: () => Effect.succeed({ matched: false, outcomes: [] }),
+          list: () => Effect.succeed([]),
+          status: () => Effect.succeed([]),
+        }),
+      )
+  const post = PostMutation.layer.pipe(
+    Layer.provide(mutation),
+    Layer.provide(formatter),
+    Layer.provide(filesystem),
+    Layer.provide(events),
+    Layer.provide(reconcile),
+    Layer.provide(PostMutation.diagnosticsLayer),
+  )
   const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(permission))
   const write = WriteTool.layer.pipe(
     Layer.provide(registry),
     Layer.provide(permission),
     Layer.provide(resolution),
     Layer.provide(mutation),
+    Layer.provide(post),
   )
   return Effect.gen(function* () {
     return yield* body(yield* ToolRegistry.Service)
-  }).pipe(Effect.provide(Layer.mergeAll(registry, resolution, mutation, write)))
+  }).pipe(Effect.provide(Layer.mergeAll(registry, resolution, mutation, events, reconcile, post, write)))
 }
 
 const call = (input: typeof WriteTool.Input.Type, id = "call-write") => ({
@@ -268,6 +325,33 @@ describe("WriteTool", () => {
         ),
     ),
   )
+
+  it.live("runs the real formatter layer through write settlement", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return Effect.promise(() => fs.writeFile(path.join(tmp.path, "actual.fmt"), "before")).pipe(
+          Effect.andThen(
+            withTool(
+              tmp.path,
+              (registry) =>
+                Effect.gen(function* () {
+                  expect(yield* executeTool(registry, call({ path: "actual.fmt", content: "value" }))).toMatchObject({
+                    type: "text",
+                  })
+                  expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "actual.fmt"), "utf8"))).toBe(
+                    "value!",
+                  )
+                }),
+              true,
+            ),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
 })
 
 test("keeps the locked write schema, semantics docstring, and deferred UX TODOs visible", async () => {
@@ -283,8 +367,6 @@ test("keeps the locked write schema, semantics docstring, and deferred UX TODOs 
   )
   for (const todo of [
     "Revisit whether model-facing mutation schemas should prefer absolute `filePath` naming for trained-in compatibility after evaluating model behavior.",
-    "Add formatter integration after V2 formatter runtime exists.",
-    "Publish watcher/file-edit events after V2 watcher integration exists.",
     "Add snapshots / undo after design exists.",
     "Add LSP notification and diagnostics after V2 LSP runtime exists.",
   ]) {

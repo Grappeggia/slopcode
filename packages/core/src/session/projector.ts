@@ -16,6 +16,7 @@ import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
 import { SessionCreate } from "./create"
+import { SessionExecutionStatus } from "./execution-status"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -464,11 +465,17 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Step.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Failed, (event) => run(db, event))
+    yield* events.project(SessionEvent.Structured.Dispatched, () => Effect.void)
+    yield* events.project(SessionEvent.Structured.Candidate, () => Effect.void)
+    yield* events.project(SessionEvent.Structured.Retry, (event) => run(db, event))
+    yield* events.project(SessionEvent.Structured.Result, (event) => run(db, event))
+    yield* events.project(SessionEvent.Structured.Failed, (event) => run(db, event))
     yield* events.project(SessionEvent.Text.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Text.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Input.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Input.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Called, (event) => run(db, event))
+    yield* events.project(SessionEvent.Tool.CalledV2, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Progress, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Success, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Failed, (event) => run(db, event))
@@ -490,6 +497,7 @@ export const layer = Layer.effectDiscard(
         yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, seq)
       })
     })
+    yield* SessionExecutionStatus.project(events, db)
   }),
 )
 

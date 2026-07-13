@@ -17,10 +17,12 @@ import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionControl } from "@slopcode-ai/core/session/control"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import { SessionRunner } from "@slopcode-ai/core/session/runner"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { ModelV2 } from "@slopcode-ai/core/model"
+import { MCP } from "@slopcode-ai/core/mcp"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { testEffect } from "./lib/effect"
 import { locationServices } from "./lib/location-services"
@@ -140,6 +142,79 @@ const interruptEvent = Database.Service.use(({ db }) =>
 )
 
 describe("SessionV2.prompt", () => {
+  it.effect("surfaces a retained terminal to a waiter created after restart", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const db = (yield* Database.Service).db
+      const status = yield* SessionExecutionStatus.make
+      const rootID = SessionMessage.ID.make("msg_durable_wait_terminal")
+      yield* db
+        .update(SessionTable)
+        .set({ runtime: "v2", runtime_state: "draining", runtime_epoch: 1 })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* status.start({
+        sessionID,
+        owner: "v2",
+        runtimeState: "draining",
+        epoch: 1,
+        activityID: rootID,
+        rootID,
+        activity: "prompt",
+        phase: "preparing",
+      })
+      yield* status.fail({
+        sessionID,
+        owner: "v2",
+        runtimeState: "draining",
+        epoch: 1,
+        activityID: rootID,
+        rootID,
+        activity: "prompt",
+        phase: "settling",
+        code: "runner-failure",
+        message: "durable failure",
+        resultingEpoch: 2,
+      })
+
+      expect(yield* (yield* SessionV2.Service).wait(sessionID).pipe(Effect.flip)).toEqual(
+        new SessionExecutionStatus.DurableTerminalError({
+          sessionID,
+          code: "runner-failure",
+          message: "durable failure",
+        }),
+      )
+      const database = yield* Database.Service
+      const eventService = yield* EventV2.Service
+      const sessionStore = yield* SessionStore.Service
+      const rebuiltStatus = SessionExecutionStatus.layer.pipe(
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(EventV2.Service, eventService)),
+      )
+      const rebuilt = SessionV2.layer.pipe(
+        Layer.provide(rebuiltStatus),
+        Layer.provide(Layer.succeed(Database.Service, database)),
+        Layer.provide(Layer.succeed(EventV2.Service, eventService)),
+        Layer.provide(Layer.succeed(SessionStore.Service, sessionStore)),
+        Layer.provide(Project.defaultLayer),
+        Layer.provide(execution),
+        Layer.provide(locationServices),
+      )
+      expect(
+        yield* SessionV2.Service.use((service) => service.wait(sessionID)).pipe(
+          Effect.provide(Layer.fresh(rebuilt)),
+          Effect.flip,
+        ),
+      ).toEqual(
+        new SessionExecutionStatus.DurableTerminalError({
+          sessionID,
+          code: "runner-failure",
+          message: "durable failure",
+        }),
+      )
+    }),
+  )
   it.effect("delegates execution continuation through SessionExecution", () =>
     Effect.gen(function* () {
       yield* setup
@@ -452,6 +527,30 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
+  it.effect("rejects conflicting steer formats while preserving independent queued contracts", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const structured = new Prompt({
+        text: "structured",
+        format: { type: "json_schema", schema: { type: "number" }, retry_count: 2 },
+      })
+      const first = yield* session.prompt({ sessionID, prompt: structured, resume: false })
+
+      expect(
+        yield* session
+          .prompt({ sessionID, prompt: new Prompt({ text: "conflicting text" }), resume: false })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "Session.PromptFormatConflictError" })
+      expect(yield* session.prompt({ sessionID, prompt: structured, delivery: "queue", resume: false })).toMatchObject({
+        delivery: "queue",
+        prompt: { format: { type: "json_schema", retry_count: 2 } },
+      })
+      expect(yield* session.prompt({ id: first.id, sessionID, prompt: structured, resume: false })).toEqual(first)
+      expect(yield* admittedCount).toBe(2)
+    }),
+  )
+
   it.effect("returns one recorded message to concurrent exact retries", () =>
     Effect.gen(function* () {
       yield* setup
@@ -728,6 +827,58 @@ describe("SessionV2.prompt", () => {
   )
 })
 
+describe("MCP.resolveAndAdmit", () => {
+  const mcp = (text: string) => ({ getPrompt: () => Effect.succeed(new Prompt({ text })) }) as unknown as MCP.Interface
+
+  it.effect("uses the real admission transaction for guard failure without admission or wake", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const id = SessionMessage.ID.make("msg_mcp_guard_failure")
+      wakeCalls.length = 0
+      const failure = yield* MCP.resolveAndAdmit(
+        mcp("guarded"),
+        yield* SessionV2.Service,
+        { name: "server:prompt", sessionID, id },
+        Effect.fail("runtime changed"),
+      ).pipe(Effect.flip)
+      expect(failure).toBe("runtime changed")
+      expect(yield* admitted(id)).toBeUndefined()
+      expect(wakeCalls).toEqual([])
+    }),
+  )
+
+  it.effect("preserves real prompt idempotency and conflict propagation", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const sessions = yield* SessionV2.Service
+      const id = SessionMessage.ID.make("msg_mcp_retry")
+      const first = yield* MCP.resolveAndAdmit(mcp("stable"), sessions, {
+        name: "server:prompt",
+        sessionID,
+        id,
+        resume: false,
+      })
+      expect(
+        yield* MCP.resolveAndAdmit(mcp("stable"), sessions, {
+          name: "server:prompt",
+          sessionID,
+          id,
+          resume: false,
+        }),
+      ).toEqual(first)
+      expect(yield* admittedCount).toBe(1)
+      expect(
+        yield* MCP.resolveAndAdmit(mcp("changed"), sessions, {
+          name: "server:prompt",
+          sessionID,
+          id,
+          resume: false,
+        }).pipe(Effect.flip),
+      ).toBeInstanceOf(SessionV2.PromptConflictError)
+    }),
+  )
+})
+
 describe("SessionControl", () => {
   it.effect("rejects V1-owned sessions before V2 prompt admission", () =>
     Effect.gen(function* () {
@@ -866,7 +1017,12 @@ describe("SessionControl", () => {
         Layer.provide(Layer.succeed(SessionV2.Service, sessions)),
         Layer.provide(Layer.succeed(SessionRuntime.Service, fenced)),
       )
-      const before = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)
+      const before = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       const scope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
       const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
@@ -891,7 +1047,9 @@ describe("SessionControl", () => {
             .pipe(Effect.orDie)
         }
 
-      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)).toEqual(before)
+      expect(
+        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
+      ).toEqual(before)
       expect(wakeCalls).toEqual([])
       expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 1 })).toBeDefined()
     }),
@@ -949,9 +1107,7 @@ describe("SessionControl", () => {
         ),
       )
       const layer = SessionControl.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(collisionSessions, Layer.succeed(SessionRuntime.Service, runtime)),
-        ),
+        Layer.provide(Layer.mergeAll(collisionSessions, Layer.succeed(SessionRuntime.Service, runtime))),
       )
       const scope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
@@ -973,11 +1129,11 @@ describe("SessionControl", () => {
             actualEpoch: change === "epoch" ? 2 : 1,
           })
           expect(
-            yield* (index === 0
+            yield* index === 0
               ? SessionInput.find(db, id)
               : index === 1
                 ? SessionInput.findShell(db, id)
-                : SessionInput.findCompaction(db, id)),
+                : SessionInput.findCompaction(db, id),
           ).toBeDefined()
           yield* db
             .update(SessionTable)

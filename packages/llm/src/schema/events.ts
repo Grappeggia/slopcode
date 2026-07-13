@@ -152,6 +152,16 @@ export const ToolInputEnd = Schema.Struct({
 }).annotate({ identifier: "LLM.Event.ToolInputEnd" })
 export type ToolInputEnd = Schema.Schema.Type<typeof ToolInputEnd>
 
+export const ToolInputError = Schema.Struct({
+  type: Schema.tag("tool-input-error"),
+  id: ToolCallID,
+  name: Schema.String,
+  reason: Schema.Literal("invalid-json"),
+  toolType: Schema.optional(ToolType),
+  providerMetadata: Schema.optional(ProviderMetadata),
+}).annotate({ identifier: "LLM.Event.ToolInputError" })
+export type ToolInputError = Schema.Schema.Type<typeof ToolInputError>
+
 const ToolCallFields = {
   type: Schema.tag("tool-call"),
   id: ToolCallID,
@@ -162,12 +172,14 @@ const ToolCallFields = {
 const ToolCallBase = Schema.Struct({ ...ToolCallFields, input: Schema.Unknown, toolType: Schema.optional(ToolType) })
 type ToolCallBase = Schema.Schema.Type<typeof ToolCallBase>
 export type ToolCall = Omit<ToolCallBase, "input" | "toolType"> &
-  ({ readonly input: unknown; readonly toolType?: "function" } | { readonly input: string; readonly toolType: "custom" })
+  (
+    | { readonly input: unknown; readonly toolType?: "function" }
+    | { readonly input: string; readonly toolType: "custom" }
+  )
 export const ToolCall = ToolCallBase.pipe(
-  Schema.refine(
-    (value): value is ToolCall => value.toolType !== "custom" || typeof value.input === "string",
-    { message: "Custom tool call input must be a string" },
-  ),
+  Schema.refine((value): value is ToolCall => value.toolType !== "custom" || typeof value.input === "string", {
+    message: "Custom tool call input must be a string",
+  }),
 ).annotate({ identifier: "LLM.Event.ToolCall" })
 
 const ToolResultFields = {
@@ -238,6 +250,7 @@ const llmEventTagged = Schema.Union([
   ToolInputStart,
   ToolInputDelta,
   ToolInputEnd,
+  ToolInputError,
   ToolCall,
   ToolResult,
   ToolError,
@@ -277,6 +290,8 @@ export const LLMEvent = Object.assign(llmEventTagged, {
   toolInputDelta: (input: WithID<ToolInputDelta, ToolCallID>) =>
     ToolInputDelta.make({ ...input, id: toolCallID(input.id) }),
   toolInputEnd: (input: WithID<ToolInputEnd, ToolCallID>) => ToolInputEnd.make({ ...input, id: toolCallID(input.id) }),
+  toolInputError: (input: WithID<ToolInputError, ToolCallID>) =>
+    ToolInputError.make({ ...input, id: toolCallID(input.id) }),
   toolCall: (input: WithID<ToolCall, ToolCallID>) => {
     if (input.toolType === "custom" && typeof input.input !== "string")
       throw new TypeError("Custom tool call input must be a string")
@@ -312,6 +327,7 @@ export const LLMEvent = Object.assign(llmEventTagged, {
     toolInputStart: llmEventTagged.guards["tool-input-start"],
     toolInputDelta: llmEventTagged.guards["tool-input-delta"],
     toolInputEnd: llmEventTagged.guards["tool-input-end"],
+    toolInputError: llmEventTagged.guards["tool-input-error"],
     toolCall: llmEventTagged.guards["tool-call"],
     toolResult: llmEventTagged.guards["tool-result"],
     toolError: llmEventTagged.guards["tool-error"],

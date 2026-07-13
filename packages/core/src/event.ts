@@ -140,6 +140,8 @@ export interface PublishOptions {
   readonly id?: ID
   /** Treat an existing event with the same ID, aggregate, type, and data as an exact retry. */
   readonly idempotent?: boolean
+  /** Compare encoded payloads when an idempotent event contains commit-time metadata such as a timestamp. */
+  readonly equivalent?: (stored: Record<string, unknown>, current: Record<string, unknown>) => boolean
   readonly metadata?: Record<string, unknown>
   readonly location?: Location.Ref
   /** Local operational projection committed atomically with a new synchronized event. Not replayed or serialized. */
@@ -227,6 +229,7 @@ export const layerWith = (options?: LayerOptions) =>
         commit?: (seq: number) => Effect.Effect<void>,
         guard?: (seq: number) => Effect.Effect<void>,
         idempotent?: boolean,
+        equivalent?: PublishOptions["equivalent"],
       ) {
         return Effect.gen(function* () {
           const definition =
@@ -342,7 +345,7 @@ export const layerWith = (options?: LayerOptions) =>
                             idempotent &&
                             stored.aggregateID === aggregateID &&
                             stored.type === versionedType(definition.type, sync.version) &&
-                            isDeepStrictEqual(stored.data, encoded)
+                            (isDeepStrictEqual(stored.data, encoded) || equivalent?.(stored.data, encoded) === true)
                           )
                             return { aggregateID, seq: stored.seq, created: false }
                           if (stored)
@@ -410,6 +413,7 @@ export const layerWith = (options?: LayerOptions) =>
         commit?: PublishOptions["commit"],
         guard?: PublishOptions["guard"],
         idempotent?: PublishOptions["idempotent"],
+        equivalent?: PublishOptions["equivalent"],
       ) {
         return Effect.gen(function* () {
           const durable = registry.get(event.type)?.sync !== undefined
@@ -421,7 +425,7 @@ export const layerWith = (options?: LayerOptions) =>
               }),
             )
           if (durable) {
-            const committed = yield* commitSyncEvent(event as Payload, undefined, commit, guard, idempotent)
+            const committed = yield* commitSyncEvent(event as Payload, undefined, commit, guard, idempotent, equivalent)
             if (committed) {
               event = { ...event, seq: committed.seq }
               if (!committed.created) return event
@@ -481,6 +485,7 @@ export const layerWith = (options?: LayerOptions) =>
             options?.commit,
             options?.guard,
             options?.idempotent,
+            options?.equivalent,
           )
         })
       }

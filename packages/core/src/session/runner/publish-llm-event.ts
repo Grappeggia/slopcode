@@ -10,6 +10,8 @@ type Input = {
   readonly sessionID: SessionSchema.ID
   readonly agent: string
   readonly model: ModelV2.Ref
+  readonly structured?: boolean
+  readonly rootUserID?: SessionMessage.ID
 }
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
@@ -236,6 +238,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       case "step-start":
         return
       case "text-start":
+        if (input.structured) return
         yield* text.start(event.id)
         yield* events.publish(SessionEvent.Text.Started, {
           sessionID: input.sessionID,
@@ -245,6 +248,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         })
         return
       case "text-delta":
+        if (input.structured) return
         yield* text.append(event.id, event.text)
         yield* events.publish(SessionEvent.Text.Delta, {
           sessionID: input.sessionID,
@@ -255,6 +259,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         })
         return
       case "text-end":
+        if (input.structured) return
         yield* text.end(event.id)
         return
       case "reasoning-start":
@@ -304,6 +309,31 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
       case "tool-input-end":
         yield* endToolInput(event)
         return
+      case "tool-input-error": {
+        if (!tools.has(event.id)) yield* startToolInput(event)
+        const tool = tools.get(event.id)!
+        if (!tool.inputEnded) yield* endToolInput(event)
+        if (tool.name !== event.name)
+          return yield* Effect.die(`Tool input error name changed for ${event.id}: ${tool.name} -> ${event.name}`)
+        if (tool.toolType !== event.toolType)
+          return yield* Effect.die(
+            `Tool input error kind changed for ${event.id}: ${tool.toolType} -> ${event.toolType}`,
+          )
+        if (tool.settled) return yield* Effect.die(`Duplicate tool input error: ${event.id}`)
+        tool.settled = true
+        yield* events.publish(SessionEvent.Tool.Failed, {
+          sessionID: input.sessionID,
+          timestamp: yield* timestamp,
+          assistantMessageID: tool.assistantMessageID,
+          callID: event.id,
+          error: { type: "unknown", message: "Provider returned malformed tool input" },
+          provider: {
+            executed: false,
+            ...(event.providerMetadata === undefined ? {} : { metadata: event.providerMetadata }),
+          },
+        })
+        return
+      }
       case "tool-call": {
         if (!tools.has(event.id)) yield* startToolInput(event)
         const tool = tools.get(event.id)!
@@ -328,7 +358,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
           },
         }
         if (event.toolType === "custom") {
-          yield* events.publish(SessionEvent.Tool.Called, { ...data, input: event.input, toolType: "custom" })
+          yield* events.publish(SessionEvent.Tool.CalledV2, { ...data, input: event.input, toolType: "custom" })
           return
         }
         yield* events.publish(SessionEvent.Tool.CalledV1, { ...data, input: record(event.input) })

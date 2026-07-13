@@ -129,9 +129,7 @@ test("old success event data containing result still decodes", () => {
 test("custom tool events preserve raw input and tool kind", async () => {
   const { published, publisher } = capture()
   await Effect.runPromise(
-    publisher.publish(
-      LLMEvent.toolCall({ id: "call-exec", name: "exec", toolType: "custom", input: "return 42" }),
-    ),
+    publisher.publish(LLMEvent.toolCall({ id: "call-exec", name: "exec", toolType: "custom", input: "return 42" })),
   )
   await Effect.runPromise(
     publisher.publish(
@@ -171,15 +169,16 @@ test("Tool.Called V2 only decodes raw custom calls", () => {
     provider: { executed: false },
   }
 
-  expect(Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)({ ...base, toolType: "custom", input: "return 42" })._tag).toBe(
-    "Some",
-  )
-  expect(Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)({ ...base, toolType: "custom", input: {} })._tag).toBe(
-    "None",
-  )
-  expect(Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)({ ...base, toolType: "function", input: {} })._tag).toBe(
-    "None",
-  )
+  expect(
+    Schema.decodeUnknownOption(SessionEvent.Tool.CalledV2.data)({ ...base, toolType: "custom", input: "return 42" })
+      ._tag,
+  ).toBe("Some")
+  expect(
+    Schema.decodeUnknownOption(SessionEvent.Tool.CalledV2.data)({ ...base, toolType: "custom", input: {} })._tag,
+  ).toBe("None")
+  expect(
+    Schema.decodeUnknownOption(SessionEvent.Tool.CalledV2.data)({ ...base, toolType: "function", input: {} })._tag,
+  ).toBe("None")
 })
 
 test("custom tool results cannot change kind", async () => {
@@ -190,9 +189,7 @@ test("custom tool results cannot change kind", async () => {
     ),
   )
   const exit = await Effect.runPromiseExit(
-    publisher.publish(
-      LLMEvent.toolResult({ id: "call-exec-kind", name: "exec", result: { type: "json", value: 42 } }),
-    ),
+    publisher.publish(LLMEvent.toolResult({ id: "call-exec-kind", name: "exec", result: { type: "json", value: 42 } })),
   )
 
   expect(exit._tag).toBe("Failure")

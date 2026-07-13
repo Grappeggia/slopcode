@@ -3,7 +3,7 @@ import { SessionControl } from "@slopcode-ai/core/session/control"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
-import { Layer } from "effect"
+import { Effect, Layer } from "effect"
 import { layer as locationLayer } from "./groups/location"
 import { sessionLocationLayer } from "./middleware/session-location"
 import { MessageHandler } from "./handlers/message"
@@ -30,19 +30,24 @@ import { EventV2 } from "@slopcode-ai/core/event"
 import { ProjectV2 } from "@slopcode-ai/core/project"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionStore } from "@slopcode-ai/core/session/store"
+import { SessionGraph } from "./session-graph"
+import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 
-// The application graph also builds the noop default; freshness keeps this live composition from reusing it.
-const sessions = Layer.fresh(SessionV2.layer).pipe(
-  Layer.provide(SessionExecutionLocal.defaultLayer),
-  Layer.provide(SessionStore.defaultLayer),
-  Layer.provide(SessionProjector.defaultLayer),
-  Layer.provide(EventV2.defaultLayer),
-  Layer.provide(Database.defaultLayer),
-  Layer.provide(ProjectV2.defaultLayer),
-  Layer.orDie,
-)
+const store = SessionStore.layer
+const execution = SessionExecutionLocal.layer.pipe(Layer.provide(store))
+const status = SessionExecutionStatus.layer
+export const sessionServices = Layer.mergeAll(
+  SessionV2.layer.pipe(Layer.provide(execution), Layer.provide(store), Layer.provide(status)),
+  SessionProjector.layer,
+  status,
+).pipe(Layer.orDie)
+export const isolatedSessionServices = Layer.mergeAll(
+  Layer.fresh(SessionV2.layer).pipe(Layer.provide(execution), Layer.provide(store), Layer.provide(status)),
+  SessionProjector.layer,
+  status,
+).pipe(Layer.orDie)
 
-export const handlers = Layer.mergeAll(
+export const rawHandlers = Layer.mergeAll(
   HealthHandler,
   LocationHandler,
   AgentHandler,
@@ -63,9 +68,23 @@ export const handlers = Layer.mergeAll(
 ).pipe(
   Layer.provide(sessionLocationLayer),
   Layer.provide(locationLayer),
-  Layer.provide(SessionControl.layer),
-  Layer.provide(sessions),
-  Layer.provide(SessionRuntime.defaultLayer),
   Layer.provide(PermissionSaved.defaultLayer),
   Layer.provide(Credential.defaultLayer),
+)
+
+const graph = Layer.effect(
+  SessionGraph.Service,
+  SessionV2.Service.use((session) =>
+    SessionControl.Service.use((control) =>
+      SessionRuntime.Service.use((runtime) => Effect.succeed(SessionGraph.Service.of({ session, control, runtime }))),
+    ),
+  ),
+).pipe(Layer.provide(SessionControl.layer), Layer.provide(sessionServices), Layer.provide(SessionRuntime.defaultLayer))
+
+export const handlers = rawHandlers.pipe(
+  Layer.provide(graph),
+  Layer.provide(SessionRuntime.defaultLayer),
+  Layer.provide(ProjectV2.defaultLayer),
+  Layer.provide(EventV2.defaultLayer),
+  Layer.provide(Database.defaultLayer),
 )

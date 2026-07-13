@@ -10,6 +10,8 @@ import { SessionRuntime } from "./runtime"
 import { SessionRunner } from "./runner"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
+import { SessionFormat } from "./format"
+import { SessionExecutionStatus } from "./execution-status"
 
 type PromptInput = {
   readonly id?: SessionMessage.ID
@@ -52,11 +54,22 @@ type ShellInput = {
 }
 
 export interface Interface {
+  readonly messages: (sessionID: SessionSchema.ID) => Effect.Effect<
+    {
+      readonly info: SessionSchema.Info
+      readonly messages: SessionMessage.Message[]
+    },
+    SessionV2.NotFoundError | SessionV2.MessageDecodeError
+  >
   readonly prompt: (
     input: PromptInput,
   ) => Effect.Effect<
     SessionInput.Admitted,
-    SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.PromptConflictError
+    | SessionRuntime.Error
+    | SessionV2.NotFoundError
+    | SessionV2.PromptConflictError
+    | SessionV2.PromptFormatConflictError
+    | SessionFormat.AdmissionError
   >
   readonly resume: (
     sessionID: SessionSchema.ID,
@@ -64,7 +77,13 @@ export interface Interface {
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void, SessionRuntime.Error>
   readonly wait: (
     sessionID: SessionSchema.ID,
-  ) => Effect.Effect<void, SessionRuntime.Error | SessionV2.NotFoundError | SessionRunner.RunError>
+  ) => Effect.Effect<
+    void,
+    | SessionRuntime.Error
+    | SessionV2.NotFoundError
+    | SessionRunner.RunError
+    | SessionExecutionStatus.DurableTerminalError
+  >
   readonly compact: (
     input: CompactInput,
   ) => Effect.Effect<
@@ -95,7 +114,20 @@ export interface Interface {
     input: SkillInput,
   ) => Effect.Effect<
     SessionInput.Admitted,
-    SessionRuntime.Error | SessionV2.NotFoundError | SessionV2.SkillNotFoundError | SessionV2.PromptConflictError
+    | SessionRuntime.Error
+    | SessionV2.NotFoundError
+    | SessionV2.SkillNotFoundError
+    | SessionV2.PromptConflictError
+    | SessionV2.PromptFormatConflictError
+    | SessionFormat.AdmissionError
+  >
+  readonly executionStatus: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<SessionExecutionStatus.Info, SessionRuntime.Error | SessionExecutionStatus.NotFound>
+  readonly executionStatuses: (input?: {
+    readonly nonIdle?: boolean
+  }) => Effect.Effect<
+    ReadonlyArray<{ readonly sessionID: SessionSchema.ID; readonly status: SessionExecutionStatus.Info }>
   >
 }
 
@@ -110,6 +142,12 @@ export const layer = Layer.effect(
       runtime.assert({ sessionID, owner: "v2", state: "ready", epoch })
 
     return Service.of({
+      messages: Effect.fn("SessionControl.messages")(function* (sessionID) {
+        return {
+          info: yield* sessions.get(sessionID),
+          messages: yield* sessions.messages({ sessionID, order: "asc" }),
+        }
+      }),
       prompt: Effect.fn("SessionControl.prompt")(function* (input) {
         const info = yield* assertV2(input.sessionID)
         return yield* sessions.prompt(input, assertV2(input.sessionID, info.epoch).pipe(Effect.asVoid))
@@ -123,7 +161,7 @@ export const layer = Layer.effect(
         yield* sessions.interrupt(sessionID, assertV2(sessionID, info.epoch).pipe(Effect.asVoid))
       }),
       wait: Effect.fn("SessionControl.wait")(function* (sessionID) {
-        yield* assertV2(sessionID)
+        yield* runtime.assert({ sessionID, owner: "v2" })
         yield* sessions.wait(sessionID)
       }),
       compact: Effect.fn("SessionControl.compact")(function* (input) {
@@ -146,6 +184,11 @@ export const layer = Layer.effect(
         const runtime = yield* assertV2(input.sessionID, input.epoch)
         return yield* sessions.skill(input, assertV2(input.sessionID, runtime.epoch).pipe(Effect.asVoid))
       }),
+      executionStatus: Effect.fn("SessionControl.executionStatus")(function* (sessionID) {
+        yield* runtime.assert({ sessionID, owner: "v2" })
+        return yield* sessions.executionStatus(sessionID)
+      }),
+      executionStatuses: (input) => sessions.executionStatuses(input),
     })
   }),
 )

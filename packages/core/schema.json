@@ -1,8 +1,8 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "1b0d7c3f-deff-4561-81f8-98419ca9a6b2",
-  "prevIds": ["24b5a4f2-8775-49a0-b812-bd1c064d1dfa"],
+  "id": "47a99587-ad1c-4bf5-b5d3-275855245c91",
+  "prevIds": ["1b0d7c3f-deff-4561-81f8-98419ca9a6b2"],
   "ddl": [
     {
       "name": "workspace",
@@ -62,6 +62,10 @@
     },
     {
       "name": "session_context_epoch",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_execution_status",
       "entityType": "tables"
     },
     {
@@ -1070,6 +1074,76 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_execution_status"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "activity_id",
+      "entityType": "columns",
+      "table": "session_execution_status"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "root_id",
+      "entityType": "columns",
+      "table": "session_execution_status"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner",
+      "entityType": "columns",
+      "table": "session_execution_status"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "epoch",
+      "entityType": "columns",
+      "table": "session_execution_status"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "seq",
+      "entityType": "columns",
+      "table": "session_execution_status"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data",
+      "entityType": "columns",
+      "table": "session_execution_status"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "id",
       "entityType": "columns",
       "table": "session_input"
@@ -1760,6 +1834,17 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
+      "name": "fk_session_execution_status_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_execution_status"
+    },
+    {
+      "columns": ["session_id"],
+      "tableTo": "session",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
       "name": "fk_session_input_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_input"
@@ -1918,6 +2003,13 @@
       "nameExplicit": false,
       "name": "session_context_epoch_pk",
       "table": "session_context_epoch",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["session_id"],
+      "nameExplicit": false,
+      "name": "session_execution_status_pk",
+      "table": "session_execution_status",
       "entityType": "pks"
     },
     {
@@ -2125,6 +2217,28 @@
       "name": "part_session_idx",
       "entityType": "indexes",
       "table": "part"
+    },
+    {
+      "columns": [
+        {
+          "value": "owner",
+          "isExpression": false
+        },
+        {
+          "value": "epoch",
+          "isExpression": false
+        },
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_execution_status_owner_state_idx",
+      "entityType": "indexes",
+      "table": "session_execution_status"
     },
     {
       "columns": [

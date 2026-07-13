@@ -35,6 +35,10 @@ import { SessionTask } from "./session/task"
 import { SessionCreate } from "./session/create"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SessionHistory } from "./session/history"
+import { SessionFormat } from "./session/format"
+import { SessionExecutionStatus } from "./session/execution-status"
+
+export { AdmissionError as StructuredFormatAdmissionError } from "./session/format"
 
 // get project -> project.locations
 //
@@ -101,6 +105,14 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
   messageID: SessionMessage.ID,
 }) {}
 
+export class PromptFormatConflictError extends Schema.TaggedErrorClass<PromptFormatConflictError>()(
+  "Session.PromptFormatConflictError",
+  {
+    sessionID: SessionSchema.ID,
+    messageID: SessionMessage.ID,
+  },
+) {}
+
 export class CompactionConflictError extends Schema.TaggedErrorClass<CompactionConflictError>()(
   "Session.CompactionConflictError",
   {
@@ -158,6 +170,7 @@ export type Error =
   | NotFoundError
   | MessageDecodeError
   | PromptConflictError
+  | PromptFormatConflictError
   | ShellConflictError
   | CompactionConflictError
   | CompactionPromptUnsupportedError
@@ -165,6 +178,7 @@ export type Error =
   | AgentUnavailableError
   | SkillNotFoundError
   | ModelHistoryIncompatibleError
+  | SessionFormat.AdmissionError
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
@@ -216,7 +230,10 @@ export interface Interface {
       resume?: boolean
     },
     guard?: Effect.Effect<void, E>,
-  ) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | E>
+  ) => Effect.Effect<
+    SessionInput.Admitted,
+    NotFoundError | PromptConflictError | PromptFormatConflictError | SessionFormat.AdmissionError | E
+  >
   readonly shell: <E = never>(
     input: {
       id?: SessionMessage.ID
@@ -234,7 +251,15 @@ export interface Interface {
       resume?: boolean
     },
     guard?: Effect.Effect<void, E>,
-  ) => Effect.Effect<SessionInput.Admitted, NotFoundError | SkillNotFoundError | PromptConflictError | E>
+  ) => Effect.Effect<
+    SessionInput.Admitted,
+    | NotFoundError
+    | SkillNotFoundError
+    | PromptConflictError
+    | PromptFormatConflictError
+    | SessionFormat.AdmissionError
+    | E
+  >
   readonly compact: <E = never>(
     input: CompactInput,
     guard?: Effect.Effect<void, E>,
@@ -242,9 +267,19 @@ export interface Interface {
     void,
     NotFoundError | CompactionConflictError | CompactionPromptUnsupportedError | CompactionFailedError | E
   >
-  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
+  readonly wait: (
+    id: SessionSchema.ID,
+  ) => Effect.Effect<void, NotFoundError | SessionRunner.RunError | SessionExecutionStatus.DurableTerminalError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: <E = never>(sessionID: SessionSchema.ID, guard?: Effect.Effect<void, E>) => Effect.Effect<void, E>
+  readonly executionStatus: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<SessionExecutionStatus.Info, SessionExecutionStatus.NotFound>
+  readonly executionStatuses: (input?: {
+    readonly nonIdle?: boolean
+  }) => Effect.Effect<
+    ReadonlyArray<{ readonly sessionID: SessionSchema.ID; readonly status: SessionExecutionStatus.Info }>
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/Session") {}
@@ -274,6 +309,7 @@ export const layer = Layer.effect(
     const projects = yield* ProjectV2.Service
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
+    const status = yield* SessionExecutionStatus.make
     const locations = yield* LocationServiceMap
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
@@ -419,6 +455,13 @@ export const layer = Layer.effect(
       prompt: Effect.fn("V2Session.prompt")((input, guard = Effect.void) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
+            const format = yield* SessionFormat.admit(input.prompt.format)
+            const prompt = new Prompt({
+              text: input.prompt.text,
+              ...(input.prompt.files === undefined ? {} : { files: input.prompt.files }),
+              ...(input.prompt.agents === undefined ? {} : { agents: input.prompt.agents }),
+              ...(format.type === "text" && input.prompt.format === undefined ? {} : { format }),
+            })
             yield* result.get(input.sessionID)
             const returnPrompt = Effect.fnUntraced(function* (admitted: SessionInput.Admitted) {
               if (input.resume !== false) yield* enqueueWake(admitted)
@@ -426,7 +469,29 @@ export const layer = Layer.effect(
             }, Effect.uninterruptible)
             const messageID = input.id ?? SessionMessage.ID.create()
             const delivery = input.delivery ?? "steer"
-            const expected = { sessionID: input.sessionID, messageID, prompt: input.prompt, delivery }
+            const expected = { sessionID: input.sessionID, messageID, prompt, delivery }
+            const existing = yield* SessionInput.find(db, messageID)
+            if (!existing && delivery === "steer") {
+              const pending = yield* SessionInput.pendingSteerFormats(db, input.sessionID)
+              const row = yield* db
+                .select({ state: SessionTable.runtime_state })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, input.sessionID))
+                .get()
+                .pipe(Effect.orDie)
+              const active =
+                row?.state === "draining"
+                  ? (yield* store.context(input.sessionID).pipe(Effect.orDie)).findLast(
+                      (message) => message.type === "user",
+                    )?.format
+                  : undefined
+              if (
+                [...pending, ...(active === undefined ? [] : [active])].some(
+                  (format) => !SessionFormat.equivalent(format, prompt.format),
+                )
+              )
+                return yield* new PromptFormatConflictError({ sessionID: input.sessionID, messageID })
+            }
             const admitted = yield* guardedCommit(
               (commit) =>
                 SessionInput.admit(
@@ -435,7 +500,7 @@ export const layer = Layer.effect(
                   {
                     id: messageID,
                     sessionID: input.sessionID,
-                    prompt: input.prompt,
+                    prompt,
                     delivery,
                   },
                   commit,
@@ -681,6 +746,13 @@ export const layer = Layer.effect(
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)
         yield* execution.wait(sessionID)
+        const current = yield* status.get(sessionID).pipe(Effect.orDie)
+        if (current.type === "interrupted" || current.type === "terminal-failure")
+          return yield* new SessionExecutionStatus.DurableTerminalError({
+            sessionID,
+            code: current.code,
+            message: current.message,
+          })
       }),
       resume: Effect.fn("V2Session.resume")(function* (sessionID) {
         yield* result.get(sessionID)
@@ -768,6 +840,8 @@ export const layer = Layer.effect(
           }),
         ),
       ),
+      executionStatus: status.get,
+      executionStatuses: (input) => status.list({ owner: "v2", nonIdle: input?.nonIdle }),
     })
 
     return result
@@ -780,6 +854,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(SessionExecution.noopLayer),
     Layer.provide(SessionStore.defaultLayer),
     Layer.provide(SessionProjector.defaultLayer),
+    Layer.provide(SessionExecutionStatus.defaultLayer),
     Layer.provide(EventV2.defaultLayer),
     Layer.provide(Database.defaultLayer),
     Layer.provide(ProjectV2.defaultLayer),

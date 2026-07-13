@@ -1,6 +1,7 @@
-import { Effect, Layer } from "effect"
+import { Clock, Effect, Fiber, Layer } from "effect"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
+import { EventTable } from "../../event/sql"
 import { LocationServiceMap } from "../../location-layer"
 import { SessionInput } from "../input"
 import { SessionRunCoordinator } from "../run-coordinator"
@@ -12,7 +13,9 @@ import { logFailure } from "../logging"
 import { SessionRuntime } from "../runtime"
 import { SessionEvent } from "../event"
 import { SessionTask } from "../task"
+import { SessionExecutionStatus } from "../execution-status"
 import { Schema } from "effect"
+import { asc, eq } from "drizzle-orm"
 
 /** Current-process routing for implicit-local Locations. Future remote placement belongs here. */
 export const layer = Layer.effect(
@@ -23,8 +26,286 @@ export const layer = Layer.effect(
     const events = yield* EventV2.Service
     const locations = yield* LocationServiceMap
     const runtime = yield* SessionRuntime.Service
+    const status = yield* SessionExecutionStatus.make
     const recovered = yield* runtime.recover()
     const recovery = new Map(recovered.map((info) => [info.sessionID, info]))
+    const resumable: SessionSchema.ID[] = []
+    const continuations: SessionSchema.ID[] = []
+    const continuation = Effect.fnUntraced(function* (
+      sessionID: SessionSchema.ID,
+      current: Extract<SessionExecutionStatus.Info, { readonly type: "busy" }>,
+    ) {
+      if (
+        current.requestAttempt === undefined ||
+        current.providerAttempt === undefined ||
+        current.fingerprint === undefined
+      )
+        return false
+      const rows = yield* db
+        .select({ seq: EventTable.seq, type: EventTable.type, data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      const matches = (row: (typeof rows)[number]) =>
+        row.data.requestAttempt === current.requestAttempt &&
+        row.data.providerAttempt === current.providerAttempt &&
+        row.data.fingerprint === current.fingerprint
+      const completed = rows.findLast(
+        (row) => row.type === `${SessionEvent.Execution.ProviderCompleted.type}.1` && matches(row),
+      )
+      if (!completed) return false
+      const dispatched = rows.findLast(
+        (row) =>
+          row.seq < completed.seq && row.type === `${SessionEvent.Execution.ProviderDispatched.type}.1` && matches(row),
+      )
+      if (!dispatched) return false
+      const turn = rows.filter((row) => row.seq > dispatched.seq)
+      const after = turn.filter((row) => row.seq > completed.seq)
+      if (
+        after.some((row) =>
+          [
+            `${SessionEvent.Execution.ProviderDispatched.type}.1`,
+            `${SessionEvent.Execution.RetryScheduled.type}.1`,
+            `${SessionEvent.Execution.Succeeded.type}.1`,
+            `${SessionEvent.Execution.Interrupted.type}.1`,
+            `${SessionEvent.Execution.Failed.type}.1`,
+            `${SessionEvent.Step.Failed.type}.2`,
+          ].includes(row.type),
+        )
+      )
+        return false
+      const calls = turn.filter(
+        (row) =>
+          (row.type === `${SessionEvent.Tool.Called.type}.1` || row.type === `${SessionEvent.Tool.CalledV2.type}.2`) &&
+          (row.data.provider as { executed?: unknown } | undefined)?.executed === false,
+      )
+      const settled =
+        calls.length > 0 &&
+        calls.every((call) =>
+          turn.some(
+            (row) =>
+              (row.type === `${SessionEvent.Tool.Success.type}.1` ||
+                row.type === `${SessionEvent.Tool.Failed.type}.1`) &&
+              row.data.assistantMessageID === call.data.assistantMessageID &&
+              row.data.callID === call.data.callID &&
+              (row.data.provider as { executed?: unknown } | undefined)?.executed === false,
+          ),
+        )
+      const tools =
+        settled &&
+        turn.some((row) => row.type === `${SessionEvent.Step.Ended.type}.2` && row.data.finish === "tool-calls")
+      const retry = after.findLast(
+        (row) =>
+          row.type === `${SessionEvent.Structured.Retry.type}.1` &&
+          row.data.rootUserID === current.rootID &&
+          typeof row.data.remaining === "number" &&
+          row.data.remaining > 0,
+      )
+      const structured =
+        retry !== undefined &&
+        !after.some(
+          (row) =>
+            row.seq > retry.seq &&
+            (row.type === `${SessionEvent.Structured.Result.type}.1` ||
+              row.type === `${SessionEvent.Structured.Failed.type}.1`),
+        )
+      const compacted = after.some(
+        (ended) =>
+          ended.type === `${SessionEvent.Compaction.Ended.type}.2` &&
+          ended.data.reason === "auto" &&
+          after.some(
+            (started) =>
+              started.seq < ended.seq &&
+              started.type === `${SessionEvent.Compaction.Started.type}.1` &&
+              started.data.reason === "auto" &&
+              started.data.messageID === ended.data.messageID,
+          ) &&
+          !after.some((failed) => failed.seq > ended.seq && failed.type === `${SessionEvent.Compaction.Failed.type}.1`),
+      )
+      if (tools || structured || compacted) return "provider" as const
+      if (yield* SessionInput.hasPending(db, sessionID, "steer")) return "steer" as const
+    })
+    yield* Effect.forEach(
+      recovered,
+      Effect.fnUntraced(function* (info) {
+        const current = yield* status.get(info.sessionID)
+        if (current.type !== "busy" && current.type !== "retrying") return
+        if (info.owner !== "v2" || info.state !== "draining" || info.epoch !== current.epoch) {
+          const replacement =
+            info.owner === "v2" && info.state !== "paused"
+              ? yield* runtime.assign({
+                  sessionID: info.sessionID,
+                  state: "paused",
+                  expectedOwner: "v2",
+                  expectedEpoch: info.epoch,
+                })
+              : info
+          yield* status
+            .replace({
+              sessionID: info.sessionID,
+              owner: "v2",
+              runtimeState: "draining",
+              epoch: current.epoch,
+              activityID: current.activityID,
+              rootID: current.rootID,
+              activity: current.activity,
+              phase: current.phase,
+              requestAttempt: current.requestAttempt,
+              providerAttempt: current.providerAttempt,
+              structuredAttempt: current.structuredAttempt,
+              resultingOwner: replacement.owner,
+              resultingState: replacement.state,
+              resultingEpoch: replacement.epoch,
+            })
+            .pipe(Effect.exit)
+          return
+        }
+        if (current.type === "retrying" && current.recovery === "retry-provider") {
+          if (!current.fingerprint) {
+            yield* status.fail({
+              sessionID: info.sessionID,
+              owner: "v2",
+              runtimeState: "draining",
+              epoch: current.epoch,
+              activityID: current.activityID,
+              rootID: current.rootID,
+              activity: current.activity,
+              phase: current.phase,
+              requestAttempt: current.requestAttempt,
+              providerAttempt: current.providerAttempt,
+              structuredAttempt: current.structuredAttempt,
+              code: "restart",
+              message: "Provider retry has no immutable request identity",
+              resultingEpoch: current.epoch + 1,
+            })
+            return
+          }
+          resumable.push(info.sessionID)
+          return
+        }
+        if (
+          current.type === "busy" &&
+          current.recovery === "retry-provider" &&
+          current.requestAttempt !== undefined &&
+          current.providerAttempt !== undefined &&
+          current.fingerprint
+        ) {
+          if (current.providerAttempt >= 6) {
+            yield* status.fail({
+              sessionID: info.sessionID,
+              owner: "v2",
+              runtimeState: "draining",
+              epoch: current.epoch,
+              activityID: current.activityID,
+              rootID: current.rootID,
+              activity: current.activity,
+              phase: current.phase,
+              requestAttempt: current.requestAttempt,
+              providerAttempt: current.providerAttempt,
+              structuredAttempt: current.structuredAttempt,
+              code: "provider-exhausted",
+              message: "Provider retry budget was exhausted during restart recovery",
+              resultingEpoch: current.epoch + 1,
+            })
+            return
+          }
+          yield* status.retry({
+            sessionID: info.sessionID,
+            owner: "v2",
+            runtimeState: "draining",
+            epoch: current.epoch,
+            activityID: current.activityID,
+            rootID: current.rootID,
+            activity: current.activity,
+            phase: "provider",
+            requestAttempt: current.requestAttempt,
+            providerAttempt: current.providerAttempt + 1,
+            structuredAttempt: current.structuredAttempt,
+            attempt: current.providerAttempt,
+            maxAttempts: 5,
+            nextAt: yield* Clock.currentTimeMillis,
+            code: "dispatch-uncertain",
+            action: "retry-provider",
+            message: "Provider dispatch outcome was uncertain after restart",
+            recovery: "retry-provider",
+            fingerprint: current.fingerprint,
+          })
+          resumable.push(info.sessionID)
+          return
+        }
+        const pendingRoot =
+          current.type === "busy" &&
+          ((current.activity === "shell" && (yield* SessionInput.hasPendingShell(db, info.sessionID))) ||
+            (current.activity === "compaction" && (yield* SessionInput.hasPendingCompaction(db, info.sessionID))) ||
+            (current.activity === "task" && (yield* SessionTask.hasPending(store, info.sessionID))))
+        const proof =
+          current.type === "busy" && current.recovery === undefined
+            ? yield* continuation(info.sessionID, current)
+            : undefined
+        if (current.type === "busy" && proof === "steer") {
+          yield* status.succeed({
+            sessionID: info.sessionID,
+            owner: "v2",
+            runtimeState: "draining",
+            epoch: current.epoch,
+            activityID: current.activityID,
+            rootID: current.rootID,
+            activity: current.activity,
+            release: false,
+          })
+          continuations.push(info.sessionID)
+          return
+        }
+        if (current.type === "busy" && proof === "provider") {
+          yield* status.continue({
+            sessionID: info.sessionID,
+            owner: "v2",
+            runtimeState: "draining",
+            epoch: current.epoch,
+            activityID: current.activityID,
+            rootID: current.rootID,
+            activity: current.activity,
+            phase: current.phase,
+            requestAttempt: current.requestAttempt!,
+            providerAttempt: current.providerAttempt!,
+            fingerprint: current.fingerprint!,
+          })
+          continuations.push(info.sessionID)
+          return
+        }
+        if (
+          current.type === "busy" &&
+          (current.recovery === "continue-provider" ||
+            (current.phase === "preparing" && current.requestAttempt === undefined) ||
+            pendingRoot)
+        ) {
+          continuations.push(info.sessionID)
+          return
+        }
+        yield* status.interrupt({
+          sessionID: info.sessionID,
+          owner: "v2",
+          runtimeState: "draining",
+          epoch: current.epoch,
+          activityID: current.activityID,
+          rootID: current.rootID,
+          activity: current.activity,
+          phase: current.phase,
+          requestAttempt: current.requestAttempt,
+          providerAttempt: current.providerAttempt,
+          structuredAttempt: current.structuredAttempt,
+          code: "restart",
+          message:
+            current.type === "retrying"
+              ? "Provider retry cannot be reconstructed safely after restart"
+              : "Session activity was interrupted by process restart",
+          resultingEpoch: current.epoch + 1,
+        })
+      }),
+      { discard: true },
+    )
     yield* Effect.forEach(
       [
         ...(yield* SessionInput.pendingCompactionSessions(db)),
@@ -49,6 +330,40 @@ export const layer = Layer.effect(
       }),
       onFailure: (sessionID, cause) => logFailure("Failed to drain Session", sessionID, cause),
     })
+    const timers = new Map<SessionSchema.ID, Fiber.Fiber<void, never>>()
+    yield* Effect.forEach(
+      resumable,
+      Effect.fnUntraced(function* (sessionID) {
+        const current = yield* status.get(sessionID)
+        if (current.type !== "retrying" || current.recovery !== "retry-provider") return
+        if (
+          current.requestAttempt === undefined ||
+          current.providerAttempt === undefined ||
+          current.fingerprint === undefined
+        )
+          return
+        const expected = {
+          requestAttempt: current.requestAttempt,
+          providerAttempt: current.providerAttempt,
+          fingerprint: current.fingerprint,
+        }
+        const fiber = yield* Effect.sleep(Math.max(0, current.nextAt - (yield* Clock.currentTimeMillis))).pipe(
+          Effect.andThen(
+            SessionRunner.Service.use((runner) => runner.run({ sessionID, recovery: expected })).pipe(
+              Effect.provide(locations.get((yield* store.get(sessionID))!.location)),
+            ),
+          ),
+          Effect.exit,
+          Effect.asVoid,
+          Effect.ensuring(Effect.sync(() => timers.delete(sessionID))),
+          Effect.forkScoped,
+        )
+        timers.set(sessionID, fiber)
+      }),
+      { discard: true },
+    )
+    yield* Effect.forEach(continuations, (sessionID) => coordinator.wake(sessionID), { discard: true })
+    const continuationIDs = new Set(continuations)
     yield* events.listen((event) => {
       if (Schema.is(SessionEvent.Task.Execute)(event))
         return SessionTask.orphaned(db, event.data.childSessionID).pipe(
@@ -71,6 +386,7 @@ export const layer = Layer.effect(
     yield* Effect.forEach(
       recovery.values(),
       Effect.fnUntraced(function* (info) {
+        if (continuationIDs.has(info.sessionID)) return
         if (yield* SessionTask.orphaned(db, info.sessionID)) return
         const pending = yield* Effect.all([
           SessionInput.hasPendingShell(db, info.sessionID),
@@ -89,10 +405,28 @@ export const layer = Layer.effect(
     )
 
     return SessionExecution.Service.of({
-      interrupt: coordinator.interrupt,
-      resume: coordinator.run,
-      wake: coordinator.wake,
-      wait: coordinator.awaitIdle,
+      interrupt: (sessionID, seq) =>
+        Effect.gen(function* () {
+          const timer = timers.get(sessionID)
+          if (timer) {
+            timers.delete(sessionID)
+            yield* Fiber.interrupt(timer)
+          }
+          yield* coordinator.interrupt(sessionID, seq)
+        }),
+      resume: (sessionID) =>
+        Effect.gen(function* () {
+          const timer = timers.get(sessionID)
+          if (timer) return yield* Fiber.join(timer)
+          yield* coordinator.run(sessionID)
+        }),
+      wake: (sessionID, seq) => (timers.has(sessionID) ? Effect.void : coordinator.wake(sessionID, seq)),
+      wait: (sessionID) =>
+        Effect.gen(function* () {
+          const timer = timers.get(sessionID)
+          if (timer) yield* Fiber.join(timer)
+          yield* coordinator.awaitIdle(sessionID)
+        }),
     })
   }),
 )

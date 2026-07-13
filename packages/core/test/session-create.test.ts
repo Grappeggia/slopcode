@@ -588,7 +588,7 @@ describe("SessionV2.create", () => {
         callID: "call-custom",
         text: "return 42",
       })
-      yield* events.publish(SessionEvent.Tool.Called, {
+      yield* events.publish(SessionEvent.Tool.CalledV2, {
         ...base,
         callID: "call-custom",
         tool: "exec",
@@ -618,7 +618,7 @@ describe("SessionV2.create", () => {
         [4, SessionEvent.Tool.CalledV1.type, "call-function"],
         [5, SessionEvent.Tool.Input.Started.type, "call-custom"],
         [6, SessionEvent.Tool.Input.Ended.type, "call-custom"],
-        [7, SessionEvent.Tool.Called.type, "call-custom"],
+        [7, SessionEvent.Tool.CalledV2.type, "call-custom"],
         [8, SessionEvent.Tool.Success.type, "call-custom"],
       ])
       expect((yield* session.message({ sessionID: created.id, messageID: assistantMessageID }))?.content).toMatchObject(
@@ -660,7 +660,7 @@ describe("SessionV2.create", () => {
         callID: "call-exec",
         text: "return 42",
       })
-      yield* events.publish(SessionEvent.Tool.Called, {
+      yield* events.publish(SessionEvent.Tool.CalledV2, {
         sessionID: created.id,
         timestamp: yield* DateTime.now,
         assistantMessageID,
@@ -730,7 +730,7 @@ describe("SessionV2.create", () => {
         agent: "build",
         model: created.model!,
       })
-      yield* events.publish(SessionEvent.Tool.Called, {
+      yield* events.publish(SessionEvent.Tool.CalledV2, {
         ...base,
         tool: "exec",
         input: "return 42",

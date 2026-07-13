@@ -75,6 +75,8 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
 }
 
 const assistant = (message: SessionMessage.Assistant, model: Model) => {
+  if (message.structured !== undefined)
+    return [Message.make({ id: message.id, role: "assistant", content: JSON.stringify(message.structured) })]
   const sameModel =
     String(message.model.providerID) === String(model.provider) && String(message.model.id) === String(model.id)
   const content = message.content.flatMap((item): ContentPart[] => {
@@ -153,4 +155,30 @@ ${message.recent}
 
 /** Translate projected V2 Session history into canonical @slopcode-ai/llm context. */
 export const toLLMMessages = (messages: readonly SessionMessage.Message[], model: Model) =>
-  messages.flatMap((message) => toLLMMessage(message, model))
+  messages.flatMap((message, index) => {
+    const lowered = toLLMMessage(message, model)
+    if (message.type !== "assistant" || !message.structuredRetry) return lowered
+    const later = messages.slice(index + 1).some((item) => item.type === "assistant")
+    if (later) return lowered
+    return [
+      ...lowered,
+      Message.make({
+        role: "assistant",
+        content: [
+          ToolCallPart.make({
+            id: `structured-retry-${message.structuredRetry.attempt}`,
+            name: "final_output",
+            input: {},
+          }),
+        ],
+      }),
+      Message.tool(
+        ToolResultPart.make({
+          id: `structured-retry-${message.structuredRetry.attempt}`,
+          name: "final_output",
+          resultType: "error",
+          result: message.structuredRetry.message,
+        }),
+      ),
+    ]
+  })

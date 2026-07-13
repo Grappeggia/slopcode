@@ -57,6 +57,9 @@ export const Flag = {
   get SLOPCODE_EXPERIMENTAL_REFERENCES() {
     return enabledByExperimental("SLOPCODE_EXPERIMENTAL_REFERENCES")
   },
+  get SLOPCODE_EXPERIMENTAL_OXFMT() {
+    return enabledByExperimental("SLOPCODE_EXPERIMENTAL_OXFMT")
+  },
   get SLOPCODE_TUI_CONFIG() {
     return process.env["SLOPCODE_TUI_CONFIG"]
   },

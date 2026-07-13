@@ -18,6 +18,7 @@ import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 import { SessionRunCoordinator } from "@slopcode-ai/core/session/run-coordinator"
 import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
+import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import * as SessionRunnerLLM from "@slopcode-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@slopcode-ai/core/session/runner/model"
 import { ToolRegistry } from "@slopcode-ai/core/tool/registry"
@@ -77,7 +78,9 @@ const location = Location.layer({ directory: AbsolutePath.make("/project") }).pi
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const referenceGuidance = Layer.mock(ReferenceGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
+const status = SessionExecutionStatus.layer.pipe(Layer.provide(database), Layer.provide(events))
 const runner = SessionRunnerLLM.defaultLayer.pipe(
+  Layer.provide(status),
   Layer.provide(database),
   Layer.provide(store),
   Layer.provide(runtime),
@@ -108,6 +111,7 @@ const execution = Layer.effect(
   ),
 ).pipe(Layer.provide(coordinator))
 const sessions = SessionV2.layer.pipe(
+  Layer.provide(status),
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
@@ -189,11 +193,15 @@ describe("SessionRunnerLLM recorded", () => {
           .all()).map((event) => event.type),
       ).toEqual([
         "session.next.prompt.admitted.1",
+        "session.next.execution.started.1",
         "session.next.prompt.promoted.1",
+        "session.next.execution.provider.dispatched.1",
         "session.next.step.started.1",
         "session.next.text.started.1",
         "session.next.text.ended.1",
         "session.next.step.ended.2",
+        "session.next.execution.provider.completed.1",
+        "session.next.execution.succeeded.1",
       ])
     }),
   )

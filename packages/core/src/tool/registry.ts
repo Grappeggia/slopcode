@@ -9,19 +9,23 @@ import {
 } from "@slopcode-ai/codemode"
 import {
   CustomToolDefinition,
+  ToolDefinition,
   ToolOutput,
   type AnyToolDefinition,
   type ToolCall,
+  type ToolInputError,
   type ToolResultValue,
 } from "@slopcode-ai/llm"
 import { Context, Effect, Layer, Scope, Semaphore } from "effect"
 import { AgentV2 } from "../agent"
 import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
+import { SessionFormat } from "../session/format"
 import { SessionSchema } from "../session/schema"
 import type { SessionEvent } from "../session/event"
 import { ToolOutputStore } from "../tool-output-store"
 import { Wildcard } from "../util/wildcard"
+import { PostMutation } from "../post-mutation"
 import { ApplicationTools } from "./application-tools"
 import {
   definition,
@@ -33,12 +37,13 @@ import {
   type Context as ToolContext,
 } from "./tool"
 import { Tools, type RegistrationOptions } from "./tools"
+import * as StructuredTool from "#structured-tool"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
-  readonly call: ToolCall
+  readonly call: ToolCall | ToolInputError
   readonly task?: SessionEvent.Task.Requested["data"]
   readonly prepared?: SessionEvent.Task.Prepared["data"]
 }
@@ -46,7 +51,11 @@ export type ExecuteInput = {
 export interface Interface {
   readonly materialize: {
     (permissions?: PermissionV2.Ruleset, plan?: ToolPlan): Effect.Effect<Materialization>
-    (permissions: PermissionV2.Ruleset, plan: ToolPlan, turn: TurnTools): Effect.Effect<Materialization, RegistrationError>
+    (
+      permissions: PermissionV2.Ruleset,
+      plan: ToolPlan,
+      turn: TurnTools,
+    ): Effect.Effect<Materialization, RegistrationError>
   }
   /** Internal registration capability exposed publicly only through Tools.Service. */
   readonly register: (
@@ -76,6 +85,7 @@ export interface ToolPlan {
   readonly patch?: "freeform"
   readonly multiAgent?: "v1" | "v2"
   readonly progress?: (input: ExecuteInput, progress: ChildProgress) => Effect.Effect<void>
+  readonly fence?: PostMutation.Fence
 }
 
 export interface TurnTools {
@@ -92,21 +102,30 @@ export interface Settlement {
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/ToolRegistry") {}
 
-const registryLayer = Layer.effect(
-  Service,
+export const FINAL_OUTPUT = "final_output"
+
+const registryLayer = Layer.effectContext(
   Effect.gen(function* () {
     const applications = yield* ApplicationTools.Service
     const resources = yield* ToolOutputStore.Service
     type Registration = { readonly identity: object; readonly tool: AnyTool }
     type Captured = { readonly registration: Registration; readonly overlay: boolean }
-    type Local = { readonly slot: object; readonly token: object; readonly registration: Registration }
+    type Local = {
+      readonly slot: object
+      readonly token: object
+      readonly registration: Registration
+      readonly visible: () => boolean
+    }
+    type Final = { readonly format: SessionFormat.JsonFormat; active: boolean }
+    const Final = Symbol("ToolRegistry.final")
     const local = new Map<string, Local[]>()
     const order = new Map<object, number>()
     const active = new Map<object, Set<object>>()
     let sequence = 0
+    const visible = (name: string) => local.get(name)?.findLast((entry) => entry.visible())?.registration
 
     const settleWith = Effect.fn("ToolRegistry.settle")(function* (
-      input: ExecuteInput,
+      input: ExecuteInput & { readonly call: ToolCall },
       registration: Registration,
       plan: ToolPlan = {},
       permissions: PermissionV2.Ruleset = [],
@@ -131,6 +150,7 @@ const registryLayer = Layer.effect(
           },
           task: { value: input.task },
           prepared: { value: input.prepared },
+          fence: { value: plan.fence ?? PostMutation.current },
         },
       ) as ToolContext
       const pending = yield* settle(registration.tool, input.call, context).pipe(
@@ -150,10 +170,15 @@ const registryLayer = Layer.effect(
         : { result, output: bounded.output }
     })
 
-    return Service.of({
+    const service = Service.of({
       register: Effect.fn("ToolRegistry.register")(function* (tools, options?: RegistrationOptions) {
         const entries = Object.entries(tools)
         yield* Effect.forEach(entries, ([name]) => validateName(name), { discard: true })
+        if (entries.some(([name]) => name === FINAL_OUTPUT))
+          return yield* new RegistrationError({
+            name: FINAL_OUTPUT,
+            message: `${FINAL_OUTPUT} is reserved for structured Session turns`,
+          })
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
             const token = {}
@@ -161,13 +186,14 @@ const registryLayer = Layer.effect(
             if (!order.has(slot)) order.set(slot, sequence++)
             active.set(slot, new Set([...(active.get(slot) ?? []), token]))
             for (const [name, tool] of entries) {
-              const registration = { slot, token, registration: { identity: {}, tool } }
+              const registration = {
+                slot,
+                token,
+                registration: { identity: {}, tool },
+                visible: options?.visible ?? (() => true),
+              }
               const existing = local.get(name) ?? []
-              const index = existing.findIndex((item) => item.slot === slot)
-              const registrations =
-                index < 0
-                  ? [...existing, registration]
-                  : existing.map((item, current) => (current === index ? registration : item))
+              const registrations = [...existing, registration]
               registrations.sort((left, right) => order.get(left.slot)! - order.get(right.slot)!)
               local.set(name, registrations)
             }
@@ -194,6 +220,7 @@ const registryLayer = Layer.effect(
         plan: ToolPlan = {},
         turn?: TurnTools,
       ) {
+        const final = (turn as (TurnTools & { readonly [Final]?: Final }) | undefined)?.[Final]
         const rules = Object.freeze(permissions.map((rule) => Object.freeze({ ...rule })))
         const captured = Object.freeze({
           mode: plan.mode,
@@ -201,12 +228,16 @@ const registryLayer = Layer.effect(
           patch: plan.patch,
           multiAgent: plan.multiAgent,
           progress: plan.progress,
+          fence: plan.fence,
         })
         const registrations = new Map<string, Captured>(
-          Array.from(applications.entries(), ([name, registration]) => [name, { registration, overlay: false }] as const),
+          Array.from(
+            applications.entries(),
+            ([name, registration]) => [name, { registration, overlay: false }] as const,
+          ),
         )
-        for (const [name, entries] of local) {
-          const registration = entries.at(-1)?.registration
+        for (const [name] of local) {
+          const registration = visible(name)
           if (registration) registrations.set(name, { registration, overlay: false })
         }
         const groups: ReadonlyArray<Readonly<Record<string, AnyTool>>> = turn
@@ -216,6 +247,11 @@ const registryLayer = Layer.effect(
           : []
         const overlays = groups.flatMap((tools) => Object.entries(tools))
         yield* Effect.forEach(overlays, ([name]) => validateName(name), { discard: true })
+        if (overlays.some(([name]) => name === FINAL_OUTPUT))
+          return yield* new RegistrationError({
+            name: FINAL_OUTPUT,
+            message: `${FINAL_OUTPUT} is reserved for structured Session turns`,
+          })
         const names = new Set<string>()
         for (const [name, tool] of overlays) {
           if (names.has(name))
@@ -228,7 +264,7 @@ const registryLayer = Layer.effect(
         const direct = new Set(turn?.direct ?? [])
         yield* Effect.forEach(direct, validateName, { discard: true })
         for (const name of direct)
-          if (!registrations.has(name))
+          if (!registrations.has(name) && !(name === FINAL_OUTPUT && final))
             return yield* Effect.fail(new RegistrationError({ name, message: `Unknown direct tool name: ${name}` }))
         const mode = captured.mode ?? "function"
         if (mode !== "function" && (names.has("exec") || direct.has("exec")))
@@ -237,17 +273,54 @@ const registryLayer = Layer.effect(
           )
         for (const [name, entry] of registrations)
           if (whollyDisabled(permission(entry.registration.tool, name), rules)) registrations.delete(name)
-        const definitions = Object.freeze(
-          Array.from(registrations, ([name, entry]) => definition(name, entry.registration.tool, rules)),
-        )
+        const definitions = Object.freeze([
+          ...Array.from(registrations, ([name, entry]) => definition(name, entry.registration.tool, rules)),
+          ...(final
+            ? [
+                new ToolDefinition({
+                  name: FINAL_OUTPUT,
+                  description: "Return the final schema-valid response exactly once after all other work is complete.",
+                  inputSchema: SessionFormat.toolSchema(final.format),
+                  metadata: { fingerprint: SessionFormat.fingerprint(final.format) },
+                }),
+              ]
+            : []),
+        ])
         const settleMaterialized = (input: ExecuteInput): Effect.Effect<Settlement, ToolOutputStore.Error> => {
+          if (input.call.name === FINAL_OUTPUT && final) {
+            if (!final.active) return Effect.succeed({ result: { type: "error", value: "Stale structured final" } })
+            if (input.call.type === "tool-input-error")
+              return Effect.succeed({
+                result: { type: "error", value: "Invalid structured final JSON" },
+              })
+            return SessionFormat.toolValue(input.call.input).pipe(
+              Effect.map(
+                (value): Settlement =>
+                  SessionFormat.validate(final.format, value)
+                    ? { result: { type: "text", value: "Structured final settled" } }
+                    : { result: { type: "error", value: "Structured final schema mismatch" } },
+              ),
+              Effect.catchTag("SessionFormat.ToolValueError", (error) =>
+                Effect.succeed({
+                  result: { type: "error" as const, value: "Invalid structured final value" },
+                }),
+              ),
+            )
+          }
+          if (input.call.type === "tool-input-error")
+            return Effect.succeed({
+              result: { type: "error" as const, value: `Invalid tool input: ${input.call.name}` },
+            })
+          const call = input.call
           const entry = registrations.get(input.call.name)
-          if (entry?.overlay) return settleWith(input, entry.registration, captured, rules)
+          if (entry?.overlay) return settleWith({ ...input, call }, entry.registration, captured, rules)
           if (entry) {
-            const current = local.get(input.call.name)?.at(-1)?.registration ?? applications.entries().get(input.call.name)
+            const current = visible(input.call.name) ?? applications.entries().get(input.call.name)
             if (current?.identity !== entry.registration.identity)
-              return Effect.succeed({ result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } })
-            return settleWith(input, entry.registration, captured, rules)
+              return Effect.succeed({
+                result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` },
+              })
+            return settleWith({ ...input, call }, entry.registration, captured, rules)
           }
           return Effect.succeed({ result: { type: "error" as const, value: `Unknown tool: ${input.call.name}` } })
         }
@@ -317,7 +390,7 @@ SOURCE: /[\s\S]+/
         })
         const serial = Semaphore.makeUnsafe(1).withPermit
         const settleExec = (input: ExecuteInput) => {
-          if (typeof input.call.input !== "string")
+          if (input.call.type !== "tool-call" || typeof input.call.input !== "string")
             return Effect.succeed({
               result: { type: "error" as const, value: "Invalid exec input: expected raw source text" },
             })
@@ -408,7 +481,7 @@ SOURCE: /[\s\S]+/
           permissions: rules,
           settle: (input) => {
             if (input.call.name !== "exec") return settleMaterialized(input)
-            if (input.call.toolType === "custom") return settleExec(input)
+            if (input.call.type === "tool-call" && input.call.toolType === "custom") return settleExec(input)
             return Effect.succeed({
               result: { type: "error", value: "Invalid exec call: expected a raw custom tool call" },
             })
@@ -416,6 +489,35 @@ SOURCE: /[\s\S]+/
         }
       }) as Interface["materialize"],
     })
+    const structured = StructuredTool.make((permissions, plan, format) =>
+      Effect.gen(function* () {
+        const final: Final = { format, active: true }
+        yield* Effect.addFinalizer(() => Effect.sync(() => (final.active = false)))
+        const materialized = yield* service
+          .materialize(permissions, plan, {
+            tools: {},
+            direct: new Set([FINAL_OUTPUT]),
+            [Final]: final,
+          } as TurnTools)
+          .pipe(Effect.orDie)
+        const settleFinal = (input: ExecuteInput): Effect.Effect<StructuredTool.FinalSettlement> => {
+          if (input.call.name !== FINAL_OUTPUT) return Effect.die("Expected structured final call")
+          if (!final.active) return Effect.succeed({ type: "stale" })
+          if (input.call.type === "tool-input-error") return Effect.succeed({ type: "invalid", reason: "invalid-json" })
+          return SessionFormat.toolValue(input.call.input).pipe(
+            Effect.map(
+              (value): StructuredTool.FinalSettlement =>
+                SessionFormat.validate(final.format, value) ? { type: "success", value } : { type: "schema", value },
+            ),
+            Effect.catchTag("SessionFormat.ToolValueError", (error) =>
+              Effect.succeed({ type: "invalid" as const, reason: error.reason }),
+            ),
+          )
+        }
+        return { ...materialized, settleFinal }
+      }),
+    )
+    return Context.make(Service, service).pipe(Context.add(StructuredTool.Service, structured))
   }),
 )
 

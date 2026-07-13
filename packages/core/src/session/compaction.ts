@@ -94,20 +94,31 @@ const serialize = (message: SessionMessage.Message) => {
     return [`[User]: ${message.text}`, ...files].join("\n")
   }
   if (message.type === "assistant") {
-    return message.content
-      .flatMap((part) => {
-        if (part.type === "text") return [`[Assistant]: ${part.text}`]
-        if (part.type === "reasoning") return part.text ? [`[Assistant reasoning]: ${part.text}`] : []
-        const input = typeof part.state.input === "string" ? part.state.input : JSON.stringify(part.state.input)
-        if (part.state.status === "completed")
-          return [
-            `[Assistant tool call]: ${part.name}(${input})`,
-            `[Tool result]: ${truncate(serializeToolContent(part.state.content))}`,
-          ]
-        if (part.state.status === "error")
-          return [`[Assistant tool call]: ${part.name}(${input})`, `[Tool error]: ${part.state.error.message}`]
-        return [`[Assistant tool call]: ${part.name}(${input})`]
-      })
+    const semantic =
+      message.structured !== undefined
+        ? `[Assistant structured]: ${JSON.stringify(message.structured)}`
+        : message.structuredError
+          ? `[Assistant structured error]: ${message.structuredError.message}`
+          : ""
+    return [
+      semantic,
+      message.content
+        .flatMap((part) => {
+          if (part.type === "text") return [`[Assistant]: ${part.text}`]
+          if (part.type === "reasoning") return part.text ? [`[Assistant reasoning]: ${part.text}`] : []
+          const input = typeof part.state.input === "string" ? part.state.input : JSON.stringify(part.state.input)
+          if (part.state.status === "completed")
+            return [
+              `[Assistant tool call]: ${part.name}(${input})`,
+              `[Tool result]: ${truncate(serializeToolContent(part.state.content))}`,
+            ]
+          if (part.state.status === "error")
+            return [`[Assistant tool call]: ${part.name}(${input})`, `[Tool error]: ${part.state.error.message}`]
+          return [`[Assistant tool call]: ${part.name}(${input})`]
+        })
+        .join("\n"),
+    ]
+      .filter(Boolean)
       .join("\n")
   }
   if (message.type === "system") return `[System update]: ${message.text}`
@@ -115,6 +126,8 @@ const serialize = (message: SessionMessage.Message) => {
   if (message.type === "shell") return `[Shell]: ${message.command}\n${truncate(message.output)}`
   return ""
 }
+
+export const serializeMessage = serialize
 
 const settings = (documents: readonly Config.Entry[]) => {
   const configured = documents

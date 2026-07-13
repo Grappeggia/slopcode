@@ -5,6 +5,7 @@ import { Effect, Layer, Schema } from "effect"
 import { FastCheck } from "effect/testing"
 import { Config } from "@slopcode-ai/core/config"
 import { ConfigProvider } from "@slopcode-ai/core/config/provider"
+import { ConfigMCP } from "@slopcode-ai/core/config/mcp"
 import { ConfigMigrateV1 } from "@slopcode-ai/core/v1/config/migrate"
 import { ConfigV1 } from "@slopcode-ai/core/v1/config/config"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
@@ -84,6 +85,30 @@ describe("Config", () => {
         }),
         { numRuns: 100 },
       )
+    }),
+  )
+
+  it.effect("drops callbackPort when migrating an external OAuth redirect", () =>
+    Effect.gen(function* () {
+      const migrated = ConfigMigrateV1.migrate({
+        mcp: {
+          external: {
+            type: "remote",
+            url: "https://example.com/mcp",
+            oauth: {
+              callbackPort: 19876,
+              redirectUri: "https://client.example/callback",
+            },
+          },
+        },
+      })
+      const decoded = Schema.decodeUnknownSync(Config.Info)(migrated)
+      expect(decoded.mcp?.servers?.external).toMatchObject({
+        oauth: { redirect_uri: "https://client.example/callback" },
+      })
+      expect(
+        ((decoded.mcp?.servers?.external as ConfigMCP.Remote).oauth as typeof ConfigMCP.OAuth.Type).callback_port,
+      ).toBeUndefined()
     }),
   )
 

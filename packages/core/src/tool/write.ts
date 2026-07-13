@@ -11,6 +11,7 @@ export * as WriteTool from "./write"
 import { ToolFailure } from "@slopcode-ai/llm"
 import { Effect, Layer, Schema } from "effect"
 import { FileMutation } from "../file-mutation"
+import { PostMutation } from "../post-mutation"
 import { LocationMutation } from "../location-mutation"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
@@ -39,8 +40,6 @@ export const toModelOutput = (output: Output) =>
   `${output.existed ? "Wrote" : "Created"} file successfully: ${output.resource}`
 
 /** Deferred V2 write UX integrations remain visible at the model-facing seam. */
-// TODO: Add formatter integration after V2 formatter runtime exists.
-// TODO: Publish watcher/file-edit events after V2 watcher integration exists.
 // TODO: Add snapshots / undo after design exists.
 // TODO: Add LSP notification and diagnostics after V2 LSP runtime exists.
 
@@ -49,6 +48,7 @@ export const layer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const mutation = yield* LocationMutation.Service
     const files = yield* FileMutation.Service
+    const post = yield* PostMutation.Service
     const permission = yield* PermissionV2.Service
 
     yield* tools
@@ -84,7 +84,18 @@ export const layer = Layer.effectDiscard(
                   agent: context.agent,
                   source,
                 })
-                return yield* files.writeTextPreservingBom({ target, content: input.content })
+                const result = yield* post.run({
+                  target,
+                  intent: "write",
+                  mutation: files.writeTextPreservingBom({ target, content: input.content }),
+                  fence: context.fence ?? PostMutation.current,
+                })
+                return {
+                  operation: result.operation,
+                  target: result.target,
+                  resource: result.resource,
+                  existed: result.existed,
+                }
               }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to write ${input.path}` }))),
           }),
           "edit",

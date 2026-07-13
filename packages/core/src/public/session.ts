@@ -45,6 +45,11 @@ export type NotFoundError = SessionV2.NotFoundError
 
 export const PromptConflictError = SessionV2.PromptConflictError
 export type PromptConflictError = SessionV2.PromptConflictError
+export const PromptFormatConflictError = SessionV2.PromptFormatConflictError
+export type PromptFormatConflictError = SessionV2.PromptFormatConflictError
+
+export const StructuredFormatAdmissionError = SessionV2.StructuredFormatAdmissionError
+export type StructuredFormatAdmissionError = SessionV2.StructuredFormatAdmissionError
 
 export const AgentUnavailableError = SessionV2.AgentUnavailableError
 export type AgentUnavailableError = SessionV2.AgentUnavailableError
@@ -134,7 +139,14 @@ export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<Info[]>
   readonly prompt: (
     input: PromptInput,
-  ) => Effect.Effect<Admission, NotFoundError | PromptConflictError | SessionRuntime.Error>
+  ) => Effect.Effect<
+    Admission,
+    | NotFoundError
+    | PromptConflictError
+    | PromptFormatConflictError
+    | StructuredFormatAdmissionError
+    | SessionRuntime.Error
+  >
   readonly switchModel: (
     input: SwitchModelInput,
   ) => Effect.Effect<
@@ -152,7 +164,15 @@ export interface Interface {
   ) => Effect.Effect<void, NotFoundError | AgentUnavailableError | SessionRuntime.Error>
   readonly skill: (
     input: SkillInput,
-  ) => Effect.Effect<Admission, NotFoundError | SkillNotFoundError | PromptConflictError | SessionRuntime.Error>
+  ) => Effect.Effect<
+    Admission,
+    | NotFoundError
+    | SkillNotFoundError
+    | PromptConflictError
+    | PromptFormatConflictError
+    | StructuredFormatAdmissionError
+    | SessionRuntime.Error
+  >
   /** Interrupt the active V2 execution chain for one Session on this process. Interrupting an idle or missing Session is a no-op. */
   readonly interrupt: (sessionID: ID) => Effect.Effect<void, SessionRuntime.Error>
   readonly messages: (input: MessagesInput) => Effect.Effect<Message[], NotFoundError | MessageDecodeError>

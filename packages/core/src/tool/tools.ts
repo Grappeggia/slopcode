@@ -13,6 +13,8 @@ export interface Interface {
 export interface RegistrationOptions {
   /** Stable source placement reused only while replacing one active producer. */
   readonly slot?: object
+  /** Keeps a staged generation out of materialization until its owner publishes it. */
+  readonly visible?: () => boolean
 }
 
 /** Narrow registration-only Location capability. */

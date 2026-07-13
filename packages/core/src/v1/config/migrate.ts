@@ -7,6 +7,7 @@ import { ConfigPermissionV1 } from "./permission"
 import { ConfigProviderV1 } from "./provider"
 import { ConfigProviderOptionsV1 } from "./provider-options"
 import { ModelRequest } from "../../model-request"
+import { MCPOAuthStore } from "../../mcp/oauth-store"
 
 const keys = new Set([
   "logLevel",
@@ -128,7 +129,12 @@ export function migrateAgent(info: ConfigAgentV1.Info) {
 function mcp(info: typeof ConfigV1.Info.Type) {
   const servers = Object.fromEntries(
     Object.entries(info.mcp ?? {}).flatMap(([name, server]) =>
-      "type" in server ? [[name, migrateMcp(server)] as const] : [],
+      "type" in server
+        ? (() => {
+            const migrated = migrateMcp(server)
+            return migrated ? ([[name, migrated]] as const) : []
+          })()
+        : [],
     ),
   )
   const timeout = info.experimental?.mcp_timeout
@@ -147,17 +153,51 @@ function migrateMcp(info: ConfigMCPV1.Info) {
       disabled,
       timeout: info.timeout,
     }
+  const url = (() => {
+    try {
+      MCPOAuthStore.normalizeEndpoint(info.url)
+      return info.url
+    } catch {
+      return undefined
+    }
+  })()
+  if (!url) return
+  const oauth = info.oauth && typeof info.oauth === "object" ? info.oauth : undefined
+  const redirect = (() => {
+    if (!oauth?.redirectUri) return undefined
+    try {
+      const value = new URL(oauth.redirectUri)
+      return (value.protocol === "http:" || value.protocol === "https:") && value.hostname && !value.hash
+        ? oauth.redirectUri
+        : undefined
+    } catch {
+      return undefined
+    }
+  })()
+  const client = oauth?.clientId || undefined
+  const callback = (() => {
+    if (!oauth?.callbackPort || !redirect) return oauth?.callbackPort
+    const value = new URL(redirect)
+    return value.protocol === "http:" &&
+      (value.hostname === "127.0.0.1" || value.hostname === "[::1]") &&
+      Number(value.port) === oauth.callbackPort
+      ? oauth.callbackPort
+      : undefined
+  })()
   return {
     type: info.type,
-    url: info.url,
+    url,
     headers: info.headers,
-    oauth: info.oauth && {
-      client_id: info.oauth.clientId,
-      client_secret: info.oauth.clientSecret,
-      scope: info.oauth.scope,
-      callback_port: info.oauth.callbackPort,
-      redirect_uri: info.oauth.redirectUri,
-    },
+    oauth:
+      info.oauth === false
+        ? false
+        : oauth && {
+            client_id: client,
+            client_secret: client ? oauth.clientSecret : undefined,
+            scope: oauth.scope,
+            callback_port: callback,
+            redirect_uri: redirect,
+          },
     disabled,
     timeout: info.timeout,
   }

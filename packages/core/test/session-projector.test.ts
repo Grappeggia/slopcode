@@ -16,6 +16,7 @@ import { Prompt } from "@slopcode-ai/core/session/prompt"
 import { SessionMessageUpdater } from "@slopcode-ai/core/session/message-updater"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
+import { SessionExecutionStatus } from "@slopcode-ai/core/session/execution-status"
 import { SessionInput } from "@slopcode-ai/core/session/input"
 import { SessionStore } from "@slopcode-ai/core/session/store"
 import { SessionInputTable, SessionMessageTable, SessionTable } from "@slopcode-ai/core/session/sql"
@@ -25,6 +26,7 @@ import { locationServices } from "./lib/location-services"
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
+const status = SessionExecutionStatus.layer.pipe(Layer.provide(database), Layer.provide(events))
 const it = testEffect(Layer.mergeAll(database, events, projector))
 const sessionID = SessionV2.ID.make("ses_projector_test")
 const created = DateTime.makeUnsafe(0)
@@ -119,7 +121,9 @@ describe("SessionProjector", () => {
         .get()
         .pipe(Effect.orDie)
       expect(row).toBeDefined()
-      expect(Schema.decodeUnknownSync(SessionMessage.Message)({ ...row!.data, id: row!.id, type: row!.type })).toMatchObject({
+      expect(
+        Schema.decodeUnknownSync(SessionMessage.Message)({ ...row!.data, id: row!.id, type: row!.type }),
+      ).toMatchObject({
         type: "assistant",
         content: [
           {
@@ -202,6 +206,7 @@ describe("SessionProjector", () => {
     }).pipe(
       Effect.provide(
         SessionV2.layer.pipe(
+          Layer.provide(status),
           Layer.provide(events),
           Layer.provide(database),
           Layer.provide(Project.defaultLayer),
@@ -442,7 +447,9 @@ describe("SessionProjector", () => {
         .where(eq(SessionMessageTable.id, id))
         .get()
         .pipe(Effect.orDie)
-      expect(Schema.decodeUnknownSync(SessionMessage.Message)({ ...row!.data, id: row!.id, type: row!.type })).toMatchObject({
+      expect(
+        Schema.decodeUnknownSync(SessionMessage.Message)({ ...row!.data, id: row!.id, type: row!.type }),
+      ).toMatchObject({
         type: "shell",
         command: "pwd",
         output: "/project",
@@ -450,13 +457,74 @@ describe("SessionProjector", () => {
       })
       expect(row!.data).not.toHaveProperty("status")
       expect(
-        Array.from(
-          yield* (yield* SessionV2.Service).events({ sessionID }).pipe(Stream.take(2), Stream.runCollect),
-        ).map((item) => item.event.type),
+        Array.from(yield* (yield* SessionV2.Service).events({ sessionID }).pipe(Stream.take(2), Stream.runCollect)).map(
+          (item) => item.event.type,
+        ),
       ).toEqual(["session.next.shell.started", "session.next.shell.ended"])
     }).pipe(
       Effect.provide(
         SessionV2.layer.pipe(
+          Layer.provide(status),
+          Layer.provide(events),
+          Layer.provide(database),
+          Layer.provide(Project.defaultLayer),
+          Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
+          Layer.provide(SessionExecution.noopLayer),
+          Layer.provide(locationServices),
+        ),
+      ),
+    ),
+  )
+
+  it.effect("exposes continuation readiness through the canonical session event stream", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const events = yield* EventV2.Service
+      const id = SessionV2.ID.make("ses_projector_continuation_stream")
+      const root = SessionMessage.ID.make("msg_projector_continuation_stream")
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id,
+          project_id: Project.ID.global,
+          slug: id,
+          directory: "/project",
+          title: "stream",
+          version: "test",
+          runtime: "v2",
+          runtime_state: "draining",
+          runtime_epoch: 1,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* events.publish(SessionEvent.Execution.ContinuationReady, {
+        sessionID: id,
+        timestamp: DateTime.makeUnsafe(1),
+        owner: "v2",
+        epoch: 1,
+        activityID: root,
+        rootID: root,
+        activity: "prompt",
+        phase: "tool",
+        requestAttempt: 1,
+        providerAttempt: 1,
+        fingerprint: "f".repeat(64),
+        recovery: "continue-provider",
+      })
+      const streamed = Array.from(
+        yield* (yield* SessionV2.Service).events({ sessionID: id }).pipe(Stream.take(1), Stream.runCollect),
+      )
+      expect(streamed.map((item) => item.event.type)).toEqual(["session.next.execution.continuation.ready"])
+    }).pipe(
+      Effect.provide(
+        SessionV2.layer.pipe(
+          Layer.provide(status),
           Layer.provide(events),
           Layer.provide(database),
           Layer.provide(Project.defaultLayer),

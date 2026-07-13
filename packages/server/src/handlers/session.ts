@@ -1,10 +1,8 @@
-import { SessionV2 } from "@slopcode-ai/core/session"
-import { SessionControl } from "@slopcode-ai/core/session/control"
-import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
 import { DateTime, Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "../groups/session"
+import { SessionGraph } from "../session-graph"
 import {
   ConflictError,
   InvalidRequestError,
@@ -19,9 +17,10 @@ const DefaultSessionsLimit = 50
 
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
-    const session = yield* SessionV2.Service
-    const control = yield* SessionControl.Service
-    const runtime = yield* SessionRuntime.Service
+    const graph = yield* SessionGraph.Service
+    const session = graph.session
+    const control = graph.control
+    const runtime = graph.runtime
 
     const runtimeUnavailable = (error: { readonly sessionID: string; readonly actualOwner: "v1" | "v2" }) =>
       new ServiceUnavailableError({
@@ -148,6 +147,17 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     }),
                   ),
                 ),
+                Effect.catchTag("Session.PromptFormatConflictError", (error) =>
+                  Effect.fail(
+                    new ConflictError({
+                      message: `Prompt format conflicts with the active activity: ${error.messageID}`,
+                      resource: error.messageID,
+                    }),
+                  ),
+                ),
+                Effect.catchTag("Session.StructuredFormatAdmissionError", (error) =>
+                  Effect.fail(new InvalidRequestError({ message: error.message, field: "prompt.format" })),
+                ),
                 Effect.catchTag("SessionRuntime.NotFound", (error) =>
                   Effect.fail(
                     new SessionNotFoundError({
@@ -164,45 +174,49 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
-          yield* control.compact({
-            sessionID: ctx.params.sessionID,
-            id: ctx.payload.id,
-            prompt: ctx.payload.prompt,
-          }).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
+          yield* control
+            .compact({
+              sessionID: ctx.params.sessionID,
+              id: ctx.payload.id,
+              prompt: ctx.payload.prompt,
+            })
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
               ),
-            ),
-            Effect.catchTag("Session.CompactionConflictError", (error) =>
-              Effect.fail(
-                new ConflictError({
-                  message: `Compaction message ID conflicts with an existing durable record: ${error.messageID}`,
-                  resource: error.messageID,
-                }),
+              Effect.catchTag("Session.CompactionConflictError", (error) =>
+                Effect.fail(
+                  new ConflictError({
+                    message: `Compaction message ID conflicts with an existing durable record: ${error.messageID}`,
+                    resource: error.messageID,
+                  }),
+                ),
               ),
-            ),
-            Effect.catchTag("Session.CompactionPromptUnsupportedError", (error) =>
-              Effect.fail(new InvalidRequestError({ message: error.message, field: "prompt" })),
-            ),
-            Effect.catchTag("Session.CompactionFailedError", (error) =>
-              Effect.fail(new UnknownError({ message: error.message, ref: error.messageID })),
-            ),
-            Effect.catchTag("SessionRuntime.NotFound", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
+              Effect.catchTag("Session.CompactionPromptUnsupportedError", (error) =>
+                Effect.fail(new InvalidRequestError({ message: error.message, field: "prompt" })),
               ),
-            ),
-            Effect.catchTag("SessionRuntime.Mismatch", () =>
-              Effect.fail(new UnknownError({ message: "Session runtime changed during compaction; retry the request" })),
-            ),
-          )
+              Effect.catchTag("Session.CompactionFailedError", (error) =>
+                Effect.fail(new UnknownError({ message: error.message, ref: error.messageID })),
+              ),
+              Effect.catchTag("SessionRuntime.NotFound", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+              Effect.catchTag("SessionRuntime.Mismatch", () =>
+                Effect.fail(
+                  new UnknownError({ message: "Session runtime changed during compaction; retry the request" }),
+                ),
+              ),
+            )
           return HttpApiSchema.NoContent.make()
         }),
       )

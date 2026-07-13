@@ -4,7 +4,7 @@ import { describe, expect } from "bun:test"
 import { Context, Effect, Equal, Exit, Hash, Layer, Schema, Scope } from "effect"
 import { Tool } from "@slopcode-ai/core/public"
 import { Catalog } from "@slopcode-ai/core/catalog"
-import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
+import { dependencies, LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { Location } from "@slopcode-ai/core/location"
 import { PluginBoot } from "@slopcode-ai/core/plugin/boot"
 import { PluginV2 } from "@slopcode-ai/core/plugin"
@@ -29,7 +29,11 @@ const applicationTools = ApplicationTools.layer
 const it = testEffect(
   Layer.merge(
     Layer.mergeAll(applicationTools, Database.defaultLayer, EventV2.defaultLayer),
-    LocationServiceMap.layer.pipe(
+    LocationServiceMap.layerNoDeps.pipe(
+      Layer.provide([
+        ...dependencies.filter((dependency) => dependency !== Global.defaultLayer),
+        Global.layerWith({ config: path.join(import.meta.dir, "fixture", "empty-global-config") }),
+      ]),
       Layer.provide(applicationTools),
       Layer.provide(
         Layer.mergeAll(
@@ -40,7 +44,6 @@ const it = testEffect(
           Npm.defaultLayer,
           ModelsDev.defaultLayer,
           FSUtil.defaultLayer,
-          Global.defaultLayer,
         ),
       ),
     ),

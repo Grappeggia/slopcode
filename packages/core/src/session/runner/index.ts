@@ -18,12 +18,27 @@ export class StepLimitExceededError extends Schema.TaggedErrorClass<StepLimitExc
   },
 ) {}
 
+export class ProviderStreamError extends Schema.TaggedErrorClass<ProviderStreamError>()(
+  "SessionRunner.ProviderStreamError",
+  {
+    message: Schema.String,
+    exhausted: Schema.Boolean,
+  },
+) {}
+
+export class RestartRequestMismatch extends Schema.TaggedErrorClass<RestartRequestMismatch>()(
+  "SessionRunner.RestartRequestMismatch",
+  { message: Schema.String },
+) {}
+
 export type RunError =
   | LLMError
   | SessionRunnerModel.Error
   | MessageDecodeError
   | ContextSnapshotDecodeError
   | StepLimitExceededError
+  | ProviderStreamError
+  | RestartRequestMismatch
   | SystemContext.InitializationBlocked
   | SessionContextEpoch.AgentReplacementBlocked
   | ToolOutputStore.Error
@@ -35,6 +50,11 @@ export interface Interface {
   readonly run: (input: {
     readonly sessionID: SessionSchema.ID
     readonly force?: boolean
+    readonly recovery?: {
+      readonly requestAttempt: number
+      readonly providerAttempt: number
+      readonly fingerprint: string
+    }
   }) => Effect.Effect<void, RunError>
 }
 

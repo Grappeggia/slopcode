@@ -64,6 +64,52 @@ describe("ToolStream", () => {
     }),
   )
 
+  it.effect("preserves malformed JSON as a bounded typed tool-input failure", () =>
+    Effect.gen(function* () {
+      const tools = ToolStream.start(ToolStream.empty<number>(), 0, {
+        id: "call_secret",
+        name: "lookup",
+        input: '{"secret":"must-not-leak"',
+      })
+      const finished = yield* ToolStream.finish(ADAPTER, tools, 0)
+
+      expect(finished).toEqual({
+        tools: {},
+        events: [
+          { type: "tool-input-end", id: "call_secret", name: "lookup" },
+          { type: "tool-input-error", id: "call_secret", name: "lookup", reason: "invalid-json" },
+        ],
+      })
+      expect(JSON.stringify(finished.events)).not.toContain("must-not-leak")
+    }),
+  )
+
+  it.effect("parses exactly the bounded raw input cap and rejects one byte over", () =>
+    Effect.gen(function* () {
+      const prefix = '{"value":"'
+      const suffix = '"}'
+      const input = `${prefix}${"x".repeat(ToolStream.MAX_INPUT_BYTES - prefix.length - suffix.length)}${suffix}`
+      const exact = yield* ToolStream.finish(
+        ADAPTER,
+        ToolStream.start(ToolStream.empty<number>(), 0, { id: "call_exact", name: "lookup", input }),
+        0,
+      )
+      const over = yield* ToolStream.finish(
+        ADAPTER,
+        ToolStream.start(ToolStream.empty<number>(), 0, { id: "call_over", name: "lookup", input: `${input} ` }),
+        0,
+      )
+
+      expect(exact.events?.at(-1)?.type).toBe("tool-call")
+      expect(over.events?.at(-1)).toEqual({
+        type: "tool-input-error",
+        id: "call_over",
+        name: "lookup",
+        reason: "invalid-json",
+      })
+    }),
+  )
+
   it.effect("preserves providerExecuted and clears all tools", () =>
     Effect.gen(function* () {
       const first: ToolStream.State<number> = ToolStream.start(ToolStream.empty<number>(), 0, {

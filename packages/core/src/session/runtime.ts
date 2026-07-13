@@ -7,7 +7,7 @@ import { LayerNode } from "../effect/layer-node"
 import { NonNegativeInt } from "../schema"
 import { V2Schema } from "../v2-schema"
 import { SessionSchema } from "./schema"
-import { SessionTable } from "./sql"
+import { SessionExecutionStatusTable, SessionTable } from "./sql"
 
 export const Owner = Schema.Literals(["v1", "v2"])
 export type Owner = typeof Owner.Type
@@ -136,13 +136,24 @@ export const layer = Layer.effect(
             runtime_epoch: sql`${SessionTable.runtime_epoch} + 1`,
             time_updated: updated,
           })
-          .where(and(eq(SessionTable.runtime, "v2"), inArray(SessionTable.runtime_state, ["draining", "migrating"])))
+          .where(
+            and(
+              eq(SessionTable.runtime, "v2"),
+              inArray(SessionTable.runtime_state, ["draining", "migrating"]),
+              sql`NOT EXISTS (SELECT 1 FROM ${SessionExecutionStatusTable} WHERE ${SessionExecutionStatusTable.session_id} = ${SessionTable.id})`,
+            ),
+          )
           .run()
           .pipe(Effect.orDie)
         return yield* db
           .select()
           .from(SessionTable)
-          .where(and(eq(SessionTable.runtime, "v2"), eq(SessionTable.runtime_state, "paused")))
+          .where(
+            and(
+              eq(SessionTable.runtime, "v2"),
+              inArray(SessionTable.runtime_state, ["draining", "migrating", "paused"]),
+            ),
+          )
           .all()
           .pipe(
             Effect.orDie,

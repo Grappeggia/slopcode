@@ -425,16 +425,25 @@ const step = (state: ParserState, event: GeminiEvent) => {
       const id = `tool_${nextToolCallId++}`
       lifecycle = Lifecycle.stepStart(lifecycle, events)
       events.push(
-        LLMEvent.toolCall({
-          id,
-          name: part.functionCall.name,
-          input,
-          providerMetadata: part.thoughtSignature
-            ? googleMetadata({ thoughtSignature: part.thoughtSignature })
-            : undefined,
-        }),
+        ProviderShared.isRecord(input)
+          ? LLMEvent.toolCall({
+              id,
+              name: part.functionCall.name,
+              input,
+              providerMetadata: part.thoughtSignature
+                ? googleMetadata({ thoughtSignature: part.thoughtSignature })
+                : undefined,
+            })
+          : LLMEvent.toolInputError({
+              id,
+              name: part.functionCall.name,
+              reason: "invalid-json",
+              providerMetadata: part.thoughtSignature
+                ? googleMetadata({ thoughtSignature: part.thoughtSignature })
+                : undefined,
+            }),
       )
-      hasToolCalls = true
+      if (ProviderShared.isRecord(input)) hasToolCalls = true
     }
   }
 

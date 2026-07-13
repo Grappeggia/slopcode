@@ -35,6 +35,14 @@ async function startListener() {
   return Server.listen({ hostname: "127.0.0.1", port: 0 })
 }
 
+async function startInstrumentedListener(initialized: () => void) {
+  Flag.SLOPCODE_SERVER_PASSWORD = auth.password
+  Flag.SLOPCODE_SERVER_USERNAME = auth.username
+  process.env.SLOPCODE_SERVER_PASSWORD = auth.password
+  process.env.SLOPCODE_SERVER_USERNAME = auth.username
+  return Server.listen({ hostname: "127.0.0.1", port: 0, sessionGraphInitialized: initialized })
+}
+
 async function startNoAuthListener() {
   Flag.SLOPCODE_SERVER_PASSWORD = undefined
   Flag.SLOPCODE_SERVER_USERNAME = auth.username
@@ -165,6 +173,29 @@ async function openPtySocket(listener: Awaited<ReturnType<typeof startListener>>
 }
 
 describe("HttpApi Server.listen", () => {
+  test("constructs the native session graph lazily once", async () => {
+    let initialized = 0
+    const listener = await startInstrumentedListener(() => initialized++)
+    try {
+      expect(initialized).toBe(0)
+      const status = await fetch(new URL("/status", listener.url))
+      expect(status.status).toBe(200)
+      expect(initialized).toBe(0)
+      const native = await fetch(new URL("/api/session", listener.url), {
+        headers: { authorization: authorization() },
+      })
+      expect(native.status).toBe(200)
+      expect(initialized).toBe(1)
+      const reused = await fetch(new URL("/api/session", listener.url), {
+        headers: { authorization: authorization() },
+      })
+      expect(reused.status).toBe(200)
+      expect(initialized).toBe(1)
+    } finally {
+      await stop(listener, "timed out cleaning up instrumented listener")
+    }
+  })
+
   testPty("serves HTTP routes and upgrades PTY websocket through Server.listen", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
     const listener = await startListener()

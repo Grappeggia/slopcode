@@ -519,6 +519,31 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("preserves malformed recorded tool arguments without failing the stream", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        deltaChunk({
+          tool_calls: [{ index: 0, id: "call_bad", function: { name: "final_output", arguments: "{" } }],
+        }),
+        deltaChunk({}, "tool_calls"),
+      )
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          tools: [{ name: "final_output", description: "Return the final value", inputSchema: { type: "object" } }],
+          toolChoice: { type: "required" },
+        }),
+      ).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events).toContainEqual({
+        type: "tool-input-error",
+        id: "call_bad",
+        name: "final_output",
+        reason: "invalid-json",
+      })
+      expect(JSON.stringify(response.events)).not.toContain('arguments":"{"')
+    }),
+  )
+
   it.effect("parses OpenAI-compatible reasoning content deltas", () =>
     Effect.gen(function* () {
       const body = sseEvents(

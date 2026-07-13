@@ -1632,6 +1632,44 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("preserves malformed recorded function arguments without failing the stream", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        {
+          type: "response.output_item.added",
+          item: { type: "function_call", id: "item_bad", call_id: "call_bad", name: "final_output", arguments: "" },
+        },
+        { type: "response.function_call_arguments.delta", item_id: "item_bad", delta: "{" },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "item_bad",
+            call_id: "call_bad",
+            name: "final_output",
+            arguments: "{",
+          },
+        },
+        { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } },
+      )
+      const response = yield* LLMClient.generate(
+        LLM.updateRequest(request, {
+          tools: [{ name: "final_output", description: "Return the final value", inputSchema: { type: "object" } }],
+          toolChoice: { type: "required" },
+        }),
+      ).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events).toContainEqual({
+        type: "tool-input-error",
+        id: "call_bad",
+        name: "final_output",
+        reason: "invalid-json",
+        providerMetadata: { openai: { itemId: "item_bad" } },
+      })
+      expect(JSON.stringify(response.events)).not.toContain('arguments":"{"')
+    }),
+  )
+
   it.effect("assembles streamed custom tool input as raw text", () =>
     Effect.gen(function* () {
       const body = sseEvents(

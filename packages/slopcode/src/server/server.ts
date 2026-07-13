@@ -41,6 +41,7 @@ type ListenOptions = CorsOptions & {
   hostname: string
   mdns?: boolean
   mdnsDomain?: string
+  sessionGraphInitialized?: () => void
 }
 type ListenerState = {
   scope: Scope.Scope
@@ -137,7 +138,7 @@ function listenerLayer(opts: ListenOptions, port: number, target: { url?: URL },
     () => target.url ?? makeURL(opts.hostname, port),
     (request, init) => fetch(authenticated(request, init, credentials)),
   )
-  return HttpRouter.serve(HttpApiApp.createRoutes(opts, plugins.layer), {
+  return HttpRouter.serve(HttpApiApp.createRoutes(opts, plugins.layer, undefined, opts.sessionGraphInitialized), {
     middleware: disposeMiddleware,
     disableLogger: true,
     disableListenLog: true,

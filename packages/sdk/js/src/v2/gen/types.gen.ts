@@ -36,6 +36,19 @@ export type Event =
   | EventSessionNextStepStarted
   | EventSessionNextStepEnded
   | EventSessionNextStepFailed
+  | EventSessionNextStructuredDispatched
+  | EventSessionNextStructuredCandidate
+  | EventSessionNextStructuredRetry
+  | EventSessionNextStructuredResult
+  | EventSessionNextStructuredFailed
+  | EventSessionNextExecutionStarted
+  | EventSessionNextExecutionProviderDispatched
+  | EventSessionNextExecutionProviderCompleted
+  | EventSessionNextExecutionContinuationReady
+  | EventSessionNextExecutionRetryScheduled
+  | EventSessionNextExecutionSucceeded
+  | EventSessionNextExecutionInterrupted
+  | EventSessionNextExecutionFailed
   | EventSessionNextTextStarted
   | EventSessionNextTextDelta
   | EventSessionNextTextEnded
@@ -76,6 +89,9 @@ export type Event =
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
   | EventTodoUpdated
+  | EventMcpStatusChanged
+  | EventMcpDiscoveryFailed
+  | EventMcpAuthChanged
   | EventMessagePartDelta
   | EventSessionDiff
   | EventSessionError
@@ -659,6 +675,17 @@ export type Prompt = {
   text: string
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
+  format?:
+    | {
+        type: "text"
+      }
+    | {
+        type: "json_schema"
+        schema: {
+          [key: string]: unknown
+        }
+        retry_count: number
+      }
 }
 
 export type Pty = {
@@ -1040,6 +1067,7 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           assistantMessageID: string
+          rootUserID?: string
           agent: string
           model: {
             id: string
@@ -1078,6 +1106,242 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           error: SessionErrorUnknown
+        }
+      }
+    | {
+        id: string
+        type: "session.next.structured.dispatched"
+        properties: {
+          timestamp: number
+          sessionID: string
+          rootUserID: string
+          attempt: number
+          fingerprint: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.structured.candidate"
+        properties: {
+          timestamp: number
+          sessionID: string
+          rootUserID: string
+          assistantMessageID: string
+          attempt: number
+          fingerprint: string
+          value?: unknown
+          invalid: boolean
+          invalidReason?: "invalid-json" | "value-limit"
+        }
+      }
+    | {
+        id: string
+        type: "session.next.structured.retry"
+        properties: {
+          timestamp: number
+          sessionID: string
+          rootUserID: string
+          assistantMessageID: string
+          attempt: number
+          remaining: number
+          reason: "invalid-json" | "schema" | "value-limit" | "stale" | "missing-final" | "interrupted"
+          message: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.structured.result"
+        properties: {
+          timestamp: number
+          sessionID: string
+          rootUserID: string
+          assistantMessageID: string
+          value: unknown
+          attempts: number
+          retryCount: number
+        }
+      }
+    | {
+        id: string
+        type: "session.next.structured.failed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          rootUserID: string
+          assistantMessageID: string
+          reason: "invalid-json" | "schema" | "value-limit" | "stale" | "missing-final" | "interrupted"
+          attempts: number
+          retryCount: number
+          exhausted: boolean
+          message: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution.started"
+        properties: {
+          timestamp: number
+          sessionID: string
+          owner: "v2"
+          epoch: number
+          activityID: string
+          rootID: string
+          activity: "prompt" | "shell" | "compaction" | "task"
+          phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+          requestAttempt?: number
+          providerAttempt?: number
+          structuredAttempt?: number
+          fingerprint?: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution.provider.dispatched"
+        properties: {
+          timestamp: number
+          sessionID: string
+          owner: "v2"
+          epoch: number
+          activityID: string
+          rootID: string
+          activity: "prompt" | "shell" | "compaction" | "task"
+          phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+          requestAttempt: number
+          providerAttempt: number
+          structuredAttempt?: number
+          fingerprint: string
+          recovery: "retry-provider" | "continue-provider" | "interrupt"
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution.provider.completed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          owner: "v2"
+          epoch: number
+          activityID: string
+          rootID: string
+          activity: "prompt" | "shell" | "compaction" | "task"
+          phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+          requestAttempt: number
+          providerAttempt: number
+          structuredAttempt?: number
+          fingerprint: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution.continuation.ready"
+        properties: {
+          timestamp: number
+          sessionID: string
+          owner: "v2"
+          epoch: number
+          activityID: string
+          rootID: string
+          activity: "prompt" | "shell" | "compaction" | "task"
+          phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+          requestAttempt: number
+          providerAttempt: number
+          structuredAttempt?: number
+          fingerprint: string
+          recovery: "continue-provider"
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution.retry.scheduled"
+        properties: {
+          timestamp: number
+          sessionID: string
+          owner: "v2"
+          epoch: number
+          activityID: string
+          rootID: string
+          activity: "prompt" | "shell" | "compaction" | "task"
+          phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+          requestAttempt: number
+          providerAttempt?: number
+          structuredAttempt?: number
+          fingerprint: string
+          attempt: number
+          maxAttempts: number
+          nextAt: number
+          code: "rate-limit" | "server" | "explicit" | "dispatch-uncertain"
+          action: "retry-provider"
+          message: string
+          recovery: "retry-provider" | "interrupt"
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution.succeeded"
+        properties: {
+          timestamp: number
+          sessionID: string
+          owner: "v2"
+          epoch: number
+          activityID: string
+          rootID: string
+          activity: "prompt" | "shell" | "compaction" | "task"
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution.interrupted"
+        properties: {
+          timestamp: number
+          sessionID: string
+          owner: "v2"
+          epoch: number
+          activityID: string
+          rootID: string
+          activity: "prompt" | "shell" | "compaction" | "task"
+          phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+          requestAttempt?: number
+          providerAttempt?: number
+          structuredAttempt?: number
+          fingerprint?: string
+          code:
+            | "interrupted"
+            | "restart"
+            | "runtime-replaced"
+            | "provider-nonretryable"
+            | "provider-exhausted"
+            | "runner-failure"
+            | "step-limit"
+          message: string
+          resultingEpoch: number
+        }
+      }
+    | {
+        id: string
+        type: "session.next.execution.failed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          owner: "v2"
+          epoch: number
+          activityID: string
+          rootID: string
+          activity: "prompt" | "shell" | "compaction" | "task"
+          phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+          requestAttempt?: number
+          providerAttempt?: number
+          structuredAttempt?: number
+          fingerprint?: string
+          code:
+            | "interrupted"
+            | "restart"
+            | "runtime-replaced"
+            | "provider-nonretryable"
+            | "provider-exhausted"
+            | "runner-failure"
+            | "step-limit"
+          message: string
+          resultingEpoch: number
         }
       }
     | {
@@ -1564,6 +1828,75 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "mcp.status.changed"
+        properties: {
+          server: string
+          status:
+            | {
+                status: "connecting"
+              }
+            | {
+                status: "disabled"
+              }
+            | {
+                status: "disconnected"
+              }
+            | {
+                status: "connected"
+                transport: "local" | "remote" | "sse"
+              }
+            | {
+                status: "failed"
+                error: string
+              }
+        }
+      }
+    | {
+        id: string
+        type: "mcp.discovery.failed"
+        properties: {
+          server: string
+          message: string
+        }
+      }
+    | {
+        id: string
+        type: "mcp.auth.changed"
+        properties: {
+          server: string
+          status:
+            | {
+                status: "connected"
+              }
+            | {
+                status: "auth-required"
+              }
+            | {
+                status: "not-applicable"
+              }
+            | {
+                status: "authorizing"
+                attempts: Array<{
+                  attemptID: string
+                  mode: "auto" | "manual"
+                  created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                  expires: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                }>
+              }
+            | {
+                status: "failed"
+                code:
+                  | "attempt-expired"
+                  | "provider-error"
+                  | "callback-unavailable"
+                  | "indeterminate-exchange"
+                  | "discovery"
+                  | "exchange"
+              }
+        }
+      }
+    | {
+        id: string
         type: "message.part.delta"
         properties: {
           sessionID: string
@@ -1924,6 +2257,19 @@ export type GlobalEvent = {
     | SyncEventSessionNextStepStarted
     | SyncEventSessionNextStepEnded
     | SyncEventSessionNextStepFailed
+    | SyncEventSessionNextStructuredDispatched
+    | SyncEventSessionNextStructuredCandidate
+    | SyncEventSessionNextStructuredRetry
+    | SyncEventSessionNextStructuredResult
+    | SyncEventSessionNextStructuredFailed
+    | SyncEventSessionNextExecutionStarted
+    | SyncEventSessionNextExecutionProviderDispatched
+    | SyncEventSessionNextExecutionProviderCompleted
+    | SyncEventSessionNextExecutionContinuationReady
+    | SyncEventSessionNextExecutionRetryScheduled
+    | SyncEventSessionNextExecutionSucceeded
+    | SyncEventSessionNextExecutionInterrupted
+    | SyncEventSessionNextExecutionFailed
     | SyncEventSessionNextTextStarted
     | SyncEventSessionNextTextEnded
     | SyncEventSessionNextReasoningStarted
@@ -3804,6 +4150,7 @@ export type SyncEventSessionNextStepStarted = {
       timestamp: number
       sessionID: string
       assistantMessageID: string
+      rootUserID?: string
       agent: string
       model: {
         id: string
@@ -3856,6 +4203,333 @@ export type SyncEventSessionNextStepFailed = {
       sessionID: string
       assistantMessageID: string
       error: SessionErrorUnknown
+    }
+  }
+}
+
+export type SyncEventSessionNextStructuredDispatched = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.structured.dispatched.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      rootUserID: string
+      attempt: number
+      fingerprint: string
+    }
+  }
+}
+
+export type SyncEventSessionNextStructuredCandidate = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.structured.candidate.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      rootUserID: string
+      assistantMessageID: string
+      attempt: number
+      fingerprint: string
+      value?: unknown
+      invalid: boolean
+      invalidReason?: "invalid-json" | "value-limit"
+    }
+  }
+}
+
+export type SyncEventSessionNextStructuredRetry = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.structured.retry.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      rootUserID: string
+      assistantMessageID: string
+      attempt: number
+      remaining: number
+      reason: "invalid-json" | "schema" | "value-limit" | "stale" | "missing-final" | "interrupted"
+      message: string
+    }
+  }
+}
+
+export type SyncEventSessionNextStructuredResult = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.structured.result.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      rootUserID: string
+      assistantMessageID: string
+      value: unknown
+      attempts: number
+      retryCount: number
+    }
+  }
+}
+
+export type SyncEventSessionNextStructuredFailed = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.structured.failed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      rootUserID: string
+      assistantMessageID: string
+      reason: "invalid-json" | "schema" | "value-limit" | "stale" | "missing-final" | "interrupted"
+      attempts: number
+      retryCount: number
+      exhausted: boolean
+      message: string
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution.started.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      owner: "v2"
+      epoch: number
+      activityID: string
+      rootID: string
+      activity: "prompt" | "shell" | "compaction" | "task"
+      phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+      requestAttempt?: number
+      providerAttempt?: number
+      structuredAttempt?: number
+      fingerprint?: string
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionProviderDispatched = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution.provider.dispatched.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      owner: "v2"
+      epoch: number
+      activityID: string
+      rootID: string
+      activity: "prompt" | "shell" | "compaction" | "task"
+      phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+      requestAttempt: number
+      providerAttempt: number
+      structuredAttempt?: number
+      fingerprint: string
+      recovery: "retry-provider" | "continue-provider" | "interrupt"
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionProviderCompleted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution.provider.completed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      owner: "v2"
+      epoch: number
+      activityID: string
+      rootID: string
+      activity: "prompt" | "shell" | "compaction" | "task"
+      phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+      requestAttempt: number
+      providerAttempt: number
+      structuredAttempt?: number
+      fingerprint: string
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionContinuationReady = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution.continuation.ready.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      owner: "v2"
+      epoch: number
+      activityID: string
+      rootID: string
+      activity: "prompt" | "shell" | "compaction" | "task"
+      phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+      requestAttempt: number
+      providerAttempt: number
+      structuredAttempt?: number
+      fingerprint: string
+      recovery: "continue-provider"
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionRetryScheduled = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution.retry.scheduled.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      owner: "v2"
+      epoch: number
+      activityID: string
+      rootID: string
+      activity: "prompt" | "shell" | "compaction" | "task"
+      phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+      requestAttempt: number
+      providerAttempt?: number
+      structuredAttempt?: number
+      fingerprint: string
+      attempt: number
+      maxAttempts: number
+      nextAt: number
+      code: "rate-limit" | "server" | "explicit" | "dispatch-uncertain"
+      action: "retry-provider"
+      message: string
+      recovery: "retry-provider" | "interrupt"
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionSucceeded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution.succeeded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      owner: "v2"
+      epoch: number
+      activityID: string
+      rootID: string
+      activity: "prompt" | "shell" | "compaction" | "task"
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionInterrupted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution.interrupted.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      owner: "v2"
+      epoch: number
+      activityID: string
+      rootID: string
+      activity: "prompt" | "shell" | "compaction" | "task"
+      phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+      requestAttempt?: number
+      providerAttempt?: number
+      structuredAttempt?: number
+      fingerprint?: string
+      code:
+        | "interrupted"
+        | "restart"
+        | "runtime-replaced"
+        | "provider-nonretryable"
+        | "provider-exhausted"
+        | "runner-failure"
+        | "step-limit"
+      message: string
+      resultingEpoch: number
+    }
+  }
+}
+
+export type SyncEventSessionNextExecutionFailed = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.execution.failed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      owner: "v2"
+      epoch: number
+      activityID: string
+      rootID: string
+      activity: "prompt" | "shell" | "compaction" | "task"
+      phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+      requestAttempt?: number
+      providerAttempt?: number
+      structuredAttempt?: number
+      fingerprint?: string
+      code:
+        | "interrupted"
+        | "restart"
+        | "runtime-replaced"
+        | "provider-nonretryable"
+        | "provider-exhausted"
+        | "runner-failure"
+        | "step-limit"
+      message: string
+      resultingEpoch: number
     }
   }
 }
@@ -4511,6 +5185,17 @@ export type SessionMessageUser = {
   text: string
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
+  format?:
+    | {
+        type: "text"
+      }
+    | {
+        type: "json_schema"
+        schema: {
+          [key: string]: unknown
+        }
+        retry_count: number
+      }
   type: "user"
 }
 
@@ -4666,6 +5351,7 @@ export type SessionMessageAssistant = {
     completed?: number
   }
   type: "assistant"
+  rootUserID?: string
   agent: string
   model: {
     id: string
@@ -4689,6 +5375,20 @@ export type SessionMessageAssistant = {
     }
   }
   error?: SessionErrorUnknown
+  structured?: unknown
+  structuredError?: {
+    reason: "invalid-json" | "schema" | "value-limit" | "stale" | "missing-final" | "interrupted"
+    attempts: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    retryCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    exhausted: boolean
+    message: string
+  }
+  structuredRetry?: {
+    attempt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    remaining: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    reason: "invalid-json" | "schema" | "value-limit" | "stale" | "missing-final" | "interrupted"
+    message: string
+  }
 }
 
 export type SessionMessageCompaction = {
@@ -5341,6 +6041,7 @@ export type EventSessionNextStepStarted = {
     timestamp: number
     sessionID: string
     assistantMessageID: string
+    rootUserID?: string
     agent: string
     model: {
       id: string
@@ -5381,6 +6082,255 @@ export type EventSessionNextStepFailed = {
     sessionID: string
     assistantMessageID: string
     error: SessionErrorUnknown
+  }
+}
+
+export type EventSessionNextStructuredDispatched = {
+  id: string
+  type: "session.next.structured.dispatched"
+  properties: {
+    timestamp: number
+    sessionID: string
+    rootUserID: string
+    attempt: number
+    fingerprint: string
+  }
+}
+
+export type EventSessionNextStructuredCandidate = {
+  id: string
+  type: "session.next.structured.candidate"
+  properties: {
+    timestamp: number
+    sessionID: string
+    rootUserID: string
+    assistantMessageID: string
+    attempt: number
+    fingerprint: string
+    value?: unknown
+    invalid: boolean
+    invalidReason?: "invalid-json" | "value-limit"
+  }
+}
+
+export type EventSessionNextStructuredRetry = {
+  id: string
+  type: "session.next.structured.retry"
+  properties: {
+    timestamp: number
+    sessionID: string
+    rootUserID: string
+    assistantMessageID: string
+    attempt: number
+    remaining: number
+    reason: "invalid-json" | "schema" | "value-limit" | "stale" | "missing-final" | "interrupted"
+    message: string
+  }
+}
+
+export type EventSessionNextStructuredResult = {
+  id: string
+  type: "session.next.structured.result"
+  properties: {
+    timestamp: number
+    sessionID: string
+    rootUserID: string
+    assistantMessageID: string
+    value: unknown
+    attempts: number
+    retryCount: number
+  }
+}
+
+export type EventSessionNextStructuredFailed = {
+  id: string
+  type: "session.next.structured.failed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    rootUserID: string
+    assistantMessageID: string
+    reason: "invalid-json" | "schema" | "value-limit" | "stale" | "missing-final" | "interrupted"
+    attempts: number
+    retryCount: number
+    exhausted: boolean
+    message: string
+  }
+}
+
+export type EventSessionNextExecutionStarted = {
+  id: string
+  type: "session.next.execution.started"
+  properties: {
+    timestamp: number
+    sessionID: string
+    owner: "v2"
+    epoch: number
+    activityID: string
+    rootID: string
+    activity: "prompt" | "shell" | "compaction" | "task"
+    phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+    requestAttempt?: number
+    providerAttempt?: number
+    structuredAttempt?: number
+    fingerprint?: string
+  }
+}
+
+export type EventSessionNextExecutionProviderDispatched = {
+  id: string
+  type: "session.next.execution.provider.dispatched"
+  properties: {
+    timestamp: number
+    sessionID: string
+    owner: "v2"
+    epoch: number
+    activityID: string
+    rootID: string
+    activity: "prompt" | "shell" | "compaction" | "task"
+    phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+    requestAttempt: number
+    providerAttempt: number
+    structuredAttempt?: number
+    fingerprint: string
+    recovery: "retry-provider" | "continue-provider" | "interrupt"
+  }
+}
+
+export type EventSessionNextExecutionProviderCompleted = {
+  id: string
+  type: "session.next.execution.provider.completed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    owner: "v2"
+    epoch: number
+    activityID: string
+    rootID: string
+    activity: "prompt" | "shell" | "compaction" | "task"
+    phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+    requestAttempt: number
+    providerAttempt: number
+    structuredAttempt?: number
+    fingerprint: string
+  }
+}
+
+export type EventSessionNextExecutionContinuationReady = {
+  id: string
+  type: "session.next.execution.continuation.ready"
+  properties: {
+    timestamp: number
+    sessionID: string
+    owner: "v2"
+    epoch: number
+    activityID: string
+    rootID: string
+    activity: "prompt" | "shell" | "compaction" | "task"
+    phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+    requestAttempt: number
+    providerAttempt: number
+    structuredAttempt?: number
+    fingerprint: string
+    recovery: "continue-provider"
+  }
+}
+
+export type EventSessionNextExecutionRetryScheduled = {
+  id: string
+  type: "session.next.execution.retry.scheduled"
+  properties: {
+    timestamp: number
+    sessionID: string
+    owner: "v2"
+    epoch: number
+    activityID: string
+    rootID: string
+    activity: "prompt" | "shell" | "compaction" | "task"
+    phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+    requestAttempt: number
+    providerAttempt?: number
+    structuredAttempt?: number
+    fingerprint: string
+    attempt: number
+    maxAttempts: number
+    nextAt: number
+    code: "rate-limit" | "server" | "explicit" | "dispatch-uncertain"
+    action: "retry-provider"
+    message: string
+    recovery: "retry-provider" | "interrupt"
+  }
+}
+
+export type EventSessionNextExecutionSucceeded = {
+  id: string
+  type: "session.next.execution.succeeded"
+  properties: {
+    timestamp: number
+    sessionID: string
+    owner: "v2"
+    epoch: number
+    activityID: string
+    rootID: string
+    activity: "prompt" | "shell" | "compaction" | "task"
+  }
+}
+
+export type EventSessionNextExecutionInterrupted = {
+  id: string
+  type: "session.next.execution.interrupted"
+  properties: {
+    timestamp: number
+    sessionID: string
+    owner: "v2"
+    epoch: number
+    activityID: string
+    rootID: string
+    activity: "prompt" | "shell" | "compaction" | "task"
+    phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+    requestAttempt?: number
+    providerAttempt?: number
+    structuredAttempt?: number
+    fingerprint?: string
+    code:
+      | "interrupted"
+      | "restart"
+      | "runtime-replaced"
+      | "provider-nonretryable"
+      | "provider-exhausted"
+      | "runner-failure"
+      | "step-limit"
+    message: string
+    resultingEpoch: number
+  }
+}
+
+export type EventSessionNextExecutionFailed = {
+  id: string
+  type: "session.next.execution.failed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    owner: "v2"
+    epoch: number
+    activityID: string
+    rootID: string
+    activity: "prompt" | "shell" | "compaction" | "task"
+    phase: "preparing" | "provider" | "tool" | "shell" | "compaction" | "task" | "settling"
+    requestAttempt?: number
+    providerAttempt?: number
+    structuredAttempt?: number
+    fingerprint?: string
+    code:
+      | "interrupted"
+      | "restart"
+      | "runtime-replaced"
+      | "provider-nonretryable"
+      | "provider-exhausted"
+      | "runner-failure"
+      | "step-limit"
+    message: string
+    resultingEpoch: number
   }
 }
 
@@ -5903,6 +6853,78 @@ export type EventTodoUpdated = {
   properties: {
     sessionID: string
     todos: Array<Todo>
+  }
+}
+
+export type EventMcpStatusChanged = {
+  id: string
+  type: "mcp.status.changed"
+  properties: {
+    server: string
+    status:
+      | {
+          status: "connecting"
+        }
+      | {
+          status: "disabled"
+        }
+      | {
+          status: "disconnected"
+        }
+      | {
+          status: "connected"
+          transport: "local" | "remote" | "sse"
+        }
+      | {
+          status: "failed"
+          error: string
+        }
+  }
+}
+
+export type EventMcpDiscoveryFailed = {
+  id: string
+  type: "mcp.discovery.failed"
+  properties: {
+    server: string
+    message: string
+  }
+}
+
+export type EventMcpAuthChanged = {
+  id: string
+  type: "mcp.auth.changed"
+  properties: {
+    server: string
+    status:
+      | {
+          status: "connected"
+        }
+      | {
+          status: "auth-required"
+        }
+      | {
+          status: "not-applicable"
+        }
+      | {
+          status: "authorizing"
+          attempts: Array<{
+            attemptID: string
+            mode: "auto" | "manual"
+            created: number | "NaN" | "Infinity" | "-Infinity"
+            expires: number | "NaN" | "Infinity" | "-Infinity"
+          }>
+        }
+      | {
+          status: "failed"
+          code:
+            | "attempt-expired"
+            | "provider-error"
+            | "callback-unavailable"
+            | "indeterminate-exchange"
+            | "discovery"
+            | "exchange"
+        }
   }
 }
 

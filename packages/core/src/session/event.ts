@@ -264,6 +264,7 @@ export namespace Step {
     schema: {
       ...Base,
       assistantMessageID: SessionMessageID.ID,
+      rootUserID: SessionMessageID.ID.pipe(Schema.optional),
       agent: Schema.String,
       model: ModelV2.Ref,
       snapshot: Schema.String.pipe(Schema.optional),
@@ -301,6 +302,209 @@ export namespace Step {
       assistantMessageID: SessionMessageID.ID,
       error: UnknownError,
     },
+  })
+  export type Failed = typeof Failed.Type
+}
+
+export namespace Structured {
+  export const FailureReason = Schema.Literals([
+    "invalid-json",
+    "schema",
+    "value-limit",
+    "stale",
+    "missing-final",
+    "interrupted",
+  ])
+
+  export const Dispatched = EventV2.define({
+    type: "session.next.structured.dispatched",
+    ...options,
+    schema: {
+      ...Base,
+      rootUserID: SessionMessageID.ID,
+      attempt: NonNegativeInt,
+      fingerprint: Schema.String,
+    },
+  })
+
+  export const Candidate = EventV2.define({
+    type: "session.next.structured.candidate",
+    ...options,
+    schema: {
+      ...Base,
+      rootUserID: SessionMessageID.ID,
+      assistantMessageID: SessionMessageID.ID,
+      attempt: NonNegativeInt,
+      fingerprint: Schema.String,
+      value: Schema.Unknown.pipe(Schema.optional),
+      invalid: Schema.Boolean,
+      invalidReason: Schema.Literals(["invalid-json", "value-limit"]).pipe(Schema.optional),
+    },
+  })
+
+  export const Retry = EventV2.define({
+    type: "session.next.structured.retry",
+    ...options,
+    schema: {
+      ...Base,
+      rootUserID: SessionMessageID.ID,
+      assistantMessageID: SessionMessageID.ID,
+      attempt: NonNegativeInt,
+      remaining: NonNegativeInt,
+      reason: FailureReason,
+      message: Schema.String,
+    },
+  })
+
+  export const Result = EventV2.define({
+    type: "session.next.structured.result",
+    ...options,
+    schema: {
+      ...Base,
+      rootUserID: SessionMessageID.ID,
+      assistantMessageID: SessionMessageID.ID,
+      value: Schema.Unknown,
+      attempts: NonNegativeInt,
+      retryCount: NonNegativeInt,
+    },
+  })
+
+  export const Failed = EventV2.define({
+    type: "session.next.structured.failed",
+    ...options,
+    schema: {
+      ...Base,
+      rootUserID: SessionMessageID.ID,
+      assistantMessageID: SessionMessageID.ID,
+      reason: FailureReason,
+      attempts: NonNegativeInt,
+      retryCount: NonNegativeInt,
+      exhausted: Schema.Boolean,
+      message: Schema.String,
+    },
+  })
+}
+
+export namespace Execution {
+  export const Message = Schema.String.check(
+    Schema.makeFilter((value) =>
+      new TextEncoder().encode(value).byteLength <= 512 ? undefined : "Expected at most 512 UTF-8 bytes",
+    ),
+  )
+  const Fingerprint = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
+  export const Activity = Schema.Literals(["prompt", "shell", "compaction", "task"])
+  export const Phase = Schema.Literals(["preparing", "provider", "tool", "shell", "compaction", "task", "settling"])
+  export const TerminalCode = Schema.Literals([
+    "interrupted",
+    "restart",
+    "runtime-replaced",
+    "provider-nonretryable",
+    "provider-exhausted",
+    "runner-failure",
+    "step-limit",
+  ])
+  export const RetryCode = Schema.Literals(["rate-limit", "server", "explicit", "dispatch-uncertain"])
+  export type RetryCode = typeof RetryCode.Type
+  export const RetryAction = Schema.Literal("retry-provider")
+  export type RetryAction = typeof RetryAction.Type
+  const Identity = {
+    ...Base,
+    owner: Schema.Literal("v2"),
+    epoch: NonNegativeInt,
+    activityID: SessionMessageID.ID,
+    rootID: SessionMessageID.ID,
+    activity: Activity,
+  }
+  const Active = {
+    ...Identity,
+    phase: Phase,
+    requestAttempt: NonNegativeInt.pipe(Schema.optional),
+    providerAttempt: NonNegativeInt.pipe(Schema.optional),
+    structuredAttempt: NonNegativeInt.pipe(Schema.optional),
+    fingerprint: Fingerprint.pipe(Schema.optional),
+  }
+
+  export const Started = EventV2.define({
+    type: "session.next.execution.started",
+    ...options,
+    schema: Active,
+  })
+  export type Started = typeof Started.Type
+
+  export const ProviderDispatched = EventV2.define({
+    type: "session.next.execution.provider.dispatched",
+    ...options,
+    schema: {
+      ...Active,
+      requestAttempt: NonNegativeInt,
+      providerAttempt: NonNegativeInt,
+      fingerprint: Fingerprint,
+      recovery: Schema.Literals(["retry-provider", "continue-provider", "interrupt"]),
+    },
+  })
+  export type ProviderDispatched = typeof ProviderDispatched.Type
+
+  export const ProviderCompleted = EventV2.define({
+    type: "session.next.execution.provider.completed",
+    ...options,
+    schema: { ...Active, requestAttempt: NonNegativeInt, providerAttempt: NonNegativeInt, fingerprint: Fingerprint },
+  })
+  export type ProviderCompleted = typeof ProviderCompleted.Type
+
+  export const ContinuationReady = EventV2.define({
+    type: "session.next.execution.continuation.ready",
+    ...options,
+    schema: {
+      ...Active,
+      requestAttempt: NonNegativeInt,
+      providerAttempt: NonNegativeInt,
+      fingerprint: Fingerprint,
+      recovery: Schema.Literal("continue-provider"),
+    },
+  })
+  export type ContinuationReady = typeof ContinuationReady.Type
+
+  export const RetryScheduled = EventV2.define({
+    type: "session.next.execution.retry.scheduled",
+    ...options,
+    schema: {
+      ...Active,
+      requestAttempt: NonNegativeInt,
+      attempt: NonNegativeInt,
+      maxAttempts: NonNegativeInt,
+      nextAt: NonNegativeInt,
+      code: RetryCode,
+      action: RetryAction,
+      message: Message,
+      fingerprint: Fingerprint,
+      recovery: Schema.Literals(["retry-provider", "interrupt"]),
+    },
+  })
+  export type RetryScheduled = typeof RetryScheduled.Type
+
+  export const Succeeded = EventV2.define({
+    type: "session.next.execution.succeeded",
+    ...options,
+    schema: Identity,
+  })
+  export type Succeeded = typeof Succeeded.Type
+
+  const Terminal = {
+    ...Active,
+    code: TerminalCode,
+    message: Message,
+    resultingEpoch: NonNegativeInt,
+  }
+  export const Interrupted = EventV2.define({
+    type: "session.next.execution.interrupted",
+    ...options,
+    schema: Terminal,
+  })
+  export type Interrupted = typeof Interrupted.Type
+  export const Failed = EventV2.define({
+    type: "session.next.execution.failed",
+    ...options,
+    schema: Terminal,
   })
   export type Failed = typeof Failed.Type
 }
@@ -420,8 +624,7 @@ export namespace Tool {
     export type Ended = typeof Ended.Type
   }
 
-  // Retain the V1 decoder so stored function-tool calls remain replayable.
-  export const CalledV1 = EventV2.define({
+  export const Called = EventV2.define({
     type: "session.next.tool.called",
     ...options,
     schema: {
@@ -434,8 +637,9 @@ export namespace Tool {
       }),
     },
   })
+  export const CalledV1 = Called
 
-  export const Called = EventV2.define({
+  export const CalledV2 = EventV2.define({
     type: "session.next.tool.called",
     sync: { aggregate: "sessionID", version: 2 },
     schema: {
@@ -449,7 +653,7 @@ export namespace Tool {
       }),
     },
   })
-  export type Called = typeof Called.Type
+  export type Called = typeof Called.Type | typeof CalledV2.Type
 
   /**
    * Replayable bounded running-tool state. Tools should checkpoint semantic
@@ -687,8 +891,8 @@ export namespace Compaction {
 
 const ShellEndedV1 = Shell.EndedV1.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
 const ShellEnded = Shell.Ended.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
-const ToolCalledV1 = Tool.CalledV1.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
-const ToolCalled = Tool.Called.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
+const ToolCalledV1 = Tool.Called.pipe(Schema.check(Schema.makeFilter((event) => event.version === 1)))
+const ToolCalled = Tool.CalledV2.pipe(Schema.check(Schema.makeFilter((event) => event.version === 2)))
 
 const DurableDefinitions = [
   AgentSwitched,
@@ -733,10 +937,27 @@ const DurableDefinitions = [
 ] as const
 const EphemeralDefinitions = [Text.Delta, Tool.Input.Delta, Reasoning.Delta, Compaction.Delta] as const
 
-export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" }).pipe(Schema.toTaggedUnion("type"))
+const StructuredDefinitions = [Structured.Dispatched, Structured.Retry, Structured.Result, Structured.Failed] as const
+const ExecutionDefinitions = [
+  Execution.Started,
+  Execution.ProviderDispatched,
+  Execution.ProviderCompleted,
+  Execution.ContinuationReady,
+  Execution.RetryScheduled,
+  Execution.Succeeded,
+  Execution.Interrupted,
+  Execution.Failed,
+] as const
+const DurableBase = Schema.Union(DurableDefinitions, { mode: "oneOf" })
+const StructuredDurable = Schema.Union(StructuredDefinitions, { mode: "oneOf" })
+const ExecutionDurable = Schema.Union(ExecutionDefinitions, { mode: "oneOf" })
+export const Durable = Schema.Union([DurableBase, StructuredDurable, ExecutionDurable], { mode: "oneOf" }).pipe(
+  Schema.toTaggedUnion("type"),
+)
 export type DurableEvent = typeof Durable.Type
 
-export const All = Schema.Union([Created, ...DurableDefinitions, ...EphemeralDefinitions], { mode: "oneOf" }).pipe(
+const AllBase = Schema.Union([Created, ...DurableDefinitions, ...EphemeralDefinitions], { mode: "oneOf" })
+export const All = Schema.Union([AllBase, StructuredDurable, ExecutionDurable], { mode: "oneOf" }).pipe(
   Schema.toTaggedUnion("type"),
 )
 export type Event = typeof All.Type
