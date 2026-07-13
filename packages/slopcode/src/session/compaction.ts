@@ -401,12 +401,25 @@ export const layer = Layer.effect(
           created: Date.now(),
         },
       }
-      yield* session.updateMessage(msg)
-      const processor = yield* processors.create({
-        assistantMessage: msg,
-        sessionID: input.sessionID,
-        model,
-      })
+      const processor = yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          yield* session.updateMessage(msg)
+          return yield* restore(
+            processors.create({
+              assistantMessage: msg,
+              sessionID: input.sessionID,
+              model,
+            }),
+          ).pipe(
+            Effect.onInterrupt(() =>
+              session.removeMessage({
+                sessionID: input.sessionID,
+                messageID: msg.id,
+              }),
+            ),
+          )
+        }),
+      )
       const result = yield* processor.process({
         user: userMessage,
         agent,

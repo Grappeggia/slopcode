@@ -209,11 +209,18 @@ function fake(
   } satisfies SessionProcessorModule.SessionProcessor.Handle
 }
 
-function layer(result: "continue" | "compact") {
+function layer(result: "continue" | "compact", setup?: Deferred.Deferred<void>) {
   return Layer.succeed(
     SessionProcessorModule.SessionProcessor.Service,
     SessionProcessorModule.SessionProcessor.Service.of({
-      create: Effect.fn("TestSessionProcessor.create")((input) => Effect.succeed(fake(input, result))),
+      create: Effect.fn("TestSessionProcessor.create")((input) => {
+        const handle = fake(input, result)
+        if (!setup) return Effect.succeed(handle)
+        return Effect.sync(() => Deferred.doneUnsafe(setup, Effect.void)).pipe(
+          Effect.andThen(Effect.never),
+          Effect.as(handle),
+        )
+      }),
     }),
   )
 }
@@ -257,6 +264,7 @@ const itCompaction = testEffect(compactionEnv)
 
 type CompactionProcessOptions = {
   result?: "continue" | "compact"
+  setup?: Deferred.Deferred<void>
   llm?: Layer.Layer<LLM.Service>
   plugin?: Layer.Layer<Plugin.Service>
   provider?: ReturnType<typeof ProviderTest.fake>
@@ -277,7 +285,7 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
         Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
         Layer.provide(status),
       )
-    : layer(options?.result ?? "continue")
+    : layer(options?.result ?? "continue", options?.setup)
   return Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(processor)), processor, events, status).pipe(
     Layer.provide(SessionNs.defaultLayer),
     Layer.provide((options?.provider ?? wide()).layer),
@@ -351,20 +359,6 @@ function reply(
       }),
     )
   }
-}
-
-function plugin(ready: Deferred.Deferred<void>) {
-  return Layer.mock(Plugin.Service)({
-    trigger: <Name extends string, Input, Output>(name: Name, _input: Input, output: Output) => {
-      if (name !== "experimental.session.compacting") return Effect.succeed(output)
-      return Effect.sync(() => Deferred.doneUnsafe(ready, Effect.void)).pipe(
-        Effect.andThen(Effect.never),
-        Effect.as(output),
-      )
-    },
-    list: () => Effect.succeed([]),
-    init: () => Effect.void,
-  })
 }
 
 function autocontinue(enabled: boolean) {
@@ -1257,10 +1251,10 @@ describe("session.compaction.process", () => {
   )
 
   itCompaction.instance(
-    "does not leave a summary assistant when aborted before processor setup",
+    "rolls back the summary assistant when aborted during processor setup",
     () =>
       Effect.gen(function* () {
-        const ready = yield* Deferred.make<void>()
+        const setup = yield* Deferred.make<void>()
         return yield* Effect.gen(function* () {
           const ssn = yield* SessionNs.Service
           const session = yield* ssn.create({})
@@ -1275,15 +1269,18 @@ describe("session.compaction.process", () => {
             })
             .pipe(Effect.forkChild)
 
-          yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
+          yield* Deferred.await(setup)
+          const pending = yield* ssn.messages({ sessionID: session.id })
+          expect(pending.some((msg) => msg.info.role === "assistant" && msg.info.summary)).toBe(true)
+
           yield* Fiber.interrupt(fiber)
-          const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
+          const exit = yield* Fiber.await(fiber)
           const all = yield* ssn.messages({ sessionID: session.id })
 
           expect(Exit.isFailure(exit)).toBe(true)
           if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true)
           expect(all.some((msg) => msg.info.role === "assistant" && msg.info.summary)).toBe(false)
-        }).pipe(withCompaction({ plugin: plugin(ready) }))
+        }).pipe(withCompaction({ setup }))
       }),
     { git: true },
   )
