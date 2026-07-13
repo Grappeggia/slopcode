@@ -365,8 +365,16 @@ jobs:
           test "$draft" = "true" || test "$draft" = "false"
           echo "SLOPCODE_RELEASE_DRAFT=$draft" >> "$GITHUB_ENV"
 
+      - name: Gate clean publication source
+        run: |
+          bun -e 'import { gatePublication } from "@slopcode-ai/script/release"; await gatePublication({ version: process.env.VERSION, source: process.env.SOURCE, previous: process.env.PREVIOUS || undefined, cwd: process.cwd(), remote: "origin", branch: "dev" })'
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_sha }}
+          PREVIOUS: ${{ inputs.previous_tag }}
+
       - name: Publish release
-        run: ./script/publish.ts
+        run: bun ./packages/slopcode/script/publish.ts
         env:
           SLOPCODE_PUBLISH_ONLY: true
           # Prebuilt release assets downloaded above; npm uses GitHub OIDC trusted publishing.
@@ -435,3 +443,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ needs.version.outputs.repo }}
           NPM_CONFIG_PROVENANCE: true
+
+      - name: Finalize GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          endpoint='repos/${{ needs.version.outputs.repo }}/releases/${{ needs.version.outputs.release }}'
+          draft=$(gh api "$endpoint" --jq .draft)
+          if [ "$draft" = "true" ]; then
+            gh api --method PATCH "$endpoint" -F draft=false
+          else
+            test "$draft" = "false"
+          fi

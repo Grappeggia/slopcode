@@ -957,9 +957,15 @@ describe("workflow contracts", () => {
     expect(publish.indexOf("actions/setup-node")).toBeGreaterThan(
       publish.indexOf("- name: Install verified source dependencies"),
     )
-    expect(publish.indexOf("run: ./script/publish.ts")).toBeGreaterThan(
-      publish.indexOf("- name: Install verified source dependencies"),
-    )
+    const artifact = publish.indexOf("bun ./packages/slopcode/script/artifact-manifest.ts verify")
+    const gate = publish.indexOf("- name: Gate clean publication source")
+    const publisher = publish.indexOf("run: bun ./packages/slopcode/script/publish.ts")
+    const finalize = publish.indexOf("- name: Finalize GitHub release")
+    expect(artifact).toBeGreaterThan(publish.indexOf("- name: Install verified source dependencies"))
+    expect(gate).toBeGreaterThan(artifact)
+    expect(publisher).toBeGreaterThan(gate)
+    expect(finalize).toBeGreaterThan(publisher)
+    expect(publish).not.toContain("run: ./script/publish.ts")
   })
 
   test("release npm verification loads and verifies complete provenance before returning", async () => {
