@@ -6,16 +6,21 @@ type Method = "get" | "post" | "put" | "delete" | "patch"
 type OpenApiSchema = {
   readonly $ref?: string
   readonly anyOf?: ReadonlyArray<OpenApiSchema>
+  readonly oneOf?: ReadonlyArray<OpenApiSchema>
   readonly type?: string
   readonly enum?: readonly unknown[]
   readonly properties?: Record<string, OpenApiSchema>
   readonly required?: readonly string[]
+  readonly items?: OpenApiSchema
+  readonly maxLength?: number
+  readonly maxItems?: number
 }
 type OpenApiResponse = {
   readonly description?: string
   readonly content?: Record<string, { readonly schema?: OpenApiSchema }>
 }
 type OpenApiOperation = {
+  readonly description?: string
   readonly parameters?: ReadonlyArray<{
     readonly name: string
     readonly in: string
@@ -23,7 +28,10 @@ type OpenApiOperation = {
     readonly schema?: { readonly type?: string }
   }>
   readonly responses?: Record<string, OpenApiResponse>
-  readonly requestBody?: { readonly required?: boolean }
+  readonly requestBody?: {
+    readonly required?: boolean
+    readonly content?: Record<string, { readonly schema?: OpenApiSchema }>
+  }
   readonly security?: unknown
 }
 type OpenApiPathItem = Partial<Record<Method, OpenApiOperation>>
@@ -78,6 +86,40 @@ describe("PublicApi OpenAPI v2 errors", () => {
     expect(
       spec.components.schemas.SyncEventSessionNextToolCalled?.properties?.syncEvent?.properties?.type?.enum,
     ).toEqual(["session.next.tool.called.1"])
+  })
+
+  test("documents the complete side-question SSE event union", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const operation = spec.paths["/session/{sessionID}/side-question"]?.post
+    const schema = operation?.responses?.["200"]?.content?.["text/event-stream"]?.schema
+    const union = schema?.$ref ? spec.components.schemas[componentName(schema.$ref)] : schema
+    const variants = [...(union?.anyOf ?? []), ...(union?.oneOf ?? [])].map((item) =>
+      item.$ref ? spec.components.schemas[componentName(item.$ref)] : item,
+    )
+
+    expect(operation?.description).toContain("completed turns")
+    expect(operation?.description).toContain("read")
+    expect(variants.map((item) => item?.properties?.type?.enum?.[0])).toEqual([
+      "status",
+      "read",
+      "usage",
+      "text",
+      "error",
+      "done",
+    ])
+  })
+
+  test("documents bounded side-question turns and text", () => {
+    const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
+    const body =
+      spec.paths["/session/{sessionID}/side-question"]?.post?.requestBody?.content?.["application/json"]?.schema
+    const turns = body?.properties?.turns
+    const turn = turns?.items?.$ref ? spec.components.schemas[componentName(turns.items.$ref)] : turns?.items
+
+    expect(body?.properties?.question?.maxLength).toBe(64_000)
+    expect(turns?.maxItems).toBe(32)
+    expect(turn?.properties?.question?.maxLength).toBe(64_000)
+    expect(turn?.properties?.answer?.maxLength).toBe(64_000)
   })
 
   test("documents nested legacy global sync events", () => {

@@ -5065,6 +5065,50 @@ export type ProjectDirectories = Array<{
   strategy?: string
 }>
 
+export type SessionSideQuestionTurn = {
+  question: string
+  answer: string
+}
+
+export type SessionSideQuestionEvent =
+  | {
+      type: "status"
+      status: "generating" | "reading"
+      round: number
+    }
+  | {
+      type: "read"
+      callID: string
+      path: string
+      reference?: string
+      offset: number
+      limit: number
+      lines: number
+      bytes: number
+      files: number
+    }
+  | {
+      type: "usage"
+      rounds: number
+      calls: number
+      files: number
+      lines: number
+      bytes: number
+      inputTokens: number
+      outputTokens: number
+    }
+  | {
+      type: "text"
+      text: string
+    }
+  | {
+      type: "error"
+      message: string
+    }
+  | {
+      type: "done"
+    }
+
 export type LocationInfo = {
   directory: string
   workspaceID?: string
@@ -10528,6 +10572,7 @@ export type SessionCommandResponse = SessionCommandResponses[keyof SessionComman
 export type SessionSideQuestionData = {
   body?: {
     question: string
+    turns?: Array<SessionSideQuestionTurn>
     agent: string
     model: {
       providerID: string
@@ -10560,9 +10605,9 @@ export type SessionSideQuestionError = SessionSideQuestionErrors[keyof SessionSi
 
 export type SessionSideQuestionResponses = {
   /**
-   * Success
+   * Side-question event stream
    */
-  200: string
+  200: SessionSideQuestionEvent
 }
 
 export type SessionSideQuestionResponse = SessionSideQuestionResponses[keyof SessionSideQuestionResponses]

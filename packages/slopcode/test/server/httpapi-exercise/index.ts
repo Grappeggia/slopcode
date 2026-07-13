@@ -1390,7 +1390,6 @@ const scenarios: Scenario[] = [
   http.protected
     .post("/session/{sessionID}/side-question", "session.side_question")
     .withLlm()
-    .stream()
     .seeded((ctx) =>
       Effect.gen(function* () {
         const session = yield* ctx.session({ title: "Side question session" })
@@ -1404,6 +1403,7 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
       body: {
         question: "What is the relevant context?",
+        turns: [{ question: "What are we discussing?", answer: "The relevant context." }],
         agent: "build",
         model: { providerID: "test", modelID: "test-model" },
       },
