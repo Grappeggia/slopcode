@@ -306,3 +306,71 @@ Result before production edits: `1 pass, 7 fail`. The delete test timed out beca
 
 - The full Slopcode aggregate retained one unrelated timing-sensitive HTTP shutdown failure that passes in isolation.
 - Non-Linux adapters deliberately skip post-mutation formatting until equivalent descriptor-relative staging/commit primitives exist; primitive mutation behavior remains available and tested.
+
+## Final Settlement Review
+
+This appendix supersedes every preceding platform, external-stage, delete-recovery, watcher, restart, and verification claim.
+
+Status: `DONE_WITH_CONCERNS`
+
+### Commits
+
+- Final-review base: `0b3e2b3b11`.
+- RED: `536663e781 test(core): expose H5E1 final review gaps`.
+- GREEN: `a600bb976e fix(core): close H5E1 final settlement races`.
+- Specs: `90676164fc docs: specify final H5E1 settlement contract`.
+- Report: the commit containing this appendix.
+- Pushes: none.
+
+### RED Evidence
+
+`bun test test/mutation-rereview.test.ts --timeout 30000` produced `9 pass, 5 fail`. The rollback test timed out at the absent deterministic barrier; insecure Darwin/Windows mocks still performed pathname mutation; real Prettier loaded the external malicious plugin and exited nonzero; replacement observations received before completion were dropped; and the actual watcher callback adapter did not exist.
+
+### Platform Adapters
+
+- `PlatformInterface` now exposes explicit `mutation`, `staging`, and `exchange` capabilities plus its descriptor namespace. The pathname mutation fallback was deleted.
+- Linux uses no-follow directory/file handles, `/proc/self/fd`, owner-process formatter descriptor paths, `renameat2(RENAME_EXCHANGE|RENAME_NOREPLACE)`, and `unlinkat`.
+- Darwin uses no-follow directory/file handles, `/dev/fd`, `renameatx_np(RENAME_SWAP|RENAME_EXCL)`, and `unlinkat`. Platform-path guards lock both POSIX descriptor namespaces.
+- An adapter without secure mutation capability fails every primitive with `FileMutation.UnsupportedPlatformError` before touching the pathname. Mock Darwin/Windows capability guards prove no file appears and no formatter runs.
+- Windows advertises its unavailable capabilities explicitly. There is no reviewed NT handle-relative helper in this tree, so default Windows mutation fails closed rather than preserving the former vulnerable pathname behavior. The adapter boundary permits a separately reviewed native helper, but this change does not ship one.
+- Because unsupported platforms cannot complete a primitive, `unsupported-security` was removed from formatter outcome taxonomy.
+
+### External Staging
+
+- `LocationMutation.Target` carries a Location-owned stage root only for external targets.
+- Internal files retain exclusive hidden `0600`, same-basename-derived, same-extension staging under the verified target dirfd, preserving nearest config behavior.
+- External files stage under the verified active Location root and never beside the external target. Formatter cwd, discovery, package roots, and configuration remain Location-owned.
+- Real Prettier coverage places a throwing plugin and hostile `.prettierrc` beside the external file, proves neither loads, proves the active Location `.prettierrc` applies, and verifies both roots contain no stage residue.
+
+### Delete Recovery
+
+- Delete tracks placeholder identity and its current `placeholder`, `approved`, `public`, `done`, or `conflict` role through a scoped finalizer.
+- Deterministic barriers now cover pre-exchange, post-exchange, placeholder movement, and rollback.
+- Mismatch rollback uses atomic exchange. Placeholder cleanup uses exclusive no-replace movement and identity verification.
+- If a concurrent public child blocks restoration, `FileMutation.RecoveryConflictError` surfaces the canonical recovery path. The public replacement and displaced replacement remain intact; unrelated entries are never unlinked silently.
+- Finalization unlinks only a name still matching the generated placeholder identity and restores the approved inode only while both expected identities remain present.
+
+### Watcher And Restart
+
+- Mutation ownership retains the latest in-flight native event, observed fingerprint, and publish effect rather than dropping callbacks.
+- Completion compares the retained fingerprint with the exact validated final fingerprint. Matching echoes are suppressed; genuine replacements publish immediately after the coordinator's direct event. Cancellation publishes retained genuine observations.
+- The exported callback adapter is the same implementation installed into Parcel watcher subscriptions. Its integration test invokes a replacement callback before completion and verifies deterministic direct-then-native order.
+- The runner recovery integration now rebuilds `SessionExecutionLocal` over persisted interrupted-tool events, explicitly resumes it, proves the stale tool executor is not called, and verifies durable interrupted failure context. It is no longer an unused PostMutation scope reopen.
+
+### Final Verification
+
+- Final focused H5E1 matrix: `100 pass, 0 fail`, 11 files, `299 expect()` calls.
+- New final-review contracts plus mutation events: `16 pass, 0 fail`, `56 expect()` calls.
+- Durable runner restart/no-replay integration: `1 pass, 0 fail`, `4 expect()` calls.
+- Core full: `1581 pass, 0 fail`, 164 files, `4928 expect()` calls.
+- Slopcode full: `3111 pass, 22 skip, 1 todo, 0 fail`, 248 files, 50 snapshots, `8602 expect()` calls.
+- V1 formatter/config compatibility: `105 pass, 0 fail`, 2 files, `173 expect()` calls.
+- CodeMode full: `254 pass, 0 fail`, 7 files, `744 expect()` calls.
+- Core, server, Slopcode, and CodeMode typechecks: pass.
+- Frozen install: `2372` installs checked across `2656` packages, no changes.
+- Source audits: no pathname fallback, `unsupported-security`, insecure adapter marker, direct target unlink, live-target formatter call, implicit shell, `exec`, or process-environment assignment.
+- `git diff --check`: pass.
+
+### Final Concerns
+
+- Windows now fails closed because this repository does not contain the separately reviewed NT handle-relative native helper required to preserve mutation securely. Linux is runtime-verified; Darwin is implementation- and guard-covered but was not runtime-tested on Darwin hardware in this Linux environment.
