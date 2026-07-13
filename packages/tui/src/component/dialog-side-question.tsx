@@ -1,5 +1,6 @@
 import { ScrollBoxRenderable, TextareaRenderable, TextAttributes } from "@opentui/core"
 import type { SessionSideQuestionEvent, SessionSideQuestionTurn } from "@slopcode-ai/sdk/v2"
+import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useClipboard } from "../context/clipboard"
@@ -7,6 +8,7 @@ import { useSDK } from "../context/sdk"
 import { useTheme } from "../context/theme"
 import { useBindings } from "../keymap"
 import { errorMessage } from "../util/error"
+import { density, isDense } from "../util/density"
 import { useToast } from "../ui/toast"
 
 const INACTIVITY_TIMEOUT = 30_000
@@ -25,6 +27,8 @@ export function SideQuestion(props: {
   const clipboard = useClipboard()
   const toast = useToast()
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const dense = () => isDense(density(dimensions()))
   const [store, setStore] = createStore<{
     turns: SessionSideQuestionTurn[]
     question?: string
@@ -32,6 +36,7 @@ export function SideQuestion(props: {
     error?: string
     loading: boolean
     started: boolean
+    used: number
     status?: Extract<SessionSideQuestionEvent, { type: "status" }>
     read?: Extract<SessionSideQuestionEvent, { type: "read" }>
     usage?: Extract<SessionSideQuestionEvent, { type: "usage" }>
@@ -40,6 +45,7 @@ export function SideQuestion(props: {
     answer: "",
     loading: false,
     started: false,
+    used: 0,
   })
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable>()
   let input: TextareaRenderable
@@ -47,9 +53,10 @@ export function SideQuestion(props: {
   let controller: AbortController | undefined
 
   const bottom = () => setTimeout(() => scroll?.scrollTo(scroll.scrollHeight), 0)
-  const files = () => store.usage?.files ?? store.read?.files ?? 0
+  const files = () => store.used
+  const copyable = () => (store.loading && store.answer ? store.answer : store.turns.at(-1)?.answer)
   const copy = () => {
-    const answer = store.loading && store.answer ? store.answer : store.turns.at(-1)?.answer
+    const answer = copyable()
     if (!answer || !clipboard.write) return
     void clipboard.write(answer).then(
       () => toast.show({ message: "Side answer copied to clipboard", variant: "info" }),
@@ -72,6 +79,7 @@ export function SideQuestion(props: {
       error: undefined,
       loading: true,
       started: true,
+      used: 0,
       status: undefined,
       read: undefined,
       usage: undefined,
@@ -115,10 +123,12 @@ export function SideQuestion(props: {
         if (event.type === "read") {
           activity()
           setStore("read", event)
+          setStore("used", (used) => Math.max(used, event.files))
           bottom()
         }
         if (event.type === "usage") {
           setStore("usage", event)
+          setStore("used", (used) => Math.max(used, event.files))
           bottom()
         }
         if (event.type === "text") {
@@ -142,7 +152,7 @@ export function SideQuestion(props: {
             return
           }
           setStore("turns", (items) => [...items, { question, answer }])
-          setStore({ question: undefined, answer: "", status: undefined, read: undefined, usage: undefined })
+          setStore({ question: undefined, answer: "", status: undefined, read: undefined, usage: undefined, used: 0 })
           input.setText("")
           setTimeout(() => {
             if (props.focused === false || input.isDestroyed) return
@@ -176,8 +186,8 @@ export function SideQuestion(props: {
     ].filter(
       (binding) =>
         binding.key === "escape" ||
-        (binding.key === "ctrl+c" && Boolean(store.answer || store.turns.length)) ||
-        store.loading,
+        ((binding.key === "up" || binding.key === "down") && store.started) ||
+        (binding.key === "ctrl+c" && Boolean(copyable())),
     ),
   }))
 
@@ -263,7 +273,7 @@ export function SideQuestion(props: {
             {(read) => (
               <text fg={theme.textMuted} wrapMode="word">
                 read {read().reference ? `${read().reference}:${read().path}` : read().path} at {read().offset} |{" "}
-                {read().lines} lines | {read().files}/5 files
+                {read().lines} lines | {files()}/5 files
               </text>
             )}
           </Show>
@@ -271,7 +281,7 @@ export function SideQuestion(props: {
             {(usage) => (
               <text fg={theme.textMuted} wrapMode="word">
                 {usage().rounds} {usage().rounds === 1 ? "round" : "rounds"} | {usage().calls} reads | {usage().lines}{" "}
-                lines | {usage().bytes} bytes | {usage().files}/5 files
+                lines | {usage().bytes} bytes | {files()}/5 files
               </text>
             )}
           </Show>
@@ -289,7 +299,7 @@ export function SideQuestion(props: {
           </Show>
         </scrollbox>
       </Show>
-      <box flexDirection="row" justifyContent="space-between">
+      <box flexDirection={dense() ? "column" : "row"} justifyContent="space-between">
         <text fg={theme.textMuted}>
           {store.loading
             ? `${store.status?.status ?? "generating"}${store.status ? ` round ${store.status.round}` : ""} | ${files()}/5 files`
@@ -298,7 +308,7 @@ export function SideQuestion(props: {
               : `enter ask | ${files()}/5 files`}
         </text>
         <Show when={store.started}>
-          <text fg={theme.textMuted}>ctrl+c copy | up/down scroll</text>
+          <text fg={theme.textMuted}>{copyable() ? "ctrl+c copy | " : ""}up/down scroll</text>
         </Show>
       </box>
     </box>

@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { TextareaRenderable } from "@opentui/core"
+import { ScrollBoxRenderable, TextareaRenderable, type Renderable } from "@opentui/core"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { testRender, useRenderer } from "@opentui/solid"
 import { expect, test } from "bun:test"
@@ -62,6 +62,8 @@ async function mount(input: {
   onClose?: () => void
   write?: (text: string) => Promise<void>
   inactivityTimeout?: number
+  width?: number
+  height?: number
 }) {
   const config = createTuiResolvedConfig()
   const state = path.join(input.root, "state")
@@ -109,7 +111,16 @@ async function mount(input: {
     )
   }
 
-  return testRender(() => <Harness />, { width: 90, height: 24, kittyKeyboard: true })
+  return testRender(() => <Harness />, {
+    width: input.width ?? 90,
+    height: input.height ?? 24,
+    kittyKeyboard: true,
+  })
+}
+
+function findScroll(root: Renderable): ScrollBoxRenderable | undefined {
+  if (root instanceof ScrollBoxRenderable) return root
+  return root.getChildren().map(findScroll).find(Boolean)
 }
 
 test("keeps a transcript and sends exact completed turns on follow-up", async () => {
@@ -200,6 +211,145 @@ test("keeps a transcript and sends exact completed turns on follow-up", async ()
     ])
     expect(app.captureCharFrame()).toContain("First answer")
     expect(app.captureCharFrame()).toContain("Third question?")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("scrolls an overflowing completed transcript with up and down", async () => {
+  await using tmp = await tmpdir()
+  let requests = 0
+  const app = await mount({
+    root: tmp.path,
+    fetch: (async () => {
+      requests++
+      return stream([
+        { type: "text", text: `Answer ${requests}: ${"long completed transcript content ".repeat(5)}` },
+        { type: "done" },
+      ])
+    }) as unknown as typeof globalThis.fetch,
+  })
+
+  try {
+    await wait(() => app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    for (let index = 1; index <= 6; index++) {
+      await app.mockInput.typeText(`Question ${index}?`)
+      app.mockInput.pressEnter()
+      await wait(() => requests === index)
+      await wait(() => (app.renderer.currentFocusedEditor as TextareaRenderable | undefined)?.plainText === "")
+    }
+
+    const scroll = findScroll(app.renderer.root)
+    if (!scroll) throw new Error("expected side transcript scrollbox")
+    await wait(() => scroll.scrollHeight > scroll.viewport.height && scroll.scrollTop > 0)
+    const bottom = scroll.scrollTop
+
+    app.mockInput.pressArrow("up")
+    await app.renderOnce()
+    expect(scroll.scrollTop).toBeLessThan(bottom)
+
+    app.mockInput.pressArrow("down")
+    await app.renderOnce()
+    expect(scroll.scrollTop).toBe(bottom)
+    expect(app.captureCharFrame()).toContain("up/down scroll")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("keeps the per-question file count monotonic across rounds and resets it", async () => {
+  await using tmp = await tmpdir()
+  const first = held([
+    { type: "status", status: "reading", round: 1 },
+    {
+      type: "read",
+      callID: "read_1",
+      path: "first.txt",
+      offset: 1,
+      limit: 10,
+      lines: 1,
+      bytes: 4,
+      files: 1,
+    },
+    {
+      type: "usage",
+      rounds: 1,
+      calls: 1,
+      files: 1,
+      lines: 1,
+      bytes: 4,
+      inputTokens: 5,
+      outputTokens: 1,
+    },
+    { type: "status", status: "generating", round: 2 },
+    { type: "status", status: "reading", round: 2 },
+    {
+      type: "read",
+      callID: "read_2",
+      path: "third.txt",
+      offset: 1,
+      limit: 10,
+      lines: 1,
+      bytes: 4,
+      files: 3,
+    },
+    { type: "text", text: "Round two answer" },
+  ])
+  const second = held([{ type: "status", status: "generating", round: 1 }])
+  let requests = 0
+  const app = await mount({
+    root: tmp.path,
+    question: "Read several files",
+    fetch: (async () => {
+      requests++
+      return requests === 1 ? first.response : second.response
+    }) as unknown as typeof globalThis.fetch,
+  })
+
+  try {
+    await wait(() => app.captureCharFrame().includes("third.txt"))
+    expect(app.captureCharFrame()).toContain("reading round 2 | 3/5 files")
+
+    first.finish({ type: "done" })
+    await wait(() => (app.renderer.currentFocusedEditor as TextareaRenderable | undefined)?.plainText === "")
+    await app.mockInput.typeText("Fresh question")
+    app.mockInput.pressEnter()
+    await wait(() => requests === 2)
+    await wait(() => app.captureCharFrame().includes("generating round 1 | 0/5 files"))
+    second.finish({ type: "text", text: "Fresh answer" }, { type: "done" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("keeps transcript controls usable in a compact terminal", async () => {
+  await using tmp = await tmpdir()
+  const copied: string[] = []
+  const app = await mount({
+    root: tmp.path,
+    question: "Compact question",
+    width: 48,
+    height: 16,
+    write: async (text) => void copied.push(text),
+    fetch: (async () =>
+      stream([
+        { type: "text", text: "Compact completed answer with enough content to exercise the transcript layout." },
+        { type: "done" },
+      ])) as unknown as typeof globalThis.fetch,
+  })
+
+  try {
+    await wait(() => app.captureCharFrame().includes("Compact completed answer"))
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Side question")
+    expect(frame).toContain("enter ask | 0/5 files")
+    expect(frame).toContain("ctrl+c copy")
+    expect(frame).toContain("up/down scroll")
+    expect(app.renderer.currentFocusedEditor).toBeInstanceOf(TextareaRenderable)
+
+    app.mockInput.pressKey("c", { ctrl: true })
+    await wait(() => copied.length === 1)
+    expect(copied).toEqual(["Compact completed answer with enough content to exercise the transcript layout."])
   } finally {
     app.renderer.destroy()
   }
