@@ -199,76 +199,32 @@ describe("mutation rejection re-review", () => {
     }),
   )
 
-  it.live("uses a child-accessible Darwin stage and fails safely when its parent is substituted", () =>
-    withTmp((directory) =>
-      withTmp((replacement) => {
-        const nested = path.join(directory, "nested")
-        const moved = path.join(directory, "moved")
-        const approved = target(nested, "source.darwin")
-        let stage = ""
-        let config = ""
-        const platform: FileMutation.PlatformInterface = {
-          name: "darwin",
-          capabilities: { mutation: true, staging: true, exchange: false },
-          path: (fd, child = "") => `/proc/self/fd/${fd}${child ? `/${child}` : ""}`,
-          executable: (_fd, child, parent) => path.join(parent, child),
-          unlink: (fd, child) => {
-            try {
-              return require("fs").unlinkSync(`/proc/self/fd/${fd}/${child}`) === undefined
-            } catch {
-              return false
-            }
-          },
-        }
-        const formatter: Formatter.Interface = {
-          ...none,
-          format: (value) =>
-            Effect.promise(async () => {
-              stage = value.canonical
-              const child = Bun.spawn(
-                [
-                  process.execPath,
-                  "-e",
-                  "const fs=require('fs'),path=require('path'),file=process.argv[1];process.stdout.write(fs.readFileSync(path.join(path.dirname(file),'.prettierrc'),'utf8'));fs.writeFileSync(file,'child')",
-                  stage,
-                ],
-                { stdout: "pipe", stderr: "pipe" },
-              )
-              config = await new Response(child.stdout).text()
-              if (await child.exited) throw new Error(await new Response(child.stderr).text())
-              await fs.rename(nested, moved)
-              await fs.rename(replacement, nested)
-              return fs.writeFile(stage, "must-not-mutate").then(
-                () => ({ matched: true, outcomes: [{ name: "darwin", code: "formatted" as const }] }),
-                () => ({ matched: true, outcomes: [{ name: "darwin", code: "nonzero" as const }] }),
-              )
-            }),
-        }
-        return Effect.gen(function* () {
-          yield* Effect.promise(async () => {
-            await fs.mkdir(nested)
-            await fs.writeFile(path.join(nested, ".prettierrc"), "{}")
-            await fs.writeFile(approved.canonical, "before")
-            await fs.writeFile(path.join(replacement, "external.darwin"), "external")
-          })
-          const files = yield* FileMutation.Service
-          const error = yield* (yield* PostMutation.Service)
-            .run({
-              target: approved,
-              intent: "write",
-              mutation: files.write({ target: approved, content: "primitive" }),
-            })
-            .pipe(Effect.flip)
-          expect(stage).toStartWith(nested)
-          expect(config).toBe("{}")
-          expect(error).toMatchObject({ _tag: "FileMutation.TargetChangedError" })
-          expect(yield* Effect.promise(() => fs.readFile(path.join(nested, "external.darwin"), "utf8"))).toBe(
-            "external",
-          )
-          expect(yield* Effect.promise(() => fs.readFile(path.join(moved, ".prettierrc"), "utf8"))).toBe("{}")
-        }).pipe(Effect.provide(post({ formatter, platform })))
-      }),
-    ),
+  it.live("keeps Darwin primitive mutation descriptor-safe while skipping formatter execution", () =>
+    withTmp((directory) => {
+      const approved = target(directory, "source.darwin")
+      let formats = 0
+      const platform: FileMutation.PlatformInterface = {
+        name: "darwin",
+        capabilities: { mutation: true, staging: false, exchange: false },
+        path: (fd, child = "") => `/proc/self/fd/${fd}${child ? `/${child}` : ""}`,
+      }
+      const formatter: Formatter.Interface = {
+        ...none,
+        format: () => Effect.sync(() => { formats++; return { matched: true, outcomes: [] } }),
+      }
+      return Effect.gen(function* () {
+        yield* Effect.promise(() => fs.writeFile(approved.canonical, "before"))
+        const files = yield* FileMutation.Service
+        const result = yield* (yield* PostMutation.Service).run({
+          target: approved,
+          intent: "write",
+          mutation: files.write({ target: approved, content: "primitive" }),
+        })
+        expect(result.formatters).toEqual([{ name: "security", code: "unsupported-security" }])
+        expect(formats).toBe(0)
+        expect(yield* Effect.promise(() => fs.readFile(approved.canonical, "utf8"))).toBe("primitive")
+      }).pipe(Effect.provide(post({ formatter, platform })))
+    }),
   )
 
   it.live("preserves real Prettier config discovery and explicit hidden-file formatting", () =>
@@ -600,6 +556,45 @@ describe("mutation rejection re-review", () => {
         }),
       ),
     ),
+  )
+
+  it.live("reports only observed recovery entries when a failed operation already removed its source", () =>
+    withTmp((directory) => Effect.scoped(Effect.gen(function* () {
+      if (process.platform !== "linux") return
+      const native = yield* makePlatform
+      for (const failure of ["approved-unlink", "placeholder-move", "placeholder-unlink"] as const) {
+        const approved = target(directory, `${failure}-vanished.txt`)
+        yield* Effect.promise(() => fs.writeFile(approved.canonical, "approved"))
+        let unlinks = 0
+        const platform: FileMutation.PlatformInterface = {
+          ...native,
+          unlink: (fd, child) => {
+            unlinks++
+            if (failure === "approved-unlink" && unlinks === 1) {
+              native.unlink!(fd, child)
+              native.unlink!(fd, path.basename(approved.canonical))
+              return false
+            }
+            if (failure === "placeholder-unlink" && unlinks === 2) {
+              native.unlink!(fd, child)
+              return false
+            }
+            return native.unlink!(fd, child)
+          },
+          move: (fd, left, right) => {
+            if (failure !== "placeholder-move") return native.move!(fd, left, right)
+            native.unlink!(fd, left)
+            return false
+          },
+        }
+        const error = yield* Effect.gen(function* () {
+          return yield* (yield* FileMutation.Service).remove({ target: approved })
+        }).pipe(Effect.provide(mutation(undefined, platform)), Effect.flip)
+        expect(error).toMatchObject({ _tag: "FileMutation.OperationFailureError", state: failure })
+        expect("recoveries" in error).toBe(false)
+        expect((yield* Effect.promise(() => fs.readdir(directory))).filter((name) => name.includes(failure))).toEqual([])
+      }
+    }))),
   )
 
   it.live("rejects a reconstructed target with alternate staging authority before formatting", () =>

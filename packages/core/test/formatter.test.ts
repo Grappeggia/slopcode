@@ -163,6 +163,23 @@ describe("Formatter", () => {
     }),
   )
 
+  it.effect("locks exact discovered argv for every builtin and its executable prerequisite", () =>
+    Effect.sync(() => {
+      const expected = {
+        gofmt: ["-w", "$FILE"], mix: ["format", "$FILE"], prettier: ["--write", "$FILE"],
+        oxfmt: ["$FILE"], biome: ["format", "--write", "$FILE"], zig: ["fmt", "$FILE"],
+        "clang-format": ["-i", "$FILE"], ktlint: ["-F", "$FILE"], ruff: ["format", "$FILE"],
+        air: ["format", "$FILE"], uv: ["format", "--", "$FILE"], rubocop: ["--autocorrect", "$FILE"],
+        standardrb: ["--fix", "$FILE"], htmlbeautifier: ["$FILE"], dart: ["format", "$FILE"],
+        ocamlformat: ["-i", "$FILE"], terraform: ["fmt", "$FILE"], latexindent: ["-w", "-s", "$FILE"],
+        gleam: ["format", "$FILE"], shfmt: ["-w", "$FILE"], nixfmt: ["$FILE"], rustfmt: ["$FILE"],
+        pint: ["$FILE"], ormolu: ["-i", "$FILE"], cljfmt: ["fix", "--quiet", "$FILE"], dfmt: ["-i", "$FILE"],
+      } as const
+      expect(Object.fromEntries(Formatter.resolve([document(true)]).map((item) => [item.name, Formatter.arguments(item.name)]))).toEqual(expected)
+      expect(Formatter.arguments("unknown")).toBeUndefined()
+    }),
+  )
+
   it.effect("reads the oxfmt flag at runtime with experimental inheritance", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => ({
