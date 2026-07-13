@@ -7,6 +7,7 @@ import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
 import { assertExternalDirectoryWithFsEffect, resolvePathEffect } from "./external-directory"
+import { readResource } from "./read-resource"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 
@@ -228,7 +229,7 @@ export const ReadTool = Tool.define<
       const target = yield* resolvePathEffect(fs, requested, instance.directory)
       const filepath = target.canonical
       const shown = process.platform === "win32" ? filepath : target.original
-      const title = path.relative(instance.worktree, shown)
+      const title = readResource(instance.worktree, shown)
 
       yield* assertExternalDirectoryWithFsEffect(fs, ctx, target, {
         bypass: Boolean(ctx.extra?.["bypassCwdCheck"]),
@@ -244,7 +245,7 @@ export const ReadTool = Tool.define<
 
       yield* ctx.ask({
         permission: "read",
-        patterns: [path.relative(instance.worktree, shown)],
+        patterns: [title],
         always: ["*"],
         metadata: {},
       })

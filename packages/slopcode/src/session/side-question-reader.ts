@@ -5,6 +5,7 @@ import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
+import { readResource } from "@/tool/read-resource"
 import { jsonSchema, tool, type Tool, type ToolExecutionOptions } from "ai"
 import { Context, Effect, Semaphore } from "effect"
 import * as Scope from "effect/Scope"
@@ -241,13 +242,15 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
           return yield* Effect.fail(new Error(`Read limit cannot exceed ${MAX_READ_LINES} lines`))
 
         const name = params.reference?.trim()
-        const selected = name ? yield* input.reference(name).pipe(Effect.mapError(() => new Error(UNAVAILABLE))) : root
+        const selected = name
+          ? yield* input.reference(name).pipe(Effect.mapError(() => new Error(UNAVAILABLE)))
+          : workspace
         if (!selected) return yield* Effect.fail(new Error(UNAVAILABLE))
         const lexical = path.resolve(selected)
         const requested = path.resolve(lexical, params.path)
         if (!FSUtil.contains(lexical, requested))
           return yield* Effect.fail(new Error("Read path escapes its configured root"))
-        const requestedResource = path.relative(instance.worktree, requested)
+        const requestedResource = readResource(instance.worktree, requested)
         if (
           (yield* permission.query({ permission: "read", pattern: requestedResource, ruleset: input.ruleset })) !==
           "allow"
@@ -257,7 +260,7 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
         const canonical = yield* filesystem.realPath(requested).pipe(Effect.mapError(() => new Error(UNAVAILABLE)))
         if (!FSUtil.contains(base, canonical)) return yield* Effect.fail(new Error(UNAVAILABLE))
 
-        const canonicalResource = path.relative(instance.worktree, canonical)
+        const canonicalResource = readResource(instance.worktree, canonical)
         if (
           canonicalResource !== requestedResource &&
           (yield* permission.query({ permission: "read", pattern: canonicalResource, ruleset: input.ruleset })) !==

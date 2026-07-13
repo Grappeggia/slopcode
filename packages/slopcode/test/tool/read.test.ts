@@ -9,6 +9,7 @@ import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { Global } from "@slopcode-ai/core/global"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { InstanceRef } from "@/effect/instance-ref"
 import { Ripgrep } from "@slopcode-ai/core/ripgrep"
 import { LSP } from "@/lsp/lsp"
 import { Permission } from "../../src/permission"
@@ -23,6 +24,7 @@ import type { ToolExecutionOptions } from "ai"
 import {
   disposeAllInstances,
   provideInstance,
+  requireInstance,
   testInstanceStoreLayer,
   TestInstance,
   tmpdirScoped,
@@ -343,6 +345,56 @@ describe("tool.read external_directory permission", () => {
             return { result, pending: yield* (yield* Permission.Service).list() }
           }),
         )
+        expect(checked.result).toMatch(/unavailable/i)
+        expect(checked.pending).toEqual([])
+      }
+    }),
+  )
+
+  it.live("uses the lexical normal read resource when a non-git workspace root is a symlink", () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return
+      const root = yield* tmpdirScoped()
+      const actual = path.join(root, "actual")
+      const link = path.join(root, "workspace")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(actual)
+        await fs.writeFile(path.join(actual, "secret.txt"), "secret")
+        await fs.symlink(actual, link, "dir")
+      })
+
+      const { items, next } = asks()
+      const base = yield* provideInstance(actual)(requireInstance)
+      const instance = { ...base, directory: link, worktree: "/" }
+      yield* run({ filePath: "secret.txt" }, next).pipe(Effect.provideService(InstanceRef, instance))
+      const resource = items.find((item) => item.permission === "read")?.patterns[0]
+      expect(resource).toBe(path.relative("/", path.join(link, "secret.txt")))
+      if (!resource) return yield* Effect.die("normal read did not request permission")
+
+      for (const action of ["ask", "deny"] as const) {
+        const checked = yield* Effect.gen(function* () {
+          const reader = yield* SideQuestionReader.make({
+            ruleset: [
+              { permission: "read", pattern: "*", action: "allow" },
+              { permission: "read", pattern: resource, action },
+            ],
+            reference: () => Effect.succeed(undefined),
+          })
+          if (!reader.tool.execute) return yield* Effect.die("private read tool is not executable")
+          const result = yield* Effect.promise(() =>
+            Promise.resolve(
+              reader.tool.execute!({ path: "secret.txt" }, {
+                toolCallId: `symlink_${action}`,
+                messages: [],
+                abortSignal: new AbortController().signal,
+              } as ToolExecutionOptions),
+            ).then(
+              () => "read unexpectedly succeeded",
+              (error: unknown) => (error instanceof Error ? error.message : String(error)),
+            ),
+          )
+          return { result, pending: yield* (yield* Permission.Service).list() }
+        }).pipe(Effect.provideService(InstanceRef, instance))
         expect(checked.result).toMatch(/unavailable/i)
         expect(checked.pending).toEqual([])
       }

@@ -89,7 +89,7 @@ Ask a quick question without interrupting your main session. Include the questio
 
 After an answer, use the same composer to ask follow-ups. Every question reloads the latest main-session context and adds the newest completed side turns, while the agent, model, and variant selected when you opened the panel stay pinned. The visible transcript remains complete when older or oversized context must be omitted, and the panel marks what was not carried.
 
-Requests carry up to 32 completed side turns and 64,000 characters per question or answer. Oversized current questions are rejected locally so they can be shortened and retried. The selected model's input limit is also enforced: the immediately preceding side turn, latest meaningful main-session group, and applicable compaction summary are required; older side turns and main history may be omitted, and a request fails before generation if required content or a read continuation cannot fit.
+Requests carry up to 32 completed side turns and 64,000 characters per question or answer. Carried answers are whitespace-normalized before this bound, while the visible and copyable transcript keeps the full answer. Oversized current questions are rejected locally so they can be shortened and retried. The selected model's input limit is also enforced: the immediately preceding side turn, latest meaningful main-session group, and applicable compaction summary are required; older side turns and main history may be omitted, and a request fails before generation if required content or a read continuation cannot fit.
 
 Side questions can read at most five unique, regular UTF-8 text files per question. Repeated reads of the same file count once, and the limit resets for every follow-up.
 

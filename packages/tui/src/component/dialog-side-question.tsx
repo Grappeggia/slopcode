@@ -28,7 +28,7 @@ function context(items: SessionSideQuestionTurn[]) {
   return {
     turns: selected.map((turn) => ({
       question: turn.question.slice(0, MAX_TEXT),
-      answer: turn.answer.slice(0, MAX_TEXT),
+      answer: turn.answer.trim().slice(0, MAX_TEXT),
     })),
     note: notes.length ? `Carried context limited: ${notes.join("; ")}. Full transcript remains visible.` : undefined,
   }

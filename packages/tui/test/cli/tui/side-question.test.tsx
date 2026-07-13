@@ -257,13 +257,15 @@ test("bounds an oversized completed answer in carried context without hiding the
   await using tmp = await tmpdir()
   const requests: Array<Record<string, unknown>> = []
   const answer = `start-${"x".repeat(64_000)}-visible-end`
+  const next = held([])
   const app = await mount({
     root: tmp.path,
     fetch: (async (request: RequestInfo | URL) => {
       requests.push(
         (await (request instanceof Request ? request : new Request(request)).json()) as Record<string, unknown>,
       )
-      return stream([{ type: "text", text: requests.length === 1 ? answer : "next answer" }, { type: "done" }])
+      if (requests.length === 1) return stream([{ type: "text", text: answer }, { type: "done" }])
+      return next.response
     }) as unknown as typeof globalThis.fetch,
   })
 
@@ -272,7 +274,11 @@ test("bounds an oversized completed answer in carried context without hiding the
     app.mockInput.typeText("First")
     app.mockInput.pressEnter()
     await wait(() => (app.renderer.currentFocusedEditor as TextareaRenderable | undefined)?.plainText === "")
-    await wait(() => app.captureCharFrame().includes("visible-end"))
+    const scroll = findScroll(app.renderer.root)
+    if (!scroll) throw new Error("expected side transcript scrollbox")
+    scroll.scrollTo(scroll.scrollHeight)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("visible-end")
     app.mockInput.typeText("Second")
     app.mockInput.pressEnter()
     await wait(() => requests.length === 2)
@@ -281,6 +287,50 @@ test("bounds an oversized completed answer in carried context without hiding the
     expect(turns[0]?.answer).toHaveLength(64_000)
     expect(turns[0]?.answer.startsWith("start-")).toBe(true)
     await wait(() => app.captureCharFrame().includes("oversized answer truncated"))
+    next.finish({ type: "text", text: "next answer" }, { type: "done" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("normalizes leading whitespace before bounding a carried answer", async () => {
+  await using tmp = await tmpdir()
+  const requests: Array<Record<string, unknown>> = []
+  const copied: string[] = []
+  const answer = `${" ".repeat(64_001)}visible answer`
+  const recovery = held([])
+  const app = await mount({
+    root: tmp.path,
+    write: async (text) => void copied.push(text),
+    fetch: (async (request: RequestInfo | URL) => {
+      requests.push(
+        (await (request instanceof Request ? request : new Request(request)).json()) as Record<string, unknown>,
+      )
+      if (requests.length === 1) return stream([{ type: "text", text: answer }, { type: "done" }])
+      return recovery.response
+    }) as unknown as typeof globalThis.fetch,
+  })
+
+  try {
+    await wait(() => app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    app.mockInput.typeText("First")
+    app.mockInput.pressEnter()
+    await wait(() => (app.renderer.currentFocusedEditor as TextareaRenderable | undefined)?.plainText === "", 5000)
+    app.mockInput.pressKey("c", { ctrl: true })
+    await wait(() => copied.length === 1)
+    expect(copied[0]).toBe(answer)
+
+    app.mockInput.typeText("Second")
+    app.mockInput.pressEnter()
+    await wait(() => requests.length === 2)
+    const turns = requests[1]?.turns as Array<{ question: string; answer: string }>
+    expect(turns[0]?.answer).toBe("visible answer")
+    expect(turns[0]?.answer.length).toBeLessThanOrEqual(64_000)
+    recovery.finish({ type: "text", text: "Recovered follow-up" }, { type: "done" })
+    await wait(() => (app.renderer.currentFocusedEditor as TextareaRenderable | undefined)?.plainText === "", 5000)
+    app.mockInput.pressKey("c", { ctrl: true })
+    await wait(() => copied.length === 2)
+    expect(copied[1]).toBe("Recovered follow-up")
   } finally {
     app.renderer.destroy()
   }
