@@ -47,6 +47,7 @@ const requests: LLM.StreamInput[] = []
 const hooks: string[] = []
 let respond = (_input: LLM.StreamInput): Stream.Stream<LLMEvent, unknown> => Stream.empty
 let beforeRead = (_callID: string): Effect.Effect<void> => Effect.void
+let released = (_input: { callID: string; fd: number; identity: string }): Effect.Effect<void> => Effect.void
 
 const agents = Layer.succeed(
   Agent.Service,
@@ -89,7 +90,10 @@ const instruction = Layer.mock(Instruction.Service)({
 
 const readerHooks = Layer.succeed(
   SideQuestionReader.ReaderHooks,
-  SideQuestionReader.ReaderHooks.of({ beforeRead: (callID) => beforeRead(callID) }),
+  SideQuestionReader.ReaderHooks.of({
+    beforeRead: (callID) => beforeRead(callID),
+    released: (input) => released(input),
+  }),
 )
 
 const provider = ProviderTest.fake({ model })
@@ -115,6 +119,7 @@ beforeEach(() => {
   hooks.length = 0
   respond = () => Stream.empty
   beforeRead = () => Effect.void
+  released = () => Effect.void
 })
 
 function user(sessionID: SessionID, ...texts: string[]) {
@@ -407,6 +412,11 @@ it.instance("continues private read calls transiently and reports bounded usage 
     const before = yield* sessions.get(session.id)
     const messages = yield* sessions.messages({ sessionID: session.id })
     yield* Effect.promise(() => Bun.write(path.join(before.directory, "notes.txt"), "private context"))
+    let closed = 0
+    released = () =>
+      Effect.sync(() => {
+        closed += 1
+      })
 
     respond = (input) => {
       if (requests.length > 1) {
@@ -463,6 +473,7 @@ it.instance("continues private read calls transiently and reports bounded usage 
       expect.objectContaining({ type: "usage", rounds: 2, calls: 1, files: 1, inputTokens: 12, outputTokens: 5 }),
     )
     expect(list).toContainEqual({ type: "text", text: "final side answer" })
+    expect(closed).toBe(1)
     expect(hooks.filter((name) => name.startsWith("tool."))).toEqual([])
     expect(yield* sessions.messages({ sessionID: session.id })).toEqual(messages)
     expect(yield* sessions.get(session.id)).toEqual(before)
@@ -573,6 +584,87 @@ it.instance("rejects private results paired with a different emitted input", () 
   }),
 )
 
+it.instance("rejects duplicate error tool results after a settled error", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    respond = (input) => {
+      const execute = input.tools.read?.execute
+      if (!execute) return Stream.fail(new Error("private read tool missing"))
+      return Stream.unwrap(
+        Effect.promise(async () => {
+          const failure = await execute({ path: "missing.txt" }, {
+            toolCallId: "duplicate_error",
+            messages: input.messages,
+            abortSignal: new AbortController().signal,
+          } as ToolExecutionOptions).then(
+            () => "read unexpectedly succeeded",
+            (error: unknown) => (error instanceof Error ? error.message : String(error)),
+          )
+          return Stream.fromIterable([
+            LLMEvent.toolCall({ id: "duplicate_error", name: "read", input: { path: "missing.txt" } }),
+            LLMEvent.toolError({ id: "duplicate_error", name: "read", message: failure }),
+            LLMEvent.toolResult({
+              id: "duplicate_error",
+              name: "read",
+              result: ToolResultValue.make(failure, "error"),
+            }),
+            LLMEvent.finish({ reason: "tool-calls" }),
+          ])
+        }),
+      )
+    }
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "duplicate", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(requests).toHaveLength(1)
+  }),
+)
+
+it.instance("rejects error tool results paired with a different emitted input", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    respond = (input) => {
+      const execute = input.tools.read?.execute
+      if (!execute) return Stream.fail(new Error("private read tool missing"))
+      return Stream.unwrap(
+        Effect.promise(async () => {
+          const failure = await execute({ path: "missing.txt" }, {
+            toolCallId: "mismatched_error",
+            messages: input.messages,
+            abortSignal: new AbortController().signal,
+          } as ToolExecutionOptions).then(
+            () => "read unexpectedly succeeded",
+            (error: unknown) => (error instanceof Error ? error.message : String(error)),
+          )
+          return Stream.fromIterable([
+            LLMEvent.toolCall({ id: "mismatched_error", name: "read", input: { path: "different.txt" } }),
+            LLMEvent.toolResult({
+              id: "mismatched_error",
+              name: "read",
+              result: ToolResultValue.make(failure, "error"),
+            }),
+            LLMEvent.finish({ reason: "tool-calls" }),
+          ])
+        }),
+      )
+    }
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "mismatch", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(requests).toHaveLength(1)
+  }),
+)
+
 it.instance("rejects more than the total private tool-call budget in one round", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
@@ -663,6 +755,11 @@ it.instance("interrupts an in-flight private read when the side stream is interr
     yield* Effect.promise(() => Bun.write(path.join(session.directory, "slow.txt"), "slow"))
     const started = yield* Deferred.make<void>()
     const stopped = yield* Deferred.make<void>()
+    let closed = false
+    released = () =>
+      Effect.sync(() => {
+        closed = true
+      })
     beforeRead = () =>
       Deferred.succeed(started, undefined).pipe(
         Effect.andThen(Effect.never),
@@ -700,5 +797,6 @@ it.instance("interrupts an in-flight private read when the side stream is interr
     yield* Fiber.interrupt(fiber)
     yield* Deferred.await(stopped)
     expect(requests).toHaveLength(1)
+    expect(closed).toBe(true)
   }),
 )

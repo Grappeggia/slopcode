@@ -1,7 +1,9 @@
 import { describe, expect } from "bun:test"
+import { descriptorPath } from "@slopcode-ai/core/file-mutation-platform"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import type { PermissionV1 } from "@slopcode-ai/core/v1/permission"
-import { Deferred, Effect, Layer } from "effect"
+import { Deferred, Effect, Exit, Layer } from "effect"
+import * as Scope from "effect/Scope"
 import fs from "fs/promises"
 import path from "path"
 import type { ToolExecutionOptions } from "ai"
@@ -205,6 +207,49 @@ describe("SideQuestionReader", () => {
       yield* Effect.promise(() => execute(reader, { path: "alias.txt" }, "alias"))
 
       expect(reader.usage().files).toBe(1)
+    }),
+  )
+
+  it.instance("pins verified identity descriptors until the request scope closes", () =>
+    Effect.gen(function* () {
+      if (process.platform !== "linux" && process.platform !== "darwin") return
+      const fixture = yield* TestInstance
+      const target = path.join(fixture.directory, "pinned.txt")
+      yield* Effect.promise(() => fs.writeFile(target, "pinned content"))
+      const scope = yield* Scope.make()
+      let descriptor: string | undefined
+      let identity: string | undefined
+      let releases = 0
+      const reader = yield* SideQuestionReader.make({
+        ruleset: allow,
+        reference: () => Effect.succeed(undefined),
+        hooks: {
+          beforeRead: () => Effect.void,
+          pinned: (input) =>
+            Effect.sync(() => {
+              descriptor = descriptorPath(process.platform as "linux" | "darwin", input.fd)
+              identity = input.identity
+            }),
+          released: () =>
+            Effect.sync(() => {
+              releases += 1
+            }),
+        },
+      }).pipe(Effect.provideService(Scope.Scope, scope))
+
+      yield* Effect.promise(() => execute(reader, { path: "pinned.txt" }, "pinned"))
+      expect(descriptor).toBeString()
+      expect(identity).toBeString()
+      if (!descriptor || !identity) throw new Error("Descriptor was not pinned")
+      const held = descriptor
+      yield* Effect.promise(() => fs.unlink(target))
+      expect(
+        yield* Effect.promise(() => fs.stat(held, { bigint: true }).then((stat) => `${stat.dev}:${stat.ino}`)),
+      ).toBe(identity)
+      expect(releases).toBe(0)
+
+      yield* Scope.close(scope, Exit.void)
+      expect(releases).toBe(1)
     }),
   )
 

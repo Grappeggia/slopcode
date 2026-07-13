@@ -7,6 +7,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
 import { jsonSchema, tool, type Tool, type ToolExecutionOptions } from "ai"
 import { Context, Effect, Semaphore } from "effect"
+import * as Scope from "effect/Scope"
 import { constants } from "fs"
 import fs, { type FileHandle } from "fs/promises"
 import path from "path"
@@ -60,6 +61,8 @@ export interface Reader {
 
 export interface HooksInterface {
   readonly beforeRead: (callID: string) => Effect.Effect<void>
+  readonly pinned?: (input: { callID: string; fd: number; identity: string }) => Effect.Effect<void>
+  readonly released?: (input: { callID: string; fd: number; identity: string }) => Effect.Effect<void>
 }
 
 export class ReaderHooks extends Context.Service<ReaderHooks, HooksInterface>()("@slopcode/SideQuestionReader/Hooks") {}
@@ -135,6 +138,7 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
   const filesystem = yield* FSUtil.Service
   const permission = yield* Permission.Service
   const instance = yield* InstanceState.context
+  const scope = yield* Scope.Scope
   const bridge = yield* EffectBridge.make()
   const lock = Semaphore.makeUnsafe(1)
   const files = new Set<string>()
@@ -182,17 +186,16 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
           close,
         )
       }
-      const handle = yield* Effect.acquireRelease(
-        Effect.tryPromise({
-          try: () =>
-            fs.open(
-              descriptorPath(platform, directory.fd, parts.at(-1) ?? ""),
-              constants.O_RDONLY | constants.O_NOFOLLOW,
-            ),
-          catch: (cause) => error(cause, `Cannot securely open ${canonical}`),
-        }),
-        close,
-      )
+      const handle = yield* Effect.tryPromise({
+        try: () =>
+          fs.open(
+            descriptorPath(platform, directory.fd, parts.at(-1) ?? ""),
+            constants.O_RDONLY | constants.O_NOFOLLOW,
+          ),
+        catch: (cause) => error(cause, `Cannot securely open ${canonical}`),
+      })
+      const ownership = { pinned: false }
+      yield* Effect.addFinalizer(() => (ownership.pinned ? Effect.void : close(handle)))
       const actual = yield* Effect.tryPromise({
         try: () => fs.realpath(descriptorPath(platform, handle.fd)),
         catch: (cause) => error(cause, `Cannot verify opened file ${canonical}`),
@@ -203,7 +206,7 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
         try: () => handle.stat({ bigint: true }),
         catch: (cause) => error(cause, `Cannot inspect opened file ${canonical}`),
       })
-      return { handle, stat }
+      return { handle, ownership, stat }
     })
 
   const run = Effect.fn("SideQuestionReader.read")(function* (
@@ -288,8 +291,20 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
             if (!files.has(identity)) {
               if (files.size >= MAX_FILES)
                 return yield* Effect.fail(new Error(`Side questions can read at most ${MAX_FILES} unique files`))
-              files.add(identity)
             }
+            const descriptor = { callID: options.toolCallId, fd: opened.handle.fd, identity }
+            // Transfer ownership atomically from the per-read scope to the request scope.
+            yield* Effect.uninterruptible(
+              Scope.addFinalizer(
+                scope,
+                Effect.gen(function* () {
+                  yield* close(opened.handle)
+                  yield* input.hooks?.released?.(descriptor) ?? Effect.void
+                }),
+              ).pipe(Effect.tap(() => Effect.sync(() => (opened.ownership.pinned = true)))),
+            )
+            files.add(identity)
+            yield* input.hooks?.pinned?.(descriptor) ?? Effect.void
             if (usage.lines >= MAX_LINES)
               return yield* Effect.fail(new Error(`Side read line limit reached (${MAX_LINES})`))
             if (usage.bytes >= MAX_BYTES)

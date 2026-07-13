@@ -297,7 +297,6 @@ export const layer = Layer.effect(
                     const call = calls.find((item) => item.id === event.id)
                     if (!call || call.name !== event.name)
                       return Stream.fail(new Error(`Unmatched side read result: ${event.id}`))
-                    if (event.result.type === "error" && results.get(event.id)?.type === "error") return Stream.empty
                     if (results.has(event.id)) return Stream.fail(new Error(`Duplicate side read result: ${event.id}`))
                     if (event.result.type === "error") {
                       const failure = reader.consumeError(event.id, call.input)
@@ -391,7 +390,7 @@ export const layer = Layer.effect(
 
           return run(initial, 1)
         }),
-      )
+      ).pipe(Stream.scoped)
 
     return Service.of({ ask })
   }),
