@@ -11094,6 +11094,43 @@ export type V2ProviderListResponses = {
 
 export type V2ProviderListResponse = V2ProviderListResponses[keyof V2ProviderListResponses]
 
+export type V2ProviderOpenaiUsageData = {
+  body?: never
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/provider/openai/usage"
+}
+
+export type V2ProviderOpenaiUsageErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2ProviderOpenaiUsageError = V2ProviderOpenaiUsageErrors[keyof V2ProviderOpenaiUsageErrors]
+
+export type V2ProviderOpenaiUsageResponses = {
+  /**
+   * Success
+   */
+  200: {
+    location: LocationInfo
+    data: OpenAiUsage
+  }
+}
+
+export type V2ProviderOpenaiUsageResponse = V2ProviderOpenaiUsageResponses[keyof V2ProviderOpenaiUsageResponses]
+
 export type V2ProviderGetData = {
   body?: never
   path: {

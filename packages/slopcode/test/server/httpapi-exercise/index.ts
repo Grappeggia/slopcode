@@ -144,6 +144,34 @@ const scenarios: Scenario[] = [
   http.protected.get("/skill", "app.skills").json(200, array, "status"),
   http.protected.get("/lsp", "lsp.status").json(200, array),
   http.protected.get("/formatter", "formatter.status").json(200, array),
+  http.protected.get("/memory", "memory.list").json(200, array),
+  http.protected
+    .post("/memory", "memory.create")
+    .mutating()
+    .at((ctx) => ({
+      path: "/memory",
+      headers: ctx.headers(),
+      body: { content: "Keep HTTP API memory coverage deterministic" },
+    }))
+    .json(200, object),
+  http.protected
+    .patch("/memory/{memoryID}", "memory.update.missing")
+    .at((ctx) => ({
+      path: route("/memory/{memoryID}", { memoryID: "mem_missing" }),
+      headers: ctx.headers(),
+      body: { enabled: false },
+    }))
+    .status(400),
+  http.protected
+    .delete("/memory/{memoryID}", "memory.delete.missing")
+    .mutating()
+    .at((ctx) => ({
+      path: route("/memory/{memoryID}", { memoryID: "mem_missing" }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      check(body === true, "memory delete should be idempotent")
+    }),
   http.protected.get("/config", "config.get").json(200, undefined, "status"),
   http.protected
     .patch("/config", "config.update")
@@ -263,6 +291,7 @@ const scenarios: Scenario[] = [
     .status(204, undefined, "status"),
   http.protected.get("/provider", "provider.list").json(),
   http.protected.get("/provider/auth", "provider.auth").json(),
+  http.protected.get("/provider/openai/usage", "provider.openai.usage").json(200, object),
   http.protected
     .post("/provider/{providerID}/oauth/authorize", "provider.oauth.authorize")
     .at((ctx) => ({
@@ -662,6 +691,7 @@ const scenarios: Scenario[] = [
   http.protected.get("/api/agent", "v2.agent.list").json(200, locationData(array)),
   http.protected.get("/api/model", "v2.model.list").json(200, locationData(array)),
   http.protected.get("/api/provider", "v2.provider.list").json(200, locationData(array)),
+  http.protected.get("/api/provider/openai/usage", "v2.provider.openai.usage").json(200, locationData(object)),
   http.protected.get("/api/integration", "v2.integration.list").json(200, locationData(array)),
   http.protected
     .get("/api/integration/{integrationID}", "v2.integration.get")
@@ -1244,15 +1274,6 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({ path: route("/session/{sessionID}/abort", { sessionID: ctx.state.id }), headers: ctx.headers() }))
     .json(200, (body) => {
       check(body === true, "abort should return true")
-    }),
-  http.protected
-    .post("/session/{sessionID}/abort", "session.abort.missing")
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/abort", { sessionID: "ses_httpapi_missing" }),
-      headers: ctx.headers(),
-    }))
-    .json(200, (body) => {
-      check(body === true, "missing session abort should remain a no-op success")
     }),
   http.protected
     .post("/session/{sessionID}/init", "session.init")

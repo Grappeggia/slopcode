@@ -323,6 +323,8 @@ import type {
   V2ProviderGetResponses,
   V2ProviderListErrors,
   V2ProviderListResponses,
+  V2ProviderOpenaiUsageErrors,
+  V2ProviderOpenaiUsageResponses,
   V2QuestionRequestListErrors,
   V2QuestionRequestListResponses,
   V2ReferenceListErrors,
@@ -5731,6 +5733,34 @@ export class Model extends HeyApiClient {
   }
 }
 
+export class Openai2 extends HeyApiClient {
+  /**
+   * Get OpenAI usage
+   *
+   * Get safe normalized OpenAI authentication and ChatGPT usage status.
+   */
+  public usage<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "location" }] }])
+    return (options?.client ?? this.client).get<
+      V2ProviderOpenaiUsageResponses,
+      V2ProviderOpenaiUsageErrors,
+      ThrowOnError
+    >({
+      url: "/api/provider/openai/usage",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Provider2 extends HeyApiClient {
   /**
    * List providers
@@ -5785,6 +5815,11 @@ export class Provider2 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _openai?: Openai2
+  get openai(): Openai2 {
+    return (this._openai ??= new Openai2({ client: this.client }))
   }
 }
 

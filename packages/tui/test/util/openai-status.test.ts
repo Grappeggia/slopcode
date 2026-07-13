@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import type { AssistantMessage, Message, Provider } from "@slopcode-ai/sdk/v2"
 import {
+  OPENAI_LOADING,
   accountLabel,
   clamp,
   creditsLabel,
   hasUsageLimits,
   latestContext,
+  loadOpenAIUsage,
   sessionTokens,
+  statusLabel,
   statusBodyHeight,
   tokens,
   resetAt,
@@ -35,11 +38,91 @@ const providers = [
 ] as unknown as Provider[]
 
 describe("OpenAI status helpers", () => {
-  test("distinguishes OAuth, API key, and disconnected accounts", () => {
-    expect(accountLabel({ status: "oauth", email: "dev@example.com", plan: "pro" })).toBe("dev@example.com (Pro)")
-    expect(accountLabel({ status: "oauth", plan: "plus" })).toBe("Plus")
-    expect(accountLabel({ status: "api_key" })).toBe("API key configured")
-    expect(accountLabel({ status: "disconnected" })).toBe("ChatGPT disconnected")
+  test("formats OAuth account labels without exposing more than optional email", () => {
+    expect(accountLabel({ status: "oauth", email: "dev@example.com", plan: "pro", capturedAt: 1 })).toBe(
+      "dev@example.com (Pro)",
+    )
+    expect(accountLabel({ status: "oauth", plan: "team_plan", capturedAt: 1 })).toBe("Team Plan")
+  })
+
+  test("uses exact ChatGPT Codex state wording", () => {
+    expect(OPENAI_LOADING).toBe("Loading ChatGPT Codex usage...")
+    expect(statusLabel({ status: "disconnected" })).toBe("No ChatGPT account connected.")
+    expect(statusLabel({ status: "api_key" })).toBe(
+      "OpenAI API key configured. ChatGPT Codex plan limits do not apply.",
+    )
+    expect(statusLabel({ status: "unavailable" })).toBe("ChatGPT Codex usage is currently unavailable.")
+  })
+
+  test("keeps V2 OAuth authoritative", async () => {
+    let calls = 0
+    const usage = await loadOpenAIUsage(
+      async () => ({ status: "oauth", plan: "plus", capturedAt: 1 }),
+      async () => {
+        calls++
+        return { status: "api_key" }
+      },
+    )
+    expect(usage).toEqual({ status: "oauth", plan: "plus", capturedAt: 1 })
+    expect(calls).toBe(0)
+  })
+
+  test("keeps V2 API key and unavailable states authoritative", async () => {
+    for (const status of ["api_key", "unavailable"] as const) {
+      let calls = 0
+      expect(
+        await loadOpenAIUsage(
+          async () => ({ status }),
+          async () => {
+            calls++
+            return { status: "oauth", plan: "plus", capturedAt: 1 }
+          },
+        ),
+      ).toEqual({ status })
+      expect(calls).toBe(0)
+    }
+  })
+
+  test("falls back to legacy when V2 is disconnected", async () => {
+    expect(
+      await loadOpenAIUsage(
+        async () => ({ status: "disconnected" }),
+        async () => ({ status: "oauth", plan: "plus", capturedAt: 1 }),
+      ),
+    ).toEqual({ status: "oauth", plan: "plus", capturedAt: 1 })
+  })
+
+  test("falls back to legacy when V2 transport fails", async () => {
+    expect(
+      await loadOpenAIUsage(
+        async () => {
+          throw new Error("unsupported route")
+        },
+        async () => ({ status: "api_key" }),
+      ),
+    ).toEqual({ status: "api_key" })
+  })
+
+  test("falls back to legacy when the V2 method throws synchronously", async () => {
+    expect(
+      await loadOpenAIUsage(
+        () => {
+          throw new Error("missing method")
+        },
+        async () => ({ status: "api_key" }),
+      ),
+    ).toEqual({ status: "api_key" })
+  })
+
+  test("preserves a legacy disconnected result", async () => {
+    expect(
+      await loadOpenAIUsage(
+        async () => {
+          throw new Error("unsupported route")
+        },
+        async () => ({ status: "disconnected" }),
+      ),
+    ).toEqual({ status: "disconnected" })
   })
 
   test("labels known and generic windows", () => {

@@ -1,14 +1,24 @@
-import type { AssistantMessage, Message, Provider } from "@slopcode-ai/sdk/v2"
+import type { AssistantMessage, Message, OpenAiUsage, Provider } from "@slopcode-ai/sdk/v2"
 
-type Account =
-  | { status: "disconnected" | "api_key" | "unavailable" }
-  | { status: "oauth"; plan: string; email?: string }
+export const OPENAI_LOADING = "Loading ChatGPT Codex usage..."
 
-export function accountLabel(account: Account) {
-  if (account.status === "api_key") return "API key configured"
-  if (account.status === "disconnected") return "ChatGPT disconnected"
-  if (account.status === "unavailable") return "OpenAI usage unavailable"
-  if (account.status !== "oauth") return "ChatGPT"
+export async function loadOpenAIUsage(v2: () => Promise<OpenAiUsage>, legacy: () => Promise<OpenAiUsage>) {
+  const usage = await Promise.resolve()
+    .then(v2)
+    .catch(() => undefined)
+  if (usage && usage.status !== "disconnected") return usage
+  return Promise.resolve()
+    .then(legacy)
+    .catch(() => usage ?? ({ status: "unavailable" } as const))
+}
+
+export function statusLabel(account: Exclude<OpenAiUsage, { status: "oauth" }>) {
+  if (account.status === "disconnected") return "No ChatGPT account connected."
+  if (account.status === "api_key") return "OpenAI API key configured. ChatGPT Codex plan limits do not apply."
+  return "ChatGPT Codex usage is currently unavailable."
+}
+
+export function accountLabel(account: Extract<OpenAiUsage, { status: "oauth" }>) {
   const plan = account.plan
     .split(/[_-]/)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))

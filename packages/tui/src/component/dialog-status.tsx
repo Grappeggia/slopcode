@@ -17,8 +17,11 @@ import {
   creditsLabel,
   hasUsageLimits,
   latestContext,
+  loadOpenAIUsage,
+  OPENAI_LOADING,
   resetAt,
   sessionTokens,
+  statusLabel,
   statusBodyHeight,
   windowLabel,
 } from "../util/openai-status"
@@ -45,10 +48,10 @@ export function DialogStatus() {
     () => local.model.current()?.providerID === "openai",
     async (enabled) => {
       if (!enabled) return
-      return sdk.client.provider.openai
-        .usage({}, { throwOnError: true })
-        .then((response) => response.data)
-        .catch(() => ({ status: "unavailable" as const }))
+      return loadOpenAIUsage(
+        () => sdk.client.v2.provider.openai.usage({}, { throwOnError: true }).then((response) => response.data.data),
+        () => sdk.client.provider.openai.usage({}, { throwOnError: true }).then((response) => response.data),
+      )
     },
   )
 
@@ -106,19 +109,19 @@ export function DialogStatus() {
         <box gap={1}>
           <Show when={local.model.current()?.providerID === "openai"}>
             <box>
-              <text fg={theme.text}>OpenAI Usage</text>
+              <text fg={theme.text}>ChatGPT Codex usage</text>
               <text fg={theme.text} wrapMode="word">
                 <b>Model</b> <span style={{ fg: theme.textMuted }}>{selected()}</span>
               </text>
-              <Switch fallback={<text fg={theme.textMuted}>Loading account usage...</text>}>
+              <Switch fallback={<text fg={theme.textMuted}>{OPENAI_LOADING}</text>}>
                 <Match when={openai()?.status === "disconnected"}>
-                  <text fg={theme.textMuted}>ChatGPT disconnected</text>
+                  <text fg={theme.textMuted}>{statusLabel({ status: "disconnected" })}</text>
                 </Match>
                 <Match when={openai()?.status === "api_key"}>
-                  <text fg={theme.textMuted}>API key configured</text>
+                  <text fg={theme.textMuted}>{statusLabel({ status: "api_key" })}</text>
                 </Match>
                 <Match when={openai()?.status === "unavailable"}>
-                  <text fg={theme.textMuted}>OpenAI usage unavailable</text>
+                  <text fg={theme.textMuted}>{statusLabel({ status: "unavailable" })}</text>
                 </Match>
                 <Match when={openai()?.status === "oauth" && openai()}>
                   {(value) => {
