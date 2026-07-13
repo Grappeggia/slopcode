@@ -148,6 +148,22 @@ describe("ShellParser PowerShell resources", () => {
     expect(await powershell(command)).toEqual([command])
   })
 
+  test("keeps an unbraced Unicode environment path in one command argument", async () => {
+    const command = "Get-Content $env:ÉROOT/path"
+    const tree = await ShellParser.parse(command, "powershell")
+    try {
+      const node = tree.rootNode.descendantsOfType("command")[0]
+      const elements = node?.childForFieldName("command_elements")
+      expect(
+        elements?.namedChildren.flatMap((child) =>
+          child ? [command.slice(child.startIndex, child.endIndex)] : [],
+        ),
+      ).toContain("$env:ÉROOT/path")
+    } finally {
+      tree.delete()
+    }
+  })
+
   test("expands numeric, Unicode, punctuation, and escaped environment names", () => {
     const keys: string[] = []
     expect(

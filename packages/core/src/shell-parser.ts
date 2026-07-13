@@ -174,21 +174,10 @@ const powershellInput = (command: string) => {
 }
 
 export async function parse(command: string, language: Language) {
-  if (language === "powershell") powershellEnv(command)
   const syntax = (await parser())[language]
-  const tree = syntax.parse(command)
+  const input = language === "powershell" ? powershellInput(command) : command
+  const tree = syntax.parse(input)
   if (tree && !tree.rootNode.hasError) return tree
-  if (language === "powershell") {
-    const input = powershellInput(command)
-    if (input !== command) {
-      const fallback = syntax.parse(input)
-      if (fallback && !fallback.rootNode.hasError) {
-        tree?.delete()
-        return fallback
-      }
-      fallback?.delete()
-    }
-  }
   tree?.delete()
   throw new SyntaxError(language)
 }
