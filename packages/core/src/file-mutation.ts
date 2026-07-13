@@ -641,6 +641,7 @@ export const layer = Layer.effect(
                       }
                       state.value = "approved"
                       let cleanup: string | undefined
+                      let placeholderMoved = false
                       return yield* Effect.gen(function* () {
                         yield* hooks.pause("remove-exchanged", input.target.canonical)
                         const quarantined = yield* safe(input.target, () =>
@@ -654,7 +655,7 @@ export const layer = Layer.effect(
                             return yield* new RecoveryConflictError({
                               path: input.target.canonical,
                               recovery,
-                              recoveries: [recovery],
+                              recoveries: [recovery, input.target.canonical],
                               state: "rollback-exchange",
                             })
                           }
@@ -693,6 +694,7 @@ export const layer = Layer.effect(
                             state: "placeholder-move",
                           })
                         }
+                        placeholderMoved = true
                         yield* hooks.pause("remove-placeholder-moved", input.target.canonical)
                         const moved = yield* safe(input.target, () =>
                           fs.lstat(platform.path(directory.fd, cleanup!), { bigint: true }),
@@ -737,7 +739,9 @@ export const layer = Layer.effect(
                           const recoveries =
                             current === "approved" || !cleanup
                               ? [path.join(path.dirname(input.target.canonical), quarantine), input.target.canonical]
-                              : [path.join(path.dirname(input.target.canonical), cleanup)]
+                              : placeholderMoved
+                                ? [path.join(path.dirname(input.target.canonical), cleanup)]
+                                : [input.target.canonical]
                           return Effect.fail(
                             new RecoveryConflictError({
                               path: input.target.canonical,
