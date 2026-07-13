@@ -194,8 +194,7 @@ if (mode === "prep") {
     const release = process.env.SLOPCODE_RELEASE
     if (!repo || !release) throw new Error("Release finalization requires GH_REPO and SLOPCODE_RELEASE.")
     const draft = (
-      process.env.SLOPCODE_RELEASE_DRAFT ??
-      (await $`gh api ${`repos/${repo}/releases/${release}`} --jq .draft`.text())
+      process.env.SLOPCODE_RELEASE_DRAFT ?? (await $`gh api ${`repos/${repo}/releases/${release}`} --jq .draft`.text())
     ).trim()
     if (draft === "true") {
       await $`gh api --method PATCH ${`repos/${repo}/releases/${release}`} -F draft=false`
