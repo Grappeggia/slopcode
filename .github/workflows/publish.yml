@@ -1,59 +1,85 @@
 name: publish
-run-name: "${{ format('release {0}', inputs.version || inputs.bump || 'manual') }}"
+run-name: "${{ inputs.dispatch_id }}"
 
 on:
   workflow_dispatch: # Default release path; `bun run release` prepares assets locally and dispatches this workflow
     inputs:
-      bump:
-        description: "Bump major, minor, or patch"
-        required: false
-        type: choice
-        options:
-          - major
-          - minor
-          - patch
       version:
-        description: "Override version (optional)"
+        description: "Prepared release version"
+        required: true
+        type: string
+      source_sha:
+        description: "Immutable prepared release commit"
+        required: true
+        type: string
+      previous_tag:
+        description: "Previous release tag, empty only for the first release"
         required: false
+        default: ""
+        type: string
+      dispatch_id:
+        description: "Unique release invocation identifier"
+        required: true
         type: string
 
-concurrency: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.version || inputs.bump }}
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
 
 permissions:
-  id-token: write # npm trusted publishing
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   version:
     runs-on: ubuntu-latest
     if: github.repository == 'teamslop/slopcode'
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: dev
           fetch-depth: 0
+          fetch-tags: true
+
+      - name: Bootstrap candidate trust from canonical dev
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_sha }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.-]*$ ]]
+          [[ "$VERSION" != v* ]]
+          [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --force --no-tags origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/tags/v$VERSION:refs/trusted/release-tag"
+          git checkout --detach refs/remotes/origin/dev
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/dev)"
+          test "$(git rev-parse refs/trusted/release-tag^{commit})" = "$SOURCE"
+          git merge-base --is-ancestor "$SOURCE" refs/remotes/origin/dev
 
       - uses: ./.github/actions/setup-bun
-
-      - name: Setup git committer
-        id: committer
-        uses: ./.github/actions/setup-git-committer
         with:
-          slopcode-app-id: ${{ vars.SLOPCODE_APP_ID }}
-          slopcode-app-secret: ${{ secrets.SLOPCODE_APP_SECRET }}
+          install-flags: --frozen-lockfile
 
-      - name: Install SlopCode
-        if: inputs.bump || inputs.version
-        run: bun i -g slopcode
-
-      - id: version
+      - name: Verify release provenance from canonical dev
+        id: version
         run: |
-          ./script/version.ts
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_REF" = "refs/heads/dev"
+          args=(bun run --cwd packages/script lineage verify --tag "v$VERSION" --source "$SOURCE" --require-previous-if-any --remote origin --branch dev)
+          if [ -n "$PREVIOUS" ]; then args+=(--previous-tag "$PREVIOUS"); fi
+          "${args[@]}"
+          release=$(gh release view "v$VERSION" --json id --jq .id --repo "$GITHUB_REPOSITORY")
+          test -n "$release"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "repo=$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
         env:
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
-          SLOPCODE_BUMP: ${{ inputs.bump }}
-          SLOPCODE_VERSION: ${{ inputs.version }}
-          GH_REPO: ${{ (github.ref_name == 'beta' && 'teamslop/slopcode-beta') || github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_sha }}
+          PREVIOUS: ${{ inputs.previous_tag }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       release: ${{ steps.version.outputs.release }}
@@ -80,10 +106,49 @@ jobs:
           - host: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.settings.host }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: dev
+          fetch-depth: 0
           fetch-tags: true
+
+      - name: Bootstrap candidate trust from canonical dev
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_sha }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.-]*$ ]]
+          [[ "$VERSION" != v* ]]
+          [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --force --no-tags origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/tags/v$VERSION:refs/trusted/release-tag"
+          git checkout --detach refs/remotes/origin/dev
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/dev)"
+          test "$(git rev-parse refs/trusted/release-tag^{commit})" = "$SOURCE"
+          git merge-base --is-ancestor "$SOURCE" refs/remotes/origin/dev
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Verify predecessor from canonical dev
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_sha }}
+          PREVIOUS: ${{ inputs.previous_tag }}
+        run: |
+          args=(bun run --cwd packages/script lineage verify --tag "v$VERSION" --source "$SOURCE" --require-previous-if-any --remote origin --branch dev)
+          if [ -n "$PREVIOUS" ]; then args+=(--previous-tag "$PREVIOUS"); fi
+          "${args[@]}"
+          git checkout --detach "$SOURCE"
+
+      - name: Install verified source dependencies
+        run: |
+          git clean -ffdx
+          bun install --frozen-lockfile
 
       - uses: apple-actions/import-codesign-certs@v2
         if: ${{ runner.os == 'macOS' }}
@@ -104,8 +169,6 @@ jobs:
         if: ${{ runner.os == 'macOS' }}
         run: |
           echo "${{ secrets.APPLE_API_KEY_PATH }}" > $RUNNER_TEMP/apple-api-key.p8
-
-      - uses: ./.github/actions/setup-bun
 
       - name: Cache apt packages
         if: contains(matrix.settings.host, 'ubuntu')
@@ -140,7 +203,7 @@ jobs:
           bun ./scripts/prepare.ts
         env:
           SLOPCODE_VERSION: ${{ needs.version.outputs.version }}
-          GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           RUST_TARGET: ${{ matrix.settings.target }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_RUN_ID: ${{ github.run_id }}
@@ -184,7 +247,7 @@ jobs:
           releaseDraft: true
           releaseAssetNamePattern: slopcode-desktop-[platform]-[arch][ext]
           repo: ${{ (github.ref_name == 'beta' && 'slopcode-beta') || '' }}
-          releaseCommitish: ${{ github.sha }}
+          releaseCommitish: ${{ inputs.source_sha }}
         env:
           GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
           TAURI_BUNDLER_NEW_APPIMAGE_FORMAT: true
@@ -202,10 +265,50 @@ jobs:
       - version
     runs-on: ubuntu-latest
     if: needs.version.outputs.version != ''
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: dev
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Bootstrap candidate trust from canonical dev
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_sha }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z.-]*$ ]]
+          [[ "$VERSION" != v* ]]
+          [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --force --no-tags origin "+refs/heads/dev:refs/remotes/origin/dev" "+refs/tags/v$VERSION:refs/trusted/release-tag"
+          git checkout --detach refs/remotes/origin/dev
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/dev)"
+          test "$(git rev-parse refs/trusted/release-tag^{commit})" = "$SOURCE"
+          git merge-base --is-ancestor "$SOURCE" refs/remotes/origin/dev
 
       - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Verify predecessor from canonical dev
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE: ${{ inputs.source_sha }}
+          PREVIOUS: ${{ inputs.previous_tag }}
+        run: |
+          args=(bun run --cwd packages/script lineage verify --tag "v$VERSION" --source "$SOURCE" --require-previous-if-any --remote origin --branch dev)
+          if [ -n "$PREVIOUS" ]; then args+=(--previous-tag "$PREVIOUS"); fi
+          "${args[@]}"
+          git checkout --detach "$SOURCE"
+
+      - name: Install verified source dependencies
+        run: |
+          git clean -ffdx
+          bun install --frozen-lockfile
 
       - name: Login to GitHub Container Registry
         if: false # Non-npm publishing channel disabled
@@ -239,12 +342,13 @@ jobs:
           rm -rf packages/slopcode/dist
           mkdir -p packages/slopcode/dist
           for attempt in $(seq 1 30); do
-            if gh release download ${{ needs.version.outputs.tag }} --pattern "slopcode-cli-dist.tar.gz" --dir packages/slopcode/dist --repo ${{ needs.version.outputs.repo }}; then
+            if gh release download "${{ needs.version.outputs.tag }}" --pattern "slopcode-cli-dist.tar.gz" --pattern "release-manifest.json" --dir packages/slopcode/dist --repo "${{ needs.version.outputs.repo }}"; then
+              bun ./packages/slopcode/script/artifact-manifest.ts verify --dir packages/slopcode/dist --source "${{ inputs.source_sha }}" --version "${{ inputs.version }}" --artifact slopcode-cli-dist.tar.gz
               tar -xzf packages/slopcode/dist/slopcode-cli-dist.tar.gz -C packages/slopcode/dist
               rm packages/slopcode/dist/slopcode-cli-dist.tar.gz
               exit 0
             fi
-            rm -f packages/slopcode/dist/slopcode-cli-dist.tar.gz
+            rm -f packages/slopcode/dist/slopcode-cli-dist.tar.gz packages/slopcode/dist/release-manifest.json
             if [ "$attempt" -eq 30 ]; then
               echo "Timed out waiting for slopcode-cli-dist.tar.gz on release ${{ needs.version.outputs.tag }}" >&2
               exit 1
@@ -259,14 +363,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends dpkg-dev gnupg rpm createrepo-c
 
-      - name: Configure npm auth
-        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > "$HOME/.npmrc"
+      - name: Recheck draft release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          draft=$(gh release view '${{ needs.version.outputs.tag }}' --json isDraft --jq .isDraft --repo '${{ needs.version.outputs.repo }}')
+          test "$draft" = "true" || test "$draft" = "false"
+          echo "SLOPCODE_RELEASE_DRAFT=$draft" >> "$GITHUB_ENV"
 
       - name: Publish release
         run: ./script/publish.ts
         env:
           SLOPCODE_PUBLISH_ONLY: true
-          # prebuilt release assets downloaded above; npm auth uses NPM_TOKEN
+          # Prebuilt release assets downloaded above; npm uses GitHub OIDC trusted publishing.
           # Homebrew tap sync
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN || steps.committer.outputs.token }}
           HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO || 'teamslop/homebrew-slopcode' }}
@@ -326,7 +435,8 @@ jobs:
           MACPORTS_BRANCH_PREFIX: ${{ vars.MACPORTS_BRANCH_PREFIX || 'slopcode-bump-' }}
           SLOPCODE_VERSION: ${{ needs.version.outputs.version }}
           SLOPCODE_RELEASE: ${{ needs.version.outputs.release }}
+          SLOPCODE_SOURCE_SHA: ${{ inputs.source_sha }}
+          SLOPCODE_PREVIOUS_TAG: ${{ inputs.previous_tag }}
           GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
           GH_REPO: ${{ needs.version.outputs.repo }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true

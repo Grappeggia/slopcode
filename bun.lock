@@ -570,6 +570,7 @@
       "name": "@slopcode-ai/script",
       "dependencies": {
         "semver": "^7.6.3",
+        "sigstore": "^4.1.1",
       },
       "devDependencies": {
         "@types/bun": "catalog:",

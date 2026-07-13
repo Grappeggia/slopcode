@@ -3,7 +3,12 @@
 import { Script } from "@slopcode-ai/script"
 import { $ } from "bun"
 import { fileURLToPath } from "url"
+import path from "node:path"
+import { manifestName, verifyManifest, writeManifest } from "../packages/slopcode/script/artifact-manifest.ts"
+import { gatePublication, gateRelease, prepareRelease } from "@slopcode-ai/script/release"
 import { releaseInfo } from "./version.ts"
+
+const dir = fileURLToPath(new URL("..", import.meta.url))
 
 const highlightsTemplate = `
 <!--
@@ -39,29 +44,58 @@ if (prep && only) {
   throw new Error("SLOPCODE_PREPARE_ONLY and SLOPCODE_PUBLISH_ONLY cannot both be true")
 }
 const mode = prep ? "prep" : only ? "publish" : "full"
+const resume = process.env.SLOPCODE_RELEASE_RESUME === "true"
+const lineage =
+  Script.release && !Script.preview && mode !== "publish"
+    ? await gateRelease({ version: Script.version, cwd: dir, remote: "origin", branch: "dev", resume })
+    : Script.release && !Script.preview
+      ? await gatePublication({
+          version: Script.version,
+          source: process.env.SLOPCODE_SOURCE_SHA,
+          previous: process.env.SLOPCODE_PREVIOUS_TAG,
+          cwd: dir,
+          remote: "origin",
+          branch: "dev",
+        })
+      : undefined
 
 console.log("=== publishing ===\n")
 
 if (mode !== "publish") {
-  const pkgjsons = await Array.fromAsync(new Bun.Glob("**/package.json").scan()).then((arr) =>
+  const pkgjsons = await Array.fromAsync(new Bun.Glob("**/package.json").scan({ cwd: dir })).then((arr) =>
     arr.filter((x) => !x.includes("node_modules") && !x.includes("dist") && !x.split(/[\\/]/).includes("tmp")),
   )
 
-  for (const file of pkgjsons) {
-    let pkg = await Bun.file(file).text()
-    pkg = pkg.replaceAll(/"version": "[^"]+"/g, `"version": "${Script.version}"`)
-    console.log("updated:", file)
-    await Bun.file(file).write(pkg)
+  if (resume) {
+    const mismatched = (
+      await Promise.all(
+        pkgjsons.map(async (file) => {
+          const pkg = (await Bun.file(path.join(dir, file)).json()) as { version?: string }
+          return pkg.version && pkg.version !== Script.version ? file : undefined
+        }),
+      )
+    ).filter((file): file is string => !!file)
+    if (mismatched.length) {
+      throw new Error(`Resume source does not contain version ${Script.version}: ${mismatched.join(", ")}`)
+    }
+    await $`bun install --frozen-lockfile`.cwd(dir)
+  } else {
+    for (const file of pkgjsons) {
+      let pkg = await Bun.file(path.join(dir, file)).text()
+      pkg = pkg.replaceAll(/"version": "[^"]+"/g, `"version": "${Script.version}"`)
+      console.log("updated:", file)
+      await Bun.file(path.join(dir, file)).write(pkg)
+    }
+
+    const extensionToml = fileURLToPath(new URL("../packages/extensions/zed/extension.toml", import.meta.url))
+    let toml = await Bun.file(extensionToml).text()
+    toml = toml.replace(/^version = "[^"]+"/m, `version = "${Script.version}"`)
+    toml = toml.replaceAll(/releases\/download\/v[^/]+\//g, `releases/download/v${Script.version}/`)
+    console.log("updated:", extensionToml)
+    await Bun.file(extensionToml).write(toml)
+
+    await $`bun install --frozen-lockfile`.cwd(dir)
   }
-
-  const extensionToml = fileURLToPath(new URL("../packages/extensions/zed/extension.toml", import.meta.url))
-  let toml = await Bun.file(extensionToml).text()
-  toml = toml.replace(/^version = "[^"]+"/m, `version = "${Script.version}"`)
-  toml = toml.replaceAll(/releases\/download\/v[^/]+\//g, `releases/download/v${Script.version}/`)
-  console.log("updated:", extensionToml)
-  await Bun.file(extensionToml).write(toml)
-
-  await $`bun install`
 }
 
 const forceBuild = process.env.SLOPCODE_FORCE_BUILD === "true"
@@ -93,48 +127,78 @@ const buildLocal = async () => {
 // Non-npm publishing channels are intentionally disabled for npm-only rollout.
 // await import(`../packages/sdk/js/script/build.ts`)
 
-if (Script.release) {
-  if (!Script.preview && mode !== "publish") {
-    const dirty = (await $`git status --porcelain`.text()).trim().length > 0
-    if (dirty) {
-      await $`git commit -am "release: v${Script.version}"`
-    } else {
-      console.log("release: skip commit (no version changes)")
-    }
+let prepared: Awaited<ReturnType<typeof prepareRelease>> | undefined
+if (mode !== "publish" && lineage) {
+  const dist = path.join(dir, "packages", "slopcode", "dist")
+  let repo = process.env.GH_REPO ?? "teamslop/slopcode"
+  prepared = await prepareRelease({
+    cwd: dir,
+    version: Script.version,
+    lineage,
+    resume,
+    build: buildLocal,
+    verify: async () => {
+      console.log("\n=== artifact verification ===\n")
+      await import(`../packages/slopcode/script/verify-artifacts.ts`)
+      process.chdir(dir)
+    },
+    manifest: async (source) => {
+      await writeManifest(dist, source, Script.version)
+      await verifyManifest(dist, source, Script.version)
+    },
+    release: async () => {
+      const info = await releaseInfo()
+      repo = info.repo
+      process.env.GH_REPO = repo
+    },
+    upload: async () => {
+      const files = (await Array.fromAsync(new Bun.Glob("*").scan({ cwd: dist })))
+        .filter(
+          (name) => name === manifestName || name.endsWith(".zip") || name.endsWith(".tar.gz") || name.endsWith(".deb"),
+        )
+        .map((name) => path.join(dist, name))
+      await $`gh release upload ${lineage.target} ${files} --clobber --repo ${repo}`
+    },
+  })
 
-    await $`git fetch --tags origin`
-    const tag = `v${Script.version}`
-    const tagged = (await $`git tag -l ${tag}`.text()).trim().length > 0
-    if (!tagged) {
-      await $`git tag ${tag}`
-    } else {
-      console.log("release: skip tag", tag)
-    }
-
-    await $`git push origin HEAD --tags`
-    await new Promise((resolve) => setTimeout(resolve, 5_000))
-    const release = await releaseInfo()
-    process.env.GH_REPO = release.repo
+  if (process.env.SLOPCODE_RELEASE_OUTPUT) {
+    await Bun.write(
+      process.env.SLOPCODE_RELEASE_OUTPUT,
+      `${JSON.stringify({
+        version: prepared.version,
+        source_sha: prepared.source,
+        previous_tag: prepared.previous,
+        tag: prepared.tag,
+      })}\n`,
+    )
   }
 
   // Non-npm publishing channels are intentionally disabled for npm-only rollout.
   // await import(`../packages/desktop/scripts/finalize-latest-json.ts`)
-}
-
-if (mode !== "publish") {
+} else if (mode !== "publish") {
   await buildLocal()
+  console.log("\n=== artifact verification ===\n")
+  await import(`../packages/slopcode/script/verify-artifacts.ts`)
+  process.chdir(dir)
 }
 
 if (mode === "prep") {
-  console.log("\n=== artifact verification ===\n")
-  await import(`../packages/slopcode/script/verify-artifacts.ts`)
   console.log("\n=== local prepare complete ===\n")
 } else {
   console.log("\n=== cli ===\n")
   await import(`../packages/slopcode/script/publish.ts`)
 
   if (Script.release && !Script.preview) {
-    await $`gh release edit v${Script.version} --draft=false --repo ${process.env.GH_REPO}`
+    const draft = (
+      await $`gh release view v${Script.version} --json isDraft --jq .isDraft --repo ${process.env.GH_REPO}`.text()
+    ).trim()
+    if (draft === "true") {
+      await $`gh release edit v${Script.version} --draft=false --repo ${process.env.GH_REPO}`
+    } else if (draft === "false") {
+      console.log(`release: already finalized v${Script.version}`)
+    } else {
+      throw new Error(`Could not verify draft state for v${Script.version}.`)
+    }
   }
 }
 
@@ -144,5 +208,4 @@ if (mode === "prep") {
 // console.log("\n=== plugin ===\n")
 // await import(`../packages/plugin/script/publish.ts`)
 
-const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)

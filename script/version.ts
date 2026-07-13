@@ -13,12 +13,14 @@ export const releaseInfo = async (repo = process.env.GH_REPO ?? "teamslop/slopco
   }
 
   if (!Script.preview) {
-    const existing = await $`gh release view ${tag} --json tagName,id --repo ${repo}`.quiet().nothrow()
+    const existing = await $`gh release view ${tag} --json tagName,id,isDraft --repo ${repo}`.quiet().nothrow()
     if (existing.exitCode !== 0) {
       await $`gh release create ${tag} -d --title ${tag} --notes "Release ${tag}" --repo ${repo}`
+    } else if (!(await existing.json()).isDraft) {
+      throw new Error(`Release ${tag} is already published; only draft releases can be resumed.`)
     }
 
-    const release = await $`gh release view ${tag} --json tagName,id --repo ${repo}`.json()
+    const release = await $`gh release view ${tag} --json tagName,id,isDraft --repo ${repo}`.json()
     output.release = `${release.id}`
     output.tag = release.tagName
   }

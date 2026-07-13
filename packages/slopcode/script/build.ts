@@ -727,9 +727,6 @@ if (Script.release) {
     }
     await debBuild(`${pkg.name}-linux-x64-baseline`, "amd64")
     await debBuild(`${pkg.name}-linux-arm64`, "arm64")
-    await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz ./dist/*.deb --clobber --repo ${process.env.GH_REPO}`
-  } else {
-    await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
   }
 }
 

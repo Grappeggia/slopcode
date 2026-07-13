@@ -2,6 +2,12 @@
 import { $ } from "bun"
 import pkg from "../package.json"
 import { Script } from "@slopcode-ai/script"
+import {
+  loadNpmPublication,
+  publishNpmSequence,
+  readNpmPublication,
+  verifyNpmPublications,
+} from "@slopcode-ai/script/release"
 import { fileURLToPath } from "url"
 import { gunzipSync } from "zlib"
 
@@ -59,9 +65,26 @@ if (binaries.length === 0) {
 }
 const otp = process.env.NPM_OTP?.trim()
 const skipPack = process.env.SLOPCODE_SKIP_PACK === "true"
+if (Script.release && skipPack) throw new Error("Release npm publication cannot skip source-stamped packing")
 const registry = (process.env.npm_config_registry ?? "https://registry.npmjs.org").replace(/\/$/, "")
 const npmPath = (name: string) => encodeURIComponent(name).replace(/^%40/, "@")
-const exists = (name: string, version: string) => fetch(`${registry}/${npmPath(name)}/${version}`).then((x) => x.ok)
+const source = process.env.SLOPCODE_SOURCE_SHA
+if (Script.release && !dry && !source) throw new Error("Release npm publication requires verified source provenance")
+const published = async (name: string, version: string) => {
+  const current = await readNpmPublication(registry, name, version)
+  if (!current) return false
+  if (Script.release) {
+    await verifyNpmPublications({
+      items: [{ name, version }],
+      source: source!,
+      load: (item) => loadNpmPublication(registry, item.name, item.version),
+      timeout: npmWait,
+      interval: npmPoll,
+    })
+  }
+  console.log("verified existing", name, version)
+  return true
+}
 const latestRelease = Script.channel === "latest" && Script.release
 const supplemental = process.env.SLOPCODE_ENABLE_SUPPLEMENTAL_CHANNELS === "true"
 const enforceApt = process.env.SLOPCODE_ENFORCE_APT === "true"
@@ -226,9 +249,20 @@ const verifyNpmTargets = async (items: { name: string; version: string }[]) => {
     console.log("npm parity: skipped dry run")
     return
   }
+  if (Script.release) {
+    await verifyNpmPublications({
+      items,
+      source: source!,
+      load: (item) => loadNpmPublication(registry, item.name, item.version),
+      timeout: npmWait,
+      interval: npmPoll,
+    })
+    console.log("npm provenance: ok", items.map((item) => `${item.name}@${item.version}`).join(", "))
+    return
+  }
   const loop = async (left: number) => {
     const result = await Promise.all(
-      items.map(async (item) => ({ ...item, ready: await exists(item.name, item.version) })),
+      items.map(async (item) => ({ ...item, ready: !!(await readNpmPublication(registry, item.name, item.version)) })),
     )
     const missing = result.filter((item) => !item.ready)
     if (missing.length === 0) {
@@ -347,6 +381,12 @@ if (latestRelease && !dry) {
 }
 
 const pack = async (dir: string, name: string) => {
+  if (Script.release && source) {
+    const file = `${dir}/package.json`
+    const json = await Bun.file(file).json()
+    json.gitHead = source
+    await Bun.write(file, JSON.stringify(json, null, 2))
+  }
   if (process.platform !== "win32") {
     await $`chmod -R 755 .`.cwd(dir)
   }
@@ -359,7 +399,7 @@ const pack = async (dir: string, name: string) => {
 }
 
 const publishBinary = async (binary: (typeof binaries)[number]) => {
-  if (!dry && (await exists(binary.name, binary.version))) {
+  if (!dry && (await published(binary.name, binary.version))) {
     console.log("skip", binary.name, binary.version)
     return
   }
@@ -373,6 +413,10 @@ const publishBinary = async (binary: (typeof binaries)[number]) => {
     return
   }
 
+  if (Script.release && process.env.SLOPCODE_RELEASE_DRAFT !== "true") {
+    throw new Error(`Release is finalized; refuse missing npm package ${binary.name}@${binary.version}`)
+  }
+
   const publish = otp
     ? $`npm publish *.tgz --access public --tag ${Script.channel} --otp=${otp}`
     : $`npm publish *.tgz --access public --tag ${Script.channel}`
@@ -380,7 +424,7 @@ const publishBinary = async (binary: (typeof binaries)[number]) => {
 }
 
 const publishPackage = async (name: string) => {
-  if (!dry && (await exists(name, version))) {
+  if (!dry && (await published(name, version))) {
     console.log("skip", name, version)
     return
   }
@@ -392,22 +436,24 @@ const publishPackage = async (name: string) => {
     return
   }
 
+  if (Script.release && process.env.SLOPCODE_RELEASE_DRAFT !== "true") {
+    throw new Error(`Release is finalized; refuse missing npm package ${name}@${version}`)
+  }
+
   const publish = otp
     ? $`npm publish *.tgz --access public --tag ${Script.channel} --otp=${otp}`
     : $`npm publish *.tgz --access public --tag ${Script.channel}`
   await publish.cwd(`./dist/${name}`)
 }
 
-for (const binary of binaries) {
-  await publishBinary(binary)
-}
-await verifyNpmTargets(binaries)
-await publishPackage(pkg.name)
-await verifyNpmTargets([{ name: pkg.name, version }])
-for (const item of aliases) {
-  await publishPackage(item.name)
-}
-await verifyNpmTargets(aliases.map((item) => ({ name: item.name, version })))
+await publishNpmSequence<{ name: string; version: string; binary?: (typeof binaries)[number] }>({
+  binaries: binaries.map((item) => ({ name: item.name, version: item.version, binary: item })),
+  main: { name: pkg.name, version },
+  aliases: aliases.map((item) => ({ name: item.name, version })),
+  publish: (item) => (item.binary ? publishBinary(item.binary) : publishPackage(item.name)),
+  verify: verifyNpmTargets,
+  finalize: async () => {},
+})
 await verifyAptParity()
 await verifyRpmParity()
 await verifyApkParity()
