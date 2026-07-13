@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import { Database } from "@slopcode-ai/core/database/database"
+import { FSUtil } from "@slopcode-ai/core/fs-util"
+import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import type { ModelMessage } from "ai"
-import { Cause, Effect, Exit, Layer, Schema } from "effect"
+import path from "path"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Agent } from "../../src/agent/agent"
 import { Instruction } from "../../src/session/instruction"
@@ -13,9 +16,12 @@ import { Session } from "../../src/session/session"
 import { SessionSideQuestion } from "../../src/session/side-question"
 import { SystemPrompt } from "../../src/session/system"
 import { Plugin } from "../../src/plugin"
+import { Permission } from "../../src/permission"
 import { ProviderTest } from "../fake/provider"
 import { TestConfig } from "../fixture/config"
 import { testEffect } from "../lib/effect"
+import { LLMEvent, ToolResultValue, Usage } from "@slopcode-ai/llm"
+import type { ToolExecutionOptions } from "ai"
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -38,6 +44,7 @@ const build = {
 
 const requests: LLM.StreamInput[] = []
 const hooks: string[] = []
+let respond = (_input: LLM.StreamInput): Stream.Stream<LLMEvent, unknown> => Stream.empty
 
 const agents = Layer.succeed(
   Agent.Service,
@@ -55,7 +62,7 @@ const llm = Layer.succeed(
   LLM.Service.of({
     stream: (input) => {
       requests.push(input)
-      return Stream.empty
+      return respond(input)
     },
   }),
 )
@@ -89,12 +96,16 @@ const side = SessionSideQuestion.layer.pipe(
   Layer.provide(llm),
   Layer.provide(TestConfig.layer()),
   Layer.provide(Database.defaultLayer),
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(Permission.defaultLayer),
+  Layer.provide(LocationServiceMap.layer),
 )
 const it = testEffect(Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, side))
 
 beforeEach(() => {
   requests.length = 0
   hooks.length = 0
+  respond = () => Stream.empty
 })
 
 function user(sessionID: SessionID, ...texts: string[]) {
@@ -242,8 +253,8 @@ it.instance("orders persisted context, side turns, and the current question with
     expect(request.user.model.variant).toBe("high")
     expect(request.agent).toBe(build)
     expect(request.model).toBe(model)
-    expect(request.tools).toEqual({})
-    expect(request.toolChoice).toBe("none")
+    expect(Object.keys(request.tools)).toEqual(["read"])
+    expect(request.toolChoice).toBe("auto")
     expect(hooks).toContain("experimental.chat.messages.transform")
     expect(yield* sessions.messages({ sessionID: session.id })).toEqual(before)
   }),
@@ -373,5 +384,145 @@ it.instance("rejects untrimmed empty input when the service is called directly",
       if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Error)
     }
     expect(requests).toHaveLength(0)
+  }),
+)
+
+it.instance("continues private read calls transiently and reports bounded usage without persistence", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      permission: [{ permission: "read", pattern: "notes.txt", action: "allow" }],
+    })
+    const first = yield* user(session.id, "main question")
+    yield* assistant(session.id, first.message.id, "main answer")
+    const before = yield* sessions.get(session.id)
+    const messages = yield* sessions.messages({ sessionID: session.id })
+    yield* Effect.promise(() => Bun.write(path.join(before.directory, "notes.txt"), "private context"))
+
+    respond = (input) => {
+      if (requests.length > 1) {
+        return Stream.fromIterable([
+          LLMEvent.textDelta({ id: "answer", text: "final side answer" }),
+          LLMEvent.finish({ reason: "stop", usage: new Usage({ inputTokens: 5, outputTokens: 3 }) }),
+        ])
+      }
+      const execute = input.tools.read?.execute
+      if (!execute) return Stream.fail(new Error("private read tool missing"))
+      return Stream.unwrap(
+        Effect.promise(async () => {
+          const result = await execute({ path: "notes.txt", offset: 1, limit: 10 }, {
+            toolCallId: "read_1",
+            messages: input.messages,
+            abortSignal: new AbortController().signal,
+          } as ToolExecutionOptions)
+          return Stream.fromIterable([
+            LLMEvent.toolCall({ id: "read_1", name: "read", input: { path: "notes.txt", offset: 1, limit: 10 } }),
+            LLMEvent.toolResult({
+              id: "read_1",
+              name: "read",
+              result: ToolResultValue.make(result),
+            }),
+            LLMEvent.finish({ reason: "tool-calls", usage: new Usage({ inputTokens: 7, outputTokens: 2 }) }),
+          ])
+        }),
+      )
+    }
+
+    const service = yield* SessionSideQuestion.Service
+    const events = yield* service
+      .ask({ sessionID: session.id, question: "read the notes", agent: build.name, model: ref })
+      .pipe(Stream.runCollect)
+    const list = Array.from(events)
+
+    expect(requests).toHaveLength(2)
+    expect(Object.keys(requests[0]!.tools)).toEqual(["read"])
+    expect(requests[0]!.toolChoice).toBe("auto")
+    expect(requests[0]!.permission).toEqual([{ permission: "read", pattern: "*", action: "allow" }])
+    expect(requests[1]!.messages.at(-2)).toMatchObject({
+      role: "assistant",
+      content: [expect.objectContaining({ type: "tool-call", toolName: "read", toolCallId: "read_1" })],
+    })
+    expect(requests[1]!.messages.at(-1)).toMatchObject({
+      role: "tool",
+      content: [expect.objectContaining({ type: "tool-result", toolName: "read", toolCallId: "read_1" })],
+    })
+    expect(list).toContainEqual(expect.objectContaining({ type: "status", status: "reading", round: 1 }))
+    expect(list).toContainEqual(
+      expect.objectContaining({ type: "read", path: "notes.txt", lines: 1, files: 1, callID: "read_1" }),
+    )
+    expect(list).toContainEqual(
+      expect.objectContaining({ type: "usage", rounds: 2, calls: 1, files: 1, inputTokens: 12, outputTokens: 5 }),
+    )
+    expect(list).toContainEqual({ type: "text", text: "final side answer" })
+    expect(hooks.filter((name) => name.startsWith("tool."))).toEqual([])
+    expect(yield* sessions.messages({ sessionID: session.id })).toEqual(messages)
+    expect(yield* sessions.get(session.id)).toEqual(before)
+  }),
+)
+
+it.instance("rejects provider-hosted read execution", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    respond = () =>
+      Stream.make(
+        LLMEvent.toolCall({
+          id: "hosted_read",
+          name: "read",
+          input: { path: "secret.txt" },
+          providerExecuted: true,
+        }),
+      )
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "hosted", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(requests).toHaveLength(1)
+  }),
+)
+
+it.instance("stops provider continuation at the configured round limit", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    respond = () =>
+      Stream.fromIterable([
+        LLMEvent.toolCall({ id: `read_${requests.length}`, name: "read", input: { path: "missing.txt" } }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ])
+    const service = yield* SessionSideQuestion.Service
+
+    const result = yield* service
+      .ask({ sessionID: session.id, question: "loop", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(requests).toHaveLength(SessionSideQuestion.MAX_ROUNDS)
+  }),
+)
+
+it.instance("interrupts provider work when the side stream is interrupted", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create()
+    const started = yield* Deferred.make<void>()
+    const stopped = yield* Deferred.make<void>()
+    respond = () =>
+      Stream.fromEffectDrain(Deferred.succeed(started, undefined)).pipe(
+        Stream.concat(Stream.never),
+        Stream.ensuring(Deferred.succeed(stopped, undefined)),
+      )
+    const service = yield* SessionSideQuestion.Service
+    const fiber = yield* service
+      .ask({ sessionID: session.id, question: "wait", agent: build.name, model: ref })
+      .pipe(Stream.runDrain, Effect.forkChild)
+
+    yield* Deferred.await(started)
+    yield* Fiber.interrupt(fiber)
+    yield* Deferred.await(stopped)
+    expect(requests).toHaveLength(1)
   }),
 )

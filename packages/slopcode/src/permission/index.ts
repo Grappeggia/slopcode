@@ -22,6 +22,11 @@ export const Event = {
 
 export interface Interface {
   readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
+  readonly query: (input: {
+    permission: string
+    pattern: string
+    ruleset: PermissionV1.Ruleset
+  }) => Effect.Effect<PermissionV1.Action>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
 }
@@ -75,20 +80,29 @@ export const layer = Layer.effect(
       }),
     )
 
+    const query = Effect.fn("Permission.query")(function* (input: {
+      permission: string
+      pattern: string
+      ruleset: PermissionV1.Ruleset
+    }) {
+      const approved = (yield* InstanceState.get(state)).approved
+      return evaluate(input.permission, input.pattern, input.ruleset, approved).action
+    })
+
     const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
-      const { approved, pending } = yield* InstanceState.get(state)
+      const pending = (yield* InstanceState.get(state)).pending
       const { ruleset, ...request } = input
       let needsAsk = false
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, ruleset, approved)
-        yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
-        if (rule.action === "deny") {
+        const action = yield* query({ permission: request.permission, pattern, ruleset })
+        yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action })
+        if (action === "deny") {
           return yield* new PermissionV1.DeniedError({
             ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
           })
         }
-        if (rule.action === "allow") continue
+        if (action === "allow") continue
         needsAsk = true
       }
 
@@ -182,7 +196,7 @@ export const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.info)
     })
 
-    return Service.of({ ask, reply, list })
+    return Service.of({ ask, query, reply, list })
   }),
 )
 

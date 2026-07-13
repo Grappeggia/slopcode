@@ -175,6 +175,46 @@ test("fromConfig - documented fallback-first example", () => {
   expect(Permission.evaluate("read", "foo.ts", ruleset).action).toBe("ask")
 })
 
+it.instance("query returns the effective action without requests, events, or approvals", () =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    const bridge = yield* EventV2Bridge.Service
+    const events: string[] = []
+    const unsubscribe = yield* bridge.listen((event) =>
+      Effect.sync(() => {
+        events.push(event.type)
+      }),
+    )
+
+    expect(
+      yield* permission.query({
+        permission: "read",
+        pattern: "secret.env",
+        ruleset: [
+          { permission: "read", pattern: "*", action: "allow" },
+          { permission: "read", pattern: "*.env", action: "ask" },
+        ],
+      }),
+    ).toBe("ask")
+    expect(yield* permission.list()).toEqual([])
+    expect(events).toEqual([])
+
+    const pending = yield* Effect.forkChild(
+      permission.ask({
+        sessionID: SessionID.make("ses_query"),
+        permission: "read",
+        patterns: ["secret.env"],
+        always: ["secret.env"],
+        metadata: {},
+        ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
+      }),
+    )
+    expect((yield* waitForPending(1))[0]?.patterns).toEqual(["secret.env"])
+    yield* Fiber.interrupt(pending)
+    yield* unsubscribe
+  }),
+)
+
 test("fromConfig - expands exact tilde to home directory", () => {
   const result = Permission.fromConfig({ external_directory: { "~": "allow" } })
   expect(result).toEqual([{ permission: "external_directory", pattern: os.homedir(), action: "allow" }])
