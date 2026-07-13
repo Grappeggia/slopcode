@@ -226,6 +226,26 @@ describe("release state transitions", () => {
     expect(await git(ctx.repo, "ls-remote", "origin", releaseStateRef)).toStartWith(result.source)
   })
 
+  test("releases an exact version when the source tree is already prepared", async () => {
+    const ctx = await setup()
+    const lineage = await gateRelease({ version: "0.2.211", cwd: ctx.repo, publication: async () => undefined })
+
+    const result = await prepareRelease({
+      cwd: ctx.repo,
+      version: "0.2.211",
+      lineage,
+      build: async () => {},
+      verify: async () => {},
+      manifest: async () => {},
+      release: async () => {},
+      upload: async () => {},
+    })
+
+    expect(result.source).toBe(ctx.base)
+    expect(await git(ctx.repo, "rev-parse", "v0.2.211^{commit}")).toBe(ctx.base)
+    expect(await git(ctx.repo, "ls-remote", "origin", releaseStateRef)).toStartWith(ctx.base)
+  })
+
   test("moves an existing release-state anchor during a subsequent release", async () => {
     const ctx = await setup()
     await git(ctx.repo, "push", "origin", `${ctx.base}:${releaseStateRef}`)
@@ -912,8 +932,8 @@ describe("workflow contracts", () => {
     expect(workflow.slice(0, workflow.indexOf("jobs:"))).toContain("contents: read")
     expect(workflow.slice(0, workflow.indexOf("jobs:"))).not.toContain("id-token: write")
     expect(publish).toContain("id-token: write")
-    expect(publish).toContain("contents: read")
-    expect(publish).not.toContain("contents: write")
+    expect(publish).toContain("contents: write")
+    expect(publish).toContain("GH_TOKEN: ${{ github.token }}")
     expect(publish).not.toContain("packages: write")
   })
 
