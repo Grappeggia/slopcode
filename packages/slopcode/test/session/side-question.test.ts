@@ -34,7 +34,7 @@ const model = ProviderTest.model({
   id: ref.modelID,
   providerID: ref.providerID,
   api: { id: ref.modelID, url: "https://example.com", npm: "@ai-sdk/openai" },
-  limit: { context: 4_000, output: 500 },
+  limit: { context: 16_000, output: 2_000 },
 })
 
 const MAX_SIDE_TURNS = 32

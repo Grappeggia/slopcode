@@ -29,7 +29,6 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
-import { Token } from "@/util/token"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -72,7 +71,12 @@ export function contextTokens(input: { system: string[]; messages: ModelMessage[
         ? item.inputSchema.jsonSchema
         : item.inputSchema,
   }))
-  return Token.estimate(JSON.stringify({ system, messages: input.messages, tools }))
+  return (
+    Buffer.byteLength(JSON.stringify({ system, messages: input.messages, tools })) +
+    256 +
+    input.messages.length * 16 +
+    tools.length * 32
+  )
 }
 
 const live: Layer.Layer<

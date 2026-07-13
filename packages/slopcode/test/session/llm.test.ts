@@ -205,6 +205,13 @@ describe("session.llm.hasToolCalls", () => {
 })
 
 describe("session.llm side runtime isolation", () => {
+  test("uses a conservative UTF-8 upper bound for side context", () => {
+    const messages: ModelMessage[] = [{ role: "user", content: "🧪".repeat(100) }]
+    const serialized = JSON.stringify({ system: [], messages, tools: [] })
+
+    expect(LLM.contextTokens({ system: [], messages, tools: {} })).toBeGreaterThanOrEqual(Buffer.byteLength(serialized))
+  })
+
   it.instance("fails closed on cached GitLab workflow models before mutation or provider execution", () =>
     Effect.gen(function* () {
       const model = ProviderTest.model({
