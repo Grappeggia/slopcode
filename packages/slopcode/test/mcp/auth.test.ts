@@ -255,7 +255,7 @@ describe("McpAuth legacy persistence", () => {
     expect(raw.match(/legacy-client-secret/g)).toHaveLength(1)
     expect(raw.match(/legacy-verifier/g)).toHaveLength(1)
     expect(raw.match(/legacy-state/g)).toHaveLength(1)
-    expect((await stat(file)).mode & 0o777).toBe(0o600)
+    if (process.platform !== "win32") expect((await stat(file)).mode & 0o777).toBe(0o600)
 
     await Effect.runPromise(auth.remove(alpha, urlA))
     const removed = await Bun.file(file).text()
