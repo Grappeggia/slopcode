@@ -164,8 +164,7 @@ const canonical = (
   row.id === childID(owner.parentID, owner.origin.messageID, owner.origin.callID) &&
   row.parent_id === owner.parentID &&
   item.sessionID === owner.parentID &&
-  (!origin ||
-    (item.assistantMessageID === owner.origin.messageID && item.callID === owner.origin.callID)) &&
+  (!origin || (item.assistantMessageID === owner.origin.messageID && item.callID === owner.origin.callID)) &&
   item.childSessionID === row.id &&
   item.promptMessageID === promptID(item.sessionID, item.assistantMessageID, item.callID) &&
   item.agent === owner.agent &&

@@ -21,5 +21,10 @@ export class Service extends Context.Service<Service, Interface>()("@slopcode/v2
 /** Low-level compatibility layer for callers that only need durable Session recording. */
 export const noopLayer = Layer.succeed(
   Service,
-  Service.of({ resume: () => Effect.void, wake: () => Effect.void, wait: () => Effect.void, interrupt: () => Effect.void }),
+  Service.of({
+    resume: () => Effect.void,
+    wake: () => Effect.void,
+    wait: () => Effect.void,
+    interrupt: () => Effect.void,
+  }),
 )

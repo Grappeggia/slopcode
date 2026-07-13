@@ -160,7 +160,8 @@ export const layer = Layer.effectDiscard(
           origin.assistantMessageID === owner.origin.messageID &&
           origin.callID === owner.origin.callID &&
           origin.childSessionID === row.id &&
-          origin.promptMessageID === SessionTask.promptID(owner.parentID, owner.origin.messageID, owner.origin.callID) &&
+          origin.promptMessageID ===
+            SessionTask.promptID(owner.parentID, owner.origin.messageID, owner.origin.callID) &&
           origin.agent === owner.agent &&
           origin.agent === row.agent &&
           origin.projectID === row.project_id &&
@@ -244,12 +245,7 @@ export const layer = Layer.effectDiscard(
         content: [],
       }
       const verify = Effect.fnUntraced(function* () {
-        const existing = yield* SessionTask.progress(
-          db,
-          request.sessionID,
-          request.assistantMessageID,
-          request.callID,
-        )
+        const existing = yield* SessionTask.progress(db, request.sessionID, request.assistantMessageID, request.callID)
         if (
           existing?.sessionID === data.sessionID &&
           existing.assistantMessageID === data.assistantMessageID &&
@@ -515,7 +511,13 @@ export const layer = Layer.effectDiscard(
               )
               const title = prepared?.title ?? `${input.description} (@${selectedID} subagent)`
               const origin = { messageID: context.assistantMessageID, callID: context.toolCallID }
-              const owner = { version: 1 as const, parentID: context.sessionID, agent: selectedID, origin, ceiling: derived }
+              const owner = {
+                version: 1 as const,
+                parentID: context.sessionID,
+                agent: selectedID,
+                origin,
+                ceiling: derived,
+              }
               const recorded = yield* SessionTask.request(
                 db,
                 context.sessionID,
@@ -576,22 +578,23 @@ export const layer = Layer.effectDiscard(
                   message: `Task resume conflict: ${taskID} has no persisted owner`,
                 })
               const ceiling = ownership.ceiling
-              const identity = input.task_id && row
-                ? {
-                    projectID: row.project_id,
-                    location: Location.Ref.make({
-                      directory: AbsolutePath.make(row.directory),
-                      workspaceID: row.workspace_id ?? undefined,
-                    }),
-                    title: row.title,
-                    ceiling,
-                  }
-                : {
-                    projectID: prepared?.projectID ?? parent.projectID,
-                    location: prepared?.location ?? location,
-                    title,
-                    ceiling: derived,
-                  }
+              const identity =
+                input.task_id && row
+                  ? {
+                      projectID: row.project_id,
+                      location: Location.Ref.make({
+                        directory: AbsolutePath.make(row.directory),
+                        workspaceID: row.workspace_id ?? undefined,
+                      }),
+                      title: row.title,
+                      ceiling,
+                    }
+                  : {
+                      projectID: prepared?.projectID ?? parent.projectID,
+                      location: prepared?.location ?? location,
+                      title,
+                      ceiling: derived,
+                    }
               const promptID = SessionTask.promptID(context.sessionID, context.assistantMessageID, context.toolCallID)
               const request = {
                 sessionID: context.sessionID,
@@ -654,7 +657,7 @@ export const layer = Layer.effectDiscard(
                   location: request.location,
                   subpath: parent.subpath,
                   title: request.title,
-                    agent: selectedID,
+                  agent: selectedID,
                   model: request.model,
                   metadata: { task: owner },
                   runtime: "v2",

@@ -195,10 +195,12 @@ export const functionToolDefinitions = Effect.fn("ProviderShared.functionToolDef
   request: LLMRequest,
 ) {
   const custom = request.tools.find(isCustomToolDefinition)
-  const part = request.messages.flatMap((message) => message.content).find((item) => {
-    if (item.type !== "tool-call" && item.type !== "tool-result") return false
-    return item.toolType === "custom"
-  })
+  const part = request.messages
+    .flatMap((message) => message.content)
+    .find((item) => {
+      if (item.type !== "tool-call" && item.type !== "tool-result") return false
+      return item.toolType === "custom"
+    })
   if (custom || part || request.toolChoice?.toolType === "custom")
     return yield* invalidRequest(`${route} does not support custom tools`)
   return request.tools.filter(isFunctionToolDefinition)

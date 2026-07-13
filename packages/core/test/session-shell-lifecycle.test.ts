@@ -125,7 +125,11 @@ describe("SessionInput shell lifecycle", () => {
         .where(eq(SessionMessageTable.id, id))
         .get()
         .pipe(Effect.orDie)
-      const message = Schema.decodeUnknownSync(SessionMessage.Message)({ ...requested!.data, id, type: requested!.type })
+      const message = Schema.decodeUnknownSync(SessionMessage.Message)({
+        ...requested!.data,
+        id,
+        type: requested!.type,
+      })
       expect(message).toMatchObject({
         id,
         type: "shell",
@@ -148,7 +152,9 @@ describe("SessionInput shell lifecycle", () => {
         .where(eq(SessionMessageTable.id, id))
         .get()
         .pipe(Effect.orDie)
-      expect(Schema.decodeUnknownSync(SessionMessage.Message)({ ...terminal!.data, id, type: terminal!.type })).toMatchObject({
+      expect(
+        Schema.decodeUnknownSync(SessionMessage.Message)({ ...terminal!.data, id, type: terminal!.type }),
+      ).toMatchObject({
         id,
         type: "shell",
         command: "pwd",

@@ -12,7 +12,8 @@ import { testEffect } from "./lib/effect"
 const bounded: string[] = []
 const outputStore = Layer.mock(ToolOutputStore.Service, {
   limits: () => Effect.succeed({ maxLines: 2_000, maxBytes: 50 * 1024 }),
-  bound: (input) => Effect.sync(() => bounded.push(input.toolCallID)).pipe(Effect.as({ output: input.output, outputPaths: [] })),
+  bound: (input) =>
+    Effect.sync(() => bounded.push(input.toolCallID)).pipe(Effect.as({ output: input.output, outputPaths: [] })),
   cleanup: () => Effect.void,
 })
 const registry = ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), Layer.provide(outputStore))
@@ -42,7 +43,11 @@ describe("ToolRegistry turn-local overlays", () => {
       const scope = yield* Scope.make()
       yield* registry.register({ shared: tool("location") }).pipe(Scope.provide(scope))
 
-      const overlay = yield* registry.materialize([], {}, { tools: [{ shared: tool("overlay"), local: tool("local") }] })
+      const overlay = yield* registry.materialize(
+        [],
+        {},
+        { tools: [{ shared: tool("overlay"), local: tool("local") }] },
+      )
       const ordinary = yield* registry.materialize()
       expect(overlay.definitions.map((item) => item.name)).toEqual(["shared", "local"])
       expect(ordinary.definitions.map((item) => item.description)).toEqual(["location"])
@@ -55,7 +60,9 @@ describe("ToolRegistry turn-local overlays", () => {
       expect(bounded).toContain("call-local")
 
       expect(
-        yield* Effect.flip(registry.materialize([], {}, { tools: [{ duplicate: tool("a") }, { duplicate: tool("b") }] })),
+        yield* Effect.flip(
+          registry.materialize([], {}, { tools: [{ duplicate: tool("a") }, { duplicate: tool("b") }] }),
+        ),
       ).toBeInstanceOf(Tool.RegistrationError)
       expect(
         yield* Effect.flip(registry.materialize([], {}, { tools: [{ "invalid name": tool("bad") }] })),
@@ -67,9 +74,13 @@ describe("ToolRegistry turn-local overlays", () => {
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const rules = [{ action: "alias", resource: "*", effect: "deny" as const }]
-      const materialized = yield* registry.materialize(rules, {}, {
-        tools: [{ hidden: Tool.withPermission(tool("hidden"), "alias"), visible: tool("visible") }],
-      })
+      const materialized = yield* registry.materialize(
+        rules,
+        {},
+        {
+          tools: [{ hidden: Tool.withPermission(tool("hidden"), "alias"), visible: tool("visible") }],
+        },
+      )
       rules[0]!.effect = "allow" as "deny"
       expect(materialized.definitions.map((item) => item.name)).toEqual(["visible"])
       expect(materialized.permissions).toEqual([{ action: "alias", resource: "*", effect: "deny" }])
@@ -97,32 +108,28 @@ describe("ToolRegistry turn-local overlays", () => {
 
       expect((yield* settle(only, "direct")).output?.structured).toEqual({ value: "direct" })
       expect(
-        (
-          yield* only.settle({
-            ...identity,
-            call: {
-              type: "tool-call",
-              toolType: "custom",
-              id: "call-exec-nested",
-              name: "exec",
-              input: "return await tools.nested({})",
-            },
-          })
-        ).output?.structured,
+        (yield* only.settle({
+          ...identity,
+          call: {
+            type: "tool-call",
+            toolType: "custom",
+            id: "call-exec-nested",
+            name: "exec",
+            input: "return await tools.nested({})",
+          },
+        })).output?.structured,
       ).toMatchObject({ ok: true, value: { value: "nested" } })
       expect(
-        (
-          yield* only.settle({
-            ...identity,
-            call: {
-              type: "tool-call",
-              toolType: "custom",
-              id: "call-exec-direct",
-              name: "exec",
-              input: "return await tools.direct({})",
-            },
-          })
-        ).output?.structured,
+        (yield* only.settle({
+          ...identity,
+          call: {
+            type: "tool-call",
+            toolType: "custom",
+            id: "call-exec-direct",
+            name: "exec",
+            input: "return await tools.direct({})",
+          },
+        })).output?.structured,
       ).toMatchObject({ ok: false, error: { kind: "UnknownTool" } })
     }),
   )
@@ -208,7 +215,9 @@ describe("ToolRegistry turn-local overlays", () => {
         value: { shell: { ok: true }, patch: { ok: true } },
         toolCalls: [{ name: "bash" }, { name: "apply_patch" }],
       })
-      expect(bounded).toEqual(expect.arrayContaining(["call-dynamic-aliases/0", "call-dynamic-aliases/1", "call-dynamic-aliases"]))
+      expect(bounded).toEqual(
+        expect.arrayContaining(["call-dynamic-aliases/0", "call-dynamic-aliases/1", "call-dynamic-aliases"]),
+      )
     }),
   )
 })

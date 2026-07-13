@@ -150,12 +150,14 @@ const ToolCallPartBase = Schema.Struct({
 })
 type ToolCallPartBase = Schema.Schema.Type<typeof ToolCallPartBase>
 export type ToolCallPart = Omit<ToolCallPartBase, "input" | "toolType"> &
-  ({ readonly input: unknown; readonly toolType?: "function" } | { readonly input: string; readonly toolType: "custom" })
+  (
+    | { readonly input: unknown; readonly toolType?: "function" }
+    | { readonly input: string; readonly toolType: "custom" }
+  )
 const ToolCallPartSchema = ToolCallPartBase.pipe(
-  Schema.refine(
-    (value): value is ToolCallPart => value.toolType !== "custom" || typeof value.input === "string",
-    { message: "Custom tool call input must be a string" },
-  ),
+  Schema.refine((value): value is ToolCallPart => value.toolType !== "custom" || typeof value.input === "string", {
+    message: "Custom tool call input must be a string",
+  }),
 ).annotate({ identifier: "LLM.Content.ToolCall" })
 
 type ToolCallPartInput = ToolCallPart extends infer Part
@@ -322,9 +324,7 @@ export namespace ToolDefinition {
     | ConstructorParameters<typeof CustomToolDefinition>[0]
 
   /** Normalize function or custom tool input into its canonical class. */
-  export function make(
-    input: ToolDefinition | ConstructorParameters<typeof ToolDefinition>[0],
-  ): ToolDefinition
+  export function make(input: ToolDefinition | ConstructorParameters<typeof ToolDefinition>[0]): ToolDefinition
   export function make(
     input: CustomToolDefinition | ConstructorParameters<typeof CustomToolDefinition>[0],
   ): CustomToolDefinition

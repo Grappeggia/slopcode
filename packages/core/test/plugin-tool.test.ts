@@ -438,9 +438,7 @@ describe("PluginTool", () => {
       yield* plugin.add({ id: b, effect: Effect.succeed(tool("b1")) })
       const beforeOmitted = yield* registry.materialize()
 
-      const omitting = yield* plugin
-        .add({ id: a, effect: Effect.succeed(hook("a-hook")) })
-        .pipe(Effect.forkChild)
+      const omitting = yield* plugin.add({ id: a, effect: Effect.succeed(hook("a-hook")) }).pipe(Effect.forkChild)
       yield* Deferred.await(disposeStarted)
       expect((yield* settle(yield* registry.materialize(), "transition_slot")).result).toEqual({
         type: "text",

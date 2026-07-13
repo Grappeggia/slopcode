@@ -31,8 +31,10 @@ const call = (source: unknown, id = "call-exec"): ToolRegistry.ExecuteInput => (
   ...identity,
   call: { type: "tool-call", toolType: "custom", id, name: "exec", input: source } as ToolRegistry.ExecuteInput["call"],
 })
-const echo = (run: (text: string, context: Tool.Context) => Effect.Effect<{ text: string }, Tool.Failure> = (text) =>
-  Effect.succeed({ text })) =>
+const echo = (
+  run: (text: string, context: Tool.Context) => Effect.Effect<{ text: string }, Tool.Failure> = (text) =>
+    Effect.succeed({ text }),
+) =>
   Tool.make({
     description: "Echo supplied text",
     input: Schema.Struct({ text: Schema.String }),
@@ -103,7 +105,10 @@ SOURCE: /[\s\S]+/
       })
 
       const sequential = yield* materialized.settle(
-        call('const a = await tools.echo({ text: "a" }); const b = await tools.echo({ text: "b" }); return [a, b]', "call-sequential"),
+        call(
+          'const a = await tools.echo({ text: "a" }); const b = await tools.echo({ text: "b" }); return [a, b]',
+          "call-sequential",
+        ),
       )
       expect(sequential.output?.structured).toMatchObject({
         ok: true,
@@ -113,22 +118,14 @@ SOURCE: /[\s\S]+/
 
       yield* Ref.set(peak, 0)
       const parallel = yield* materialized.settle(
-        call(
-          'return await Promise.all([tools.echo({ text: "c" }), tools.echo({ text: "d" })])',
-          "call-parallel",
-        ),
+        call('return await Promise.all([tools.echo({ text: "c" }), tools.echo({ text: "d" })])', "call-parallel"),
       )
       expect(parallel.output?.structured).toMatchObject({
         ok: true,
         value: [{ text: "c" }, { text: "d" }],
       })
       expect(yield* Ref.get(peak)).toBe(2)
-      expect(ids).toEqual([
-        "call-sequential/0",
-        "call-sequential/1",
-        "call-parallel/0",
-        "call-parallel/1",
-      ])
+      expect(ids).toEqual(["call-sequential/0", "call-sequential/1", "call-parallel/0", "call-parallel/1"])
     }),
   )
 
@@ -155,12 +152,10 @@ SOURCE: /[\s\S]+/
         value: "Invalid exec input: expected raw source text",
       })
       expect(
-        (
-          yield* materialized.settle({
-            ...identity,
-            call: { type: "tool-call", id: "call-function-exec", name: "exec", input: "return 42" },
-          })
-        ).result,
+        (yield* materialized.settle({
+          ...identity,
+          call: { type: "tool-call", id: "call-function-exec", name: "exec", input: "return 42" },
+        })).result,
       ).toEqual({
         type: "error",
         value: "Invalid exec call: expected a raw custom tool call",
@@ -309,13 +304,12 @@ SOURCE: /[\s\S]+/
           execute: ({ name }) =>
             name === "interrupt"
               ? Effect.never
-              :
-            Effect.sync(() => order.push(`start:${name}`)).pipe(
-              Effect.andThen(name === "first" ? Deferred.succeed(started, undefined) : Effect.void),
-              Effect.andThen(Deferred.await(release)),
-              Effect.andThen(Effect.sync(() => order.push(`end:${name}`))),
-              Effect.as({ name }),
-            ),
+              : Effect.sync(() => order.push(`start:${name}`)).pipe(
+                  Effect.andThen(name === "first" ? Deferred.succeed(started, undefined) : Effect.void),
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(Effect.sync(() => order.push(`end:${name}`))),
+                  Effect.as({ name }),
+                ),
         }),
       })
       const materialized = yield* registry.materialize([], { mode: "code-only" })

@@ -115,12 +115,10 @@ describe("Tool.dynamic", () => {
       const materialized = yield* registry.materialize([], {}, { tools: [{ invalid, defect }] })
 
       expect(
-        (
-          yield* materialized.settle({
-            ...identity,
-            call: { type: "tool-call", id: "call-output", name: "invalid", input: {} },
-          })
-        ).result,
+        (yield* materialized.settle({
+          ...identity,
+          call: { type: "tool-call", id: "call-output", name: "invalid", input: {} },
+        })).result,
       ).toEqual({ type: "error", value: "invalid dynamic output" })
       const exit = yield* Effect.exit(
         materialized.settle({
@@ -145,14 +143,18 @@ describe("Tool.dynamic", () => {
           execute: () => Effect.succeed({ ok: true }),
           toModelOutput: () => content as ReadonlyArray<Tool.Content>,
         })
-      const materialized = yield* registry.materialize([], {}, {
-        tools: {
-          canonical: malformed({ type: "text", text: "not an array" }),
-          entry: malformed([null]),
-          text: malformed([{ type: "text", text: 1 }]),
-          file: malformed([{ type: "file", data: 1, mime: undefined }]),
+      const materialized = yield* registry.materialize(
+        [],
+        {},
+        {
+          tools: {
+            canonical: malformed({ type: "text", text: "not an array" }),
+            entry: malformed([null]),
+            text: malformed([{ type: "text", text: 1 }]),
+            file: malformed([{ type: "file", data: 1, mime: undefined }]),
+          },
         },
-      })
+      )
 
       for (const name of ["canonical", "entry", "text", "file"]) {
         const result = yield* materialized.settle({

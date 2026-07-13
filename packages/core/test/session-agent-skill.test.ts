@@ -498,7 +498,12 @@ describe("SessionControl", () => {
       const sessions = yield* SessionV2.Service
       const id = SessionMessage.ID.make("msg_guarded_skill_retry")
       wakes.length = 0
-      yield* db.update(SessionTable).set({ agent: "reviewer" }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      yield* db
+        .update(SessionTable)
+        .set({ agent: "reviewer" })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
       yield* SessionInput.admit(db, events, {
         id,
         sessionID,
@@ -526,7 +531,12 @@ describe("SessionControl", () => {
         Layer.provide(Layer.succeed(SessionV2.Service, sessions)),
         Layer.provide(Layer.succeed(SessionRuntime.Service, fenced)),
       )
-      const before = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)
+      const before = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
       const scope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
       const control = Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), SessionControl.Service)
@@ -551,7 +561,9 @@ describe("SessionControl", () => {
             .pipe(Effect.orDie)
         }
 
-      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)).toEqual(before)
+      expect(
+        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie),
+      ).toEqual(before)
       expect(wakes).toEqual([])
       expect(yield* runtime.assert({ sessionID, owner: "v2", state: "ready", epoch: 0 })).toBeDefined()
     }),

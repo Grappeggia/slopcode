@@ -230,13 +230,15 @@ describe("PermissionV2", () => {
         save: ["/outside/file"],
       })
       expect(yield* service.ask(input)).toMatchObject({ effect: "ask" })
-      const pending = yield* service.assert({ ...input, id: PermissionV2.ID.create("per_ceiling_once") }).pipe(Effect.forkChild)
+      const pending = yield* service
+        .assert({ ...input, id: PermissionV2.ID.create("per_ceiling_once") })
+        .pipe(Effect.forkChild)
       yield* Effect.yieldNow
       yield* service.reply({ requestID: PermissionV2.ID.create("per_ceiling_once"), reply: "always" })
       yield* Fiber.join(pending)
-      expect(
-        yield* service.ask({ ...input, id: PermissionV2.ID.create("per_ceiling_future") }),
-      ).toMatchObject({ effect: "ask" })
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_ceiling_future") })).toMatchObject({
+        effect: "ask",
+      })
     }),
   )
 
