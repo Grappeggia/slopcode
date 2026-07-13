@@ -75,6 +75,32 @@ Here are all available slash commands:
 
 ---
 
+### btw
+
+Ask a quick question without interrupting your main session. Include the question after the command, or run `/btw` to open an empty side composer.
+
+```text frame="none"
+/btw Which file defines the API routes?
+```
+
+```text frame="none"
+/btw
+```
+
+After an answer, use the same composer to ask follow-ups. Every question reloads the latest main-session context and adds the completed side turns, while the agent, model, and variant selected when you opened the panel stay pinned.
+
+Side questions can read at most five unique, regular UTF-8 text files per question. Repeated reads of the same file count once, and the limit resets for every follow-up.
+
+Reads require an exact, known workspace-relative path or a named configured reference already allowed by your read permissions. They never prompt for access and cannot search, list directories, edit files, or run commands.
+
+Secure side reads work on Linux and macOS and fail closed on other platforms.
+
+If a question fails, times out, or its stream ends early, press **Enter** to retry it. Completed turns remain available, but any partial answer from the failed attempt is dropped.
+
+Press **Esc** to abort active work, close the panel, and discard its transcript. Side questions, answers, and reads are never saved to your main history.
+
+---
+
 ### connect
 
 Add a provider to SlopCode. Allows you to select from available providers and add their API keys.
