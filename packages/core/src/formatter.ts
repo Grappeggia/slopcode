@@ -22,7 +22,7 @@ export type Entry = {
   readonly environment?: Readonly<Record<string, string>>
   readonly builtin: boolean
 }
-export type Code = "formatted" | "unavailable" | "spawn-error" | "timeout" | "nonzero"
+export type Code = "formatted" | "unavailable" | "unsupported-security" | "spawn-error" | "timeout" | "nonzero"
 export type Outcome = {
   readonly name: string
   readonly code: Code
@@ -107,6 +107,37 @@ const builtins: readonly Entry[] = [
   { name: "cljfmt", extensions: [".clj", ".cljs", ".cljc", ".edn"], builtin: true },
   { name: "dfmt", extensions: [".d"], builtin: true },
 ]
+
+const args: Readonly<Record<string, readonly string[]>> = {
+  gofmt: ["-w", "$FILE"],
+  mix: ["format", "$FILE"],
+  prettier: ["--write", "$FILE"],
+  oxfmt: ["$FILE"],
+  biome: ["format", "--write", "$FILE"],
+  zig: ["fmt", "$FILE"],
+  "clang-format": ["-i", "$FILE"],
+  ktlint: ["-F", "$FILE"],
+  ruff: ["format", "$FILE"],
+  air: ["format", "$FILE"],
+  uv: ["format", "--", "$FILE"],
+  rubocop: ["--autocorrect", "$FILE"],
+  standardrb: ["--fix", "$FILE"],
+  htmlbeautifier: ["$FILE"],
+  dart: ["format", "$FILE"],
+  ocamlformat: ["-i", "$FILE"],
+  terraform: ["fmt", "$FILE"],
+  latexindent: ["-w", "-s", "$FILE"],
+  gleam: ["format", "$FILE"],
+  shfmt: ["-w", "$FILE"],
+  nixfmt: ["$FILE"],
+  rustfmt: ["$FILE"],
+  pint: ["$FILE"],
+  ormolu: ["-i", "$FILE"],
+  cljfmt: ["fix", "--quiet", "$FILE"],
+  dfmt: ["-i", "$FILE"],
+}
+
+export const builtinArguments = (name: string) => args[name]
 
 type Mutable = {
   disabled?: boolean
@@ -253,18 +284,18 @@ export const layer = Layer.effect(
         }
         switch (item.name) {
           case "gofmt":
-            return command("gofmt", "-w", "$FILE")
+            return command("gofmt", ...builtinArguments("gofmt")!)
           case "mix":
-            return command("mix", "format", "$FILE")
+            return command("mix", ...builtinArguments("mix")!)
           case "prettier": {
             if (!(yield* manifest("prettier", "package.json"))) return
             const bin = yield* npmWhich("prettier")
-            return bin ? [bin, "--write", "$FILE"] : undefined
+            return bin ? [bin, ...builtinArguments("prettier")!] : undefined
           }
           case "oxfmt": {
             if (!Flag.SLOPCODE_EXPERIMENTAL_OXFMT || !(yield* manifest("oxfmt", "package.json"))) return
             const bin = yield* npmWhich("oxfmt")
-            return bin ? [bin, "$FILE"] : undefined
+            return bin ? [bin, ...builtinArguments("oxfmt")!] : undefined
           }
           case "biome": {
             const found =
@@ -272,16 +303,16 @@ export const layer = Layer.effect(
               (yield* fs.findUp("biome.jsonc", location.directory, location.project.directory)).length > 0
             if (!found) return
             const bin = yield* npmWhich("@biomejs/biome")
-            return bin ? [bin, "format", "--write", "$FILE"] : undefined
+            return bin ? [bin, ...builtinArguments("biome")!] : undefined
           }
           case "zig":
-            return command("zig", "fmt", "$FILE")
+            return command("zig", ...builtinArguments("zig")!)
           case "clang-format":
             return (yield* fs.findUp(".clang-format", location.directory, location.project.directory)).length
-              ? command("clang-format", "-i", "$FILE")
+              ? command("clang-format", ...builtinArguments("clang-format")!)
               : undefined
           case "ktlint":
-            return command("ktlint", "-F", "$FILE")
+            return command("ktlint", ...builtinArguments("ktlint")!)
           case "ruff": {
             const bin = find("ruff")
             if (!bin) return
@@ -289,12 +320,12 @@ export const layer = Layer.effect(
               const found = yield* fs.findUp(name, location.directory, location.project.directory)
               if (!found.length) continue
               if (name !== "pyproject.toml" || (yield* fs.readFileStringSafe(found[0]!))?.includes("[tool.ruff]"))
-                return [bin, "format", "$FILE"]
+                return [bin, ...builtinArguments("ruff")!]
             }
             for (const name of ["requirements.txt", "pyproject.toml", "Pipfile"]) {
               const found = yield* fs.findUp(name, location.directory, location.project.directory)
               if (found.length && (yield* fs.readFileStringSafe(found[0]!))?.includes("ruff"))
-                return [bin, "format", "$FILE"]
+                return [bin, ...builtinArguments("ruff")!]
             }
             return
           }
@@ -304,7 +335,7 @@ export const layer = Layer.effect(
             const result = Option.getOrUndefined(yield* probe([bin, "--help"]))
             const first = result?.stdout.toString("utf8").split("\n")[0] ?? ""
             return result?.exitCode === 0 && first.includes("R language") && first.includes("formatter")
-              ? [bin, "format", "$FILE"]
+              ? [bin, ...builtinArguments("air")!]
               : undefined
           }
           case "uv": {
@@ -313,42 +344,44 @@ export const layer = Layer.effect(
             const bin = find("uv")
             if (!bin) return
             const result = Option.getOrUndefined(yield* probe([bin, "format", "--help"]))
-            return result?.exitCode === 0 ? [bin, "format", "--", "$FILE"] : undefined
+            return result?.exitCode === 0 ? [bin, ...builtinArguments("uv")!] : undefined
           }
           case "rubocop":
-            return command("rubocop", "--autocorrect", "$FILE")
+            return command("rubocop", ...builtinArguments("rubocop")!)
           case "standardrb":
-            return command("standardrb", "--fix", "$FILE")
+            return command("standardrb", ...builtinArguments("standardrb")!)
           case "htmlbeautifier":
-            return command("htmlbeautifier", "$FILE")
+            return command("htmlbeautifier", ...builtinArguments("htmlbeautifier")!)
           case "dart":
-            return command("dart", "format", "$FILE")
+            return command("dart", ...builtinArguments("dart")!)
           case "ocamlformat": {
             const bin = find("ocamlformat")
             return bin && (yield* fs.findUp(".ocamlformat", location.directory, location.project.directory)).length
-              ? [bin, "-i", "$FILE"]
+              ? [bin, ...builtinArguments("ocamlformat")!]
               : undefined
           }
           case "terraform":
-            return command("terraform", "fmt", "$FILE")
+            return command("terraform", ...builtinArguments("terraform")!)
           case "latexindent":
-            return command("latexindent", "-w", "-s", "$FILE")
+            return command("latexindent", ...builtinArguments("latexindent")!)
           case "gleam":
-            return command("gleam", "format", "$FILE")
+            return command("gleam", ...builtinArguments("gleam")!)
           case "shfmt":
-            return command("shfmt", "-w", "$FILE")
+            return command("shfmt", ...builtinArguments("shfmt")!)
           case "nixfmt":
-            return command("nixfmt", "$FILE")
+            return command("nixfmt", ...builtinArguments("nixfmt")!)
           case "rustfmt":
-            return command("rustfmt", "$FILE")
+            return command("rustfmt", ...builtinArguments("rustfmt")!)
           case "pint":
-            return (yield* manifest("laravel/pint", "composer.json")) ? ["./vendor/bin/pint", "$FILE"] : undefined
+            return (yield* manifest("laravel/pint", "composer.json"))
+              ? ["./vendor/bin/pint", ...builtinArguments("pint")!]
+              : undefined
           case "ormolu":
-            return command("ormolu", "-i", "$FILE")
+            return command("ormolu", ...builtinArguments("ormolu")!)
           case "cljfmt":
-            return command("cljfmt", "fix", "--quiet", "$FILE")
+            return command("cljfmt", ...builtinArguments("cljfmt")!)
           case "dfmt":
-            return command("dfmt", "-i", "$FILE")
+            return command("dfmt", ...builtinArguments("dfmt")!)
         }
       })
     function discover(item: Entry): Effect.Effect<readonly string[] | undefined> {

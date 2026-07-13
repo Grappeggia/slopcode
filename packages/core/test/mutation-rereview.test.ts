@@ -496,7 +496,10 @@ describe("mutation rejection re-review", () => {
               state: failure,
             })
             expect(error.recoveries.length).toBeGreaterThan(0)
-            for (const recovery of error.recoveries) expect(yield* Effect.promise(() => exists(recovery))).toBe(true)
+            for (const [index, recovery] of error.recoveries.entries()) {
+              const stat = yield* Effect.promise(() => fs.lstat(recovery, { bigint: true }))
+              expect(`${stat.dev}:${stat.ino}`).toBe(error.identities[index])
+            }
           }
         }),
       ),
@@ -551,7 +554,10 @@ describe("mutation rejection re-review", () => {
               state: failure,
             })
             expect(yield* Effect.promise(() => fs.readFile(original, "utf8"))).toBe("approved")
-            for (const recovery of error.recoveries) expect(yield* Effect.promise(() => exists(recovery))).toBe(true)
+            for (const [index, recovery] of error.recoveries.entries()) {
+              const stat = yield* Effect.promise(() => fs.lstat(recovery, { bigint: true }))
+              expect(`${stat.dev}:${stat.ino}`).toBe(error.identities[index])
+            }
           }
         }),
       ),
@@ -592,7 +598,7 @@ describe("mutation rejection re-review", () => {
         }).pipe(Effect.provide(mutation(undefined, platform)), Effect.flip)
         expect(error).toMatchObject({ _tag: "FileMutation.OperationFailureError", state: failure })
         expect("recoveries" in error).toBe(false)
-        expect((yield* Effect.promise(() => fs.readdir(directory))).filter((name) => name.includes(failure))).toEqual([])
+        expect((yield* Effect.promise(() => fs.readdir(directory))).filter((name) => name.startsWith(".slopcode-delete-"))).toEqual([])
       }
     }))),
   )

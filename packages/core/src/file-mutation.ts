@@ -83,15 +83,18 @@ export class StageUnavailableError extends Schema.TaggedErrorClass<StageUnavaila
   },
 ) {}
 
-export class RecoveryConflictError extends Schema.TaggedErrorClass<RecoveryConflictError>()(
-  "FileMutation.RecoveryConflictError",
-  {
-    path: Schema.String,
-    recovery: Schema.String,
-    recoveries: Schema.Array(Schema.String),
-    state: Schema.String,
-  },
-) {}
+export class RecoveryConflictError extends Schema.TaggedErrorClass<RecoveryConflictError>()("FileMutation.RecoveryConflictError", {
+  path: Schema.String,
+  recovery: Schema.String,
+  recoveries: Schema.Array(Schema.String),
+  identities: Schema.Array(Schema.String),
+  state: Schema.String,
+}) {}
+
+export class OperationFailureError extends Schema.TaggedErrorClass<OperationFailureError>()("FileMutation.OperationFailureError", {
+  path: Schema.String,
+  state: Schema.String,
+}) {}
 
 type Revision = {
   readonly dev: bigint
@@ -137,6 +140,7 @@ export type Error =
   | UnsupportedPlatformError
   | StageUnavailableError
   | RecoveryConflictError
+  | OperationFailureError
   | FSUtil.Error
 
 export interface Interface {
@@ -159,6 +163,7 @@ export interface Interface {
   readonly fingerprint: (result: WriteResult) => string | undefined
   readonly remove: (input: RemoveInput) => Effect.Effect<RemoveResult, Error>
   readonly private: (result: WriteResult | RemoveResult) => Private | undefined
+  readonly staging: "secure" | "unsupported-security"
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/FileMutation") {}
@@ -621,6 +626,34 @@ export const layer = Layer.effect(
                           .catch(() => undefined)
                         return current?.dev === expected.dev && current.ino === expected.ino
                       }
+                      const conflict = Effect.fnUntraced(function* (label: string, names: readonly string[]) {
+                        const entries = yield* Effect.promise(() =>
+                          Promise.all(
+                            [...new Set(names)].map(async (child) => {
+                              const current = await fs
+                                .lstat(platform.path(directory.fd, child), { bigint: true })
+                                .catch(() => undefined)
+                              return current
+                                ? {
+                                    path: path.join(path.dirname(input.target.canonical), child),
+                                    identity: `${current.dev}:${current.ino}`,
+                                  }
+                                : undefined
+                            }),
+                          ).then((values) =>
+                            values.filter((value): value is NonNullable<typeof value> => value !== undefined),
+                          ),
+                        )
+                        if (!entries.length)
+                          return yield* new OperationFailureError({ path: input.target.canonical, state: label })
+                        return yield* new RecoveryConflictError({
+                          path: input.target.canonical,
+                          recovery: entries[0]!.path,
+                          recoveries: entries.map((entry) => entry.path),
+                          identities: entries.map((entry) => entry.identity),
+                          state: label,
+                        })
+                      })
                       yield* Effect.addFinalizer(() =>
                         Effect.promise(async () => {
                           await placeholder.close().catch(() => {})
@@ -651,48 +684,25 @@ export const layer = Layer.effect(
                           yield* hooks.pause("remove-rollback", input.target.canonical)
                           if (!exchange(directory.fd, name, quarantine)) {
                             state.value = "conflict"
-                            const recovery = path.join(path.dirname(input.target.canonical), quarantine)
-                            return yield* new RecoveryConflictError({
-                              path: input.target.canonical,
-                              recovery,
-                              recoveries: [recovery, input.target.canonical],
-                              state: "rollback-exchange",
-                            })
+                            return yield* conflict("rollback-exchange", [quarantine, name])
                           }
                           state.value = "placeholder"
                           if (!unlink(directory.fd, quarantine)) {
                             state.value = "conflict"
-                            const recovery = path.join(path.dirname(input.target.canonical), quarantine)
-                            return yield* new RecoveryConflictError({
-                              path: input.target.canonical,
-                              recovery,
-                              recoveries: [recovery, input.target.canonical],
-                              state: "rollback-placeholder-unlink",
-                            })
+                            return yield* conflict("rollback-placeholder-unlink", [quarantine, name])
                           }
                           state.value = "done"
                           return yield* new TargetChangedError({ path: input.target.canonical })
                         }
                         if (!unlink(directory.fd, quarantine)) {
                           state.value = "conflict"
-                          const recovery = path.join(path.dirname(input.target.canonical), quarantine)
-                          return yield* new RecoveryConflictError({
-                            path: input.target.canonical,
-                            recovery,
-                            recoveries: [recovery, input.target.canonical],
-                            state: "approved-unlink",
-                          })
+                          return yield* conflict("approved-unlink", [quarantine, name])
                         }
                         state.value = "public"
                         cleanup = `.slopcode-delete-${crypto.randomBytes(16).toString("hex")}`
                         if (!move(directory.fd, name, cleanup)) {
                           state.value = "conflict"
-                          return yield* new RecoveryConflictError({
-                            path: input.target.canonical,
-                            recovery: input.target.canonical,
-                            recoveries: [input.target.canonical],
-                            state: "placeholder-move",
-                          })
+                          return yield* conflict("placeholder-move", [name, cleanup])
                         }
                         placeholderMoved = true
                         yield* hooks.pause("remove-placeholder-moved", input.target.canonical)
@@ -702,26 +712,14 @@ export const layer = Layer.effect(
                         if (placeholderIdentity.dev !== moved.dev || placeholderIdentity.ino !== moved.ino) {
                           if (!move(directory.fd, cleanup, name)) {
                             state.value = "conflict"
-                            const recovery = path.join(path.dirname(input.target.canonical), cleanup)
-                            return yield* new RecoveryConflictError({
-                              path: input.target.canonical,
-                              recovery,
-                              recoveries: [recovery, input.target.canonical],
-                              state: "placeholder-restore",
-                            })
+                            return yield* conflict("placeholder-restore", [cleanup, name])
                           }
                           state.value = "done"
                           return yield* new TargetChangedError({ path: input.target.canonical })
                         }
                         if (!unlink(directory.fd, cleanup)) {
                           state.value = "conflict"
-                          const recovery = path.join(path.dirname(input.target.canonical), cleanup)
-                          return yield* new RecoveryConflictError({
-                            path: input.target.canonical,
-                            recovery,
-                            recoveries: [recovery],
-                            state: "placeholder-unlink",
-                          })
+                          return yield* conflict("placeholder-unlink", [cleanup, name])
                         }
                         state.value = "done"
                         return removed(input.target, true)
@@ -729,6 +727,7 @@ export const layer = Layer.effect(
                         Effect.catch((error) => {
                           if (
                             error instanceof RecoveryConflictError ||
+                            error instanceof OperationFailureError ||
                             state.value === "placeholder" ||
                             state.value === "done"
                           ) {
@@ -736,19 +735,13 @@ export const layer = Layer.effect(
                           }
                           const current = state.value
                           state.value = "conflict"
-                          const recoveries =
+                          return conflict(
+                            cleanup ? "placeholder-inspection" : "approved-inspection",
                             current === "approved" || !cleanup
-                              ? [path.join(path.dirname(input.target.canonical), quarantine), input.target.canonical]
+                              ? [quarantine, name]
                               : placeholderMoved
-                                ? [path.join(path.dirname(input.target.canonical), cleanup)]
-                                : [input.target.canonical]
-                          return Effect.fail(
-                            new RecoveryConflictError({
-                              path: input.target.canonical,
-                              recovery: recoveries[0]!,
-                              recoveries,
-                              state: cleanup ? "placeholder-inspection" : "approved-inspection",
-                            }),
+                                ? [cleanup, name]
+                                : [name],
                           )
                         }),
                       )
@@ -782,6 +775,7 @@ export const layer = Layer.effect(
       },
       remove,
       private: (value) => data.get(value),
+      staging: platform.capabilities.staging && platform.executable ? "secure" : "unsupported-security",
     })
   }),
 )

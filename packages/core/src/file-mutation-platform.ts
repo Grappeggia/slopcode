@@ -41,9 +41,8 @@ export const make = Effect.acquireRelease(
       return {
         value: Platform.of({
           name: "darwin",
-          capabilities: { mutation: true, staging: true, exchange: true },
+          capabilities: { mutation: true, staging: false, exchange: true },
           path: (directory, child = "") => descriptorPath("darwin", directory, child),
-          executable: (_directory, child, parent) => `${parent}/${child}`,
           exchange: (directory, left, right) =>
             libc.symbols.renameatx_np(directory, pointer(left), directory, pointer(right), 0x00000002) === 0,
           move: (directory, left, right) =>

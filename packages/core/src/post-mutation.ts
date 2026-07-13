@@ -68,7 +68,10 @@ export const layer = Layer.effect(
           const stage = yield* files.stage({ target, content: immediate })
           if (!stage)
             return {
-              formatted: { matched: false, outcomes: [{ name: "stage", code: "unavailable" as const }] },
+              formatted:
+                files.staging === "secure"
+                  ? { matched: false, outcomes: [{ name: "stage", code: "unavailable" as const }] }
+                  : { matched: false, outcomes: [{ name: "security", code: "unsupported-security" as const }] },
               final: immediate,
             }
           yield* stage.verify

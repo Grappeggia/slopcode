@@ -175,9 +175,28 @@ describe("Formatter", () => {
         gleam: ["format", "$FILE"], shfmt: ["-w", "$FILE"], nixfmt: ["$FILE"], rustfmt: ["$FILE"],
         pint: ["$FILE"], ormolu: ["-i", "$FILE"], cljfmt: ["fix", "--quiet", "$FILE"], dfmt: ["-i", "$FILE"],
       } as const
-      expect(Object.fromEntries(Formatter.resolve([document(true)]).map((item) => [item.name, Formatter.arguments(item.name)]))).toEqual(expected)
-      expect(Formatter.arguments("unknown")).toBeUndefined()
+      expect(Object.fromEntries(Formatter.resolve([document(true)]).map((item) => [item.name, Formatter.builtinArguments(item.name)]))).toEqual(expected)
+      expect(Formatter.builtinArguments("unknown")).toBeUndefined()
     }),
+  )
+
+  it.live("reports every builtin unavailable without executables or prerequisite evidence", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()).pipe(Effect.map((tmp) => ({ tmp, path: process.env.PATH }))),
+      ({ tmp }) => {
+        process.env.PATH = ""
+        return withFormatter(tmp.path, [document(true)], Effect.gen(function* () {
+          const status = yield* (yield* Formatter.Service).status()
+          expect(status).toHaveLength(26)
+          expect(status.every((item) => !item.available && item.outcome === "unavailable")).toBe(true)
+        }))
+      },
+      ({ tmp, path: original }) => Effect.promise(async () => {
+        if (original === undefined) delete process.env.PATH
+        else process.env.PATH = original
+        await tmp[Symbol.asyncDispose]()
+      }),
+    ),
   )
 
   it.effect("reads the oxfmt flag at runtime with experimental inheritance", () =>
