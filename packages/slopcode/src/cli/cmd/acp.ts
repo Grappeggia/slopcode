@@ -5,6 +5,13 @@ import { ServerAuth } from "@/server/auth"
 import { createSlopcodeClient } from "@slopcode-ai/sdk/v2"
 import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import { ACPProfile } from "@/acp/profile"
+import { once } from "node:events"
+import type { Readable } from "node:stream"
+
+export function waitForEnd(input: Readable) {
+  if (input.readableEnded) return Promise.resolve()
+  return once(input, "end").then(() => undefined)
+}
 
 export const AcpCommand = effectCmd({
   command: "acp",
@@ -29,6 +36,8 @@ export const AcpCommand = effectCmd({
       headers: ServerAuth.headers(),
     })
 
+    // Latch EOF before the data listener puts stdin into flowing mode.
+    const ended = waitForEnd(process.stdin)
     const input = new WritableStream<Uint8Array>({
       write(chunk) {
         return new Promise<void>((resolve, reject) => {
@@ -44,11 +53,15 @@ export const AcpCommand = effectCmd({
     })
     const output = new ReadableStream<Uint8Array>({
       start(controller) {
+        if (process.stdin.readableEnded) {
+          controller.close()
+          return
+        }
+        process.stdin.on("end", () => controller.close())
+        process.stdin.on("error", (err) => controller.error(err))
         process.stdin.on("data", (chunk: Buffer) => {
           controller.enqueue(new Uint8Array(chunk))
         })
-        process.stdin.on("end", () => controller.close())
-        process.stdin.on("error", (err) => controller.error(err))
       },
     })
 
@@ -62,12 +75,6 @@ export const AcpCommand = effectCmd({
 
     yield* Effect.logInfo("setup connection")
     process.stdin.resume()
-    yield* Effect.promise(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          process.stdin.on("end", () => resolve())
-          process.stdin.on("error", reject)
-        }),
-    )
+    yield* Effect.promise(() => ended)
   }),
 })
