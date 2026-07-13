@@ -234,3 +234,75 @@ Result before production edits: `0 pass, 6 fail`. All six cases failed at the ab
 
 - None for the requested Linux security and behavioral contract.
 - Descriptor-relative mutation intentionally fails closed on non-Linux platforms until an equivalent native adapter is implemented; it does not fall back to vulnerable pathname mutation.
+
+## Atomic Settlement Re-review
+
+This appendix supersedes the preceding delete-atomicity, staging-location, portability, event-fingerprint, and full-matrix claims.
+
+Status: `DONE_WITH_CONCERNS`
+
+### Commits
+
+- Re-review base: `cc46e725be`.
+- RED: `c94a895d63 test(core): expose H5E1 atomic settlement gaps`.
+- GREEN: `9dd0ccd863 fix(core): make mutation settlement atomic`.
+- Specs: `254cec3e58 docs: specify atomic mutation settlement`.
+- Report: the commit containing this appendix.
+- Pushes: none.
+
+### RED Evidence
+
+Command from `packages/core`:
+
+```text
+bun test test/mutation-rereview.test.ts --timeout 2000
+```
+
+Result before production edits: `1 pass, 7 fail`. The delete test timed out because no post-check/pre-atomic barrier existed. The other failures proved system-tmp staging, commit-before-fence behavior, absent no-match validation, the 16 MiB durable-mutation failure, missing platform adapter, and completion-time pathname fingerprint adoption.
+
+### Atomic Delete
+
+- `file-mutation-platform.ts` is the explicit platform adapter. Linux/Bun loads libc through FFI and exposes dirfd-relative `renameat2(RENAME_EXCHANGE)`, `renameat2(RENAME_NOREPLACE)`, and `unlinkat` operations.
+- Delete opens and records the approved inode, creates an unpredictable exclusive placeholder quarantine, pauses at the deterministic boundary after the prior identity check, and atomically exchanges the public child with the quarantine.
+- The quarantined inode is verified against the approved open handle. Mismatch atomically exchanges the replacement back and unlinks only the known placeholder quarantine; the replacement is never deleted.
+- Success unlinks the approved random quarantine. Public-name placeholder cleanup is moved with `RENAME_NOREPLACE` into a second unpredictable quarantine, verified against the placeholder handle, and only then unlinked. A substituted public child is restored rather than unlinked.
+
+### Staging And Fencing
+
+- Linux stages through the verified target-directory handle as an unpredictable exclusive `0600` hidden, same-basename-derived, same-extension file. No system tmp path or 16 MiB bound remains.
+- Formatter argv uses `/proc/<owner-pid>/fd/<dirfd>/<stage>` so child processes resolve the stable parent handle without inheriting the fd. This is the documented narrow security deviation from canonical target argv.
+- A real Prettier integration proves nearest target-directory `.prettierrc` discovery, hidden explicit-file formatting, extension matching, final commit, and cleanup.
+- Stage cleanup is registered immediately after exclusive creation and covers before-open, post-create/pre-write, post-write/pre-close, interruption, and scope shutdown. Ordinary stage creation/write inability is a bounded nonfatal `unavailable` formatter outcome after final target validation.
+- The coordinator checks the runtime fence after formatter return and immediately before commit. The locked commit rechecks the same guard after revision/content validation and before writing.
+- Unmatched formatting and unavailable staging always execute descriptor-backed final identity/revision validation before events. Replacement or edit fails stale with no event.
+- Files larger than 16 MiB stage and settle normally; dedicated coverage writes and verifies `16 MiB + 1` byte.
+
+### Portability And Events
+
+- Mock Darwin and Windows adapters retain create/write/conditional-write/delete primitive parity. Because they lack equivalent descriptor security, formatting is skipped with one bounded `unsupported-security` outcome instead of failing write/edit/apply_patch.
+- Primitive and formatter commit results retain exact device/inode/size/mtime/ctime/content fingerprints. `MutationEvents.Ownership.complete` now requires that expected fingerprint and never rereads/adopts the pathname.
+- A replacement before completion differs from the expected fingerprint and remains publishable as native. Private `.slopcode-` stage paths are ignored both in watcher subscription patterns and callback defense.
+
+### Integration Matrix
+
+- Real `Formatter.layer` execution is covered through write, edit, and sequential apply_patch tool settlement.
+- Actual Location-scoped formatter close/reopen proves positive discovery cache disposal and executable rediscovery.
+- Watcher stage filtering, timeout-as-nonfatal settlement, restart/no-replay, existing process timeout/tree cleanup, and all prior crash/recovery suites are covered.
+- Previous no-op, failed primitive, BOM, once-only primitive, ruff/ocamlformat path pinning, target/parent swaps, diagnostics/event fences, and interruption cleanup remain green.
+
+### Final Verification
+
+- Focused Core H5E1 matrix: `365 pass, 0 fail`, 15 files, `1174 expect()` calls.
+- Core full: `1577 pass, 0 fail`, 164 files, `4919 expect()` calls.
+- CodeMode full: `254 pass, 0 fail`, 7 files, `744 expect()` calls.
+- V1 formatter/config compatibility: `105 pass, 0 fail`, 2 files, `173 expect()` calls.
+- Core, server, Slopcode, and CodeMode typechecks: pass.
+- Frozen install: `2372` installs checked across `2656` packages, no changes.
+- Source audits: no lstat/pathname-unlink sequence, system-tmp staging, stage-size bound, live-target formatter invocation, completion-time fingerprint reread, V1 runtime import, implicit shell, or process-environment mutation.
+- `git diff --check`: pass.
+- Full Slopcode isolated aggregate: `3110 pass, 22 skip, 1 todo, 1 fail`, 248 files, 50 snapshots, `8604 expect()` calls. The only failure was unrelated `HttpApi Server.listen > graceful stop waits for an overlapping forced stop`; its immediate isolated rerun passed `11/11` with `40 expect()` calls.
+
+### Final Concerns
+
+- The full Slopcode aggregate retained one unrelated timing-sensitive HTTP shutdown failure that passes in isolation.
+- Non-Linux adapters deliberately skip post-mutation formatting until equivalent descriptor-relative staging/commit primitives exist; primitive mutation behavior remains available and tested.
