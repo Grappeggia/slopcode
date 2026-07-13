@@ -135,8 +135,8 @@ function powershellEnv(text: string) {
     if (char !== "$") continue
 
     if (text.slice(i + 1, i + 5).toLowerCase() === "env:") {
-      const match = /^[A-Za-z0-9_?]+/.exec(text.slice(i + 5))
-      if (!match) continue
+      const match = /^[\p{L}\p{Nd}_?]+/u.exec(text.slice(i + 5))
+      if (!match) throw new SyntaxError("powershell")
       result.push({ start: i, end: i + 5 + match[0].length, key: match[0] })
       i += 4 + match[0].length
       continue

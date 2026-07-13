@@ -658,6 +658,60 @@ describe("tool.shell permissions", () => {
     }
 
     for (const item of ps) {
+      it.live(`asks for external_directory permission for complex PowerShell env paths [${item.label}]`, () =>
+        withShell(
+          item,
+          Effect.acquireUseRelease(
+            Effect.sync(() => {
+              const known = "ÉSLOPCODE_TEST_WINDIR"
+              const missing = "ÉSLOPCODE_TEST_MISSING"
+              const punct = "ProgramFiles(x86)"
+              const prev = new Map([known, missing, punct].map((key) => [key, process.env[key]]))
+              process.env[known] = process.env.WINDIR
+              delete process.env[missing]
+              process.env[punct] = process.env.WINDIR
+              return { known, missing, punct, prev }
+            }),
+            ({ known, missing, punct }) =>
+              runIn(
+                projectRoot,
+                Effect.gen(function* () {
+                  const root = path.parse(process.env.WINDIR!).root.replace(/[\\/]+$/, "")
+                  const cases = [
+                    `Get-Content $env:${known}/win.ini`,
+                    `Get-Content -Path "${root}$env:${missing}\\Windows\\win.ini"`,
+                    "Get-Content ${env:" + punct + "}/win.ini",
+                  ]
+                  for (const command of cases) {
+                    const err = new Error("stop after permission")
+                    const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+                    expect(
+                      yield* fail(
+                        { command, description: "Read Windows ini from complex env" },
+                        capture(requests, err),
+                      ),
+                    ).toMatchObject({ message: err.message })
+                    expect(requests[0]?.permission).toBe("external_directory")
+                    if (requests[0]?.permission !== "external_directory") continue
+                    expect(requests[0].patterns).toContain(
+                      Filesystem.normalizePathPattern(path.join(process.env.WINDIR!, "*")),
+                    )
+                  }
+                }),
+              ),
+            ({ prev }) =>
+              Effect.sync(() => {
+                for (const [key, value] of prev) {
+                  if (value === undefined) delete process.env[key]
+                  else process.env[key] = value
+                }
+              }),
+          ),
+        ),
+      )
+    }
+
+    for (const item of ps) {
       it.live(`asks for external_directory permission for PowerShell FileSystem paths [${item.label}]`, () =>
         withShell(
           item,

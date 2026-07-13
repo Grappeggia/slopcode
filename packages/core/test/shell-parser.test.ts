@@ -139,21 +139,31 @@ describe("ShellParser PowerShell resources", () => {
     "Get-Content $env:WINDIR/win.ini",
     "Get-Content ${env:WINDIR}/win.ini",
     "Get-Content $env:1NAME/path",
+    "Get-Content $env:ÉROOT/path",
+    "Get-Content $env:不存在/path",
+    "Get-Content ${env:ProgramFiles(x86)}/tool.exe",
     "Get-Content ${env:WIN`}DIR}/win.ini",
     "Get-Content ${env:WINDIR``}/win.ini",
   ])("preserves an environment path argument: %s", async (command) => {
     expect(await powershell(command)).toEqual([command])
   })
 
-  test("expands numeric and escaped environment names", () => {
+  test("expands numeric, Unicode, punctuation, and escaped environment names", () => {
     const keys: string[] = []
     expect(
-      ShellParser.expandEnv("$env:1NAME/a ${env:WIN`}DIR}/b ${env:TICK``NAME}/c", (key) => {
-        keys.push(key)
-        return `[${key}]`
-      }),
-    ).toBe("[1NAME]/a [WIN}DIR]/b [TICK`NAME]/c")
-    expect(keys).toEqual(["1NAME", "WIN}DIR", "TICK`NAME"])
+      ShellParser.expandEnv(
+        "$env:1NAME/a $env:ÉROOT/b $env:不存在/c ${env:ProgramFiles(x86)}/d ${env:WIN`}DIR}/e ${env:TICK``NAME}/f",
+        (key) => {
+          keys.push(key)
+          return key === "不存在" ? "" : `[${key}]`
+        },
+      ),
+    ).toBe("[1NAME]/a [ÉROOT]/b /c [ProgramFiles(x86)]/d [WIN}DIR]/e [TICK`NAME]/f")
+    expect(keys).toEqual(["1NAME", "ÉROOT", "不存在", "ProgramFiles(x86)", "WIN}DIR", "TICK`NAME"])
+  })
+
+  test("rejects an active environment prefix without an expandable name", () => {
+    expect(() => ShellParser.expandEnv("$env:-ROOT/path", () => "unused")).toThrow(ShellParser.SyntaxError)
   })
 
   test("rejects expansion of a braced environment name with only an escaped terminator", () => {
@@ -178,9 +188,9 @@ describe("ShellParser PowerShell resources", () => {
   })
 
   test("maps fallback parser offsets to the original source", async () => {
-    expect(await powershell('Write-Output "π"; Get-Content $env:1NAME/path; Remove-Item target')).toEqual([
+    expect(await powershell('Write-Output "π"; Get-Content $env:ÉROOT/path; Remove-Item target')).toEqual([
       'Write-Output "π"',
-      "Get-Content $env:1NAME/path",
+      "Get-Content $env:ÉROOT/path",
       "Remove-Item target",
     ])
   })
