@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { Catalog } from "@slopcode-ai/core/catalog"
 import { Integration } from "@slopcode-ai/core/integration"
 import { ModelV2 } from "@slopcode-ai/core/model"
@@ -46,6 +46,48 @@ describe("OpenAIPlugin", () => {
         refresh: "refresh-preserved",
         metadata: { accountID: "account-new", workspace: "work" },
       })
+    }),
+  )
+
+  it.live("aborts interrupted V2 OAuth refreshes and retries", () =>
+    Effect.gen(function* () {
+      const original = globalThis.fetch
+      let started: (() => void) | undefined
+      const ready = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      let calls = 0
+      let aborts = 0
+      globalThis.fetch = async (_input, init) => {
+        calls++
+        if (calls > 1) return Response.json({ access_token: "access-retried", expires_in: 60 })
+        return new Promise((_resolve, reject) => {
+          started!()
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              aborts++
+              reject(init.signal?.reason)
+            },
+            { once: true },
+          )
+        })
+      }
+      yield* Effect.addFinalizer(() => Effect.sync(() => void (globalThis.fetch = original)))
+      const value = new Credential.OAuth({
+        type: "oauth",
+        methodID: Integration.MethodID.make("chatgpt-browser"),
+        access: "expired",
+        refresh: "refresh-aborted",
+        expires: 0,
+      })
+      const interrupted = yield* browser.refresh!(value).pipe(Effect.forkChild)
+      yield* Effect.promise(() => ready)
+      yield* Fiber.interrupt(interrupted)
+
+      expect(aborts).toBe(1)
+      expect((yield* browser.refresh!(value)).access).toBe("access-retried")
+      expect(calls).toBe(2)
     }),
   )
 

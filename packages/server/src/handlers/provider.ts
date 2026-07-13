@@ -8,7 +8,7 @@ import {
   type Credential as OpenAICredential,
   type Options as OpenAIUsageOptions,
 } from "@slopcode-ai/core/plugin/provider/openai-usage"
-import { Effect } from "effect"
+import { Context, Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { ProviderNotFoundError, ServiceUnavailableError } from "../errors"
@@ -17,6 +17,10 @@ import { response } from "../groups/location"
 const catalogUnavailable = new ServiceUnavailableError({
   message: "Provider catalog is unavailable",
   service: "catalog",
+})
+
+export const OpenAIUsageConfig = Context.Reference<OpenAIUsageOptions>("@slopcode/server/OpenAIUsageConfig", {
+  defaultValue: () => ({}),
 })
 
 export function openAIUsage(credentials: Credential.Interface, options: OpenAIUsageOptions = {}) {
@@ -93,7 +97,7 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
         "provider.openaiUsage",
         Effect.fn(function* () {
           const credentials = yield* Credential.Service
-          return yield* response(openAIUsage(credentials))
+          return yield* response(openAIUsage(credentials, yield* OpenAIUsageConfig))
         }),
       )
   }),

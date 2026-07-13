@@ -12,7 +12,11 @@ import { authorizationLayer } from "./middleware/authorization"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { PluginServer } from "./plugin"
 
-export function createRoutes(password?: string, host?: Layer.Layer<PluginPackage.Host>) {
+export function createRoutes(
+  password?: string,
+  host?: Layer.Layer<PluginPackage.Host>,
+  locations?: Layer.Layer<LocationServiceMap>,
+) {
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(handlers),
     Layer.provide(authorizationLayer),
@@ -22,7 +26,7 @@ export function createRoutes(password?: string, host?: Layer.Layer<PluginPackage
         ? ServerAuth.Config.layer({ username: "slopcode", password: Option.some(password) })
         : ServerAuth.Config.defaultLayer,
     ),
-    Layer.provide(host ? withPluginHost(host) : LocationServiceMap.layer),
+    Layer.provide(locations ?? (host ? withPluginHost(host) : LocationServiceMap.layer)),
     Layer.provide(Database.defaultLayer),
     Layer.provide(EventV2.defaultLayer),
     Layer.provide(FetchHttpClient.layer),

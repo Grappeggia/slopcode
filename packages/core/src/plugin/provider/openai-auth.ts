@@ -158,14 +158,17 @@ function exchange(code: string, redirect: string, pkce: Pkce) {
 
 function refresh(value: Credential.OAuth) {
   return Effect.tryPromise({
-    try: () =>
-      refreshOAuth({
-        type: "oauth",
-        refresh: value.refresh,
-        access: value.access,
-        expires: value.expires,
-        ...(value.metadata?.accountID && { accountID: value.metadata.accountID }),
-      }),
+    try: (signal) =>
+      refreshOAuth(
+        {
+          type: "oauth",
+          refresh: value.refresh,
+          access: value.access,
+          expires: value.expires,
+          ...(value.metadata?.accountID && { accountID: value.metadata.accountID }),
+        },
+        { signal },
+      ),
     catch: (cause) => cause,
   }).pipe(
     Effect.map(

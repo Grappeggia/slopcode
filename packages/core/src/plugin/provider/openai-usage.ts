@@ -74,6 +74,7 @@ export type Options = {
   readonly endpoint?: string
   readonly issuer?: string
   readonly now?: () => number
+  readonly signal?: AbortSignal
   readonly timeout?: number
 }
 
@@ -207,7 +208,9 @@ export async function refreshAccessToken(refresh: string, options: Options = {})
       refresh_token: refresh,
       client_id: clientID,
     }).toString(),
-    signal: AbortSignal.timeout(options.timeout ?? timeout),
+    signal: options.signal
+      ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeout ?? timeout)])
+      : AbortSignal.timeout(options.timeout ?? timeout),
   }).then(async (response) => {
     if (!response.ok) throw new Error(`Token refresh failed: ${response.status}`)
     const value = record(await response.json())
@@ -222,8 +225,18 @@ export async function refreshAccessToken(refresh: string, options: Options = {})
         Number.isFinite(value.expires_in) && { expires_in: value.expires_in }),
     }
   })
-  const shared = result.finally(() => pending.delete(key))
+  let shared: Promise<TokenResponse>
+  const clear = () => {
+    if (pending.get(key) === shared) pending.delete(key)
+  }
+  shared = result.finally(clear)
   pending.set(key, shared)
+  if (options.signal) {
+    options.signal.addEventListener("abort", clear, { once: true })
+    if (options.signal.aborted) clear()
+    const cleanup = () => options.signal?.removeEventListener("abort", clear)
+    void shared.then(cleanup, cleanup)
+  }
   return shared
 }
 
