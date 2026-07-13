@@ -224,8 +224,6 @@ const resolve = async (cwd: string, ref: string) => {
   return result.code === 0 ? result.stdout : undefined
 }
 
-const exists = async (cwd: string, ref: string) => (await run(cwd, ["rev-parse", "--verify", ref])).code === 0
-
 const ancestor = async (cwd: string, older: string, newer: string) => {
   const result = await run(cwd, ["merge-base", "--is-ancestor", older, newer])
   if (result.code === 0) return true
@@ -245,13 +243,14 @@ const tag = (value: string, stable = false) => {
 
 type ReleaseTag = { tag: string; ref: string; version: string; sha: string }
 
+export const releaseSeries = ">=0.2.0 <0.3.0"
+
 type RemoteHistory = {
   cwd: string
   remote: string
   branch: string
   target: string
   targetVersion: string
-  tags: string
   upstream: string
   published: ReleaseTag[]
   highest?: ReleaseTag
@@ -290,6 +289,11 @@ const history = (cwd: string, items: ReleaseTag[], source: string) =>
 const remoteHistory = async (options: { target: string; cwd: string; remote: string; branch: string }) => {
   const target = tag(options.target, true)
   const targetVersion = target.slice(1)
+  if (!semver.satisfies(targetVersion, releaseSeries)) {
+    throw new Error(
+      `Release target "${options.target}" is outside the configured SlopCode release series "${releaseSeries}".`,
+    )
+  }
   const tags = `refs/slopcode/lineage/${options.remote}/tags/`
   const heads = `refs/slopcode/lineage/${options.remote}/heads/`
   await git(options.cwd, [
@@ -305,17 +309,17 @@ const remoteHistory = async (options: { target: string; cwd: string; remote: str
   const upstream = await resolve(options.cwd, `refs/remotes/${options.remote}/${options.branch}`)
   if (!upstream)
     throw new Error(`Could not resolve freshly fetched canonical branch ${options.remote}/${options.branch}.`)
-  const published = await releases(options.cwd, tags)
+  const all = await releases(options.cwd, tags)
+  const published = all.filter((item) => semver.satisfies(item.version, releaseSeries))
   return {
     ...options,
     target,
     targetVersion,
-    tags,
     upstream,
     published,
     highest: published[0],
     priors: prior(published, targetVersion),
-    targetSha: await resolve(options.cwd, `${tags}${target}`),
+    targetSha: (await resolve(options.cwd, `${tags}${target}`)) ?? all.find((item) => item.tag === target)?.sha,
     stateSha: await resolve(options.cwd, `${heads}${releaseStateRef.slice("refs/heads/".length)}`),
   } satisfies RemoteHistory
 }
@@ -444,7 +448,7 @@ export async function gateLineage(options: LineageOptions): Promise<LineageResul
   const remote = options.remote ?? "origin"
   const branch = options.branch ?? "dev"
   const fetched = await remoteHistory({ target: options.target, cwd, remote, branch })
-  const { target, targetVersion, tags, upstream, highest, priors } = fetched
+  const { target, targetVersion, upstream, highest, priors } = fetched
 
   if (options.mode === "verify") {
     const source = await resolve(cwd, options.source)
@@ -490,7 +494,9 @@ export async function gateLineage(options: LineageOptions): Promise<LineageResul
     throw new Error(`Latest release tag "${previousTag}" could not be resolved to a commit.`)
   }
 
-  const targetLocalSha = await resolve(cwd, `refs/tags/${target}`)
+  const targetLocalSha =
+    (await resolve(cwd, `refs/tags/${target}`)) ??
+    (await releases(cwd, "refs/tags/")).find((item) => item.tag === target)?.sha
   const targetRemoteSha = fetched.targetSha
   if (options.resume && targetLocalSha && targetRemoteSha && targetLocalSha !== targetRemoteSha) {
     throw new LineageError([
@@ -525,8 +531,8 @@ export async function gateLineage(options: LineageOptions): Promise<LineageResul
       !!(options.resume && targetRemoteSha && highest.tag === target),
     highest: highest?.tag,
     priors: ancestry,
-    targetLocal: options.resume ? false : await exists(cwd, `refs/tags/${target}`),
-    targetRemote: options.resume ? false : await exists(cwd, `${tags}${target}`),
+    targetLocal: options.resume ? false : !!targetLocalSha,
+    targetRemote: options.resume ? false : !!targetRemoteSha,
     previous:
       previousTag && previousSha
         ? {

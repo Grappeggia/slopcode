@@ -94,6 +94,7 @@ if (mode !== "publish") {
     console.log("updated:", extensionToml)
     await Bun.file(extensionToml).write(toml)
 
+    await $`bun install --lockfile-only --ignore-scripts`.cwd(dir)
     await $`bun install --frozen-lockfile`.cwd(dir)
   }
 }
