@@ -2,7 +2,7 @@ export * as SlopCode from "./slopcode"
 
 import path from "path"
 import { type ParseError, parse } from "jsonc-parser"
-import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect"
 import { Catalog } from "../catalog"
 import { Config } from "../config"
 import { Database } from "../database/database"
@@ -200,7 +200,9 @@ export const layer = Layer.effect(
           }),
         message: (input) => sessions.message({ sessionID: input.sessionID, messageID: input.messageID }),
         context: sessions.context,
-        events: (input) => sessions.events({ sessionID: input.sessionID, after: input.after }),
+        events: (input) => sessions.events({ sessionID: input.sessionID, after: input.after }).pipe(
+          Stream.filter((event): event is Session.Event => EventV2.isPublic(event.event)),
+        ),
       },
     })
   }),

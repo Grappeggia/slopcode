@@ -53,7 +53,7 @@ test("standalone SSE publishes function V1 and excludes internal custom V2", asy
       version: 1,
       data: { input: { value: true } },
     })
-    await reader.cancel()
+    expect(await Promise.race([reader.cancel().then(() => true), Bun.sleep(500).then(() => false)])).toBe(true)
   } finally {
     controller.abort()
     await app.dispose()

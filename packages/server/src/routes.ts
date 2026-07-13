@@ -16,6 +16,7 @@ export function createRoutes(
   password?: string,
   host?: Layer.Layer<PluginPackage.Host>,
   locations?: Layer.Layer<LocationServiceMap>,
+  events: Layer.Layer<EventV2.Service> = EventV2.defaultLayer,
 ) {
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
     Layer.provide(handlers),
@@ -28,14 +29,18 @@ export function createRoutes(
     ),
     Layer.provide(locations ?? (host ? withPluginHost(host) : LocationServiceMap.layer)),
     Layer.provide(Database.defaultLayer),
-    Layer.provide(EventV2.defaultLayer),
+    Layer.provide(events),
     Layer.provide(FetchHttpClient.layer),
   )
 }
 
 export const routes = createRoutes()
 
-export function webHandler(options?: { readonly baseUrl?: URL | (() => URL); readonly password?: string }) {
+export function webHandler(options?: {
+  readonly baseUrl?: URL | (() => URL)
+  readonly password?: string
+  readonly events?: EventV2.Interface
+}) {
   let handler: ReturnType<typeof HttpRouter.toWebHandler>["handler"] | undefined
   const plugins = PluginServer.runtime({
     baseUrl: options?.baseUrl ?? new URL("http://localhost"),
@@ -49,7 +54,12 @@ export function webHandler(options?: { readonly baseUrl?: URL | (() => URL); rea
       return handler(next, undefined as never)
     },
   })
-  const routes = createRoutes(options?.password, plugins.layer)
+  const routes = createRoutes(
+    options?.password,
+    plugins.layer,
+    undefined,
+    options?.events ? Layer.succeed(EventV2.Service, EventV2.Service.of(options.events)) : EventV2.defaultLayer,
+  )
   const app = HttpRouter.toWebHandler(routes.pipe(Layer.provide(HttpServer.layerServices)), { disableLogger: true })
   handler = app.handler
   return Object.assign(app, { pluginHost: plugins, workspace: plugins.workspace })

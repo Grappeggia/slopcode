@@ -38,7 +38,8 @@ export type ListInput = SessionV2.ListInput
 
 export const EventCursor = EventV2.Cursor
 export type EventCursor = EventV2.Cursor
-export type Event = EventV2.CursorEvent<SessionEvent.DurableEvent>
+export type EventPayload = Exclude<SessionEvent.DurableEvent, typeof SessionEvent.Tool.CalledV2.Type>
+export type Event = EventV2.CursorEvent<EventPayload>
 
 export const NotFoundError = SessionV2.NotFoundError
 export type NotFoundError = SessionV2.NotFoundError
