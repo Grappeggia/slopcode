@@ -200,9 +200,10 @@ export const layer = Layer.effect(
           }),
         message: (input) => sessions.message({ sessionID: input.sessionID, messageID: input.messageID }),
         context: sessions.context,
-        events: (input) => sessions.events({ sessionID: input.sessionID, after: input.after }).pipe(
-          Stream.filter((event): event is Session.Event => EventV2.isPublic(event.event)),
-        ),
+        events: (input) =>
+          sessions
+            .events({ sessionID: input.sessionID, after: input.after })
+            .pipe(Stream.filter((event): event is Session.Event => EventV2.isPublic(event.event))),
       },
     })
   }),

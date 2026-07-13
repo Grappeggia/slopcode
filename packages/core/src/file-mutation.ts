@@ -84,18 +84,24 @@ export class StageUnavailableError extends Schema.TaggedErrorClass<StageUnavaila
   },
 ) {}
 
-export class RecoveryConflictError extends Schema.TaggedErrorClass<RecoveryConflictError>()("FileMutation.RecoveryConflictError", {
-  path: Schema.String,
-  recovery: Schema.String,
-  recoveries: Schema.Array(Schema.String),
-  identities: Schema.Array(Schema.String),
-  state: Schema.String,
-}) {}
+export class RecoveryConflictError extends Schema.TaggedErrorClass<RecoveryConflictError>()(
+  "FileMutation.RecoveryConflictError",
+  {
+    path: Schema.String,
+    recovery: Schema.String,
+    recoveries: Schema.Array(Schema.String),
+    identities: Schema.Array(Schema.String),
+    state: Schema.String,
+  },
+) {}
 
-export class OperationFailureError extends Schema.TaggedErrorClass<OperationFailureError>()("FileMutation.OperationFailureError", {
-  path: Schema.String,
-  state: Schema.String,
-}) {}
+export class OperationFailureError extends Schema.TaggedErrorClass<OperationFailureError>()(
+  "FileMutation.OperationFailureError",
+  {
+    path: Schema.String,
+    state: Schema.String,
+  },
+) {}
 
 type Revision = {
   readonly dev: bigint

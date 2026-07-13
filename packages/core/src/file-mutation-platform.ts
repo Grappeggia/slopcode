@@ -52,7 +52,9 @@ export const make = Effect.acquireRelease(
             const buffer = Buffer.alloc(1024)
             if (libc.symbols.fcntl(directory, 50, ffi.ptr(buffer)) !== 0) return undefined
             const end = buffer.indexOf(0)
-            const located = await fs.realpath(buffer.subarray(0, end < 0 ? buffer.length : end).toString()).catch(() => undefined)
+            const located = await fs
+              .realpath(buffer.subarray(0, end < 0 ? buffer.length : end).toString())
+              .catch(() => undefined)
             if (!located) return undefined
             const [held, current] = await Promise.all([
               fs.stat(descriptorPath("darwin", directory), { bigint: true }).catch(() => undefined),

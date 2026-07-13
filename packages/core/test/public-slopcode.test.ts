@@ -26,39 +26,47 @@ describe("public native SlopCode API", () => {
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ).pipe(
-      Effect.flatMap((tmp) => Effect.gen(function* () {
-        const slopcode = yield* SlopCode.Service
-        const events = yield* EventV2.Service
-        const { db } = yield* Database.Service
-        const sessionID = Session.ID.create()
-        const assistantMessageID = SessionMessage.ID.create()
-        const base = {
-          sessionID,
-          assistantMessageID,
-          timestamp: yield* DateTime.now,
-          callID: "call-public-native",
-          tool: "tool",
-          provider: { executed: false },
-        }
-        yield* slopcode.sessions.create({
-          id: sessionID,
-          location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
-        })
-        yield* events.publish(SessionEvent.Tool.CalledV2, { ...base, input: "raw", toolType: "custom" })
-        yield* events.publish(SessionEvent.Tool.Called, { ...base, input: { value: true } })
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const slopcode = yield* SlopCode.Service
+          const events = yield* EventV2.Service
+          const { db } = yield* Database.Service
+          const sessionID = Session.ID.create()
+          const assistantMessageID = SessionMessage.ID.create()
+          const base = {
+            sessionID,
+            assistantMessageID,
+            timestamp: yield* DateTime.now,
+            callID: "call-public-native",
+            tool: "tool",
+            provider: { executed: false },
+          }
+          yield* slopcode.sessions.create({
+            id: sessionID,
+            location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+          })
+          yield* events.publish(SessionEvent.Tool.CalledV2, { ...base, input: "raw", toolType: "custom" })
+          yield* events.publish(SessionEvent.Tool.Called, { ...base, input: { value: true } })
 
-        const streamed = Array.from(yield* slopcode.sessions.events({ sessionID }).pipe(Stream.take(1), Stream.runCollect))
-        const rows = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all().pipe(Effect.orDie)
+          const streamed = Array.from(
+            yield* slopcode.sessions.events({ sessionID }).pipe(Stream.take(1), Stream.runCollect),
+          )
+          const rows = yield* db
+            .select()
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, sessionID))
+            .all()
+            .pipe(Effect.orDie)
 
-        expect(publicCustomCallIsExcluded).toEqual([])
-        expect(rows.map((row) => row.type)).toEqual(expect.arrayContaining([
-          "session.next.tool.called.2",
-          "session.next.tool.called.1",
-        ]))
-        expect(streamed.map((item) => [item.event.version, item.event.data])).toEqual([
-          [1, expect.objectContaining({ input: { value: true } })],
-        ])
-      })),
+          expect(publicCustomCallIsExcluded).toEqual([])
+          expect(rows.map((row) => row.type)).toEqual(
+            expect.arrayContaining(["session.next.tool.called.2", "session.next.tool.called.1"]),
+          )
+          expect(streamed.map((item) => [item.event.version, item.event.data])).toEqual([
+            [1, expect.objectContaining({ input: { value: true } })],
+          ])
+        }),
+      ),
     ),
   )
 

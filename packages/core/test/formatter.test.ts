@@ -166,16 +166,38 @@ describe("Formatter", () => {
   it.effect("locks exact discovered argv for every builtin and its executable prerequisite", () =>
     Effect.sync(() => {
       const expected = {
-        gofmt: ["-w", "$FILE"], mix: ["format", "$FILE"], prettier: ["--write", "$FILE"],
-        oxfmt: ["$FILE"], biome: ["format", "--write", "$FILE"], zig: ["fmt", "$FILE"],
-        "clang-format": ["-i", "$FILE"], ktlint: ["-F", "$FILE"], ruff: ["format", "$FILE"],
-        air: ["format", "$FILE"], uv: ["format", "--", "$FILE"], rubocop: ["--autocorrect", "$FILE"],
-        standardrb: ["--fix", "$FILE"], htmlbeautifier: ["$FILE"], dart: ["format", "$FILE"],
-        ocamlformat: ["-i", "$FILE"], terraform: ["fmt", "$FILE"], latexindent: ["-w", "-s", "$FILE"],
-        gleam: ["format", "$FILE"], shfmt: ["-w", "$FILE"], nixfmt: ["$FILE"], rustfmt: ["$FILE"],
-        pint: ["$FILE"], ormolu: ["-i", "$FILE"], cljfmt: ["fix", "--quiet", "$FILE"], dfmt: ["-i", "$FILE"],
+        gofmt: ["-w", "$FILE"],
+        mix: ["format", "$FILE"],
+        prettier: ["--write", "$FILE"],
+        oxfmt: ["$FILE"],
+        biome: ["format", "--write", "$FILE"],
+        zig: ["fmt", "$FILE"],
+        "clang-format": ["-i", "$FILE"],
+        ktlint: ["-F", "$FILE"],
+        ruff: ["format", "$FILE"],
+        air: ["format", "$FILE"],
+        uv: ["format", "--", "$FILE"],
+        rubocop: ["--autocorrect", "$FILE"],
+        standardrb: ["--fix", "$FILE"],
+        htmlbeautifier: ["$FILE"],
+        dart: ["format", "$FILE"],
+        ocamlformat: ["-i", "$FILE"],
+        terraform: ["fmt", "$FILE"],
+        latexindent: ["-w", "-s", "$FILE"],
+        gleam: ["format", "$FILE"],
+        shfmt: ["-w", "$FILE"],
+        nixfmt: ["$FILE"],
+        rustfmt: ["$FILE"],
+        pint: ["$FILE"],
+        ormolu: ["-i", "$FILE"],
+        cljfmt: ["fix", "--quiet", "$FILE"],
+        dfmt: ["-i", "$FILE"],
       } as const
-      expect(Object.fromEntries(Formatter.resolve([document(true)]).map((item) => [item.name, Formatter.builtinArguments(item.name)]))).toEqual(expected)
+      expect(
+        Object.fromEntries(
+          Formatter.resolve([document(true)]).map((item) => [item.name, Formatter.builtinArguments(item.name)]),
+        ),
+      ).toEqual(expected)
       expect(Formatter.builtinArguments("unknown")).toBeUndefined()
     }),
   )
@@ -185,17 +207,22 @@ describe("Formatter", () => {
       Effect.promise(() => tmpdir()).pipe(Effect.map((tmp) => ({ tmp, path: process.env.PATH }))),
       ({ tmp }) => {
         process.env.PATH = ""
-        return withFormatter(tmp.path, [document(true)], Effect.gen(function* () {
-          const status = yield* (yield* Formatter.Service).status()
-          expect(status).toHaveLength(26)
-          expect(status.every((item) => !item.available && item.outcome === "unavailable")).toBe(true)
-        }))
+        return withFormatter(
+          tmp.path,
+          [document(true)],
+          Effect.gen(function* () {
+            const status = yield* (yield* Formatter.Service).status()
+            expect(status).toHaveLength(26)
+            expect(status.every((item) => !item.available && item.outcome === "unavailable")).toBe(true)
+          }),
+        )
       },
-      ({ tmp, path: original }) => Effect.promise(async () => {
-        if (original === undefined) delete process.env.PATH
-        else process.env.PATH = original
-        await tmp[Symbol.asyncDispose]()
-      }),
+      ({ tmp, path: original }) =>
+        Effect.promise(async () => {
+          if (original === undefined) delete process.env.PATH
+          else process.env.PATH = original
+          await tmp[Symbol.asyncDispose]()
+        }),
     ),
   )
 
@@ -625,41 +652,45 @@ describe("Formatter", () => {
     ),
   )
 
-  it.live("treats malformed manifests and timed-out startup probes as unavailable", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(async () => {
-        const tmp = await tmpdir()
-        const bin = path.join(tmp.path, "bin")
-        await fs.mkdir(bin)
-        await fs.writeFile(path.join(tmp.path, "package.json"), "{")
-        await fs.writeFile(path.join(bin, "air"), `#!${process.execPath}\nsetTimeout(()=>{},30000)\n`, { mode: 0o755 })
-        return { tmp, bin, path: process.env.PATH }
-      }),
-      ({ tmp, bin }) => {
-        process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ""}`
-        return withFormatter(
-          tmp.path,
-          [document(true)],
-          Effect.gen(function* () {
-            const formatter = yield* Formatter.Service
-            expect((yield* formatter.format({ canonical: path.join(tmp.path, "source.js") })).outcomes[0]).toEqual({
-              name: "prettier",
-              code: "unavailable",
-            })
-            expect((yield* formatter.format({ canonical: path.join(tmp.path, "source.R") })).outcomes[0]).toEqual({
-              name: "air",
-              code: "unavailable",
-            })
-          }),
-        )
-      },
-      ({ tmp, path: original }) =>
+  it.live(
+    "treats malformed manifests and timed-out startup probes as unavailable",
+    () =>
+      Effect.acquireUseRelease(
         Effect.promise(async () => {
-          if (original === undefined) delete process.env.PATH
-          else process.env.PATH = original
-          await tmp[Symbol.asyncDispose]()
+          const tmp = await tmpdir()
+          const bin = path.join(tmp.path, "bin")
+          await fs.mkdir(bin)
+          await fs.writeFile(path.join(tmp.path, "package.json"), "{")
+          await fs.writeFile(path.join(bin, "air"), `#!${process.execPath}\nsetTimeout(()=>{},30000)\n`, {
+            mode: 0o755,
+          })
+          return { tmp, bin, path: process.env.PATH }
         }),
-    ),
+        ({ tmp, bin }) => {
+          process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ""}`
+          return withFormatter(
+            tmp.path,
+            [document(true)],
+            Effect.gen(function* () {
+              const formatter = yield* Formatter.Service
+              expect((yield* formatter.format({ canonical: path.join(tmp.path, "source.js") })).outcomes[0]).toEqual({
+                name: "prettier",
+                code: "unavailable",
+              })
+              expect((yield* formatter.format({ canonical: path.join(tmp.path, "source.R") })).outcomes[0]).toEqual({
+                name: "air",
+                code: "unavailable",
+              })
+            }),
+          )
+        },
+        ({ tmp, path: original }) =>
+          Effect.promise(async () => {
+            if (original === undefined) delete process.env.PATH
+            else process.env.PATH = original
+            await tmp[Symbol.asyncDispose]()
+          }),
+      ),
     15_000,
   )
 

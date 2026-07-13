@@ -40,11 +40,9 @@ test("standalone SSE publishes function V1 and excludes internal custom V2", asy
       provider: { executed: false },
     }
     const location = Location.Ref.make({ directory: AbsolutePath.make(directory) })
-    await Effect.runPromise(events.publish(
-      SessionEvent.Tool.CalledV2,
-      { ...base, input: "raw", toolType: "custom" },
-      { location },
-    ))
+    await Effect.runPromise(
+      events.publish(SessionEvent.Tool.CalledV2, { ...base, input: "raw", toolType: "custom" }, { location }),
+    )
     await Bun.sleep(20)
     await Effect.runPromise(events.publish(SessionEvent.Tool.Called, { ...base, input: { value: true } }, { location }))
 
@@ -71,7 +69,10 @@ async function read(reader: ReadableStreamDefaultReader<Uint8Array>) {
     text += decoder.decode(result.value, { stream: true })
     const end = text.indexOf("\n\n")
     if (end < 0) continue
-    const data = text.slice(0, end).split("\n").find((line) => line.startsWith("data: "))
+    const data = text
+      .slice(0, end)
+      .split("\n")
+      .find((line) => line.startsWith("data: "))
     if (data) return JSON.parse(data.slice(6)) as Record<string, unknown>
     text = text.slice(end + 2)
   }

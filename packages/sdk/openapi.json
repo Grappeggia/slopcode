@@ -19179,11 +19179,7 @@
                         "type": "string"
                       },
                       "input": {
-                        "type": "string"
-                      },
-                      "toolType": {
-                        "type": "string",
-                        "enum": ["custom"]
+                        "type": "object"
                       },
                       "provider": {
                         "type": "object",
@@ -19202,16 +19198,7 @@
                         "additionalProperties": false
                       }
                     },
-                    "required": [
-                      "timestamp",
-                      "sessionID",
-                      "assistantMessageID",
-                      "callID",
-                      "tool",
-                      "input",
-                      "toolType",
-                      "provider"
-                    ],
+                    "required": ["timestamp", "sessionID", "assistantMessageID", "callID", "tool", "input", "provider"],
                     "additionalProperties": false
                   }
                 },
@@ -29654,7 +29641,7 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["session.next.tool.called.2"]
+                "enum": ["session.next.tool.called.1"]
               },
               "id": {
                 "type": "string",
@@ -29687,11 +29674,7 @@
                     "type": "string"
                   },
                   "input": {
-                    "type": "string"
-                  },
-                  "toolType": {
-                    "type": "string",
-                    "enum": ["custom"]
+                    "type": "object"
                   },
                   "provider": {
                     "type": "object",
@@ -29710,16 +29693,7 @@
                     "additionalProperties": false
                   }
                 },
-                "required": [
-                  "timestamp",
-                  "sessionID",
-                  "assistantMessageID",
-                  "callID",
-                  "tool",
-                  "input",
-                  "toolType",
-                  "provider"
-                ],
+                "required": ["timestamp", "sessionID", "assistantMessageID", "callID", "tool", "input", "provider"],
                 "additionalProperties": false
               }
             },
@@ -35883,11 +35857,7 @@
                 "type": "string"
               },
               "input": {
-                "type": "string"
-              },
-              "toolType": {
-                "type": "string",
-                "enum": ["custom"]
+                "type": "object"
               },
               "provider": {
                 "type": "object",
@@ -35906,16 +35876,7 @@
                 "additionalProperties": false
               }
             },
-            "required": [
-              "timestamp",
-              "sessionID",
-              "assistantMessageID",
-              "callID",
-              "tool",
-              "input",
-              "toolType",
-              "provider"
-            ],
+            "required": ["timestamp", "sessionID", "assistantMessageID", "callID", "tool", "input", "provider"],
             "additionalProperties": false
           }
         },

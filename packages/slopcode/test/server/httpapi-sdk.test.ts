@@ -342,39 +342,43 @@ describe("HttpApi SDK", () => {
     Effect.acquireRelease(
       Effect.sync(() => new AbortController()),
       (controller) => Effect.sync(() => controller.abort()),
-    ).pipe(Effect.flatMap((controller) => Effect.gen(function* () {
-      const sdk = yield* client("raw")
-      const events = yield* call(() => sdk.global.event({ signal: controller.signal }))
-      yield* call(() => events.stream.next())
-      const pending = (async () => {
-        for (;;) {
-          const event = await events.stream.next()
-          if (record(record(event.value).payload).type === "session.next.tool.called") return event
-        }
-      })()
-      yield* Effect.sleep("10 millis")
-      GlobalBus.emit("event", {
-        directory: "project",
-        payload: {
-          id: "evt_function_shape",
-          type: "session.next.tool.called",
-          properties: {
-            timestamp: Date.now(),
-            sessionID: "ses_function_shape",
-            assistantMessageID: "msg_function_shape",
-            callID: "call-function-shape",
-            tool: "read",
-            input: { path: "README.md" },
-            provider: { executed: false },
-          },
-        },
-      })
-      const event = yield* call(() => pending).pipe(Effect.timeout("1 second"))
-      expect(event.value).toMatchObject({
-        payload: { type: "session.next.tool.called", properties: { input: { path: "README.md" } } },
-      })
-      yield* call(async () => void (await events.stream.return?.(undefined)))
-    }))),
+    ).pipe(
+      Effect.flatMap((controller) =>
+        Effect.gen(function* () {
+          const sdk = yield* client("raw")
+          const events = yield* call(() => sdk.global.event({ signal: controller.signal }))
+          yield* call(() => events.stream.next())
+          const pending = (async () => {
+            for (;;) {
+              const event = await events.stream.next()
+              if (record(record(event.value).payload).type === "session.next.tool.called") return event
+            }
+          })()
+          yield* Effect.sleep("10 millis")
+          GlobalBus.emit("event", {
+            directory: "project",
+            payload: {
+              id: "evt_function_shape",
+              type: "session.next.tool.called",
+              properties: {
+                timestamp: Date.now(),
+                sessionID: "ses_function_shape",
+                assistantMessageID: "msg_function_shape",
+                callID: "call-function-shape",
+                tool: "read",
+                input: { path: "README.md" },
+                provider: { executed: false },
+              },
+            },
+          })
+          const event = yield* call(() => pending).pipe(Effect.timeout("1 second"))
+          expect(event.value).toMatchObject({
+            payload: { type: "session.next.tool.called", properties: { input: { path: "README.md" } } },
+          })
+          yield* call(async () => void (await events.stream.return?.(undefined)))
+        }),
+      ),
+    ),
   )
 
   httpapi(

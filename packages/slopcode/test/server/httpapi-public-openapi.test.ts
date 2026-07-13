@@ -75,9 +75,9 @@ describe("PublicApi OpenAPI v2 errors", () => {
 
     expect(called?.properties?.properties?.properties?.input?.type).toBe("object")
     expect(called?.properties?.properties?.properties).not.toHaveProperty("toolType")
-    expect(spec.components.schemas.SyncEventSessionNextToolCalled?.properties?.syncEvent?.properties?.type?.enum).toEqual([
-      "session.next.tool.called.1",
-    ])
+    expect(
+      spec.components.schemas.SyncEventSessionNextToolCalled?.properties?.syncEvent?.properties?.type?.enum,
+    ).toEqual(["session.next.tool.called.1"])
   })
 
   test("documents nested legacy global sync events", () => {
