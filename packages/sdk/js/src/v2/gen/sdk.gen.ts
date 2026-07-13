@@ -4330,7 +4330,7 @@ export class Session2 extends HeyApiClient {
   /**
    * Ask side question
    *
-   * Ask an ephemeral side question against the current session context without writing history.
+   * Ask an ephemeral side question with optional completed turns, streaming generation, bounded read activity, usage, errors, and completion without writing session history.
    */
   public sideQuestion<ThrowOnError extends boolean = false>(
     parameters: {

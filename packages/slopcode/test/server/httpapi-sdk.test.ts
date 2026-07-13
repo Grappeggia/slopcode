@@ -8,7 +8,7 @@ import { ChildProcessSpawner } from "effect/unstable/process"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import { Flag } from "@slopcode-ai/core/flag/flag"
-import { createSlopcodeClient } from "@slopcode-ai/sdk/v2"
+import { createSlopcodeClient, type SessionSideQuestionEvent } from "@slopcode-ai/sdk/v2"
 import { validateSession } from "../../src/cli/tui/validate-session"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
@@ -179,6 +179,17 @@ function statuses(input: Record<string, Captured>) {
 
 function firstPartText(value: unknown) {
   return record(array(record(value).parts)[0]).text
+}
+
+function sideEvent(event: SessionSideQuestionEvent) {
+  if (event.type === "status") return `${event.status}:${event.round}`
+  if (event.type === "read") return `${event.path}:${event.files}`
+  if (event.type === "usage") return `${event.rounds}:${event.calls}:${event.files}`
+  if (event.type === "text") return event.text
+  if (event.type === "error") return event.message
+  if (event.type === "done") return event.type
+  const exhaustive: never = event
+  return exhaustive
 }
 
 function sessionTitles(value: unknown) {
@@ -843,6 +854,57 @@ describe("HttpApi SDK", () => {
           userText: JSON.stringify(messages.data).includes("hello llm"),
         }
       }),
+    ),
+  )
+
+  httpapi(
+    "streams typed side-question reads and ordered follow-ups without persistence",
+    withFakeLlmProject(
+      "raw",
+      {
+        setup: (dir) => FSUtil.Service.use((fs) => fs.writeWithDirs(path.join(dir, "notes.txt"), "private notes\n")),
+      },
+      ({ sdk, llm }) =>
+        Effect.gen(function* () {
+          yield* llm.tool("read", { path: "notes.txt", offset: 1, limit: 10 })
+          yield* llm.text("answer from notes", { usage: { input: 9, output: 4 } })
+          const session = yield* call(() =>
+            sdk.session.create({
+              title: "side SDK",
+              permission: [{ permission: "*", pattern: "*", action: "allow" }],
+            }),
+          )
+          const sessionID = session.data!.id
+          const result = yield* call(() =>
+            sdk.session.sideQuestion({
+              sessionID,
+              question: "Current question",
+              turns: [{ question: "Earlier question", answer: "Earlier answer" }],
+              agent: "build",
+              model: { providerID: "test", modelID: "test-model" },
+              variant: "fast",
+            }),
+          )
+          const events = yield* call(async () => {
+            const values: SessionSideQuestionEvent[] = []
+            for await (const event of result.stream) values.push(event)
+            return values
+          })
+          const inputs = yield* llm.inputs
+          const messages = array(inputs[0]?.messages).map(record)
+          const persisted = yield* call(() => sdk.session.messages({ sessionID }))
+
+          expect(messages.slice(-3)).toEqual([
+            { role: "user", content: "Earlier question" },
+            { role: "assistant", content: "Earlier answer" },
+            { role: "user", content: "Current question" },
+          ])
+          expect(events.map(sideEvent)).toContain("notes.txt:1")
+          expect(events).toContainEqual(expect.objectContaining({ type: "usage", calls: 1, files: 1 }))
+          expect(events).toContainEqual({ type: "text", text: "answer from notes" })
+          expect(events.at(-1)).toEqual({ type: "done" })
+          expect(persisted.data).toEqual([])
+        }),
     ),
   )
 

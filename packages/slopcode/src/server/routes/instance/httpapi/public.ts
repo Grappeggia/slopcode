@@ -168,6 +168,14 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
           },
         }
       }
+      if (path === "/session/{sessionID}/side-question" && method === "post") {
+        const response = operation.responses?.["200"]
+        const schema = response?.content?.["application/json"]?.schema
+        if (response && schema) {
+          response.description = "Side-question event stream"
+          response.content = { "text/event-stream": { schema } }
+        }
+      }
       const route = `${method.toUpperCase()} ${path}`
       for (const param of operation.parameters ?? []) normalizeParameter(param, route)
     }

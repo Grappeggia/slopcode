@@ -360,13 +360,14 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           payload: SideQuestionPayload,
-          success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+          success: SessionSideQuestion.Event,
           error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.side_question",
             summary: "Ask side question",
-            description: "Ask an ephemeral side question against the current session context without writing history.",
+            description:
+              "Ask an ephemeral side question with optional completed turns, streaming generation, bounded read activity, usage, errors, and completion without writing session history.",
           }),
         ),
         HttpApiEndpoint.post("shell", SessionPaths.shell, {
