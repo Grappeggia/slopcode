@@ -8,7 +8,7 @@ export interface PlatformInterface {
     readonly exchange: boolean
   }
   readonly path: (directory: number, child?: string) => string
-  readonly executable?: (directory: number, child: string) => string
+  readonly executable?: (directory: number, child: string, parent: string) => string
   readonly exchange?: (directory: number, left: string, right: string) => boolean
   readonly move?: (directory: number, left: string, right: string) => boolean
   readonly unlink?: (directory: number, name: string) => boolean
@@ -42,7 +42,7 @@ export const make = Effect.acquireRelease(
           name: "darwin",
           capabilities: { mutation: true, staging: true, exchange: true },
           path: (directory, child = "") => descriptorPath("darwin", directory, child),
-          executable: (directory, child) => `/dev/fd/${directory}/${child}`,
+          executable: (_directory, child, parent) => `${parent}/${child}`,
           exchange: (directory, left, right) =>
             libc.symbols.renameatx_np(directory, pointer(left), directory, pointer(right), 0x00000002) === 0,
           move: (directory, left, right) =>

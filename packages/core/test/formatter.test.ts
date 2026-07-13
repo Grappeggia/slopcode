@@ -471,6 +471,49 @@ describe("Formatter", () => {
     ),
   )
 
+  it.live("does not carry in-flight discovery across a Location reopen", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(async () => {
+        const tmp = await tmpdir()
+        const bin = path.join(tmp.path, "bin")
+        const marker = path.join(tmp.path, "started")
+        await fs.mkdir(bin)
+        await fs.writeFile(
+          path.join(bin, "air"),
+          `#!${process.execPath}\nrequire("fs").writeFileSync(${JSON.stringify(marker)},"yes");setTimeout(()=>{},30000)\n`,
+          { mode: 0o755 },
+        )
+        return { tmp, bin, marker, path: process.env.PATH }
+      }),
+      ({ tmp, bin, marker }) => {
+        process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ""}`
+        return Effect.gen(function* () {
+          yield* withFormatter(tmp.path, [document(true)], Effect.gen(function* () {
+            const fiber = yield* (yield* Formatter.Service).status().pipe(Effect.forkChild)
+            while (!(yield* Effect.promise(() => fs.stat(marker).then(() => true, () => false)))) yield* Effect.yieldNow
+            void fiber
+          }))
+          yield* Effect.promise(() => fs.writeFile(
+            path.join(bin, "air"),
+            `#!${process.execPath}\nif(process.argv.includes("--help"))console.log("R language formatter");else require("fs").writeFileSync(process.argv.at(-1),"fresh")\n`,
+            { mode: 0o755 },
+          ))
+          yield* withFormatter(tmp.path, [document(true)], Effect.gen(function* () {
+            const file = path.join(tmp.path, "fresh.R")
+            yield* Effect.promise(() => fs.writeFile(file, "source"))
+            expect((yield* (yield* Formatter.Service).format({ canonical: file })).outcomes[0]).toMatchObject({ name: "air", code: "formatted" })
+            expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("fresh")
+          }))
+        })
+      },
+      ({ tmp, path: original }) => Effect.promise(async () => {
+        if (original === undefined) delete process.env.PATH
+        else process.env.PATH = original
+        await tmp[Symbol.asyncDispose]()
+      }),
+    ),
+  )
+
   it.effect("keeps Core formatter sources isolated from V1 and Slopcode runtime imports", () =>
     Effect.promise(async () => {
       const source = await fs.readFile(new URL("../src/formatter.ts", import.meta.url), "utf8")

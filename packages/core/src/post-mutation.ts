@@ -62,8 +62,10 @@ export const layer = Layer.effect(
           formatted: { matched: false, outcomes: [{ name: "stage", code: "unavailable" as const }] },
           final: immediate,
         }
+        yield* stage.verify
         const formatted = yield* formatter.format({ canonical: stage.canonical })
         yield* fence.check
+        yield* stage.verify
         const output = yield* stage.read
         const wanted = hasBom(immediate)
         let offset = 0
@@ -99,6 +101,7 @@ export const layer = Layer.effect(
 
             const snapshot = files.private(mutated)
             if (!snapshot) return yield* new ResultMismatchError({ path: input.target.canonical })
+            if (snapshot.target !== input.target) return yield* new ResultMismatchError({ path: input.target.canonical })
             const deleted = mutated.operation === "remove"
             const event: MutationEvents.Kind = deleted ? "unlink" : mutated.existed ? "change" : "add"
             if (mutated.change === "none") {

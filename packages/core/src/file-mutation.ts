@@ -77,6 +77,8 @@ export class StageUnavailableError extends Schema.TaggedErrorClass<StageUnavaila
 export class RecoveryConflictError extends Schema.TaggedErrorClass<RecoveryConflictError>()("FileMutation.RecoveryConflictError", {
   path: Schema.String,
   recovery: Schema.String,
+  recoveries: Schema.Array(Schema.String),
+  state: Schema.String,
 }) {}
 
 type Revision = {
@@ -91,10 +93,12 @@ type Private = {
   readonly revision?: Revision
   readonly content: Uint8Array
   readonly secure: boolean
+  readonly target: Target
 }
 
 export interface Stage {
   readonly canonical: string
+  readonly verify: Effect.Effect<void, Error>
   readonly read: Effect.Effect<Uint8Array, Error>
 }
 
@@ -199,7 +203,7 @@ export const layer = Layer.effect(
               return await fs.open(child, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
             } catch (error) {
               if (!create || code(error) !== "ENOENT") throw error
-               await fs.mkdir(child, { mode: target.staging ? 0o700 : 0o755 })
+              await fs.mkdir(child, { mode: target.staging ? 0o700 : 0o755 })
               return fs.open(child, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
             }
           })
@@ -243,7 +247,7 @@ export const layer = Layer.effect(
     const result = (target: Target, existed: boolean, change: WriteResult["change"], content: Uint8Array, current: Revision) => {
       const value = { operation: "write", target: target.canonical, resource: target.resource, existed } as WriteResult
       Object.defineProperty(value, "change", { value: change, enumerable: false })
-      data.set(value, { revision: current, content, secure: platform.capabilities.mutation })
+      data.set(value, { revision: current, content, secure: platform.capabilities.mutation, target })
       return value
     }
 
@@ -255,7 +259,7 @@ export const layer = Layer.effect(
         existed,
       } as RemoveResult
       Object.defineProperty(value, "change", { value: existed ? "deleted" : "none", enumerable: false })
-      data.set(value, { content: new Uint8Array(), secure: platform.capabilities.mutation })
+      data.set(value, { content: new Uint8Array(), secure: platform.capabilities.mutation, target })
       return value
     }
 
@@ -374,7 +378,7 @@ export const layer = Layer.effect(
     ) {
       const snapshot = data.get(value)
       if (!snapshot?.revision) return yield* new StaleContentError({ path: value.target })
-      const target = { canonical: value.target, resource: value.resource }
+      const target = snapshot.target
       return yield* withLock(target, open(target, false).pipe(
         Effect.flatMap((handle) => Effect.gen(function* () {
           const current = yield* safe(target, () => handle.readFile())
@@ -401,7 +405,8 @@ export const layer = Layer.effect(
       return yield* parent(target, Boolean(input.target.staging)).pipe(
         Effect.flatMap((directory) => Effect.gen(function* () {
           const child = platform.path(directory.fd, name)
-          const executable = platform.executable!(directory.fd, name)
+          const parent = path.dirname(target.canonical)
+          const executable = platform.executable!(directory.fd, name, parent)
           yield* hooks.pause("stage-before-open", input.target.canonical)
           const handle = yield* Effect.tryPromise({
             try: () => fs.open(
@@ -411,9 +416,22 @@ export const layer = Layer.effect(
             ),
             catch: () => new StageUnavailableError({ path: input.target.canonical }),
           })
+          const identity = yield* safe(input.target, () => handle.stat({ bigint: true }))
+          const verify = Effect.tryPromise({
+            try: async () => {
+              const current = await fs.lstat(platform.name === "darwin" ? executable : child, { bigint: true })
+              const actual = await fs.realpath(platform.path(directory.fd))
+              if (
+                current.dev !== identity.dev || current.ino !== identity.ino ||
+                FSUtil.normalizePath(actual) !== FSUtil.normalizePath(parent)
+              ) throw new Error("stage changed")
+            },
+            catch: () => new TargetChangedError({ path: input.target.canonical }),
+          })
           yield* Effect.addFinalizer(() => Effect.promise(async () => {
             await handle.close().catch(() => {})
-            platform.unlink?.(directory.fd, name)
+            const current = await fs.lstat(child, { bigint: true }).catch(() => undefined)
+            if (current?.dev === identity.dev && current.ino === identity.ino) platform.unlink?.(directory.fd, name)
           }))
           yield* hooks.pause("stage-created", input.target.canonical)
           yield* Effect.tryPromise({
@@ -424,17 +442,15 @@ export const layer = Layer.effect(
             catch: () => new StageUnavailableError({ path: input.target.canonical }),
           })
           yield* hooks.pause("stage-written", input.target.canonical)
-          yield* close(handle)
           return {
             canonical: executable,
-            read: Effect.acquireUseRelease(
-              Effect.tryPromise({
-                try: () => fs.open(child, constants.O_RDONLY | constants.O_NOFOLLOW),
-                catch: () => new TargetChangedError({ path: input.target.canonical }),
-              }),
-              (opened) => safe(input.target, () => opened.readFile()),
-              close,
-            ),
+            verify,
+            read: verify.pipe(Effect.andThen(safe(input.target, async () => {
+              const stat = await handle.stat()
+              const output = new Uint8Array(stat.size)
+              await handle.read(output, 0, output.length, 0)
+              return output
+            }))),
           } satisfies Stage
         })),
       )
@@ -457,6 +473,9 @@ export const layer = Layer.effect(
             const named = yield* safe(input.target, () => fs.lstat(platform.path(directory.fd, path.basename(input.target.canonical)), { bigint: true }))
             if (opened.dev !== named.dev || opened.ino !== named.ino) return yield* new TargetChangedError({ path: input.target.canonical })
             if (!platform.exchange || !platform.move || !platform.unlink) return yield* new UnsupportedPlatformError({ platform: platform.name })
+            const exchange = platform.exchange
+            const move = platform.move
+            const unlink = platform.unlink
             const name = path.basename(input.target.canonical)
             const quarantine = `.slopcode-delete-${crypto.randomBytes(16).toString("hex")}`
             const placeholder = yield* safe(input.target, () => fs.open(
@@ -473,62 +492,120 @@ export const layer = Layer.effect(
             yield* Effect.addFinalizer(() => Effect.promise(async () => {
               await placeholder.close().catch(() => {})
               if (state.value === "placeholder" && await matches(quarantine, placeholderIdentity)) {
-                platform.unlink?.(directory.fd, quarantine)
+                unlink(directory.fd, quarantine)
               }
               if (
                 state.value === "approved" &&
                 await matches(quarantine, opened) &&
                 await matches(name, placeholderIdentity)
-              ) platform.exchange?.(directory.fd, name, quarantine)
+              ) exchange(directory.fd, name, quarantine)
             }))
             yield* hooks.pause("before-remove-atomic", input.target.canonical)
-            if (!platform.exchange(directory.fd, name, quarantine)) {
+            if (!exchange(directory.fd, name, quarantine)) {
               return yield* new TargetChangedError({ path: input.target.canonical })
             }
             state.value = "approved"
-            yield* hooks.pause("remove-exchanged", input.target.canonical)
-            const quarantined = yield* safe(input.target, () => fs.lstat(
-              platform.path(directory.fd, quarantine),
-              { bigint: true },
-            ))
-            if (opened.dev !== quarantined.dev || opened.ino !== quarantined.ino) {
-              yield* hooks.pause("remove-rollback", input.target.canonical)
-              if (!platform.exchange(directory.fd, name, quarantine)) {
+            let cleanup: string | undefined
+            return yield* Effect.gen(function* () {
+              yield* hooks.pause("remove-exchanged", input.target.canonical)
+              const quarantined = yield* safe(input.target, () => fs.lstat(
+                platform.path(directory.fd, quarantine),
+                { bigint: true },
+              ))
+              if (opened.dev !== quarantined.dev || opened.ino !== quarantined.ino) {
+                yield* hooks.pause("remove-rollback", input.target.canonical)
+                if (!exchange(directory.fd, name, quarantine)) {
+                  state.value = "conflict"
+                  const recovery = path.join(path.dirname(input.target.canonical), quarantine)
+                  return yield* new RecoveryConflictError({
+                    path: input.target.canonical,
+                    recovery,
+                    recoveries: [recovery],
+                    state: "rollback-exchange",
+                  })
+                }
+                state.value = "placeholder"
+                if (!unlink(directory.fd, quarantine)) {
+                  state.value = "conflict"
+                  const recovery = path.join(path.dirname(input.target.canonical), quarantine)
+                  return yield* new RecoveryConflictError({
+                    path: input.target.canonical,
+                    recovery,
+                    recoveries: [recovery, input.target.canonical],
+                    state: "rollback-placeholder-unlink",
+                  })
+                }
+                state.value = "done"
+                return yield* new TargetChangedError({ path: input.target.canonical })
+              }
+              if (!unlink(directory.fd, quarantine)) {
                 state.value = "conflict"
+                const recovery = path.join(path.dirname(input.target.canonical), quarantine)
                 return yield* new RecoveryConflictError({
                   path: input.target.canonical,
-                  recovery: path.join(path.dirname(input.target.canonical), quarantine),
+                  recovery,
+                  recoveries: [recovery, input.target.canonical],
+                  state: "approved-unlink",
                 })
               }
-              state.value = "placeholder"
-              return yield* new TargetChangedError({ path: input.target.canonical })
-            }
-            if (!platform.unlink(directory.fd, quarantine)) {
-              state.value = "conflict"
-              return yield* new TargetChangedError({ path: input.target.canonical })
-            }
-            state.value = "public"
-            const cleanup = `.slopcode-delete-${crypto.randomBytes(16).toString("hex")}`
-            if (!platform.move(directory.fd, name, cleanup)) return yield* new TargetChangedError({ path: input.target.canonical })
-            yield* hooks.pause("remove-placeholder-moved", input.target.canonical)
-            const moved = yield* safe(input.target, () => fs.lstat(
-              platform.path(directory.fd, cleanup),
-              { bigint: true },
-            ))
-            if (placeholderIdentity.dev !== moved.dev || placeholderIdentity.ino !== moved.ino) {
-              if (!platform.move(directory.fd, cleanup, name)) {
+              state.value = "public"
+              cleanup = `.slopcode-delete-${crypto.randomBytes(16).toString("hex")}`
+              if (!move(directory.fd, name, cleanup)) {
                 state.value = "conflict"
                 return yield* new RecoveryConflictError({
                   path: input.target.canonical,
-                  recovery: path.join(path.dirname(input.target.canonical), cleanup),
+                  recovery: input.target.canonical,
+                  recoveries: [input.target.canonical],
+                  state: "placeholder-move",
+                })
+              }
+              yield* hooks.pause("remove-placeholder-moved", input.target.canonical)
+              const moved = yield* safe(input.target, () => fs.lstat(
+                platform.path(directory.fd, cleanup!),
+                { bigint: true },
+              ))
+              if (placeholderIdentity.dev !== moved.dev || placeholderIdentity.ino !== moved.ino) {
+                if (!move(directory.fd, cleanup, name)) {
+                  state.value = "conflict"
+                  const recovery = path.join(path.dirname(input.target.canonical), cleanup)
+                  return yield* new RecoveryConflictError({
+                    path: input.target.canonical,
+                    recovery,
+                    recoveries: [recovery, input.target.canonical],
+                    state: "placeholder-restore",
+                  })
+                }
+                state.value = "done"
+                return yield* new TargetChangedError({ path: input.target.canonical })
+              }
+              if (!unlink(directory.fd, cleanup)) {
+                state.value = "conflict"
+                const recovery = path.join(path.dirname(input.target.canonical), cleanup)
+                return yield* new RecoveryConflictError({
+                  path: input.target.canonical,
+                  recovery,
+                  recoveries: [recovery],
+                  state: "placeholder-unlink",
                 })
               }
               state.value = "done"
-              return yield* new TargetChangedError({ path: input.target.canonical })
-            }
-            if (!platform.unlink(directory.fd, cleanup)) return yield* new TargetChangedError({ path: input.target.canonical })
-            state.value = "done"
-            return removed(input.target, true)
+              return removed(input.target, true)
+            }).pipe(Effect.catch((error) => {
+              if (error instanceof RecoveryConflictError || state.value === "placeholder" || state.value === "done") {
+                return Effect.fail(error)
+              }
+              const current = state.value
+              state.value = "conflict"
+              const recoveries = current === "approved" || !cleanup
+                ? [path.join(path.dirname(input.target.canonical), quarantine), input.target.canonical]
+                : [path.join(path.dirname(input.target.canonical), cleanup)]
+              return Effect.fail(new RecoveryConflictError({
+                path: input.target.canonical,
+                recovery: recoveries[0]!,
+                recoveries,
+                state: cleanup ? "placeholder-inspection" : "approved-inspection",
+              }))
+            }))
           })
         }))),
         Effect.catchIf((error) => error instanceof Missing, () => Effect.succeed(removed(input.target, false))),
