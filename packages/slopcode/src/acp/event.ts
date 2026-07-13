@@ -42,6 +42,7 @@ export class Subscription {
   private readonly toolStarts = new Set<string>()
   private readonly permission: ACPPermission.Handler
   private started = false
+  private running: Promise<void> | undefined
 
   constructor(
     private readonly input: {
@@ -56,13 +57,14 @@ export class Subscription {
   start() {
     if (this.started) return
     this.started = true
-    this.run().catch(() => {
+    this.running = this.run().catch(() => {
       if (this.abort.signal.aborted) return
     })
   }
 
-  stop() {
+  async stop() {
     this.abort.abort()
+    await this.running
   }
 
   async handle(event: Event) {

@@ -7,12 +7,12 @@ import type {
 } from "@agentclientprotocol/sdk"
 import { Duration, Effect } from "effect"
 import { cliIt } from "../../lib/cli-process"
-import { expectOk, selectConfigOption } from "./acp-test-client"
+import { createAcpClient as createJsonRpcAcpClient, expectOk, selectConfigOption } from "./acp-test-client"
 import { createAcpClient, initialize, newSession, verifierConfig } from "./helpers"
 
 describe("slopcode acp lifecycle subprocess", () => {
   cliIt.live(
-    "stdin EOF exits cleanly",
+    "stdin EOF during startup exits cleanly within startup allowance",
     ({ slopcode }) =>
       Effect.gen(function* () {
         const acp = yield* slopcode.acp()
@@ -20,6 +20,24 @@ describe("slopcode acp lifecycle subprocess", () => {
 
         const code = yield* Effect.promise(() => acp.exited).pipe(Effect.timeout(Duration.seconds(15)))
         expect(code).toBe(0)
+      }),
+    60_000,
+  )
+
+  cliIt.live(
+    "stdin EOF after startup tears down promptly",
+    ({ slopcode }) =>
+      Effect.gen(function* () {
+        const handle = yield* slopcode.acp()
+        yield* initialize(createJsonRpcAcpClient(handle))
+        const started = performance.now()
+        handle.close()
+
+        // The generated SSE client observes abort after its 3s retry sleep; this
+        // remains a teardown-only bound, separate from the cold-start allowance.
+        const code = yield* Effect.promise(() => handle.exited).pipe(Effect.timeout(Duration.seconds(5)))
+        expect(code).toBe(0)
+        expect(performance.now() - started).toBeLessThan(5_000)
       }),
     60_000,
   )
