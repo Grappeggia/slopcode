@@ -310,6 +310,9 @@ jobs:
           git clean -ffdx
           bun install --frozen-lockfile
 
+      - name: Restore canonical release controller
+        run: git show refs/remotes/origin/dev:script/publish.ts > script/publish.ts
+
       - name: Login to GitHub Container Registry
         if: false # Non-npm publishing channel disabled
         uses: docker/login-action@v3
@@ -341,20 +344,14 @@ jobs:
         run: |
           rm -rf packages/slopcode/dist
           mkdir -p packages/slopcode/dist
-          for attempt in $(seq 1 30); do
-            if gh release download "${{ needs.version.outputs.tag }}" --pattern "slopcode-cli-dist.tar.gz" --pattern "release-manifest.json" --dir packages/slopcode/dist --repo "${{ needs.version.outputs.repo }}"; then
-              bun ./packages/slopcode/script/artifact-manifest.ts verify --dir packages/slopcode/dist --source "${{ inputs.source_sha }}" --version "${{ inputs.version }}" --artifact slopcode-cli-dist.tar.gz
-              tar -xzf packages/slopcode/dist/slopcode-cli-dist.tar.gz -C packages/slopcode/dist
-              rm packages/slopcode/dist/slopcode-cli-dist.tar.gz
-              exit 0
-            fi
-            rm -f packages/slopcode/dist/slopcode-cli-dist.tar.gz packages/slopcode/dist/release-manifest.json
-            if [ "$attempt" -eq 30 ]; then
-              echo "Timed out waiting for slopcode-cli-dist.tar.gz on release ${{ needs.version.outputs.tag }}" >&2
-              exit 1
-            fi
-            sleep 10
+          for name in slopcode-cli-dist.tar.gz release-manifest.json; do
+            asset=$(gh api --paginate "repos/${{ needs.version.outputs.repo }}/releases/${{ needs.version.outputs.release }}/assets" --jq ".[] | select(.name == \"$name\") | .id")
+            test -n "$asset"
+            gh api -H "Accept: application/octet-stream" "repos/${{ needs.version.outputs.repo }}/releases/assets/$asset" > "packages/slopcode/dist/$name"
           done
+          bun ./packages/slopcode/script/artifact-manifest.ts verify --dir packages/slopcode/dist --source "${{ inputs.source_sha }}" --version "${{ inputs.version }}" --artifact slopcode-cli-dist.tar.gz
+          tar -xzf packages/slopcode/dist/slopcode-cli-dist.tar.gz -C packages/slopcode/dist
+          rm packages/slopcode/dist/slopcode-cli-dist.tar.gz
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
 
@@ -367,7 +364,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
-          draft=$(gh release view '${{ needs.version.outputs.tag }}' --json isDraft --jq .isDraft --repo '${{ needs.version.outputs.repo }}')
+          draft=$(gh api 'repos/${{ needs.version.outputs.repo }}/releases/${{ needs.version.outputs.release }}' --jq .draft)
           test "$draft" = "true" || test "$draft" = "false"
           echo "SLOPCODE_RELEASE_DRAFT=$draft" >> "$GITHUB_ENV"
 

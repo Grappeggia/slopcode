@@ -190,11 +190,15 @@ if (mode === "prep") {
   await import(`../packages/slopcode/script/publish.ts`)
 
   if (Script.release && !Script.preview) {
+    const repo = process.env.GH_REPO
+    const release = process.env.SLOPCODE_RELEASE
+    if (!repo || !release) throw new Error("Release finalization requires GH_REPO and SLOPCODE_RELEASE.")
     const draft = (
-      await $`gh release view v${Script.version} --json isDraft --jq .isDraft --repo ${process.env.GH_REPO}`.text()
+      process.env.SLOPCODE_RELEASE_DRAFT ??
+      (await $`gh api ${`repos/${repo}/releases/${release}`} --jq .draft`.text())
     ).trim()
     if (draft === "true") {
-      await $`gh release edit v${Script.version} --draft=false --repo ${process.env.GH_REPO}`
+      await $`gh api --method PATCH ${`repos/${repo}/releases/${release}`} -F draft=false`
     } else if (draft === "false") {
       console.log(`release: already finalized v${Script.version}`)
     } else {
