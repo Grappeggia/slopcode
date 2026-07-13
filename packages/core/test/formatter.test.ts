@@ -403,6 +403,74 @@ describe("Formatter", () => {
     ),
   )
 
+  it.live("discovers every ruff evidence branch independently", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(async () => {
+        const tmp = await tmpdir()
+        const bin = path.join(tmp.path, "bin")
+        await fs.mkdir(bin)
+        await fs.writeFile(path.join(bin, "ruff"), `#!${process.execPath}\nrequire("fs").writeFileSync(process.argv.at(-1),"ruff")\n`, { mode: 0o755 })
+        return { tmp, bin, path: process.env.PATH }
+      }),
+      ({ tmp, bin }) => {
+        process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ""}`
+        return Effect.gen(function* () {
+          const evidence = [
+            ["pyproject.toml", "[tool.ruff]\n"],
+            ["ruff.toml", "line-length=88\n"],
+            [".ruff.toml", "line-length=88\n"],
+            ["requirements.txt", "ruff==1\n"],
+            ["pyproject.toml", "dependencies=['ruff']\n"],
+            ["Pipfile", "ruff='*'\n"],
+          ] as const
+          for (const [index, [name, content]] of evidence.entries()) {
+            const directory = path.join(tmp.path, `case-${index}`)
+            yield* Effect.promise(async () => {
+              await fs.mkdir(directory)
+              await fs.writeFile(path.join(directory, name), content)
+              await fs.writeFile(path.join(directory, "source.py"), "source")
+            })
+            yield* withFormatter(directory, [document(true)], Effect.gen(function* () {
+              const result = yield* (yield* Formatter.Service).format({ canonical: path.join(directory, "source.py") })
+              expect(result.outcomes[0]).toMatchObject({ name: "ruff", code: "formatted" })
+            }))
+          }
+        })
+      },
+      ({ tmp, path: original }) => Effect.promise(async () => {
+        if (original === undefined) delete process.env.PATH
+        else process.env.PATH = original
+        await tmp[Symbol.asyncDispose]()
+      }),
+    ),
+  )
+
+  it.live("treats malformed manifests and timed-out startup probes as unavailable", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(async () => {
+        const tmp = await tmpdir()
+        const bin = path.join(tmp.path, "bin")
+        await fs.mkdir(bin)
+        await fs.writeFile(path.join(tmp.path, "package.json"), "{")
+        await fs.writeFile(path.join(bin, "air"), `#!${process.execPath}\nsetTimeout(()=>{},30000)\n`, { mode: 0o755 })
+        return { tmp, bin, path: process.env.PATH }
+      }),
+      ({ tmp, bin }) => {
+        process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ""}`
+        return withFormatter(tmp.path, [document(true)], Effect.gen(function* () {
+          const formatter = yield* Formatter.Service
+          expect((yield* formatter.format({ canonical: path.join(tmp.path, "source.js") })).outcomes[0]).toEqual({ name: "prettier", code: "unavailable" })
+          expect((yield* formatter.format({ canonical: path.join(tmp.path, "source.R") })).outcomes[0]).toEqual({ name: "air", code: "unavailable" })
+        }))
+      },
+      ({ tmp, path: original }) => Effect.promise(async () => {
+        if (original === undefined) delete process.env.PATH
+        else process.env.PATH = original
+        await tmp[Symbol.asyncDispose]()
+      }),
+    ),
+  )
+
   it.effect("keeps Core formatter sources isolated from V1 and Slopcode runtime imports", () =>
     Effect.promise(async () => {
       const source = await fs.readFile(new URL("../src/formatter.ts", import.meta.url), "utf8")
