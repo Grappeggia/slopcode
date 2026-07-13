@@ -11,23 +11,26 @@ describe("MCP OAuth callback", () => {
     ).pipe(
       Effect.flatMap((callbacks) =>
         Effect.gen(function* () {
+          const reserve = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() })
+          const port = reserve.port
+          reserve.stop(true)
           const registered = yield* Effect.promise(() =>
             callbacks.register({
-              redirect: "http://127.0.0.1:19876/mcp/oauth/callback",
+              redirect: `http://127.0.0.1:${port}/mcp/oauth/callback`,
               state: "private-state",
               receive: () => Promise.resolve(true),
             }),
           )
-          const missing = yield* Effect.promise(() => fetch("http://127.0.0.1:19876/mcp/oauth/callback?code=secret"))
+          const missing = yield* Effect.promise(() => fetch(`http://127.0.0.1:${port}/mcp/oauth/callback?code=secret`))
           expect(missing.status).toBe(400)
           expect(yield* Effect.promise(() => missing.text())).not.toContain("secret")
           const response = yield* Effect.promise(() =>
-            fetch("http://127.0.0.1:19876/mcp/oauth/callback?state=private-state&code=private-code"),
+            fetch(`http://127.0.0.1:${port}/mcp/oauth/callback?state=private-state&code=private-code`),
           )
           expect(response.status).toBe(200)
           expect(yield* Effect.promise(() => response.text())).not.toContain("private")
           const replay = yield* Effect.promise(() =>
-            fetch("http://127.0.0.1:19876/mcp/oauth/callback?state=private-state&code=private-code"),
+            fetch(`http://127.0.0.1:${port}/mcp/oauth/callback?state=private-state&code=private-code`),
           )
           expect(replay.status).toBe(400)
           yield* Effect.promise(() => registered.close())
