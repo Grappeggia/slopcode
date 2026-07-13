@@ -135,12 +135,40 @@ describe("ShellParser PowerShell resources", () => {
     expect(await powershell("& { git status }")).toEqual(["git status"])
   })
 
-  test.each(["Get-Content $env:WINDIR/win.ini", "Get-Content ${env:WINDIR}/win.ini"])(
-    "preserves an environment path argument: %s",
-    async (command) => {
-      expect(await powershell(command)).toEqual([command])
-    },
-  )
+  test.each([
+    "Get-Content $env:WINDIR/win.ini",
+    "Get-Content ${env:WINDIR}/win.ini",
+    "Get-Content $env:1NAME/path",
+    "Get-Content ${env:WIN`}DIR}/win.ini",
+    "Get-Content ${env:WINDIR``}/win.ini",
+  ])("preserves an environment path argument: %s", async (command) => {
+    expect(await powershell(command)).toEqual([command])
+  })
+
+  test("expands numeric and escaped environment names", () => {
+    const keys: string[] = []
+    expect(
+      ShellParser.expandEnv("$env:1NAME/a ${env:WIN`}DIR}/b ${env:TICK``NAME}/c", (key) => {
+        keys.push(key)
+        return `[${key}]`
+      }),
+    ).toBe("[1NAME]/a [WIN}DIR]/b [TICK`NAME]/c")
+    expect(keys).toEqual(["1NAME", "WIN}DIR", "TICK`NAME"])
+  })
+
+  test("rejects expansion of a braced environment name with only an escaped terminator", () => {
+    expect(() => ShellParser.expandEnv("${env:WINDIR`}/win.ini", () => "unused")).toThrow(ShellParser.SyntaxError)
+  })
+
+  test("ignores environment syntax in literal PowerShell text", async () => {
+    const command = "Write-Output '${env:WINDIR`}/win.ini'"
+    expect(await powershell(command)).toEqual([command])
+    expect(
+      ShellParser.expandEnv("'${env:WINDIR`}/win.ini'", () => {
+        throw new Error("literal variable must not expand")
+      }),
+    ).toBe("'${env:WINDIR`}/win.ini'")
+  })
 
   test("does not let environment path normalization hide another command", async () => {
     expect(await powershell("Get-Content $env:WINDIR/win.ini; Remove-Item target")).toEqual([
@@ -149,12 +177,23 @@ describe("ShellParser PowerShell resources", () => {
     ])
   })
 
-  test.each(['Get-Content $env:WINDIR/win.ini "', 'Get-Content ${env:WINDIR}/win.ini "'])(
-    "fails closed on malformed syntax after an environment path: %s",
-    async (command) => {
-      await expect(powershell(command)).rejects.toBeInstanceOf(ShellParser.SyntaxError)
-    },
-  )
+  test("maps fallback parser offsets to the original source", async () => {
+    expect(await powershell('Write-Output "π"; Get-Content $env:1NAME/path; Remove-Item target')).toEqual([
+      'Write-Output "π"',
+      "Get-Content $env:1NAME/path",
+      "Remove-Item target",
+    ])
+  })
+
+  test.each([
+    'Get-Content $env:WINDIR/win.ini "',
+    'Get-Content ${env:WINDIR}/win.ini "',
+    "Get-Content ${env:WINDIR`}/win.ini",
+    'Get-Content "${env:WINDIR`}/win.ini"',
+    "Get-Content ${env:WINDIR`}/win.ini; Remove-Item target",
+  ])("fails closed on malformed syntax after an environment path: %s", async (command) => {
+    await expect(powershell(command)).rejects.toBeInstanceOf(ShellParser.SyntaxError)
+  })
 
   test("keeps executable expressions and their redirects opaque", async () => {
     expect(await powershell('"hi" > target')).toEqual(['"hi" > target'])

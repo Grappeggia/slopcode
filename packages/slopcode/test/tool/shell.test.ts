@@ -615,6 +615,49 @@ describe("tool.shell permissions", () => {
     }
 
     for (const item of ps) {
+      it.live(`asks for external_directory permission for numeric PowerShell env paths [${item.label}]`, () =>
+        withShell(
+          item,
+          Effect.acquireUseRelease(
+            Effect.sync(() => {
+              const key = "1SLOPCODE_TEST_WINDIR"
+              const prev = process.env[key]
+              process.env[key] = process.env.WINDIR
+              return { key, prev }
+            }),
+            ({ key }) =>
+              runIn(
+                projectRoot,
+                Effect.gen(function* () {
+                  const err = new Error("stop after permission")
+                  const requests: Array<Omit<PermissionV1.Request, "id" | "sessionID" | "tool">> = []
+                  expect(
+                    yield* fail(
+                      {
+                        command: `Get-Content $env:${key}/win.ini`,
+                        description: "Read Windows ini from numeric env",
+                      },
+                      capture(requests, err),
+                    ),
+                  ).toMatchObject({ message: err.message })
+                  expect(requests[0]?.permission).toBe("external_directory")
+                  if (requests[0]?.permission !== "external_directory") return
+                  expect(requests[0].patterns).toContain(
+                    Filesystem.normalizePathPattern(path.join(process.env.WINDIR!, "*")),
+                  )
+                }),
+              ),
+            ({ key, prev }) =>
+              Effect.sync(() => {
+                if (prev === undefined) delete process.env[key]
+                else process.env[key] = prev
+              }),
+          ),
+        ),
+      )
+    }
+
+    for (const item of ps) {
       it.live(`asks for external_directory permission for PowerShell FileSystem paths [${item.label}]`, () =>
         withShell(
           item,

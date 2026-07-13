@@ -83,15 +83,110 @@ export function opaque(shell: string, command: string) {
   return `[opaque shell statement] shell-utf8=${encode(shell)} source-utf8=${encode(command)}`
 }
 
+type Env = {
+  start: number
+  end: number
+  key: string
+}
+
+function powershellEnv(text: string) {
+  const result: Env[] = []
+  let quote: "'" | '"' | undefined
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+    if (quote === "'") {
+      if (char !== "'") continue
+      if (text[i + 1] === "'") {
+        i++
+        continue
+      }
+      quote = undefined
+      continue
+    }
+    if (char === "`") {
+      i++
+      continue
+    }
+    if (char === '"') {
+      if (quote === '"' && text[i + 1] === '"') {
+        i++
+        continue
+      }
+      quote = quote === '"' ? undefined : '"'
+      continue
+    }
+    if (!quote && char === "'") {
+      quote = "'"
+      continue
+    }
+    if (!quote && text.startsWith("<#", i)) {
+      const end = text.indexOf("#>", i + 2)
+      if (end === -1) break
+      i = end + 1
+      continue
+    }
+    if (!quote && char === "#") {
+      const end = text.indexOf("\n", i + 1)
+      if (end === -1) break
+      i = end
+      continue
+    }
+    if (!quote && text.startsWith("--%", i) && (i === 0 || /\s/.test(text[i - 1]))) break
+    if (char !== "$") continue
+
+    if (text.slice(i + 1, i + 5).toLowerCase() === "env:") {
+      const match = /^[A-Za-z0-9_?]+/.exec(text.slice(i + 5))
+      if (!match) continue
+      result.push({ start: i, end: i + 5 + match[0].length, key: match[0] })
+      i += 4 + match[0].length
+      continue
+    }
+    if (text.slice(i + 1, i + 6).toLowerCase() !== "{env:") continue
+
+    // Tree-sitter treats escaped braces as terminators, so validate and decode the name here.
+    let key = ""
+    let end = i + 6
+    for (; end < text.length; end++) {
+      const current = text[end]
+      if (current === "`") {
+        const escaped = text[end + 1]
+        if (!escaped || escaped === "\r" || escaped === "\n") throw new SyntaxError("powershell")
+        key += escaped
+        end++
+        continue
+      }
+      if (current === "}") break
+      if (current === "\r" || current === "\n") throw new SyntaxError("powershell")
+      key += current
+    }
+    if (!key || text[end] !== "}") throw new SyntaxError("powershell")
+    result.push({ start: i, end: end + 1, key })
+    i = end
+  }
+  return result
+}
+
+export function expandEnv(text: string, value: (key: string) => string) {
+  return powershellEnv(text)
+    .map((item) => ({ ...item, value: value(item.key) }))
+    .toReversed()
+    .reduce((result, item) => result.slice(0, item.start) + item.value + result.slice(item.end), text)
+}
+
 const powershellInput = (command: string) => {
   // The grammar cannot parse variables concatenated with path suffixes. Same-length
   // placeholders preserve offsets so authorization still reads the original source.
-  return command.replace(/\$(?:env:[A-Za-z_][A-Za-z0-9_]*|\{env:[^}\r\n]+\})(?=[\\/])/gi, (value) =>
-    "x".repeat(value.length),
-  )
+  return powershellEnv(command)
+    .filter((item) => command[item.end] === "\\" || command[item.end] === "/")
+    .toReversed()
+    .reduce(
+      (result, item) => result.slice(0, item.start) + "x".repeat(item.end - item.start) + result.slice(item.end),
+      command,
+    )
 }
 
 export async function parse(command: string, language: Language) {
+  if (language === "powershell") powershellEnv(command)
   const syntax = (await parser())[language]
   const tree = syntax.parse(command)
   if (tree && !tree.rootNode.hasError) return tree
