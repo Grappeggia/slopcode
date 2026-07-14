@@ -608,6 +608,7 @@ describe("session.llm-native.request", () => {
         input: [openAIResponses.user("hello")],
         max_output_tokens: 512,
         store: false,
+        include: ["reasoning.encrypted_content"],
         stream: true,
       },
     }),
@@ -635,6 +636,38 @@ describe("session.llm-native.request", () => {
           openAIResponses.user("Summarize it."),
         ],
         store: false,
+        include: ["reasoning.encrypted_content"],
+      },
+    }),
+  )
+
+  it.effect("filters malformed persisted replay ids without removing visible text", () =>
+    expectOpenAIResponsesRequest({
+      history: [
+        storedSession.assistant([
+          storedSession.openaiReasoning("discarded reasoning", {
+            storedAs: "providerOptions",
+            itemId: "malformed",
+            encryptedContent: "encrypted-state",
+          }),
+          storedSession.text("Visible answer."),
+        ]),
+      ],
+      providerOptions: { openai: { store: false } },
+      expectedBody: {
+        input: [openAIResponses.assistant("Visible answer.")],
+        include: ["reasoning.encrypted_content"],
+        store: false,
+      },
+    }),
+  )
+
+  it.effect("never emits sequential cutoff on the public native route", () =>
+    expectOpenAIResponsesRequest({
+      history: [storedSession.user("hello")],
+      providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
+      expectedBody: {
+        input: [openAIResponses.user("hello")],
       },
     }),
   )

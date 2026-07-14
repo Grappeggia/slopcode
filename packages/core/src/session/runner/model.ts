@@ -132,6 +132,7 @@ export const fromCatalogModel = (
       harness?.route.id === "codex"
         ? OpenAIResponses.route.with({
             id: "openai-responses-codex",
+            capabilities: [...OpenAIResponses.route.capabilities, "sequential-cutoff"],
             endpoint: { baseURL: "https://chatgpt.com/backend-api/codex" },
             headers: credential?.value.metadata?.accountID
               ? { "ChatGPT-Account-Id": credential.value.metadata.accountID }

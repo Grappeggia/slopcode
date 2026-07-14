@@ -122,4 +122,9 @@ export const responsesMode = (request: LLMRequest) => {
   return typeof value === "string" && RESPONSES_MODES.has(value) ? (value as OpenAIResponsesMode) : "full"
 }
 
+export const reasoningSummaryDelivery = (request: LLMRequest) => {
+  const value = options(request)?.reasoningSummaryDelivery
+  return value === "sequential_cutoff" ? value : undefined
+}
+
 export * as OpenAIOptions from "./openai-options"

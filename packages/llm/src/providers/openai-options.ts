@@ -33,6 +33,7 @@ export interface OpenAIOptionsInput {
   readonly parallelToolCalls?: boolean
   readonly truncation?: OpenAITruncation
   readonly responsesMode?: OpenAIResponsesMode
+  readonly reasoningSummaryDelivery?: "sequential_cutoff"
 }
 
 export type OpenAIProviderOptionsInput = ProviderOptions & {
@@ -57,6 +58,7 @@ export const make = (options: OpenAIOptionsInput | undefined): ProviderOptions |
       parallelToolCalls: options?.parallelToolCalls,
       truncation: options?.truncation,
       responsesMode: options?.responsesMode,
+      reasoningSummaryDelivery: options?.reasoningSummaryDelivery,
     }),
   )
   if (Object.keys(openai).length === 0) return undefined

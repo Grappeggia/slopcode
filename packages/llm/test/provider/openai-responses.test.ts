@@ -5,6 +5,7 @@ import {
   CustomToolDefinition,
   LLM,
   LLMError,
+  LLMEvent,
   Message,
   Model,
   Tool,
@@ -28,6 +29,13 @@ import { sseEvents } from "../lib/sse"
 const model = OpenAIResponses.route
   .with({ endpoint: { baseURL: "https://api.openai.test/v1/" }, auth: Auth.bearer("test") })
   .model({ id: "gpt-4.1-mini" })
+
+const codexModel = Model.update(model, {
+  route: model.route.with({
+    id: "openai-responses-codex",
+    capabilities: [...model.route.capabilities, "sequential-cutoff"],
+  }),
+})
 
 const request = LLM.request({
   id: "req_1",
@@ -269,7 +277,69 @@ describe("OpenAI Responses route", () => {
         model: "gpt-4.1-mini",
         input: [{ role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
         store: false,
+        include: ["reasoning.encrypted_content"],
       })
+    }),
+  )
+
+  it.effect("applies sequential cutoff parsing over WebSocket", () =>
+    Effect.gen(function* () {
+      const sent: string[] = []
+      const deps = Layer.mergeAll(
+        Layer.succeed(
+          RequestExecutor.Service,
+          RequestExecutor.Service.of({ execute: () => Effect.die("unexpected HTTP request") }),
+        ),
+        Layer.succeed(
+          WebSocketExecutor.Service,
+          WebSocketExecutor.Service.of({
+            open: () =>
+              Effect.succeed({
+                sendText: (message) => Effect.sync(() => sent.push(message)),
+                messages: Stream.fromArray([
+                  ProviderShared.encodeJson({
+                    type: "response.output_item.added",
+                    item: { type: "reasoning", id: "rs_ws" },
+                  }),
+                  ProviderShared.encodeJson({
+                    type: "response.reasoning_summary_text.delta",
+                    item_id: "rs_ws",
+                    summary_index: 0,
+                    delta: "partial",
+                  }),
+                  ProviderShared.encodeJson({
+                    type: "response.reasoning_summary_text.done",
+                    item_id: "rs_ws",
+                    summary_index: 0,
+                    text: "Complete",
+                  }),
+                  ProviderShared.encodeJson({
+                    type: "response.output_item.done",
+                    item: { type: "reasoning", id: "rs_ws", encrypted_content: "encrypted-ws" },
+                  }),
+                  ProviderShared.encodeJson({ type: "response.completed", response: {} }),
+                ]),
+                close: Effect.void,
+              }),
+          }),
+        ),
+      )
+      const route = OpenAIResponses.webSocketRoute.with({
+        id: "openai-responses-codex-websocket",
+        endpoint: { baseURL: "https://api.openai.test/v1/" },
+        auth: Auth.bearer("test"),
+        capabilities: [...OpenAIResponses.webSocketRoute.capabilities, "sequential-cutoff"],
+      })
+      const response = yield* LLMClient.generate(
+        LLM.request({
+          model: route.model({ id: "gpt-5.6" }),
+          prompt: "Think.",
+          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
+        }),
+      ).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(deps))))
+
+      expect(response.reasoning).toBe("Complete")
+      expect(JSON.parse(sent[0]).stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" })
     }),
   )
 
@@ -442,6 +512,76 @@ describe("OpenAI Responses route", () => {
           input: "*** Begin Patch\n*** End Patch",
         },
         { type: "custom_tool_call_output", call_id: "call_1", output: "applied" },
+      ])
+    }),
+  )
+
+  it.effect("filters malformed replay item ids while accepting future prefixes", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [
+            Message.assistant([
+              {
+                type: "reasoning",
+                text: "valid future state",
+                providerMetadata: {
+                  openai: { itemId: "future_123", reasoningEncryptedContent: "encrypted-future" },
+                },
+              },
+              ...["", "missing", "_suffix", "prefix_"].map((itemId) => ({
+                type: "reasoning" as const,
+                text: `invalid ${itemId}`,
+                providerMetadata: { openai: { itemId, reasoningEncryptedContent: "encrypted-invalid" } },
+              })),
+              {
+                type: "reasoning",
+                text: "empty encryption",
+                providerMetadata: { openai: { itemId: "rs_empty", reasoningEncryptedContent: "" } },
+              },
+              ToolCallPart.make({
+                id: "call_1",
+                name: "patch",
+                input: "patch",
+                toolType: "custom",
+                providerMetadata: { openai: { itemId: "invalid" } },
+              }),
+              ToolCallPart.make({
+                id: "call_2",
+                name: "patch",
+                input: "future patch",
+                toolType: "custom",
+                providerMetadata: { openai: { itemId: "future_tool" } },
+              }),
+              ToolResultPart.make({
+                id: "hosted_1",
+                name: "web_search",
+                result: { type: "json", value: {} },
+                providerExecuted: true,
+                providerMetadata: { openai: { itemId: "invalid" } },
+              }),
+            ]),
+          ],
+          providerOptions: { openai: { store: false } },
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        {
+          type: "reasoning",
+          id: "future_123",
+          encrypted_content: "encrypted-future",
+          summary: [{ type: "summary_text", text: "valid future state" }],
+        },
+        { type: "custom_tool_call", call_id: "call_1", name: "patch", input: "patch" },
+        {
+          type: "custom_tool_call",
+          id: "future_tool",
+          call_id: "call_2",
+          name: "patch",
+          input: "future patch",
+        },
       ])
     }),
   )
@@ -1028,33 +1168,33 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("treats an explicit empty include as no include at all", () =>
+  it.effect("adds encrypted reasoning to an explicit empty include for stateless requests", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({ model, prompt: "hi", providerOptions: { openai: { include: [] } } }),
+        LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: false, include: [] } } }),
       )
 
-      expect(prepared.body.include).toBeUndefined()
+      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
     }),
   )
 
-  it.effect("treats an all-invalid include as no include at all", () =>
+  it.effect("adds encrypted reasoning when all caller include values are invalid", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
-        LLM.request({ model, prompt: "hi", providerOptions: { openai: { include: ["bogus.thing"] } } }),
+        LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: false, include: ["bogus.thing"] } } }),
       )
 
-      expect(prepared.body.include).toBeUndefined()
+      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
     }),
   )
 
-  it.effect("omits include when no include is set", () =>
+  it.effect("requests encrypted reasoning when stateless include is omitted", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: false } } }),
       )
 
-      expect(prepared.body.include).toBeUndefined()
+      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
     }),
   )
 
@@ -1077,7 +1217,7 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("lets callers opt out of the GPT-5 default include", () =>
+  it.effect("does not let stateless callers opt out of encrypted reasoning", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({
@@ -1087,7 +1227,59 @@ describe("OpenAI Responses route", () => {
         }),
       )
 
+      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
+    }),
+  )
+
+  it.effect("merges and deduplicates stateless include fields", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          prompt: "hi",
+          providerOptions: {
+            openai: {
+              store: false,
+              include: ["web_search_call.results", "reasoning.encrypted_content", "reasoning.encrypted_content"],
+            },
+          },
+        }),
+      )
+
+      expect(prepared.body.include).toEqual(["web_search_call.results", "reasoning.encrypted_content"])
+    }),
+  )
+
+  it.effect("does not force encrypted reasoning for stored requests", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: true } } }),
+      )
+
       expect(prepared.body.include).toBeUndefined()
+    }),
+  )
+
+  it.effect("emits sequential cutoff only on capable Codex routes", () =>
+    Effect.gen(function* () {
+      const options = { openai: { reasoningSummaryDelivery: "sequential_cutoff" as const } }
+      const publicRequest = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({ model, prompt: "hi", providerOptions: options }),
+      )
+      const codexRequest = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({ model: codexModel, prompt: "hi", providerOptions: options }),
+      )
+      const azureRequest = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: Azure.configure({ baseURL: "https://azure.test/openai/v1", apiKey: "test" }).responses("gpt-5"),
+          prompt: "hi",
+          providerOptions: options,
+        }),
+      )
+
+      expect(publicRequest.body).not.toHaveProperty("stream_options")
+      expect(azureRequest.body).not.toHaveProperty("stream_options")
+      expect(codexRequest.body.stream_options).toEqual({ reasoning_summary_delivery: "sequential_cutoff" })
     }),
   )
 
@@ -1228,6 +1420,131 @@ describe("OpenAI Responses route", () => {
           providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
         }),
       )
+    }),
+  )
+
+  it.effect("parses only completed sequential cutoff summaries in order", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.request({
+          model: codexModel,
+          prompt: "think",
+          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_1" } },
+              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_1" } },
+              { type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 0, delta: "partial" },
+              { type: "response.reasoning_summary_text.done", item_id: "rs_1", summary_index: 0, text: "First" },
+              { type: "response.reasoning_summary_text.done", item_id: "rs_1", summary_index: 0, text: "duplicate" },
+              { type: "response.reasoning_summary_text.done", item_id: "rs_1", summary_index: 1, text: "Second" },
+              {
+                type: "response.output_item.done",
+                item: { type: "reasoning", id: "rs_1", encrypted_content: "encrypted-state" },
+              },
+              {
+                type: "response.output_item.done",
+                item: { type: "reasoning", id: "rs_1", encrypted_content: "duplicate-state" },
+              },
+              { type: "response.output_text.delta", item_id: "msg_1", delta: "Visible" },
+              { type: "response.reasoning_summary_text.done", item_id: "rs_1", summary_index: 2, text: "stale" },
+              { type: "response.completed", response: { id: "resp_1" } },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.reasoning).toBe("FirstSecond")
+      expect(response.text).toBe("Visible")
+      expect(response.events.filter(LLMEvent.is.reasoningDelta)).toEqual([
+        { type: "reasoning-delta", id: "rs_1:0", text: "First" },
+        { type: "reasoning-delta", id: "rs_1:1", text: "Second" },
+      ])
+      expect(response.events.filter(LLMEvent.is.reasoningEnd).at(-1)).toMatchObject({
+        providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
+      })
+    }),
+  )
+
+  it.effect("does not interpret sequential cutoff events on public routes", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.request({
+          model,
+          prompt: "think",
+          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_public" } },
+              {
+                type: "response.reasoning_summary_text.delta",
+                item_id: "rs_public",
+                summary_index: 0,
+                delta: "Legacy",
+              },
+              {
+                type: "response.reasoning_summary_text.done",
+                item_id: "rs_public",
+                summary_index: 0,
+                text: "Atomic",
+              },
+              { type: "response.output_item.done", item: { type: "reasoning", id: "rs_public" } },
+              { type: "response.completed", response: {} },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.reasoning).toBe("Legacy")
+    }),
+  )
+
+  it.effect("drops interrupted and done-only sequential cutoff items", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.request({
+          model: codexModel,
+          prompt: "think",
+          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_interrupted" } },
+              {
+                type: "response.reasoning_summary_text.delta",
+                item_id: "rs_interrupted",
+                summary_index: 0,
+                delta: "partial",
+              },
+              { type: "response.output_item.added", item: { type: "message", id: "msg_1" } },
+              {
+                type: "response.reasoning_summary_text.done",
+                item_id: "rs_interrupted",
+                summary_index: 0,
+                text: "late",
+              },
+              {
+                type: "response.output_item.done",
+                item: { type: "reasoning", id: "rs_done_only", encrypted_content: "stale" },
+              },
+              { type: "response.output_text.delta", item_id: "msg_1", delta: "Visible" },
+              { type: "response.completed", response: {} },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.reasoning).toBe("")
+      expect(response.text).toBe("Visible")
+      expect(response.events.some(LLMEvent.is.reasoningDelta)).toBe(false)
     }),
   )
 

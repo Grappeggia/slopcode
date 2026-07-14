@@ -681,6 +681,8 @@ export const layer = Layer.effect(
                 reasoningEffort: resolved.reasoning,
                 reasoningSummary: "none",
                 reasoningContext: resolved.harness.route.reasoning === "all_turns" ? "all_turns" : undefined,
+                reasoningSummaryDelivery:
+                  resolved.harness.route.id === "codex" ? "sequential_cutoff" : undefined,
               }
             : { promptCacheKey },
         ),

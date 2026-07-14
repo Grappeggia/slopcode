@@ -7279,7 +7279,7 @@ describe("SessionRunnerLLM", () => {
         const instructions = yield* ModelHarness.instructions(profile)
         expect(request.model.route).toMatchObject({
           protocol: "openai-responses",
-          capabilities: ["code-mode", "responses-lite", "custom-tools"],
+          capabilities: ["code-mode", "responses-lite", "custom-tools", "sequential-cutoff"],
           defaults: { limits: { context: 372_000, output: 128_000 } },
         })
         expect(request.tools).toHaveLength(1)
@@ -7297,6 +7297,7 @@ describe("SessionRunnerLLM", () => {
           reasoningContext: "all_turns",
           reasoningEffort: item.effort,
           reasoningSummary: "none",
+          reasoningSummaryDelivery: "sequential_cutoff",
           responsesMode: "lite",
           textVerbosity: "low",
         })
@@ -7310,6 +7311,7 @@ describe("SessionRunnerLLM", () => {
           store: false,
           include: ["reasoning.encrypted_content"],
           reasoning: { effort: item.effort, context: "all_turns" },
+          stream_options: { reasoning_summary_delivery: "sequential_cutoff" },
           text: { verbosity: "low" },
         })
         expect(JSON.parse(JSON.stringify(prepared.body))).not.toHaveProperty("tools")
@@ -7379,6 +7381,7 @@ describe("SessionRunnerLLM", () => {
       expect(prepared.body.tools).toHaveLength(2)
       expect(prepared.body.input.some((item) => "type" in item && item.type === "additional_tools")).toBe(false)
       expect(prepared.body.reasoning).toEqual({ effort: "low" })
+      expect(prepared.body).not.toHaveProperty("stream_options")
     }),
   )
 

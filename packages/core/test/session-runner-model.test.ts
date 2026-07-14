@@ -199,6 +199,7 @@ describe("SessionRunnerModel", () => {
           item.codex ? "account-123" : undefined,
         )
         expect(resolved.model.route.defaults.limits?.context).toBe(item.codex ? 372_000 : 1_050_000)
+        expect(resolved.model.route.capabilities.includes("sequential-cutoff")).toBe(item.codex)
         expect(resolved.harness?.route.responses).toBe(item.codex ? "lite" : "full")
         expect(resolved.harness?.route.tools.mode).toBe(item.codex ? "code-only" : "function")
         expect(resolved.harness?.route.reasoning).toBe(item.codex ? "all_turns" : "default")

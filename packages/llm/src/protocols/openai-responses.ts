@@ -178,6 +178,9 @@ const OpenAIResponsesCoreFields = {
   service_tier: Schema.optional(OpenAIOptions.OpenAIServiceTier),
   prompt_cache_key: Schema.optional(Schema.String),
   include: optionalArray(OpenAIOptions.OpenAIResponseIncludable),
+  stream_options: Schema.optional(
+    Schema.Struct({ reasoning_summary_delivery: Schema.Literal("sequential_cutoff") }),
+  ),
   reasoning: Schema.optional(
     Schema.Struct({
       effort: Schema.optional(OpenAIOptions.OpenAIReasoningEffort),
@@ -264,6 +267,7 @@ const OpenAIResponsesErrorPayload = Schema.Struct({
 const OpenAIResponsesEvent = Schema.Struct({
   type: Schema.String,
   delta: Schema.optional(Schema.String),
+  text: Schema.optional(Schema.String),
   item_id: Schema.optional(Schema.String),
   summary_index: Schema.optional(Schema.Number),
   item: Schema.optional(OpenAIResponsesStreamItem),
@@ -290,7 +294,9 @@ interface ParserState {
   readonly hasFunctionCall: boolean
   readonly lifecycle: Lifecycle.State
   readonly reasoningItems: Readonly<Record<string, ReasoningStreamItem>>
+  readonly reasoningCutoffs: ReadonlySet<string>
   readonly store: boolean | undefined
+  readonly sequentialCutoff: boolean
 }
 
 type ReasoningSummaryStatus = "active" | "can-conclude" | "concluded"
@@ -332,11 +338,15 @@ const lowerToolChoice = (toolChoice: NonNullable<LLMRequest["toolChoice"]>) =>
     tool: (name) => ({ type: toolChoice.toolType === "custom" ? ("custom" as const) : ("function" as const), name }),
   })
 
+const isReplayItemID = (value: unknown): value is string => {
+  if (typeof value !== "string") return false
+  const separator = value.indexOf("_")
+  return separator > 0 && separator < value.length - 1
+}
+
 const openAIItemID = (part: ToolCallPart | ToolResultPart) => {
   const openai = part.providerMetadata?.openai
-  return ProviderShared.isRecord(openai) && typeof openai.itemId === "string" && openai.itemId.length > 0
-    ? openai.itemId
-    : undefined
+  return ProviderShared.isRecord(openai) && isReplayItemID(openai.itemId) ? openai.itemId : undefined
 }
 
 const lowerToolCall = Effect.fn("OpenAIResponses.lowerToolCall")(function* (part: ToolCallPart) {
@@ -361,10 +371,9 @@ const lowerToolCall = Effect.fn("OpenAIResponses.lowerToolCall")(function* (part
 
 const lowerReasoning = (part: ReasoningPart): OpenAIResponsesReasoningInput | undefined => {
   const openai = part.providerMetadata?.openai
-  if (!ProviderShared.isRecord(openai) || typeof openai.itemId !== "string" || openai.itemId.length === 0)
-    return undefined
+  if (!ProviderShared.isRecord(openai) || !isReplayItemID(openai.itemId)) return undefined
   const encryptedContent =
-    typeof openai.reasoningEncryptedContent === "string"
+    typeof openai.reasoningEncryptedContent === "string" && openai.reasoningEncryptedContent.length > 0
       ? openai.reasoningEncryptedContent
       : openai.reasoningEncryptedContent === null
         ? null
@@ -472,7 +481,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
           const existing = reasoningItems[reasoning.id]
           if (existing) {
             existing.summary.push(...reasoning.summary)
-            if (typeof reasoning.encrypted_content === "string")
+            if (typeof reasoning.encrypted_content === "string" && reasoning.encrypted_content.length > 0)
               existing.encrypted_content = reasoning.encrypted_content
             continue
           }
@@ -521,7 +530,10 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
   // that state only on the last block, so filter after they have been joined.
   return store === false
     ? input.filter(
-        (item) => !("type" in item) || item.type !== "reasoning" || typeof item.encrypted_content === "string",
+        (item) =>
+          !("type" in item) ||
+          item.type !== "reasoning" ||
+          (typeof item.encrypted_content === "string" && item.encrypted_content.length > 0),
       )
     : input
 })
@@ -535,7 +547,10 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
     return yield* invalid(`OpenAI Responses does not support reasoning effort ${effort}`)
   const summary = OpenAIOptions.reasoningSummary(request)
   const context = lite ? ("all_turns" as const) : OpenAIOptions.reasoningContext(request)
-  const include = OpenAIOptions.include(request)
+  const requested = OpenAIOptions.include(request) ?? []
+  const include = [
+    ...new Set(store === false ? [...requested, "reasoning.encrypted_content" as const] : requested),
+  ]
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
@@ -545,7 +560,11 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
     ...(lite ? { instructions: "" } : instructions ? { instructions } : {}),
     ...(store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
-    ...(include ? { include } : {}),
+    ...(include.length > 0 ? { include } : {}),
+    ...(request.model.route.capabilities.includes("sequential-cutoff") &&
+    OpenAIOptions.reasoningSummaryDelivery(request) === "sequential_cutoff"
+      ? { stream_options: { reasoning_summary_delivery: "sequential_cutoff" as const } }
+      : {}),
     ...(effort || summary === "auto" || context
       ? {
           reasoning: {
@@ -740,6 +759,7 @@ const onOutputTextDelta = (state: ParserState, event: OpenAIResponsesEvent): Ste
 }
 
 const onReasoningDelta = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
+  if (state.sequentialCutoff) return [state, NO_EVENTS]
   if (!event.delta) return [state, NO_EVENTS]
   const events: LLMEvent[] = []
   const itemID = event.item_id ?? "reasoning-0"
@@ -754,7 +774,37 @@ const onReasoningDelta = (state: ParserState, event: OpenAIResponsesEvent): Step
   ]
 }
 
-const onReasoningDone = (state: ParserState, _event: OpenAIResponsesEvent): StepResult => [state, NO_EVENTS]
+const onReasoningDone = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
+  if (!state.sequentialCutoff || !event.item_id || event.summary_index === undefined || !event.text)
+    return [state, NO_EVENTS]
+  if (state.reasoningCutoffs.has(event.item_id)) return [state, NO_EVENTS]
+  const item = state.reasoningItems[event.item_id]
+  if (!item || item.summaryParts[event.summary_index]) return [state, NO_EVENTS]
+  const events: LLMEvent[] = []
+  const closed = Object.entries(item.summaryParts).reduce(
+    (lifecycle, entry) =>
+      Lifecycle.reasoningEnd(lifecycle, events, `${event.item_id}:${entry[0]}`, openaiMetadata({ itemId: event.item_id })),
+    state.lifecycle,
+  )
+  const id = `${event.item_id}:${event.summary_index}`
+  return [
+    {
+      ...state,
+      lifecycle: Lifecycle.reasoningDelta(closed, events, id, event.text),
+      reasoningItems: {
+        ...state.reasoningItems,
+        [event.item_id]: {
+          ...item,
+          summaryParts: {
+            ...Object.fromEntries(Object.keys(item.summaryParts).map((index) => [index, "concluded" as const])),
+            [event.summary_index]: "active",
+          },
+        },
+      },
+    },
+    events,
+  ]
+}
 
 const reasoningMetadata = (item: OpenAIResponsesStreamItem & { id: string }) =>
   openaiMetadata({ itemId: item.id, reasoningEncryptedContent: item.encrypted_content ?? null })
@@ -774,6 +824,18 @@ const reasoningMetadata = (item: OpenAIResponsesStreamItem & { id: string }) =>
 const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
   const item = event.item
   if (item && isReasoningItem(item)) {
+    if (state.sequentialCutoff) {
+      if (state.reasoningCutoffs.has(item.id) || state.reasoningItems[item.id]) return [state, NO_EVENTS]
+      return [
+        {
+          ...state,
+          reasoningItems: {
+            [item.id]: { encryptedContent: item.encrypted_content, summaryParts: {} },
+          },
+        },
+        NO_EVENTS,
+      ]
+    }
     const events: LLMEvent[] = []
     return [
       {
@@ -786,6 +848,23 @@ const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): Ste
       },
       events,
     ]
+  }
+  if (state.sequentialCutoff && Object.keys(state.reasoningItems).length > 0) {
+    const events: LLMEvent[] = []
+    const lifecycle = Object.entries(state.reasoningItems).reduce(
+      (current, entry) =>
+        Object.keys(entry[1].summaryParts).reduce(
+          (inner, index) => Lifecycle.reasoningEnd(inner, events, `${entry[0]}:${index}`),
+          current,
+        ),
+      state.lifecycle,
+    )
+    state = {
+      ...state,
+      lifecycle,
+      reasoningItems: {},
+      reasoningCutoffs: new Set([...state.reasoningCutoffs, ...Object.keys(state.reasoningItems)]),
+    }
   }
   if ((item?.type !== "function_call" && item?.type !== "custom_tool_call") || !item.id) return [state, NO_EVENTS]
   const providerMetadata = openaiMetadata({ itemId: item.id })
@@ -818,6 +897,7 @@ const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): Ste
 }
 
 const onReasoningSummaryPartAdded = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
+  if (state.sequentialCutoff) return [state, NO_EVENTS]
   if (!event.item_id || event.summary_index === undefined) return [state, NO_EVENTS]
   const item = state.reasoningItems[event.item_id] ?? { encryptedContent: undefined, summaryParts: {} }
   if (event.summary_index === 0) {
@@ -883,6 +963,7 @@ const onReasoningSummaryPartAdded = (state: ParserState, event: OpenAIResponsesE
 }
 
 const onReasoningSummaryPartDone = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
+  if (state.sequentialCutoff) return [state, NO_EVENTS]
   if (!event.item_id || event.summary_index === undefined) return [state, NO_EVENTS]
   const item = state.reasoningItems[event.item_id]
   if (!item) return [state, NO_EVENTS]
@@ -977,6 +1058,7 @@ const onOutputItemDone = Effect.fn("OpenAIResponses.onOutputItemDone")(function*
   }
 
   if (isReasoningItem(item)) {
+    if (state.sequentialCutoff && state.reasoningCutoffs.has(item.id)) return [state, NO_EVENTS] satisfies StepResult
     const events: LLMEvent[] = []
     const providerMetadata = reasoningMetadata(item)
     const reasoningItem = state.reasoningItems[item.id]
@@ -988,8 +1070,19 @@ const onOutputItemDone = Effect.fn("OpenAIResponses.onOutputItemDone")(function*
           state.lifecycle,
         )
       const { [item.id]: _removed, ...reasoningItems } = state.reasoningItems
-      return [{ ...state, lifecycle, reasoningItems }, events] satisfies StepResult
+      return [
+        {
+          ...state,
+          lifecycle,
+          reasoningItems,
+          reasoningCutoffs: state.sequentialCutoff
+            ? new Set([...state.reasoningCutoffs, item.id])
+            : state.reasoningCutoffs,
+        },
+        events,
+      ] satisfies StepResult
     }
+    if (state.sequentialCutoff) return [state, NO_EVENTS] satisfies StepResult
     if (!state.lifecycle.reasoning.has(item.id)) {
       const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
       events.push(LLMEvent.reasoningStart({ id: item.id, providerMetadata }))
@@ -1103,7 +1196,11 @@ export const protocol = Protocol.make({
       tools: ToolStream.empty<string>(),
       lifecycle: Lifecycle.initial(),
       reasoningItems: {},
+      reasoningCutoffs: new Set<string>(),
       store: OpenAIOptions.store(request),
+      sequentialCutoff:
+        request.model.route.capabilities.includes("sequential-cutoff") &&
+        OpenAIOptions.reasoningSummaryDelivery(request) === "sequential_cutoff",
     }),
     step,
     terminal: (event) => TERMINAL_TYPES.has(event.type),
