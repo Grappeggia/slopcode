@@ -14,6 +14,7 @@ export type Capability = typeof Capability.Type
 
 export type ToolMode = "function" | "code-preferred" | "code-only"
 export type Reasoning = "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+export type Route = "public" | "codex"
 
 export interface Template {
   readonly id: "gpt-5.6-sol-v1" | "gpt-5.6-general-v1"
@@ -25,30 +26,37 @@ export interface Profile {
   readonly id: ID
   readonly version: 1
   readonly instruction: Template
-  readonly tools: {
-    readonly mode: ToolMode
-    readonly shell: "shell_command"
-    readonly patch: "freeform"
-    readonly discovery: "code-mode"
-    readonly parallel: boolean
-  }
   readonly reasoning: {
     readonly default: Reasoning
     readonly supported: readonly Reasoning[]
   }
   readonly multiAgent: "v1" | "v2"
+  readonly source: typeof source
+  readonly sourceModel: "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna"
+  readonly profileHash: `sha256:${string}`
+  readonly route: RouteProfile
+}
+
+export interface RouteProfile {
+  readonly id: Route
+  readonly tools: {
+    readonly mode: ToolMode
+    readonly shell?: "shell_command"
+    readonly patch?: "freeform"
+    readonly discovery?: "code-mode"
+    readonly parallel?: boolean
+  }
   readonly context: {
-    readonly limit: number
-    readonly truncation: { readonly mode: "tokens"; readonly limit: number }
-    readonly compaction: { readonly compatible: boolean; readonly hash: string }
+    readonly limit: number | undefined
+    readonly truncation?: { readonly mode: "tokens"; readonly limit: number }
+    readonly compaction?: { readonly compatible: boolean; readonly hash: string }
   }
   readonly transport: {
     readonly required: readonly Capability[]
     readonly websocket: "preferred" | "neutral"
   }
-  readonly source: typeof source
-  readonly sourceModel: "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna"
-  readonly profileHash: `sha256:${string}`
+  readonly responses: "full" | "lite"
+  readonly reasoning: "default" | "all_turns"
 }
 
 export const source = {
@@ -73,29 +81,42 @@ export const templates = {
 
 const common = {
   version: 1,
-  tools: {
-    mode: "code-only",
-    shell: "shell_command",
-    patch: "freeform",
-    discovery: "code-mode",
-    parallel: true,
-  },
-  context: {
-    limit: 372_000,
-    truncation: { mode: "tokens", limit: 10_000 },
-    compaction: { compatible: true, hash: "3000" },
-  },
-  transport: {
-    required: ["code-mode", "responses-lite"],
-    websocket: "preferred",
-  },
   source,
 } as const
+
+export const routes: Readonly<Record<Route, RouteProfile>> = {
+  public: {
+    id: "public",
+    tools: { mode: "function" },
+    context: { limit: undefined },
+    transport: { required: [], websocket: "neutral" },
+    responses: "full",
+    reasoning: "default",
+  },
+  codex: {
+    id: "codex",
+    tools: {
+      mode: "code-only",
+      shell: "shell_command",
+      patch: "freeform",
+      discovery: "code-mode",
+      parallel: true,
+    },
+    context: {
+      limit: 372_000,
+      truncation: { mode: "tokens", limit: 10_000 },
+      compaction: { compatible: true, hash: "3000" },
+    },
+    transport: { required: ["code-mode", "responses-lite"], websocket: "preferred" },
+    responses: "lite",
+    reasoning: "all_turns",
+  },
+}
 
 const all = ["low", "medium", "high", "xhigh", "max", "ultra"] as const
 const standard = ["low", "medium", "high", "xhigh", "max"] as const
 
-export const profiles: Readonly<Record<ID, Profile>> = {
+export const profiles: Readonly<Record<ID, Omit<Profile, "route">>> = {
   "gpt-5.6": {
     ...common,
     id: "gpt-5.6",
@@ -103,7 +124,7 @@ export const profiles: Readonly<Record<ID, Profile>> = {
     instruction: templates["gpt-5.6-sol-v1"],
     reasoning: { default: "low", supported: all },
     multiAgent: "v2",
-    profileHash: "sha256:5d727c29a47b42a85e4a653f428cfe24a802615b70b3da4f325e718f282c6b87",
+    profileHash: "sha256:6cb8d2fa5c427e475d93b253a70df7198efd8996c3e2602333ddb8961c104a98",
   },
   "gpt-5.6-sol": {
     ...common,
@@ -112,7 +133,7 @@ export const profiles: Readonly<Record<ID, Profile>> = {
     instruction: templates["gpt-5.6-sol-v1"],
     reasoning: { default: "low", supported: all },
     multiAgent: "v2",
-    profileHash: "sha256:4b4fc2f50c2eec0cd208430eced7f04665e2f0d6827eeb896231bbbf8e23db42",
+    profileHash: "sha256:7ab05e3cdf1593aa9d7686cea1c0673479f3b0db4658b529e203818466022a5c",
   },
   "gpt-5.6-terra": {
     ...common,
@@ -121,7 +142,7 @@ export const profiles: Readonly<Record<ID, Profile>> = {
     instruction: templates["gpt-5.6-general-v1"],
     reasoning: { default: "medium", supported: all },
     multiAgent: "v2",
-    profileHash: "sha256:44b764825455ae23fb572218522248497be9e587da3f2f50098e87343d5b882c",
+    profileHash: "sha256:7fc5f8b80d8894e4c423016b68ead2d3120fa78849374478847dce8708ad50b2",
   },
   "gpt-5.6-luna": {
     ...common,
@@ -130,7 +151,7 @@ export const profiles: Readonly<Record<ID, Profile>> = {
     instruction: templates["gpt-5.6-general-v1"],
     reasoning: { default: "medium", supported: standard },
     multiAgent: "v1",
-    profileHash: "sha256:68b571fede4f2b1518c58c389ea859816ed4f58b6895a367fb2508bc46c7cdcd",
+    profileHash: "sha256:f09032794140a9992ce6fbe7e9f9f0879885da6994cbc7cd55793cb50cca729f",
   },
 }
 
@@ -153,15 +174,15 @@ export class UnsupportedReasoningError extends Schema.TaggedErrorClass<Unsupport
 
 const isID = Schema.is(ID)
 
-export const resolve = (model: ModelV2.Info): Profile | undefined => {
+export const resolve = (model: ModelV2.Info, route: Route = "public"): Profile | undefined => {
   if (!isID(model.api.id)) return undefined
   const id: ID = model.api.id
-  return profiles[id]
+  return { ...profiles[id], route: routes[route] }
 }
 
 export const validate = (profile: Profile, capabilities: readonly string[]) => {
   const available = new Set(capabilities)
-  const missing = profile.transport.required.filter((capability) => !available.has(capability))
+  const missing = profile.route.transport.required.filter((capability) => !available.has(capability))
   if (missing.length > 0) return Effect.fail(new IncompatibilityError({ profileID: profile.id, missing }))
   return Effect.void
 }
@@ -171,7 +192,7 @@ const content: Readonly<Record<Template["id"], string>> = {
   "gpt-5.6-general-v1": general,
 }
 
-export const instructions = (profile: Profile) =>
+export const instructions = (profile: Pick<Profile, "instruction">) =>
   Effect.sync(() => {
     const value = content[profile.instruction.id]
     if (value === undefined) throw new Error(`Missing model harness instructions: ${profile.instruction.id}`)
@@ -183,7 +204,7 @@ export const instructions = (profile: Profile) =>
     return value
   })
 
-export const reasoning = (profile: Profile, variant?: string) => {
+export const reasoning = (profile: Omit<Profile, "route"> | Profile, variant?: string) => {
   if (variant === undefined || variant === "default") return Effect.succeed(profile.reasoning.default)
   if (profile.reasoning.supported.some((effort) => effort === variant)) return Effect.succeed(variant as Reasoning)
   return Effect.fail(

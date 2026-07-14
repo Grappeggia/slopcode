@@ -94,13 +94,13 @@ describe("ModelHarness", () => {
       },
     })
     expect(profiles.map((profile) => profile.profileHash)).toEqual([
-      "sha256:5d727c29a47b42a85e4a653f428cfe24a802615b70b3da4f325e718f282c6b87",
-      "sha256:4b4fc2f50c2eec0cd208430eced7f04665e2f0d6827eeb896231bbbf8e23db42",
-      "sha256:44b764825455ae23fb572218522248497be9e587da3f2f50098e87343d5b882c",
-      "sha256:68b571fede4f2b1518c58c389ea859816ed4f58b6895a367fb2508bc46c7cdcd",
+      "sha256:6cb8d2fa5c427e475d93b253a70df7198efd8996c3e2602333ddb8961c104a98",
+      "sha256:7ab05e3cdf1593aa9d7686cea1c0673479f3b0db4658b529e203818466022a5c",
+      "sha256:7fc5f8b80d8894e4c423016b68ead2d3120fa78849374478847dce8708ad50b2",
+      "sha256:f09032794140a9992ce6fbe7e9f9f0879885da6994cbc7cd55793cb50cca729f",
     ])
     for (const profile of profiles) {
-      const { profileHash, ...content } = profile
+      const { profileHash, route: _route, ...content } = profile
       expect(profileHash).toBe(`sha256:${Bun.CryptoHasher.hash("sha256", JSON.stringify(content), "hex")}`)
     }
   })
@@ -123,10 +123,10 @@ describe("ModelHarness", () => {
   )
 
   it("represents the pinned model-visible behavior", () => {
-    const profiles = ids.map((id) => ModelHarness.resolve(model(id))!)
+    const profiles = ids.map((id) => ModelHarness.resolve(model(id), "codex")!)
 
     expect(profiles.map((profile) => profile.version)).toEqual([1, 1, 1, 1])
-    expect(profiles.map((profile) => profile.tools)).toEqual(
+    expect(profiles.map((profile) => profile.route.tools)).toEqual(
       ids.map(() => ({
         mode: "code-only",
         shell: "shell_command",
@@ -143,21 +143,35 @@ describe("ModelHarness", () => {
       ["low", "medium", "high", "xhigh", "max"],
     ])
     expect(profiles.map((profile) => profile.multiAgent)).toEqual(["v2", "v2", "v2", "v1"])
-    expect(profiles.map((profile) => profile.context)).toEqual(
+    expect(profiles.map((profile) => profile.route.context)).toEqual(
       ids.map(() => ({
         limit: 372_000,
         truncation: { mode: "tokens", limit: 10_000 },
         compaction: { compatible: true, hash: "3000" },
       })),
     )
-    expect(profiles.map((profile) => profile.transport)).toEqual(
+    expect(profiles.map((profile) => profile.route.transport)).toEqual(
       ids.map(() => ({ required: ["code-mode", "responses-lite"], websocket: "preferred" })),
     )
+    expect(profiles.map((profile) => profile.route.responses)).toEqual(ids.map(() => "lite"))
+  })
+
+  it("uses public transport, catalog context, and function tools by default", () => {
+    const profile = ModelHarness.resolve(model("gpt-5.6-sol"))!
+
+    expect(profile.route).toEqual({
+      id: "public",
+      tools: { mode: "function" },
+      context: { limit: undefined },
+      transport: { required: [], websocket: "neutral" },
+      responses: "full",
+      reasoning: "default",
+    })
   })
 
   effectIt.effect("reports unmet model transport requirements without claiming route support", () =>
     Effect.gen(function* () {
-      const profile = ModelHarness.resolve(model("gpt-5.6-sol"))!
+      const profile = ModelHarness.resolve(model("gpt-5.6-sol"), "codex")!
       const failure = yield* ModelHarness.validate(profile, ["websocket"]).pipe(Effect.flip)
 
       expect(failure).toEqual(
@@ -167,6 +181,7 @@ describe("ModelHarness", () => {
         }),
       )
       yield* ModelHarness.validate(profile, ["code-mode", "responses-lite"])
+      yield* ModelHarness.validate(ModelHarness.resolve(model("gpt-5.6-sol"))!, [])
     }),
   )
 
@@ -194,7 +209,7 @@ describe("ModelHarness", () => {
 
       expect(resolved.model.id).toBe("gpt-5.6-sol")
       expect(resolved.catalog).toBe(catalog)
-      expect(resolved.harness).toBe(ModelHarness.resolve(catalog))
+      expect(resolved.harness).toEqual(ModelHarness.resolve(catalog))
     }),
   )
 })

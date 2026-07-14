@@ -71,6 +71,8 @@ import { LocationServiceMap } from "@slopcode-ai/core/location-layer"
 import { PluginBoot } from "@slopcode-ai/core/plugin/boot"
 import { AppProcess } from "@slopcode-ai/core/process"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
+import { Credential } from "@slopcode-ai/core/credential"
+import { Integration } from "@slopcode-ai/core/integration"
 import { SkillV2 } from "@slopcode-ai/core/skill"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import * as TestClock from "effect/testing/TestClock"
@@ -237,11 +239,12 @@ const echo = Layer.effectDiscard(
 let modelResolveHook = Effect.void
 let currentModel = model
 let currentCatalog: ModelV2.Info | undefined
+let currentCredential: Credential.Stored | undefined
 const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(
     Effect.andThen(
       currentCatalog
-        ? SessionRunnerModel.resolve(session, currentCatalog)
+        ? SessionRunnerModel.resolve(session, currentCatalog, undefined, undefined, currentCredential)
         : Effect.succeed({
             model: session.model?.id === "replacement" ? replacementModel : currentModel,
             catalog: ModelV2.Info.empty(ProviderV2.ID.make(currentModel.provider), ModelV2.ID.make(currentModel.id)),
@@ -435,6 +438,7 @@ const setup = Effect.gen(function* () {
   modelResolveHook = Effect.void
   currentModel = model
   currentCatalog = undefined
+  currentCredential = undefined
   skillBaselines.clear()
   responses = undefined
   streamFailure = undefined
@@ -7238,6 +7242,19 @@ describe("SessionRunnerLLM", () => {
       Effect.gen(function* () {
         yield* setup
         currentCatalog = catalogModel(item.id, item.api, "@ai-sdk/openai", item.efforts)
+        currentCredential = new Credential.Stored({
+          id: Credential.ID.make("cred_openai_oauth"),
+          integrationID: Integration.ID.make("openai"),
+          label: "ChatGPT",
+          value: new Credential.OAuth({
+            type: "oauth",
+            methodID: Integration.MethodID.make("chatgpt-browser"),
+            refresh: "refresh",
+            access: "access",
+            expires: Date.now() + 60_000,
+            metadata: { accountID: "account-123" },
+          }),
+        })
         const agents = yield* AgentV2.Service
         yield* agents.transform((editor) =>
           editor.update(AgentV2.ID.make("build"), (agent) => {
@@ -7277,6 +7294,7 @@ describe("SessionRunnerLLM", () => {
         )
         expect(request.providerOptions?.openai).toEqual({
           promptCacheKey: sessionID,
+          reasoningContext: "all_turns",
           reasoningEffort: item.effort,
           reasoningSummary: "none",
           responsesMode: "lite",
@@ -7339,6 +7357,31 @@ describe("SessionRunnerLLM", () => {
     )
   }
 
+  it.effect("uses full Responses, catalog context, and function tools for public GPT-5.6", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentCatalog = catalogModel("gpt-5.6-sol")
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run public GPT-5.6" }), resume: false })
+      requests.length = 0
+
+      yield* session.resume(sessionID)
+
+      const request = requests[0]!
+      expect(request.model.route.defaults.limits).toEqual({ context: 1_050_000, output: 128_000 })
+      expect(request.tools).toHaveLength(2)
+      expect(request.tools.every((tool) => !("type" in tool))).toBe(true)
+      expect(request.providerOptions?.openai).toMatchObject({
+        reasoningEffort: "low",
+        responsesMode: "full",
+      })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(request)
+      expect(prepared.body.tools).toHaveLength(2)
+      expect(prepared.body.input.some((item) => "type" in item && item.type === "additional_tools")).toBe(false)
+      expect(prepared.body.reasoning).toEqual({ effort: "low" })
+    }),
+  )
+
   it.effect("leaves unrelated models in full Responses and function-tool mode", () =>
     Effect.gen(function* () {
       yield* setup
@@ -7378,6 +7421,18 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const { db } = yield* Database.Service
       currentCatalog = catalogModel("gpt-5.6-sol")
+      currentCredential = new Credential.Stored({
+        id: Credential.ID.make("cred_openai_oauth"),
+        integrationID: Integration.ID.make("openai"),
+        label: "ChatGPT",
+        value: new Credential.OAuth({
+          type: "oauth",
+          methodID: Integration.MethodID.make("chatgpt-browser"),
+          refresh: "refresh",
+          access: "access",
+          expires: Date.now() + 60_000,
+        }),
+      })
       yield* db
         .update(SessionTable)
         .set({ model: { id: "gpt-5.6-sol", providerID: "openai", variant: "ultra" } })
@@ -7430,7 +7485,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("fails closed on harness routes without typed Responses Lite support", () =>
+  it.effect("keeps compatible custom endpoints on the public GPT-5.6 profile", () =>
     Effect.gen(function* () {
       yield* setup
       currentCatalog = catalogModel("gpt-5.6-sol", "gpt-5.6-sol", "@ai-sdk/openai-compatible")
@@ -7438,12 +7493,11 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Reject classic transport" }), resume: false })
       requests.length = 0
 
-      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+      yield* session.resume(sessionID)
 
-      expect(failure).toEqual(
-        new ModelHarness.IncompatibilityError({ profileID: "gpt-5.6-sol", missing: ["responses-lite"] }),
-      )
-      expect(requests).toEqual([])
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.tools.every((tool) => !("type" in tool))).toBe(true)
+      expect(requests[0]?.providerOptions?.openai?.responsesMode).toBe("full")
     }),
   )
 
@@ -7451,6 +7505,18 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       currentCatalog = catalogModel("gpt-5.6-sol")
+      currentCredential = new Credential.Stored({
+        id: Credential.ID.make("cred_openai_oauth"),
+        integrationID: Integration.ID.make("openai"),
+        label: "ChatGPT",
+        value: new Credential.OAuth({
+          type: "oauth",
+          methodID: Integration.MethodID.make("chatgpt-browser"),
+          refresh: "refresh",
+          access: "access",
+          expires: Date.now() + 60_000,
+        }),
+      })
       const session = yield* SessionV2.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run nested echo" }), resume: false })
       requests.length = 0

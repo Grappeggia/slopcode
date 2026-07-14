@@ -640,9 +640,9 @@ export const layer = Layer.effect(
       const permissions = [...(agent.info?.permissions ?? []), ...((yield* store.task(session.id))?.ceiling ?? [])]
       const plan = resolved.harness
         ? {
-            mode: resolved.harness.tools.mode,
-            shell: resolved.harness.tools.shell,
-            patch: resolved.harness.tools.patch,
+            mode: resolved.harness.route.tools.mode,
+            shell: resolved.harness.route.tools.shell,
+            patch: resolved.harness.route.tools.patch,
             multiAgent: resolved.harness.multiAgent,
           }
         : {}
@@ -676,10 +676,11 @@ export const layer = Layer.effect(
           resolved.harness
             ? {
                 promptCacheKey,
-                responsesMode: "lite",
+                responsesMode: resolved.harness.route.responses,
                 textVerbosity: "low",
                 reasoningEffort: resolved.reasoning,
                 reasoningSummary: "none",
+                reasoningContext: resolved.harness.route.reasoning === "all_turns" ? "all_turns" : undefined,
               }
             : { promptCacheKey },
         ),

@@ -1,8 +1,9 @@
 import { describe, expect } from "bun:test"
 import { LLM } from "@slopcode-ai/llm"
-import { LLMClient } from "@slopcode-ai/llm/route"
+import { HttpTransport, LLMClient } from "@slopcode-ai/llm/route"
+import * as OpenAIResponses from "@slopcode-ai/llm/protocols/openai-responses"
 import { ConfigProvider, DateTime, Effect } from "effect"
-import { Headers } from "effect/unstable/http"
+import { Headers, HttpClientRequest } from "effect/unstable/http"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ProjectV2 } from "@slopcode-ai/core/project"
@@ -10,6 +11,8 @@ import { SessionRunnerModel } from "@slopcode-ai/core/session/runner/model"
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { ModelHarness } from "@slopcode-ai/core/model-harness"
+import { Credential } from "@slopcode-ai/core/credential"
+import { Integration } from "@slopcode-ai/core/integration"
 import { it } from "./lib/effect"
 
 type Api =
@@ -52,6 +55,24 @@ const provider = (api: ProviderV2.Info["api"]) =>
     request: { headers: {}, body: {} },
   })
 
+const credential = (type: "oauth" | "key") =>
+  new Credential.Stored({
+    id: Credential.ID.make(`cred_${type}`),
+    integrationID: Integration.ID.make("openai"),
+    label: type,
+    value:
+      type === "oauth"
+        ? new Credential.OAuth({
+            type,
+            methodID: Integration.MethodID.make("chatgpt-browser"),
+            refresh: "refresh",
+            access: "oauth-secret",
+            expires: Date.now() + 60_000,
+            metadata: { accountID: "account-123" },
+          })
+        : new Credential.Key({ type, key: "api-secret" }),
+  })
+
 const harnessModel = (api: Api = { type: "aisdk", package: "@ai-sdk/openai", url: "https://openai.example/v1" }) => {
   const base = model(api)
   return new ModelV2.Info({
@@ -61,6 +82,18 @@ const harnessModel = (api: Api = { type: "aisdk", package: "@ai-sdk/openai", url
     limit: { context: 1_050_000, output: 128_000 },
   })
 }
+
+const session = (catalog: ModelV2.Info) =>
+  SessionV2.Info.make({
+    id: SessionV2.ID.make("ses_route"),
+    projectID: ProjectV2.ID.global,
+    title: "test",
+    model: { id: catalog.id, providerID: catalog.providerID },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+    location: { directory: AbsolutePath.make("/project") },
+  })
 
 describe("SessionRunnerModel", () => {
   it.effect("maps catalog OpenAI AI SDK models into native Responses routes", () =>
@@ -84,22 +117,22 @@ describe("SessionRunnerModel", () => {
     }),
   )
 
-  it.effect("overrides only the executable context limit for harnessed GPT-5.6", () =>
+  it.effect("uses catalog context for public GPT-5.6", () =>
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(harnessModel())
 
-      expect(resolved.route.defaults.limits).toEqual({ context: 372_000, output: 128_000 })
+      expect(resolved.route.defaults.limits).toEqual({ context: 1_050_000, output: 128_000 })
     }),
   )
 
-  it.effect("fails closed when a harness profile resolves to a non-Responses route", () =>
+  it.effect("allows public harness profiles on compatible non-Lite routes", () =>
     Effect.gen(function* () {
       const catalog = harnessModel({
         type: "aisdk",
         package: "@ai-sdk/openai-compatible",
-        url: "https://compatible.example/v1",
+        url: "https://api.openai.com/v1",
       })
-      const failure = yield* SessionRunnerModel.resolve(
+      const resolved = yield* SessionRunnerModel.resolve(
         SessionV2.Info.make({
           id: SessionV2.ID.make("ses_harness_incompatible"),
           projectID: ProjectV2.ID.global,
@@ -111,14 +144,118 @@ describe("SessionRunnerModel", () => {
           location: { directory: AbsolutePath.make("/project") },
         }),
         catalog,
-      ).pipe(Effect.flip)
-
-      expect(failure).toEqual(
-        new ModelHarness.IncompatibilityError({
-          profileID: "gpt-5.6-sol",
-          missing: ["responses-lite"],
-        }),
       )
+
+      expect(resolved.harness?.route.id).toBe("public")
+      expect(resolved.model.route.defaults.limits).toEqual({ context: 1_050_000, output: 128_000 })
+    }),
+  )
+
+  const routes = [
+    { name: "OpenAI OAuth", providerID: "openai", enabled: "credential", credential: credential("oauth"), codex: true },
+    { name: "explicit API key", providerID: "openai", enabled: "credential", credential: credential("key"), codex: false },
+    { name: "environment key", providerID: "openai", enabled: "env", codex: false },
+    { name: "custom endpoint", providerID: "openai", enabled: "custom", url: "https://custom.example/v1", codex: false },
+    { name: "Slopcode free", providerID: "slopcode", enabled: "custom", url: "https://slopcode.dev/zen/v1", codex: false },
+    { name: "Slopcode Go", providerID: "slopcode-go", enabled: "custom", url: "https://slopcode.dev/zen/go/v1", codex: false },
+  ] as const
+
+  for (const item of routes) {
+    it.effect(`resolves ${item.name} GPT-5.6 transport without route leakage`, () =>
+      Effect.gen(function* () {
+        const catalog = new ModelV2.Info({
+          ...harnessModel(),
+          providerID: ProviderV2.ID.make(item.providerID),
+          api: { ...harnessModel().api, url: item.url ?? "https://api.openai.com/v1" },
+        })
+        const info = new ProviderV2.Info({
+          id: ProviderV2.ID.make(item.providerID),
+          name: item.name,
+          enabled:
+            item.enabled === "credential"
+              ? { via: "credential", credentialID: item.credential!.id }
+              : item.enabled === "env"
+                ? { via: "env", name: "TEST_PROVIDER_API_KEY" }
+                : { via: "custom", data: {} },
+          env: item.enabled === "env" ? ["TEST_PROVIDER_API_KEY"] : [],
+          api: { type: "aisdk", package: "@ai-sdk/openai", url: catalog.api.url },
+          request: { headers: {}, body: {} },
+        })
+        const resolved = yield* SessionRunnerModel.resolve(
+          session(catalog),
+          catalog,
+          info,
+          undefined,
+          item.credential,
+        )
+
+        expect(resolved.harness?.route.id).toBe(item.codex ? "codex" : "public")
+        expect(resolved.model.route.endpoint).toMatchObject(
+          item.codex
+            ? { baseURL: "https://chatgpt.com/backend-api/codex", path: "/responses" }
+            : { baseURL: item.url ?? "https://api.openai.com/v1", path: "/responses" },
+        )
+        expect(resolved.model.route.defaults.headers?.["ChatGPT-Account-Id"]).toBe(
+          item.codex ? "account-123" : undefined,
+        )
+        expect(resolved.model.route.defaults.limits?.context).toBe(item.codex ? 372_000 : 1_050_000)
+        expect(resolved.harness?.route.responses).toBe(item.codex ? "lite" : "full")
+        expect(resolved.harness?.route.tools.mode).toBe(item.codex ? "code-only" : "function")
+        expect(resolved.harness?.route.reasoning).toBe(item.codex ? "all_turns" : "default")
+
+        const request = LLM.request({
+          model: resolved.model,
+          prompt: "Hello",
+          tools: item.codex
+            ? [{ type: "custom", name: "exec", description: "Run code" }]
+            : [{ name: "lookup", description: "Lookup", inputSchema: { type: "object" } }],
+          providerOptions: {
+            openai: { responsesMode: item.codex ? "lite" : "full", reasoningEffort: "low" },
+          },
+          http: { headers: resolved.model.route.defaults.headers },
+        })
+        const body = yield* resolved.model.route.body.from(request)
+        const transport = yield* resolved.model.route.prepareTransport(body, request).pipe(
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: { TEST_PROVIDER_API_KEY: "env-secret" } }))),
+        )
+        const web = yield* HttpClientRequest.toWeb((transport as HttpTransport.HttpPrepared<string>).request)
+        const json = body as OpenAIResponses.OpenAIResponsesBody
+
+        expect(web.url).toBe(
+          item.codex
+            ? "https://chatgpt.com/backend-api/codex/responses"
+            : `${item.url ?? "https://api.openai.com/v1"}/responses`,
+        )
+        expect(web.headers.get("ChatGPT-Account-Id")).toBe(item.codex ? "account-123" : null)
+        expect(web.headers.get("x-openai-internal-codex-responses-lite")).toBe(item.codex ? "true" : null)
+        expect(json.input.some((entry) => "type" in entry && entry.type === "additional_tools")).toBe(item.codex)
+        expect(json.tools?.[0]?.type).toBe(item.codex ? undefined : "function")
+        expect(json.reasoning?.context).toBe(item.codex ? "all_turns" : undefined)
+      }),
+    )
+  }
+
+  it.effect("keeps OpenAI-compatible OAuth routes public", () =>
+    Effect.gen(function* () {
+      const catalog = harnessModel({
+        type: "aisdk",
+        package: "@ai-sdk/openai-compatible",
+        url: "https://api.openai.com/v1",
+      })
+      const resolved = yield* SessionRunnerModel.resolve(
+        session(catalog),
+        catalog,
+        new ProviderV2.Info({
+          ...provider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compatible.example/v1" }),
+          id: ProviderV2.ID.openai,
+          enabled: { via: "credential", credentialID: credential("oauth").id },
+        }),
+        undefined,
+        credential("oauth"),
+      )
+
+      expect(resolved.harness?.route.id).toBe("public")
+      expect(resolved.model.route.capabilities).not.toContain("responses-lite")
     }),
   )
 
