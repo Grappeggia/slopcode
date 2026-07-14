@@ -59,18 +59,35 @@ type CompletedCompaction = {
   summary: string | undefined
 }
 
-type Failure = "model_not_found" | "context" | "usage" | "retry_exhausted" | "server"
+type Eligible = "model_not_found" | "context" | "usage" | "retry_exhausted" | "server"
+type Failure = {
+  class: Eligible | "auth" | "billing" | "content_filter" | "validation" | "cancelled" | "incomplete"
+  eligible: boolean
+}
 
-function code(body: string | undefined) {
-  if (!body) return undefined
+function codes(error: SessionV1.APIError) {
+  const normalize = (value: string) => value.toLowerCase().replaceAll("-", "_")
+  const result = Object.entries(error.data.metadata ?? {}).flatMap(([key, value]) =>
+    key === "code" || key === "type" || key === "name" ? [value] : [],
+  )
+  if (!error.data.responseBody) return result.map(normalize)
   try {
-    const value = JSON.parse(body)
-    if (!value || typeof value !== "object") return undefined
-    const error = "error" in value && value.error && typeof value.error === "object" ? value.error : value
-    return "code" in error && typeof error.code === "string" ? error.code : undefined
+    const value = JSON.parse(error.data.responseBody)
+    if (!value || typeof value !== "object") return result.map(normalize)
+    const nested = "error" in value ? value.error : undefined
+    const records = [value, nested].filter(
+      (item): item is Record<string, unknown> => !!item && typeof item === "object",
+    )
+    result.push(
+      ...records.flatMap((item) =>
+        [item.code, item.type, item.name].filter((item): item is string => typeof item === "string"),
+      ),
+    )
+    if (typeof nested === "string") result.push(nested)
   } catch {
-    return undefined
+    return result.map(normalize)
   }
+  return result.map(normalize)
 }
 
 function failure(input: {
@@ -78,20 +95,98 @@ function failure(input: {
   cause: unknown
   model: Provider.Model
   result: SessionProcessor.Result
-}) {
-  if (Provider.ModelNotFoundError.isInstance(input.cause)) return "model_not_found" satisfies Failure
+}): Failure | undefined {
+  if (Provider.ModelNotFoundError.isInstance(input.cause)) return { class: "model_not_found", eligible: true }
+  if (input.cause instanceof Error && input.cause.name === "AbortError") return { class: "cancelled", eligible: false }
+  if (SessionV1.AbortedError.isInstance(input.error)) return { class: "cancelled", eligible: false }
+  if (SessionV1.AuthError.isInstance(input.error)) return { class: "auth", eligible: false }
+  if (SessionV1.ContentFilterError.isInstance(input.error)) return { class: "content_filter", eligible: false }
+  if (SessionV1.StructuredOutputError.isInstance(input.error)) return { class: "validation", eligible: false }
   if (SessionV1.ContextOverflowError.isInstance(input.error) || input.result === "compact")
-    return "context" satisfies Failure
+    return { class: "context", eligible: true }
   if (SessionV1.APIError.isInstance(input.error)) {
-    if (code(input.error.data.responseBody) === "model_not_found") return "model_not_found" satisfies Failure
+    const values = codes(input.error)
+    const has = (match: (value: string) => boolean) => values.some(match)
     const status = input.error.data.statusCode
-    if (status !== undefined && status >= 500 && status <= 599) return "server" satisfies Failure
-    if (input.error.data.isRetryable) return "retry_exhausted" satisfies Failure
+    if (status === 401 || status === 402 || status === 403) return { class: "auth", eligible: false }
+    if (
+      has(
+        (value) =>
+          value.includes("unauthorized") ||
+          value.includes("authentication") ||
+          value.includes("authorization") ||
+          value.includes("forbidden") ||
+          value === "permission_denied",
+      )
+    ) {
+      return { class: "auth", eligible: false }
+    }
+    if (
+      has(
+        (value) =>
+          value.includes("billing") ||
+          value.includes("quota") ||
+          value === "usage_not_included" ||
+          value === "freeusagelimiterror" ||
+          value === "gousagelimiterror",
+      )
+    ) {
+      return { class: "billing", eligible: false }
+    }
+    if (has((value) => value.includes("content_filter") || value.includes("safety"))) {
+      return { class: "content_filter", eligible: false }
+    }
+    if (has((value) => value.includes("cancel") || value.includes("abort"))) {
+      return { class: "cancelled", eligible: false }
+    }
+    if (has((value) => value.includes("invalid") || value.includes("validation") || value === "bad_request")) {
+      return { class: "validation", eligible: false }
+    }
+    if (values.includes("model_not_found")) return { class: "model_not_found", eligible: true }
+    if (
+      values.some((value) =>
+        ["model_usage_limit", "model_rate_limit_exceeded", "model_unavailable_usage_limit"].includes(value),
+      )
+    ) {
+      return { class: "usage", eligible: true }
+    }
+    if (status !== undefined && status >= 500 && status <= 599) return { class: "server", eligible: true }
+    if (input.error.data.isRetryable) return { class: "retry_exhausted", eligible: true }
   }
-  if (!input.error && input.result === "continue") {
-    const tokens = input.model.limit.context
-    if (!Number.isFinite(tokens) || tokens <= 0) return "usage" satisfies Failure
+  return undefined
+}
+
+function used(message: SessionV1.Assistant) {
+  return Object.values(message.tokens).some((value) =>
+    typeof value === "number" ? Number.isFinite(value) && value > 0 : Object.values(value).some((token) => token > 0),
+  )
+}
+
+function validate(input: {
+  message: SessionV1.WithParts
+  cause: unknown
+  model: Provider.Model
+  result: SessionProcessor.Result
+}) {
+  if (input.message.info.role !== "assistant") return { class: "incomplete", eligible: false } satisfies Failure
+  const failed = failure({
+    error: input.message.info.error,
+    cause: input.cause,
+    model: input.model,
+    result: input.result,
+  })
+  if (failed) return failed
+  if (input.result !== "continue") return { class: "incomplete", eligible: false } satisfies Failure
+  if (!Number.isFinite(input.model.limit.context) || input.model.limit.context <= 0 || !used(input.message.info)) {
+    return { class: "usage", eligible: true } satisfies Failure
   }
+  if (!input.message.info.finish || input.message.info.finish === "content-filter") {
+    return {
+      class: input.message.info.finish === "content-filter" ? "content_filter" : "incomplete",
+      eligible: false,
+    } satisfies Failure
+  }
+  if (!summaryText(input.message)) return { class: "incomplete", eligible: false } satisfies Failure
   return undefined
 }
 
@@ -454,7 +549,7 @@ export const layer = Layer.effect(
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             yield* session.updateMessage(msg)
-            return yield* restore(
+            const output = yield* restore(
               Effect.gen(function* () {
                 const processor = yield* processors.create({
                   assistantMessage: msg,
@@ -480,29 +575,25 @@ export const layer = Layer.effect(
                 return { msg, processor, result, model }
               }),
             ).pipe(Effect.onInterrupt(() => session.removeMessage({ sessionID: input.sessionID, messageID: msg.id })))
+            if (!bounded) return { ...output, failure: undefined }
+            const saved = (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
+              (item) => item.info.id === msg.id,
+            )
+            const error = validate({
+              message: { info: output.processor.message, parts: saved?.parts ?? [] },
+              cause: output.processor.failure,
+              model,
+              result: output.result,
+            })
+            if (error) yield* session.removeMessage({ sessionID: input.sessionID, messageID: msg.id })
+            return { ...output, failure: error }
           }),
         )
       })
 
       let originalAttempt = missing ? undefined : yield* attempt(first, historical)
-      const originalFailure = originalAttempt
-        ? (failure({
-            error: originalAttempt.processor.message.error,
-            cause: originalAttempt.processor.failure,
-            model: first,
-            result: originalAttempt.result,
-          }) ??
-          (originalAttempt.result === "continue" &&
-          !Object.values(originalAttempt.processor.message.tokens).some((value) =>
-            typeof value === "number" ? value > 0 : Object.values(value).some((token) => token > 0),
-          )
-            ? "usage"
-            : undefined))
-        : "model_not_found"
-
-      if (originalAttempt && originalFailure && historical) {
-        yield* session.removeMessage({ sessionID: input.sessionID, messageID: originalAttempt.msg.id })
-      }
+      const originalFailure =
+        originalAttempt?.failure ?? (missing ? { class: "model_not_found", eligible: true } : undefined)
 
       if (originalFailure && historical) {
         const latest = yield* currentRef()
@@ -510,53 +601,22 @@ export const layer = Layer.effect(
         yield* Effect.logWarning("historical compaction recovery", {
           original: `${original.providerID}/${original.modelID}`,
           current: `${latest.providerID}/${latest.modelID}`,
-          failure: originalFailure,
+          failure: originalFailure.class,
           attempt: 1,
         })
-        if (same) return "stop"
+        if (same || !originalFailure.eligible) return "stop"
         const model = yield* provider.getModel(latest.providerID, latest.modelID).pipe(Effect.orDie)
         const fallback = yield* attempt(model, true)
-        const failed =
-          fallback.result !== "continue" ||
-          !!fallback.processor.message.error ||
-          fallback.processor.message.finish === "content-filter" ||
-          !Object.values(fallback.processor.message.tokens).some((value) =>
-            typeof value === "number" ? value > 0 : Object.values(value).some((token) => token > 0),
-          )
-        if (failed) {
-          yield* session.removeMessage({ sessionID: input.sessionID, messageID: fallback.msg.id })
+        if (fallback.failure) {
           yield* Effect.logWarning("historical compaction recovery", {
             original: `${original.providerID}/${original.modelID}`,
             current: `${model.providerID}/${model.id}`,
-            failure:
-              failure({
-                error: fallback.processor.message.error,
-                cause: fallback.processor.failure,
-                model,
-                result: fallback.result,
-              }) ?? "terminal",
+            failure: fallback.failure.class,
             attempt: 2,
           })
           return "stop"
         }
         originalAttempt = fallback
-      }
-
-      if (
-        historical &&
-        originalAttempt &&
-        (originalAttempt.result !== "continue" ||
-          !!originalAttempt.processor.message.error ||
-          originalAttempt.processor.message.finish === "content-filter")
-      ) {
-        yield* session.removeMessage({ sessionID: input.sessionID, messageID: originalAttempt.msg.id })
-        yield* Effect.logWarning("historical compaction recovery", {
-          original: `${original.providerID}/${original.modelID}`,
-          current: `${current.providerID}/${current.modelID}`,
-          failure: originalAttempt.processor.message.finish === "content-filter" ? "content_filter" : "terminal",
-          attempt: 1,
-        })
-        return "stop"
       }
 
       if (!originalAttempt) return "stop"
@@ -631,7 +691,7 @@ export const layer = Layer.effect(
           ) {
             const followup =
               historical && (model.providerID !== original.providerID || model.id !== original.modelID)
-                ? yield* currentRef()
+                ? { providerID: model.providerID, modelID: model.id }
                 : userMessage.model
             const continueMsg = yield* session.updateMessage({
               id: MessageID.ascending(),
