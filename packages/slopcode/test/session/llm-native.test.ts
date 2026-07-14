@@ -3,6 +3,7 @@ import { LLMEvent, ToolFailure } from "@slopcode-ai/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor, type LLMClientShape } from "@slopcode-ai/llm/route"
 import { jsonSchema, tool, type ModelMessage, type Tool } from "ai"
 import { Effect, Fiber, Layer, Stream } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { LLMNative } from "@/session/llm/native-request"
 import { LLMNativeRuntime } from "@/session/llm/native-runtime"
 import type { Provider } from "@/provider/provider"
@@ -615,6 +616,168 @@ describe("session.llm-native.request", () => {
           )
         }),
       )
+    }),
+  )
+
+  it.effect("reuses resolved custom fetch and the exact safe body across native retries", () =>
+    Effect.gen(function* () {
+      const client = yield* LLMClient.Service
+      const bodies: string[] = []
+      const headers: Headers[] = []
+      let attempts = 0
+      let release!: () => void
+      const first = new Promise<void>((resolve) => (release = resolve))
+      const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(input, init)
+        attempts++
+        bodies.push(await request.clone().text())
+        headers.push(request.headers)
+        if (attempts === 1) {
+          release()
+          throw new TypeError("proxy transport unavailable")
+        }
+        return responsesStream([
+          {
+            type: "response.completed",
+            response: { usage: { input_tokens: 1, output_tokens: 0 }, incomplete_details: null },
+          },
+        ])
+      }
+      const result = LLMNativeRuntime.stream({
+        model: {
+          ...baseModel,
+          id: ModelV2.ID.make("gpt-5.6"),
+          api: { ...baseModel.api, id: "gpt-5.6" },
+          options: { fetch: customFetch },
+        },
+        provider: {
+          ...providerInfo,
+          options: {
+            ...providerInfo.options,
+            fetch: async () => {
+              throw new Error("model fetch must take precedence")
+            },
+          },
+        },
+        auth: undefined,
+        llmClient: client,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "stable context",
+                cache: { type: "ephemeral", ttlSeconds: 1800 },
+              },
+            ],
+          } as unknown as ModelMessage,
+        ],
+        tools: {},
+        providerOptions: {
+          safetyIdentifier: "sc_safe",
+          promptCacheOptions: { mode: "explicit", ttl: "30m" },
+        },
+        headers: { "x-slopcode-openai-cache-breakpoints": "forged" },
+        retries: 1,
+        abort: new AbortController().signal,
+      })
+      if (result.type === "unsupported") throw new Error(result.reason)
+      const fiber = yield* result.stream.pipe(Stream.runDrain, Effect.forkScoped)
+      yield* Effect.promise(() => first)
+      yield* TestClock.adjust(10_000)
+      yield* Fiber.join(fiber)
+
+      expect(attempts).toBe(2)
+      expect(bodies[1]).toBe(bodies[0])
+      expect(headers.every((value) => !value.has("x-slopcode-openai-cache-breakpoints"))).toBe(true)
+      const expected = yield* prepareNativeRequest({
+        model: {
+          ...baseModel,
+          id: ModelV2.ID.make("gpt-5.6"),
+          api: { ...baseModel.api, id: "gpt-5.6" },
+        },
+        apiKey: "test-openai-key",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "stable context",
+                cache: { type: "ephemeral", ttlSeconds: 1800 },
+              },
+            ],
+          } as unknown as ModelMessage,
+        ],
+        providerOptions: {
+          openai: {
+            safetyIdentifier: "sc_safe",
+            promptCacheOptions: { mode: "explicit", ttl: "30m" },
+          },
+        },
+      })
+      expect(JSON.parse(bodies[0])).toEqual(JSON.parse(JSON.stringify(expected.body)))
+      expect(JSON.parse(bodies[0])).toMatchObject({
+        model: "gpt-5.6",
+        safety_identifier: "sc_safe",
+        prompt_cache_options: { mode: "explicit", ttl: "30m" },
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "stable context",
+                prompt_cache_breakpoint: { mode: "explicit" },
+              },
+            ],
+          },
+        ],
+      })
+    }),
+  )
+
+  it.effect("aborts custom native fetch without retrying", () =>
+    Effect.gen(function* () {
+      const client = yield* LLMClient.Service
+      let attempts = 0
+      let release!: () => void
+      const started = new Promise<void>((resolve) => (release = resolve))
+      let aborted = false
+      const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(input, init)
+        attempts++
+        release()
+        return new Promise<Response>((_resolve, reject) => {
+          request.signal.addEventListener(
+            "abort",
+            () => {
+              aborted = true
+              reject(request.signal.reason ?? new DOMException("Aborted", "AbortError"))
+            },
+            { once: true },
+          )
+        })
+      }
+      const result = LLMNativeRuntime.stream({
+        model: { ...baseModel, options: { fetch: customFetch } },
+        provider: providerInfo,
+        auth: undefined,
+        llmClient: client,
+        messages: [storedSession.user("hello")],
+        tools: {},
+        headers: {},
+        retries: 2,
+        abort: new AbortController().signal,
+      })
+      if (result.type === "unsupported") throw new Error(result.reason)
+      const fiber = yield* result.stream.pipe(Stream.runDrain, Effect.forkScoped)
+      yield* Effect.promise(() => started)
+      yield* Fiber.interrupt(fiber)
+
+      expect(aborted).toBe(true)
+      expect(attempts).toBe(1)
     }),
   )
 

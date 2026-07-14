@@ -360,6 +360,7 @@ const live: Layer.Layer<
           maxOutputTokens: prepared.params.maxOutputTokens,
           providerOptions: options,
           headers,
+          retries: input.retries,
           abort: input.abort,
         })
         if (native.type === "supported") {

@@ -27,6 +27,7 @@ import { isContextOverflow } from "../provider-error"
 export interface Interface {
   readonly execute: (
     request: HttpClientRequest.HttpClientRequest,
+    retries?: number,
   ) => Effect.Effect<HttpClientResponse.HttpClientResponse, LLMError>
 }
 
@@ -352,14 +353,17 @@ const retryDelay = (error: LLMError, attempt: number) => {
 
 const retryStatusFailures = <A, R>(
   effect: Effect.Effect<A, LLMError, R>,
-  retries = MAX_RETRIES,
+  retries?: number,
   attempt = 0,
+  retryTransport = retries !== undefined,
 ): Effect.Effect<A, LLMError, R> =>
   Effect.catchTag(effect, "LLM.Error", (error): Effect.Effect<A, LLMError, R> => {
-    if (!error.retryable || retries <= 0) return Effect.fail(error)
+    const remaining = retries ?? MAX_RETRIES
+    if ((!error.retryable && !(retryTransport && error.reason._tag === "Transport")) || remaining <= 0)
+      return Effect.fail(error)
     return retryDelay(error, attempt).pipe(
       Effect.flatMap((delay) => Effect.sleep(delay)),
-      Effect.flatMap(() => retryStatusFailures(effect, retries - 1, attempt + 1)),
+      Effect.flatMap(() => retryStatusFailures(effect, remaining - 1, attempt + 1, retryTransport)),
     )
   })
 
@@ -375,7 +379,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
           .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
       })
     return Service.of({
-      execute: (request) => retryStatusFailures(executeOnce(request)),
+      execute: (request, retries) => retryStatusFailures(executeOnce(request), retries),
     })
   }),
 )

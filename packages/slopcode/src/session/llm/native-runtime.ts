@@ -40,6 +40,7 @@ type StreamInput = {
   readonly maxOutputTokens?: number
   readonly providerOptions?: Record<string, any>
   readonly headers: Record<string, string>
+  readonly retries?: number
   readonly abort: AbortSignal
 }
 
@@ -99,6 +100,7 @@ export function stream(input: StreamInput): StreamResult {
     maxOutputTokens: input.maxOutputTokens,
     providerOptions: ProviderTransform.providerOptions(input.model, input.providerOptions ?? {}),
     headers: { ...providerHeaders(input.provider.options.headers), ...input.headers },
+    retries: Math.max(0, Math.floor(input.retries ?? 0)),
   })
   const stream = Stream.scoped(
     Stream.unwrap(
@@ -145,9 +147,8 @@ export function stream(input: StreamInput): StreamResult {
   }
 }
 
-function providerFetch(input: Pick<StreamInput, "provider" | "auth">): typeof globalThis.fetch | undefined {
-  if (input.provider.id !== "openai" || input.auth?.type !== "oauth") return undefined
-  const value: unknown = input.provider.options.fetch
+function providerFetch(input: Pick<StreamInput, "model" | "provider">): typeof globalThis.fetch | undefined {
+  const value: unknown = input.model.options.fetch ?? input.provider.options.fetch
   if (typeof value !== "function") return undefined
   return value as typeof globalThis.fetch
 }
