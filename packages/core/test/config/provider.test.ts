@@ -38,7 +38,12 @@ describe("ConfigProviderPlugin.Plugin", () => {
           }
         })
         draft.model.update(providerID, modelID, (model) => {
-          model.api = { id: modelID, type: "aisdk", package: "@ai-sdk/openai" }
+          model.api = {
+            id: modelID,
+            type: "aisdk",
+            package: "@ai-sdk/openai",
+            url: "https://slopcode.ai/zen/v1",
+          }
           model.limit = { context: 1_050_000, output: 128_000 }
           model.time.released = DateTime.makeUnsafe(0)
         })

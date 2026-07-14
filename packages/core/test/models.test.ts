@@ -68,6 +68,19 @@ const fixture2: Record<string, ModelsDev.Provider> = {
   },
 }
 
+const managedModel = (api: string): ModelsDev.Model => ({
+  id: "gpt-5.6",
+  name: "GPT-5.6",
+  release_date: "2026-05-01",
+  attachment: true,
+  reasoning: true,
+  temperature: true,
+  tool_call: true,
+  limit: { context: 1_050_000, input: 922_000, output: 128_000 },
+  modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+  provider: { npm: "@ai-sdk/openai", api },
+})
+
 const managed = (domain = "slopcode.ai"): Record<string, ModelsDev.Provider> => ({
   slopcode: {
     id: "slopcode",
@@ -75,7 +88,7 @@ const managed = (domain = "slopcode.ai"): Record<string, ModelsDev.Provider> => 
     env: ["SLOPCODE_API_KEY"],
     npm: "@ai-sdk/openai-compatible",
     api: `https://${domain}/zen/v1`,
-    models: {},
+    models: { "gpt-5.6": managedModel(`https://${domain}/zen/v1`) },
   },
   "slopcode-go": {
     id: "slopcode-go",
@@ -83,7 +96,7 @@ const managed = (domain = "slopcode.ai"): Record<string, ModelsDev.Provider> => 
     env: ["SLOPCODE_API_KEY"],
     npm: "@ai-sdk/openai-compatible",
     api: `https://${domain}/zen/go/v1`,
-    models: {},
+    models: { "gpt-5.6": managedModel(`https://${domain}/zen/go/v1`) },
   },
 })
 
@@ -244,8 +257,10 @@ describe("ModelsDev Service", () => {
 
       expect(result.slopcode?.api).toBe("https://slopcode.dev/zen/v1")
       expect(result["slopcode-go"]?.api).toBe("https://slopcode.dev/zen/go/v1")
-      expect(`${result.slopcode?.api}/responses`).toBe("https://slopcode.dev/zen/v1/responses")
-      expect(`${result["slopcode-go"]?.api}/responses`).toBe("https://slopcode.dev/zen/go/v1/responses")
+      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe(
+        "https://slopcode.dev/zen/go/v1",
+      )
       expect((yield* Ref.get(state)).calls).toEqual([])
     }),
   )
@@ -268,9 +283,42 @@ describe("ModelsDev Service", () => {
 
       expect(result.slopcode?.api).toBe("https://slopcode.dev/zen/v1")
       expect(result["slopcode-go"]?.api).toBe("https://slopcode.dev/zen/go/v1")
-      expect(`${result.slopcode?.api}/responses`).toBe("https://slopcode.dev/zen/v1/responses")
-      expect(`${result["slopcode-go"]?.api}/responses`).toBe("https://slopcode.dev/zen/go/v1/responses")
+      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe(
+        "https://slopcode.dev/zen/go/v1",
+      )
       expect((yield* Ref.get(state)).calls).toHaveLength(1)
+    }),
+  )
+
+  it.live("canonicalizes managed endpoints from an explicit models path without merging fallback providers", () =>
+    Effect.gen(function* () {
+      const file = path.join(Global.Path.cache, "models-explicit.json")
+      yield* Effect.promise(() => writeFile(file, JSON.stringify(managed())))
+      const state = yield* Ref.make(initialState)
+      const result = yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const previous = Flag.SLOPCODE_MODELS_PATH
+          Flag.SLOPCODE_MODELS_PATH = file
+          return previous
+        }),
+        () =>
+          provided(
+            state,
+            ModelsDev.Service.use((service) => service.get()),
+          ),
+        (previous) =>
+          Effect.sync(() => {
+            Flag.SLOPCODE_MODELS_PATH = previous
+          }),
+      )
+      yield* Effect.promise(() => rm(file, { force: true }))
+
+      expect(Object.keys(result).sort()).toEqual(["slopcode", "slopcode-go"])
+      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe(
+        "https://slopcode.dev/zen/go/v1",
+      )
     }),
   )
 

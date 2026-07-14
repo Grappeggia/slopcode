@@ -211,10 +211,10 @@ export const layer = Layer.effect(
 
     const fallback = bundledFallback as Record<string, Provider>
     const mergeFallback = (data?: Record<string, Provider>) => {
-      if (Flag.SLOPCODE_MODELS_PATH !== undefined) return data
+      if (Flag.SLOPCODE_MODELS_PATH !== undefined && !data) return data
       if (Object.keys(fallback).length === 0) return data
-      const result = { ...fallback, ...(data ?? {}) }
-      if (data?.openai && fallback.openai) {
+      const result = Flag.SLOPCODE_MODELS_PATH === undefined ? { ...fallback, ...(data ?? {}) } : { ...data }
+      if (Flag.SLOPCODE_MODELS_PATH === undefined && data?.openai && fallback.openai) {
         result.openai = {
           ...fallback.openai,
           ...data.openai,
@@ -225,8 +225,19 @@ export const layer = Layer.effect(
         }
       }
       for (const id of ["slopcode", "slopcode-go"]) {
-        if (!result[id] || !fallback[id]?.api) continue
-        result[id] = { ...result[id], api: fallback[id].api }
+        const provider = result[id]
+        const api = fallback[id]?.api
+        if (!provider || !api) continue
+        result[id] = {
+          ...provider,
+          api,
+          models: Object.fromEntries(
+            Object.entries(provider.models).map(([id, model]) => [
+              id,
+              model.provider?.api !== undefined ? { ...model, provider: { ...model.provider, api } } : model,
+            ]),
+          ),
+        }
       }
       return result
     }
