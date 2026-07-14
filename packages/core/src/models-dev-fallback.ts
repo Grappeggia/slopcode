@@ -130,7 +130,7 @@ export const fallback: Record<string, Record<string, unknown>> = {
     id: "slopcode",
     env: ["SLOPCODE_API_KEY"],
     npm: "@ai-sdk/openai-compatible",
-    api: "https://slopcode.ai/zen/v1",
+    api: "https://slopcode.dev/zen/v1",
     name: "SlopCode Zen",
     doc: "https://slopcode.ai/docs/zen",
     models: {
@@ -2038,7 +2038,7 @@ export const fallback: Record<string, Record<string, unknown>> = {
     id: "slopcode-go",
     env: ["SLOPCODE_API_KEY"],
     npm: "@ai-sdk/openai-compatible",
-    api: "https://slopcode.ai/zen/go/v1",
+    api: "https://slopcode.dev/zen/go/v1",
     name: "SlopCode Go",
     doc: "https://slopcode.ai/docs/zen",
     models: {

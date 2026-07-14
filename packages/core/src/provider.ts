@@ -86,26 +86,31 @@ export class Info extends Schema.Class<Info>("ProviderV2.Info")({
   }
 }
 
-const publicURL = (value: string | undefined) => {
-  if (!value || !URL.canParse(value)) return undefined
-  const url = new URL(value)
-  url.username = ""
-  url.password = ""
-  url.search = ""
-  url.hash = ""
-  return url.toString().replace(/\/$/, "")
-}
+export const PublicApi = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("aisdk"), package: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("native") }),
+]).pipe(Schema.toTaggedUnion("type"))
+
+export class PublicInfo extends Schema.Class<PublicInfo>("ProviderV2.PublicInfo")({
+  id: ID,
+  name: Schema.String,
+  enabled: Schema.Union([
+    Schema.Literal(false),
+    Schema.Struct({ via: Schema.Literal("env"), name: Schema.String }),
+    Schema.Struct({ via: Schema.Literal("custom"), data: Schema.Record(Schema.String, Schema.Any) }),
+  ]),
+  env: Schema.Array(Schema.String),
+  api: PublicApi,
+}) {}
 
 export const publicInfo = (provider: Info) =>
-  new Info({
-    ...provider,
+  new PublicInfo({
+    id: provider.id,
+    name: provider.name,
     enabled:
       provider.enabled === false || provider.enabled.via === "env"
         ? provider.enabled
         : { via: "custom", data: {} },
-    api:
-      provider.api.type === "aisdk"
-        ? { ...provider.api, url: publicURL(provider.api.url), settings: {} }
-        : { ...provider.api, url: publicURL(provider.api.url), settings: {} },
-    request: { headers: {}, body: {} },
+    env: provider.env,
+    api: provider.api.type === "aisdk" ? { type: provider.api.type, package: provider.api.package } : { type: "native" },
   })

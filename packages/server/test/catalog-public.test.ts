@@ -19,7 +19,7 @@ const provider = new ProviderV2.Info({
   api: {
     type: "aisdk",
     package: "@ai-sdk/openai",
-    url: "https://api.openai.com/v1?api_key=query-secret",
+    url: "https://api.cloudflare.com/client/v4/accounts/account-path-secret/ai/run",
     settings: { apiKey: "settings-secret", accountID: "account-settings" },
   },
   request: {
@@ -32,7 +32,11 @@ const model = new ModelV2.Info({
   id: ModelV2.ID.make("gpt-5.6"),
   providerID: provider.id,
   name: "GPT-5.6",
-  api: { id: ModelV2.ID.make("gpt-5.6"), ...provider.api },
+  api: {
+    id: ModelV2.ID.make("gpt-5.6"),
+    ...provider.api,
+    url: "https://gateway.example/v1/path-token-secret/responses",
+  },
   capabilities: { tools: true, input: ["text"], output: ["text"] },
   request: {
     headers: { authorization: "Bearer model-header-secret" },
@@ -106,10 +110,12 @@ test("public V2 provider and model routes redact internal authentication materia
         "variant-secret",
         "model-option-secret",
         "variant-option-secret",
-        "query-secret",
+        "account-path-secret",
+        "path-token-secret",
       ]) {
         expect(text).not.toContain(secret)
       }
+      expect(text).not.toContain('"url"')
     }
   } finally {
     await app.dispose()

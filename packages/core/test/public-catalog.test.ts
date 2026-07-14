@@ -14,7 +14,7 @@ describe("public catalog projection", () => {
       api: {
         type: "aisdk",
         package: "@ai-sdk/openai",
-        url: "https://user:password@api.openai.com/v1?api_key=query-secret#secret",
+        url: "https://api.cloudflare.com/client/v4/accounts/account-path-secret/ai/run",
         settings: { apiKey: "settings-secret", accountID: "account-secret" },
       },
       request: {
@@ -26,7 +26,11 @@ describe("public catalog projection", () => {
       id: ModelV2.ID.make("gpt-5.6"),
       providerID: provider.id,
       name: "GPT-5.6",
-      api: { id: ModelV2.ID.make("gpt-5.6"), ...provider.api },
+      api: {
+        id: ModelV2.ID.make("gpt-5.6"),
+        ...provider.api,
+        url: "https://gateway.example/v1/path-token-secret/responses",
+      },
       capabilities: { tools: true, input: ["text"], output: ["text"] },
       request: {
         headers: { authorization: "Bearer model-secret" },
@@ -57,16 +61,17 @@ describe("public catalog projection", () => {
     expect(publicProvider.api).toEqual({
       type: "aisdk",
       package: "@ai-sdk/openai",
-      url: "https://api.openai.com/v1",
-      settings: {},
     })
-    expect(publicProvider.request).toEqual({ headers: {}, body: {} })
-    expect(publicModel.api.settings).toEqual({})
-    expect(publicModel.request).toMatchObject({ headers: {}, body: {}, options: {} })
-    expect(publicModel.variants[0]).toMatchObject({ headers: {}, body: {}, options: {} })
+    expect(publicProvider).not.toHaveProperty("request")
+    expect(publicModel.api).not.toHaveProperty("settings")
+    expect(publicModel.api).not.toHaveProperty("url")
+    expect(publicModel.request).toEqual({ variant: undefined })
+    expect(publicModel.variants[0]).toEqual({ id: "high" })
 
     expect(provider.enabled).toEqual({ via: "credential", credentialID: "cred_secret" })
     expect(provider.request.body.apiKey).toBe("projected-secret")
+    expect(provider.api.url).toContain("account-path-secret")
+    expect(model.api.url).toContain("path-token-secret")
     expect(model.request.body.apiKey).toBe("model-secret")
     expect(model.variants[0]?.body.apiKey).toBe("variant-secret")
   })

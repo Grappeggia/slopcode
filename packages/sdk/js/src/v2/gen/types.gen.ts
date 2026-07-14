@@ -5461,7 +5461,57 @@ export type SessionMessage =
   | SessionMessageAssistant
   | SessionMessageCompaction
 
-export type ProviderV2Info = {
+export type ModelV2PublicInfo = {
+  id: string
+  providerID: string
+  family?: string
+  name: string
+  api:
+    | {
+        id: string
+        type: "aisdk"
+        package: string
+      }
+    | {
+        id: string
+        type: "native"
+      }
+  capabilities: {
+    tools: boolean
+    input: Array<string>
+    output: Array<string>
+  }
+  request: {
+    variant?: string
+  }
+  variants: Array<{
+    id: string
+  }>
+  time: {
+    released: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  cost: Array<{
+    tier?: {
+      type: "context"
+      size: number
+    }
+    input: number
+    output: number
+    cache: {
+      read: number
+      write: number
+    }
+  }>
+  status: "alpha" | "beta" | "deprecated" | "active"
+  enabled: boolean
+  limit: {
+    context: number
+    input?: number
+    output: number
+  }
+}
+
+export type ProviderV2PublicInfo = {
   id: string
   name: string
   enabled:
@@ -5469,10 +5519,6 @@ export type ProviderV2Info = {
     | {
         via: "env"
         name: string
-      }
-    | {
-        via: "credential"
-        credentialID: string
       }
     | {
         via: "custom"
@@ -5485,26 +5531,10 @@ export type ProviderV2Info = {
     | {
         type: "aisdk"
         package: string
-        url?: string
-        settings?: {
-          [key: string]: unknown
-        }
       }
     | {
         type: "native"
-        url?: string
-        settings: {
-          [key: string]: unknown
-        }
       }
-  request: {
-    headers: {
-      [key: string]: string
-    }
-    body: {
-      [key: string]: unknown
-    }
-  }
 }
 
 export type IntegrationWhen = {
@@ -12117,7 +12147,7 @@ export type V2ModelListResponses = {
    */
   200: {
     location: LocationInfo
-    data: Array<ModelV2Info>
+    data: Array<ModelV2PublicInfo>
   }
 }
 
@@ -12158,7 +12188,7 @@ export type V2ProviderListResponses = {
    */
   200: {
     location: LocationInfo
-    data: Array<ProviderV2Info>
+    data: Array<ProviderV2PublicInfo>
   }
 }
 
@@ -12242,7 +12272,7 @@ export type V2ProviderGetResponses = {
    */
   200: {
     location: LocationInfo
-    data: ProviderV2Info
+    data: ProviderV2PublicInfo
   }
 }
 
