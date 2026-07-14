@@ -4,7 +4,7 @@ import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { APICallError } from "ai"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { Config } from "@/config/config"
 import { Image } from "@/image/image"
@@ -929,6 +929,8 @@ describe("session.compaction.process", () => {
       returned?: Deferred.Deferred<void>
       fallback?: Deferred.Deferred<void>
       change?: Provider.Model
+      tokens?: (model: Provider.Model, tokens: SessionV1.Assistant["tokens"]) => void
+      result?: SessionProcessorModule.SessionProcessor.Result
     }) {
       const attempts: Array<{ model: string; retry: boolean | undefined }> = []
       const sessions: SessionID[] = []
@@ -982,6 +984,7 @@ describe("session.compaction.process", () => {
                   if (input.finish !== false) item.assistantMessage.finish = input.finish ?? "stop"
                   if (input.usage !== false || item.model.id === current.id) item.assistantMessage.tokens.input = 1
                   yield* store!.updateMessage(item.assistantMessage)
+                  input.tokens?.(item.model, item.assistantMessage.tokens)
                   if (input.change && item.model.id === current.id) {
                     yield* store!.updateMessage({
                       id: MessageID.ascending(),
@@ -993,7 +996,7 @@ describe("session.compaction.process", () => {
                     })
                   }
                   if (input.returned) Deferred.doneUnsafe(input.returned, Effect.void)
-                  return "continue" as const
+                  return input.result ?? ("continue" as const)
                 }),
             }),
           ),
@@ -1270,6 +1273,60 @@ describe("session.compaction.process", () => {
         expect(usageOutput.messages.filter((item) => item.info.role === "assistant" && item.info.summary)).toHaveLength(
           1,
         )
+      })
+    })
+
+    itCompaction.instance("keeps zero-usage content filtering terminal", () => {
+      const setup = recovery({ finish: "content-filter", usage: false, result: "compact", fail: () => undefined })
+      return Effect.gen(function* () {
+        const output = yield* run(setup)
+        expect(setup.attempts.map((item) => item.model)).toEqual([historical.id])
+        expect(output.messages.some((item) => item.info.role === "assistant" && item.info.summary)).toBe(false)
+      })
+    })
+
+    itCompaction.instance("rejects malformed and negative usage components", () => {
+      const values = [
+        (tokens: SessionV1.Assistant["tokens"]) => (tokens.input = Number.NaN),
+        (tokens: SessionV1.Assistant["tokens"]) => (tokens.output = Number.POSITIVE_INFINITY),
+        (tokens: SessionV1.Assistant["tokens"]) => (tokens.reasoning = -1),
+        (tokens: SessionV1.Assistant["tokens"]) => (tokens.cache.read = Number.NaN),
+        (tokens: SessionV1.Assistant["tokens"]) => (tokens.cache.write = Number.NEGATIVE_INFINITY),
+        (tokens: SessionV1.Assistant["tokens"]) => (tokens.cache.write = -1),
+        (tokens: SessionV1.Assistant["tokens"]) => (tokens.total = Number.NaN),
+        (tokens: SessionV1.Assistant["tokens"]) => (tokens.total = Number.POSITIVE_INFINITY),
+        (tokens: SessionV1.Assistant["tokens"]) => (tokens.total = -1),
+        (tokens: SessionV1.Assistant["tokens"]) => (tokens.total = 0),
+        (tokens: SessionV1.Assistant["tokens"]) => {
+          tokens.input = Number.MAX_VALUE
+          tokens.output = Number.MAX_VALUE
+        },
+      ]
+      return Effect.forEach(values, (mutate) => {
+        const setup = recovery({
+          fail: () => undefined,
+          tokens: (item, tokens) => {
+            if (item.id === historical.id) mutate(tokens)
+          },
+        })
+        return Effect.gen(function* () {
+          const output = yield* run(setup)
+          expect(setup.attempts.map((item) => item.model)).toEqual([historical.id, current.id])
+          expect(output.messages.filter((item) => item.info.role === "assistant" && item.info.summary)).toHaveLength(1)
+        })
+      })
+    })
+
+    itCompaction.instance("classifies and logs HTTP 402 as billing", () => {
+      const logs: unknown[] = []
+      const logger = Logger.make((options) => logs.push(options.message))
+      const setup = recovery({
+        fail: () => new SessionV1.APIError({ message: "payment", statusCode: 402, isRetryable: true }).toObject(),
+      })
+      return Effect.gen(function* () {
+        yield* run(setup).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })))
+        expect(setup.attempts.map((item) => item.model)).toEqual([historical.id])
+        expect(logs.some((message) => JSON.stringify(message).includes('"failure":"billing"'))).toBe(true)
       })
     })
 

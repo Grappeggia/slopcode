@@ -108,7 +108,8 @@ function failure(input: {
     const values = codes(input.error)
     const has = (match: (value: string) => boolean) => values.some(match)
     const status = input.error.data.statusCode
-    if (status === 401 || status === 402 || status === 403) return { class: "auth", eligible: false }
+    if (status === 402) return { class: "billing", eligible: false }
+    if (status === 401 || status === 403) return { class: "auth", eligible: false }
     if (
       has(
         (value) =>
@@ -157,9 +158,18 @@ function failure(input: {
 }
 
 function used(message: SessionV1.Assistant) {
-  return Object.values(message.tokens).some((value) =>
-    typeof value === "number" ? Number.isFinite(value) && value > 0 : Object.values(value).some((token) => token > 0),
-  )
+  const values = [
+    message.tokens.input,
+    message.tokens.output,
+    message.tokens.reasoning,
+    message.tokens.cache.read,
+    message.tokens.cache.write,
+  ]
+  if (values.some((value) => !Number.isFinite(value) || value < 0)) return false
+  const total = values.reduce((sum, value) => sum + value, 0)
+  if (!Number.isFinite(total) || total <= 0) return false
+  if (message.tokens.total === undefined) return true
+  return Number.isFinite(message.tokens.total) && message.tokens.total > 0
 }
 
 function validate(input: {
@@ -169,6 +179,12 @@ function validate(input: {
   result: SessionProcessor.Result
 }) {
   if (input.message.info.role !== "assistant") return { class: "incomplete", eligible: false } satisfies Failure
+  if (input.message.info.finish === "content-filter") {
+    return { class: "content_filter", eligible: false } satisfies Failure
+  }
+  if (input.message.info.finish === "cancelled" || input.message.info.finish === "canceled") {
+    return { class: "cancelled", eligible: false } satisfies Failure
+  }
   const failed = failure({
     error: input.message.info.error,
     cause: input.cause,
@@ -177,16 +193,11 @@ function validate(input: {
   })
   if (failed) return failed
   if (input.result !== "continue") return { class: "incomplete", eligible: false } satisfies Failure
+  if (!input.message.info.finish) return { class: "incomplete", eligible: false } satisfies Failure
+  if (!summaryText(input.message)) return { class: "incomplete", eligible: false } satisfies Failure
   if (!Number.isFinite(input.model.limit.context) || input.model.limit.context <= 0 || !used(input.message.info)) {
     return { class: "usage", eligible: true } satisfies Failure
   }
-  if (!input.message.info.finish || input.message.info.finish === "content-filter") {
-    return {
-      class: input.message.info.finish === "content-filter" ? "content_filter" : "incomplete",
-      eligible: false,
-    } satisfies Failure
-  }
-  if (!summaryText(input.message)) return { class: "incomplete", eligible: false } satisfies Failure
   return undefined
 }
 
