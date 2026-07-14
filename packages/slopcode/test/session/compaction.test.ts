@@ -23,7 +23,7 @@ import { SessionSummary } from "../../src/session/summary"
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionExecution } from "@slopcode-ai/core/session/execution"
 
-import type { Provider } from "@/provider/provider"
+import { Provider } from "@/provider/provider"
 import * as SessionProcessorModule from "../../src/session/processor"
 import { Snapshot } from "../../src/snapshot"
 import { ProviderTest } from "../fake/provider"
@@ -85,6 +85,14 @@ function createModel(opts: {
     api: { npm: opts.npm ?? "@ai-sdk/anthropic" },
     options: {},
   } as Provider.Model
+}
+
+function model(id: string, providerID = "test") {
+  return {
+    ...createModel({ context: 100_000, output: 32_000 }),
+    id: ModelV2.ID.make(id),
+    providerID: ProviderV2.ID.make(providerID),
+  }
 }
 
 const wide = () => ProviderTest.fake({ model: createModel({ context: 100_000, output: 32_000 }) })
@@ -269,6 +277,8 @@ type CompactionProcessOptions = {
   plugin?: Layer.Layer<Plugin.Service>
   provider?: ReturnType<typeof ProviderTest.fake>
   config?: Layer.Layer<Config.Service>
+  processor?: Layer.Layer<SessionProcessorModule.SessionProcessor.Service>
+  agent?: Layer.Layer<Agent.Service>
 }
 
 function withCompaction(options?: CompactionProcessOptions) {
@@ -278,21 +288,23 @@ function withCompaction(options?: CompactionProcessOptions) {
 function compactionProcessLayer(options?: CompactionProcessOptions) {
   const events = EventV2Bridge.defaultLayer
   const status = SessionStatus.layer.pipe(Layer.provide(events))
-  const processor = options?.llm
-    ? SessionProcessorModule.SessionProcessor.layer.pipe(
-        Layer.provide(summary),
-        Layer.provide(Image.defaultLayer),
-        Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
-        Layer.provide(status),
-      )
-    : layer(options?.result ?? "continue", options?.setup)
+  const processor =
+    options?.processor ??
+    (options?.llm
+      ? SessionProcessorModule.SessionProcessor.layer.pipe(
+          Layer.provide(summary),
+          Layer.provide(Image.defaultLayer),
+          Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+          Layer.provide(status),
+        )
+      : layer(options?.result ?? "continue", options?.setup))
   return Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(processor)), processor, events, status).pipe(
     Layer.provide(SessionNs.defaultLayer),
     Layer.provide((options?.provider ?? wide()).layer),
     Layer.provide(Snapshot.defaultLayer),
     Layer.provide(options?.llm ?? LLM.defaultLayer),
     Layer.provide(Permission.defaultLayer),
-    Layer.provide(Agent.defaultLayer),
+    Layer.provide(options?.agent ?? Agent.defaultLayer),
     Layer.provide(options?.plugin ?? Plugin.defaultLayer),
     Layer.provide(status),
     Layer.provide(events),
@@ -899,6 +911,287 @@ describe("session.compaction.process", () => {
       }
     }).pipe(withCompaction({ result: "compact" })),
   )
+
+  describe("historical model recovery", () => {
+    const historical = model("historical")
+    const current = model("current")
+
+    function recovery(input: {
+      fail: (model: Provider.Model) => SessionV1.Assistant["error"] | undefined
+      missing?: boolean
+      explicit?: boolean
+      context?: boolean
+      usage?: boolean
+      stall?: Deferred.Deferred<void>
+      cause?: (model: Provider.Model) => unknown
+    }) {
+      const attempts: Array<{ model: string; retry: boolean | undefined }> = []
+      const sessions: SessionID[] = []
+      let store: SessionNs.Interface | undefined
+      const provider = ProviderTest.fake({
+        model: current,
+        info: ProviderTest.info({ models: { historical, current } }, current),
+        getModel: Effect.fn("TestProvider.getModel")(function* (providerID, modelID) {
+          if (providerID !== "test" || (input.missing && modelID === historical.id)) {
+            return yield* new Provider.ModelNotFoundError({ providerID, modelID })
+          }
+          if (modelID === historical.id) {
+            return input.context ? { ...historical, limit: { ...historical.limit, context: 0 } } : historical
+          }
+          if (modelID === current.id) return current
+          return yield* new Provider.ModelNotFoundError({ providerID, modelID })
+        }),
+      })
+      const processor = Layer.succeed(
+        SessionProcessorModule.SessionProcessor.Service,
+        SessionProcessorModule.SessionProcessor.Service.of({
+          create: Effect.fn("TestSessionProcessor.create")((item) =>
+            Effect.succeed({
+              message: item.assistantMessage,
+              failure: input.cause?.(item.model),
+              updateToolCall: () => Effect.succeed(undefined),
+              completeToolCall: () => Effect.void,
+              process: () =>
+                Effect.gen(function* () {
+                  attempts.push({ model: item.model.id, retry: item.retry })
+                  yield* store!.updatePart({
+                    id: PartID.ascending(),
+                    messageID: item.assistantMessage.id,
+                    sessionID: item.sessionID,
+                    type: "text",
+                    text: `partial-${item.model.id}`,
+                  })
+                  if (input.stall) {
+                    Deferred.doneUnsafe(input.stall, Effect.void)
+                    return yield* Effect.never
+                  }
+                  item.assistantMessage.error = input.fail(item.model)
+                  if (item.assistantMessage.error) return "stop" as const
+                  item.assistantMessage.finish = "stop"
+                  if (input.usage !== false || item.model.id === current.id) item.assistantMessage.tokens.input = 1
+                  yield* store!.updateMessage(item.assistantMessage)
+                  return "continue" as const
+                }),
+            }),
+          ),
+        }),
+      )
+      const agent = input.explicit
+        ? Layer.mock(Agent.Service)({
+            get: () =>
+              Effect.succeed({
+                name: "compaction",
+                mode: "primary",
+                native: true,
+                hidden: true,
+                prompt: "",
+                permission: [],
+                options: {},
+                model: { providerID: current.providerID, modelID: current.id },
+              }),
+            list: () => Effect.succeed([]),
+            defaultInfo: () => Effect.die("unused"),
+            defaultAgent: () => Effect.die("unused"),
+            generate: () => Effect.die("unused"),
+          })
+        : Agent.defaultLayer
+      const layer = compactionProcessLayer({ provider, processor, agent })
+      return { attempts, sessions, layer, bind: (value: SessionNs.Interface) => (store = value) }
+    }
+
+    function run(setup: ReturnType<typeof recovery>, auto = true, same = false) {
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        setup.bind(ssn)
+        const selected = same ? historical : current
+        const info = yield* ssn.create({ model: { id: selected.id, providerID: selected.providerID } })
+        setup.sessions.push(info.id)
+        const parent = yield* ssn.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: info.id,
+          agent: "build",
+          model: { providerID: historical.providerID, modelID: historical.id },
+          time: { created: Date.now() },
+        })
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: parent.id,
+          sessionID: info.id,
+          type: "compaction",
+          auto,
+        })
+        yield* ssn.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: info.id,
+          agent: "build",
+          model: { providerID: selected.providerID, modelID: selected.id },
+          time: { created: Date.now() },
+        })
+        const result = yield* SessionCompaction.use.process({
+          parentID: parent.id,
+          messages: yield* ssn.messages({ sessionID: info.id }),
+          sessionID: info.id,
+          auto,
+        })
+        return { result, messages: yield* ssn.messages({ sessionID: info.id }) }
+      }).pipe(Effect.provide(setup.layer))
+    }
+
+    itCompaction.instance("falls back once after a typed model-not-found and removes its provisional parts", () => {
+      const setup = recovery({
+        fail: (item) =>
+          item.id === historical.id
+            ? new SessionV1.APIError({
+                message: "unavailable",
+                statusCode: 404,
+                isRetryable: false,
+                responseBody: '{"error":{"code":"model_not_found"}}',
+              }).toObject()
+            : undefined,
+      })
+      return Effect.gen(function* () {
+        const output = yield* run(setup)
+        expect(setup.attempts).toEqual([
+          { model: historical.id, retry: false },
+          { model: current.id, retry: false },
+        ])
+        const summaries = output.messages.filter((item) => item.info.role === "assistant" && item.info.summary)
+        expect(summaries).toHaveLength(1)
+        expect(summaries[0]?.info).toMatchObject({ modelID: current.id, providerID: current.providerID })
+        expect(summaries[0]?.parts.map((part) => (part.type === "text" ? part.text : part.type))).toEqual([
+          `partial-${current.id}`,
+        ])
+        const followup = output.messages.find(
+          (item) =>
+            item.info.role === "user" &&
+            item.parts.some((part) => part.type === "text" && part.metadata?.compaction_continue === true),
+        )
+        expect(followup?.info.role === "user" ? followup.info.model : undefined).toMatchObject({
+          modelID: current.id,
+          providerID: current.providerID,
+        })
+      })
+    })
+
+    itCompaction.instance("falls back after a typed processor model-not-found failure", () => {
+      const setup = recovery({
+        cause: (item) =>
+          item.id === historical.id
+            ? new Provider.ModelNotFoundError({ providerID: historical.providerID, modelID: historical.id })
+            : undefined,
+        fail: () => undefined,
+      })
+      return run(setup).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => expect(setup.attempts.map((item) => item.model)).toEqual([historical.id, current.id])),
+        ),
+      )
+    })
+
+    itCompaction.instance("missing historical lookup counts as the original attempt", () => {
+      const setup = recovery({ missing: true, fail: () => undefined })
+      return Effect.gen(function* () {
+        const output = yield* run(setup)
+        expect(setup.attempts).toEqual([{ model: current.id, retry: false }])
+        expect(output.messages.filter((item) => item.info.role === "assistant" && item.info.summary)).toHaveLength(1)
+      })
+    })
+
+    itCompaction.instance("falls back once for context, retry exhaustion, and 5xx", () => {
+      const errors = [
+        new SessionV1.ContextOverflowError({ message: "too large" }).toObject(),
+        new SessionV1.APIError({ message: "retry", isRetryable: true }).toObject(),
+        new SessionV1.APIError({ message: "server", statusCode: 503, isRetryable: false }).toObject(),
+      ]
+      return Effect.forEach(errors, (error) => {
+        const setup = recovery({ fail: (item) => (item.id === historical.id ? error : undefined) })
+        return run(setup).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => expect(setup.attempts.map((item) => item.model)).toEqual([historical.id, current.id])),
+          ),
+        )
+      })
+    })
+
+    itCompaction.instance("falls back when historical context or usage metadata is unusable", () =>
+      Effect.forEach(
+        [recovery({ context: true, fail: () => undefined }), recovery({ usage: false, fail: () => undefined })],
+        (setup) =>
+          run(setup).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => expect(setup.attempts.map((item) => item.model)).toEqual([historical.id, current.id])),
+            ),
+          ),
+      ),
+    )
+
+    itCompaction.instance("keeps authentication and content filtering terminal", () => {
+      const errors = [
+        new SessionV1.AuthError({ providerID: "test", message: "no" }).toObject(),
+        new SessionV1.ContentFilterError({ message: "blocked" }).toObject(),
+      ]
+      return Effect.forEach(errors, (error) => {
+        const setup = recovery({ fail: () => error })
+        return Effect.gen(function* () {
+          const output = yield* run(setup)
+          expect(setup.attempts.map((item) => item.model)).toEqual([historical.id])
+          expect(output.messages.some((item) => item.info.role === "assistant" && item.info.summary)).toBe(false)
+        })
+      })
+    })
+
+    itCompaction.instance("does not recover manual compaction or an explicit compaction model", () =>
+      Effect.gen(function* () {
+        const manual = recovery({ fail: () => new SessionV1.ContextOverflowError({ message: "too large" }).toObject() })
+        yield* run(manual, false)
+        expect(manual.attempts.map((item) => item.model)).toEqual([historical.id])
+
+        const explicit = recovery({
+          explicit: true,
+          fail: () => new SessionV1.ContextOverflowError({ message: "too large" }).toObject(),
+        })
+        yield* run(explicit)
+        expect(explicit.attempts.map((item) => item.model)).toEqual([current.id])
+      }),
+    )
+
+    itCompaction.instance("does not duplicate an attempt when historical and current models match", () => {
+      const setup = recovery({ fail: () => new SessionV1.ContextOverflowError({ message: "too large" }).toObject() })
+      return run(setup, true, true).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => expect(setup.attempts).toEqual([{ model: historical.id, retry: undefined }])),
+        ),
+      )
+    })
+
+    itCompaction.instance("stops after a failed fallback and removes both provisional attempts", () => {
+      const setup = recovery({ fail: () => new SessionV1.ContextOverflowError({ message: "too large" }).toObject() })
+      return Effect.gen(function* () {
+        const output = yield* run(setup)
+        expect(setup.attempts.map((item) => item.model)).toEqual([historical.id, current.id])
+        expect(output.result).toBe("stop")
+        expect(output.messages.some((item) => item.info.role === "assistant" && item.info.summary)).toBe(false)
+      })
+    })
+
+    itCompaction.instance("removes the interrupted provisional attempt without starting fallback", () =>
+      Effect.gen(function* () {
+        const stall = yield* Deferred.make<void>()
+        const setup = recovery({ stall, fail: () => undefined })
+        const fiber = yield* run(setup).pipe(Effect.forkChild)
+        yield* Deferred.await(stall)
+        yield* Fiber.interrupt(fiber)
+        const ssn = yield* SessionNs.Service
+        const summaries = (yield* ssn.messages({ sessionID: setup.sessions[0]! })).filter(
+          (item) => item.info.role === "assistant" && item.info.summary,
+        )
+        expect(setup.attempts.map((item) => item.model)).toEqual([historical.id])
+        expect(summaries).toHaveLength(0)
+      }),
+    )
+  })
 
   it.instance(
     "adds synthetic continue prompt when auto is enabled",

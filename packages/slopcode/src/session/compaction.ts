@@ -12,7 +12,7 @@ import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
 
-import { Effect, Layer, Context } from "effect"
+import { Cause, Effect, Layer, Context, Exit } from "effect"
 import * as DateTime from "effect/DateTime"
 import { InstanceState } from "@/effect/instance-state"
 import { isOverflow as overflow, usable } from "./overflow"
@@ -57,6 +57,42 @@ type CompletedCompaction = {
   userIndex: number
   assistantIndex: number
   summary: string | undefined
+}
+
+type Failure = "model_not_found" | "context" | "usage" | "retry_exhausted" | "server"
+
+function code(body: string | undefined) {
+  if (!body) return undefined
+  try {
+    const value = JSON.parse(body)
+    if (!value || typeof value !== "object") return undefined
+    const error = "error" in value && value.error && typeof value.error === "object" ? value.error : value
+    return "code" in error && typeof error.code === "string" ? error.code : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function failure(input: {
+  error: SessionV1.Assistant["error"]
+  cause: unknown
+  model: Provider.Model
+  result: SessionProcessor.Result
+}) {
+  if (Provider.ModelNotFoundError.isInstance(input.cause)) return "model_not_found" satisfies Failure
+  if (SessionV1.ContextOverflowError.isInstance(input.error) || input.result === "compact")
+    return "context" satisfies Failure
+  if (SessionV1.APIError.isInstance(input.error)) {
+    if (code(input.error.data.responseBody) === "model_not_found") return "model_not_found" satisfies Failure
+    const status = input.error.data.statusCode
+    if (status !== undefined && status >= 500 && status <= 599) return "server" satisfies Failure
+    if (input.error.data.isRetryable) return "retry_exhausted" satisfies Failure
+  }
+  if (!input.error && input.result === "continue") {
+    const tokens = input.model.limit.context
+    if (!Number.isFinite(tokens) || tokens <= 0) return "usage" satisfies Failure
+  }
+  return undefined
 }
 
 function summaryText(message: SessionV1.WithParts) {
@@ -336,9 +372,36 @@ export const layer = Layer.effect(
       }
 
       const agent = yield* agents.get("compaction")
-      const model = agent.model
-        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
-        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
+      const original = agent.model ?? userMessage.model
+      const currentRef = Effect.fnUntraced(function* () {
+        const info = yield* session.get(input.sessionID).pipe(Effect.orDie)
+        const latest = yield* session
+          .findMessage(
+            input.sessionID,
+            (item) => item.info.role === "user" && !item.parts.some((part) => part.type === "compaction"),
+          )
+          .pipe(Effect.orDie)
+        if (latest._tag === "Some" && latest.value.info.role === "user" && latest.value.info.id > input.parentID) {
+          return latest.value.info.model
+        }
+        if (info.model) return { providerID: info.model.providerID, modelID: info.model.id }
+        if (latest._tag === "Some" && latest.value.info.role === "user") return latest.value.info.model
+        return userMessage.model
+      })
+      const current = yield* currentRef()
+      const historical =
+        input.auto &&
+        !agent.model &&
+        (original.providerID !== current.providerID || original.modelID !== current.modelID)
+      const originalExit = yield* provider.getModel(original.providerID, original.modelID).pipe(Effect.exit)
+      const missing = Exit.isFailure(originalExit)
+      if (missing && !historical) return yield* Effect.die(Cause.squash(originalExit.cause))
+      const recoveryRef = missing ? yield* currentRef() : current
+      const recovery =
+        missing && historical
+          ? yield* provider.getModel(recoveryRef.providerID, recoveryRef.modelID).pipe(Effect.orDie)
+          : undefined
+      const first = Exit.isSuccess(originalExit) ? originalExit.value : recovery!
       const cfg = yield* config.get()
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
       const prior = completedCompactions(history)
@@ -347,7 +410,7 @@ export const layer = Layer.effect(
       const selected = yield* select({
         messages: history.filter((_, index) => !hidden.has(index)),
         cfg,
-        model,
+        model: first,
       })
       // Allow plugins to inject context or replace compaction prompt.
       const compacting = yield* plugin.trigger(
@@ -358,10 +421,6 @@ export const layer = Layer.effect(
       const nextPrompt = compacting.prompt ?? buildPrompt({ previousSummary, context: compacting.context })
       const msgs = structuredClone(selected.head)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-      const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
-        stripMedia: true,
-        toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
-      })
       const tailIndex = selected.tail_start_id
         ? history.findIndex((message) => message.info.id === selected.tail_start_id)
         : -1
@@ -369,72 +428,139 @@ export const layer = Layer.effect(
         tailIndex < 0
           ? ""
           : JSON.stringify(
-              yield* MessageV2.toModelMessagesEffect(history.slice(tailIndex), model, {
+              yield* MessageV2.toModelMessagesEffect(history.slice(tailIndex), first, {
                 stripMedia: true,
                 toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
               }),
             )
       const ctx = yield* InstanceState.context
-      const msg: SessionV1.Assistant = {
-        id: MessageID.ascending(),
-        role: "assistant",
-        parentID: input.parentID,
-        sessionID: input.sessionID,
-        mode: "compaction",
-        agent: "compaction",
-        variant: userMessage.model.variant,
-        summary: true,
-        path: {
-          cwd: ctx.directory,
-          root: ctx.worktree,
-        },
-        cost: 0,
-        tokens: {
-          output: 0,
-          input: 0,
-          reasoning: 0,
-          cache: { read: 0, write: 0 },
-        },
-        modelID: model.id,
-        providerID: model.providerID,
-        time: {
-          created: Date.now(),
-        },
-      }
-      const processor = yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          yield* session.updateMessage(msg)
-          return yield* restore(
-            processors.create({
-              assistantMessage: msg,
-              sessionID: input.sessionID,
-              model,
-            }),
-          ).pipe(
-            Effect.onInterrupt(() =>
-              session.removeMessage({
-                sessionID: input.sessionID,
-                messageID: msg.id,
+      const attempt = Effect.fn("SessionCompaction.attempt")(function* (model: Provider.Model, bounded: boolean) {
+        const msg: SessionV1.Assistant = {
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: input.parentID,
+          sessionID: input.sessionID,
+          mode: "compaction",
+          agent: "compaction",
+          variant: userMessage.model.variant,
+          summary: true,
+          path: { cwd: ctx.directory, root: ctx.worktree },
+          cost: 0,
+          tokens: { output: 0, input: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: model.id,
+          providerID: model.providerID,
+          time: { created: Date.now() },
+        }
+        return yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            yield* session.updateMessage(msg)
+            return yield* restore(
+              Effect.gen(function* () {
+                const processor = yield* processors.create({
+                  assistantMessage: msg,
+                  sessionID: input.sessionID,
+                  model,
+                  retry: bounded ? false : undefined,
+                })
+                const result = yield* processor.process({
+                  user: userMessage,
+                  agent,
+                  sessionID: input.sessionID,
+                  tools: {},
+                  system: [],
+                  messages: [
+                    ...(yield* MessageV2.toModelMessagesEffect(msgs, model, {
+                      stripMedia: true,
+                      toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
+                    })),
+                    { role: "user", content: [{ type: "text", text: nextPrompt }] },
+                  ],
+                  model,
+                })
+                return { msg, processor, result, model }
               }),
-            ),
-          )
-        }),
-      )
-      const result = yield* processor.process({
-        user: userMessage,
-        agent,
-        sessionID: input.sessionID,
-        tools: {},
-        system: [],
-        messages: [
-          ...modelMessages,
-          {
-            role: "user",
-            content: [{ type: "text", text: nextPrompt }],
-          },
-        ],
-        model,
+            ).pipe(Effect.onInterrupt(() => session.removeMessage({ sessionID: input.sessionID, messageID: msg.id })))
+          }),
+        )
       })
+
+      let originalAttempt = missing ? undefined : yield* attempt(first, historical)
+      const originalFailure = originalAttempt
+        ? (failure({
+            error: originalAttempt.processor.message.error,
+            cause: originalAttempt.processor.failure,
+            model: first,
+            result: originalAttempt.result,
+          }) ??
+          (originalAttempt.result === "continue" &&
+          !Object.values(originalAttempt.processor.message.tokens).some((value) =>
+            typeof value === "number" ? value > 0 : Object.values(value).some((token) => token > 0),
+          )
+            ? "usage"
+            : undefined))
+        : "model_not_found"
+
+      if (originalAttempt && originalFailure && historical) {
+        yield* session.removeMessage({ sessionID: input.sessionID, messageID: originalAttempt.msg.id })
+      }
+
+      if (originalFailure && historical) {
+        const latest = yield* currentRef()
+        const same = latest.providerID === original.providerID && latest.modelID === original.modelID
+        yield* Effect.logWarning("historical compaction recovery", {
+          original: `${original.providerID}/${original.modelID}`,
+          current: `${latest.providerID}/${latest.modelID}`,
+          failure: originalFailure,
+          attempt: 1,
+        })
+        if (same) return "stop"
+        const model = yield* provider.getModel(latest.providerID, latest.modelID).pipe(Effect.orDie)
+        const fallback = yield* attempt(model, true)
+        const failed =
+          fallback.result !== "continue" ||
+          !!fallback.processor.message.error ||
+          fallback.processor.message.finish === "content-filter" ||
+          !Object.values(fallback.processor.message.tokens).some((value) =>
+            typeof value === "number" ? value > 0 : Object.values(value).some((token) => token > 0),
+          )
+        if (failed) {
+          yield* session.removeMessage({ sessionID: input.sessionID, messageID: fallback.msg.id })
+          yield* Effect.logWarning("historical compaction recovery", {
+            original: `${original.providerID}/${original.modelID}`,
+            current: `${model.providerID}/${model.id}`,
+            failure:
+              failure({
+                error: fallback.processor.message.error,
+                cause: fallback.processor.failure,
+                model,
+                result: fallback.result,
+              }) ?? "terminal",
+            attempt: 2,
+          })
+          return "stop"
+        }
+        originalAttempt = fallback
+      }
+
+      if (
+        historical &&
+        originalAttempt &&
+        (originalAttempt.result !== "continue" ||
+          !!originalAttempt.processor.message.error ||
+          originalAttempt.processor.message.finish === "content-filter")
+      ) {
+        yield* session.removeMessage({ sessionID: input.sessionID, messageID: originalAttempt.msg.id })
+        yield* Effect.logWarning("historical compaction recovery", {
+          original: `${original.providerID}/${original.modelID}`,
+          current: `${current.providerID}/${current.modelID}`,
+          failure: originalAttempt.processor.message.finish === "content-filter" ? "content_filter" : "terminal",
+          attempt: 1,
+        })
+        return "stop"
+      }
+
+      if (!originalAttempt) return "stop"
+      const { msg, processor, result, model } = originalAttempt
 
       if (result === "compact") {
         processor.message.error = new SessionV1.ContextOverflowError({
@@ -484,16 +610,14 @@ export const layer = Layer.effect(
         }
 
         if (!replay) {
-          const info = yield* provider.getProvider(userMessage.model.providerID)
+          const info = yield* provider.getProvider(model.providerID)
           if (
             (yield* plugin.trigger(
               "experimental.compaction.autocontinue",
               {
                 sessionID: input.sessionID,
                 agent: userMessage.agent,
-                model: yield* provider
-                  .getModel(userMessage.model.providerID, userMessage.model.modelID)
-                  .pipe(Effect.orDie),
+                model,
                 provider: {
                   source: info.source,
                   info,
@@ -505,13 +629,17 @@ export const layer = Layer.effect(
               { enabled: true },
             )).enabled
           ) {
+            const followup =
+              historical && (model.providerID !== original.providerID || model.id !== original.modelID)
+                ? yield* currentRef()
+                : userMessage.model
             const continueMsg = yield* session.updateMessage({
               id: MessageID.ascending(),
               role: "user",
               sessionID: input.sessionID,
               time: { created: Date.now() },
               agent: userMessage.agent,
-              model: userMessage.model,
+              model: followup,
             })
             const text =
               (input.overflow

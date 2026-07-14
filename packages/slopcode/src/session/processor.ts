@@ -37,6 +37,7 @@ export type Result = "compact" | "stop" | "continue"
 
 export interface Handle {
   readonly message: SessionV1.Assistant
+  readonly failure?: unknown
   readonly updateToolCall: (
     toolCallID: string,
     update: (part: SessionV1.ToolPart) => SessionV1.ToolPart,
@@ -57,6 +58,7 @@ type Input = {
   assistantMessage: SessionV1.Assistant
   sessionID: SessionID
   model: Provider.Model
+  retry?: boolean
 }
 
 export interface Interface {
@@ -83,6 +85,7 @@ interface ProcessorContext extends Input {
   currentTextID: string | undefined
   reasoningMap: Record<string, SessionV1.ReasoningPart>
   v2AssistantMessageID: SessionMessage.ID | undefined
+  failure: unknown
 }
 
 type StreamEvent = LLMEvent
@@ -125,6 +128,7 @@ export const layer = Layer.effect(
         currentTextID: undefined,
         reasoningMap: {},
         v2AssistantMessageID: undefined,
+        failure: undefined,
       }
       const mirrorAssistant = flags.experimentalEventSystem && !input.assistantMessage.summary
       let aborted = false
@@ -916,6 +920,7 @@ export const layer = Layer.effect(
       })
 
       const halt = Effect.fn("SessionProcessor.halt")(function* (e: unknown) {
+        ctx.failure = e
         yield* Effect.logError("process", {
           "session.id": input.sessionID,
           messageID: input.assistantMessage.id,
@@ -967,7 +972,7 @@ export const layer = Layer.effect(
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
-          yield* Effect.gen(function* () {
+          const stream = Effect.gen(function* () {
             ctx.currentText = undefined
             ctx.currentTextID = undefined
             ctx.reasoningMap = {}
@@ -992,41 +997,45 @@ export const layer = Layer.effect(
               (cause) => !Cause.hasInterruptsOnly(cause),
               (cause) => Effect.fail(Cause.squash(cause)),
             ),
-            Effect.retry(
-              SessionRetry.policy({
-                provider: input.model.providerID,
-                parse,
-                set: (info) => {
-                  // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-                  const event = mirrorAssistant
-                    ? events.publish(SessionEvent.Retried, {
-                        sessionID: ctx.sessionID,
-                        attempt: info.attempt,
-                        error: {
-                          message: info.message,
-                          isRetryable: true,
-                        },
-                        timestamp: DateTime.makeUnsafe(Date.now()),
-                      })
-                    : Effect.void
-                  return flushV2Fragments().pipe(
-                    Effect.andThen(event),
-                    Effect.andThen(
-                      status.set(ctx.sessionID, {
-                        type: "retry",
-                        attempt: info.attempt,
-                        message: info.message,
-                        action: info.action,
-                        next: info.next,
-                      }),
-                    ),
-                  )
-                },
-              }),
-            ),
-            Effect.catch(halt),
-            Effect.ensuring(cleanup()),
           )
+          yield* (
+            input.retry === false
+              ? stream
+              : stream.pipe(
+                  Effect.retry(
+                    SessionRetry.policy({
+                      provider: input.model.providerID,
+                      parse,
+                      set: (info) => {
+                        // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+                        const event = mirrorAssistant
+                          ? events.publish(SessionEvent.Retried, {
+                              sessionID: ctx.sessionID,
+                              attempt: info.attempt,
+                              error: {
+                                message: info.message,
+                                isRetryable: true,
+                              },
+                              timestamp: DateTime.makeUnsafe(Date.now()),
+                            })
+                          : Effect.void
+                        return flushV2Fragments().pipe(
+                          Effect.andThen(event),
+                          Effect.andThen(
+                            status.set(ctx.sessionID, {
+                              type: "retry",
+                              attempt: info.attempt,
+                              message: info.message,
+                              action: info.action,
+                              next: info.next,
+                            }),
+                          ),
+                        )
+                      },
+                    }),
+                  ),
+                )
+          ).pipe(Effect.catch(halt), Effect.ensuring(cleanup()))
 
           if (ctx.needsCompaction) return "compact"
           if (ctx.blocked || ctx.assistantMessage.error) return "stop"
@@ -1037,6 +1046,9 @@ export const layer = Layer.effect(
       return {
         get message() {
           return ctx.assistantMessage
+        },
+        get failure() {
+          return ctx.failure
         },
         updateToolCall,
         completeToolCall,
