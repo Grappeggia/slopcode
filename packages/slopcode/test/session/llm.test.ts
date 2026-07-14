@@ -31,6 +31,7 @@ import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { ProviderTest } from "../fake/provider"
 import { Account } from "@/account/account"
 import { SafetyIdentity } from "@slopcode-ai/core/safety-identity"
+import { CacheHint } from "@slopcode-ai/llm"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
@@ -257,6 +258,53 @@ describe("session.llm provider option safety", () => {
       safetyIdentifier: "sc_safe",
       promptCacheOptions: { mode: "explicit", ttl: "30m" },
     })
+  })
+
+  test("preserves protocol-neutral cache hints outside unofficial OpenAI GPT-5.6", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "cache me", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) },
+        ],
+      },
+    ] as unknown as ModelMessage[]
+    const cases = [
+      model("openai", "@ai-sdk/openai", "gpt-5.5"),
+      model("anthropic", "@ai-sdk/anthropic", "claude-opus-4-6", "https://api.anthropic.com/v1"),
+      model(
+        "amazon-bedrock",
+        "@ai-sdk/amazon-bedrock",
+        "anthropic.claude-sonnet-4-6",
+        "https://bedrock-runtime.us-east-1.amazonaws.com",
+      ),
+    ]
+
+    cases.forEach((item) => expect(LLM.sanitizeMessages({ model: item, messages })).toBe(messages))
+  })
+
+  test("scrubs custom OpenAI GPT-5.6 hints while preserving official hints", () => {
+    const messages = [
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "stable", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) },
+        ],
+      } as unknown as ModelMessage,
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "cache me", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) },
+        ],
+      },
+    ] as unknown as ModelMessage[]
+    const official = model("openai", "@ai-sdk/openai")
+    const custom = model("openai", "@ai-sdk/openai", "gpt-5.6", "https://proxy.example/v1")
+
+    expect(LLM.sanitizeMessages({ model: official, messages })).toBe(messages)
+    const scrubbed = LLM.sanitizeMessages({ model: custom, messages })
+    expect(scrubbed[0]).toEqual({ role: "system", content: "stable" })
+    expect(scrubbed[1]).toEqual({ role: "user", content: [{ type: "text", text: "cache me" }] })
   })
 })
 

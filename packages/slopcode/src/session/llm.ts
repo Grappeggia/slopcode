@@ -78,6 +78,38 @@ const cacheHint = (messages: readonly ModelMessage[]) =>
       ),
   )
 
+export function sanitizeMessages(input: {
+  model: Provider.Model
+  auth?: Auth.Info
+  provider?: Provider.Info
+  messages: ModelMessage[]
+}) {
+  const openAI56 =
+    Object.hasOwn(OFFICIAL, input.model.providerID) &&
+    input.model.api.npm === "@ai-sdk/openai" &&
+    GPT5_6.has(input.model.api.id.toLowerCase())
+  if (!openAI56 || eligibleRoute(input.model, input.auth, input.provider)) return input.messages
+  return input.messages.map((message): ModelMessage => {
+    if (!Array.isArray(message.content)) return message
+    if (message.role === "system")
+      return {
+        ...message,
+        content: message.content
+          .filter((part) => part && typeof part === "object" && part.type === "text")
+          .map((part) => part.text)
+          .join("\n"),
+      } as ModelMessage
+    return {
+      ...message,
+      content: message.content.map((part) => {
+        if (!part || typeof part !== "object" || !("cache" in part)) return part
+        const { cache: _, ...clean } = part
+        return clean
+      }),
+    } as ModelMessage
+  })
+}
+
 export function sanitizeOptions(input: {
   model: Provider.Model
   auth?: Auth.Info
@@ -211,27 +243,7 @@ const live: Layer.Layer<
         isWorkflow,
       })
       const eligible = eligibleRoute(input.model, info, item)
-      const messages: ModelMessage[] = eligible
-        ? prepared.messages
-        : prepared.messages.map((message): ModelMessage => {
-            if (!Array.isArray(message.content)) return message
-            if (message.role === "system")
-              return {
-                ...message,
-                content: message.content
-                  .filter((part) => part && typeof part === "object" && part.type === "text")
-                  .map((part) => part.text)
-                  .join("\n"),
-              } as ModelMessage
-            return {
-              ...message,
-              content: message.content.map((part) => {
-                if (!part || typeof part !== "object" || !("cache" in part)) return part
-                const { cache: _, ...clean } = part
-                return clean
-              }),
-            } as ModelMessage
-          })
+      const messages = sanitizeMessages({ model: input.model, auth: info, provider: item, messages: prepared.messages })
       const active = eligible
         ? Option.getOrUndefined(yield* account.active().pipe(Effect.catch(() => Effect.succeed(Option.none()))))
         : undefined
