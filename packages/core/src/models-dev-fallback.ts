@@ -1,6 +1,6 @@
 // Auto-generated fallback catalog for local development
 // Generated from models.dev API snapshot
-// Contains the OpenAI GPT-5.6 family plus 60 slopcode models and 14 slopcode-go models
+// Contains the OpenAI GPT-5.6 family plus 61 slopcode models and 15 slopcode-go models
 
 function gpt(id: string, name: string, family: string, description: string, input: number, output: number) {
   return {
@@ -71,6 +71,20 @@ function gpt(id: string, name: string, family: string, description: string, inpu
   }
 }
 
+function managedGPT(free: boolean) {
+  return {
+    ...gpt(
+      "gpt-5.6",
+      "GPT-5.6",
+      "gpt",
+      "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+      free ? 0 : 5,
+      free ? 0 : 30,
+    ),
+    provider: { npm: "@ai-sdk/openai" },
+  }
+}
+
 export const fallback: Record<string, Record<string, unknown>> = {
   openai: {
     id: "openai",
@@ -120,6 +134,7 @@ export const fallback: Record<string, Record<string, unknown>> = {
     name: "SlopCode Zen",
     doc: "https://slopcode.ai/docs/zen",
     models: {
+      "gpt-5.6": managedGPT(true),
       "minimax-m2.7": {
         id: "minimax-m2.7",
         name: "MiniMax M2.7",
@@ -2027,6 +2042,7 @@ export const fallback: Record<string, Record<string, unknown>> = {
     name: "SlopCode Go",
     doc: "https://slopcode.ai/docs/zen",
     models: {
+      "gpt-5.6": managedGPT(false),
       "minimax-m2.7": {
         id: "minimax-m2.7",
         name: "MiniMax M2.7",

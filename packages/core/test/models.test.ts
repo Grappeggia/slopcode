@@ -154,6 +154,8 @@ describe("ModelsDev Service", () => {
       )
       expect(result.slopcode?.models["big-pickle"]).toBeDefined()
       expect(result["slopcode-go"]?.models).toBeDefined()
+      expect(result.slopcode?.models["gpt-5.6"]?.provider).toEqual({ npm: "@ai-sdk/openai" })
+      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider).toEqual({ npm: "@ai-sdk/openai" })
       expect(Object.keys(result.openai?.models ?? {}).sort()).toEqual([
         "gpt-5.6",
         "gpt-5.6-luna",

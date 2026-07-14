@@ -72,7 +72,9 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
           const catalog = yield* Catalog.Service
           const pluginBoot = yield* PluginBoot.Service
           yield* pluginBoot.wait().pipe(Effect.catchDefect(() => Effect.fail(catalogUnavailable)))
-          return yield* response(catalog.provider.available())
+          return yield* response(
+            catalog.provider.available().pipe(Effect.map((providers) => providers.map(ProviderV2.publicInfo))),
+          )
         }),
       )
       .handle(
@@ -81,7 +83,7 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
           const catalog = yield* Catalog.Service
           const pluginBoot = yield* PluginBoot.Service
           yield* pluginBoot.wait().pipe(Effect.catchDefect(() => Effect.fail(catalogUnavailable)))
-          return yield* response(catalog.provider.get(ctx.params.providerID)).pipe(
+          return yield* response(catalog.provider.get(ctx.params.providerID).pipe(Effect.map(ProviderV2.publicInfo))).pipe(
             Effect.catchTag("CatalogV2.ProviderNotFound", (error) =>
               Effect.fail(
                 new ProviderNotFoundError({

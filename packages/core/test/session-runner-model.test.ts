@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { LLM } from "@slopcode-ai/llm"
+import { LLM, Model } from "@slopcode-ai/llm"
 import { HttpTransport, LLMClient } from "@slopcode-ai/llm/route"
 import * as OpenAIResponses from "@slopcode-ai/llm/protocols/openai-responses"
 import { ConfigProvider, DateTime, Effect } from "effect"
@@ -256,6 +256,34 @@ describe("SessionRunnerModel", () => {
 
       expect(resolved.harness?.route.id).toBe("public")
       expect(resolved.model.route.capabilities).not.toContain("responses-lite")
+    }),
+  )
+
+  it.effect("fails Codex closed when its deployment does not advertise Code Mode", () =>
+    Effect.gen(function* () {
+      const catalog = harnessModel({ type: "aisdk", package: "@ai-sdk/openai", url: "https://api.openai.com/v1" })
+      const resolved = yield* SessionRunnerModel.resolve(
+        session(catalog),
+        catalog,
+        new ProviderV2.Info({
+          ...provider({ type: "aisdk", package: "@ai-sdk/openai", url: "https://api.openai.com/v1" }),
+          id: ProviderV2.ID.openai,
+          enabled: { via: "credential", credentialID: credential("oauth").id },
+        }),
+        undefined,
+        credential("oauth"),
+      )
+      const failure = yield* SessionRunnerModel.validate(
+        resolved.harness!,
+        new Model({
+          ...resolved.model,
+          route: resolved.model.route.with({ capabilities: ["responses-lite", "custom-tools"] }),
+        }),
+      ).pipe(Effect.flip)
+
+      expect(failure).toEqual(
+        new ModelHarness.IncompatibilityError({ profileID: "gpt-5.6-sol", missing: ["code-mode"] }),
+      )
     }),
   )
 

@@ -1126,7 +1126,7 @@ export const route = Route.make({
   auth,
   headers,
   transport: httpTransport,
-  capabilities: ["responses-lite", "custom-tools"],
+  capabilities: ["code-mode", "responses-lite", "custom-tools"],
 })
 
 const decodeWebSocketMessage = ProviderShared.validateWith(Schema.decodeUnknownEffect(OpenAIResponsesWebSocketMessage))
@@ -1165,7 +1165,7 @@ export const webSocketRoute = Route.make({
   auth,
   headers,
   transport: webSocketTransport,
-  capabilities: ["responses-lite", "custom-tools"],
+  capabilities: ["code-mode", "responses-lite", "custom-tools"],
 })
 
 export * as OpenAIResponses from "./openai-responses"

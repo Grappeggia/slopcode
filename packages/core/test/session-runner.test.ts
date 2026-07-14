@@ -7279,7 +7279,7 @@ describe("SessionRunnerLLM", () => {
         const instructions = yield* ModelHarness.instructions(profile)
         expect(request.model.route).toMatchObject({
           protocol: "openai-responses",
-          capabilities: ["responses-lite", "custom-tools"],
+          capabilities: ["code-mode", "responses-lite", "custom-tools"],
           defaults: { limits: { context: 372_000, output: 128_000 } },
         })
         expect(request.tools).toHaveLength(1)

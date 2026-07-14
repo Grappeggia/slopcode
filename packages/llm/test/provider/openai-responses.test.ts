@@ -799,9 +799,9 @@ describe("OpenAI Responses route", () => {
   it.effect("declares internal Responses capabilities only on explicit OpenAI deployments", () =>
     Effect.sync(() => {
       expect(OpenAIResponses.protocol.capabilities).toBeUndefined()
-      expect(OpenAIResponses.route.capabilities).toEqual(["responses-lite", "custom-tools"])
-      expect(OpenAIResponses.webSocketRoute.capabilities).toEqual(["responses-lite", "custom-tools"])
-      expect(OpenAI.routes[0]?.capabilities).toEqual(["responses-lite", "custom-tools"])
+      expect(OpenAIResponses.route.capabilities).toEqual(["code-mode", "responses-lite", "custom-tools"])
+      expect(OpenAIResponses.webSocketRoute.capabilities).toEqual(["code-mode", "responses-lite", "custom-tools"])
+      expect(OpenAI.routes[0]?.capabilities).toEqual(["code-mode", "responses-lite", "custom-tools"])
       expect(Azure.routes[0]?.capabilities).toEqual([])
       expect(XAI.routes[0]?.capabilities).toEqual([])
       expect(GitHubCopilot.routes[0]?.capabilities).toEqual([])

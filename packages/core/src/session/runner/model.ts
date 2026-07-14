@@ -178,7 +178,7 @@ export const resolve = (
     const harness = ModelHarness.resolve(model, authentication(model, provider, credential))
     const resolved = yield* fromCatalogModel(withVariant(model, variant), provider, harness, credential)
     if (!harness) return { model: resolved, catalog: model, harness, reasoning: undefined }
-    yield* ModelHarness.validate(harness, ["code-mode", ...resolved.route.capabilities])
+    yield* validate(harness, resolved)
     return {
       model: resolved,
       catalog: model,
@@ -186,6 +186,9 @@ export const resolve = (
       reasoning: yield* ModelHarness.reasoning(harness, variant),
     }
   })
+
+export const validate = (harness: ModelHarness.Profile, model: Model) =>
+  ModelHarness.validate(harness, model.route.capabilities)
 
 export const supported = (model: ModelV2.Info) =>
   model.api.type === "aisdk" &&

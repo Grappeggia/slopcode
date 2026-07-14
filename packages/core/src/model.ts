@@ -116,6 +116,37 @@ export class Info extends Schema.Class<Info>("ModelV2.Info")({
   }
 }
 
+export const publicInfo = (model: Info) => {
+  const provider = ProviderV2.publicInfo(
+    new ProviderV2.Info({
+      id: model.providerID,
+      name: model.providerID,
+      enabled: false,
+      env: [],
+      api: model.api,
+      request: { headers: {}, body: {} },
+    }),
+  )
+  return new Info({
+    ...model,
+    api: { id: model.api.id, ...provider.api },
+    request: {
+      headers: {},
+      body: {},
+      generation: {},
+      options: {},
+      variant: model.request.variant,
+    },
+    variants: model.variants.map((variant) => ({
+      id: variant.id,
+      headers: {},
+      body: {},
+      generation: {},
+      options: {},
+    })),
+  })
+}
+
 export function parse(input: string): { providerID: ProviderV2.ID; modelID: ID } {
   const [providerID, ...modelID] = input.split("/")
   return {

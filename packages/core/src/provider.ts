@@ -85,3 +85,27 @@ export class Info extends Schema.Class<Info>("ProviderV2.Info")({
     })
   }
 }
+
+const publicURL = (value: string | undefined) => {
+  if (!value || !URL.canParse(value)) return undefined
+  const url = new URL(value)
+  url.username = ""
+  url.password = ""
+  url.search = ""
+  url.hash = ""
+  return url.toString().replace(/\/$/, "")
+}
+
+export const publicInfo = (provider: Info) =>
+  new Info({
+    ...provider,
+    enabled:
+      provider.enabled === false || provider.enabled.via === "env"
+        ? provider.enabled
+        : { via: "custom", data: {} },
+    api:
+      provider.api.type === "aisdk"
+        ? { ...provider.api, url: publicURL(provider.api.url), settings: {} }
+        : { ...provider.api, url: publicURL(provider.api.url), settings: {} },
+    request: { headers: {}, body: {} },
+  })
