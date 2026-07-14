@@ -29,6 +29,8 @@ import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { ProviderTest } from "../fake/provider"
+import { Account } from "@/account/account"
+import { SafetyIdentity } from "@slopcode-ai/core/safety-identity"
 
 type ConfigModel = NonNullable<NonNullable<ConfigV1.Info["provider"]>[string]["models"]>[string]
 
@@ -114,6 +116,8 @@ function llmLayerWithExecutor(executor: Layer.Layer<RequestExecutor.Service>, fl
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(executor, WebSocketExecutor.layer)))),
     Layer.provide(RuntimeFlags.layer(flags)),
+    Layer.provide(Account.defaultLayer),
+    Layer.provide(SafetyIdentity.defaultLayer),
   )
 }
 
@@ -204,6 +208,52 @@ describe("session.llm.hasToolCalls", () => {
   })
 })
 
+describe("session.llm provider option safety", () => {
+  const options = {
+    safetyIdentifier: "hostile",
+    promptCacheOptions: { mode: "explicit", ttl: "30m" },
+    reasoningEffort: "high",
+  }
+  const model = (providerID: string, npm: string, id = "gpt-5.6") =>
+    ({ providerID, api: { id, npm } }) as Provider.Model
+
+  test("scrubs safety and cache options from every excluded route", () => {
+    const routes = [
+      { model: model("openai", "@ai-sdk/openai"), auth: { type: "oauth" } as Auth.Info },
+      { model: model("openai", "@ai-sdk/openai", "gpt-5.5") },
+      { model: model("azure", "@ai-sdk/azure") },
+      { model: model("github-copilot", "@ai-sdk/github-copilot") },
+      { model: model("openrouter", "@openrouter/ai-sdk-provider") },
+      { model: model("compatible", "@ai-sdk/openai-compatible") },
+    ]
+    routes.forEach((route) =>
+      expect(
+        LLM.sanitizeOptions({ ...route, options, safetyIdentifier: "sc_safe", cacheHint: true }),
+      ).toEqual({ reasoningEffort: "high" }),
+    )
+  })
+
+  test("requires a 30m hint for eligible explicit cache options", () => {
+    const input = { model: model("openai", "@ai-sdk/openai"), options, safetyIdentifier: "sc_safe" }
+    expect(LLM.sanitizeOptions({ ...input, cacheHint: false })).toEqual({
+      reasoningEffort: "high",
+      safetyIdentifier: "sc_safe",
+    })
+    expect(LLM.sanitizeOptions({ ...input, cacheHint: true })).toEqual({
+      reasoningEffort: "high",
+      safetyIdentifier: "sc_safe",
+      promptCacheOptions: { mode: "explicit", ttl: "30m" },
+    })
+    expect(
+      LLM.sanitizeOptions({
+        ...input,
+        options: { ...options, promptCacheOptions: { mode: "explicit", ttl: "1h" } },
+        cacheHint: true,
+      }),
+    ).toEqual({ reasoningEffort: "high", safetyIdentifier: "sc_safe" })
+  })
+})
+
 describe("session.llm side runtime isolation", () => {
   test("uses a conservative UTF-8 upper bound for side context", () => {
     const messages: ModelMessage[] = [{ role: "user", content: "🧪".repeat(100) }]
@@ -252,6 +302,8 @@ describe("session.llm side runtime isolation", () => {
           LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
         ),
         Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: false })),
+        Layer.provide(Account.defaultLayer),
+        Layer.provide(SafetyIdentity.defaultLayer),
       )
       const sessionID = SessionID.make("ses_side_workflow")
       const agent = {
@@ -1146,7 +1198,10 @@ describe("session.llm.stream", () => {
         const agent = {
           name: "test",
           mode: "primary",
-          options: {},
+          options: {
+            safetyIdentifier: "hostile-client-id",
+            promptCacheOptions: { mode: "explicit", ttl: "30m" },
+          },
           permission: [{ permission: "*", pattern: "*", action: "allow" }],
           temperature: 0.2,
         } satisfies Agent.Info
@@ -1175,6 +1230,9 @@ describe("session.llm.stream", () => {
 
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
         expect(body.model).toBe(resolved.api.id)
+        expect(body.safety_identifier).toBeUndefined()
+        expect(body.prompt_cache_options).toBeUndefined()
+        expect(JSON.stringify(body)).not.toContain("prompt_cache_breakpoint")
         expect(body.stream).toBe(true)
         expect((body.reasoning as { effort?: string } | undefined)?.effort).toBe("high")
 
@@ -1249,7 +1307,10 @@ describe("session.llm.stream", () => {
             const agent = {
               name: "test",
               mode: "primary",
-              options: {},
+              options: {
+                safetyIdentifier: "hostile-client-id",
+                promptCacheOptions: { mode: "explicit", ttl: "30m" },
+              },
               permission: [{ permission: "*", pattern: "*", action: "allow" }],
             } satisfies Agent.Info
             const user = {
@@ -1280,6 +1341,10 @@ describe("session.llm.stream", () => {
           expect(capture.body.reasoning).toEqual({ effort: "max", summary: "auto" })
           expect(capture.body.include).toEqual(["reasoning.encrypted_content"])
           expect(capture.body.store).toBe(false)
+          expect(capture.body.safety_identifier).toMatch(/^sc_[A-Za-z0-9_-]{43}$/)
+          expect(capture.body.safety_identifier).not.toBe("hostile-client-id")
+          expect(capture.body.prompt_cache_options).toBeUndefined()
+          expect(JSON.stringify(capture.body)).not.toContain("prompt_cache_breakpoint")
         })
         expect(captures[1].body.service_tier).toBe("priority")
       }),
@@ -1365,6 +1430,8 @@ describe("session.llm.stream", () => {
             Layer.provide(Plugin.defaultLayer),
             Layer.provide(failingNativeClient),
             Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: false })),
+            Layer.provide(Account.defaultLayer),
+            Layer.provide(SafetyIdentity.defaultLayer),
           ),
           {
             user: {

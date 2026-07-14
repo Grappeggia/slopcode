@@ -26,6 +26,8 @@ import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ModelV2 } from "@slopcode-ai/core/model"
+import { Account } from "@/account/account"
+import { SafetyIdentity } from "@slopcode-ai/core/safety-identity"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "../fixtures/recordings")
 
@@ -303,6 +305,8 @@ function recordedNativeLLMLayer(scenario: RecordedScenario) {
       Layer.provide(Plugin.defaultLayer),
       Layer.provide(recordedClient),
       Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: true })),
+      Layer.provide(Account.defaultLayer),
+      Layer.provide(SafetyIdentity.defaultLayer),
     ),
   )
 }

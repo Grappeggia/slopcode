@@ -110,6 +110,25 @@ export const subtractTokens = (total: number | undefined, subtrahend: number | u
   return Math.max(0, total - subtrahend)
 }
 
+const finiteToken = (value: number | undefined) =>
+  typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0
+
+export const normalizeInputTokens = (
+  input: number | undefined,
+  read: number | undefined,
+  write: number | undefined,
+) => {
+  const inputTokens = finiteToken(input)
+  const cached = Math.min(inputTokens, finiteToken(read))
+  const written = Math.min(inputTokens - cached, finiteToken(write))
+  return {
+    inputTokens,
+    nonCachedInputTokens: inputTokens - cached - written,
+    cacheReadInputTokens: read === undefined ? undefined : cached,
+    cacheWriteInputTokens: write === undefined ? undefined : written,
+  }
+}
+
 /**
  * Sum a list of optional token counts, returning `undefined` only when
  * every value is `undefined` (so we don't fabricate a `0`). Used by

@@ -1,4 +1,4 @@
-import { ProviderHelper, CommonRequest, CommonResponse, CommonChunk } from "./provider"
+import { ProviderHelper, CommonRequest, CommonResponse, CommonChunk, normalizeInputUsage } from "./provider"
 
 type Usage = {
   prompt_tokens?: number
@@ -61,7 +61,10 @@ export const oaCompatHelper: ProviderHelper = ({ adjustCacheUsage }) => ({
   },
   extractUsage: (response: any) => response.usage,
   normalizeUsage: (usage: Usage) => {
-    let inputTokens = usage.prompt_tokens ?? 0
+    const inputTokens =
+      typeof usage.prompt_tokens === "number" && Number.isFinite(usage.prompt_tokens)
+        ? Math.max(0, usage.prompt_tokens)
+        : 0
     const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens ?? undefined
     const outputTokens = Math.max(0, (usage.completion_tokens ?? 0) - (reasoningTokens ?? 0))
     let cacheReadTokens = usage.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? undefined
@@ -74,12 +77,13 @@ export const oaCompatHelper: ProviderHelper = ({ adjustCacheUsage }) => ({
       cacheReadTokens = Math.floor(inputTokens * 0.9)
     }
 
+    const input = normalizeInputUsage(inputTokens, cacheReadTokens, cacheWriteTokens)
     return {
-      inputTokens: Math.max(0, inputTokens - (cacheReadTokens ?? 0) - (cacheWriteTokens ?? 0)),
+      inputTokens: input.inputTokens,
       outputTokens,
       reasoningTokens,
-      cacheReadTokens,
-      cacheWrite5mTokens: cacheWriteTokens,
+      cacheReadTokens: input.cacheReadTokens,
+      cacheWrite5mTokens: input.cacheWriteTokens,
       cacheWrite1hTokens: undefined,
     }
   },

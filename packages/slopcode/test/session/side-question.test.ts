@@ -27,6 +27,8 @@ import { Token } from "../../src/util/token"
 import { Auth } from "../../src/auth"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { LLMClient } from "@slopcode-ai/llm/route"
+import { Account } from "@/account/account"
+import { SafetyIdentity } from "@slopcode-ai/core/safety-identity"
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -163,6 +165,8 @@ const nativeLlm = LLM.layer.pipe(
   Layer.provide(plugin),
   Layer.provide(nativeClient),
   Layer.provide(RuntimeFlags.layer({ experimentalNativeLlm: true })),
+  Layer.provide(Account.defaultLayer),
+  Layer.provide(SafetyIdentity.defaultLayer),
 )
 const nativeSide = SessionSideQuestion.layer.pipe(
   Layer.provide(agents),

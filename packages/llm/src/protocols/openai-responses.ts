@@ -706,18 +706,17 @@ const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request:
 // non-cached breakdown.
 const mapUsage = (usage: OpenAIResponsesUsage | null | undefined) => {
   if (!usage) return undefined
-  const cached = usage.input_tokens_details?.cached_tokens
-  const written = usage.input_tokens_details?.cache_write_tokens
+  const input = ProviderShared.normalizeInputTokens(
+    usage.input_tokens,
+    usage.input_tokens_details?.cached_tokens,
+    usage.input_tokens_details?.cache_write_tokens,
+  )
   const reasoning = usage.output_tokens_details?.reasoning_tokens
-  const nonCached = ProviderShared.subtractTokens(ProviderShared.subtractTokens(usage.input_tokens, cached), written)
   return new Usage({
-    inputTokens: usage.input_tokens,
+    ...input,
     outputTokens: usage.output_tokens,
-    nonCachedInputTokens: nonCached,
-    cacheReadInputTokens: cached,
-    cacheWriteInputTokens: written,
     reasoningTokens: reasoning,
-    totalTokens: ProviderShared.totalTokens(usage.input_tokens, usage.output_tokens, usage.total_tokens),
+    totalTokens: ProviderShared.totalTokens(input.inputTokens, usage.output_tokens, usage.total_tokens),
     providerMetadata: { openai: usage },
   })
 }

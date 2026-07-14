@@ -78,6 +78,30 @@ describe("provider usage extraction", () => {
     ).toMatchObject({ inputTokens: 3, cacheReadTokens: 3, cacheWrite5mTokens: 4 })
   })
 
+  test("clamps malformed OpenAI usage before billing", () => {
+    expect(
+      providers.openai.normalizeUsage({
+        input_tokens: 10,
+        output_tokens: 2,
+        input_tokens_details: { cached_tokens: 12, cache_write_tokens: 9 },
+      }),
+    ).toMatchObject({ inputTokens: 0, cacheReadTokens: 10, cacheWrite5mTokens: 0 })
+    expect(
+      providers.openai.normalizeUsage({
+        input_tokens: Number.NaN,
+        output_tokens: 2,
+        input_tokens_details: { cached_tokens: -4, cache_write_tokens: Number.POSITIVE_INFINITY },
+      }),
+    ).toMatchObject({ inputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0 })
+    expect(
+      providers["oa-compat"].normalizeUsage({
+        prompt_tokens: -10,
+        completion_tokens: 2,
+        prompt_tokens_details: { cached_tokens: 5, cache_write_tokens: 8 },
+      }),
+    ).toMatchObject({ inputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0 })
+  })
+
   test("overwrites authenticated managed identity and omits anonymous hostile identity", async () => {
     const hostile = { model: "gpt-5.6", safety_identifier: "raw-user", user: "raw-client" }
     const authenticated = await sanitizeSafety(hostile, "wrk_private", "test-secret")

@@ -384,18 +384,17 @@ const mapFinishReason = (reason: string | null | undefined): FinishReason => {
 // satisfied on both sides.
 const mapUsage = (usage: OpenAIChatEvent["usage"]): Usage | undefined => {
   if (!usage) return undefined
-  const cached = usage.prompt_tokens_details?.cached_tokens
-  const written = usage.prompt_tokens_details?.cache_write_tokens
+  const input = ProviderShared.normalizeInputTokens(
+    usage.prompt_tokens,
+    usage.prompt_tokens_details?.cached_tokens,
+    usage.prompt_tokens_details?.cache_write_tokens,
+  )
   const reasoning = usage.completion_tokens_details?.reasoning_tokens
-  const nonCached = ProviderShared.subtractTokens(ProviderShared.subtractTokens(usage.prompt_tokens, cached), written)
   return new Usage({
-    inputTokens: usage.prompt_tokens,
+    ...input,
     outputTokens: usage.completion_tokens,
-    nonCachedInputTokens: nonCached,
-    cacheReadInputTokens: cached,
-    cacheWriteInputTokens: written,
     reasoningTokens: reasoning,
-    totalTokens: ProviderShared.totalTokens(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens),
+    totalTokens: ProviderShared.totalTokens(input.inputTokens, usage.completion_tokens, usage.total_tokens),
     providerMetadata: { openai: usage },
   })
 }

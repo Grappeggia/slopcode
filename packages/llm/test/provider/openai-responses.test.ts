@@ -1450,6 +1450,34 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("clamps malformed Responses cache usage into one input partition", () =>
+    Effect.gen(function* () {
+      const body = sseEvents({
+        type: "response.completed",
+        response: {
+          usage: {
+            input_tokens: 10,
+            output_tokens: 1,
+            input_tokens_details: { cached_tokens: 12, cache_write_tokens: 9 },
+          },
+        },
+      })
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+      expect(response.usage).toMatchObject({
+        inputTokens: 10,
+        nonCachedInputTokens: 0,
+        cacheReadInputTokens: 10,
+        cacheWriteInputTokens: 0,
+      })
+      expect(ProviderShared.normalizeInputTokens(-4, Number.NaN, Number.POSITIVE_INFINITY)).toEqual({
+        inputTokens: 0,
+        nonCachedInputTokens: 0,
+        cacheReadInputTokens: 0,
+        cacheWriteInputTokens: 0,
+      })
+    }),
+  )
+
   it.effect("parses reasoning summary stream fixtures", () =>
     Effect.gen(function* () {
       const body = sseEvents(

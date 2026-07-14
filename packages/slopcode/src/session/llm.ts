@@ -34,6 +34,42 @@ import { LLMRequestPrep } from "./llm/request"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
+const GPT5_6 = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+
+const eligibleRoute = (model: Provider.Model, auth?: Auth.Info) => {
+  const managed = model.providerID === "slopcode" || model.providerID === "slopcode-go"
+  return (
+    GPT5_6.has(model.api.id.toLowerCase()) &&
+    model.api.npm === "@ai-sdk/openai" &&
+    (managed || (model.providerID === "openai" && auth?.type !== "oauth"))
+  )
+}
+
+export function sanitizeOptions(input: {
+  model: Provider.Model
+  auth?: Auth.Info
+  options: Record<string, any>
+  safetyIdentifier?: string
+  cacheHint: boolean
+}) {
+  const eligible = eligibleRoute(input.model, input.auth)
+  const options = Object.fromEntries(
+    Object.entries(input.options).filter(([key]) => key !== "safetyIdentifier" && key !== "promptCacheOptions"),
+  )
+  const cache = input.options.promptCacheOptions
+  if (
+    eligible &&
+    input.cacheHint &&
+    cache &&
+    typeof cache === "object" &&
+    cache.mode === "explicit" &&
+    cache.ttl === "30m"
+  )
+    options.promptCacheOptions = { mode: "explicit", ttl: "30m" }
+  if (eligible && input.safetyIdentifier) options.safetyIdentifier = input.safetyIdentifier
+  return options
+}
+
 export type StreamInput = {
   user: SessionV1.User
   sessionID: string
@@ -92,6 +128,8 @@ const live: Layer.Layer<
   | EventV2Bridge.Service
   | LLMClientService
   | RuntimeFlags.Service
+  | Account.Service
+  | SafetyIdentity.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -103,6 +141,8 @@ const live: Layer.Layer<
     const events = yield* EventV2Bridge.Service
     const llmClient = yield* LLMClient.Service
     const flags = yield* RuntimeFlags.Service
+    const account = yield* Account.Service
+    const safety = yield* SafetyIdentity.Service
 
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
       yield* Effect.logInfo("stream", {
@@ -145,25 +185,31 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
-      const managed = input.model.providerID === "slopcode" || input.model.providerID === "slopcode-go"
-      const eligible =
-        ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].includes(input.model.api.id.toLowerCase()) &&
-        input.model.api.npm === "@ai-sdk/openai" &&
-        (managed || (input.model.providerID === "openai" && info?.type !== "oauth"))
-      const account = eligible ? Option.getOrUndefined(yield* Effect.serviceOption(Account.Service)) : undefined
-      const safety = eligible ? Option.getOrUndefined(yield* Effect.serviceOption(SafetyIdentity.Service)) : undefined
-      const active = account
+      const eligible = eligibleRoute(input.model, info)
+      const active = eligible
         ? Option.getOrUndefined(yield* account.active().pipe(Effect.catch(() => Effect.succeed(Option.none()))))
         : undefined
-      const options = eligible && safety
-        ? {
-            ...prepared.params.options,
-            safetyIdentifier: safety.identifier({
+      const hint = prepared.messages.some(
+        (message) =>
+          Array.isArray(message.content) &&
+          message.content.some((part) => {
+            if (!part || typeof part !== "object" || !("cache" in part)) return false
+            const cache = part.cache
+            return !!cache && typeof cache === "object" && "ttlSeconds" in cache && cache.ttlSeconds === 1800
+          }),
+      )
+      const options = sanitizeOptions({
+        model: input.model,
+        auth: info,
+        options: prepared.params.options,
+        cacheHint: hint,
+        safetyIdentifier: eligible
+          ? safety.identifier({
               account: active?.id,
               openai: info?.type === "oauth" ? info.accountId : undefined,
-            }),
-          }
-        : prepared.params.options
+            })
+          : undefined,
+      })
       if (input.runtime === "side") {
         const hard =
           input.model.limit.context === 0
@@ -479,6 +525,7 @@ export const node = LayerNode.make(layer, [
   EventV2Bridge.node,
   llmClient,
   RuntimeFlags.node,
+  Account.node,
   SafetyIdentity.node,
 ])
 
