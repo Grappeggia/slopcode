@@ -31,6 +31,7 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import * as OpenAICache from "@/provider/openai-cache"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -56,16 +57,7 @@ export function sanitizeOptions(input: {
   const options = Object.fromEntries(
     Object.entries(input.options).filter(([key]) => key !== "safetyIdentifier" && key !== "promptCacheOptions"),
   )
-  const cache = input.options.promptCacheOptions
-  if (
-    eligible &&
-    input.cacheHint &&
-    cache &&
-    typeof cache === "object" &&
-    cache.mode === "explicit" &&
-    cache.ttl === "30m"
-  )
-    options.promptCacheOptions = { mode: "explicit", ttl: "30m" }
+  if (eligible && input.cacheHint) options.promptCacheOptions = { mode: "explicit", ttl: "30m" }
   if (eligible && input.safetyIdentifier) options.safetyIdentifier = input.safetyIdentifier
   return options
 }
@@ -189,15 +181,8 @@ const live: Layer.Layer<
       const active = eligible
         ? Option.getOrUndefined(yield* account.active().pipe(Effect.catch(() => Effect.succeed(Option.none()))))
         : undefined
-      const hint = prepared.messages.some(
-        (message) =>
-          Array.isArray(message.content) &&
-          message.content.some((part) => {
-            if (!part || typeof part !== "object" || !("cache" in part)) return false
-            const cache = part.cache
-            return !!cache && typeof cache === "object" && "ttlSeconds" in cache && cache.ttlSeconds === 1800
-          }),
-      )
+      const hints = OpenAICache.hints(prepared.messages)
+      const hint = hints.length > 0
       const options = sanitizeOptions({
         model: input.model,
         auth: info,
@@ -210,6 +195,9 @@ const live: Layer.Layer<
             })
           : undefined,
       })
+      const headers = Object.fromEntries(
+        Object.entries(prepared.headers).filter(([key]) => key.toLowerCase() !== OpenAICache.HEADER),
+      )
       if (input.runtime === "side") {
         const hard =
           input.model.limit.context === 0
@@ -350,7 +338,7 @@ const live: Layer.Layer<
           topK: prepared.params.topK,
           maxOutputTokens: prepared.params.maxOutputTokens,
           providerOptions: options,
-          headers: prepared.headers,
+          headers,
           abort: input.abort,
         })
         if (native.type === "supported") {
@@ -432,7 +420,7 @@ const live: Layer.Layer<
           toolChoice: input.toolChoice,
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
-          headers: prepared.headers,
+          headers: hint && eligible ? { ...headers, [OpenAICache.HEADER]: JSON.stringify(hints) } : headers,
           maxRetries: input.retries ?? 0,
           messages: prepared.messages,
           model: wrapLanguageModel({

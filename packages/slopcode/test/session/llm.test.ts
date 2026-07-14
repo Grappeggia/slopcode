@@ -250,7 +250,11 @@ describe("session.llm provider option safety", () => {
         options: { ...options, promptCacheOptions: { mode: "explicit", ttl: "1h" } },
         cacheHint: true,
       }),
-    ).toEqual({ reasoningEffort: "high", safetyIdentifier: "sc_safe" })
+    ).toEqual({
+      reasoningEffort: "high",
+      safetyIdentifier: "sc_safe",
+      promptCacheOptions: { mode: "explicit", ttl: "30m" },
+    })
   })
 })
 
@@ -1347,6 +1351,97 @@ describe("session.llm.stream", () => {
           expect(JSON.stringify(capture.body)).not.toContain("prompt_cache_breakpoint")
         })
         expect(captures[1].body.service_tier).toBe("priority")
+      }),
+    { config: () => openAI56Config(`${state.server!.url.origin}/v1`) },
+  )
+
+  it.instance(
+    "maps session 30m hints to explicit cache fields on the default Responses wire",
+    () =>
+      Effect.gen(function* () {
+        const cases = [
+          { name: "hint-only", hint: true, option: false, cached: true },
+          { name: "option-only", hint: false, option: true, cached: false },
+          { name: "option-and-hint", hint: true, option: true, cached: true },
+        ]
+        const captures = yield* Effect.forEach(cases, (item, index) =>
+          Effect.gen(function* () {
+            const request = waitRequest(
+              "/responses",
+              createEventResponse(
+                [
+                  {
+                    type: "response.created",
+                    response: {
+                      id: `resp-cache-${index}`,
+                      created_at: Math.floor(Date.now() / 1000),
+                      model: "gpt-5.6",
+                      service_tier: null,
+                    },
+                  },
+                  {
+                    type: "response.completed",
+                    response: {
+                      incomplete_details: null,
+                      usage: { input_tokens: 1, output_tokens: 0 },
+                      service_tier: null,
+                    },
+                  },
+                ],
+                true,
+              ),
+            )
+            const model = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6"))
+            const sessionID = SessionID.make(`session-cache-${index}`)
+            const agent = {
+              name: "test",
+              mode: "primary",
+              options: item.option ? { promptCacheOptions: { mode: "explicit", ttl: "30m" } } : {},
+              permission: [{ permission: "*", pattern: "*", action: "allow" }],
+            } satisfies Agent.Info
+            yield* drain({
+              user: {
+                id: MessageID.make(`msg-cache-${index}`),
+                sessionID,
+                role: "user",
+                time: { created: Date.now() },
+                agent: agent.name,
+                model: { providerID: ProviderV2.ID.openai, modelID: model.id },
+              } satisfies SessionV1.User,
+              sessionID,
+              model,
+              agent,
+              system: [],
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: item.name,
+                      ...(item.hint ? { cache: { type: "ephemeral", ttlSeconds: 1800 } } : {}),
+                    },
+                    {
+                      type: "text",
+                      text: `${item.name}-second`,
+                      ...(item.hint ? { cache: { type: "ephemeral", ttlSeconds: 1800 } } : {}),
+                    },
+                  ],
+                } as ModelMessage,
+              ],
+              tools: {},
+            })
+            return { item, capture: yield* Effect.promise(() => request) }
+          }),
+        )
+
+        captures.forEach(({ item, capture }) => {
+          expect(capture.body.prompt_cache_options).toEqual(
+            item.cached ? { mode: "explicit", ttl: "30m" } : undefined,
+          )
+          expect(JSON.stringify(capture.body).match(/prompt_cache_breakpoint/g)?.length ?? 0).toBe(item.cached ? 2 : 0)
+          expect(capture.headers.get("x-slopcode-openai-cache-breakpoints")).toBeNull()
+        })
       }),
     { config: () => openAI56Config(`${state.server!.url.origin}/v1`) },
   )

@@ -2080,6 +2080,32 @@ describe("util.token.estimate", () => {
 })
 
 describe("SessionNs.getUsage", () => {
+  test("bounds malformed inclusive AI SDK cache usage before costing", () => {
+    const model = createModel({
+      context: 100_000,
+      output: 32_000,
+      cost: { input: 1, output: 1, cache: { read: 1, write: 1 } },
+    })
+    const oversized = SessionNs.getUsage({
+      model,
+      usage: usage({ inputTokens: 10, outputTokens: 0, cacheReadInputTokens: 12, cacheWriteInputTokens: 9 }),
+    })
+    expect(oversized.tokens).toMatchObject({ input: 0, cache: { read: 10, write: 0 } })
+    expect(oversized.cost).toBeGreaterThanOrEqual(0)
+
+    const malformed = SessionNs.getUsage({
+      model,
+      usage: usage({
+        inputTokens: Number.NaN,
+        outputTokens: 0,
+        cacheReadInputTokens: -4,
+        cacheWriteInputTokens: Number.POSITIVE_INFINITY,
+      }),
+    })
+    expect(malformed.tokens).toMatchObject({ input: 0, cache: { read: 0, write: 0 } })
+    expect(malformed.cost).toBe(0)
+  })
+
   test("normalizes standard usage to token format", () => {
     const model = createModel({ context: 100_000, output: 32_000 })
     const result = SessionNs.getUsage({

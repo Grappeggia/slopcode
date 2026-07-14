@@ -126,6 +126,7 @@ const openAIResponses = {
 const prepareNativeRequest = (input: NativeRequestInput) => LLMClient.prepare(LLMNative.request(input))
 
 const expectOpenAIResponsesRequest = (input: {
+  readonly model?: Provider.Model
   readonly history: NativeRequestInput["messages"]
   readonly providerOptions?: NativeRequestInput["providerOptions"]
   readonly maxOutputTokens?: NativeRequestInput["maxOutputTokens"]
@@ -135,7 +136,7 @@ const expectOpenAIResponsesRequest = (input: {
   Effect.gen(function* () {
     expect(
       yield* prepareNativeRequest({
-        model: baseModel,
+        model: input.model ?? baseModel,
         apiKey: "test-openai-key",
         messages: input.history,
         providerOptions: input.providerOptions,
@@ -517,6 +518,57 @@ describe("session.llm-native.request", () => {
       const failure = yield* Effect.flip(wrapped.explode.execute({}, { id: "call-1", name: "explode" }))
       expect(failure).toBeInstanceOf(ToolFailure)
       expect(failure.message).toBe("boom")
+    }),
+  )
+
+  it.effect("enforces hint-only explicit caching on native Responses", () =>
+    Effect.gen(function* () {
+      const model = {
+        ...baseModel,
+        id: ModelV2.ID.make("gpt-5.6"),
+        api: { ...baseModel.api, id: "gpt-5.6" },
+      }
+      const cases = [
+        { hint: true, option: false, cached: true },
+        { hint: false, option: true, cached: false },
+        { hint: true, option: true, cached: true },
+      ]
+      yield* Effect.forEach(cases, (item) =>
+        Effect.gen(function* () {
+          const prepared = yield* prepareNativeRequest({
+            model,
+            apiKey: "test-openai-key",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: "stable context",
+                    ...(item.hint ? { cache: { type: "ephemeral", ttlSeconds: 1800 } } : {}),
+                  },
+                  {
+                    type: "text",
+                    text: "more stable context",
+                    ...(item.hint ? { cache: { type: "ephemeral", ttlSeconds: 1800 } } : {}),
+                  },
+                ],
+              } as unknown as ModelMessage,
+            ],
+            providerOptions: {
+              openai: {
+                safetyIdentifier: "sc_safe",
+                ...(item.option ? { promptCacheOptions: { mode: "explicit", ttl: "30m" } } : {}),
+              },
+            },
+          })
+          const body = prepared.body as Record<string, unknown>
+          expect(body.prompt_cache_options).toEqual(
+            item.cached ? { mode: "explicit", ttl: "30m" } : undefined,
+          )
+          expect(JSON.stringify(body).match(/prompt_cache_breakpoint/g)?.length ?? 0).toBe(item.cached ? 2 : 0)
+        }),
+      )
     }),
   )
 

@@ -1,5 +1,5 @@
 import type { JsonSchema, LLMRequest, ProviderMetadata } from "@slopcode-ai/llm"
-import { LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@slopcode-ai/llm"
+import { CacheHint, LLM, Message, SystemPart, ToolCallPart, ToolDefinition, ToolResultPart } from "@slopcode-ai/llm"
 import {
   AmazonBedrock,
   Anthropic,
@@ -47,9 +47,17 @@ const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
 const partProviderMetadata = (part: Record<string, unknown>) =>
   providerMetadata(part.providerMetadata) ?? providerMetadata(part.providerOptions)
 
+const cacheHint = (value: unknown) => {
+  if (!isRecord(value) || value.type !== "ephemeral") return undefined
+  if (value.ttlSeconds !== undefined && (typeof value.ttlSeconds !== "number" || !Number.isFinite(value.ttlSeconds)))
+    return undefined
+  return new CacheHint({ type: "ephemeral", ttlSeconds: value.ttlSeconds })
+}
+
 const textPart = (part: Record<string, unknown>) => ({
   type: "text" as const,
   text: typeof part.text === "string" ? part.text : "",
+  cache: cacheHint(part.cache),
   providerMetadata: partProviderMetadata(part),
 })
 
@@ -103,7 +111,16 @@ const content = (value: ModelMessage["content"]) =>
   typeof value === "string" ? [{ type: "text" as const, text: value }] : value.map(contentPart)
 
 const messages = (input: readonly ModelMessage[]) => {
-  const system = input.flatMap((message) => (message.role === "system" ? [SystemPart.make(message.content)] : []))
+  const system = input.flatMap((message) => {
+    if (message.role !== "system") return []
+    const value: unknown = message.content
+    if (typeof value === "string") return [SystemPart.make(value)]
+    if (!Array.isArray(value)) return []
+    return value.flatMap((part: unknown) => {
+      if (!isRecord(part) || part.type !== "text") return []
+      return [{ type: "text" as const, text: typeof part.text === "string" ? part.text : "", cache: cacheHint(part.cache) }]
+    })
+  })
   const messages = input.flatMap((message) => {
     if (message.role === "system") return []
     return [
