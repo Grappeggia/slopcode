@@ -49,3 +49,21 @@ None. No persistence columns, migrations, or stored metadata schemas were added 
 ## Concerns
 
 None known. The 30 skipped LLM tests are existing live/recording-gated cases; the replayed recording suite passed.
+
+## Review Follow-Up
+
+Resolved all Task 2 parser review findings:
+
+- Added one sequential interruption path that closes every active reasoning block, clears active reasoning state, records all interrupted item IDs as cutoffs, and returns the generated lifecycle events.
+- Applied that path when a different reasoning item starts and when any non-reasoning output item starts. Consecutive reasoning items now produce balanced `reasoning-start`/`reasoning-end` pairs at replacement time.
+- Prevented old item IDs from reopening after replacement, including duplicate `output_item.added`, late summary completion, and stale `output_item.done` events.
+- Removed the non-reasoning interruption event-array shadowing path. Generated reasoning-end events are returned before message or tool output begins.
+- Limited include deduplication to `store: false`. For `store: true`, supported include arrays preserve caller order and duplicate entries exactly.
+
+Review regression coverage includes consecutive reasoning items, old-ID duplicate events after replacement, balanced non-reasoning interruption ordering, and duplicate `store: true` includes.
+
+Review verification:
+
+- `packages/llm`: full suite, 317 passed and 30 recording-gated tests skipped; typecheck passed.
+- `packages/slopcode`: focused native session and provider transform suites, 287 passed; typecheck passed.
+- `git diff --check` passed.

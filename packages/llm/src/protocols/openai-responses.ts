@@ -548,9 +548,8 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   const summary = OpenAIOptions.reasoningSummary(request)
   const context = lite ? ("all_turns" as const) : OpenAIOptions.reasoningContext(request)
   const requested = OpenAIOptions.include(request) ?? []
-  const include = [
-    ...new Set(store === false ? [...requested, "reasoning.encrypted_content" as const] : requested),
-  ]
+  const include =
+    store === false ? [...new Set([...requested, "reasoning.encrypted_content" as const])] : requested
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
@@ -809,6 +808,28 @@ const onReasoningDone = (state: ParserState, event: OpenAIResponsesEvent): StepR
 const reasoningMetadata = (item: OpenAIResponsesStreamItem & { id: string }) =>
   openaiMetadata({ itemId: item.id, reasoningEncryptedContent: item.encrypted_content ?? null })
 
+const interruptReasoning = (state: ParserState): StepResult => {
+  if (!state.sequentialCutoff || Object.keys(state.reasoningItems).length === 0) return [state, NO_EVENTS]
+  const events: LLMEvent[] = []
+  const lifecycle = Object.entries(state.reasoningItems).reduce(
+    (current, entry) =>
+      Object.keys(entry[1].summaryParts).reduce(
+        (inner, index) => Lifecycle.reasoningEnd(inner, events, `${entry[0]}:${index}`),
+        current,
+      ),
+    state.lifecycle,
+  )
+  return [
+    {
+      ...state,
+      lifecycle,
+      reasoningItems: {},
+      reasoningCutoffs: new Set([...state.reasoningCutoffs, ...Object.keys(state.reasoningItems)]),
+    },
+    events,
+  ]
+}
+
 // OpenAI Responses streams reasoning items in a stable order:
 //   `output_item.added` (reasoning) →
 //     `reasoning_summary_part.added` (index=0) →
@@ -826,14 +847,15 @@ const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): Ste
   if (item && isReasoningItem(item)) {
     if (state.sequentialCutoff) {
       if (state.reasoningCutoffs.has(item.id) || state.reasoningItems[item.id]) return [state, NO_EVENTS]
+      const [interrupted, events] = interruptReasoning(state)
       return [
         {
-          ...state,
+          ...interrupted,
           reasoningItems: {
             [item.id]: { encryptedContent: item.encrypted_content, summaryParts: {} },
           },
         },
-        NO_EVENTS,
+        events,
       ]
     }
     const events: LLMEvent[] = []
@@ -849,34 +871,26 @@ const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): Ste
       events,
     ]
   }
-  if (state.sequentialCutoff && Object.keys(state.reasoningItems).length > 0) {
-    const events: LLMEvent[] = []
-    const lifecycle = Object.entries(state.reasoningItems).reduce(
-      (current, entry) =>
-        Object.keys(entry[1].summaryParts).reduce(
-          (inner, index) => Lifecycle.reasoningEnd(inner, events, `${entry[0]}:${index}`),
-          current,
-        ),
-      state.lifecycle,
-    )
-    state = {
-      ...state,
-      lifecycle,
-      reasoningItems: {},
-      reasoningCutoffs: new Set([...state.reasoningCutoffs, ...Object.keys(state.reasoningItems)]),
-    }
-  }
-  if ((item?.type !== "function_call" && item?.type !== "custom_tool_call") || !item.id) return [state, NO_EVENTS]
+  const [interrupted, interruptionEvents] = interruptReasoning(state)
+  if ((item?.type !== "function_call" && item?.type !== "custom_tool_call") || !item.id)
+    return [interrupted, interruptionEvents]
   const providerMetadata = openaiMetadata({ itemId: item.id })
   const toolType = item.type === "custom_tool_call" ? ("custom" as const) : undefined
-  const events: LLMEvent[] = []
-  const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
+  const events: LLMEvent[] = [...interruptionEvents]
+  const lifecycle = Lifecycle.stepStart(interrupted.lifecycle, events)
+  events.push(
+    LLMEvent.toolInputStart({
+      id: item.call_id ?? item.id,
+      name: item.name ?? "",
+      toolType,
+      providerMetadata,
+    }),
+  )
   return [
     {
-      ...state,
+      ...interrupted,
       lifecycle,
-      hasFunctionCall: state.hasFunctionCall,
-      tools: ToolStream.start(state.tools, item.id, {
+      tools: ToolStream.start(interrupted.tools, item.id, {
         id: item.call_id ?? item.id,
         name: item.name ?? "",
         input: item.type === "custom_tool_call" ? (item.input ?? "") : (item.arguments ?? ""),
@@ -884,15 +898,7 @@ const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): Ste
         providerMetadata,
       }),
     },
-    [
-      ...events,
-      LLMEvent.toolInputStart({
-        id: item.call_id ?? item.id,
-        name: item.name ?? "",
-        toolType,
-        providerMetadata,
-      }),
-    ],
+    events,
   ]
 }
 

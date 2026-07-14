@@ -1260,6 +1260,21 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("preserves stored include order and duplicates exactly", () =>
+    Effect.gen(function* () {
+      const include = [
+        "web_search_call.results",
+        "reasoning.encrypted_content",
+        "web_search_call.results",
+      ] as const
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: true, include } } }),
+      )
+
+      expect(prepared.body.include).toEqual(include)
+    }),
+  )
+
   it.effect("emits sequential cutoff only on capable Codex routes", () =>
     Effect.gen(function* () {
       const options = { openai: { reasoningSummaryDelivery: "sequential_cutoff" as const } }
@@ -1466,6 +1481,143 @@ describe("OpenAI Responses route", () => {
       expect(response.events.filter(LLMEvent.is.reasoningEnd).at(-1)).toMatchObject({
         providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
       })
+    }),
+  )
+
+  it.effect("closes consecutive sequential reasoning items at replacement", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.request({
+          model: codexModel,
+          prompt: "think",
+          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_first" } },
+              {
+                type: "response.reasoning_summary_text.done",
+                item_id: "rs_first",
+                summary_index: 0,
+                text: "First",
+              },
+              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_second" } },
+              {
+                type: "response.reasoning_summary_text.done",
+                item_id: "rs_second",
+                summary_index: 0,
+                text: "Second",
+              },
+              {
+                type: "response.output_item.done",
+                item: { type: "reasoning", id: "rs_second", encrypted_content: "encrypted-second" },
+              },
+              { type: "response.completed", response: {} },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.reasoning).toBe("FirstSecond")
+      expect(response.events.filter((event) => event.type.startsWith("reasoning-"))).toMatchObject([
+        { type: "reasoning-start", id: "rs_first:0" },
+        { type: "reasoning-delta", id: "rs_first:0", text: "First" },
+        { type: "reasoning-end", id: "rs_first:0" },
+        { type: "reasoning-start", id: "rs_second:0" },
+        { type: "reasoning-delta", id: "rs_second:0", text: "Second" },
+        { type: "reasoning-end", id: "rs_second:0" },
+      ])
+    }),
+  )
+
+  it.effect("does not reopen an old reasoning id after replacement", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.request({
+          model: codexModel,
+          prompt: "think",
+          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_old" } },
+              {
+                type: "response.reasoning_summary_text.done",
+                item_id: "rs_old",
+                summary_index: 0,
+                text: "Old",
+              },
+              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_new" } },
+              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_old" } },
+              {
+                type: "response.reasoning_summary_text.done",
+                item_id: "rs_old",
+                summary_index: 1,
+                text: "Stale",
+              },
+              {
+                type: "response.reasoning_summary_text.done",
+                item_id: "rs_new",
+                summary_index: 0,
+                text: "New",
+              },
+              {
+                type: "response.output_item.done",
+                item: { type: "reasoning", id: "rs_new", encrypted_content: "encrypted-new" },
+              },
+              { type: "response.completed", response: {} },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.reasoning).toBe("OldNew")
+      expect(response.events.filter(LLMEvent.is.reasoningStart)).toHaveLength(2)
+      expect(response.events.filter(LLMEvent.is.reasoningEnd)).toHaveLength(2)
+    }),
+  )
+
+  it.effect("returns balanced reasoning lifecycle events on non-reasoning interruption", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.request({
+          model: codexModel,
+          prompt: "think",
+          providerOptions: { openai: { reasoningSummaryDelivery: "sequential_cutoff" } },
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_item.added", item: { type: "reasoning", id: "rs_interrupted" } },
+              {
+                type: "response.reasoning_summary_text.done",
+                item_id: "rs_interrupted",
+                summary_index: 0,
+                text: "Retained",
+              },
+              { type: "response.output_item.added", item: { type: "message", id: "msg_1" } },
+              { type: "response.output_text.delta", item_id: "msg_1", delta: "Visible" },
+              { type: "response.completed", response: {} },
+            ),
+          ),
+        ),
+      )
+
+      const start = response.events.findIndex(LLMEvent.is.reasoningStart)
+      const end = response.events.findIndex(LLMEvent.is.reasoningEnd)
+      const text = response.events.findIndex(LLMEvent.is.textStart)
+      expect(response.reasoning).toBe("Retained")
+      expect(response.text).toBe("Visible")
+      expect(start).toBeGreaterThanOrEqual(0)
+      expect(end).toBeGreaterThan(start)
+      expect(text).toBeGreaterThan(end)
+      expect(response.events.filter(LLMEvent.is.reasoningStart)).toHaveLength(1)
+      expect(response.events.filter(LLMEvent.is.reasoningEnd)).toHaveLength(1)
     }),
   )
 
