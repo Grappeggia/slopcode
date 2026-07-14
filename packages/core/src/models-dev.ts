@@ -224,6 +224,10 @@ export const layer = Layer.effect(
           },
         }
       }
+      for (const id of ["slopcode", "slopcode-go"]) {
+        if (!result[id] || !fallback[id]?.api) continue
+        result[id] = { ...result[id], api: fallback[id].api }
+      }
       return result
     }
 

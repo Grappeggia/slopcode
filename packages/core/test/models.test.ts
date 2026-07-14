@@ -68,6 +68,25 @@ const fixture2: Record<string, ModelsDev.Provider> = {
   },
 }
 
+const managed = (domain = "slopcode.ai"): Record<string, ModelsDev.Provider> => ({
+  slopcode: {
+    id: "slopcode",
+    name: "SlopCode Zen",
+    env: ["SLOPCODE_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    api: `https://${domain}/zen/v1`,
+    models: {},
+  },
+  "slopcode-go": {
+    id: "slopcode-go",
+    name: "SlopCode Go",
+    env: ["SLOPCODE_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    api: `https://${domain}/zen/go/v1`,
+    models: {},
+  },
+})
+
 interface MockState {
   body: string
   status: number
@@ -211,6 +230,47 @@ describe("ModelsDev Service", () => {
       expect(result.openai?.models["gpt-5.5"]).toBeDefined()
       expect(result.openai?.models["gpt-5.6"]).toBeDefined()
       expect((yield* Ref.get(state)).calls).toEqual([])
+    }),
+  )
+
+  it.live("uses canonical request endpoints for stale cached managed records", () =>
+    Effect.gen(function* () {
+      yield* writeCache(managed(), Date.now() - 10 * 60 * 1000)
+      const state = yield* Ref.make(initialState)
+      const result = yield* provided(
+        state,
+        ModelsDev.Service.use((service) => service.get()),
+      )
+
+      expect(result.slopcode?.api).toBe("https://slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.api).toBe("https://slopcode.dev/zen/go/v1")
+      expect(`${result.slopcode?.api}/responses`).toBe("https://slopcode.dev/zen/v1/responses")
+      expect(`${result["slopcode-go"]?.api}/responses`).toBe("https://slopcode.dev/zen/go/v1/responses")
+      expect((yield* Ref.get(state)).calls).toEqual([])
+    }),
+  )
+
+  it.live("uses canonical request endpoints for fetched managed records", () =>
+    Effect.gen(function* () {
+      yield* writeCacheText("{")
+      const state = yield* Ref.make({ ...initialState, body: JSON.stringify(managed()) })
+      const result = yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          Flag.SLOPCODE_DISABLE_MODELS_FETCH = false
+        }),
+        () =>
+          provided(
+            state,
+            ModelsDev.Service.use((service) => service.get()),
+          ),
+        () => Effect.sync(() => (Flag.SLOPCODE_DISABLE_MODELS_FETCH = true)),
+      )
+
+      expect(result.slopcode?.api).toBe("https://slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.api).toBe("https://slopcode.dev/zen/go/v1")
+      expect(`${result.slopcode?.api}/responses`).toBe("https://slopcode.dev/zen/v1/responses")
+      expect(`${result["slopcode-go"]?.api}/responses`).toBe("https://slopcode.dev/zen/go/v1/responses")
+      expect((yield* Ref.get(state)).calls).toHaveLength(1)
     }),
   )
 
