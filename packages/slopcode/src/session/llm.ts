@@ -31,7 +31,6 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
-import * as OpenAICache from "@/provider/openai-cache"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -45,6 +44,26 @@ const eligibleRoute = (model: Provider.Model, auth?: Auth.Info) => {
     (managed || (model.providerID === "openai" && auth?.type !== "oauth"))
   )
 }
+
+const cacheHint = (messages: readonly ModelMessage[]) =>
+  messages.some(
+    (message) =>
+      (message.role === "system" || message.role === "user") &&
+      Array.isArray(message.content) &&
+      message.content.some(
+        (part) =>
+          !!part &&
+          typeof part === "object" &&
+          part.type === "text" &&
+          "cache" in part &&
+          !!part.cache &&
+          typeof part.cache === "object" &&
+          "type" in part.cache &&
+          part.cache.type === "ephemeral" &&
+          "ttlSeconds" in part.cache &&
+          part.cache.ttlSeconds === 1800,
+      ),
+  )
 
 export function sanitizeOptions(input: {
   model: Provider.Model
@@ -181,8 +200,7 @@ const live: Layer.Layer<
       const active = eligible
         ? Option.getOrUndefined(yield* account.active().pipe(Effect.catch(() => Effect.succeed(Option.none()))))
         : undefined
-      const hints = OpenAICache.hints(prepared.messages)
-      const hint = hints.length > 0
+      const hint = cacheHint(prepared.messages)
       const options = sanitizeOptions({
         model: input.model,
         auth: info,
@@ -196,7 +214,9 @@ const live: Layer.Layer<
           : undefined,
       })
       const headers = Object.fromEntries(
-        Object.entries(prepared.headers).filter(([key]) => key.toLowerCase() !== OpenAICache.HEADER),
+        Object.entries(prepared.headers).filter(
+          ([key]) => key.toLowerCase() !== "x-slopcode-openai-cache-breakpoints",
+        ),
       )
       if (input.runtime === "side") {
         const hard =
@@ -322,9 +342,10 @@ const live: Layer.Layer<
           })
         : undefined
 
-      // Runtime seam: native is an opt-in adapter over @slopcode-ai/llm. It
-      // either returns a ready LLMEvent stream or a concrete fallback reason.
-      if (flags.experimentalNativeLlm) {
+      // Explicit caching requires native lowering so CacheHint placement reaches
+      // the exact Responses content part without AI SDK prompt conversion.
+      const explicitCache = eligible && hint
+      if (flags.experimentalNativeLlm || explicitCache) {
         const native = LLMNativeRuntime.stream({
           model: input.model,
           provider: item,
@@ -352,6 +373,10 @@ const live: Layer.Layer<
             stream: native.stream,
           }
         }
+        if (explicitCache)
+          return yield* Effect.fail(
+            new Error(`Explicit GPT-5.6 caching requires native OpenAI Responses: ${native.reason}`),
+          )
         yield* Effect.logInfo("llm runtime selected", {
           "llm.runtime": "ai-sdk",
           "llm.provider": input.model.providerID,
@@ -420,7 +445,7 @@ const live: Layer.Layer<
           toolChoice: input.toolChoice,
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
-          headers: hint && eligible ? { ...headers, [OpenAICache.HEADER]: JSON.stringify(hints) } : headers,
+          headers,
           maxRetries: input.retries ?? 0,
           messages: prepared.messages,
           model: wrapLanguageModel({

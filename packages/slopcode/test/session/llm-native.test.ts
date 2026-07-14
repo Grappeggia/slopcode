@@ -540,6 +540,18 @@ describe("session.llm-native.request", () => {
             apiKey: "test-openai-key",
             messages: [
               {
+                role: "system",
+                content: item.hint
+                  ? [
+                      {
+                        type: "text",
+                        text: "stable system",
+                        cache: { type: "ephemeral", ttlSeconds: 1800 },
+                      },
+                    ]
+                  : "stable system",
+              } as unknown as ModelMessage,
+              {
                 role: "user",
                 content: [
                   {
@@ -566,7 +578,41 @@ describe("session.llm-native.request", () => {
           expect(body.prompt_cache_options).toEqual(
             item.cached ? { mode: "explicit", ttl: "30m" } : undefined,
           )
-          expect(JSON.stringify(body).match(/prompt_cache_breakpoint/g)?.length ?? 0).toBe(item.cached ? 2 : 0)
+          expect(JSON.stringify(body).match(/prompt_cache_breakpoint/g)?.length ?? 0).toBe(item.cached ? 3 : 0)
+          const system = (body.input as Array<{ role?: string; content?: unknown }>).find(
+            (entry) => entry.role === "system",
+          )
+          expect(system?.content).toEqual(
+            item.cached
+              ? [
+                  {
+                    type: "input_text",
+                    text: "stable system",
+                    prompt_cache_breakpoint: { mode: "explicit" },
+                  },
+                ]
+              : "stable system",
+          )
+          const user = (body.input as Array<{ role?: string; content?: unknown }>).find((entry) => entry.role === "user")
+          expect(user?.content).toEqual(
+            item.cached
+              ? [
+                  {
+                    type: "input_text",
+                    text: "stable context",
+                    prompt_cache_breakpoint: { mode: "explicit" },
+                  },
+                  {
+                    type: "input_text",
+                    text: "more stable context",
+                    prompt_cache_breakpoint: { mode: "explicit" },
+                  },
+                ]
+              : [
+                  { type: "input_text", text: "stable context" },
+                  { type: "input_text", text: "more stable context" },
+                ],
+          )
         }),
       )
     }),

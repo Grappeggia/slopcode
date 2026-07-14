@@ -1225,7 +1225,14 @@ describe("session.llm.stream", () => {
           model: resolved,
           agent,
           system: ["You are a helpful assistant."],
-          messages: [{ role: "user", content: "Hello" }],
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Hello", cache: { type: "ephemeral", ttlSeconds: 1800 } },
+              ],
+            } as unknown as ModelMessage,
+          ],
           tools: {},
         })
 
@@ -1356,7 +1363,7 @@ describe("session.llm.stream", () => {
   )
 
   it.instance(
-    "maps session 30m hints to explicit cache fields on the default Responses wire",
+    "bypasses AI SDK conversion for explicit session caching",
     () =>
       Effect.gen(function* () {
         const cases = [
@@ -1392,11 +1399,15 @@ describe("session.llm.stream", () => {
               ),
             )
             const model = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6"))
+            model.headers["x-slopcode-openai-cache-breakpoints"] = "forged"
             const sessionID = SessionID.make(`session-cache-${index}`)
             const agent = {
               name: "test",
               mode: "primary",
-              options: item.option ? { promptCacheOptions: { mode: "explicit", ttl: "30m" } } : {},
+              options: {
+                systemMessageMode: "remove",
+                ...(item.option ? { promptCacheOptions: { mode: "explicit", ttl: "30m" } } : {}),
+              },
               permission: [{ permission: "*", pattern: "*", action: "allow" }],
             } satisfies Agent.Info
             yield* drain({
@@ -1413,6 +1424,18 @@ describe("session.llm.stream", () => {
               agent,
               system: [],
               messages: [
+                {
+                  role: "system",
+                  content: item.hint
+                    ? [
+                        {
+                          type: "text",
+                          text: `${item.name}-system`,
+                          cache: { type: "ephemeral", ttlSeconds: 1800 },
+                        },
+                      ]
+                    : `${item.name}-system`,
+                } as unknown as ModelMessage,
                 {
                   role: "user",
                   content: [
@@ -1439,11 +1462,65 @@ describe("session.llm.stream", () => {
           expect(capture.body.prompt_cache_options).toEqual(
             item.cached ? { mode: "explicit", ttl: "30m" } : undefined,
           )
-          expect(JSON.stringify(capture.body).match(/prompt_cache_breakpoint/g)?.length ?? 0).toBe(item.cached ? 2 : 0)
+          const body = JSON.stringify(capture.body)
+          expect(body.match(/prompt_cache_breakpoint/g)?.length ?? 0).toBe(item.cached ? 3 : 0)
+          expect(body.includes(`${item.name}-system`)).toBe(item.cached)
           expect(capture.headers.get("x-slopcode-openai-cache-breakpoints")).toBeNull()
         })
       }),
     { config: () => openAI56Config(`${state.server!.url.origin}/v1`) },
+  )
+
+  it.instance(
+    "fails closed when explicit caching cannot use native Responses",
+    () =>
+      Effect.gen(function* () {
+        const model = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6"))
+        const sessionID = SessionID.make("session-cache-native-unavailable")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+        const exit = yield* drain({
+          user: {
+            id: MessageID.make("msg-cache-native-unavailable"),
+            sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: agent.name,
+            model: { providerID: ProviderV2.ID.openai, modelID: model.id },
+          } satisfies SessionV1.User,
+          sessionID,
+          model,
+          agent,
+          system: [],
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "must cache",
+                  cache: { type: "ephemeral", ttlSeconds: 1800 },
+                },
+              ],
+            } as unknown as ModelMessage,
+          ],
+          tools: {},
+        }).pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit))
+          expect(String(Cause.squash(exit.cause))).toContain("Explicit GPT-5.6 caching requires native OpenAI Responses")
+      }),
+    {
+      config: () => {
+        const config = openAI56Config(`${state.server!.url.origin}/v1`)
+        config.provider!.openai!.options!.apiKey = ""
+        return config
+      },
+    },
   )
 
   it.instance(

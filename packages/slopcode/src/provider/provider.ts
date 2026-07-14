@@ -18,7 +18,6 @@ import { InstallationVersion } from "@slopcode-ai/core/installation/version"
 import { iife } from "@/util/iife"
 import { Global } from "@slopcode-ai/core/global"
 import path from "path"
-import * as OpenAICache from "./openai-cache"
 import { pathToFileURL } from "url"
 import { Effect, Layer, Context, Schema, Types } from "effect"
 import { EffectBridge } from "@/effect/bridge"
@@ -1863,6 +1862,12 @@ export const layer = Layer.effect(
             ...options["headers"],
             ...model.headers,
           }
+        if (options["headers"] && typeof options["headers"] === "object")
+          options["headers"] = Object.fromEntries(
+            Object.entries(options["headers"]).filter(
+              ([key]) => key.toLowerCase() !== "x-slopcode-openai-cache-breakpoints",
+            ),
+          )
 
         const key = Hash.fast(
           JSON.stringify({
@@ -1883,13 +1888,6 @@ export const layer = Layer.effect(
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
           const opts = init ?? {}
-          const headers = new Headers(opts.headers)
-          const cache = headers.get(OpenAICache.HEADER)
-          if (cache) {
-            headers.delete(OpenAICache.HEADER)
-            opts.headers = headers
-            if (typeof opts.body === "string") opts.body = OpenAICache.apply(opts.body, cache)
-          }
           const chunkAbortCtl = typeof chunkTimeout === "number" && chunkTimeout > 0 ? new AbortController() : undefined
           const headerTimeoutMs = headerTimeout === false ? undefined : headerTimeout
           const headerTimeoutCtl = typeof headerTimeoutMs === "number" ? timeoutController(headerTimeoutMs) : undefined

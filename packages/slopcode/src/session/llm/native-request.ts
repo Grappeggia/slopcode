@@ -162,6 +162,11 @@ const generation = (input: RequestInput) => {
 const baseURL = (input: Provider.Model | RequestInput) =>
   "model" in input ? (input.baseURL ?? (input.model.api.url || undefined)) : input.api.url || undefined
 
+const scrubHeaders = (value: Record<string, string> | undefined) =>
+  Object.fromEntries(
+    Object.entries(value ?? {}).filter(([key]) => key.toLowerCase() !== "x-slopcode-openai-cache-breakpoints"),
+  )
+
 const requireBaseURL = (model: Provider.Model, url: string | undefined) => {
   if (url) return url
   throw new Error(`Native LLM request adapter requires a base URL for ${model.providerID}/${model.id}`)
@@ -170,10 +175,15 @@ const requireBaseURL = (model: Provider.Model, url: string | undefined) => {
 export const model = (input: Provider.Model | RequestInput, headers?: Record<string, string>) => {
   const model = "model" in input ? input.model : input
   const url = baseURL(input)
+  const modelHeaders = scrubHeaders(model.headers)
+  const requestHeaders = scrubHeaders(headers)
   const options = {
     ...("model" in input && input.apiKey ? { apiKey: input.apiKey } : {}),
     ...(url ? { baseURL: url } : {}),
-    headers: Object.keys({ ...model.headers, ...headers }).length === 0 ? undefined : { ...model.headers, ...headers },
+    headers:
+      Object.keys({ ...modelHeaders, ...requestHeaders }).length === 0
+        ? undefined
+        : { ...modelHeaders, ...requestHeaders },
     limits: {
       context: model.limit.context,
       output: model.limit.output,
