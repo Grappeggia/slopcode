@@ -93,6 +93,7 @@ const OpenAIResponsesHistoryItem = Schema.Union([
   OpenAIResponsesItemReference,
   Schema.Struct({
     type: Schema.tag("function_call"),
+    id: Schema.optional(Schema.String),
     call_id: Schema.String,
     name: Schema.String,
     arguments: Schema.String,
@@ -376,6 +377,7 @@ const lowerToolCall = Effect.fn("OpenAIResponses.lowerToolCall")(function* (part
   }
   return {
     type: "function_call" as const,
+    id: openAIItemID(part),
     call_id: part.id,
     name: part.name,
     arguments: ProviderShared.encodeJson(part.input),
@@ -578,11 +580,27 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
 })
 
 const GPT5_6 = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+const OFFICIAL = {
+  openai: "https://api.openai.com/v1",
+  slopcode: "https://slopcode.dev/zen/v1",
+  "slopcode-go": "https://slopcode.dev/zen/go/v1",
+} as const
+
+const official = (request: LLMRequest) => {
+  const target = OFFICIAL[request.model.provider as keyof typeof OFFICIAL]
+  if (!target || request.model.route.endpoint.path !== "/responses" || request.model.route.endpoint.query) return false
+  try {
+    const url = new URL(request.model.route.endpoint.baseURL ?? "")
+    if (url.username || url.password || url.search || url.hash || url.port) return false
+    return `${url.origin}${url.pathname.replace(/\/+$/, "")}` === target
+  } catch {
+    return false
+  }
+}
+
 const eligible = (request: LLMRequest) =>
   GPT5_6.has(request.model.id.toLowerCase()) &&
-  (request.model.provider === "openai" ||
-    request.model.provider === "slopcode" ||
-    request.model.provider === "slopcode-go") &&
+  official(request) &&
   request.model.route.id !== "openai-responses-codex" &&
   OpenAIOptions.responsesMode(request) !== "lite"
 

@@ -214,8 +214,8 @@ describe("session.llm provider option safety", () => {
     promptCacheOptions: { mode: "explicit", ttl: "30m" },
     reasoningEffort: "high",
   }
-  const model = (providerID: string, npm: string, id = "gpt-5.6") =>
-    ({ providerID, api: { id, npm } }) as Provider.Model
+  const model = (providerID: string, npm: string, id = "gpt-5.6", url = "https://api.openai.com/v1") =>
+    ({ providerID, api: { id, npm, url } }) as Provider.Model
 
   test("scrubs safety and cache options from every excluded route", () => {
     const routes = [
@@ -225,6 +225,8 @@ describe("session.llm provider option safety", () => {
       { model: model("github-copilot", "@ai-sdk/github-copilot") },
       { model: model("openrouter", "@openrouter/ai-sdk-provider") },
       { model: model("compatible", "@ai-sdk/openai-compatible") },
+      { model: model("openai", "@ai-sdk/openai", "gpt-5.6", "https://proxy.example/v1") },
+      { model: model("slopcode", "@ai-sdk/openai", "gpt-5.6", "https://proxy.example/zen/v1") },
     ]
     routes.forEach((route) =>
       expect(
@@ -1352,8 +1354,7 @@ describe("session.llm.stream", () => {
           expect(capture.body.reasoning).toEqual({ effort: "max", summary: "auto" })
           expect(capture.body.include).toEqual(["reasoning.encrypted_content"])
           expect(capture.body.store).toBe(false)
-          expect(capture.body.safety_identifier).toMatch(/^sc_[A-Za-z0-9_-]{43}$/)
-          expect(capture.body.safety_identifier).not.toBe("hostile-client-id")
+          expect(capture.body.safety_identifier).toBeUndefined()
           expect(capture.body.prompt_cache_options).toBeUndefined()
           expect(JSON.stringify(capture.body)).not.toContain("prompt_cache_breakpoint")
         })
@@ -1363,7 +1364,7 @@ describe("session.llm.stream", () => {
   )
 
   it.instance(
-    "bypasses AI SDK conversion for explicit session caching",
+    "strips explicit cache annotations on custom endpoints",
     () =>
       Effect.gen(function* () {
         const cases = [
@@ -1459,12 +1460,9 @@ describe("session.llm.stream", () => {
         )
 
         captures.forEach(({ item, capture }) => {
-          expect(capture.body.prompt_cache_options).toEqual(
-            item.cached ? { mode: "explicit", ttl: "30m" } : undefined,
-          )
+          expect(capture.body.prompt_cache_options).toBeUndefined()
           const body = JSON.stringify(capture.body)
-          expect(body.match(/prompt_cache_breakpoint/g)?.length ?? 0).toBe(item.cached ? 3 : 0)
-          expect(body.includes(`${item.name}-system`)).toBe(item.cached)
+          expect(body).not.toContain("prompt_cache_breakpoint")
           expect(capture.headers.get("x-slopcode-openai-cache-breakpoints")).toBeNull()
         })
       }),
@@ -1476,6 +1474,7 @@ describe("session.llm.stream", () => {
     () =>
       Effect.gen(function* () {
         const model = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6"))
+        model.api.url = "https://api.openai.com/v1"
         const sessionID = SessionID.make("session-cache-native-unavailable")
         const agent = {
           name: "test",
@@ -1516,7 +1515,7 @@ describe("session.llm.stream", () => {
       }),
     {
       config: () => {
-        const config = openAI56Config(`${state.server!.url.origin}/v1`)
+        const config = openAI56Config("https://api.openai.com/v1")
         config.provider!.openai!.options!.apiKey = ""
         return config
       },

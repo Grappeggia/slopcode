@@ -7385,6 +7385,24 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("does not derive safety identity for a custom native OpenAI endpoint", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentCatalog = catalogModel("gpt-5.6-sol")
+      currentCatalog.api.url = "https://proxy.example/v1"
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Run custom GPT-5.6" }), resume: false })
+      requests.length = 0
+
+      yield* session.resume(sessionID)
+
+      expect(requests[0]?.providerOptions?.openai?.safetyIdentifier).toBeUndefined()
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(requests[0]!)
+      expect(prepared.body.safety_identifier).toBeUndefined()
+      expect(prepared.body.prompt_cache_options).toBeUndefined()
+    }),
+  )
+
   it.effect("leaves unrelated models in full Responses and function-tool mode", () =>
     Effect.gen(function* () {
       yield* setup

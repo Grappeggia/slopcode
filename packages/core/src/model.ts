@@ -116,16 +116,6 @@ export class Info extends Schema.Class<Info>("ModelV2.Info")({
   }
 }
 
-export class PublicInfo extends Schema.Class<PublicInfo>("ModelV2.PublicInfo")({
-  ...Info.fields,
-  api: Schema.Union([
-    Schema.Struct({ id: ID, type: Schema.Literal("aisdk"), package: Schema.String }),
-    Schema.Struct({ id: ID, type: Schema.Literal("native") }),
-  ]).pipe(Schema.toTaggedUnion("type")),
-  request: Schema.Struct({ variant: Schema.optional(Schema.String) }),
-  variants: Schema.Array(Schema.Struct({ id: VariantID })),
-}) {}
-
 export const publicInfo = (model: Info) => {
   const provider = ProviderV2.publicInfo(
     new ProviderV2.Info({
@@ -137,11 +127,11 @@ export const publicInfo = (model: Info) => {
       request: { headers: {}, body: {} },
     }),
   )
-  return new PublicInfo({
+  return new Info({
     ...model,
     api: { id: model.api.id, ...provider.api },
-    request: { variant: model.request.variant },
-    variants: model.variants.map((variant) => ({ id: variant.id })),
+    request: { headers: {}, body: {}, variant: model.request.variant },
+    variants: model.variants.map((variant) => ({ id: variant.id, headers: {}, body: {} })),
   })
 }
 

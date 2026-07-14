@@ -450,7 +450,7 @@ export async function handler(
         ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].includes(model.toLowerCase())
           ? await sanitizeSafety(
               converted,
-              authInfo?.workspaceID,
+              authInfo?.user.id,
               runtime.safetySecret ?? Resource.ZEN_SESSION_SECRET.value,
             )
           : converted

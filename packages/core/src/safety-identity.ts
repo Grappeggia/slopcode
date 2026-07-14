@@ -1,6 +1,7 @@
 export * as SafetyIdentity from "./safety-identity"
 
 import fs from "node:fs/promises"
+import { constants } from "node:fs"
 import path from "node:path"
 import { createHmac, randomBytes } from "node:crypto"
 import { Context, Effect, Layer, Schema } from "effect"
@@ -41,36 +42,43 @@ export const fromSeed = (seed: Uint8Array): Interface => ({
 export const load = async (data: string): Promise<Interface> => {
   const target = seedPath(data)
   await fs.mkdir(target.directory, { recursive: true, mode: 0o700 })
-  const directory = await fs.lstat(target.directory)
-  if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Safety identity directory is unsafe")
-  await fs.chmod(target.directory, 0o700)
-  const existing = await fs.lstat(target.file).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return undefined
-    throw error
-  })
-  if (!existing) {
-    const temp = path.join(target.directory, `.safety.${process.pid}.${randomBytes(16).toString("hex")}.tmp`)
-    const handle = await fs.open(temp, "wx", 0o600)
-    try {
-      await handle.writeFile(randomBytes(32))
-      await handle.sync()
-    } finally {
-      await handle.close()
-    }
-    try {
-      await fs.link(temp, target.file).catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== "EEXIST") throw error
-      })
-    } finally {
-      await fs.rm(temp, { force: true })
-    }
+  const nofollow = constants.O_NOFOLLOW ?? 0
+  const directory = await fs.open(
+    target.directory,
+    constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | nofollow,
+  )
+  try {
+    if (!(await directory.stat()).isDirectory()) throw new Error("Safety identity directory is unsafe")
+    await directory.chmod(0o700)
+  } finally {
+    await directory.close()
   }
-  const info = await fs.lstat(target.file)
-  if (!info.isFile() || info.isSymbolicLink()) throw new Error("Safety identity seed is unsafe")
-  await fs.chmod(target.file, 0o600)
-  const seed = await fs.readFile(target.file)
-  if (seed.byteLength !== 32) throw new Error("Safety identity seed is invalid")
-  return fromSeed(seed)
+
+  const temp = path.join(target.directory, `.safety.${process.pid}.${randomBytes(16).toString("hex")}.tmp`)
+  const created = await fs.open(temp, "wx", 0o600)
+  try {
+    await created.writeFile(randomBytes(32))
+    await created.sync()
+    await created.chmod(0o600)
+    await fs.link(temp, target.file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST") throw error
+    })
+  } finally {
+    await created.close()
+    await fs.rm(temp, { force: true })
+  }
+
+  const handle = await fs.open(target.file, constants.O_RDONLY | nofollow)
+  try {
+    const info = await handle.stat()
+    if (!info.isFile()) throw new Error("Safety identity seed is unsafe")
+    await handle.chmod(0o600)
+    const seed = await handle.readFile()
+    if (seed.byteLength !== 32) throw new Error("Safety identity seed is invalid")
+    return fromSeed(seed)
+  } finally {
+    await handle.close()
+  }
 }
 
 export const make = (input: { readonly data: string }) =>

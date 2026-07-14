@@ -35,14 +35,27 @@ import { LLMRequestPrep } from "./llm/request"
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
 const GPT5_6 = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+const OFFICIAL = {
+  openai: "https://api.openai.com/v1",
+  slopcode: "https://slopcode.dev/zen/v1",
+  "slopcode-go": "https://slopcode.dev/zen/go/v1",
+} as const
 
-const eligibleRoute = (model: Provider.Model, auth?: Auth.Info) => {
-  const managed = model.providerID === "slopcode" || model.providerID === "slopcode-go"
-  return (
-    GPT5_6.has(model.api.id.toLowerCase()) &&
-    model.api.npm === "@ai-sdk/openai" &&
-    (managed || (model.providerID === "openai" && auth?.type !== "oauth"))
-  )
+const eligibleRoute = (model: Provider.Model, auth?: Auth.Info, provider?: Provider.Info) => {
+  const target = OFFICIAL[model.providerID as keyof typeof OFFICIAL]
+  if (!target || auth?.type === "oauth" || !GPT5_6.has(model.api.id.toLowerCase())) return false
+  if (model.api.npm !== "@ai-sdk/openai") return false
+  try {
+    const url = new URL(
+      typeof provider?.options.baseURL === "string" && provider.options.baseURL
+        ? provider.options.baseURL
+        : model.api.url,
+    )
+    if (url.username || url.password || url.search || url.hash || url.port) return false
+    return `${url.origin}${url.pathname.replace(/\/+$/, "")}` === target
+  } catch {
+    return false
+  }
 }
 
 const cacheHint = (messages: readonly ModelMessage[]) =>
@@ -68,11 +81,12 @@ const cacheHint = (messages: readonly ModelMessage[]) =>
 export function sanitizeOptions(input: {
   model: Provider.Model
   auth?: Auth.Info
+  provider?: Provider.Info
   options: Record<string, any>
   safetyIdentifier?: string
   cacheHint: boolean
 }) {
-  const eligible = eligibleRoute(input.model, input.auth)
+  const eligible = eligibleRoute(input.model, input.auth, input.provider)
   const options = Object.fromEntries(
     Object.entries(input.options).filter(([key]) => key !== "safetyIdentifier" && key !== "promptCacheOptions"),
   )
@@ -196,14 +210,36 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
-      const eligible = eligibleRoute(input.model, info)
+      const eligible = eligibleRoute(input.model, info, item)
+      const messages: ModelMessage[] = eligible
+        ? prepared.messages
+        : prepared.messages.map((message): ModelMessage => {
+            if (!Array.isArray(message.content)) return message
+            if (message.role === "system")
+              return {
+                ...message,
+                content: message.content
+                  .filter((part) => part && typeof part === "object" && part.type === "text")
+                  .map((part) => part.text)
+                  .join("\n"),
+              } as ModelMessage
+            return {
+              ...message,
+              content: message.content.map((part) => {
+                if (!part || typeof part !== "object" || !("cache" in part)) return part
+                const { cache: _, ...clean } = part
+                return clean
+              }),
+            } as ModelMessage
+          })
       const active = eligible
         ? Option.getOrUndefined(yield* account.active().pipe(Effect.catch(() => Effect.succeed(Option.none()))))
         : undefined
-      const hint = cacheHint(prepared.messages)
+      const hint = cacheHint(messages)
       const options = sanitizeOptions({
         model: input.model,
         auth: info,
+        provider: item,
         options: prepared.params.options,
         cacheHint: hint,
         safetyIdentifier: eligible
@@ -227,7 +263,7 @@ const live: Layer.Layer<
                 Math.max(0, input.model.limit.context - (prepared.params.maxOutputTokens ?? 0)),
               )
         if (
-          contextTokens({ system: prepared.system, messages: prepared.messages, tools: prepared.tools }) >
+          contextTokens({ system: prepared.system, messages, tools: prepared.tools }) >
           Math.min(input.maxInputTokens ?? Infinity, hard)
         )
           return yield* Effect.fail(new Error("Side question exceeds the selected model context limit"))
@@ -351,7 +387,7 @@ const live: Layer.Layer<
           provider: item,
           auth: info,
           llmClient,
-          messages: prepared.messages,
+          messages,
           tools: prepared.tools,
           toolChoice: input.toolChoice,
           temperature: prepared.params.temperature,
@@ -448,7 +484,7 @@ const live: Layer.Layer<
           abortSignal: input.abort,
           headers,
           maxRetries: input.retries ?? 0,
-          messages: prepared.messages,
+          messages,
           model: wrapLanguageModel({
             model: language,
             middleware: [

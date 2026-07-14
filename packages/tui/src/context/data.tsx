@@ -5,10 +5,10 @@ import type {
   IntegrationInfo,
   Event,
   LocationRef,
-  ModelV2PublicInfo,
+  ModelV2Info,
   PermissionSavedInfo,
   PermissionV2Request,
-  ProviderV2PublicInfo,
+  ProviderV2Info,
   QuestionV2Request,
   ReferenceInfo,
   SessionMessage,
@@ -28,8 +28,8 @@ type LocationData = {
   agent?: AgentV2Info[]
   command?: CommandV2Info[]
   integration?: IntegrationInfo[]
-  model?: ModelV2PublicInfo[]
-  provider?: ProviderV2PublicInfo[]
+  model?: ModelV2Info[]
+  provider?: ProviderV2Info[]
   reference?: ReferenceInfo[]
   skill?: SkillV2Info[]
 }

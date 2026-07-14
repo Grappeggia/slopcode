@@ -10,7 +10,7 @@ export const ProviderGroup = HttpApiGroup.make("server.provider")
   .add(
     HttpApiEndpoint.get("provider.list", "/api/provider", {
       query: LocationQuery,
-      success: Location.response(Schema.Array(ProviderV2.PublicInfo)),
+      success: Location.response(Schema.Array(ProviderV2.Info)),
       error: ServiceUnavailableError,
     })
       .annotateMerge(locationQueryOpenApi)
@@ -40,7 +40,7 @@ export const ProviderGroup = HttpApiGroup.make("server.provider")
     HttpApiEndpoint.get("provider.get", "/api/provider/:providerID", {
       params: { providerID: ProviderV2.ID },
       query: LocationQuery,
-      success: Location.response(ProviderV2.PublicInfo),
+      success: Location.response(ProviderV2.Info),
       error: [ProviderNotFoundError, ServiceUnavailableError],
     })
       .annotateMerge(locationQueryOpenApi)

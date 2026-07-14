@@ -585,7 +585,13 @@ export const layer = Layer.effect(
                 })
                 return { msg, processor, result, model }
               }),
-            ).pipe(Effect.onInterrupt(() => session.removeMessage({ sessionID: input.sessionID, messageID: msg.id })))
+            ).pipe(
+              Effect.onExit((exit) =>
+                Exit.isFailure(exit)
+                  ? session.removeMessage({ sessionID: input.sessionID, messageID: msg.id })
+                  : Effect.void,
+              ),
+            )
             if (!bounded) return { ...output, failure: undefined }
             const saved = (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
               (item) => item.info.id === msg.id,

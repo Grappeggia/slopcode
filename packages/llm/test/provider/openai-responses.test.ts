@@ -476,6 +476,48 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("preserves valid ordinary function call item ids and omits malformed ids", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [
+            Message.assistant([
+              ToolCallPart.make({
+                id: "call_valid",
+                name: "lookup",
+                input: { query: "valid" },
+                providerMetadata: { openai: { itemId: "future_valid" } },
+              }),
+              ToolCallPart.make({
+                id: "call_invalid",
+                name: "lookup",
+                input: { query: "invalid" },
+                providerMetadata: { openai: { itemId: "malformed" } },
+              }),
+            ]),
+          ],
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        {
+          type: "function_call",
+          id: "future_valid",
+          call_id: "call_valid",
+          name: "lookup",
+          arguments: '{"query":"valid"}',
+        },
+        {
+          type: "function_call",
+          call_id: "call_invalid",
+          name: "lookup",
+          arguments: '{"query":"invalid"}',
+        },
+      ])
+    }),
+  )
+
   it.effect("replays custom calls and results with retained item ids and raw input", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
@@ -748,7 +790,11 @@ describe("OpenAI Responses route", () => {
 
   it.effect("emits GPT-5.6 safety identity and only explicit 30m cache breakpoints", () =>
     Effect.gen(function* () {
-      const eligible = Model.update(model, { id: "gpt-5.6", provider: "openai" })
+      const eligible = Model.update(model, {
+        id: "gpt-5.6",
+        provider: "openai",
+        route: model.route.with({ endpoint: { baseURL: "https://api.openai.com/v1" } }),
+      })
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({
           model: eligible,
@@ -771,6 +817,34 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("preserves explicit caching on canonical managed endpoints", () =>
+    Effect.gen(function* () {
+      for (const item of [
+        { provider: "slopcode", baseURL: "https://slopcode.dev/zen/v1" },
+        { provider: "slopcode-go", baseURL: "https://slopcode.dev/zen/go/v1" },
+      ]) {
+        const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+          LLM.request({
+            model: Model.update(model, {
+              id: "gpt-5.6",
+              provider: item.provider,
+              route: model.route.with({ endpoint: { baseURL: item.baseURL } }),
+            }),
+            prompt: [
+              { type: "text", text: "managed", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) },
+            ],
+            providerOptions: {
+              openai: { safetyIdentifier: "sc_safe", promptCacheOptions: { mode: "explicit", ttl: "30m" } },
+            },
+          }),
+        )
+        expect(prepared.body.safety_identifier).toBe("sc_safe")
+        expect(prepared.body.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" })
+        expect(JSON.stringify(prepared.body.input)).toContain("prompt_cache_breakpoint")
+      }
+    }),
+  )
+
   it.effect("omits safety and cache options for defaults, bad TTLs, and excluded routes", () =>
     Effect.gen(function* () {
       const options = {
@@ -783,6 +857,12 @@ describe("OpenAI Responses route", () => {
         Model.update(model, { id: "gpt-5.6", provider: "github-copilot" }),
         Model.update(model, { id: "gpt-5.6", provider: "openrouter" }),
         Model.update(model, { id: "gpt-5.6", provider: "compatible" }),
+        Model.update(model, { id: "gpt-5.6", provider: "openai" }),
+        Model.update(model, {
+          id: "gpt-5.6",
+          provider: "slopcode",
+          route: model.route.with({ endpoint: { baseURL: "https://proxy.example/zen/v1" } }),
+        }),
       ]
       for (const excluded of cases) {
         const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(

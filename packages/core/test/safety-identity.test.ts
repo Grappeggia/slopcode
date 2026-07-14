@@ -33,7 +33,24 @@ describe("SafetyIdentity", () => {
     expect((await fs.readdir(target.directory)).sort()).toEqual(["safety.key"])
 
     await fs.chmod(target.file, 0o644)
+    await fs.chmod(target.directory, 0o755)
     expect((await SafetyIdentity.load(data)).identifier({})).toBe(identities[0]!.identifier({}))
     expect((await fs.stat(target.file)).mode & 0o777).toBe(0o600)
+    expect((await fs.stat(target.directory)).mode & 0o777).toBe(0o700)
+  })
+
+  test("rejects a symlink seed without reading or changing its target", async () => {
+    if (process.platform === "win32") return
+    const data = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-safety-link-"))
+    dirs.push(data)
+    const target = SafetyIdentity.seedPath(data)
+    await fs.mkdir(target.directory, { mode: 0o700 })
+    const outside = path.join(data, "outside")
+    await fs.writeFile(outside, Buffer.alloc(32, 9), { mode: 0o644 })
+    await fs.symlink(outside, target.file)
+
+    await expect(SafetyIdentity.load(data)).rejects.toThrow()
+    expect((await fs.stat(outside)).mode & 0o777).toBe(0o644)
+    expect(await fs.readFile(outside)).toEqual(Buffer.alloc(32, 9))
   })
 })

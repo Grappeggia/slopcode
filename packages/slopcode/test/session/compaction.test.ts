@@ -931,6 +931,9 @@ describe("session.compaction.process", () => {
       change?: Provider.Model
       tokens?: (model: Provider.Model, tokens: SessionV1.Assistant["tokens"]) => void
       result?: SessionProcessorModule.SessionProcessor.Result
+      createEscape?: "fail" | "die"
+      processEscape?: "fail" | "die"
+      conversionEscape?: boolean
     }) {
       const attempts: Array<{ model: string; retry: boolean | undefined }> = []
       const sessions: SessionID[] = []
@@ -957,8 +960,10 @@ describe("session.compaction.process", () => {
       const processor = Layer.succeed(
         SessionProcessorModule.SessionProcessor.Service,
         SessionProcessorModule.SessionProcessor.Service.of({
-          create: Effect.fn("TestSessionProcessor.create")((item) =>
-            Effect.succeed({
+          create: ((item: Parameters<SessionProcessorModule.SessionProcessor.Interface["create"]>[0]) => {
+            if (input.createEscape === "fail") return Effect.fail(new Error("create escaped"))
+            if (input.createEscape === "die") return Effect.die(new Error("create defect"))
+            return Effect.succeed({
               message: item.assistantMessage,
               failure: input.cause?.(item.model),
               updateToolCall: () => Effect.succeed(undefined),
@@ -975,6 +980,8 @@ describe("session.compaction.process", () => {
                       text: input.text ?? `partial-${item.model.id}`,
                     })
                   }
+                  if (input.processEscape === "fail") return yield* Effect.fail(new Error("process escaped"))
+                  if (input.processEscape === "die") return yield* Effect.die(new Error("process defect"))
                   if (input.stall) {
                     Deferred.doneUnsafe(input.stall, Effect.void)
                     return yield* Effect.never
@@ -998,8 +1005,8 @@ describe("session.compaction.process", () => {
                   if (input.returned) Deferred.doneUnsafe(input.returned, Effect.void)
                   return input.result ?? ("continue" as const)
                 }),
-            }),
-          ),
+            })
+          }) as never,
         }),
       )
       const agent = input.explicit
@@ -1021,7 +1028,53 @@ describe("session.compaction.process", () => {
             generate: () => Effect.die("unused"),
           })
         : Agent.defaultLayer
-      const layer = compactionProcessLayer({ provider, processor, agent })
+      const plugin = input.conversionEscape
+        ? Layer.mock(Plugin.Service)({
+            trigger: (name: string, _input: unknown, output: { messages?: SessionV1.WithParts[] }) =>
+              Effect.sync(() => {
+                if (name !== "experimental.chat.messages.transform" || !output.messages) return output
+                output.messages.push({
+                  info: {
+                    id: MessageID.ascending(),
+                    role: "assistant",
+                    parentID: MessageID.ascending(),
+                    sessionID: SessionID.make("ses_conversion"),
+                    mode: "compaction",
+                    agent: "compaction",
+                    path: { cwd: "/tmp", root: "/tmp" },
+                    cost: 0,
+                    tokens: { output: 0, input: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                    modelID: historical.id,
+                    providerID: historical.providerID,
+                    time: { created: Date.now() },
+                  },
+                  parts: [
+                    {
+                      id: PartID.ascending(),
+                      messageID: MessageID.ascending(),
+                      sessionID: SessionID.make("ses_conversion"),
+                      type: "tool",
+                      callID: "bad",
+                      tool: Symbol("bad"),
+                      state: {
+                        status: "completed",
+                        input: {},
+                        output: "bad",
+                        title: "bad",
+                        metadata: {},
+                        time: { start: Date.now(), end: Date.now() },
+                        attachments: [{ mime: "image/png", url: 1 }],
+                      },
+                    },
+                  ],
+                } as never)
+                return output
+              }),
+            list: () => Effect.succeed([]),
+            init: () => Effect.void,
+          } as never)
+        : undefined
+      const layer = compactionProcessLayer({ provider, processor, agent, plugin })
       return { attempts, sessions, layer, bind: (value: SessionNs.Interface) => (store = value) }
     }
 
@@ -1415,6 +1468,27 @@ describe("session.compaction.process", () => {
         ).toBe(false)
       }),
     )
+
+    for (const item of [
+      { name: "processor creation failure", options: { createEscape: "fail" as const } },
+      { name: "processor creation defect", options: { createEscape: "die" as const } },
+      { name: "message conversion failure", options: { conversionEscape: true } },
+      { name: "processor failure", options: { processEscape: "fail" as const } },
+      { name: "processor defect", options: { processEscape: "die" as const } },
+    ]) {
+      itCompaction.instance(`removes provisional compaction ownership after ${item.name}`, () => {
+        const setup = recovery({ fail: () => undefined, ...item.options })
+        return Effect.gen(function* () {
+          yield* run(setup).pipe(Effect.exit)
+          const ssn = yield* SessionNs.Service
+          expect(
+            (yield* ssn.messages({ sessionID: setup.sessions[0]! })).filter(
+              (message) => message.info.role === "assistant" && message.info.summary,
+            ),
+          ).toEqual([])
+        })
+      })
+    }
 
     itCompaction.instance("pins synthetic continuation to the successful fallback model", () => {
       const third = model("third")

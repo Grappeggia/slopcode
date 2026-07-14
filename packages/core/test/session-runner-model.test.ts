@@ -55,16 +55,20 @@ const provider = (api: ProviderV2.Info["api"]) =>
     request: { headers: {}, body: {} },
   })
 
-const credential = (type: "oauth" | "key") =>
+const credential = (
+  type: "oauth" | "key",
+  integrationID = "openai",
+  methodID = "chatgpt-browser",
+) =>
   new Credential.Stored({
     id: Credential.ID.make(`cred_${type}`),
-    integrationID: Integration.ID.make("openai"),
+    integrationID: Integration.ID.make(integrationID),
     label: type,
     value:
       type === "oauth"
         ? new Credential.OAuth({
             type,
-            methodID: Integration.MethodID.make("chatgpt-browser"),
+            methodID: Integration.MethodID.make(methodID),
             refresh: "refresh",
             access: "oauth-secret",
             expires: Date.now() + 60_000,
@@ -259,6 +263,40 @@ describe("SessionRunnerModel", () => {
       expect(resolved.model.route.capabilities).not.toContain("responses-lite")
     }),
   )
+
+  for (const item of [
+    { name: "foreign integration", credential: credential("oauth", "github-copilot") },
+    { name: "foreign OAuth method", credential: credential("oauth", "openai", "foreign-oauth") },
+  ]) {
+    it.effect(`never classifies ${item.name} credentials as Codex`, () =>
+      Effect.gen(function* () {
+        const catalog = harnessModel({ type: "aisdk", package: "@ai-sdk/openai", url: "https://api.openai.com/v1" })
+        const resolved = yield* SessionRunnerModel.resolve(
+          session(catalog),
+          catalog,
+          new ProviderV2.Info({
+            ...provider({ type: "aisdk", package: "@ai-sdk/openai", url: "https://api.openai.com/v1" }),
+            id: ProviderV2.ID.openai,
+            enabled: { via: "credential", credentialID: item.credential.id },
+          }),
+          undefined,
+          item.credential,
+        )
+
+        expect(resolved.harness?.route.id).toBe("public")
+        expect(resolved.model.route.endpoint.baseURL).toBe("https://api.openai.com/v1")
+        expect(resolved.model.route.defaults.headers?.["ChatGPT-Account-Id"]).toBeUndefined()
+        const headers = yield* resolved.model.route.auth.apply({
+          request: LLM.request({ model: resolved.model, prompt: "Hello" }),
+          method: "POST",
+          url: "https://api.openai.com/v1/responses",
+          body: "{}",
+          headers: Headers.empty,
+        })
+        expect(headers.authorization).not.toBe("Bearer oauth-secret")
+      }),
+    )
+  }
 
   it.effect("fails Codex closed when its deployment does not advertise Code Mode", () =>
     Effect.gen(function* () {

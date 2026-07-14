@@ -74,12 +74,19 @@ const apiKey = (model: ModelV2.Info, provider?: ProviderV2.Info) => {
   return provider?.enabled !== false && provider?.enabled.via === "env" ? Auth.config(provider.enabled.name) : undefined
 }
 
+const OPENAI_OAUTH_METHODS = new Set(["chatgpt-browser", "chatgpt-headless"])
+const openAIOAuth = (credential: Credential.Stored | undefined) =>
+  credential?.integrationID === "openai" &&
+  credential.value.type === "oauth" &&
+  OPENAI_OAUTH_METHODS.has(credential.value.methodID)
+
 export const authentication = (
   model: ModelV2.Info,
   provider: ProviderV2.Info | undefined,
   credential: Credential.Stored | undefined,
 ): ModelHarness.Route => {
   if ((provider?.id ?? model.providerID) !== ProviderV2.ID.openai || credential?.value.type !== "oauth") return "public"
+  if (!openAIOAuth(credential)) return "public"
   if (model.api.type !== "aisdk" || model.api.package !== "@ai-sdk/openai") return "public"
   if (model.api.url && model.api.url.replace(/\/$/, "") !== OpenAIResponses.DEFAULT_BASE_URL) return "public"
   return "codex"
@@ -177,10 +184,17 @@ export const resolve = (
   credential?: Credential.Stored,
 ) =>
   Effect.gen(function* () {
-    const harness = ModelHarness.resolve(model, authentication(model, provider, credential))
-    const resolved = yield* fromCatalogModel(withVariant(model, variant), provider, harness, credential)
+    const providerID = provider?.id ?? model.providerID
+    const bound =
+      credential &&
+      String(credential.integrationID) === String(providerID) &&
+      !(providerID === ProviderV2.ID.openai && credential.value.type === "oauth" && !openAIOAuth(credential))
+        ? credential
+        : undefined
+    const harness = ModelHarness.resolve(model, authentication(model, provider, bound))
+    const resolved = yield* fromCatalogModel(withVariant(model, variant), provider, harness, bound)
     const openAIAccountID =
-      credential?.value.type === "oauth" ? credential.value.metadata?.accountID : undefined
+      bound?.value.type === "oauth" && harness?.route.id === "codex" ? bound.value.metadata?.accountID : undefined
     if (!harness) return { model: resolved, catalog: model, harness, reasoning: undefined, openAIAccountID }
     yield* validate(harness, resolved)
     return {

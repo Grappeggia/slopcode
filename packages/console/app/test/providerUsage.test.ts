@@ -111,6 +111,15 @@ describe("provider usage extraction", () => {
     expect(await sanitizeSafety(hostile, undefined, "test-secret")).toEqual({ model: "gpt-5.6" })
   })
 
+  test("scopes managed identity to the authenticated user instead of workspace", async () => {
+    const body = { model: "gpt-5.6" }
+    const first = await sanitizeSafety(body, "usr_first", "test-secret")
+    const repeat = await sanitizeSafety(body, "usr_first", "test-secret")
+    const second = await sanitizeSafety(body, "usr_second", "test-secret")
+    expect(first.safety_identifier).toBe(repeat.safety_identifier)
+    expect(first.safety_identifier).not.toBe(second.safety_identifier)
+  })
+
   test("charges Gemini thinking tokens at the output rate", () => {
     const result = calculateUsageCost({ input: 0.000001, output: 0.000004 }, undefined, {
       inputTokens: 10,

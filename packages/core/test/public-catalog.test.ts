@@ -62,11 +62,13 @@ describe("public catalog projection", () => {
       type: "aisdk",
       package: "@ai-sdk/openai",
     })
-    expect(publicProvider).not.toHaveProperty("request")
+    expect(publicProvider).toBeInstanceOf(ProviderV2.Info)
+    expect(publicProvider.request).toEqual({ headers: {}, body: {} })
+    expect(publicModel).toBeInstanceOf(ModelV2.Info)
     expect(publicModel.api).not.toHaveProperty("settings")
     expect(publicModel.api).not.toHaveProperty("url")
-    expect(publicModel.request).toEqual({ variant: undefined })
-    expect(publicModel.variants[0]).toEqual({ id: "high" })
+    expect(publicModel.request).toEqual({ headers: {}, body: {}, generation: {}, options: {}, variant: undefined })
+    expect(publicModel.variants[0]).toEqual({ id: "high", headers: {}, body: {}, generation: {}, options: {} })
 
     expect(provider.enabled).toEqual({ via: "credential", credentialID: "cred_secret" })
     expect(provider.request.body.apiKey).toBe("projected-secret")

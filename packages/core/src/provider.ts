@@ -86,25 +86,8 @@ export class Info extends Schema.Class<Info>("ProviderV2.Info")({
   }
 }
 
-export const PublicApi = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("aisdk"), package: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("native") }),
-]).pipe(Schema.toTaggedUnion("type"))
-
-export class PublicInfo extends Schema.Class<PublicInfo>("ProviderV2.PublicInfo")({
-  id: ID,
-  name: Schema.String,
-  enabled: Schema.Union([
-    Schema.Literal(false),
-    Schema.Struct({ via: Schema.Literal("env"), name: Schema.String }),
-    Schema.Struct({ via: Schema.Literal("custom"), data: Schema.Record(Schema.String, Schema.Any) }),
-  ]),
-  env: Schema.Array(Schema.String),
-  api: PublicApi,
-}) {}
-
 export const publicInfo = (provider: Info) =>
-  new PublicInfo({
+  new Info({
     id: provider.id,
     name: provider.name,
     enabled:
@@ -112,5 +95,9 @@ export const publicInfo = (provider: Info) =>
         ? provider.enabled
         : { via: "custom", data: {} },
     env: provider.env,
-    api: provider.api.type === "aisdk" ? { type: provider.api.type, package: provider.api.package } : { type: "native" },
+    api:
+      provider.api.type === "aisdk"
+        ? { type: provider.api.type, package: provider.api.package }
+        : { type: "native", settings: {} },
+    request: { headers: {}, body: {} },
   })

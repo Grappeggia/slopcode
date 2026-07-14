@@ -672,8 +672,25 @@ export const layer = Layer.effect(
         : undefined
       const toolMaterialization = structuredMaterialization ?? (yield* tools.materialize(permissions, toolPlan))
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      const official = (() => {
+        const targets = {
+          openai: "https://api.openai.com/v1",
+          slopcode: "https://slopcode.dev/zen/v1",
+          "slopcode-go": "https://slopcode.dev/zen/go/v1",
+        } as const
+        const target = targets[resolved.model.provider as keyof typeof targets]
+        if (!target || resolved.model.route.endpoint.path !== "/responses" || resolved.model.route.endpoint.query)
+          return false
+        try {
+          const url = new URL(resolved.model.route.endpoint.baseURL ?? "")
+          if (url.username || url.password || url.search || url.hash || url.port) return false
+          return `${url.origin}${url.pathname.replace(/\/+$/, "")}` === target
+        } catch {
+          return false
+        }
+      })()
       const safetyIdentifier =
-        resolved.harness?.route.id === "public" && safety
+        resolved.harness?.route.id === "public" && official && safety
           ? safety.identifier({
               account: session.location.workspaceID,
               openai: resolved.openAIAccountID,

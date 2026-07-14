@@ -116,6 +116,7 @@ test("public V2 provider and model routes redact internal authentication materia
         expect(text).not.toContain(secret)
       }
       expect(text).not.toContain('"url"')
+      expect(text).not.toContain("PublicInfo")
     }
   } finally {
     await app.dispose()

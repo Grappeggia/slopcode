@@ -11,7 +11,7 @@ export async function sanitizeSafety(body: Record<string, unknown>, user: string
   const digest = await crypto.subtle.sign(
     "HMAC",
     key,
-    new TextEncoder().encode(`slopcode-managed-openai-safety-v1\0workspace\0${user}`),
+    new TextEncoder().encode(`slopcode-managed-openai-safety-v1\0user\0${user}`),
   )
   const value = btoa(String.fromCharCode(...new Uint8Array(digest)))
     .replace(/\+/g, "-")
