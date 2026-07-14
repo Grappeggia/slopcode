@@ -20,6 +20,8 @@ export interface OpenAIOptionsInput {
   readonly [key: string]: unknown
   readonly store?: boolean
   readonly promptCacheKey?: string
+  readonly safetyIdentifier?: string
+  readonly promptCacheOptions?: OpenAIPromptCacheOptions
   readonly instructions?: string
   readonly reasoningEffort?: ReasoningEffort
   readonly reasoningSummary?: "auto" | "none"
@@ -36,6 +38,11 @@ export interface OpenAIOptionsInput {
   readonly reasoningSummaryDelivery?: "sequential_cutoff"
 }
 
+export interface OpenAIPromptCacheOptions {
+  readonly mode: "explicit"
+  readonly ttl: "30m"
+}
+
 export type OpenAIProviderOptionsInput = ProviderOptions & {
   readonly openai?: OpenAIOptionsInput
 }
@@ -48,6 +55,8 @@ export const make = (options: OpenAIOptionsInput | undefined): ProviderOptions |
     definedEntries({
       store: options?.store,
       promptCacheKey: options?.promptCacheKey,
+      safetyIdentifier: options?.safetyIdentifier,
+      promptCacheOptions: options?.promptCacheOptions,
       instructions: options?.instructions,
       reasoningEffort: options?.reasoningEffort,
       reasoningSummary: options?.reasoningSummary,

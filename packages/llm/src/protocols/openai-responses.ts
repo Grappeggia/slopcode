@@ -35,6 +35,7 @@ export const PATH = "/responses"
 const OpenAIResponsesInputText = Schema.Struct({
   type: Schema.tag("input_text"),
   text: Schema.String,
+  prompt_cache_breakpoint: Schema.optional(Schema.Struct({ mode: Schema.Literal("explicit") })),
 })
 const OpenAIResponsesInputImage = Schema.Struct({
   type: Schema.tag("input_image"),
@@ -82,7 +83,10 @@ const OpenAIResponsesFunctionCallOutput = Schema.Union([
 ])
 
 const OpenAIResponsesHistoryItem = Schema.Union([
-  Schema.Struct({ role: Schema.tag("system"), content: Schema.String }),
+  Schema.Struct({
+    role: Schema.tag("system"),
+    content: Schema.Union([Schema.String, Schema.Array(OpenAIResponsesInputText)]),
+  }),
   Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenAIResponsesInputContent) }),
   Schema.Struct({ role: Schema.tag("assistant"), content: Schema.Array(OpenAIResponsesOutputText) }),
   OpenAIResponsesReasoningItem,
@@ -177,6 +181,10 @@ const OpenAIResponsesCoreFields = {
   store: Schema.optional(Schema.Boolean),
   service_tier: Schema.optional(OpenAIOptions.OpenAIServiceTier),
   prompt_cache_key: Schema.optional(Schema.String),
+  prompt_cache_options: Schema.optional(
+    Schema.Struct({ mode: Schema.Literal("explicit"), ttl: Schema.Literal("30m") }),
+  ),
+  safety_identifier: Schema.optional(Schema.String),
   include: optionalArray(OpenAIOptions.OpenAIResponseIncludable),
   stream_options: Schema.optional(
     Schema.Struct({ reasoning_summary_delivery: Schema.Literal("sequential_cutoff") }),
@@ -221,7 +229,12 @@ const encodeWebSocketMessage = Schema.encodeSync(Schema.fromJsonString(OpenAIRes
 
 const OpenAIResponsesUsage = Schema.Struct({
   input_tokens: Schema.optional(Schema.Number),
-  input_tokens_details: optionalNull(Schema.Struct({ cached_tokens: Schema.optional(Schema.Number) })),
+  input_tokens_details: optionalNull(
+    Schema.Struct({
+      cached_tokens: Schema.optional(Schema.Number),
+      cache_write_tokens: Schema.optional(Schema.Number),
+    }),
+  ),
   output_tokens: Schema.optional(Schema.Number),
   output_tokens_details: optionalNull(Schema.Struct({ reasoning_tokens: Schema.optional(Schema.Number) })),
   total_tokens: Schema.optional(Schema.Number),
@@ -392,8 +405,16 @@ const hostedToolItemID = (part: ToolResultPart) => {
 
 const lowerUserContent = Effect.fn("OpenAIResponses.lowerUserContent")(function* (
   part: LLMRequest["messages"][number]["content"][number],
+  cache = false,
 ) {
-  if (part.type === "text") return { type: "input_text" as const, text: part.text }
+  if (part.type === "text")
+    return {
+      type: "input_text" as const,
+      text: part.text,
+      ...(cache && part.cache?.ttlSeconds === 1800
+        ? { prompt_cache_breakpoint: { mode: "explicit" as const } }
+        : {}),
+    }
   if (part.type === "media") {
     const media = yield* ProviderShared.validateMedia(
       "OpenAI Responses",
@@ -429,28 +450,46 @@ const lowerToolResultOutput = Effect.fn("OpenAIResponses.lowerToolResultOutput")
 })
 
 const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest, includeSystem = true) {
+  const cache = eligible(request)
   const system: OpenAIResponsesInputItem[] =
     !includeSystem || request.system.length === 0
       ? []
-      : [{ role: "system", content: ProviderShared.joinText(request.system) }]
+      : [
+          {
+            role: "system",
+            content: request.system.some((part) => cache && part.cache?.ttlSeconds === 1800)
+              ? request.system.map((part) => ({
+                  type: "input_text" as const,
+                  text: part.text,
+                  ...(cache && part.cache?.ttlSeconds === 1800
+                    ? { prompt_cache_breakpoint: { mode: "explicit" as const } }
+                    : {}),
+                }))
+              : ProviderShared.joinText(request.system),
+          },
+        ]
   const input: OpenAIResponsesInputItem[] = [...system]
   const store = OpenAIOptions.store(request)
 
   for (const message of request.messages) {
     if (message.role === "system") {
       const part = yield* ProviderShared.wrappedSystemUpdate("OpenAI Responses", message)
+      const lowered = yield* lowerUserContent(part, cache)
       const previous = input.at(-1)
       if (previous && "role" in previous && previous.role === "user")
         input[input.length - 1] = {
           role: "user",
-          content: [...previous.content, { type: "input_text", text: part.text }],
+          content: [...previous.content, lowered],
         }
-      else input.push({ role: "user", content: [{ type: "input_text", text: part.text }] })
+      else input.push({ role: "user", content: [lowered] })
       continue
     }
 
     if (message.role === "user") {
-      input.push({ role: "user", content: yield* Effect.forEach(message.content, lowerUserContent) })
+      input.push({
+        role: "user",
+        content: yield* Effect.forEach(message.content, (part) => lowerUserContent(part, cache)),
+      })
       continue
     }
 
@@ -538,6 +577,21 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     : input
 })
 
+const GPT5_6 = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+const eligible = (request: LLMRequest) =>
+  GPT5_6.has(request.model.id.toLowerCase()) &&
+  (request.model.provider === "openai" ||
+    request.model.provider === "slopcode" ||
+    request.model.provider === "slopcode-go") &&
+  request.model.route.id !== "openai-responses-codex" &&
+  OpenAIOptions.responsesMode(request) !== "lite"
+
+const hasBreakpoint = (request: LLMRequest) =>
+  request.system.some((part) => part.cache?.ttlSeconds === 1800) ||
+  request.messages.some((message) =>
+    message.content.some((part) => part.type === "text" && part.cache?.ttlSeconds === 1800),
+  )
+
 const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (request: LLMRequest) {
   const lite = OpenAIOptions.responsesMode(request) === "lite"
   const store = OpenAIOptions.store(request)
@@ -555,10 +609,20 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   const serviceTier = OpenAIOptions.serviceTier(request)
   const parallelToolCalls = OpenAIOptions.parallelToolCalls(request)
   const truncation = OpenAIOptions.truncation(request)
+  const requestedCache = OpenAIOptions.promptCacheOptions(request)
+  const cache =
+    eligible(request) &&
+    hasBreakpoint(request) &&
+    (!OpenAIOptions.hasPromptCacheOptions(request) || requestedCache !== undefined)
+  const safety = eligible(request) ? OpenAIOptions.safetyIdentifier(request) : undefined
   return {
     ...(lite ? { instructions: "" } : instructions ? { instructions } : {}),
     ...(store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
+    ...(cache
+      ? { prompt_cache_options: requestedCache ?? { mode: "explicit" as const, ttl: "30m" as const } }
+      : {}),
+    ...(safety ? { safety_identifier: safety } : {}),
     ...(include.length > 0 ? { include } : {}),
     ...(request.model.route.capabilities.includes("sequential-cutoff") &&
     OpenAIOptions.reasoningSummaryDelivery(request) === "sequential_cutoff"
@@ -643,13 +707,15 @@ const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request:
 const mapUsage = (usage: OpenAIResponsesUsage | null | undefined) => {
   if (!usage) return undefined
   const cached = usage.input_tokens_details?.cached_tokens
+  const written = usage.input_tokens_details?.cache_write_tokens
   const reasoning = usage.output_tokens_details?.reasoning_tokens
-  const nonCached = ProviderShared.subtractTokens(usage.input_tokens, cached)
+  const nonCached = ProviderShared.subtractTokens(ProviderShared.subtractTokens(usage.input_tokens, cached), written)
   return new Usage({
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,
     nonCachedInputTokens: nonCached,
     cacheReadInputTokens: cached,
+    cacheWriteInputTokens: written,
     reasoningTokens: reasoning,
     totalTokens: ProviderShared.totalTokens(usage.input_tokens, usage.output_tokens, usage.total_tokens),
     providerMetadata: { openai: usage },

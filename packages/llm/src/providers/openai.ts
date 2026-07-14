@@ -12,6 +12,7 @@ export type {
   OpenAIReasoningContext,
   OpenAIResponseIncludable,
   OpenAIResponsesMode,
+  OpenAIPromptCacheOptions,
   OpenAITruncation,
 } from "./openai-options"
 

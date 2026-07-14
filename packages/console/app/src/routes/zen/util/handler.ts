@@ -62,6 +62,7 @@ import {
   type UsageCutover,
 } from "./usageBatcher"
 import { calculateUsageCost } from "./cost"
+import { sanitizeSafety } from "./safety"
 
 type ZenData = Awaited<ReturnType<typeof ZenData.list>>
 export type HandlerRuntime = {
@@ -72,6 +73,7 @@ export type HandlerRuntime = {
   reload?: boolean
   leaseSeconds?: number
   heartbeatInterval?: number
+  safetySecret?: string
   drainTimeout?: number
   usageCutover?: {
     redis?: Redis
@@ -420,7 +422,7 @@ export async function handler(
 
       const startTimestamp = Date.now()
       const reqUrl = providerInfo.modifyUrl(providerInfo.api, isStream)
-      const reqPayload = providerInfo.modifyBody({
+      const converted = providerInfo.modifyBody({
         ...createBodyConverter(opts.format, providerInfo.format)(body),
         model: providerInfo.model,
         ...(() => {
@@ -443,6 +445,15 @@ export async function handler(
           return replacer(providerInfo.payloadModifier ?? {})
         })(),
       })
+      const reqPayload =
+        providerInfo.format === "openai" &&
+        ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].includes(model.toLowerCase())
+          ? await sanitizeSafety(
+              converted,
+              authInfo?.workspaceID,
+              runtime.safetySecret ?? Resource.ZEN_SESSION_SECRET.value,
+            )
+          : converted
       const bound = prepareReservation(reqPayload, providerInfo.format, modelInfo.cost, modelInfo.cost200K, {
         limit: modelInfo.limit,
         payloads: [body],

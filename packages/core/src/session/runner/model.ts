@@ -50,6 +50,7 @@ export interface Resolved {
   readonly catalog: ModelV2.Info
   readonly harness: ModelHarness.Profile | undefined
   readonly reasoning: ModelHarness.Reasoning | undefined
+  readonly openAIAccountID?: string
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/SessionRunnerModel") {}
@@ -178,13 +179,16 @@ export const resolve = (
   Effect.gen(function* () {
     const harness = ModelHarness.resolve(model, authentication(model, provider, credential))
     const resolved = yield* fromCatalogModel(withVariant(model, variant), provider, harness, credential)
-    if (!harness) return { model: resolved, catalog: model, harness, reasoning: undefined }
+    const openAIAccountID =
+      credential?.value.type === "oauth" ? credential.value.metadata?.accountID : undefined
+    if (!harness) return { model: resolved, catalog: model, harness, reasoning: undefined, openAIAccountID }
     yield* validate(harness, resolved)
     return {
       model: resolved,
       catalog: model,
       harness,
       reasoning: yield* ModelHarness.reasoning(harness, variant),
+      openAIAccountID,
     }
   })
 

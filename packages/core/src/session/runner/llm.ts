@@ -45,6 +45,7 @@ import { SessionTask } from "../task"
 import { SessionExecutionStatus } from "../execution-status"
 import { SessionProviderRetry } from "../provider-retry"
 import { SessionRequestFingerprint } from "../request-fingerprint"
+import { SafetyIdentity } from "../../safety-identity"
 import { eq } from "drizzle-orm"
 import { type RunError, ProviderStreamError, RestartRequestMismatch, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
@@ -153,6 +154,7 @@ export const layer = Layer.effect(
     const runtime = yield* SessionRuntime.Service
     const status = yield* SessionExecutionStatus.Service
     const fingerprints = yield* SessionRequestFingerprint.Service
+    const safety = Option.getOrUndefined(yield* Effect.serviceOption(SafetyIdentity.Service))
     const location = yield* Location.Service
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
@@ -670,12 +672,20 @@ export const layer = Layer.effect(
         : undefined
       const toolMaterialization = structuredMaterialization ?? (yield* tools.materialize(permissions, toolPlan))
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      const safetyIdentifier =
+        resolved.harness?.route.id === "public" && safety
+          ? safety.identifier({
+              account: session.location.workspaceID,
+              openai: resolved.openAIAccountID,
+            })
+          : undefined
       const request = LLM.request({
         model,
         providerOptions: OpenAIProviderOptions.make(
           resolved.harness
             ? {
                 promptCacheKey,
+                safetyIdentifier,
                 responsesMode: resolved.harness.route.responses,
                 textVerbosity: "low",
                 reasoningEffort: resolved.reasoning,
@@ -1700,4 +1710,7 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(SessionRequestFingerprint.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(SessionRequestFingerprint.defaultLayer),
+  Layer.provide(SafetyIdentity.defaultLayer),
+)

@@ -3,6 +3,7 @@ import { ConfigProvider, Effect, Layer, Schema, Stream } from "effect"
 import { Headers, HttpClientRequest } from "effect/unstable/http"
 import {
   CustomToolDefinition,
+  CacheHint,
   LLM,
   LLMError,
   LLMEvent,
@@ -745,6 +746,75 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("emits GPT-5.6 safety identity and only explicit 30m cache breakpoints", () =>
+    Effect.gen(function* () {
+      const eligible = Model.update(model, { id: "gpt-5.6", provider: "openai" })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: eligible,
+          system: [{ type: "text", text: "stable", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
+          messages: [
+            Message.user([
+              { type: "text", text: "first" },
+              { type: "text", text: "second", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) },
+            ]),
+          ],
+          providerOptions: {
+            openai: { safetyIdentifier: "sc_safe", promptCacheOptions: { mode: "explicit", ttl: "30m" } },
+          },
+        }),
+      )
+
+      expect(prepared.body.safety_identifier).toBe("sc_safe")
+      expect(prepared.body.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" })
+      expect(JSON.stringify(prepared.body.input).match(/prompt_cache_breakpoint/g)?.length).toBe(2)
+    }),
+  )
+
+  it.effect("omits safety and cache options for defaults, bad TTLs, and excluded routes", () =>
+    Effect.gen(function* () {
+      const options = {
+        openai: { safetyIdentifier: "hostile", promptCacheOptions: { mode: "explicit" as const, ttl: "30m" as const } },
+      }
+      const cases = [
+        Model.update(model, { id: "gpt-5.5", provider: "openai" }),
+        Model.update(codexModel, { id: "gpt-5.6", provider: "openai" }),
+        Model.update(model, { id: "gpt-5.6", provider: "azure" }),
+        Model.update(model, { id: "gpt-5.6", provider: "github-copilot" }),
+        Model.update(model, { id: "gpt-5.6", provider: "openrouter" }),
+        Model.update(model, { id: "gpt-5.6", provider: "compatible" }),
+      ]
+      for (const excluded of cases) {
+        const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+          LLM.request({
+            model: excluded,
+            prompt: [{ type: "text", text: "no leak", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
+            providerOptions: options,
+          }),
+        )
+        expect(prepared.body.safety_identifier).toBeUndefined()
+        expect(prepared.body.prompt_cache_options).toBeUndefined()
+        expect(JSON.stringify(prepared.body.input)).not.toContain("prompt_cache_breakpoint")
+      }
+
+      const implicit = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({ model: Model.update(model, { id: "gpt-5.6", provider: "openai" }), prompt: "plain" }),
+      )
+      expect(implicit.body.prompt_cache_options).toBeUndefined()
+      expect(JSON.stringify(implicit.body.input)).not.toContain("prompt_cache_breakpoint")
+
+      const bad = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: Model.update(model, { id: "gpt-5.6", provider: "openai" }),
+          prompt: [{ type: "text", text: "old", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 3600 }) }],
+          providerOptions: options,
+        }),
+      )
+      expect(bad.body.prompt_cache_options).toBeUndefined()
+      expect(JSON.stringify(bad.body.input)).not.toContain("prompt_cache_breakpoint")
+    }),
+  )
+
   it.effect("maps max reasoning effort for GPT-5.6", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
@@ -1327,10 +1397,10 @@ describe("OpenAI Responses route", () => {
             id: "resp_1",
             service_tier: "default",
             usage: {
-              input_tokens: 5,
+              input_tokens: 10,
               output_tokens: 2,
-              total_tokens: 7,
-              input_tokens_details: { cached_tokens: 1 },
+              total_tokens: 12,
+              input_tokens_details: { cached_tokens: 3, cache_write_tokens: 4 },
               output_tokens_details: { reasoning_tokens: 0 },
             },
           },
@@ -1338,18 +1408,19 @@ describe("OpenAI Responses route", () => {
       )
       const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
       const usage = new Usage({
-        inputTokens: 5,
+        inputTokens: 10,
         outputTokens: 2,
-        nonCachedInputTokens: 4,
-        cacheReadInputTokens: 1,
+        nonCachedInputTokens: 3,
+        cacheReadInputTokens: 3,
+        cacheWriteInputTokens: 4,
         reasoningTokens: 0,
-        totalTokens: 7,
+        totalTokens: 12,
         providerMetadata: {
           openai: {
-            input_tokens: 5,
+            input_tokens: 10,
             output_tokens: 2,
-            total_tokens: 7,
-            input_tokens_details: { cached_tokens: 1 },
+            total_tokens: 12,
+            input_tokens_details: { cached_tokens: 3, cache_write_tokens: 4 },
             output_tokens_details: { reasoning_tokens: 0 },
           },
         },

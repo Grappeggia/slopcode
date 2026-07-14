@@ -51,6 +51,37 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("normalizes native cache writes without double counting input", () =>
+    Effect.gen(function* () {
+      const result = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents({
+            id: "chatcmpl_cache",
+            object: "chat.completion.chunk",
+            created: 0,
+            model: "gpt-5.6",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: {
+              prompt_tokens: 10,
+              completion_tokens: 2,
+              total_tokens: 12,
+              prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 4 },
+            },
+            }),
+          ),
+        ),
+      )
+      const usage = result.usage
+      expect(usage).toMatchObject({
+        inputTokens: 10,
+        nonCachedInputTokens: 3,
+        cacheReadInputTokens: 3,
+        cacheWriteInputTokens: 4,
+      })
+    }),
+  )
+
   it.effect("lowers chronological system updates to escaped user wrappers in order", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(

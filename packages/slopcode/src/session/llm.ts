@@ -24,6 +24,8 @@ import { SessionID } from "@/session/schema"
 import { Auth } from "@/auth"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { Account } from "@/account/account"
+import { SafetyIdentity } from "@slopcode-ai/core/safety-identity"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
@@ -143,6 +145,25 @@ const live: Layer.Layer<
         flags,
         isWorkflow,
       })
+      const managed = input.model.providerID === "slopcode" || input.model.providerID === "slopcode-go"
+      const eligible =
+        ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].includes(input.model.api.id.toLowerCase()) &&
+        input.model.api.npm === "@ai-sdk/openai" &&
+        (managed || (input.model.providerID === "openai" && info?.type !== "oauth"))
+      const account = eligible ? Option.getOrUndefined(yield* Effect.serviceOption(Account.Service)) : undefined
+      const safety = eligible ? Option.getOrUndefined(yield* Effect.serviceOption(SafetyIdentity.Service)) : undefined
+      const active = account
+        ? Option.getOrUndefined(yield* account.active().pipe(Effect.catch(() => Effect.succeed(Option.none()))))
+        : undefined
+      const options = eligible && safety
+        ? {
+            ...prepared.params.options,
+            safetyIdentifier: safety.identifier({
+              account: active?.id,
+              openai: info?.type === "oauth" ? info.accountId : undefined,
+            }),
+          }
+        : prepared.params.options
       if (input.runtime === "side") {
         const hard =
           input.model.limit.context === 0
@@ -282,7 +303,7 @@ const live: Layer.Layer<
           topP: prepared.params.topP,
           topK: prepared.params.topK,
           maxOutputTokens: prepared.params.maxOutputTokens,
-          providerOptions: prepared.params.options,
+          providerOptions: options,
           headers: prepared.headers,
           abort: input.abort,
         })
@@ -359,7 +380,7 @@ const live: Layer.Layer<
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
-          providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
+          providerOptions: ProviderTransform.providerOptions(input.model, options),
           activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
           tools: prepared.tools,
           toolChoice: input.toolChoice,
@@ -442,6 +463,8 @@ export const defaultLayer = Layer.suspend(() =>
       LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
     ),
     Layer.provide(RuntimeFlags.defaultLayer),
+    Layer.provide(Account.defaultLayer),
+    Layer.provide(SafetyIdentity.defaultLayer),
   ),
 )
 
@@ -456,6 +479,7 @@ export const node = LayerNode.make(layer, [
   EventV2Bridge.node,
   llmClient,
   RuntimeFlags.node,
+  SafetyIdentity.node,
 ])
 
 export * as LLM from "./llm"

@@ -14,6 +14,7 @@ type Usage = {
     cached_tokens?: number
     // used by alibaba
     cache_creation_input_tokens?: number
+    cache_write_tokens?: number
   }
   completion_tokens_details?: {
     reasoning_tokens?: number
@@ -64,14 +65,17 @@ export const oaCompatHelper: ProviderHelper = ({ adjustCacheUsage }) => ({
     const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens ?? undefined
     const outputTokens = Math.max(0, (usage.completion_tokens ?? 0) - (reasoningTokens ?? 0))
     let cacheReadTokens = usage.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? undefined
-    const cacheWriteTokens = usage.prompt_tokens_details?.cache_creation_input_tokens ?? undefined
+    const cacheWriteTokens =
+      usage.prompt_tokens_details?.cache_write_tokens ??
+      usage.prompt_tokens_details?.cache_creation_input_tokens ??
+      undefined
 
     if (adjustCacheUsage && !cacheReadTokens) {
       cacheReadTokens = Math.floor(inputTokens * 0.9)
     }
 
     return {
-      inputTokens: inputTokens - (cacheReadTokens ?? 0),
+      inputTokens: Math.max(0, inputTokens - (cacheReadTokens ?? 0) - (cacheWriteTokens ?? 0)),
       outputTokens,
       reasoningTokens,
       cacheReadTokens,

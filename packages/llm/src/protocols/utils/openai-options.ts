@@ -92,6 +92,20 @@ export const promptCacheKey = (request: LLMRequest) => {
   return typeof value === "string" ? value : undefined
 }
 
+export const safetyIdentifier = (request: LLMRequest) => {
+  const value = options(request)?.safetyIdentifier
+  return typeof value === "string" && value.length > 0 && value.length <= 64 ? value : undefined
+}
+
+export const promptCacheOptions = (request: LLMRequest) => {
+  const value = options(request)?.promptCacheOptions
+  if (!value || typeof value !== "object") return undefined
+  const item = value as Record<string, unknown>
+  return item.mode === "explicit" && item.ttl === "30m" ? { mode: "explicit" as const, ttl: "30m" as const } : undefined
+}
+
+export const hasPromptCacheOptions = (request: LLMRequest) => options(request)?.promptCacheOptions !== undefined
+
 export const textVerbosity = (request: LLMRequest) => {
   const value = options(request)?.textVerbosity
   return isTextVerbosity(value) ? value : undefined
