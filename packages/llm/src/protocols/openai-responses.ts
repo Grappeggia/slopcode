@@ -187,9 +187,7 @@ const OpenAIResponsesCoreFields = {
   ),
   safety_identifier: Schema.optional(Schema.String),
   include: optionalArray(OpenAIOptions.OpenAIResponseIncludable),
-  stream_options: Schema.optional(
-    Schema.Struct({ reasoning_summary_delivery: Schema.Literal("sequential_cutoff") }),
-  ),
+  stream_options: Schema.optional(Schema.Struct({ reasoning_summary_delivery: Schema.Literal("sequential_cutoff") })),
   reasoning: Schema.optional(
     Schema.Struct({
       effort: Schema.optional(OpenAIOptions.OpenAIReasoningEffort),
@@ -413,9 +411,7 @@ const lowerUserContent = Effect.fn("OpenAIResponses.lowerUserContent")(function*
     return {
       type: "input_text" as const,
       text: part.text,
-      ...(cache && part.cache?.ttlSeconds === 1800
-        ? { prompt_cache_breakpoint: { mode: "explicit" as const } }
-        : {}),
+      ...(cache && part.cache?.ttlSeconds === 1800 ? { prompt_cache_breakpoint: { mode: "explicit" as const } } : {}),
     }
   if (part.type === "media") {
     const media = yield* ProviderShared.validateMedia(
@@ -620,8 +616,7 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   const summary = OpenAIOptions.reasoningSummary(request)
   const context = lite ? ("all_turns" as const) : OpenAIOptions.reasoningContext(request)
   const requested = OpenAIOptions.include(request) ?? []
-  const include =
-    store === false ? [...new Set([...requested, "reasoning.encrypted_content" as const])] : requested
+  const include = store === false ? [...new Set([...requested, "reasoning.encrypted_content" as const])] : requested
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
@@ -637,9 +632,7 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
     ...(lite ? { instructions: "" } : instructions ? { instructions } : {}),
     ...(store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
-    ...(cache
-      ? { prompt_cache_options: requestedCache ?? { mode: "explicit" as const, ttl: "30m" as const } }
-      : {}),
+    ...(cache ? { prompt_cache_options: requestedCache ?? { mode: "explicit" as const, ttl: "30m" as const } } : {}),
     ...(safety ? { safety_identifier: safety } : {}),
     ...(include.length > 0 ? { include } : {}),
     ...(request.model.route.capabilities.includes("sequential-cutoff") &&
@@ -865,7 +858,12 @@ const onReasoningDone = (state: ParserState, event: OpenAIResponsesEvent): StepR
   const events: LLMEvent[] = []
   const closed = Object.entries(item.summaryParts).reduce(
     (lifecycle, entry) =>
-      Lifecycle.reasoningEnd(lifecycle, events, `${event.item_id}:${entry[0]}`, openaiMetadata({ itemId: event.item_id })),
+      Lifecycle.reasoningEnd(
+        lifecycle,
+        events,
+        `${event.item_id}:${entry[0]}`,
+        openaiMetadata({ itemId: event.item_id }),
+      ),
     state.lifecycle,
   )
   const id = `${event.item_id}:${event.summary_index}`

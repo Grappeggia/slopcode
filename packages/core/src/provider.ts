@@ -91,9 +91,7 @@ export const publicInfo = (provider: Info) =>
     id: provider.id,
     name: provider.name,
     enabled:
-      provider.enabled === false || provider.enabled.via === "env"
-        ? provider.enabled
-        : { via: "custom", data: {} },
+      provider.enabled === false || provider.enabled.via === "env" ? provider.enabled : { via: "custom", data: {} },
     env: provider.env,
     api:
       provider.api.type === "aisdk"

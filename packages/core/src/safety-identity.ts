@@ -43,10 +43,7 @@ export const load = async (data: string): Promise<Interface> => {
   const target = seedPath(data)
   await fs.mkdir(target.directory, { recursive: true, mode: 0o700 })
   const nofollow = constants.O_NOFOLLOW ?? 0
-  const directory = await fs.open(
-    target.directory,
-    constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | nofollow,
-  )
+  const directory = await fs.open(target.directory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | nofollow)
   try {
     if (!(await directory.stat()).isDirectory()) throw new Error("Safety identity directory is unsafe")
     await directory.chmod(0o700)

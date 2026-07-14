@@ -576,9 +576,7 @@ describe("session.llm-native.request", () => {
             },
           })
           const body = prepared.body as Record<string, unknown>
-          expect(body.prompt_cache_options).toEqual(
-            item.cached ? { mode: "explicit", ttl: "30m" } : undefined,
-          )
+          expect(body.prompt_cache_options).toEqual(item.cached ? { mode: "explicit", ttl: "30m" } : undefined)
           expect(JSON.stringify(body).match(/prompt_cache_breakpoint/g)?.length ?? 0).toBe(item.cached ? 3 : 0)
           const system = (body.input as Array<{ role?: string; content?: unknown }>).find(
             (entry) => entry.role === "system",
@@ -594,7 +592,9 @@ describe("session.llm-native.request", () => {
                 ]
               : "stable system",
           )
-          const user = (body.input as Array<{ role?: string; content?: unknown }>).find((entry) => entry.role === "user")
+          const user = (body.input as Array<{ role?: string; content?: unknown }>).find(
+            (entry) => entry.role === "user",
+          )
           expect(user?.content).toEqual(
             item.cached
               ? [

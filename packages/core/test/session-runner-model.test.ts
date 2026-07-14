@@ -55,11 +55,7 @@ const provider = (api: ProviderV2.Info["api"]) =>
     request: { headers: {}, body: {} },
   })
 
-const credential = (
-  type: "oauth" | "key",
-  integrationID = "openai",
-  methodID = "chatgpt-browser",
-) =>
+const credential = (type: "oauth" | "key", integrationID = "openai", methodID = "chatgpt-browser") =>
   new Credential.Stored({
     id: Credential.ID.make(`cred_${type}`),
     integrationID: Integration.ID.make(integrationID),
@@ -157,11 +153,35 @@ describe("SessionRunnerModel", () => {
 
   const routes = [
     { name: "OpenAI OAuth", providerID: "openai", enabled: "credential", credential: credential("oauth"), codex: true },
-    { name: "explicit API key", providerID: "openai", enabled: "credential", credential: credential("key"), codex: false },
+    {
+      name: "explicit API key",
+      providerID: "openai",
+      enabled: "credential",
+      credential: credential("key"),
+      codex: false,
+    },
     { name: "environment key", providerID: "openai", enabled: "env", codex: false },
-    { name: "custom endpoint", providerID: "openai", enabled: "custom", url: "https://custom.example/v1", codex: false },
-    { name: "Slopcode free", providerID: "slopcode", enabled: "custom", url: "https://slopcode.dev/zen/v1", codex: false },
-    { name: "Slopcode Go", providerID: "slopcode-go", enabled: "custom", url: "https://slopcode.dev/zen/go/v1", codex: false },
+    {
+      name: "custom endpoint",
+      providerID: "openai",
+      enabled: "custom",
+      url: "https://custom.example/v1",
+      codex: false,
+    },
+    {
+      name: "Slopcode free",
+      providerID: "slopcode",
+      enabled: "custom",
+      url: "https://slopcode.dev/zen/v1",
+      codex: false,
+    },
+    {
+      name: "Slopcode Go",
+      providerID: "slopcode-go",
+      enabled: "custom",
+      url: "https://slopcode.dev/zen/go/v1",
+      codex: false,
+    },
   ] as const
 
   for (const item of routes) {
@@ -185,13 +205,7 @@ describe("SessionRunnerModel", () => {
           api: { type: "aisdk", package: "@ai-sdk/openai", url: catalog.api.url },
           request: { headers: {}, body: {} },
         })
-        const resolved = yield* SessionRunnerModel.resolve(
-          session(catalog),
-          catalog,
-          info,
-          undefined,
-          item.credential,
-        )
+        const resolved = yield* SessionRunnerModel.resolve(session(catalog), catalog, info, undefined, item.credential)
 
         expect(resolved.harness?.route.id).toBe(item.codex ? "codex" : "public")
         expect(resolved.model.route.endpoint).toMatchObject(
@@ -220,9 +234,13 @@ describe("SessionRunnerModel", () => {
           http: { headers: resolved.model.route.defaults.headers },
         })
         const body = yield* resolved.model.route.body.from(request)
-        const transport = yield* resolved.model.route.prepareTransport(body, request).pipe(
-          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: { TEST_PROVIDER_API_KEY: "env-secret" } }))),
-        )
+        const transport = yield* resolved.model.route
+          .prepareTransport(body, request)
+          .pipe(
+            Effect.provide(
+              ConfigProvider.layer(ConfigProvider.fromEnv({ env: { TEST_PROVIDER_API_KEY: "env-secret" } })),
+            ),
+          )
         const web = yield* HttpClientRequest.toWeb((transport as HttpTransport.HttpPrepared<string>).request)
         const json = body as OpenAIResponses.OpenAIResponsesBody
 

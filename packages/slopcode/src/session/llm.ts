@@ -262,9 +262,7 @@ const live: Layer.Layer<
           : undefined,
       })
       const headers = Object.fromEntries(
-        Object.entries(prepared.headers).filter(
-          ([key]) => key.toLowerCase() !== "x-slopcode-openai-cache-breakpoints",
-        ),
+        Object.entries(prepared.headers).filter(([key]) => key.toLowerCase() !== "x-slopcode-openai-cache-breakpoints"),
       )
       if (input.runtime === "side") {
         const hard =

@@ -230,9 +230,9 @@ describe("session.llm provider option safety", () => {
       { model: model("slopcode", "@ai-sdk/openai", "gpt-5.6", "https://proxy.example/zen/v1") },
     ]
     routes.forEach((route) =>
-      expect(
-        LLM.sanitizeOptions({ ...route, options, safetyIdentifier: "sc_safe", cacheHint: true }),
-      ).toEqual({ reasoningEffort: "high" }),
+      expect(LLM.sanitizeOptions({ ...route, options, safetyIdentifier: "sc_safe", cacheHint: true })).toEqual({
+        reasoningEffort: "high",
+      }),
     )
   })
 
@@ -264,9 +264,7 @@ describe("session.llm provider option safety", () => {
     const messages = [
       {
         role: "user",
-        content: [
-          { type: "text", text: "cache me", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) },
-        ],
+        content: [{ type: "text", text: "cache me", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
       },
     ] as unknown as ModelMessage[]
     const cases = [
@@ -287,15 +285,11 @@ describe("session.llm provider option safety", () => {
     const messages = [
       {
         role: "system",
-        content: [
-          { type: "text", text: "stable", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) },
-        ],
+        content: [{ type: "text", text: "stable", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
       } as unknown as ModelMessage,
       {
         role: "user",
-        content: [
-          { type: "text", text: "cache me", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) },
-        ],
+        content: [{ type: "text", text: "cache me", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
       },
     ] as unknown as ModelMessage[]
     const official = model("openai", "@ai-sdk/openai")
@@ -1278,9 +1272,7 @@ describe("session.llm.stream", () => {
           messages: [
             {
               role: "user",
-              content: [
-                { type: "text", text: "Hello", cache: { type: "ephemeral", ttlSeconds: 1800 } },
-              ],
+              content: [{ type: "text", text: "Hello", cache: { type: "ephemeral", ttlSeconds: 1800 } }],
             } as unknown as ModelMessage,
           ],
           tools: {},
@@ -1559,7 +1551,9 @@ describe("session.llm.stream", () => {
         }).pipe(Effect.exit)
         expect(Exit.isFailure(exit)).toBe(true)
         if (Exit.isFailure(exit))
-          expect(String(Cause.squash(exit.cause))).toContain("Explicit GPT-5.6 caching requires native OpenAI Responses")
+          expect(String(Cause.squash(exit.cause))).toContain(
+            "Explicit GPT-5.6 caching requires native OpenAI Responses",
+          )
       }),
     {
       config: () => {

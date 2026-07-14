@@ -830,9 +830,7 @@ describe("OpenAI Responses route", () => {
               provider: item.provider,
               route: model.route.with({ endpoint: { baseURL: item.baseURL } }),
             }),
-            prompt: [
-              { type: "text", text: "managed", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) },
-            ],
+            prompt: [{ type: "text", text: "managed", cache: new CacheHint({ type: "ephemeral", ttlSeconds: 1800 }) }],
             providerOptions: {
               openai: { safetyIdentifier: "sc_safe", promptCacheOptions: { mode: "explicit", ttl: "30m" } },
             },
@@ -1412,11 +1410,7 @@ describe("OpenAI Responses route", () => {
 
   it.effect("preserves stored include order and duplicates exactly", () =>
     Effect.gen(function* () {
-      const include = [
-        "web_search_call.results",
-        "reasoning.encrypted_content",
-        "web_search_call.results",
-      ] as const
+      const include = ["web_search_call.results", "reasoning.encrypted_content", "web_search_call.results"] as const
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({ model, prompt: "hi", providerOptions: { openai: { store: true, include } } }),
       )

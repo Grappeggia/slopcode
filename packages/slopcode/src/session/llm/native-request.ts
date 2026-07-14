@@ -119,7 +119,9 @@ const messages = (input: readonly ModelMessage[]) => {
     if (!Array.isArray(value)) return []
     return value.flatMap((part: unknown) => {
       if (!isRecord(part) || part.type !== "text") return []
-      return [{ type: "text" as const, text: typeof part.text === "string" ? part.text : "", cache: cacheHint(part.cache) }]
+      return [
+        { type: "text" as const, text: typeof part.text === "string" ? part.text : "", cache: cacheHint(part.cache) },
+      ]
     })
   })
   const messages = input.flatMap((message) => {

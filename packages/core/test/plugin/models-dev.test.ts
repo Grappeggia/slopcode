@@ -98,7 +98,10 @@ describe("ModelsDevPlugin", () => {
           model,
         )
 
-        expect(model.api).toMatchObject({ package: "@ai-sdk/openai", url: `https://slopcode.dev/zen${providerID === ProviderV2.ID.slopcodeGo ? "/go" : ""}/v1` })
+        expect(model.api).toMatchObject({
+          package: "@ai-sdk/openai",
+          url: `https://slopcode.dev/zen${providerID === ProviderV2.ID.slopcodeGo ? "/go" : ""}/v1`,
+        })
         expect(resolved.model.route).toMatchObject({
           protocol: "openai-responses",
           endpoint: {

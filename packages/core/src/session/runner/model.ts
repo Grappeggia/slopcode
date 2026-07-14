@@ -259,13 +259,7 @@ export const locationLayer = Layer.effect(
           enabled !== false && enabled.via === "credential"
             ? (yield* credentials.all()).find((item) => item.id === enabled.credentialID)
             : undefined
-        return yield* resolve(
-          session,
-          selected.model,
-          provider,
-          selected.variant,
-          credential,
-        )
+        return yield* resolve(session, selected.model, provider, selected.variant, credential)
       }),
     })
   }),
