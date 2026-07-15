@@ -1,5 +1,10 @@
 import { afterEach, describe, expect } from "bun:test"
-import type { LanguageModelV3, LanguageModelV3CallOptions } from "@ai-sdk/provider"
+import type {
+  LanguageModelV3,
+  LanguageModelV3CallOptions,
+  LanguageModelV3StreamPart,
+  LanguageModelV3StreamResult,
+} from "@ai-sdk/provider"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import { Database } from "@slopcode-ai/core/database/database"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
@@ -12,6 +17,7 @@ import { HttpServer } from "effect/unstable/http"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
 import { createRoutes } from "../../src/server/routes/instance/httpapi/server"
+import { SessionAutocomplete } from "../../src/session/autocomplete"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { testEffect } from "../lib/effect"
@@ -41,15 +47,37 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-type Generation = { signal: AbortSignal; aborted: Promise<void> }
+function stream(text: string): LanguageModelV3StreamResult {
+  return {
+    stream: new ReadableStream<LanguageModelV3StreamPart>({
+      start(controller) {
+        controller.enqueue({ type: "stream-start", warnings: [] })
+        controller.enqueue({ type: "text-start", id: "text" })
+        controller.enqueue({ type: "text-delta", id: "text", delta: text })
+        controller.enqueue({ type: "text-end", id: "text" })
+        controller.enqueue({
+          type: "finish",
+          finishReason: { unified: "stop", raw: "stop" },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 1, text: 1, reasoning: 0 },
+          },
+        })
+        controller.close()
+      },
+    }),
+  }
+}
+
+type Generation = { signal: AbortSignal; aborted: Promise<void>; finish(text: string): void }
 const generations = (() => {
   const calls: Generation[] = []
   const waiting = new Map<number, (call: Generation) => void>()
   return {
     add(signal: AbortSignal) {
       const stopped = deferred<void>()
-      const pending = deferred<never>()
-      const call = { signal, aborted: stopped.promise }
+      const pending = deferred<LanguageModelV3StreamResult>()
+      const call = { signal, aborted: stopped.promise, finish: (text: string) => pending.resolve(stream(text)) }
       const abort = () => {
         stopped.resolve()
         pending.reject(signal.reason)
@@ -320,7 +348,7 @@ describe("session autocomplete HttpApi", () => {
   )
 
   abortIt.live(
-    "does not let a late abort poison a reused ID",
+    "rejects replacement before a delayed cancel can target a reused ID",
     Effect.gen(function* () {
       generations.reset()
       const directory = yield* tmpdirScoped({
@@ -339,27 +367,68 @@ describe("session autocomplete HttpApi", () => {
         prefix: "first reused completion",
       })
       const initial = yield* Effect.promise(() => generations.wait(0))
-      yield* Effect.promise(() => sdk.session.abortAutocomplete({ sessionID: session.data!.id, requestID: "reused" }))
-      yield* Effect.promise(() => initial.aborted)
-      yield* Effect.promise(() => first)
+      initial.finish("first")
+      expect((yield* Effect.promise(() => first)).response.status).toBe(200)
+
+      const replacement = sdk.session.autocomplete({
+        sessionID: session.data!.id,
+        requestID: "reused",
+        model: { providerID: "test", modelID: "test-model" },
+        prefix: "replacement completion",
+      })
+      const outcome = yield* Effect.promise(() =>
+        Promise.race([replacement.then((response) => ({ response })), generations.wait(1).then((call) => ({ call }))]),
+      )
+      expect("response" in outcome).toBe(true)
+      if (!("response" in outcome)) return
+      expect(outcome.response.response.status).toBe(400)
+      expect(generations.count()).toBe(1)
 
       const late = yield* Effect.promise(() =>
         sdk.session.abortAutocomplete({ sessionID: session.data!.id, requestID: "reused" }),
       )
       expect(late.data).toBe(false)
+      expect(generations.count()).toBe(1)
+    }),
+    15_000,
+  )
+
+  abortIt.live(
+    "allows request ID reuse after the tombstone expires",
+    Effect.gen(function* () {
+      generations.reset()
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: {
+          ...testProviderConfig("http://127.0.0.1:1/v1"),
+          autocomplete: { enabled: true, min_prefix_chars: 1, timeout_ms: 10_000 },
+        },
+      })
+      const sdk = yield* client(directory)
+      const session = yield* Effect.promise(() => sdk.session.create({ title: "autocomplete expiry" }))
+      const first = sdk.session.autocomplete({
+        sessionID: session.data!.id,
+        requestID: "expires",
+        model: { providerID: "test", modelID: "test-model" },
+        prefix: "first expiring completion",
+      })
+      const initial = yield* Effect.promise(() => generations.wait(0))
+      initial.finish("first")
+      expect((yield* Effect.promise(() => first)).response.status).toBe(200)
+
+      yield* Effect.promise(() => Bun.sleep(SessionAutocomplete.REQUEST_TOMBSTONE_MS + 100))
       const second = sdk.session.autocomplete({
         sessionID: session.data!.id,
-        requestID: "reused",
+        requestID: "expires",
         model: { providerID: "test", modelID: "test-model" },
-        prefix: "second reused completion",
+        prefix: "second expiring completion",
       })
       const current = yield* Effect.promise(() => generations.wait(1))
       expect(current.signal.aborted).toBe(false)
-      yield* Effect.promise(() => sdk.session.abortAutocomplete({ sessionID: session.data!.id, requestID: "reused" }))
-      yield* Effect.promise(() => current.aborted)
-      yield* Effect.promise(() => second)
+      current.finish("second")
+      expect((yield* Effect.promise(() => second)).response.status).toBe(200)
     }),
-    15_000,
+    20_000,
   )
 
   abortIt.live(

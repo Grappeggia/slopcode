@@ -5,7 +5,7 @@ import { ModelV2 } from "@slopcode-ai/core/model"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { Grapheme } from "@slopcode-ai/core/util/grapheme"
 import { waitForAbort } from "@slopcode-ai/core/process"
-import { Context, Duration, Effect, Layer } from "effect"
+import { Context, Data, Duration, Effect, Layer } from "effect"
 import { streamText, wrapLanguageModel, type ModelMessage } from "ai"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -13,6 +13,7 @@ import { SessionID } from "./schema"
 
 export const INSTRUCTIONS =
   "Continue the user's unfinished prompt. Return only the short continuation, on one line, without repeating the prefix, markdown, quotes, or explanation. Return an empty string when uncertain."
+export const REQUEST_TOMBSTONE_MS = 2_000
 
 export type Settings = ConfigAutocompleteV1.Resolved
 
@@ -28,6 +29,11 @@ export type Output = {
   completion: string
   model: string
 }
+
+export class RequestIDConflictError extends Data.TaggedError("AutocompleteRequestIDConflictError")<{
+  sessionID: SessionID
+  requestID: string
+}> {}
 
 export function settings(input?: ConfigAutocompleteV1.Info): Settings {
   return ConfigAutocompleteV1.resolve(input)
@@ -78,7 +84,7 @@ export function route(input: {
 }
 
 export interface Interface {
-  readonly complete: (input: Input) => Effect.Effect<Output, Provider.ModelNotFoundError>
+  readonly complete: (input: Input) => Effect.Effect<Output, Provider.ModelNotFoundError | RequestIDConflictError>
   readonly abort: (sessionID: SessionID, requestID: string) => Effect.Effect<boolean>
 }
 
@@ -92,7 +98,10 @@ export const layer = Layer.effect(
     const provider = yield* Provider.Service
     const active = new Map<string, AbortController>()
     // Finished tombstones keep a late cancel from becoming a pre-cancel when an ID is reused.
-    const state = new Map<string, { status: "canceled" | "finished"; timer: ReturnType<typeof setTimeout> }>()
+    const state = new Map<
+      string,
+      { status: "canceled" | "finished"; expires: number; timer: ReturnType<typeof setTimeout> }
+    >()
 
     const key = (sessionID: SessionID, requestID: string) => JSON.stringify([sessionID, requestID])
     const remove = (id: string) => {
@@ -101,16 +110,23 @@ export const layer = Layer.effect(
       clearTimeout(item.timer)
       state.delete(id)
     }
+    const lookup = (id: string) => {
+      const item = state.get(id)
+      if (!item || item.expires > Date.now()) return item
+      remove(id)
+      return undefined
+    }
     const mark = (id: string, status: "canceled" | "finished") => {
       remove(id)
       if (state.size >= 1_024) {
         const oldest = state.keys().next()
         if (!oldest.done) remove(oldest.value)
       }
+      const expires = Date.now() + REQUEST_TOMBSTONE_MS
       const timer = setTimeout(() => {
         if (state.get(id)?.timer === timer) state.delete(id)
-      }, 10_000)
-      state.set(id, { status, timer })
+      }, REQUEST_TOMBSTONE_MS)
+      state.set(id, { status, expires, timer })
     }
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
@@ -196,14 +212,16 @@ export const layer = Layer.effect(
       const requestID = input.requestID
       if (!requestID) return yield* run(input)
       const id = key(input.sessionID, requestID)
-      if (state.get(id)?.status === "canceled") {
+      const current = lookup(id)
+      if (current?.status === "canceled") {
         remove(id)
         mark(id, "finished")
         return { completion: "", model: `${input.model.providerID}/${input.model.modelID}` }
       }
-      remove(id)
+      if (current?.status === "finished" || active.has(id)) {
+        return yield* new RequestIDConflictError({ sessionID: input.sessionID, requestID })
+      }
 
-      active.get(id)?.abort()
       const ctrl = new AbortController()
       active.set(id, ctrl)
       const stopped = waitForAbort(ctrl.signal).pipe(
@@ -231,8 +249,9 @@ export const layer = Layer.effect(
           ctrl.abort()
           return true
         }
-        if (state.get(id)?.status === "finished") return false
-        if (!state.has(id)) mark(id, "canceled")
+        const current = lookup(id)
+        if (current?.status === "finished") return false
+        if (!current) mark(id, "canceled")
         return false
       }),
     )
