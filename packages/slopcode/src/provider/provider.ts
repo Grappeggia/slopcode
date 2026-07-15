@@ -2024,6 +2024,17 @@ export const layer = Layer.effect(
     const getSmallModelForProvider = Effect.fn("Provider.getSmallModelForProvider")(function* (
       providerID: ProviderV2.ID,
     ) {
+      const cfg = yield* config.get()
+      if (cfg.small_model) {
+        const parsed = parseModel(cfg.small_model)
+        if (parsed.providerID === providerID) {
+          const configured = yield* getModel(parsed.providerID, parsed.modelID).pipe(
+            Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
+          )
+          if (configured) return configured
+        }
+      }
+
       const s = yield* InstanceState.get(state)
       const provider = s.providers[providerID]
       if (!provider) return undefined

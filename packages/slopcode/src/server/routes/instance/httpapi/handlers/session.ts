@@ -396,6 +396,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       if (Flag.SLOPCODE_DISABLE_AUTOCOMPLETE || !settings.enabled) return { completion: "", model }
       return yield* autocompleteSvc
         .complete({
+          sessionID: ctx.params.sessionID,
           requestID: ctx.payload.requestID,
           model: ctx.payload.model,
           prefix: ctx.payload.prefix,
@@ -408,7 +409,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID; requestID: string }
     }) {
       yield* requireSession(ctx.params.sessionID)
-      return yield* autocompleteSvc.abort(ctx.params.requestID)
+      return yield* autocompleteSvc.abort(ctx.params.sessionID, ctx.params.requestID)
     })
 
     const promptAsync = Effect.fn("SessionHttpApi.promptAsync")(function* (ctx: {

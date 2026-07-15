@@ -675,6 +675,17 @@ it.instance(
 )
 
 it.instance(
+  "getSmallModelForProvider respects a same-provider global override",
+  Effect.gen(function* () {
+    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    const model = yield* Provider.use.getSmallModelForProvider(ProviderV2.ID.anthropic)
+    expect(String(model?.providerID)).toBe("anthropic")
+    expect(String(model?.id)).toBe("claude-sonnet-4-20250514")
+  }),
+  { config: { small_model: "anthropic/claude-sonnet-4-20250514" } },
+)
+
+it.instance(
   "getSmallModelForProvider ignores a foreign global override and keeps provider heuristics",
   Effect.gen(function* () {
     yield* set("ANTHROPIC_API_KEY", "test-api-key")

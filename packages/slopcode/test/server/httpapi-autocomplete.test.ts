@@ -6,6 +6,7 @@ import { FSUtil } from "@slopcode-ai/core/fs-util"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { createSlopcodeClient } from "@slopcode-ai/sdk/v2"
+import { createClient as createGeneratedClient } from "@slopcode-ai/sdk/v2/gen/client"
 import { Effect, Layer } from "effect"
 import { HttpServer } from "effect/unstable/http"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
@@ -29,9 +30,51 @@ const dependencies = (http: typeof httpApiLayer) =>
     http,
   )
 const it = testEffect(dependencies(httpApiLayer))
-let aborts = 0
-let done = () => {}
-let aborted = Promise.resolve()
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done
+    reject = fail
+  })
+  return { promise, resolve, reject }
+}
+
+type Generation = { signal: AbortSignal; aborted: Promise<void> }
+const generations = (() => {
+  const calls: Generation[] = []
+  const waiting = new Map<number, (call: Generation) => void>()
+  return {
+    add(signal: AbortSignal) {
+      const stopped = deferred<void>()
+      const pending = deferred<never>()
+      const call = { signal, aborted: stopped.promise }
+      const abort = () => {
+        stopped.resolve()
+        pending.reject(signal.reason)
+      }
+      if (signal.aborted) abort()
+      else signal.addEventListener("abort", abort, { once: true })
+      calls.push(call)
+      waiting.get(calls.length - 1)?.(call)
+      waiting.delete(calls.length - 1)
+      return pending.promise
+    },
+    wait(index: number) {
+      const call = calls[index]
+      if (call) return Promise.resolve(call)
+      return new Promise<Generation>((resolve) => waiting.set(index, resolve))
+    },
+    count() {
+      return calls.length
+    },
+    reset() {
+      calls.splice(0)
+      waiting.clear()
+    },
+  }
+})()
 const model = ProviderTest.model({
   id: ModelV2.ID.make("test-model"),
   providerID: ProviderV2.ID.make("test"),
@@ -45,17 +88,8 @@ const language = {
     throw new Error("unexpected generate")
   },
   doStream(options: LanguageModelV3CallOptions) {
-    return new Promise<never>((_, reject) => {
-      options.abortSignal?.addEventListener(
-        "abort",
-        () => {
-          aborts += 1
-          done()
-          reject(options.abortSignal?.reason)
-        },
-        { once: true },
-      )
-    })
+    if (!options.abortSignal) throw new Error("missing generation abort signal")
+    return generations.add(options.abortSignal)
   },
 } satisfies LanguageModelV3
 const provider = ProviderTest.fake({ model, getLanguage: () => Effect.succeed(language) })
@@ -175,12 +209,9 @@ describe("session autocomplete HttpApi", () => {
   )
 
   abortIt.live(
-    "propagates generated SDK aborts through the endpoint to provider generation",
+    "cancels an active generation through the direct endpoint",
     Effect.gen(function* () {
-      aborts = 0
-      aborted = new Promise<void>((resolve) => {
-        done = resolve
-      })
+      generations.reset()
       const directory = yield* tmpdirScoped({
         git: true,
         config: {
@@ -190,18 +221,234 @@ describe("session autocomplete HttpApi", () => {
       })
       const sdk = yield* client(directory)
       const session = yield* Effect.promise(() => sdk.session.create({ title: "autocomplete abort" }))
+      const request = sdk.session.autocomplete({
+        sessionID: session.data!.id,
+        requestID: "active",
+        model: { providerID: "test", modelID: "test-model" },
+        prefix: "abort this completion",
+      })
+
+      const call = yield* Effect.promise(() => generations.wait(0))
+      const canceled = yield* Effect.promise(() =>
+        sdk.session.abortAutocomplete({ sessionID: session.data!.id, requestID: "active" }),
+      )
+      expect(canceled.data).toBe(true)
+      yield* Effect.promise(() => call.aborted)
+      expect((yield* Effect.promise(() => request)).data?.completion).toBe("")
+    }),
+    15_000,
+  )
+
+  abortIt.live(
+    "consumes a scoped pre-cancel before generation starts",
+    Effect.gen(function* () {
+      generations.reset()
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: {
+          ...testProviderConfig("http://127.0.0.1:1/v1"),
+          autocomplete: { enabled: true, min_prefix_chars: 1, timeout_ms: 10_000 },
+        },
+      })
+      const sdk = yield* client(directory)
+      const session = yield* Effect.promise(() => sdk.session.create({ title: "autocomplete pre-cancel" }))
+
+      const canceled = yield* Effect.promise(() =>
+        sdk.session.abortAutocomplete({ sessionID: session.data!.id, requestID: "early" }),
+      )
+      const response = yield* Effect.promise(() =>
+        sdk.session.autocomplete({
+          sessionID: session.data!.id,
+          requestID: "early",
+          model: { providerID: "test", modelID: "test-model" },
+          prefix: "pre-cancel this completion",
+        }),
+      )
+      expect(canceled.data).toBe(false)
+      expect(response.data?.completion).toBe("")
+      expect(generations.count()).toBe(0)
+    }),
+    15_000,
+  )
+
+  abortIt.live(
+    "isolates active and pre-canceled IDs across sessions",
+    Effect.gen(function* () {
+      generations.reset()
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: {
+          ...testProviderConfig("http://127.0.0.1:1/v1"),
+          autocomplete: { enabled: true, min_prefix_chars: 1, timeout_ms: 10_000 },
+        },
+      })
+      const sdk = yield* client(directory)
+      const first = yield* Effect.promise(() => sdk.session.create({ title: "autocomplete first" }))
+      const second = yield* Effect.promise(() => sdk.session.create({ title: "autocomplete second" }))
+      const request = sdk.session.autocomplete({
+        sessionID: first.data!.id,
+        requestID: "shared",
+        model: { providerID: "test", modelID: "test-model" },
+        prefix: "first session completion",
+      })
+      const call = yield* Effect.promise(() => generations.wait(0))
+
+      const other = yield* Effect.promise(() =>
+        sdk.session.abortAutocomplete({ sessionID: second.data!.id, requestID: "shared" }),
+      )
+      expect(other.data).toBe(false)
+      expect(call.signal.aborted).toBe(false)
+      const canceled = yield* Effect.promise(() =>
+        sdk.session.abortAutocomplete({ sessionID: first.data!.id, requestID: "shared" }),
+      )
+      expect(canceled.data).toBe(true)
+      yield* Effect.promise(() => call.aborted)
+      yield* Effect.promise(() => request)
+
+      const preCanceled = yield* Effect.promise(() =>
+        sdk.session.autocomplete({
+          sessionID: second.data!.id,
+          requestID: "shared",
+          model: { providerID: "test", modelID: "test-model" },
+          prefix: "second session completion",
+        }),
+      )
+      expect(preCanceled.data?.completion).toBe("")
+      expect(generations.count()).toBe(1)
+    }),
+    15_000,
+  )
+
+  abortIt.live(
+    "does not let a late abort poison a reused ID",
+    Effect.gen(function* () {
+      generations.reset()
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: {
+          ...testProviderConfig("http://127.0.0.1:1/v1"),
+          autocomplete: { enabled: true, min_prefix_chars: 1, timeout_ms: 10_000 },
+        },
+      })
+      const sdk = yield* client(directory)
+      const session = yield* Effect.promise(() => sdk.session.create({ title: "autocomplete reuse" }))
+      const first = sdk.session.autocomplete({
+        sessionID: session.data!.id,
+        requestID: "reused",
+        model: { providerID: "test", modelID: "test-model" },
+        prefix: "first reused completion",
+      })
+      const initial = yield* Effect.promise(() => generations.wait(0))
+      yield* Effect.promise(() => sdk.session.abortAutocomplete({ sessionID: session.data!.id, requestID: "reused" }))
+      yield* Effect.promise(() => initial.aborted)
+      yield* Effect.promise(() => first)
+
+      const late = yield* Effect.promise(() =>
+        sdk.session.abortAutocomplete({ sessionID: session.data!.id, requestID: "reused" }),
+      )
+      expect(late.data).toBe(false)
+      const second = sdk.session.autocomplete({
+        sessionID: session.data!.id,
+        requestID: "reused",
+        model: { providerID: "test", modelID: "test-model" },
+        prefix: "second reused completion",
+      })
+      const current = yield* Effect.promise(() => generations.wait(1))
+      expect(current.signal.aborted).toBe(false)
+      yield* Effect.promise(() => sdk.session.abortAutocomplete({ sessionID: session.data!.id, requestID: "reused" }))
+      yield* Effect.promise(() => current.aborted)
+      yield* Effect.promise(() => second)
+    }),
+    15_000,
+  )
+
+  abortIt.live(
+    "cleans active cancellation state after completion",
+    Effect.gen(function* () {
+      generations.reset()
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: {
+          ...testProviderConfig("http://127.0.0.1:1/v1"),
+          autocomplete: { enabled: true, min_prefix_chars: 1, timeout_ms: 10_000 },
+        },
+      })
+      const sdk = yield* client(directory)
+      const session = yield* Effect.promise(() => sdk.session.create({ title: "autocomplete cleanup" }))
+      const request = sdk.session.autocomplete({
+        sessionID: session.data!.id,
+        requestID: "cleanup",
+        model: { providerID: "test", modelID: "test-model" },
+        prefix: "cleanup this completion",
+      })
+      const call = yield* Effect.promise(() => generations.wait(0))
+      const active = yield* Effect.promise(() =>
+        sdk.session.abortAutocomplete({ sessionID: session.data!.id, requestID: "cleanup" }),
+      )
+      expect(active.data).toBe(true)
+      yield* Effect.promise(() => call.aborted)
+      yield* Effect.promise(() => request)
+      const cleaned = yield* Effect.promise(() =>
+        sdk.session.abortAutocomplete({ sessionID: session.data!.id, requestID: "cleanup" }),
+      )
+      expect(cleaned.data).toBe(false)
+    }),
+    15_000,
+  )
+
+  abortIt.live(
+    "preserves custom client options and bounds the SDK cancel request",
+    Effect.gen(function* () {
+      generations.reset()
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: {
+          ...testProviderConfig("http://127.0.0.1:1/v1"),
+          autocomplete: { enabled: true, min_prefix_chars: 1, timeout_ms: 10_000 },
+        },
+      })
+      const baseUrl = yield* HttpServer.HttpServer.use((server) =>
+        Effect.succeed(HttpServer.formatAddress(server.address)),
+      )
+      const bootstrap = createSlopcodeClient({ baseUrl, directory })
+      const session = yield* Effect.promise(() => bootstrap.session.create({ title: "autocomplete client" }))
+      const requests: Request[] = []
+      const timedOut = deferred<void>()
+      const fetcher = Object.assign(
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = input instanceof Request ? input : new Request(input, init)
+          requests.push(request.clone())
+          if (request.method === "DELETE") {
+            if (request.signal.aborted) timedOut.resolve()
+            else request.signal.addEventListener("abort", () => timedOut.resolve(), { once: true })
+          }
+          return fetch(request)
+        },
+        { preconnect: fetch.preconnect },
+      ) satisfies typeof fetch
+      const custom = createGeneratedClient({
+        baseUrl,
+        fetch: fetcher,
+        headers: { authorization: "Bearer custom-auth", "x-client-header": "client" },
+      })
+      const sdk = createSlopcodeClient({ baseUrl: "http://127.0.0.1:1" })
       const ctrl = new AbortController()
       const request = sdk.session.autocomplete(
         {
           sessionID: session.data!.id,
+          directory,
+          requestID: "custom-client",
           model: { providerID: "test", modelID: "test-model" },
-          prefix: "abort this completion",
+          prefix: "custom client completion",
         },
-        { signal: ctrl.signal, throwOnError: true },
+        {
+          client: custom,
+          signal: ctrl.signal,
+          throwOnError: true,
+          headers: { "x-request-header": "request" },
+        },
       )
-
-      yield* Effect.sleep("50 millis")
-      const start = Date.now()
+      const call = yield* Effect.promise(() => generations.wait(0))
       ctrl.abort()
       expect(
         yield* Effect.promise(() =>
@@ -211,9 +458,16 @@ describe("session autocomplete HttpApi", () => {
           ),
         ),
       ).toBe(true)
-      yield* Effect.promise(() => aborted)
-      expect(aborts).toBe(1)
-      expect(Date.now() - start).toBeLessThan(2_000)
+      yield* Effect.promise(() => call.aborted)
+
+      const canceled = requests.find((item) => item.method === "DELETE")
+      expect(canceled).toBeDefined()
+      expect(new URL(canceled!.url).origin).toBe(new URL(baseUrl).origin)
+      expect(canceled!.headers.get("authorization")).toBe("Bearer custom-auth")
+      expect(canceled!.headers.get("x-client-header")).toBe("client")
+      expect(canceled!.headers.get("x-request-header")).toBe("request")
+      yield* Effect.promise(() => timedOut.promise)
+      expect(canceled!.signal.aborted).toBe(true)
     }),
     15_000,
   )

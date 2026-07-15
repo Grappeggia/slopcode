@@ -4,6 +4,7 @@ import { ModelV2 } from "@slopcode-ai/core/model"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { Effect, Layer } from "effect"
 import { SessionAutocomplete } from "../../src/session/autocomplete"
+import { SessionID } from "../../src/session/schema"
 import { ProviderTest } from "../fake/provider"
 import { testEffect } from "../lib/effect"
 
@@ -114,6 +115,7 @@ describe("session autocomplete cancellation", () => {
       aborted = false
       const service = yield* SessionAutocomplete.Service
       const result = yield* service.complete({
+        sessionID: SessionID.make("ses_autocomplete"),
         model: { providerID: selected.providerID, modelID: selected.id },
         prefix: "a sufficiently long prefix",
         settings: { ...SessionAutocomplete.settings({ enabled: true }), timeout_ms: 10 },

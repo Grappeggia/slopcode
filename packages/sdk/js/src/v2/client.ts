@@ -99,13 +99,20 @@ export function createSlopcodeClient(config?: Config & { directory?: string; exp
     const ctrl = new AbortController()
     const abort = () => {
       ctrl.abort(signal.reason)
+      // Bun aborts the local fetch without reliably closing the Node response, so stop server work explicitly.
       sdk.session
-        .abortAutocomplete({
-          sessionID: parameters.sessionID,
-          requestID,
-          directory: parameters.directory,
-          workspace: parameters.workspace,
-        })
+        .abortAutocomplete(
+          {
+            sessionID: parameters.sessionID,
+            requestID,
+            directory: parameters.directory,
+            workspace: parameters.workspace,
+          },
+          {
+            ...options,
+            signal: AbortSignal.timeout(1_000),
+          },
+        )
         .then(
           () => undefined,
           () => undefined,

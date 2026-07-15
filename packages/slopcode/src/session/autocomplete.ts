@@ -9,6 +9,7 @@ import { Context, Duration, Effect, Layer } from "effect"
 import { streamText, wrapLanguageModel, type ModelMessage } from "ai"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
+import { SessionID } from "./schema"
 
 export const INSTRUCTIONS =
   "Continue the user's unfinished prompt. Return only the short continuation, on one line, without repeating the prefix, markdown, quotes, or explanation. Return an empty string when uncertain."
@@ -16,6 +17,7 @@ export const INSTRUCTIONS =
 export type Settings = ConfigAutocompleteV1.Resolved
 
 export type Input = {
+  sessionID: SessionID
   requestID?: string
   model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
   prefix: string
@@ -77,7 +79,7 @@ export function route(input: {
 
 export interface Interface {
   readonly complete: (input: Input) => Effect.Effect<Output, Provider.ModelNotFoundError>
-  readonly abort: (requestID: string) => Effect.Effect<boolean>
+  readonly abort: (sessionID: SessionID, requestID: string) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/SessionAutocomplete") {}
@@ -89,7 +91,35 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const provider = yield* Provider.Service
     const active = new Map<string, AbortController>()
-    const canceled = new Map<string, number>()
+    // Finished tombstones keep a late cancel from becoming a pre-cancel when an ID is reused.
+    const state = new Map<string, { status: "canceled" | "finished"; timer: ReturnType<typeof setTimeout> }>()
+
+    const key = (sessionID: SessionID, requestID: string) => JSON.stringify([sessionID, requestID])
+    const remove = (id: string) => {
+      const item = state.get(id)
+      if (!item) return
+      clearTimeout(item.timer)
+      state.delete(id)
+    }
+    const mark = (id: string, status: "canceled" | "finished") => {
+      remove(id)
+      if (state.size >= 1_024) {
+        const oldest = state.keys().next()
+        if (!oldest.done) remove(oldest.value)
+      }
+      const timer = setTimeout(() => {
+        if (state.get(id)?.timer === timer) state.delete(id)
+      }, 10_000)
+      state.set(id, { status, timer })
+    }
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        active.forEach((ctrl) => ctrl.abort())
+        state.forEach((item) => clearTimeout(item.timer))
+        active.clear()
+        state.clear()
+      }),
+    )
 
     const candidates = Effect.fn("SessionAutocomplete.candidates")(function* (input: Input) {
       const selected = yield* provider.getModel(input.model.providerID, input.model.modelID)
@@ -165,15 +195,17 @@ export const layer = Layer.effect(
     const complete = Effect.fn("SessionAutocomplete.complete")(function* (input: Input) {
       const requestID = input.requestID
       if (!requestID) return yield* run(input)
-      const now = Date.now()
-      for (const [id, time] of canceled) if (now - time > 10_000) canceled.delete(id)
-      if (canceled.delete(requestID)) {
+      const id = key(input.sessionID, requestID)
+      if (state.get(id)?.status === "canceled") {
+        remove(id)
+        mark(id, "finished")
         return { completion: "", model: `${input.model.providerID}/${input.model.modelID}` }
       }
+      remove(id)
 
-      active.get(requestID)?.abort()
+      active.get(id)?.abort()
       const ctrl = new AbortController()
-      active.set(requestID, ctrl)
+      active.set(id, ctrl)
       const stopped = waitForAbort(ctrl.signal).pipe(
         Effect.catch(() =>
           Effect.succeed({ completion: "", model: `${input.model.providerID}/${input.model.modelID}` }),
@@ -183,21 +215,24 @@ export const layer = Layer.effect(
         Effect.raceFirst(stopped),
         Effect.ensuring(
           Effect.sync(() => {
-            if (active.get(requestID) === ctrl) active.delete(requestID)
+            if (active.get(id) !== ctrl) return
+            active.delete(id)
+            mark(id, "finished")
           }),
         ),
       )
     })
 
-    const abort = Effect.fn("SessionAutocomplete.abort")((requestID: string) =>
+    const abort = Effect.fn("SessionAutocomplete.abort")((sessionID: SessionID, requestID: string) =>
       Effect.sync(() => {
-        const ctrl = active.get(requestID)
+        const id = key(sessionID, requestID)
+        const ctrl = active.get(id)
         if (ctrl) {
           ctrl.abort()
           return true
         }
-        if (canceled.size >= 1_024) canceled.delete(canceled.keys().next().value!)
-        canceled.set(requestID, Date.now())
+        if (state.get(id)?.status === "finished") return false
+        if (!state.has(id)) mark(id, "canceled")
         return false
       }),
     )
