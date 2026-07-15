@@ -1,5 +1,6 @@
 import { expect } from "bun:test"
 import { LayerNode } from "@slopcode-ai/core/effect/layer-node"
+import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Database } from "@slopcode-ai/core/database/database"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
@@ -330,12 +331,14 @@ it.instance("concurrent plan exits join an active review before one build transi
     const questions = yield* Question.Service
     const permissions = yield* Permission.Service
     const session = yield* sessions.create({ title: "Concurrent plan exit" })
-    const publishing = yield* Deferred.make<void>()
+    const publishing = yield* Deferred.make<PermissionV1.Request>()
     const release = yield* Deferred.make<void>()
     const builds: MessageID[] = []
     const unsubscribe = yield* (yield* EventV2Bridge.Service).listen((event) => {
-      if (event.type === Permission.Event.Asked.type && decodeAsked(event.data).sessionID === session.id)
-        return Deferred.succeed(publishing, undefined).pipe(Effect.andThen(Deferred.await(release)))
+      if (event.type === Permission.Event.Asked.type && decodeAsked(event.data).sessionID === session.id) {
+        const request = decodeAsked(event.data)
+        return Deferred.succeed(publishing, request).pipe(Effect.andThen(Deferred.await(release)))
+      }
       if (event.type === SessionV1.Event.MessageUpdated.type) {
         const info = decodeMessage(event.data).info
         if (info.role === "user" && info.agent === "build") builds.push(info.id)
@@ -368,8 +371,7 @@ it.instance("concurrent plan exits join an active review before one build transi
         policy: () => Effect.succeed([{ permission: "doom_loop", pattern: "*", action: "ask" }]),
       })
       .pipe(Effect.forkScoped)
-    yield* Deferred.await(publishing)
-    const batch = yield* permissions.list()
+    const batch = [yield* Deferred.await(publishing)]
     const first = yield* exit.execute({}, context(session.id)).pipe(Effect.forkScoped)
     const second = yield* exit.execute({}, context(session.id)).pipe(Effect.forkScoped)
     yield* wait(questions.list())
