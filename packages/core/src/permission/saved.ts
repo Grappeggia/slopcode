@@ -1,13 +1,11 @@
 export * as PermissionSaved from "./saved"
 
-import { and, eq } from "drizzle-orm"
+import { and, eq, ne } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { LayerNode } from "../effect/layer-node"
 import { ProjectV2 } from "../project"
-import { ProjectTable } from "../project/sql"
-import { AbsolutePath, withStatics } from "../schema"
-import { Hash } from "../util/hash"
+import { withStatics } from "../schema"
 import { Identifier } from "../util/identifier"
 import { PermissionTable } from "./sql"
 
@@ -37,20 +35,8 @@ export const AddInput = Schema.Struct({
 }).annotate({ identifier: "PermissionSaved.AddInput" })
 export type AddInput = typeof AddInput.Type
 
-export const ScopeInput = Schema.Struct({
-  projectID: ProjectV2.ID,
-  directory: AbsolutePath,
-}).annotate({ identifier: "PermissionSaved.ScopeInput" })
-export type ScopeInput = typeof ScopeInput.Type
-
-export function scopeID(input: ScopeInput) {
-  if (input.projectID !== ProjectV2.ID.global) return input.projectID
-  return ProjectV2.ID.make(Hash.fast(`permission-scope:${input.directory}`))
-}
-
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
-  readonly scope: (input: ScopeInput) => Effect.Effect<ProjectV2.ID>
   readonly add: (input: AddInput) => Effect.Effect<void>
   readonly remove: (input: { id: ID; projectID: ProjectV2.ID }) => Effect.Effect<boolean>
   readonly clear: (projectID: ProjectV2.ID) => Effect.Effect<number>
@@ -64,10 +50,15 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
 
     const list = Effect.fn("PermissionSaved.list")(function* (input?: ListInput) {
+      if (input?.projectID === ProjectV2.ID.global) return []
       const rows = yield* db
         .select()
         .from(PermissionTable)
-        .where(input?.projectID ? eq(PermissionTable.project_id, input.projectID) : undefined)
+        .where(
+          input?.projectID
+            ? eq(PermissionTable.project_id, input.projectID)
+            : ne(PermissionTable.project_id, ProjectV2.ID.global),
+        )
         .all()
         .pipe(Effect.orDie)
       return rows.map(
@@ -75,19 +66,8 @@ export const layer = Layer.effect(
       )
     })
 
-    const scope = Effect.fn("PermissionSaved.scope")(function* (input: ScopeInput) {
-      const projectID = scopeID(input)
-      if (projectID === input.projectID) return projectID
-      yield* db
-        .insert(ProjectTable)
-        .values({ id: projectID, worktree: input.directory, sandboxes: [] })
-        .onConflictDoNothing()
-        .run()
-        .pipe(Effect.orDie)
-      return projectID
-    })
-
     const add = Effect.fn("PermissionSaved.add")(function* (input: AddInput) {
+      if (input.projectID === ProjectV2.ID.global) return
       if (!input.resources.length) return
       yield* db
         .insert(PermissionTable)
@@ -105,6 +85,7 @@ export const layer = Layer.effect(
     })
 
     const remove = Effect.fn("PermissionSaved.remove")(function* (input: { id: ID; projectID: ProjectV2.ID }) {
+      if (input.projectID === ProjectV2.ID.global) return false
       const rows = yield* db
         .delete(PermissionTable)
         .where(and(eq(PermissionTable.id, input.id), eq(PermissionTable.project_id, input.projectID)))
@@ -115,6 +96,7 @@ export const layer = Layer.effect(
     })
 
     const clear = Effect.fn("PermissionSaved.clear")(function* (projectID: ProjectV2.ID) {
+      if (projectID === ProjectV2.ID.global) return 0
       const rows = yield* db
         .delete(PermissionTable)
         .where(eq(PermissionTable.project_id, projectID))
@@ -124,7 +106,7 @@ export const layer = Layer.effect(
       return rows.length
     })
 
-    return Service.of({ list, scope, add, remove, clear })
+    return Service.of({ list, add, remove, clear })
   }),
 )
 

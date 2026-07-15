@@ -8,7 +8,7 @@ import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
-import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { ProjectV2 } from "@slopcode-ai/core/project"
 
 export const Event = {
   Asked: EventV2.define({ type: "permission.asked", schema: PermissionV1.Request.fields }),
@@ -84,11 +84,13 @@ export const layer = Layer.effect(
 
     const projectID = Effect.fnUntraced(function* () {
       const ctx = yield* InstanceState.context
-      return yield* saved.scope({ projectID: ctx.project.id, directory: AbsolutePath.make(ctx.directory) })
+      return ctx.project.id === ProjectV2.ID.global || ctx.project.vcs !== "git" ? undefined : ctx.project.id
     })
 
     const approvals = Effect.fnUntraced(function* () {
-      return (yield* saved.list({ projectID: yield* projectID() })).map(
+      const project = yield* projectID()
+      if (!project) return []
+      return (yield* saved.list({ projectID: project })).map(
         (item): PermissionV1.Rule => ({ permission: item.action, pattern: item.resource, action: "allow" }),
       )
     })
@@ -139,7 +141,7 @@ export const layer = Layer.effect(
         permission: request.permission,
         patterns: request.patterns,
         metadata: request.metadata,
-        always: request.always,
+        always: (yield* projectID()) ? request.always : [],
         tool: request.tool,
       }
       yield* Effect.logInfo("asking", { id, permission: info.permission, patterns: info.patterns })
@@ -161,11 +163,12 @@ export const layer = Layer.effect(
           const { pending } = yield* InstanceState.get(state)
           const existing = pending.get(input.requestID)
           if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
-          const answer = input.reply === "always" && !existing.info.always.length ? "once" : input.reply
+          const project = yield* projectID()
+          const answer = input.reply === "always" && (!existing.info.always.length || !project) ? "once" : input.reply
 
-          if (answer === "always") {
+          if (answer === "always" && project) {
             yield* saved.add({
-              projectID: yield* projectID(),
+              projectID: project,
               action: existing.info.permission,
               resources: existing.info.always,
             })

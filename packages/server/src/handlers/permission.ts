@@ -1,6 +1,7 @@
 import { Location } from "@slopcode-ai/core/location"
 import { PermissionV2 } from "@slopcode-ai/core/permission"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
+import { ProjectV2 } from "@slopcode-ai/core/project"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
@@ -44,9 +45,9 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
         Effect.fn(function* (ctx) {
           const location = yield* Location.Service
           const saved = yield* PermissionSaved.Service
-          const projectID =
-            ctx.query.projectID ??
-            (yield* saved.scope({ projectID: location.project.id, directory: location.directory }))
+          const projectID = ctx.query.projectID ?? location.project.id
+          if (location.vcs?.type !== "git" || projectID === ProjectV2.ID.global || projectID !== location.project.id)
+            return { data: [] }
           return {
             data: yield* saved.list({ projectID }),
           }
@@ -57,8 +58,8 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
         Effect.fn(function* (ctx) {
           const location = yield* Location.Service
           const saved = yield* PermissionSaved.Service
-          const projectID = yield* saved.scope({ projectID: location.project.id, directory: location.directory })
-          yield* saved.remove({ id: ctx.params.id, projectID })
+          if (location.vcs?.type === "git" && location.project.id !== ProjectV2.ID.global)
+            yield* saved.remove({ id: ctx.params.id, projectID: location.project.id })
           return HttpApiSchema.NoContent.make()
         }),
       )

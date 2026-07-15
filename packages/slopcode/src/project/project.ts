@@ -22,7 +22,6 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { PermissionTable } from "@slopcode-ai/core/permission/sql"
-import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 
 const ProjectVcs = Schema.Literal("git")
 
@@ -266,11 +265,6 @@ export const layer = Layer.effect(
       // Phase 2: upsert
       const projectID = ProjectV2.ID.make(data.id)
       yield* migrateProjectId(data.previous ? ProjectV2.ID.make(data.previous) : undefined, projectID)
-      if (projectID !== ProjectV2.ID.global)
-        yield* migrateProjectId(
-          PermissionSaved.scopeID({ projectID: ProjectV2.ID.global, directory: data.directory }),
-          projectID,
-        )
       const row = yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, projectID)).get().pipe(Effect.orDie)
       const existing = row
         ? fromRow(row)

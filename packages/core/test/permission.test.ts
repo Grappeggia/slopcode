@@ -21,9 +21,14 @@ import { testEffect } from "./lib/effect"
 import { locationServices } from "./lib/location-services"
 
 const database = Database.layerFromPath(":memory:")
+const projectID = Project.ID.make("project_test")
 const current = Layer.succeed(
   Location.Service,
-  Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
+  Location.Service.of({
+    ...location({ directory: AbsolutePath.make("/project") }),
+    project: { id: projectID, directory: AbsolutePath.make("/project") },
+    vcs: { type: "git", store: AbsolutePath.make("/project/.git") },
+  }),
 )
 const events = EventV2.layer.pipe(Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
@@ -52,7 +57,7 @@ function setup(rules: PermissionV2.Ruleset = []) {
     const { db } = yield* Database.Service
     yield* db
       .insert(ProjectTable)
-      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+      .values({ id: projectID, worktree: AbsolutePath.make("/project"), vcs: "git", sandboxes: [] })
       .onConflictDoNothing()
       .run()
       .pipe(Effect.orDie)
@@ -60,7 +65,7 @@ function setup(rules: PermissionV2.Ruleset = []) {
       .insert(SessionTable)
       .values({
         id: SessionV2.ID.make("ses_test"),
-        project_id: Project.ID.global,
+        project_id: projectID,
         slug: "test",
         directory: "/project",
         title: "test",
@@ -93,12 +98,6 @@ function assertion(input: Partial<PermissionV2.AssertInput> = {}) {
     resources: ["src/index.ts"],
     ...input,
   } satisfies PermissionV2.AssertInput
-}
-
-function permissionProject() {
-  return PermissionSaved.Service.use((saved) =>
-    saved.scope({ projectID: Project.ID.global, directory: AbsolutePath.make("/project") }),
-  )
 }
 
 function waitForRequest(input: PermissionV2.AssertInput = assertion()) {
@@ -193,7 +192,7 @@ describe("PermissionV2", () => {
         .run()
         .pipe(Effect.orDie)
       yield* (yield* PermissionSaved.Service).add({
-        projectID: yield* permissionProject(),
+        projectID,
         action: "read",
         resources: ["secret"],
       })
@@ -225,7 +224,7 @@ describe("PermissionV2", () => {
         .run()
         .pipe(Effect.orDie)
       yield* (yield* PermissionSaved.Service).add({
-        projectID: yield* permissionProject(),
+        projectID,
         action: "external_directory",
         resources: ["/outside/file"],
       })
@@ -328,7 +327,7 @@ describe("PermissionV2", () => {
     Effect.gen(function* () {
       yield* setup()
       const saved = yield* PermissionSaved.Service
-      yield* saved.add({ projectID: yield* permissionProject(), action: "bash", resources: ["pwd"] })
+      yield* saved.add({ projectID, action: "bash", resources: ["pwd"] })
 
       const service = yield* PermissionV2.Service
       expect(yield* service.ask(assertion({ action: "bash", resources: ["pwd"] }))).toEqual({
@@ -482,7 +481,6 @@ describe("PermissionV2", () => {
       yield* Fiber.join(fiber)
 
       const { db } = yield* Database.Service
-      const projectID = yield* permissionProject()
       expect(
         yield* db.select().from(PermissionTable).where(eq(PermissionTable.project_id, projectID)).all(),
       ).toMatchObject([{ action: "read", resource: "src/*" }])
@@ -507,50 +505,44 @@ describe("PermissionV2", () => {
         .pipe(Effect.orDie)
 
       const saved = yield* PermissionSaved.Service
-      yield* saved.add({
-        projectID: Project.ID.global,
-        action: "bash",
-        resources: ["git status", "git status"],
-      })
+      yield* saved.add({ projectID, action: "bash", resources: ["git status", "git status"] })
       yield* saved.add({ projectID: other, action: "read", resources: ["README.md"] })
 
-      const item = (yield* saved.list({ projectID: Project.ID.global }))[0]
-      expect(yield* saved.list({ projectID: Project.ID.global })).toEqual([item])
+      const item = (yield* saved.list({ projectID }))[0]
+      expect(yield* saved.list({ projectID })).toEqual([item])
       expect(item).toMatchObject({ action: "bash", resource: "git status" })
       expect(yield* saved.remove({ id: item.id, projectID: other })).toBe(false)
-      expect(yield* saved.list({ projectID: Project.ID.global })).toEqual([item])
+      expect(yield* saved.list({ projectID })).toEqual([item])
       expect(yield* saved.clear(other)).toBe(1)
       expect(yield* saved.list({ projectID: other })).toEqual([])
-      expect(yield* saved.list({ projectID: Project.ID.global })).toEqual([item])
+      expect(yield* saved.list({ projectID })).toEqual([item])
     }),
   )
 
-  it.effect("creates stable isolated permission projects for non-git directories", () =>
+  it.effect("does not persist, expose, or mutate global saved permissions", () =>
     Effect.gen(function* () {
       yield* setup()
       const saved = yield* PermissionSaved.Service
-      const one = yield* saved.scope({
-        projectID: Project.ID.global,
-        directory: AbsolutePath.make("/non-git/one"),
-      })
-      const again = yield* saved.scope({
-        projectID: Project.ID.global,
-        directory: AbsolutePath.make("/non-git/one"),
-      })
-      const two = yield* saved.scope({
-        projectID: Project.ID.global,
-        directory: AbsolutePath.make("/non-git/two"),
-      })
-
-      expect(one).toBe(again)
-      expect(one).not.toBe(two)
-      expect(one).not.toBe(Project.ID.global)
-      expect(
-        yield* saved.scope({ projectID: Project.ID.make("git-project"), directory: AbsolutePath.make("/x") }),
-      ).toBe(Project.ID.make("git-project"))
       const { db } = yield* Database.Service
-      expect(yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, one)).get()).toBeDefined()
-      expect(yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, two)).get()).toBeDefined()
+      const legacy = PermissionSaved.ID.create()
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(PermissionTable)
+        .values({ id: legacy, project_id: Project.ID.global, action: "bash", resource: "legacy" })
+        .run()
+        .pipe(Effect.orDie)
+      const count = (yield* db.select().from(ProjectTable).all()).length
+      yield* saved.add({ projectID: Project.ID.global, action: "bash", resources: ["git status"] })
+      expect(yield* saved.list({ projectID: Project.ID.global })).toEqual([])
+      expect(yield* saved.remove({ id: legacy, projectID: Project.ID.global })).toBe(false)
+      expect(yield* saved.clear(Project.ID.global)).toBe(0)
+      expect(yield* saved.list()).not.toContainEqual(expect.objectContaining({ id: legacy }))
+      expect(yield* db.select().from(PermissionTable).where(eq(PermissionTable.id, legacy)).get()).toBeDefined()
+      expect((yield* db.select().from(ProjectTable).all()).length).toBe(count)
     }),
   )
 })

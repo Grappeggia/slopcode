@@ -1,6 +1,6 @@
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { InstanceState } from "@/effect/instance-state"
-import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { ProjectV2 } from "@slopcode-ai/core/project"
 import { Effect } from "effect"
 import { EOL } from "os"
 import { effectCmd, fail } from "../effect-cmd"
@@ -19,19 +19,24 @@ function table(items: ReadonlyArray<PermissionSaved.Info>) {
   ].join(EOL)
 }
 
-const projectID = PermissionSaved.Service.use((saved) =>
-  Effect.gen(function* () {
-    const ctx = yield* InstanceState.context
-    return yield* saved.scope({ projectID: ctx.project.id, directory: AbsolutePath.make(ctx.directory) })
-  }),
+const projectID = InstanceState.context.pipe(
+  Effect.map((ctx) =>
+    ctx.project.id === ProjectV2.ID.global || ctx.project.vcs !== "git" ? undefined : ctx.project.id,
+  ),
 )
+const unavailable = "Saved permissions are unavailable outside a Git project."
 
 const ListCommand = effectCmd({
   command: "list",
   describe: "list saved Always approvals for this project",
   builder: (yargs) => yargs.option("json", { type: "boolean", describe: "output JSON" }),
   handler: Effect.fn("Cli.permission.list")(function* (args) {
-    const items = (yield* (yield* PermissionSaved.Service).list({ projectID: yield* projectID })).toSorted((a, b) =>
+    const project = yield* projectID
+    if (!project) {
+      process.stdout.write((args.json ? "[]" : unavailable) + EOL)
+      return
+    }
+    const items = (yield* (yield* PermissionSaved.Service).list({ projectID: project })).toSorted((a, b) =>
       a.id.localeCompare(b.id),
     )
     process.stdout.write((args.json ? JSON.stringify(items, null, 2) : table(items)) + EOL)
@@ -48,10 +53,13 @@ const RevokeCommand = effectCmd({
       demandOption: true,
     }),
   handler: Effect.fn("Cli.permission.revoke")(function* (args) {
+    const project = yield* projectID
+    if (!project) return yield* fail(unavailable)
     const id = PermissionSaved.ID.make(args.id)
-    const removed = yield* (yield* PermissionSaved.Service).remove({ id, projectID: yield* projectID })
+    const removed = yield* (yield* PermissionSaved.Service).remove({ id, projectID: project })
     if (!removed) yield* fail(`Saved permission not found in this project: ${id}`)
     process.stdout.write(`Revoked saved permission ${id}.` + EOL)
+    return undefined
   }),
 })
 
@@ -65,7 +73,12 @@ const ClearCommand = effectCmd({
     }),
   handler: Effect.fn("Cli.permission.clear")(function* (args) {
     if (!args.all) yield* fail("Pass --all to clear saved permissions.")
-    const removed = yield* (yield* PermissionSaved.Service).clear(yield* projectID)
+    const project = yield* projectID
+    if (!project) {
+      process.stdout.write(unavailable + EOL)
+      return
+    }
+    const removed = yield* (yield* PermissionSaved.Service).clear(project)
     process.stdout.write(`Cleared ${removed} saved permission${removed === 1 ? "" : "s"}.` + EOL)
   }),
 })

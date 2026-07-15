@@ -853,10 +853,14 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
     }))
     .json(404, object, "status"),
-  http.protected.get("/api/permission/saved", "v2.permission.saved.list").json(200, (body) => {
-    object(body)
-    array(body.data)
-  }),
+  http.protected
+    .get("/api/permission/saved", "v2.permission.saved.list")
+    .at((ctx) => ({ path: "/api/permission/saved?projectID=global", headers: ctx.headers() }))
+    .json(200, (body) => {
+      object(body)
+      array(body.data)
+      check(body.data.length === 0, "global project must not expose saved permissions")
+    }),
   http.protected
     .delete("/api/permission/saved/{id}", "v2.permission.saved.remove")
     .at((ctx) => ({ path: route("/api/permission/saved/{id}", { id: "psv_httpapi_missing" }), headers: ctx.headers() }))

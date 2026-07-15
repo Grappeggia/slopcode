@@ -6,7 +6,8 @@ import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import { Database } from "@slopcode-ai/core/database/database"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
-import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { PermissionTable } from "@slopcode-ai/core/permission/sql"
+import { ProjectTable } from "@slopcode-ai/core/project/sql"
 import { Permission } from "../../src/permission"
 import { InstanceState } from "../../src/effect/instance-state"
 import { InstanceRef } from "../../src/effect/instance-ref"
@@ -223,60 +224,63 @@ it.instance("query returns the effective action without requests, events, or app
   }),
 )
 
-it.instance("query includes remembered project approvals without creating requests", () =>
-  Effect.gen(function* () {
-    const permission = yield* Permission.Service
-    const bridge = yield* EventV2Bridge.Service
-    const events: string[] = []
-    const unsubscribe = yield* bridge.listen((event) =>
-      Effect.sync(() => {
-        events.push(event.type)
-      }),
-    )
-    const first = yield* permission
-      .ask({
-        sessionID: SessionID.make("ses_permission_source"),
+it.instance(
+  "query includes remembered project approvals without creating requests",
+  () =>
+    Effect.gen(function* () {
+      const permission = yield* Permission.Service
+      const bridge = yield* EventV2Bridge.Service
+      const events: string[] = []
+      const unsubscribe = yield* bridge.listen((event) =>
+        Effect.sync(() => {
+          events.push(event.type)
+        }),
+      )
+      const first = yield* permission
+        .ask({
+          sessionID: SessionID.make("ses_permission_source"),
+          permission: "read",
+          patterns: ["secret.txt"],
+          always: ["*.txt"],
+          metadata: {},
+          ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
+        })
+        .pipe(Effect.forkChild)
+      const pending = yield* waitForPending(1)
+      yield* permission.reply({ requestID: pending[0].id, reply: "always" })
+      yield* Fiber.join(first)
+
+      events.length = 0
+      expect(
+        yield* permission.query({
+          permission: "read",
+          pattern: "secret.txt",
+          ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
+        }),
+      ).toBe("allow")
+      expect(
+        yield* permission.query({
+          permission: "read",
+          pattern: "secret.txt",
+          ruleset: [{ permission: "read", pattern: "*", action: "deny" }],
+        }),
+      ).toBe("deny")
+      expect(yield* permission.list()).toEqual([])
+      expect(events).toEqual([])
+
+      yield* permission.ask({
+        sessionID: SessionID.make("ses_permission_target"),
         permission: "read",
         patterns: ["secret.txt"],
-        always: ["*.txt"],
+        always: [],
         metadata: {},
         ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
       })
-      .pipe(Effect.forkChild)
-    const pending = yield* waitForPending(1)
-    yield* permission.reply({ requestID: pending[0].id, reply: "always" })
-    yield* Fiber.join(first)
-
-    events.length = 0
-    expect(
-      yield* permission.query({
-        permission: "read",
-        pattern: "secret.txt",
-        ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
-      }),
-    ).toBe("allow")
-    expect(
-      yield* permission.query({
-        permission: "read",
-        pattern: "secret.txt",
-        ruleset: [{ permission: "read", pattern: "*", action: "deny" }],
-      }),
-    ).toBe("deny")
-    expect(yield* permission.list()).toEqual([])
-    expect(events).toEqual([])
-
-    yield* permission.ask({
-      sessionID: SessionID.make("ses_permission_target"),
-      permission: "read",
-      patterns: ["secret.txt"],
-      always: [],
-      metadata: {},
-      ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
-    })
-    expect(yield* permission.list()).toEqual([])
-    expect(events).toEqual([])
-    yield* unsubscribe
-  }),
+      expect(yield* permission.list()).toEqual([])
+      expect(events).toEqual([])
+      yield* unsubscribe
+    }),
+  { git: true },
 )
 
 test("fromConfig - expands exact tilde to home directory", () => {
@@ -937,11 +941,7 @@ it.instance(
 
       const ctx = yield* InstanceState.context
       const saved = yield* PermissionSaved.Service
-      const projectID = yield* saved.scope({
-        projectID: ctx.project.id,
-        directory: AbsolutePath.make(ctx.directory),
-      })
-      expect(yield* saved.list({ projectID })).toEqual([])
+      expect(yield* saved.list({ projectID: ctx.project.id })).toEqual([])
 
       const second = yield* ask({
         sessionID: SessionID.make("session_after_empty_always"),
@@ -1122,7 +1122,7 @@ it.live("shares approvals across one project's worktrees but isolates different 
   }),
 )
 
-it.live("isolates two real non-git directories and keeps approvals across reload", () =>
+it.live("does not persist or expose Always in two real non-git directories across reload", () =>
   Effect.gen(function* () {
     const one = yield* tmpdirScoped()
     const two = yield* tmpdirScoped()
@@ -1130,6 +1130,8 @@ it.live("isolates two real non-git directories and keeps approvals across reload
     const first = yield* store.load({ directory: one })
     const second = yield* store.load({ directory: two })
     expect(first.project.id).toBe(second.project.id)
+    const { db } = yield* Database.Service
+    const projects = (yield* db.select().from(ProjectTable).all()).length
 
     const approved = yield* ask({
       id: PermissionV1.ID.make("per_non_git"),
@@ -1140,35 +1142,39 @@ it.live("isolates two real non-git directories and keeps approvals across reload
       always: ["git status"],
       ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
     }).pipe(Effect.provideService(InstanceRef, first), Effect.forkScoped)
-    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, first))
+    expect((yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, first)))[0].always).toEqual([])
     yield* reply({ requestID: PermissionV1.ID.make("per_non_git"), reply: "always" }).pipe(
       Effect.provideService(InstanceRef, first),
     )
     yield* Fiber.join(approved)
+    expect(yield* db.select().from(PermissionTable).all()).toEqual([])
 
     const restarted = yield* store.reload({ directory: one })
-    expect(
-      yield* ask({
-        sessionID: SessionID.make("session_non_git_restart"),
-        permission: "bash",
-        patterns: ["git status"],
-        metadata: {},
-        always: [],
-        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
-      }).pipe(Effect.provideService(InstanceRef, restarted)),
-    ).toBeUndefined()
+    const restartedAsk = yield* ask({
+      sessionID: SessionID.make("session_non_git_restart"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, restarted), Effect.forkScoped)
+    expect((yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, restarted)))[0].always).toEqual([])
+    yield* rejectAll().pipe(Effect.provideService(InstanceRef, restarted))
+    yield* Fiber.await(restartedAsk)
 
     const isolated = yield* ask({
       sessionID: SessionID.make("session_other_non_git"),
       permission: "bash",
       patterns: ["git status"],
       metadata: {},
-      always: [],
+      always: ["git status"],
       ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
     }).pipe(Effect.provideService(InstanceRef, second), Effect.forkScoped)
-    expect(yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, second))).toHaveLength(1)
+    expect((yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, second)))[0].always).toEqual([])
     yield* rejectAll().pipe(Effect.provideService(InstanceRef, second))
     yield* Fiber.await(isolated)
+    expect(yield* (yield* PermissionSaved.Service).list({ projectID: first.project.id })).toEqual([])
+    expect((yield* db.select().from(ProjectTable).all()).length).toBe(projects)
   }),
 )
 

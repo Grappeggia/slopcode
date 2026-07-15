@@ -11,6 +11,7 @@ import { Identifier } from "./util/identifier"
 import { Wildcard } from "./util/wildcard"
 import { PermissionSchema } from "./permission/schema"
 import { PermissionSaved } from "./permission/saved"
+import { Project } from "./project"
 
 export { Effect, Rule, Ruleset } from "./permission/schema"
 type Effect = PermissionSchema.Effect
@@ -143,6 +144,7 @@ export const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const pending = new Map<ID, Pending>()
+    const persistent = location.project.id !== Project.ID.global && location.vcs?.type === "git"
 
     yield* EffectRuntime.addFinalizer(() =>
       EffectRuntime.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new RejectedError()), {
@@ -157,8 +159,8 @@ export const layer = Layer.effect(
     )
 
     const savedRules = EffectRuntime.fnUntraced(function* () {
-      const projectID = yield* saved.scope({ projectID: location.project.id, directory: location.directory })
-      return (yield* saved.list({ projectID })).map(
+      if (!persistent) return []
+      return (yield* saved.list({ projectID: location.project.id })).map(
         (item): Rule => ({ action: item.action, resource: item.resource, effect: "allow" }),
       )
     })
@@ -228,7 +230,7 @@ export const layer = Layer.effect(
         sessionID: input.sessionID,
         action: input.action,
         resources: input.resources,
-        save: input.save,
+        save: persistent ? input.save : undefined,
         metadata: input.metadata,
         source: input.source,
       }
@@ -285,9 +287,8 @@ export const layer = Layer.effect(
           const answer = input.reply === "always" && !existing.request.save?.length ? "once" : input.reply
 
           if (answer === "always") {
-            const projectID = yield* saved.scope({ projectID: location.project.id, directory: location.directory })
             yield* saved.add({
-              projectID,
+              projectID: location.project.id,
               action: existing.request.action,
               resources: existing.request.save ?? [],
             })
