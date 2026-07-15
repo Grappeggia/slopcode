@@ -16,6 +16,12 @@ describe("computePromptTraits", () => {
     expect(traits.status).toBeUndefined()
   })
 
+  test("normal mode with ghost text captures dismissal before session escape", () => {
+    const traits = computePromptTraits({ mode: "normal", autocompleteVisible: false, ghostVisible: true })
+
+    expect(traits.capture).toEqual(["escape", "tab"])
+  })
+
   test("shell mode disables capture and labels the prompt without suspending", () => {
     const traits = computePromptTraits({ mode: "shell", autocompleteVisible: false })
     expect(traits.capture).toBeUndefined()

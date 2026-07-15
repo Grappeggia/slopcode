@@ -183,6 +183,8 @@ import type {
   QuestionV2Reply,
   SessionAbortErrors,
   SessionAbortResponses,
+  SessionAutocompleteErrors,
+  SessionAutocompleteResponses,
   SessionChildrenErrors,
   SessionChildrenResponses,
   SessionCommandErrors,
@@ -4207,6 +4209,52 @@ export class Session2 extends HeyApiClient {
         ...params.headers,
       },
     })
+  }
+
+  /**
+   * Complete prompt prefix
+   *
+   * Generate an ephemeral model-powered continuation for the current unsubmitted TUI prefix.
+   */
+  public autocomplete<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      model?: {
+        providerID: string
+        modelID: string
+      }
+      prefix?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "model" },
+            { in: "body", key: "prefix" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionAutocompleteResponses, SessionAutocompleteErrors, ThrowOnError>(
+      {
+        url: "/session/{sessionID}/autocomplete",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
   }
 
   /**

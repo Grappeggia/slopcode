@@ -9,6 +9,7 @@ import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
+import { SessionAutocomplete } from "@/session/autocomplete"
 import { SessionControl } from "@/session/control"
 import { SessionRevert } from "@/session/revert"
 import { SessionSideQuestion } from "@/session/side-question"
@@ -29,6 +30,7 @@ import * as Sse from "effect/unstable/encoding/Sse"
 import { InstanceHttpApi } from "../api"
 import {
   CommandPayload,
+  AutocompletePayload,
   DiffQuery,
   ForkPayload,
   InitPayload,
@@ -45,6 +47,8 @@ import {
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 import { errorMessage } from "@/util/error"
+import { Config } from "@/config/config"
+import { Flag } from "@slopcode-ai/core/flag/flag"
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -66,6 +70,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const session = yield* Session.Service
     const shareSvc = yield* SessionShare.Service
     const promptSvc = yield* SessionPrompt.Service
+    const autocompleteSvc = yield* SessionAutocomplete.Service
+    const config = yield* Config.Service
     const controlSvc = yield* SessionControl.Service
     const sideSvc = yield* SessionSideQuestion.Service
     const revertSvc = yield* SessionRevert.Service
@@ -380,6 +386,19 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       })
     })
 
+    const autocomplete = Effect.fn("SessionHttpApi.autocomplete")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof AutocompletePayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const model = `${ctx.payload.model.providerID}/${ctx.payload.model.modelID}`
+      const settings = SessionAutocomplete.settings((yield* config.get()).autocomplete)
+      if (Flag.SLOPCODE_DISABLE_AUTOCOMPLETE || !settings.enabled) return { completion: "", model }
+      return yield* autocompleteSvc
+        .complete({ model: ctx.payload.model, prefix: ctx.payload.prefix, settings })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
     const promptAsync = Effect.fn("SessionHttpApi.promptAsync")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
@@ -536,6 +555,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("share", share)
       .handle("unshare", unshare)
       .handle("summarize", summarize)
+      .handle("autocomplete", autocomplete)
       .handle("prompt", prompt)
       .handle("promptAsync", promptAsync)
       .handle("command", command)

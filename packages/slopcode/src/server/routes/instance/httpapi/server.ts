@@ -33,6 +33,7 @@ import { Instruction } from "@/session/instruction"
 import { LLM } from "@/session/llm"
 import { SessionProcessor } from "@/session/processor"
 import { SessionPrompt } from "@/session/prompt"
+import { SessionAutocomplete } from "@/session/autocomplete"
 import { SessionControl, sessionGraphNode, sessionNode } from "@/session/control"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
@@ -246,6 +247,7 @@ const app = LayerNode.group([
   SessionRevert.node,
   SessionSummary.node,
   SessionPrompt.node,
+  SessionAutocomplete.node,
   SessionControl.node,
   SessionSideQuestion.node,
   Instruction.node,

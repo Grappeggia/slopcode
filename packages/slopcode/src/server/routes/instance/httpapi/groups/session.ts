@@ -5,6 +5,7 @@ import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
+import { ConfigAutocompleteV1 } from "@slopcode-ai/core/v1/config/autocomplete"
 import { SessionRevert } from "@/session/revert"
 import { SessionSideQuestion } from "@/session/side-question"
 import { SessionStatus } from "@/session/status"
@@ -69,6 +70,17 @@ export const SummarizePayload = Schema.Struct({
   auto: Schema.optional(Schema.Boolean),
 })
 export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
+export const AutocompletePayload = Schema.Struct({
+  model: Schema.Struct({
+    providerID: ProviderV2.ID,
+    modelID: ModelV2.ID,
+  }),
+  prefix: Schema.String.check(Schema.isMaxLength(ConfigAutocompleteV1.Limits.max_prefix_chars.maximum)),
+})
+export const AutocompleteResult = Schema.Struct({
+  completion: Schema.String.check(Schema.isMaxLength(ConfigAutocompleteV1.Limits.max_completion_chars.maximum)),
+  model: Schema.String,
+})
 export const CommandPayload = Schema.Struct(Struct.omit(SessionPrompt.CommandInput.fields, ["sessionID"]))
 export const ShellPayload = Schema.Struct(Struct.omit(SessionPrompt.ShellInput.fields, ["sessionID"]))
 export const SideQuestionPayload = Schema.Struct(Struct.omit(SessionSideQuestion.Input.fields, ["sessionID"]))
@@ -95,6 +107,7 @@ export const SessionPaths = {
   init: `${root}/:sessionID/init`,
   summarize: `${root}/:sessionID/summarize`,
   prompt: `${root}/:sessionID/message`,
+  autocomplete: `${root}/:sessionID/autocomplete`,
   promptAsync: `${root}/:sessionID/prompt_async`,
   command: `${root}/:sessionID/command`,
   sideQuestion: `${root}/:sessionID/side-question`,
@@ -314,6 +327,19 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.summarize",
             summary: "Summarize session",
             description: "Generate a concise summary of the session using AI compaction to preserve key information.",
+          }),
+        ),
+        HttpApiEndpoint.post("autocomplete", SessionPaths.autocomplete, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: AutocompletePayload,
+          success: described(AutocompleteResult, "Autocomplete response"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.autocomplete",
+            summary: "Complete prompt prefix",
+            description: "Generate an ephemeral model-powered continuation for the current unsubmitted TUI prefix.",
           }),
         ),
         HttpApiEndpoint.post("prompt", SessionPaths.prompt, {

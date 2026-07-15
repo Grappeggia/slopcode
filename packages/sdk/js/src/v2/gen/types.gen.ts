@@ -2537,6 +2537,19 @@ export type AttachmentConfig = {
   image?: ImageAttachmentConfig
 }
 
+export type AutocompleteConfig = {
+  enabled?: boolean
+  debounce_ms?: number
+  min_prefix_chars?: number
+  max_prefix_chars?: number
+  timeout_ms?: number
+  max_output_tokens?: number
+  max_completion_chars?: number
+  provider_model_overrides?: {
+    [key: string]: string
+  }
+}
+
 export type Config = {
   $schema?: string
   shell?: string
@@ -2662,6 +2675,7 @@ export type Config = {
     [key: string]: boolean
   }
   attachment?: AttachmentConfig
+  autocomplete?: AutocompleteConfig
   enterprise?: {
     url?: string
   }
@@ -10467,6 +10481,49 @@ export type SessionSummarizeResponses = {
 }
 
 export type SessionSummarizeResponse = SessionSummarizeResponses[keyof SessionSummarizeResponses]
+
+export type SessionAutocompleteData = {
+  body?: {
+    model: {
+      providerID: string
+      modelID: string
+    }
+    prefix: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/autocomplete"
+}
+
+export type SessionAutocompleteErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionAutocompleteError = SessionAutocompleteErrors[keyof SessionAutocompleteErrors]
+
+export type SessionAutocompleteResponses = {
+  /**
+   * Autocomplete response
+   */
+  200: {
+    completion: string
+    model: string
+  }
+}
+
+export type SessionAutocompleteResponse = SessionAutocompleteResponses[keyof SessionAutocompleteResponses]
 
 export type SessionPromptAsyncData = {
   body?: {

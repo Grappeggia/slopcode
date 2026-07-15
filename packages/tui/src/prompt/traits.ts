@@ -5,6 +5,7 @@ export type PromptMode = "normal" | "shell"
 export interface PromptTraitsInput {
   mode: PromptMode
   autocompleteVisible: boolean
+  ghostVisible?: boolean
 }
 
 export type PromptTraits = EditorTraits & {
@@ -18,7 +19,9 @@ export function computePromptTraits(input: PromptTraitsInput): PromptTraits {
     input.mode === "normal"
       ? input.autocompleteVisible
         ? (["escape", "navigate", "submit", "tab"] as const)
-        : (["tab"] as const)
+        : input.ghostVisible
+          ? (["escape", "tab"] as const)
+          : (["tab"] as const)
       : undefined
   return {
     capture,
