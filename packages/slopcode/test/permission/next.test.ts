@@ -4,18 +4,21 @@ import os from "os"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
-import { Database } from "@slopcode-ai/core/database/database"
+import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { Permission } from "../../src/permission"
+import { InstanceState } from "../../src/effect/instance-state"
+import { InstanceRef } from "../../src/effect/instance-ref"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
-import { TestInstance, tmpdirScoped } from "../fixture/fixture"
+import { TestInstance, reloadInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
 
 const events = EventV2Bridge.defaultLayer
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
+const saved = PermissionSaved.defaultLayer
 const env = Layer.mergeAll(
-  Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events)),
+  Permission.layer.pipe(Layer.provideMerge(saved), Layer.provide(events)),
   events,
   CrossSpawnSpawner.defaultLayer,
   InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
@@ -215,7 +218,7 @@ it.instance("query returns the effective action without requests, events, or app
   }),
 )
 
-it.instance("query ignores remembered approvals from another session without changing normal asks", () =>
+it.instance("query includes remembered project approvals without creating requests", () =>
   Effect.gen(function* () {
     const permission = yield* Permission.Service
     const bridge = yield* EventV2Bridge.Service
@@ -246,7 +249,7 @@ it.instance("query ignores remembered approvals from another session without cha
         pattern: "secret.txt",
         ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
       }),
-    ).toBe("ask")
+    ).toBe("allow")
     expect(
       yield* permission.query({
         permission: "read",
@@ -900,6 +903,170 @@ it.instance(
       expect(result).toBeUndefined()
     }),
   { git: true },
+)
+
+it.instance(
+  "reply - always persists exact deduplicated approvals across an instance restart",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        id: PermissionV1.ID.make("per_restart"),
+        sessionID: SessionID.make("session_restart"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: ["git status", "git status"],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionV1.ID.make("per_restart"), reply: "always" })
+      yield* Fiber.join(fiber)
+
+      const ctx = yield* InstanceState.context
+      expect(yield* (yield* PermissionSaved.Service).list({ projectID: ctx.project.id })).toMatchObject([
+        { projectID: ctx.project.id, action: "bash", resource: "git status" },
+      ])
+
+      yield* reloadInstance({ directory: (yield* TestInstance).directory })
+      expect(
+        yield* ask({
+          sessionID: SessionID.make("session_after_restart"),
+          permission: "bash",
+          patterns: ["git status"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        }),
+      ).toBeUndefined()
+    }),
+  { git: true },
+)
+
+it.instance(
+  "saved approvals never override configured or task-ceiling denies and configured allows still win",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* InstanceState.context
+      yield* (yield* PermissionSaved.Service).add({
+        projectID: ctx.project.id,
+        action: "bash",
+        resources: ["git status"],
+      })
+
+      const configured = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_config_deny"),
+          permission: "bash",
+          patterns: ["git status"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "deny" }],
+        }),
+      )
+      expect(configured).toBeInstanceOf(PermissionV1.DeniedError)
+
+      const ceiling = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_ceiling_deny"),
+          permission: "bash",
+          patterns: ["git status"],
+          metadata: {},
+          always: [],
+          ruleset: [
+            { permission: "bash", pattern: "*", action: "ask" },
+            { permission: "bash", pattern: "git status", action: "deny" },
+          ],
+        }),
+      )
+      expect(ceiling).toBeInstanceOf(PermissionV1.DeniedError)
+
+      expect(
+        yield* ask({
+          sessionID: SessionID.make("session_config_allow"),
+          permission: "read",
+          patterns: ["README.md"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "read", pattern: "*", action: "allow" }],
+        }),
+      ).toBeUndefined()
+      expect(yield* list()).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "revocation is visible to the running permission service",
+  () =>
+    Effect.gen(function* () {
+      const ctx = yield* InstanceState.context
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({ projectID: ctx.project.id, action: "bash", resources: ["bun test"] })
+      const item = (yield* saved.list({ projectID: ctx.project.id }))[0]
+
+      expect(
+        yield* ask({
+          sessionID: SessionID.make("session_before_revoke"),
+          permission: "bash",
+          patterns: ["bun test"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        }),
+      ).toBeUndefined()
+
+      expect(yield* saved.remove({ id: item.id, projectID: ctx.project.id })).toBe(true)
+      const fiber = yield* ask({
+        sessionID: SessionID.make("session_after_revoke"),
+        permission: "bash",
+        patterns: ["bun test"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(fiber)
+    }),
+  { git: true },
+)
+
+it.live("shares approvals across one project's worktrees but isolates different projects", () =>
+  Effect.gen(function* () {
+    const mainDir = yield* tmpdirScoped({ git: true })
+    const worktreeDir = yield* tmpdirScoped()
+    const otherDir = yield* tmpdirScoped({ git: true })
+    const store = yield* InstanceStore.Service
+    const main = yield* store.load({ directory: mainDir })
+    const worktree = yield* store.load({ directory: worktreeDir, project: main.project, worktree: main.worktree })
+    const other = yield* store.load({ directory: otherDir })
+    const saved = yield* PermissionSaved.Service
+    yield* saved.add({ projectID: main.project.id, action: "bash", resources: ["git status"] })
+
+    expect(
+      yield* ask({
+        sessionID: SessionID.make("session_worktree"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.provideService(InstanceRef, worktree)),
+    ).toBeUndefined()
+
+    const fiber = yield* ask({
+      sessionID: SessionID.make("session_other_project"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, other), Effect.forkScoped)
+    expect(yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, other))).toHaveLength(1)
+    yield* rejectAll().pipe(Effect.provideService(InstanceRef, other))
+    yield* Fiber.await(fiber)
+  }),
 )
 
 it.instance(

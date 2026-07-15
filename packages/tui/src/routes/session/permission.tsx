@@ -9,6 +9,7 @@ import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useSync } from "../../context/sync"
 import { useProject } from "../../context/project"
+import { permissionAlwaysLines } from "./permission-copy"
 import { filetype } from "../../util/filetype"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -142,19 +143,16 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           body={
             <Switch>
               <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
-                <TextBody title={"This will allow " + props.request.permission + " until SlopCode is restarted."} />
+                <TextBody title={permissionAlwaysLines(props.request.permission, props.request.always)[0]} />
               </Match>
               <Match when={true}>
                 <box paddingLeft={1} gap={1}>
-                  <text fg={theme.textMuted}>This will allow the following patterns until SlopCode is restarted</text>
+                  <text fg={theme.textMuted}>
+                    {permissionAlwaysLines(props.request.permission, props.request.always)[0]}
+                  </text>
                   <box>
-                    <For each={props.request.always}>
-                      {(pattern) => (
-                        <text fg={theme.text}>
-                          {"- "}
-                          {pattern}
-                        </text>
-                      )}
+                    <For each={permissionAlwaysLines(props.request.permission, props.request.always).slice(1)}>
+                      {(line) => <text fg={theme.text}>{line}</text>}
                     </For>
                   </box>
                 </box>

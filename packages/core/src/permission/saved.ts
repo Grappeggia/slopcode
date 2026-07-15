@@ -1,8 +1,9 @@
 export * as PermissionSaved from "./saved"
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
+import { LayerNode } from "../effect/layer-node"
 import { ProjectV2 } from "../project"
 import { withStatics } from "../schema"
 import { Identifier } from "../util/identifier"
@@ -37,7 +38,8 @@ export type AddInput = typeof AddInput.Type
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
   readonly add: (input: AddInput) => Effect.Effect<void>
-  readonly remove: (id: ID) => Effect.Effect<void>
+  readonly remove: (input: { id: ID; projectID: ProjectV2.ID }) => Effect.Effect<boolean>
+  readonly clear: (projectID: ProjectV2.ID) => Effect.Effect<number>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/PermissionSaved") {}
@@ -76,12 +78,30 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
     })
 
-    const remove = Effect.fn("PermissionSaved.remove")(function* (id: ID) {
-      yield* db.delete(PermissionTable).where(eq(PermissionTable.id, id)).run().pipe(Effect.orDie)
+    const remove = Effect.fn("PermissionSaved.remove")(function* (input: { id: ID; projectID: ProjectV2.ID }) {
+      const rows = yield* db
+        .delete(PermissionTable)
+        .where(and(eq(PermissionTable.id, input.id), eq(PermissionTable.project_id, input.projectID)))
+        .returning({ id: PermissionTable.id })
+        .all()
+        .pipe(Effect.orDie)
+      return rows.length > 0
     })
 
-    return Service.of({ list, add, remove })
+    const clear = Effect.fn("PermissionSaved.clear")(function* (projectID: ProjectV2.ID) {
+      const rows = yield* db
+        .delete(PermissionTable)
+        .where(eq(PermissionTable.project_id, projectID))
+        .returning({ id: PermissionTable.id })
+        .all()
+        .pipe(Effect.orDie)
+      return rows.length
+    })
+
+    return Service.of({ list, add, remove, clear })
   }),
 )
 
 export const defaultLayer = layer.pipe(Layer.provide(Database.defaultLayer))
+
+export const node = LayerNode.make(layer, [Database.node])

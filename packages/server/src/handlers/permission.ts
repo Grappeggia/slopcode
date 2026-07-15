@@ -53,7 +53,8 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
       .handle(
         "permission.saved.remove",
         Effect.fn(function* (ctx) {
-          yield* (yield* PermissionSaved.Service).remove(ctx.params.id)
+          const location = yield* Location.Service
+          yield* (yield* PermissionSaved.Service).remove({ id: ctx.params.id, projectID: location.project.id })
           return HttpApiSchema.NoContent.make()
         }),
       )

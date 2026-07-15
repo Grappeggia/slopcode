@@ -480,11 +480,41 @@ describe("PermissionV2", () => {
         yield* db.select().from(PermissionTable).where(eq(PermissionTable.project_id, Project.ID.global)).all(),
       ).toMatchObject([{ action: "read", resource: "src/*" }])
       const saved = yield* PermissionSaved.Service
-      const id = (yield* saved.list())[0]!.id
+      const id = (yield* saved.list())[0].id
       expect(yield* saved.list()).toEqual([{ id, projectID: Project.ID.global, action: "read", resource: "src/*" }])
       yield* service.assert(assertion({ id: PermissionV2.ID.create("per_next"), resources: ["src/next.ts"] }))
-      yield* saved.remove(id)
+      expect(yield* saved.remove({ id, projectID: Project.ID.global })).toBe(true)
       expect(yield* saved.list()).toEqual([])
+    }),
+  )
+
+  it.effect("deduplicates saved resources and scopes removal and clearing to a project", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { db } = yield* Database.Service
+      const other = Project.ID.make("project_other")
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: other, worktree: AbsolutePath.make("/other"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({
+        projectID: Project.ID.global,
+        action: "bash",
+        resources: ["git status", "git status"],
+      })
+      yield* saved.add({ projectID: other, action: "read", resources: ["README.md"] })
+
+      const item = (yield* saved.list({ projectID: Project.ID.global }))[0]
+      expect(yield* saved.list({ projectID: Project.ID.global })).toEqual([item])
+      expect(item).toMatchObject({ action: "bash", resource: "git status" })
+      expect(yield* saved.remove({ id: item.id, projectID: other })).toBe(false)
+      expect(yield* saved.list({ projectID: Project.ID.global })).toEqual([item])
+      expect(yield* saved.clear(other)).toBe(1)
+      expect(yield* saved.list({ projectID: other })).toEqual([])
+      expect(yield* saved.list({ projectID: Project.ID.global })).toEqual([item])
     }),
   )
 })
