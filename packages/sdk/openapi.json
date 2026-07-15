@@ -7420,6 +7420,217 @@
         ]
       }
     },
+    "/session/{sessionID}/autocomplete": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.autocomplete",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Autocomplete response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "completion": {
+                      "type": "string",
+                      "maxLength": 512
+                    },
+                    "model": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["completion", "model"],
+                  "additionalProperties": false,
+                  "description": "Autocomplete response"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Generate an ephemeral model-powered continuation for the current unsubmitted TUI prefix.",
+        "summary": "Complete prompt prefix",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "requestID": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "model": {
+                    "type": "object",
+                    "properties": {
+                      "providerID": {
+                        "type": "string"
+                      },
+                      "modelID": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["providerID", "modelID"],
+                    "additionalProperties": false
+                  },
+                  "prefix": {
+                    "type": "string",
+                    "maxLength": 8192
+                  }
+                },
+                "required": ["model", "prefix"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.autocomplete({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/session/{sessionID}/autocomplete/{requestID}": {
+      "delete": {
+        "tags": ["session"],
+        "operationId": "session.abortAutocomplete",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "requestID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether the autocomplete request was active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean",
+                  "description": "Whether the autocomplete request was active"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BadRequestError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Interrupt an ephemeral autocomplete generation request.",
+        "summary": "Abort prompt autocomplete",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.session.abortAutocomplete({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/session/{sessionID}/prompt_async": {
       "post": {
         "tags": ["session"],
@@ -22644,6 +22855,53 @@
         },
         "additionalProperties": false
       },
+      "AutocompleteConfig": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "debounce_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5000
+          },
+          "min_prefix_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 512
+          },
+          "max_prefix_chars": {
+            "type": "integer",
+            "minimum": 64,
+            "maximum": 8192
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 250,
+            "maximum": 10000
+          },
+          "max_output_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 128
+          },
+          "max_completion_chars": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 512
+          },
+          "provider_model_overrides": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "Config": {
         "type": "object",
         "properties": {
@@ -23021,6 +23279,9 @@
           },
           "attachment": {
             "$ref": "#/components/schemas/AttachmentConfig"
+          },
+          "autocomplete": {
+            "$ref": "#/components/schemas/AutocompleteConfig"
           },
           "enterprise": {
             "type": "object",
