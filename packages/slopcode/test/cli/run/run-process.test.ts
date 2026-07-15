@@ -4,8 +4,21 @@
 // `slopcode.run(message, opts?)` to spawn `bun src/index.ts run ...` with
 // `SLOPCODE_CONFIG_CONTENT` providing the test provider config inline.
 import { describe, expect } from "bun:test"
+import { Database } from "bun:sqlite"
 import { Effect } from "effect"
+import path from "node:path"
 import { cliIt } from "../../lib/cli-process"
+import { testProviderConfig } from "../../lib/test-provider"
+
+function tools(input: Record<string, unknown> | undefined) {
+  if (!Array.isArray(input?.tools)) return []
+  return input.tools.flatMap((item) => {
+    if (!item || typeof item !== "object" || !("function" in item)) return []
+    const fn = item.function
+    if (!fn || typeof fn !== "object" || !("name" in fn) || typeof fn.name !== "string") return []
+    return [fn.name]
+  })
+}
 
 describe("slopcode run (non-interactive subprocess)", () => {
   // Happy path: prompt completes, output reaches stdout, process exits 0.
@@ -20,6 +33,81 @@ describe("slopcode run (non-interactive subprocess)", () => {
         expect(result.stdout).toContain("hello from the test llm")
       }),
     60_000,
+  )
+
+  cliIt.live(
+    "denies plan_permissions when a local command resumes a plan session",
+    ({ home, llm, slopcode }) =>
+      Effect.gen(function* () {
+        const env = {
+          SLOPCODE_CONFIG_CONTENT: JSON.stringify({
+            ...testProviderConfig(llm.url),
+            command: {
+              forecast: {
+                template: "Continue planning without requesting build permissions.",
+                agent: "plan",
+              },
+            },
+          }),
+          SLOPCODE_EXPERIMENTAL_PLAN_MODE: "true",
+          SLOPCODE_DB: path.join(home, "run-process.db"),
+        }
+        yield* llm.text("seed complete")
+        const seed = yield* slopcode.run("seed plan session", { agent: "plan", format: "json", env })
+        slopcode.expectExit(seed, 0)
+        const sessionID = slopcode.parseJsonEvents(seed.stdout)[0]?.sessionID
+        if (typeof sessionID !== "string") throw new Error("failed to identify resumed plan session")
+        const seedInput = (yield* llm.inputs).findLast((input) => JSON.stringify(input).includes("seed plan session"))
+        expect(tools(seedInput)).not.toContain("plan_permissions")
+
+        const clear = () => {
+          const db = new Database(env.SLOPCODE_DB)
+          db.query("UPDATE session SET permission = NULL WHERE id = ?").run(sessionID)
+          db.close()
+        }
+        clear()
+
+        yield* llm.text("resume complete")
+        const resumed = yield* slopcode.run("resume plan session", {
+          agent: "plan",
+          env,
+          extraArgs: ["--session", sessionID],
+          timeoutMs: 60_000,
+        })
+        slopcode.expectExit(resumed, 0)
+        const resumedInput = (yield* llm.inputs).findLast((input) =>
+          JSON.stringify(input).includes("resume plan session"),
+        )
+        expect(tools(resumedInput)).not.toContain("plan_permissions")
+        clear()
+
+        yield* llm.text("command complete")
+        const result = yield* slopcode.run("", {
+          agent: "plan",
+          command: "forecast",
+          env,
+          extraArgs: ["--session", sessionID],
+          timeoutMs: 60_000,
+        })
+        slopcode.expectExit(result, 0)
+
+        const input = (yield* llm.inputs).at(-1)
+        expect(tools(input).length).toBeGreaterThan(0)
+        expect(tools(input)).not.toContain("plan_permissions")
+
+        yield* llm.text("new command complete")
+        const fresh = yield* slopcode.run("", {
+          agent: "plan",
+          command: "forecast",
+          env,
+          timeoutMs: 60_000,
+        })
+        slopcode.expectExit(fresh, 0)
+        const freshInput = (yield* llm.inputs).at(-1)
+        expect(tools(freshInput).length).toBeGreaterThan(0)
+        expect(tools(freshInput)).not.toContain("plan_permissions")
+      }),
+    90_000,
   )
 
   // Regression for #27371: an unknown model used to hang the process forever

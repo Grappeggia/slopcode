@@ -22,7 +22,7 @@ import { Filesystem } from "@/util/filesystem"
 import { createSlopcodeClient, type SlopcodeClient, type ToolPart } from "@slopcode-ai/sdk/v2"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
-import { runPermissionRules, runPromptTools } from "./run/permission-rules"
+import { runPermissionRules, runPromptTools, runSessionPermission } from "./run/permission-rules"
 
 type ModelInput = Parameters<SlopcodeClient["session"]["prompt"]>[0]["model"]
 
@@ -64,6 +64,7 @@ type SessionInfo = {
   id: string
   title?: string
   directory?: string
+  permission?: ReturnType<typeof runPermissionRules>
 }
 
 function inline(info: Inline) {
@@ -414,6 +415,7 @@ export const RunCommand = effectCmd({
               id,
               title: forked.data?.title ?? current.data.title,
               directory: forked.data?.directory ?? current.data.directory,
+              permission: forked.data?.permission ?? current.data.permission,
             }
           }
 
@@ -421,6 +423,7 @@ export const RunCommand = effectCmd({
             id: current.data.id,
             title: current.data.title,
             directory: current.data.directory,
+            permission: current.data.permission,
           }
         }
 
@@ -439,6 +442,7 @@ export const RunCommand = effectCmd({
             id,
             title: forked.data?.title ?? base.title,
             directory: forked.data?.directory ?? base.directory,
+            permission: forked.data?.permission ?? base.permission,
           }
         }
 
@@ -447,6 +451,7 @@ export const RunCommand = effectCmd({
             id: base.id,
             title: base.title,
             directory: base.directory,
+            permission: base.permission,
           }
         }
 
@@ -464,6 +469,7 @@ export const RunCommand = effectCmd({
           id,
           title: result.data?.title ?? name,
           directory: result.data?.directory,
+          permission: result.data?.permission,
         }
       }
 
@@ -507,6 +513,7 @@ export const RunCommand = effectCmd({
         return {
           id,
           title: result.data?.title,
+          permission: result.data?.permission,
         }
       }
 
@@ -754,6 +761,18 @@ export const RunCommand = effectCmd({
         }
         const cwd = args.attach ? (directory ?? sess.directory ?? (await current(sdk))) : (directory ?? root)
         const client = args.attach ? attachSDK(cwd) : sdk
+
+        if (!interactive) {
+          const updated = await client.session.update({
+            sessionID,
+            permission: runSessionPermission(sess.permission, false),
+          })
+          if (updated.error) {
+            if (!emit("error", { error: updated.error })) UI.error(formatRunError(updated.error))
+            process.exitCode = 1
+            return
+          }
+        }
 
         // Validate agent if specified
         const agent = await pickAgent(client)

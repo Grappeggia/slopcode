@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store"
 import { dirname } from "node:path"
-import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, For, Match, Show, Switch, untrack } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { useTheme, selectedForeground } from "../../context/theme"
@@ -22,6 +22,7 @@ import {
   createPermissionBatchState,
   permissionBatchMove,
   permissionBatchReply,
+  permissionBatchSync,
   permissionBatchToggle,
   permissionQueue,
   type PermissionBatchOption,
@@ -461,12 +462,8 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
   const persistent = createMemo(() => props.requests.every((item) => item.always.length > 0))
 
   createEffect(() => {
-    const ids = props.requests.map((item) => item.id)
-    setStore("selected", (current) => {
-      const kept = current.filter((id) => ids.includes(id))
-      return [...kept, ...ids.filter((id) => !kept.includes(id))]
-    })
-    setStore("focused", (current) => Math.min(current, Math.max(ids.length - 1, 0)))
+    const requests = props.requests
+    setStore(untrack(() => permissionBatchSync(store, requests)))
   })
 
   const submit = (reply: NonNullable<ReturnType<typeof permissionBatchReply>["reply"]>) => {

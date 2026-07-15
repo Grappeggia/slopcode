@@ -47,6 +47,7 @@ export type PermissionStep = {
 export type PermissionBatchState = {
   stage: "review" | "always"
   focused: number
+  requestIDs: string[]
   selected: string[]
 }
 
@@ -99,7 +100,19 @@ export function permissionQueue(requests: PermissionRequest[]) {
 }
 
 export function createPermissionBatchState(requests: PermissionRequest[]): PermissionBatchState {
-  return { stage: "review", focused: 0, selected: requests.map((item) => item.id) }
+  const requestIDs = requests.map((item) => item.id)
+  return { stage: "review", focused: 0, requestIDs, selected: requestIDs }
+}
+
+export function permissionBatchSync(state: PermissionBatchState, requests: PermissionRequest[]): PermissionBatchState {
+  const requestIDs = requests.map((item) => item.id)
+  const known = new Set(state.requestIDs)
+  return {
+    ...state,
+    focused: Math.min(state.focused, Math.max(requestIDs.length - 1, 0)),
+    requestIDs,
+    selected: [...state.selected.filter((id) => requestIDs.includes(id)), ...requestIDs.filter((id) => !known.has(id))],
+  }
 }
 
 export function permissionBatchMove(state: PermissionBatchState, requests: PermissionRequest[], step: number) {

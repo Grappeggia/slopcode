@@ -80,6 +80,7 @@ it.instance("exposes a bounded exact plan-only forecast tool", () =>
         }),
       ),
     ).toBe(true)
+    expect(Result.isSuccess(Schema.decodeUnknownResult(tool.parameters)({ permissions: [] }))).toBe(true)
     expect(
       Result.isFailure(
         Schema.decodeUnknownResult(tool.parameters)({
@@ -132,6 +133,37 @@ it.instance("exposes a bounded exact plan-only forecast tool", () =>
           .pipe(Effect.exit),
       ),
     ).toBe(true)
+  }),
+)
+
+it.instance("an empty plan permission forecast clears the previous session forecast", () =>
+  Effect.gen(function* () {
+    const registry = yield* ToolRegistry.Service
+    const tool = (yield* registry.all()).find((item) => item.id === "plan_permissions")
+    if (!tool) throw new Error("plan_permissions tool not found")
+    const permissions = yield* Permission.Service
+    const session = yield* (yield* Session.Service).create({ title: "Plan" })
+    yield* (yield* Database.Service).db
+      .insert(SessionTable)
+      .values(Session.toRow(session))
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+
+    yield* tool.execute(
+      { permissions: [{ action: "bash", resources: ["git status"], reason: "Inspect state" }] },
+      context(session.id),
+    )
+    const result = yield* tool.execute({ permissions: [] }, context(session.id))
+
+    expect(result.metadata).toMatchObject({ permissions: [] })
+    expect(
+      yield* permissions.review({
+        sessionID: session.id,
+        policy: () => Effect.succeed([{ permission: "bash", pattern: "*", action: "ask" }]),
+      }),
+    ).toBe(false)
+    expect(yield* permissions.list()).toEqual([])
   }),
 )
 
@@ -202,7 +234,12 @@ it.instance("skipping a forecast never rejects the plan transition", () =>
       ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
       candidates: [{ action: "bash", resources: ["git status"], reason: "Inspect state" }],
     })
-    const review = yield* permission.review({ sessionID: session }).pipe(Effect.forkScoped)
+    const review = yield* permission
+      .review({
+        sessionID: session,
+        policy: () => Effect.succeed([{ permission: "bash", pattern: "*", action: "ask" }]),
+      })
+      .pipe(Effect.forkScoped)
     const batch = yield* wait(permission.list())
     yield* permission.replyBatch({ batchID: batch[0].batchID!, requestIDs: [], reply: "reject" })
     expect(yield* Fiber.join(review)).toBe(true)

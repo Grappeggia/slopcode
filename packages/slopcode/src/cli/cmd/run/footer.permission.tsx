@@ -20,6 +20,7 @@ import {
   createPermissionBatchState,
   permissionBatchMove,
   permissionBatchReply,
+  permissionBatchSync,
   permissionBatchToggle,
   permissionAlwaysLines,
   permissionCancel,
@@ -491,15 +492,7 @@ function RunPermissionBatchBody(props: {
   )
 
   createEffect(() => {
-    const ids = props.requests.map((item) => item.id)
-    setState((current) => ({
-      ...current,
-      focused: Math.min(current.focused, Math.max(ids.length - 1, 0)),
-      selected: [
-        ...current.selected.filter((id) => ids.includes(id)),
-        ...ids.filter((id) => !current.selected.includes(id)),
-      ],
-    }))
+    setState((current) => permissionBatchSync(current, props.requests))
   })
 
   const submit = async (reply: PermissionBatchReply) => {

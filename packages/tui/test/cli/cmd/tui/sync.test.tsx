@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { tmpdir } from "../../../fixture/fixture"
-import { mount, wait } from "./sync-fixture"
+import { json, mount, wait } from "./sync-fixture"
 import type { GlobalEvent } from "@slopcode-ai/sdk/v2"
 
 function branchEvent(branch: string, workspace?: string): GlobalEvent {
@@ -56,6 +56,54 @@ describe("tui sync", () => {
       await wait(() => sync.data.vcs?.branch === "feature")
 
       expect(sync.data.vcs?.branch).toBe("feature")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("auto mode approves a forecast batch once with every request selected", async () => {
+    await using tmp = await tmpdir()
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const replies: unknown[] = []
+    const { app, emit } = await mount(
+      async (url, request): Promise<Response | undefined> => {
+        if (url.pathname !== "/permission/batch/pmb_auto/reply") return undefined
+        replies.push(await request?.json())
+        return json(true)
+      },
+      tmp.path,
+      { auto: true },
+    )
+
+    const permission = (id: string): GlobalEvent => ({
+      directory: "/tmp/slopcode/packages/tui",
+      project: "proj_test",
+      payload: {
+        id: `evt_${id}`,
+        type: "permission.asked",
+        properties: {
+          id,
+          sessionID: "ses_auto",
+          permission: "bash",
+          patterns: [id],
+          metadata: {},
+          always: [id],
+          kind: "forecast",
+          batchID: "pmb_auto",
+          batchSize: 2,
+        },
+      },
+    })
+
+    try {
+      emit(permission("per_a"))
+      await Bun.sleep(20)
+      expect(replies).toEqual([])
+
+      emit(permission("per_b"))
+      await wait(() => replies.length === 1)
+
+      expect(replies).toEqual([{ requestIDs: ["per_a", "per_b"], reply: "once" }])
     } finally {
       app.renderer.destroy()
     }

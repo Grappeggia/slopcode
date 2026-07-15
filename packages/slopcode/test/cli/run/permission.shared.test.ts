@@ -12,6 +12,7 @@ import {
   createPermissionBatchState,
   permissionBatchMove,
   permissionBatchReply,
+  permissionBatchSync,
   permissionBatchToggle,
   permissionQueue,
 } from "@/cli/cmd/run/permission.shared"
@@ -189,6 +190,20 @@ describe("run permission shared", () => {
       batchID: "pmb_one",
       requestIDs: [],
       reply: "reject",
+    })
+  })
+
+  test("preserves batch deselection when a later event adds a request", () => {
+    const initial = [
+      req({ id: "per_a", kind: "forecast", batchID: "pmb_one" }),
+      req({ id: "per_b", kind: "forecast", batchID: "pmb_one" }),
+    ]
+    const deselected = permissionBatchToggle(createPermissionBatchState(initial), "per_a")
+    const requests = [...initial, req({ id: "per_c", kind: "forecast", batchID: "pmb_one" })]
+
+    expect(permissionBatchSync(deselected, requests)).toMatchObject({
+      requestIDs: ["per_a", "per_b", "per_c"],
+      selected: ["per_b", "per_c"],
     })
   })
 })

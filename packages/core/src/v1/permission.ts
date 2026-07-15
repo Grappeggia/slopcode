@@ -40,6 +40,7 @@ export const Request = Schema.Struct({
   always: Schema.Array(Schema.String),
   kind: Schema.optional(Schema.Literal("forecast")),
   batchID: Schema.optional(BatchID),
+  batchSize: Schema.optional(Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 16 }))),
   reason: Schema.optional(Schema.String),
   tool: Schema.Struct({
     messageID: Schema.String,

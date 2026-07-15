@@ -4,6 +4,7 @@ import {
   createPermissionBatchState,
   permissionBatchMove,
   permissionBatchReply,
+  permissionBatchSync,
   permissionBatchToggle,
   permissionQueue,
 } from "../src/routes/session/permission-batch"
@@ -57,5 +58,16 @@ test("persistent batch approval requires confirmation and skip selects nothing",
     batchID: "pmb_one",
     requestIDs: [],
     reply: "reject",
+  })
+})
+
+test("incremental batch events preserve deselection and select only new requests", () => {
+  const initial = [request("per_a", "forecast", "pmb_one"), request("per_b", "forecast", "pmb_one")]
+  const deselected = permissionBatchToggle(createPermissionBatchState(initial), "per_a")
+  const requests = [...initial, request("per_c", "forecast", "pmb_one")]
+
+  expect(permissionBatchSync(deselected, requests)).toMatchObject({
+    requestIDs: ["per_a", "per_b", "per_c"],
+    selected: ["per_b", "per_c"],
   })
 })

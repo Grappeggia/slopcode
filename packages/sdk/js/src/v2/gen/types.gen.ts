@@ -1966,6 +1966,7 @@ export type GlobalEvent = {
           always: Array<string>
           kind?: "forecast"
           batchID?: string
+          batchSize?: number
           reason?: string
           tool?: {
             messageID: string
@@ -3175,6 +3176,7 @@ export type PermissionRequest = {
   always: Array<string>
   kind?: "forecast"
   batchID?: string
+  batchSize?: number
   reason?: string
   tool?: {
     messageID: string
@@ -7071,6 +7073,7 @@ export type EventPermissionAsked = {
     always: Array<string>
     kind?: "forecast"
     batchID?: string
+    batchSize?: number
     reason?: string
     tool?: {
       messageID: string

@@ -138,6 +138,8 @@ export const {
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
     const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
+    const autoBatches = new Map<string, { expected: number; requestIDs: Set<string> }>()
+    const autoReplied = new Set<string>()
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
     }
@@ -184,6 +186,27 @@ export const {
         case "permission.asked": {
           const request = event.properties
           if (permission.mode === "auto") {
+            if (request.kind === "forecast" && request.batchID) {
+              if (autoReplied.has(request.batchID)) break
+              const batch = autoBatches.get(request.batchID) ?? {
+                expected: request.batchSize ?? 1,
+                requestIDs: new Set<string>(),
+              }
+              batch.expected = Math.max(batch.expected, request.batchSize ?? 1)
+              batch.requestIDs.add(request.id)
+              autoBatches.set(request.batchID, batch)
+              if (batch.requestIDs.size < batch.expected) break
+              autoBatches.delete(request.batchID)
+              autoReplied.add(request.batchID)
+              void sdk.client.permission.replyBatch({
+                batchID: request.batchID,
+                requestIDs: [...batch.requestIDs].toSorted(),
+                reply: "once",
+                directory,
+                workspace,
+              })
+              break
+            }
             void sdk.client.permission.reply({
               requestID: request.id,
               reply: "once",

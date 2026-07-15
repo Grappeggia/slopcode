@@ -15,7 +15,6 @@ export const Parameters = Schema.Struct({})
 
 export const PlanPermissionsParameters = Schema.Struct({
   permissions: Schema.Array(Permission.ForecastCandidate).check(
-    Schema.isMinLength(1),
     Schema.isMaxLength(Permission.ForecastLimits.candidates),
   ),
 })
@@ -29,7 +28,7 @@ export const PlanPermissionsTool = Tool.define(
 
     return {
       description:
-        "Replace the likely build-mode permission forecast with exact actions and resources for review before leaving plan mode.",
+        "Replace the likely build-mode permission forecast with exact actions and resources for review before leaving plan mode. Pass an empty list to clear it.",
       parameters: PlanPermissionsParameters,
       execute: (params: typeof PlanPermissionsParameters.Type, ctx: Tool.Context) =>
         Effect.gen(function* () {
@@ -48,7 +47,9 @@ export const PlanPermissionsTool = Tool.define(
               : "No build permissions need review",
             output: candidates.length
               ? "The previous forecast was replaced. These exact permissions will be reviewed before build starts."
-              : "The previous forecast was cleared because every candidate is already allowed or denied by configuration.",
+              : params.permissions.length
+                ? "The previous forecast was cleared because every candidate is already allowed or denied by configuration."
+                : "The previous forecast was cleared.",
             metadata: { permissions: candidates },
           }
         }).pipe(Effect.orDie),
@@ -63,6 +64,7 @@ export const PlanExitTool = Tool.define(
     const question = yield* Question.Service
     const provider = yield* Provider.Service
     const permission = yield* Permission.Service
+    const agents = yield* Agent.Service
 
     return {
       description: EXIT_DESCRIPTION,
@@ -93,6 +95,13 @@ export const PlanExitTool = Tool.define(
           yield* permission.review({
             sessionID: ctx.sessionID,
             tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
+            policy: () =>
+              Effect.gen(function* () {
+                const build = yield* agents.get("build")
+                if (!build) return yield* Effect.die("Build agent not found")
+                const info = yield* session.get(ctx.sessionID)
+                return Permission.merge(build.permission, info.permission ?? [])
+              }).pipe(Effect.orDie),
           })
 
           const messages = yield* session.messages({ sessionID: ctx.sessionID }).pipe(Effect.orDie)

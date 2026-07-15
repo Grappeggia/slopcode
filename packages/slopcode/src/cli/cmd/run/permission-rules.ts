@@ -13,3 +13,20 @@ export function runPromptTools(interactive: boolean) {
   if (!interactive) return { plan_permissions: false }
   return undefined
 }
+
+export function runSessionPermission(
+  permission: PermissionV1.Ruleset | undefined,
+  interactive: boolean,
+): PermissionV1.Rule[] {
+  if (interactive) return [...(permission ?? [])]
+  const rules = runPermissionRules(false)
+  return [
+    ...(permission ?? []).filter(
+      (rule) =>
+        !rules.some(
+          (item) => item.permission === rule.permission && item.pattern === rule.pattern && item.action === rule.action,
+        ),
+    ),
+    ...rules,
+  ]
+}
