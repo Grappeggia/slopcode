@@ -157,7 +157,8 @@ export const layer = Layer.effect(
     )
 
     const savedRules = EffectRuntime.fnUntraced(function* () {
-      return (yield* saved.list({ projectID: location.project.id })).map(
+      const projectID = yield* saved.scope({ projectID: location.project.id, directory: location.directory })
+      return (yield* saved.list({ projectID })).map(
         (item): Rule => ({ action: item.action, resource: item.resource, effect: "allow" }),
       )
     })
@@ -281,13 +282,24 @@ export const layer = Layer.effect(
         EffectRuntime.gen(function* () {
           const existing = pending.get(input.requestID)
           if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
+          const answer = input.reply === "always" && !existing.request.save?.length ? "once" : input.reply
+
+          if (answer === "always") {
+            const projectID = yield* saved.scope({ projectID: location.project.id, directory: location.directory })
+            yield* saved.add({
+              projectID,
+              action: existing.request.action,
+              resources: existing.request.save ?? [],
+            })
+          }
+
           yield* events.publish(Event.Replied, {
             sessionID: existing.request.sessionID,
             requestID: existing.request.id,
-            reply: input.reply,
+            reply: answer,
           })
 
-          if (input.reply === "reject") {
+          if (answer === "reject") {
             yield* Deferred.fail(
               existing.deferred,
               input.message ? new CorrectedError({ feedback: input.message }) : new RejectedError(),
@@ -306,16 +318,9 @@ export const layer = Layer.effect(
             return
           }
 
-          if (input.reply === "always" && existing.request.save?.length) {
-            yield* saved.add({
-              projectID: location.project.id,
-              action: existing.request.action,
-              resources: existing.request.save,
-            })
-          }
           yield* Deferred.succeed(existing.deferred, undefined)
           pending.delete(input.requestID)
-          if (input.reply !== "always" || !existing.request.save?.length) return
+          if (answer !== "always") return
 
           const rememberedRules = yield* savedRules()
           for (const [id, item] of pending) {

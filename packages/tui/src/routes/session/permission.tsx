@@ -9,7 +9,7 @@ import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useSync } from "../../context/sync"
 import { useProject } from "../../context/project"
-import { permissionAlwaysLines } from "./permission-copy"
+import { permissionActions, permissionAlwaysLines } from "./permission-copy"
 import { filetype } from "../../util/filetype"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -403,7 +403,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               header={header()}
               body={current.body}
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={permissionActions(props.request.always)}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {

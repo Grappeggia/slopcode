@@ -1,10 +1,12 @@
 import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { test, expect } from "bun:test"
 import os from "os"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
+import { Database } from "@slopcode-ai/core/database/database"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
+import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { Permission } from "../../src/permission"
 import { InstanceState } from "../../src/effect/instance-state"
 import { InstanceRef } from "../../src/effect/instance-ref"
@@ -17,9 +19,12 @@ import { MessageID, SessionID } from "../../src/session/schema"
 const events = EventV2Bridge.defaultLayer
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const saved = PermissionSaved.defaultLayer
+const decodeAsked = Schema.decodeUnknownSync(Permission.Event.Asked.data)
+const decodeReply = Schema.decodeUnknownSync(Permission.Event.Replied.data)
 const env = Layer.mergeAll(
   Permission.layer.pipe(Layer.provideMerge(saved), Layer.provide(events)),
   events,
+  Database.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
   InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
 )
@@ -239,7 +244,7 @@ it.instance("query includes remembered project approvals without creating reques
       })
       .pipe(Effect.forkChild)
     const pending = yield* waitForPending(1)
-    yield* permission.reply({ requestID: pending[0]!.id, reply: "always" })
+    yield* permission.reply({ requestID: pending[0].id, reply: "always" })
     yield* Fiber.join(first)
 
     events.length = 0
@@ -757,7 +762,7 @@ it.instance(
       const seen = yield* Deferred.make<PermissionV1.Request>()
       const unsub = yield* events.listen((event) => {
         if (event.type === Permission.Event.Asked.type)
-          Deferred.doneUnsafe(seen, Effect.succeed(event.data as PermissionV1.Request))
+          Deferred.doneUnsafe(seen, Effect.succeed(decodeAsked(event.data)))
         return Effect.void
       })
       yield* Effect.addFinalizer(() => unsub)
@@ -901,6 +906,54 @@ it.instance(
         ruleset: [],
       })
       expect(result).toBeUndefined()
+    }),
+  { git: true },
+)
+
+it.instance(
+  "reply - empty Always resources resolve once without persistence",
+  () =>
+    Effect.gen(function* () {
+      const bridge = yield* EventV2Bridge.Service
+      const replies: PermissionV1.Reply[] = []
+      const unsubscribe = yield* bridge.listen((event) => {
+        if (event.type === Permission.Event.Replied.type) replies.push(decodeReply(event.data).reply)
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const first = yield* ask({
+        id: PermissionV1.ID.make("per_empty_always"),
+        sessionID: SessionID.make("session_empty_always"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionV1.ID.make("per_empty_always"), reply: "always" })
+      yield* Fiber.join(first)
+      expect(replies).toEqual(["once"])
+
+      const ctx = yield* InstanceState.context
+      const saved = yield* PermissionSaved.Service
+      const projectID = yield* saved.scope({
+        projectID: ctx.project.id,
+        directory: AbsolutePath.make(ctx.directory),
+      })
+      expect(yield* saved.list({ projectID })).toEqual([])
+
+      const second = yield* ask({
+        sessionID: SessionID.make("session_after_empty_always"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(second)
     }),
   { git: true },
 )
@@ -1069,6 +1122,155 @@ it.live("shares approvals across one project's worktrees but isolates different 
   }),
 )
 
+it.live("isolates two real non-git directories and keeps approvals across reload", () =>
+  Effect.gen(function* () {
+    const one = yield* tmpdirScoped()
+    const two = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const first = yield* store.load({ directory: one })
+    const second = yield* store.load({ directory: two })
+    expect(first.project.id).toBe(second.project.id)
+
+    const approved = yield* ask({
+      id: PermissionV1.ID.make("per_non_git"),
+      sessionID: SessionID.make("session_non_git"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, first), Effect.forkScoped)
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, first))
+    yield* reply({ requestID: PermissionV1.ID.make("per_non_git"), reply: "always" }).pipe(
+      Effect.provideService(InstanceRef, first),
+    )
+    yield* Fiber.join(approved)
+
+    const restarted = yield* store.reload({ directory: one })
+    expect(
+      yield* ask({
+        sessionID: SessionID.make("session_non_git_restart"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.provideService(InstanceRef, restarted)),
+    ).toBeUndefined()
+
+    const isolated = yield* ask({
+      sessionID: SessionID.make("session_other_non_git"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, second), Effect.forkScoped)
+    expect(yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, second))).toHaveLength(1)
+    yield* rejectAll().pipe(Effect.provideService(InstanceRef, second))
+    yield* Fiber.await(isolated)
+  }),
+)
+
+it.instance(
+  "keeps Always pending and retriable when database persistence fails",
+  () =>
+    Effect.gen(function* () {
+      const bridge = yield* EventV2Bridge.Service
+      const replies: PermissionV1.Reply[] = []
+      const unsubscribe = yield* bridge.listen((event) => {
+        if (event.type === Permission.Event.Replied.type) replies.push(decodeReply(event.data).reply)
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const fiber = yield* ask({
+        id: PermissionV1.ID.make("per_database_failure"),
+        sessionID: SessionID.make("session_database_failure"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: ["git status"],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      const { db } = yield* Database.Service
+      yield* db
+        .run(
+          "CREATE TRIGGER fail_permission_insert BEFORE INSERT ON permission BEGIN SELECT RAISE(FAIL, 'forced permission failure'); END",
+        )
+        .pipe(Effect.orDie)
+
+      expect(
+        Exit.isFailure(
+          yield* reply({ requestID: PermissionV1.ID.make("per_database_failure"), reply: "always" }).pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      expect(yield* list()).toHaveLength(1)
+      expect(replies).toEqual([])
+
+      yield* db.run("DROP TRIGGER fail_permission_insert").pipe(Effect.orDie)
+      yield* reply({ requestID: PermissionV1.ID.make("per_database_failure"), reply: "always" })
+      yield* Fiber.join(fiber)
+      expect(yield* list()).toEqual([])
+      expect(replies).toEqual(["always"])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "finishes the persisted reply critical section when interrupted",
+  () =>
+    Effect.gen(function* () {
+      const bridge = yield* EventV2Bridge.Service
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const unsubscribe = yield* bridge.listen((event) => {
+        if (
+          event.type !== Permission.Event.Replied.type ||
+          decodeReply(event.data).requestID !== PermissionV1.ID.make("per_interrupted_reply")
+        )
+          return Effect.void
+        return Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const askFiber = yield* ask({
+        id: PermissionV1.ID.make("per_interrupted_reply"),
+        sessionID: SessionID.make("session_interrupted_reply"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: ["git status"],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+
+      const replyFiber = yield* reply({
+        requestID: PermissionV1.ID.make("per_interrupted_reply"),
+        reply: "always",
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+      const interrupt = yield* Fiber.interrupt(replyFiber).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      expect(yield* list()).toHaveLength(1)
+
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.await(interrupt)
+      yield* Fiber.join(askFiber)
+      expect(yield* list()).toEqual([])
+      expect(
+        yield* ask({
+          sessionID: SessionID.make("session_after_interrupted_reply"),
+          permission: "bash",
+          patterns: ["git status"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        }),
+      ).toBeUndefined()
+    }),
+  { git: true },
+)
+
 it.instance(
   "reply - reject cancels all pending for same session",
   () =>
@@ -1200,12 +1402,7 @@ it.instance(
 
       const unsub = yield* events.listen((event) => {
         if (event.type === Permission.Event.Replied.type)
-          Deferred.doneUnsafe(
-            seen,
-            Effect.succeed(
-              event.data as { sessionID: SessionID; requestID: PermissionV1.ID; reply: PermissionV1.Reply },
-            ),
-          )
+          Deferred.doneUnsafe(seen, Effect.succeed(decodeReply(event.data)))
         return Effect.void
       })
       yield* Effect.addFinalizer(() => unsub)

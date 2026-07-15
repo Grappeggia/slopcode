@@ -8,6 +8,7 @@ import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
+import { AbsolutePath } from "@slopcode-ai/core/schema"
 
 export const Event = {
   Asked: EventV2.define({ type: "permission.asked", schema: PermissionV1.Request.fields }),
@@ -81,9 +82,13 @@ export const layer = Layer.effect(
       }),
     )
 
-    const approvals = Effect.fnUntraced(function* () {
+    const projectID = Effect.fnUntraced(function* () {
       const ctx = yield* InstanceState.context
-      return (yield* saved.list({ projectID: ctx.project.id })).map(
+      return yield* saved.scope({ projectID: ctx.project.id, directory: AbsolutePath.make(ctx.directory) })
+    })
+
+    const approvals = Effect.fnUntraced(function* () {
+      return (yield* saved.list({ projectID: yield* projectID() })).map(
         (item): PermissionV1.Rule => ({ permission: item.action, pattern: item.resource, action: "allow" }),
       )
     })
@@ -150,71 +155,73 @@ export const layer = Layer.effect(
       )
     })
 
-    const reply = Effect.fn("Permission.reply")(function* (input: PermissionV1.ReplyInput) {
-      const { pending } = yield* InstanceState.get(state)
-      const existing = pending.get(input.requestID)
-      if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
+    const reply = Effect.fn("Permission.reply")((input: PermissionV1.ReplyInput) =>
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const { pending } = yield* InstanceState.get(state)
+          const existing = pending.get(input.requestID)
+          if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
+          const answer = input.reply === "always" && !existing.info.always.length ? "once" : input.reply
 
-      pending.delete(input.requestID)
-      yield* events.publish(Event.Replied, {
-        sessionID: existing.info.sessionID,
-        requestID: existing.info.id,
-        reply: input.reply,
-      })
+          if (answer === "always") {
+            yield* saved.add({
+              projectID: yield* projectID(),
+              action: existing.info.permission,
+              resources: existing.info.always,
+            })
+          }
 
-      if (input.reply === "reject") {
-        yield* Deferred.fail(
-          existing.deferred,
-          input.message
-            ? new PermissionV1.CorrectedError({ feedback: input.message })
-            : new PermissionV1.RejectedError(),
-        )
-
-        for (const [id, item] of pending.entries()) {
-          if (item.info.sessionID !== existing.info.sessionID) continue
-          pending.delete(id)
           yield* events.publish(Event.Replied, {
-            sessionID: item.info.sessionID,
-            requestID: item.info.id,
-            reply: "reject",
+            sessionID: existing.info.sessionID,
+            requestID: existing.info.id,
+            reply: answer,
           })
-          yield* Deferred.fail(item.deferred, new PermissionV1.RejectedError())
-        }
-        return undefined
-      }
 
-      if (input.reply === "once") {
-        yield* Deferred.succeed(existing.deferred, undefined)
-        return undefined
-      }
+          if (answer === "reject") {
+            yield* Deferred.fail(
+              existing.deferred,
+              input.message
+                ? new PermissionV1.CorrectedError({ feedback: input.message })
+                : new PermissionV1.RejectedError(),
+            )
+            pending.delete(input.requestID)
 
-      if (existing.info.always.length) {
-        const ctx = yield* InstanceState.context
-        yield* saved.add({
-          projectID: ctx.project.id,
-          action: existing.info.permission,
-          resources: existing.info.always,
-        })
-      }
-      yield* Deferred.succeed(existing.deferred, undefined)
+            for (const [id, item] of pending.entries()) {
+              if (item.info.sessionID !== existing.info.sessionID) continue
+              yield* events.publish(Event.Replied, {
+                sessionID: item.info.sessionID,
+                requestID: item.info.id,
+                reply: "reject",
+              })
+              yield* Deferred.fail(item.deferred, new PermissionV1.RejectedError())
+              pending.delete(id)
+            }
+            return undefined
+          }
 
-      const approved = yield* approvals()
-      for (const [id, item] of pending.entries()) {
-        if (item.info.sessionID !== existing.info.sessionID) continue
-        const ok = item.info.patterns.every(
-          (pattern) => resolve(item.info.permission, pattern, item.ruleset, approved) === "allow",
-        )
-        if (!ok) continue
-        pending.delete(id)
-        yield* events.publish(Event.Replied, {
-          sessionID: item.info.sessionID,
-          requestID: item.info.id,
-          reply: "always",
-        })
-        yield* Deferred.succeed(item.deferred, undefined)
-      }
-      return undefined
-    })
+          yield* Deferred.succeed(existing.deferred, undefined)
+          pending.delete(input.requestID)
+          if (answer === "once") return undefined
+
+          const approved = yield* approvals()
+          for (const [id, item] of pending.entries()) {
+            if (item.info.sessionID !== existing.info.sessionID) continue
+            const ok = item.info.patterns.every(
+              (pattern) => resolve(item.info.permission, pattern, item.ruleset, approved) === "allow",
+            )
+            if (!ok) continue
+            yield* events.publish(Event.Replied, {
+              sessionID: item.info.sessionID,
+              requestID: item.info.id,
+              reply: "always",
+            })
+            yield* Deferred.succeed(item.deferred, undefined)
+            pending.delete(id)
+          }
+          return undefined
+        }),
+      ),
+    )
 
     const list = Effect.fn("Permission.list")(function* () {
       const pending = (yield* InstanceState.get(state)).pending

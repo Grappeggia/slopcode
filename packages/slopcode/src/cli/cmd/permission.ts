@@ -1,5 +1,6 @@
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { InstanceState } from "@/effect/instance-state"
+import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { Effect } from "effect"
 import { EOL } from "os"
 import { effectCmd, fail } from "../effect-cmd"
@@ -18,13 +19,19 @@ function table(items: ReadonlyArray<PermissionSaved.Info>) {
   ].join(EOL)
 }
 
+const projectID = PermissionSaved.Service.use((saved) =>
+  Effect.gen(function* () {
+    const ctx = yield* InstanceState.context
+    return yield* saved.scope({ projectID: ctx.project.id, directory: AbsolutePath.make(ctx.directory) })
+  }),
+)
+
 const ListCommand = effectCmd({
   command: "list",
   describe: "list saved Always approvals for this project",
   builder: (yargs) => yargs.option("json", { type: "boolean", describe: "output JSON" }),
   handler: Effect.fn("Cli.permission.list")(function* (args) {
-    const ctx = yield* InstanceState.context
-    const items = (yield* (yield* PermissionSaved.Service).list({ projectID: ctx.project.id })).toSorted((a, b) =>
+    const items = (yield* (yield* PermissionSaved.Service).list({ projectID: yield* projectID })).toSorted((a, b) =>
       a.id.localeCompare(b.id),
     )
     process.stdout.write((args.json ? JSON.stringify(items, null, 2) : table(items)) + EOL)
@@ -41,9 +48,8 @@ const RevokeCommand = effectCmd({
       demandOption: true,
     }),
   handler: Effect.fn("Cli.permission.revoke")(function* (args) {
-    const ctx = yield* InstanceState.context
     const id = PermissionSaved.ID.make(args.id)
-    const removed = yield* (yield* PermissionSaved.Service).remove({ id, projectID: ctx.project.id })
+    const removed = yield* (yield* PermissionSaved.Service).remove({ id, projectID: yield* projectID })
     if (!removed) yield* fail(`Saved permission not found in this project: ${id}`)
     process.stdout.write(`Revoked saved permission ${id}.` + EOL)
   }),
@@ -55,13 +61,11 @@ const ClearCommand = effectCmd({
   builder: (yargs) =>
     yargs.option("all", {
       type: "boolean",
-      demandOption: true,
       describe: "confirm clearing every saved permission",
     }),
   handler: Effect.fn("Cli.permission.clear")(function* (args) {
     if (!args.all) yield* fail("Pass --all to clear saved permissions.")
-    const ctx = yield* InstanceState.context
-    const removed = yield* (yield* PermissionSaved.Service).clear(ctx.project.id)
+    const removed = yield* (yield* PermissionSaved.Service).clear(yield* projectID)
     process.stdout.write(`Cleared ${removed} saved permission${removed === 1 ? "" : "s"}.` + EOL)
   }),
 })

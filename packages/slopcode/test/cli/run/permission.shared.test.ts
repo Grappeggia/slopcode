@@ -6,6 +6,7 @@ import {
   permissionCancel,
   permissionEscape,
   permissionInfo,
+  permissionOptions,
   permissionReject,
   permissionRun,
 } from "@/cli/cmd/run/permission.shared"
@@ -140,5 +141,10 @@ describe("run permission shared", () => {
       "- src/**/*.ts",
       "- src/**/*.tsx",
     ])
+  })
+
+  test("hides persistent actions and copy when no resources can be saved", () => {
+    expect(permissionOptions("permission", false)).toEqual(["once", "reject"])
+    expect(permissionAlwaysLines(req({ always: [] }))).toEqual([])
   })
 })

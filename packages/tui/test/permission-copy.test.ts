@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { permissionAlwaysLines } from "../src/routes/session/permission-copy"
+import { permissionActions, permissionAlwaysLines } from "../src/routes/session/permission-copy"
 
 test("always approval copy explains project persistence and revocation", () => {
   expect(permissionAlwaysLines("bash", ["*"])).toEqual(["This will remember bash for this project until revoked."])
@@ -8,4 +8,9 @@ test("always approval copy explains project persistence and revocation", () => {
     "- src/**/*.ts",
     "- src/**/*.tsx",
   ])
+})
+
+test("requests without saved resources do not offer or describe Always", () => {
+  expect(permissionActions([])).toEqual({ once: "Allow once", reject: "Reject" })
+  expect(permissionAlwaysLines("bash", [])).toEqual([])
 })

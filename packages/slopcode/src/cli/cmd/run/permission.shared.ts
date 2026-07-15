@@ -77,9 +77,9 @@ export function createPermissionBodyState(requestID: string): PermissionBodyStat
   }
 }
 
-export function permissionOptions(stage: PermissionStage): PermissionOption[] {
+export function permissionOptions(stage: PermissionStage, persistent = true): PermissionOption[] {
   if (stage === "permission") {
-    return ["once", "always", "reject"]
+    return persistent ? ["once", "always", "reject"] : ["once", "reject"]
   }
 
   if (stage === "always") {
@@ -124,6 +124,7 @@ export function permissionInfo(request: PermissionRequest): PermissionInfo {
 }
 
 export function permissionAlwaysLines(request: PermissionRequest): string[] {
+  if (!request.always.length) return []
   if (request.always.length === 1 && request.always[0] === "*") {
     return [`This will remember ${request.permission} for this project until revoked.`]
   }
@@ -150,8 +151,8 @@ export function permissionReply(requestID: string, reply: PermissionReply["reply
   }
 }
 
-export function permissionShift(state: PermissionBodyState, dir: -1 | 1): PermissionBodyState {
-  const list = permissionOptions(state.stage)
+export function permissionShift(state: PermissionBodyState, dir: -1 | 1, persistent = true): PermissionBodyState {
+  const list = permissionOptions(state.stage, persistent)
   if (list.length === 0) {
     return state
   }

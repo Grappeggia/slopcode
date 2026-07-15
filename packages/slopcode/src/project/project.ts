@@ -1,5 +1,5 @@
 import { LayerNode } from "@slopcode-ai/core/effect/layer-node"
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import { Database } from "@slopcode-ai/core/database/database"
 import { ProjectDirectoryTable, ProjectTable } from "@slopcode-ai/core/project/sql"
 import { ProjectDirectories } from "@slopcode-ai/core/project/directories"
@@ -21,6 +21,8 @@ import { serviceUse } from "@slopcode-ai/core/effect/service-use"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@slopcode-ai/core/event"
+import { PermissionTable } from "@slopcode-ai/core/permission/sql"
+import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 
 const ProjectVcs = Schema.Literal("git")
 
@@ -203,6 +205,22 @@ export const layer = Layer.effect(
               // accuracy
               yield* d.delete(ProjectDirectoryTable).where(eq(ProjectDirectoryTable.project_id, oldID)).run()
 
+              const [source, target] = yield* Effect.all([
+                d.select().from(PermissionTable).where(eq(PermissionTable.project_id, oldID)).all(),
+                d.select().from(PermissionTable).where(eq(PermissionTable.project_id, newID)).all(),
+              ])
+              const existing = new Set(target.map((item) => JSON.stringify([item.action, item.resource])))
+              const duplicates = source
+                .filter((item) => existing.has(JSON.stringify([item.action, item.resource])))
+                .map((item) => item.id)
+              if (duplicates.length)
+                yield* d.delete(PermissionTable).where(inArray(PermissionTable.id, duplicates)).run()
+              yield* d
+                .update(PermissionTable)
+                .set({ project_id: newID })
+                .where(eq(PermissionTable.project_id, oldID))
+                .run()
+
               yield* d
                 .update(SessionTable)
                 .set({ project_id: newID, time_updated: sql`${SessionTable.time_updated}` })
@@ -248,6 +266,11 @@ export const layer = Layer.effect(
       // Phase 2: upsert
       const projectID = ProjectV2.ID.make(data.id)
       yield* migrateProjectId(data.previous ? ProjectV2.ID.make(data.previous) : undefined, projectID)
+      if (projectID !== ProjectV2.ID.global)
+        yield* migrateProjectId(
+          PermissionSaved.scopeID({ projectID: ProjectV2.ID.global, directory: data.directory }),
+          projectID,
+        )
       const row = yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, projectID)).get().pipe(Effect.orDie)
       const existing = row
         ? fromRow(row)

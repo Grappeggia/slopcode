@@ -5,7 +5,9 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { LayerNode } from "../effect/layer-node"
 import { ProjectV2 } from "../project"
-import { withStatics } from "../schema"
+import { ProjectTable } from "../project/sql"
+import { AbsolutePath, withStatics } from "../schema"
+import { Hash } from "../util/hash"
 import { Identifier } from "../util/identifier"
 import { PermissionTable } from "./sql"
 
@@ -35,8 +37,20 @@ export const AddInput = Schema.Struct({
 }).annotate({ identifier: "PermissionSaved.AddInput" })
 export type AddInput = typeof AddInput.Type
 
+export const ScopeInput = Schema.Struct({
+  projectID: ProjectV2.ID,
+  directory: AbsolutePath,
+}).annotate({ identifier: "PermissionSaved.ScopeInput" })
+export type ScopeInput = typeof ScopeInput.Type
+
+export function scopeID(input: ScopeInput) {
+  if (input.projectID !== ProjectV2.ID.global) return input.projectID
+  return ProjectV2.ID.make(Hash.fast(`permission-scope:${input.directory}`))
+}
+
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
+  readonly scope: (input: ScopeInput) => Effect.Effect<ProjectV2.ID>
   readonly add: (input: AddInput) => Effect.Effect<void>
   readonly remove: (input: { id: ID; projectID: ProjectV2.ID }) => Effect.Effect<boolean>
   readonly clear: (projectID: ProjectV2.ID) => Effect.Effect<number>
@@ -59,6 +73,18 @@ export const layer = Layer.effect(
       return rows.map(
         (row): Info => ({ id: row.id, projectID: row.project_id, action: row.action, resource: row.resource }),
       )
+    })
+
+    const scope = Effect.fn("PermissionSaved.scope")(function* (input: ScopeInput) {
+      const projectID = scopeID(input)
+      if (projectID === input.projectID) return projectID
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: projectID, worktree: input.directory, sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      return projectID
     })
 
     const add = Effect.fn("PermissionSaved.add")(function* (input: AddInput) {
@@ -98,7 +124,7 @@ export const layer = Layer.effect(
       return rows.length
     })
 
-    return Service.of({ list, add, remove, clear })
+    return Service.of({ list, scope, add, remove, clear })
   }),
 )
 
