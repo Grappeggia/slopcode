@@ -22,19 +22,20 @@ describe("SafetyIdentity", () => {
     expect(identity.identifier({})).toBe(identity.identifier({}))
   })
 
-  test("creates one stable mode-0600 seed atomically and repairs permissions", async () => {
+  test("creates one stable seed atomically and repairs POSIX permissions", async () => {
     const data = await fs.mkdtemp(path.join(os.tmpdir(), "slopcode-safety-"))
     dirs.push(data)
     const identities = await Promise.all(Array.from({ length: 8 }, () => SafetyIdentity.load(data)))
     expect(new Set(identities.map((identity) => identity.identifier({}))).size).toBe(1)
 
     const target = SafetyIdentity.seedPath(data)
-    expect((await fs.stat(target.file)).mode & 0o777).toBe(0o600)
     expect((await fs.readdir(target.directory)).sort()).toEqual(["safety.key"])
+    if (process.platform === "win32") return
 
+    expect((await fs.stat(target.file)).mode & 0o777).toBe(0o600)
     await fs.chmod(target.file, 0o644)
     await fs.chmod(target.directory, 0o755)
-    expect((await SafetyIdentity.load(data)).identifier({})).toBe(identities[0]!.identifier({}))
+    expect((await SafetyIdentity.load(data)).identifier({})).toBe(identities[0].identifier({}))
     expect((await fs.stat(target.file)).mode & 0o777).toBe(0o600)
     expect((await fs.stat(target.directory)).mode & 0o777).toBe(0o700)
   })

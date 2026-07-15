@@ -46,7 +46,7 @@ export const load = async (data: string): Promise<Interface> => {
   const directory = await fs.open(target.directory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | nofollow)
   try {
     if (!(await directory.stat()).isDirectory()) throw new Error("Safety identity directory is unsafe")
-    await directory.chmod(0o700)
+    if (process.platform !== "win32") await directory.chmod(0o700)
   } finally {
     await directory.close()
   }
@@ -56,7 +56,7 @@ export const load = async (data: string): Promise<Interface> => {
   try {
     await created.writeFile(randomBytes(32))
     await created.sync()
-    await created.chmod(0o600)
+    if (process.platform !== "win32") await created.chmod(0o600)
     await fs.link(temp, target.file).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "EEXIST") throw error
     })
@@ -69,7 +69,7 @@ export const load = async (data: string): Promise<Interface> => {
   try {
     const info = await handle.stat()
     if (!info.isFile()) throw new Error("Safety identity seed is unsafe")
-    await handle.chmod(0o600)
+    if (process.platform !== "win32") await handle.chmod(0o600)
     const seed = await handle.readFile()
     if (seed.byteLength !== 32) throw new Error("Safety identity seed is invalid")
     return fromSeed(seed)
