@@ -6,6 +6,7 @@ import {
   openDraftTab,
   promoteDraftTab,
   refreshSessionTabs,
+  replaceSessionTab,
   sessionFamilyIndex,
   sessionRoot,
   sessionTabStatus,
@@ -56,6 +57,63 @@ describe("session tabs", () => {
     )
     expect(index.families.get("ses_root")?.map((item) => item.id)).toEqual(["ses_root", "ses_child", "ses_grandchild"])
     expect(index.families.get("ses_other")?.map((item) => item.id)).toEqual(["ses_other"])
+  })
+
+  test("replaces a provisional child ID when root descriptor fields are equal", () => {
+    const state = {
+      tabs: [
+        {
+          type: "session" as const,
+          id: "ses_child",
+          title: "Shared title",
+          workspaceID: "work_1",
+          status: "busy" as const,
+          waiting: false,
+        },
+      ],
+      active: "ses_child",
+    }
+
+    expect(
+      replaceSessionTab(state, "ses_child", {
+        id: "ses_root",
+        title: "Shared title",
+        workspaceID: "work_1",
+        status: "busy",
+        waiting: false,
+      }),
+    ).toEqual({
+      tabs: [
+        {
+          type: "session",
+          id: "ses_root",
+          title: "Shared title",
+          workspaceID: "work_1",
+          status: "busy",
+          waiting: false,
+        },
+      ],
+      active: "ses_root",
+    })
+  })
+
+  test("dedupes a provisional child when its root tab is already open", () => {
+    const state = {
+      tabs: [
+        { type: "session" as const, id: "ses_root", title: "Root" },
+        { type: "session" as const, id: "ses_child", title: "Child" },
+        { type: "session" as const, id: "ses_other", title: "Other" },
+      ],
+      active: "ses_child",
+    }
+
+    expect(replaceSessionTab(state, "ses_child", { id: "ses_root", title: "Root" })).toEqual({
+      tabs: [
+        { type: "session", id: "ses_root", title: "Root" },
+        { type: "session", id: "ses_other", title: "Other" },
+      ],
+      active: "ses_root",
+    })
   })
 
   test("opens one reusable draft and promotes it in place", () => {

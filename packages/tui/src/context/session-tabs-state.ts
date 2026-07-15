@@ -53,6 +53,7 @@ function merge(
     pendingTitle,
   )
   if (
+    next.id === tab.id &&
     next.title === tab.title &&
     next.workspaceID === tab.workspaceID &&
     next.status === tab.status &&
