@@ -3,6 +3,8 @@ import { serviceUse } from "@slopcode-ai/core/effect/service-use"
 import { ConfigAutocompleteV1 } from "@slopcode-ai/core/v1/config/autocomplete"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
+import { Grapheme } from "@slopcode-ai/core/util/grapheme"
+import { waitForAbort } from "@slopcode-ai/core/process"
 import { Context, Duration, Effect, Layer } from "effect"
 import { streamText, wrapLanguageModel, type ModelMessage } from "ai"
 import { Provider } from "@/provider/provider"
@@ -14,6 +16,7 @@ export const INSTRUCTIONS =
 export type Settings = ConfigAutocompleteV1.Resolved
 
 export type Input = {
+  requestID?: string
   model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
   prefix: string
   settings: Settings
@@ -52,7 +55,7 @@ export function normalize(input: { prefix: string; completion: string; max: numb
   const line = input.completion.replace(/\r\n?/g, "\n").split("\n", 1)[0] ?? ""
   const completion = stripPrefix(line, input.prefix).replace(/\s+$/g, "")
   if (!completion) return ""
-  return spacing(input.prefix, completion).slice(0, input.max)
+  return Grapheme.take(spacing(input.prefix, completion), input.max)
 }
 
 function text(model: Provider.Model | undefined): model is Provider.Model {
@@ -74,6 +77,7 @@ export function route(input: {
 
 export interface Interface {
   readonly complete: (input: Input) => Effect.Effect<Output, Provider.ModelNotFoundError>
+  readonly abort: (requestID: string) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/SessionAutocomplete") {}
@@ -84,6 +88,8 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const provider = yield* Provider.Service
+    const active = new Map<string, AbortController>()
+    const canceled = new Map<string, number>()
 
     const candidates = Effect.fn("SessionAutocomplete.candidates")(function* (input: Input) {
       const selected = yield* provider.getModel(input.model.providerID, input.model.modelID)
@@ -93,7 +99,7 @@ export const layer = Layer.effect(
             .getModel(selected.providerID, ModelV2.ID.make(overrideID))
             .pipe(Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)))
         : undefined
-      const small = yield* provider.getSmallModel(selected.providerID)
+      const small = yield* provider.getSmallModelForProvider(selected.providerID)
       return route({ selected, override, small })
     })
 
@@ -133,9 +139,9 @@ export const layer = Layer.effect(
       return normalize({ prefix, completion: result, max: config.max_completion_chars })
     })
 
-    const complete = Effect.fn("SessionAutocomplete.complete")(function* (input: Input) {
+    const run = Effect.fn("SessionAutocomplete.run")(function* (input: Input) {
       const fallback = `${input.model.providerID}/${input.model.modelID}`
-      const prefix = input.prefix.slice(-input.settings.max_prefix_chars)
+      const prefix = Grapheme.takeEnd(input.prefix, input.settings.max_prefix_chars)
       if (!/\S/.test(prefix) || prefix.trim().length < input.settings.min_prefix_chars)
         return { completion: "", model: fallback }
 
@@ -156,7 +162,47 @@ export const layer = Layer.effect(
       )
     })
 
-    return Service.of({ complete })
+    const complete = Effect.fn("SessionAutocomplete.complete")(function* (input: Input) {
+      const requestID = input.requestID
+      if (!requestID) return yield* run(input)
+      const now = Date.now()
+      for (const [id, time] of canceled) if (now - time > 10_000) canceled.delete(id)
+      if (canceled.delete(requestID)) {
+        return { completion: "", model: `${input.model.providerID}/${input.model.modelID}` }
+      }
+
+      active.get(requestID)?.abort()
+      const ctrl = new AbortController()
+      active.set(requestID, ctrl)
+      const stopped = waitForAbort(ctrl.signal).pipe(
+        Effect.catch(() =>
+          Effect.succeed({ completion: "", model: `${input.model.providerID}/${input.model.modelID}` }),
+        ),
+      )
+      return yield* run(input).pipe(
+        Effect.raceFirst(stopped),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (active.get(requestID) === ctrl) active.delete(requestID)
+          }),
+        ),
+      )
+    })
+
+    const abort = Effect.fn("SessionAutocomplete.abort")((requestID: string) =>
+      Effect.sync(() => {
+        const ctrl = active.get(requestID)
+        if (ctrl) {
+          ctrl.abort()
+          return true
+        }
+        if (canceled.size >= 1_024) canceled.delete(canceled.keys().next().value!)
+        canceled.set(requestID, Date.now())
+        return false
+      }),
+    )
+
+    return Service.of({ complete, abort })
   }),
 )
 

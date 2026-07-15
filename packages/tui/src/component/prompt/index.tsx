@@ -4,13 +4,12 @@ import {
   TextareaRenderable,
   MouseEvent,
   PasteEvent,
-  RenderableEvents,
   decodePasteBytes,
   type KeyEvent,
   type Renderable,
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match, For } from "solid-js"
+import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
 import "opentui-spinner/solid"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -61,7 +60,7 @@ import { readLocalAttachment } from "./local-attachment"
 import { density, isCompact, isDense } from "../../util/density"
 import { useSessionTabs } from "../../context/session-tabs"
 import { ConfigAutocompleteV1 } from "@slopcode-ai/core/v1/config/autocomplete"
-import { createGhostLifecycle, ghostAccept, ghostEligible, ghostLayout, ghostRemainder } from "../../prompt/ghost"
+import { insertGhost, PromptGhost, type PromptGhostRef } from "./ghost"
 
 export type PromptProps = {
   sessionID?: string
@@ -307,102 +306,8 @@ export function Prompt(props: PromptProps) {
     extmarkToPartIndex: new Map(),
     interrupt: 0,
   })
-  const [ghost, setGhost] = createSignal("")
-  const [focused, setFocused] = createSignal(false)
-  const ghostLifecycle = createGhostLifecycle()
+  let ghost: PromptGhostRef | undefined
   const ghostSettings = createMemo(() => ConfigAutocompleteV1.resolve(sync.data.config.autocomplete))
-  let ghostTimer: ReturnType<typeof setTimeout> | undefined
-
-  function clearGhost() {
-    if (ghostTimer) clearTimeout(ghostTimer)
-    ghostTimer = undefined
-    ghostLifecycle.clear()
-    setGhost("")
-  }
-
-  function ghostState() {
-    return ghostEligible({
-      enabled: ghostSettings().enabled && !!props.sessionID && !!local.model.current(),
-      prefix: input?.plainText ?? store.prompt.input,
-      min: ghostSettings().min_prefix_chars,
-      mode: store.mode,
-      focused: focused(),
-      cursor: input?.cursorOffset ?? 0,
-      popover: !!auto()?.visible,
-      parts: store.prompt.parts.length,
-    })
-  }
-
-  function scheduleGhost() {
-    clearGhost()
-    if (!ghostState()) return
-    const prefix = input.plainText
-    const sessionID = props.sessionID
-    const model = local.model.current()
-    if (!sessionID || !model) return
-
-    ghostTimer = setTimeout(async () => {
-      ghostTimer = undefined
-      if (!ghostState() || input.plainText !== prefix) return
-      const request = ghostLifecycle.begin()
-      const response = await sdk.client.session
-        .autocomplete(
-          {
-            sessionID,
-            model: { providerID: model.providerID, modelID: model.modelID },
-            prefix: prefix.slice(-ghostSettings().max_prefix_chars),
-          },
-          { signal: request.signal },
-        )
-        .catch(() => undefined)
-      if (!response?.data || !ghostLifecycle.current(request.generation)) return
-      const current = local.model.current()
-      if (
-        props.sessionID !== sessionID ||
-        current?.providerID !== model.providerID ||
-        current.modelID !== model.modelID ||
-        input.plainText !== prefix ||
-        !ghostState()
-      )
-        return
-      setGhost(ghostRemainder(prefix, response.data.completion))
-    }, ghostSettings().debounce_ms)
-  }
-
-  const ghostLines = createMemo(() => {
-    cursorVersion()
-    if (!ghost() || !inputTarget()) return []
-    const parent = input.parent
-    return ghostLayout({
-      ghost: ghost(),
-      row: input.visualCursor.visualRow,
-      col: input.visualCursor.visualCol,
-      width: input.width,
-      rows: input.height,
-    }).map((line) => ({
-      ...line,
-      top: line.top + input.y - (parent?.y ?? input.y),
-      left: line.left + input.x - (parent?.x ?? input.x),
-    }))
-  })
-
-  createEffect(
-    on(
-      () => [
-        props.sessionID,
-        local.model.current()?.providerID,
-        local.model.current()?.modelID,
-        ghostSettings().enabled,
-        store.mode,
-        auto()?.visible,
-        props.visible,
-        props.disabled,
-        dialog.stack.length,
-      ],
-      clearGhost,
-      { defer: true },
-    ),
-  )
   function openSideQuestion(question?: string) {
     const agent = local.agent.current()
     const model = local.model.current()
@@ -729,18 +634,18 @@ export function Prompt(props: PromptProps) {
       input.focus()
     },
     blur() {
-      clearGhost()
+      ghost?.clear()
       input.blur()
     },
     set(prompt) {
-      clearGhost()
+      ghost?.clear()
       input.setText(prompt.input)
       setStore("prompt", prompt)
       restoreExtmarksFromParts(prompt.parts)
       input.gotoBufferEnd()
     },
     reset() {
-      clearGhost()
+      ghost?.clear()
       input.clear()
       input.extmarks.clear()
       setStore("prompt", {
@@ -755,19 +660,6 @@ export function Prompt(props: PromptProps) {
   }
 
   onMount(() => {
-    const focus = () => setFocused(true)
-    const blur = () => {
-      setFocused(false)
-      clearGhost()
-    }
-    setFocused(input.focused)
-    input.on(RenderableEvents.FOCUSED, focus)
-    input.on(RenderableEvents.BLURRED, blur)
-    onCleanup(() => {
-      input.off(RenderableEvents.FOCUSED, focus)
-      input.off(RenderableEvents.BLURRED, blur)
-    })
-
     const saved = stashed
     stashed = undefined
     if (store.prompt.input) return
@@ -780,7 +672,7 @@ export function Prompt(props: PromptProps) {
   })
 
   onCleanup(() => {
-    clearGhost()
+    ghost?.clear()
     if (store.prompt.input) {
       stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
     }
@@ -807,7 +699,6 @@ export function Prompt(props: PromptProps) {
       ...computePromptTraits({
         mode: store.mode,
         autocompleteVisible: !!auto()?.visible,
-        ghostVisible: !!ghost(),
       }),
     }
   })
@@ -1086,7 +977,7 @@ export function Prompt(props: PromptProps) {
 
   let submitting = false
   async function submit() {
-    clearGhost()
+    ghost?.clear()
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
     // a second call slips past the empty-input check before the first call
@@ -1605,32 +1496,16 @@ export function Prompt(props: PromptProps) {
                 auto()?.onInput(value)
                 syncExtmarksWithPromptParts()
                 setCursorVersion((value) => value + 1)
-                scheduleGhost()
+                ghost?.schedule()
               }}
               onCursorChange={() => {
                 setCursorVersion((value) => value + 1)
-                scheduleGhost()
+                ghost?.schedule()
               }}
               onKeyDown={(e: KeyEvent) => {
                 if (props.disabled) {
                   e.preventDefault()
                   return
-                }
-                if (auto()?.visible || !ghost()) return
-                if (e.name === "tab" && !e.ctrl && !e.meta && !e.shift && !e.option) {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  const value = ghostAccept(input.plainText, ghost())
-                  clearGhost()
-                  input.setText(value)
-                  input.gotoBufferEnd()
-                  setStore("prompt", "input", value)
-                  return
-                }
-                if (e.name === "escape") {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  clearGhost()
                 }
               }}
               onSubmit={() => {
@@ -1684,20 +1559,35 @@ export function Prompt(props: PromptProps) {
               cursorColor={props.disabled ? theme.backgroundElement : theme.text}
               syntaxStyle={syntax()}
             />
-            <For each={ghostLines()}>
-              {(line) => (
-                <text
-                  position="absolute"
-                  top={line.top}
-                  left={line.left}
-                  zIndex={1}
-                  fg={theme.textMuted}
-                  wrapMode="none"
-                >
-                  {line.text}
-                </text>
-              )}
-            </For>
+            <PromptGhost
+              ref={(value) => (ghost = value)}
+              input={inputTarget}
+              settings={ghostSettings()}
+              sessionID={props.sessionID}
+              model={local.model.current()}
+              mode={store.mode}
+              parts={store.prompt.parts.length}
+              popover={!!auto()?.visible}
+              active={props.visible !== false && !props.disabled && dialog.stack.length === 0}
+              maxRows={maxHeight()}
+              revision={cursorVersion()}
+              color={theme.textMuted}
+              complete={async (request) => {
+                const response = await sdk.client.session.autocomplete(
+                  {
+                    sessionID: request.sessionID,
+                    model: request.model,
+                    prefix: request.prefix,
+                  },
+                  { signal: request.signal },
+                )
+                return response.data?.completion
+              }}
+              onAccept={(value) => {
+                insertGhost(input, value)
+                setStore("prompt", "input", input.plainText)
+              }}
+            />
             <box
               flexDirection="row"
               flexShrink={0}

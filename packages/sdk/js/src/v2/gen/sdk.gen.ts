@@ -181,6 +181,8 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
+  SessionAbortAutocompleteErrors,
+  SessionAbortAutocompleteResponses,
   SessionAbortErrors,
   SessionAbortResponses,
   SessionAutocompleteErrors,
@@ -4221,6 +4223,7 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
+      requestID?: string
       model?: {
         providerID: string
         modelID: string
@@ -4237,6 +4240,7 @@ export class Session2 extends HeyApiClient {
             { in: "path", key: "sessionID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "requestID" },
             { in: "body", key: "model" },
             { in: "body", key: "prefix" },
           ],
@@ -4255,6 +4259,44 @@ export class Session2 extends HeyApiClient {
         },
       },
     )
+  }
+
+  /**
+   * Abort prompt autocomplete
+   *
+   * Interrupt an ephemeral autocomplete generation request.
+   */
+  public abortAutocomplete<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      requestID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "requestID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      SessionAbortAutocompleteResponses,
+      SessionAbortAutocompleteErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/autocomplete/{requestID}",
+      ...options,
+      ...params,
+    })
   }
 
   /**

@@ -89,5 +89,36 @@ export function createSlopcodeClient(config?: Config & { directory?: string; exp
     return response
   })
   client.interceptors.error.use(wrapClientError)
-  return new SlopcodeClient({ client })
+  const sdk = new SlopcodeClient({ client })
+  const complete = sdk.session.autocomplete.bind(sdk.session)
+  const autocomplete: typeof sdk.session.autocomplete = (parameters, options) => {
+    const requestID = parameters.requestID ?? crypto.randomUUID()
+    const signal = options?.signal
+    if (!signal) return complete({ ...parameters, requestID }, options)
+
+    const ctrl = new AbortController()
+    const abort = () => {
+      ctrl.abort(signal.reason)
+      sdk.session
+        .abortAutocomplete({
+          sessionID: parameters.sessionID,
+          requestID,
+          directory: parameters.directory,
+          workspace: parameters.workspace,
+        })
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+    }
+    if (signal.aborted) abort()
+    else signal.addEventListener("abort", abort, { once: true })
+
+    const result = complete({ ...parameters, requestID }, { ...options, signal: ctrl.signal })
+    const cleanup = () => signal.removeEventListener("abort", abort)
+    result.then(cleanup, cleanup)
+    return result
+  }
+  sdk.session.autocomplete = autocomplete
+  return sdk
 }

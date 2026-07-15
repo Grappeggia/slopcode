@@ -299,6 +299,9 @@ export function createRoutes(
   host?: Layer.Layer<PluginPackage.Host>,
   observe?: (locations: Context.Service.Shape<typeof LocationServiceMap>) => void,
   sessionGraphInitialized?: () => void,
+  replacements?: {
+    provider?: Layer.Layer<Provider.Service>
+  },
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
   const locations = host ? withPluginHost(host) : LocationServiceMap.layer
   const locationLayer = observe
@@ -399,6 +402,7 @@ export function createRoutes(
           LayerNode.replaceWithNode(locationServiceMapNode, locationMap),
           LayerNode.replaceWithNode(sessionNode, lazySessionNode),
           LayerNode.replaceWithNode(sessionGraphNode, graphNode),
+          ...(replacements?.provider ? [LayerNode.replace(Provider.node, replacements.provider)] : []),
         ],
       }),
     ),

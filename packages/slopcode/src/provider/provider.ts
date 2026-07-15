@@ -1288,6 +1288,7 @@ export interface Interface {
     query: string[],
   ) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: string } | undefined>
   readonly getSmallModel: (providerID: ProviderV2.ID) => Effect.Effect<Model | undefined>
+  readonly getSmallModelForProvider: (providerID: ProviderV2.ID) => Effect.Effect<Model | undefined>
   readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }, DefaultModelError>
 }
 
@@ -2020,16 +2021,9 @@ export const layer = Layer.effect(
       return undefined
     })
 
-    const getSmallModel = Effect.fn("Provider.getSmallModel")(function* (providerID: ProviderV2.ID) {
-      const cfg = yield* config.get()
-
-      if (cfg.small_model) {
-        const parsed = parseModel(cfg.small_model)
-        return yield* getModel(parsed.providerID, parsed.modelID).pipe(
-          Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
-        )
-      }
-
+    const getSmallModelForProvider = Effect.fn("Provider.getSmallModelForProvider")(function* (
+      providerID: ProviderV2.ID,
+    ) {
       const s = yield* InstanceState.get(state)
       const provider = s.providers[providerID]
       if (!provider) return undefined
@@ -2039,7 +2033,7 @@ export const layer = Layer.effect(
         { provider: toPublicInfo(provider) },
         { model: undefined },
       )
-      if (experimental.model) {
+      if (experimental.model && experimental.model.providerID === providerID) {
         return {
           ...experimental.model,
           id: ModelV2.ID.make(experimental.model.id),
@@ -2090,6 +2084,15 @@ export const layer = Layer.effect(
       return undefined
     })
 
+    const getSmallModel = Effect.fn("Provider.getSmallModel")(function* (providerID: ProviderV2.ID) {
+      const cfg = yield* config.get()
+      if (!cfg.small_model) return yield* getSmallModelForProvider(providerID)
+      const parsed = parseModel(cfg.small_model)
+      return yield* getModel(parsed.providerID, parsed.modelID).pipe(
+        Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
+      )
+    })
+
     const defaultModel = Effect.fn("Provider.defaultModel")(function* () {
       const cfg = yield* config.get()
       if (cfg.model) return parseModel(cfg.model)
@@ -2124,7 +2127,16 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel })
+    return Service.of({
+      list,
+      getProvider,
+      getModel,
+      getLanguage,
+      closest,
+      getSmallModel,
+      getSmallModelForProvider,
+      defaultModel,
+    })
   }),
 )
 

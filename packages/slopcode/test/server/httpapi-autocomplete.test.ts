@@ -1,28 +1,67 @@
 import { afterEach, describe, expect } from "bun:test"
-import { NodeHttpServer, NodeServices } from "@effect/platform-node"
+import type { LanguageModelV3, LanguageModelV3CallOptions } from "@ai-sdk/provider"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import { Database } from "@slopcode-ai/core/database/database"
 import { FSUtil } from "@slopcode-ai/core/fs-util"
+import { ModelV2 } from "@slopcode-ai/core/model"
+import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { createSlopcodeClient } from "@slopcode-ai/sdk/v2"
 import { Effect, Layer } from "effect"
 import { HttpServer } from "effect/unstable/http"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
+import { createRoutes } from "../../src/server/routes/instance/httpapi/server"
 import { disposeAllInstances, tmpdirScoped } from "../fixture/fixture"
 import { resetDatabase } from "../fixture/db"
 import { testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
-import { httpApiLayer } from "./httpapi-layer"
+import { ProviderTest } from "../fake/provider"
+import { httpApiLayer, makeHttpApiLayer } from "./httpapi-layer"
 
 const noop = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
-const it = testEffect(
+const dependencies = (http: typeof httpApiLayer) =>
   Layer.mergeAll(
     FSUtil.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     InstanceStore.defaultLayer.pipe(Layer.provide(noop)),
     Database.defaultLayer,
-    httpApiLayer,
+    http,
+  )
+const it = testEffect(dependencies(httpApiLayer))
+let aborts = 0
+let done = () => {}
+let aborted = Promise.resolve()
+const model = ProviderTest.model({
+  id: ModelV2.ID.make("test-model"),
+  providerID: ProviderV2.ID.make("test"),
+})
+const language = {
+  specificationVersion: "v3",
+  provider: "test",
+  modelId: "test-model",
+  supportedUrls: {},
+  doGenerate() {
+    throw new Error("unexpected generate")
+  },
+  doStream(options: LanguageModelV3CallOptions) {
+    return new Promise<never>((_, reject) => {
+      options.abortSignal?.addEventListener(
+        "abort",
+        () => {
+          aborts += 1
+          done()
+          reject(options.abortSignal?.reason)
+        },
+        { once: true },
+      )
+    })
+  },
+} satisfies LanguageModelV3
+const provider = ProviderTest.fake({ model, getLanguage: () => Effect.succeed(language) })
+const abortIt = testEffect(
+  dependencies(
+    makeHttpApiLayer(createRoutes(undefined, undefined, undefined, undefined, { provider: provider.layer })),
   ),
 )
 
@@ -30,15 +69,7 @@ function client(directory: string) {
   return HttpServer.HttpServer.use((server) =>
     Effect.sync(() => {
       const baseUrl = HttpServer.formatAddress(server.address)
-      const fetcher = Object.assign(
-        async (request: RequestInfo | URL, init?: RequestInit) => {
-          const source = request instanceof Request ? request : new Request(request, init)
-          const url = new URL(source.url)
-          return fetch(new Request(new URL(`${url.pathname}${url.search}`, baseUrl), source))
-        },
-        { preconnect: fetch.preconnect },
-      ) satisfies typeof fetch
-      return createSlopcodeClient({ baseUrl: "http://localhost", directory, fetch: fetcher })
+      return createSlopcodeClient({ baseUrl, directory })
     }),
   )
 }
@@ -116,6 +147,7 @@ describe("session autocomplete HttpApi", () => {
       expect(sent).not.toContain("PRIVATE_PROJECT_INSTRUCTIONS")
       expect(sent).not.toContain(session.data!.id)
     }).pipe(Effect.provide(TestLLMServer.layer)),
+    15_000,
   )
 
   it.live("honors the server kill switch", () =>
@@ -140,5 +172,49 @@ describe("session autocomplete HttpApi", () => {
       expect(response.data?.completion).toBe("")
       expect(yield* llm.calls).toBe(0)
     }).pipe(Effect.provide(TestLLMServer.layer)),
+  )
+
+  abortIt.live(
+    "propagates generated SDK aborts through the endpoint to provider generation",
+    Effect.gen(function* () {
+      aborts = 0
+      aborted = new Promise<void>((resolve) => {
+        done = resolve
+      })
+      const directory = yield* tmpdirScoped({
+        git: true,
+        config: {
+          ...testProviderConfig("http://127.0.0.1:1/v1"),
+          autocomplete: { enabled: true, min_prefix_chars: 1, timeout_ms: 10_000 },
+        },
+      })
+      const sdk = yield* client(directory)
+      const session = yield* Effect.promise(() => sdk.session.create({ title: "autocomplete abort" }))
+      const ctrl = new AbortController()
+      const request = sdk.session.autocomplete(
+        {
+          sessionID: session.data!.id,
+          model: { providerID: "test", modelID: "test-model" },
+          prefix: "abort this completion",
+        },
+        { signal: ctrl.signal, throwOnError: true },
+      )
+
+      yield* Effect.sleep("50 millis")
+      const start = Date.now()
+      ctrl.abort()
+      expect(
+        yield* Effect.promise(() =>
+          request.then(
+            () => false,
+            () => true,
+          ),
+        ),
+      ).toBe(true)
+      yield* Effect.promise(() => aborted)
+      expect(aborts).toBe(1)
+      expect(Date.now() - start).toBeLessThan(2_000)
+    }),
+    15_000,
   )
 })

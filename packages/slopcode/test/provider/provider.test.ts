@@ -674,6 +674,17 @@ it.instance(
   { config: { small_model: "anthropic/not-a-real-model" } },
 )
 
+it.instance(
+  "getSmallModelForProvider ignores a foreign global override and keeps provider heuristics",
+  Effect.gen(function* () {
+    yield* set("ANTHROPIC_API_KEY", "test-api-key")
+    const model = yield* Provider.use.getSmallModelForProvider(ProviderV2.ID.anthropic)
+    expect(String(model?.providerID)).toBe("anthropic")
+    expect(String(model?.id)).toContain("haiku")
+  }),
+  { config: { small_model: "openai/gpt-5" } },
+)
+
 test("provider.sort prioritizes preferred models", () => {
   const models = [
     { id: "random-model", name: "Random" },

@@ -71,6 +71,7 @@ export const SummarizePayload = Schema.Struct({
 })
 export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
 export const AutocompletePayload = Schema.Struct({
+  requestID: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128))),
   model: Schema.Struct({
     providerID: ProviderV2.ID,
     modelID: ModelV2.ID,
@@ -108,6 +109,7 @@ export const SessionPaths = {
   summarize: `${root}/:sessionID/summarize`,
   prompt: `${root}/:sessionID/message`,
   autocomplete: `${root}/:sessionID/autocomplete`,
+  autocompleteAbort: `${root}/:sessionID/autocomplete/:requestID`,
   promptAsync: `${root}/:sessionID/prompt_async`,
   command: `${root}/:sessionID/command`,
   sideQuestion: `${root}/:sessionID/side-question`,
@@ -340,6 +342,21 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.autocomplete",
             summary: "Complete prompt prefix",
             description: "Generate an ephemeral model-powered continuation for the current unsubmitted TUI prefix.",
+          }),
+        ),
+        HttpApiEndpoint.delete("abortAutocomplete", SessionPaths.autocompleteAbort, {
+          params: {
+            sessionID: SessionID,
+            requestID: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+          },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "Whether the autocomplete request was active"),
+          error: [ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.abortAutocomplete",
+            summary: "Abort prompt autocomplete",
+            description: "Interrupt an ephemeral autocomplete generation request.",
           }),
         ),
         HttpApiEndpoint.post("prompt", SessionPaths.prompt, {

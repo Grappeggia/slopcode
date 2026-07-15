@@ -10484,6 +10484,7 @@ export type SessionSummarizeResponse = SessionSummarizeResponses[keyof SessionSu
 
 export type SessionAutocompleteData = {
   body?: {
+    requestID?: string
     model: {
       providerID: string
       modelID: string
@@ -10524,6 +10525,42 @@ export type SessionAutocompleteResponses = {
 }
 
 export type SessionAutocompleteResponse = SessionAutocompleteResponses[keyof SessionAutocompleteResponses]
+
+export type SessionAbortAutocompleteData = {
+  body?: never
+  path: {
+    sessionID: string
+    requestID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/autocomplete/{requestID}"
+}
+
+export type SessionAbortAutocompleteErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionAbortAutocompleteError = SessionAbortAutocompleteErrors[keyof SessionAbortAutocompleteErrors]
+
+export type SessionAbortAutocompleteResponses = {
+  /**
+   * Whether the autocomplete request was active
+   */
+  200: boolean
+}
+
+export type SessionAbortAutocompleteResponse =
+  SessionAbortAutocompleteResponses[keyof SessionAbortAutocompleteResponses]
 
 export type SessionPromptAsyncData = {
   body?: {

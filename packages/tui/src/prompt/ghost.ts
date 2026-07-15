@@ -1,3 +1,6 @@
+import { Grapheme } from "@slopcode-ai/core/util/grapheme"
+import { promptOffsetWidth } from "./display"
+
 export type GhostInput = {
   enabled: boolean
   prefix: string
@@ -16,7 +19,7 @@ export function ghostEligible(input: GhostInput) {
     input.focused &&
     !input.popover &&
     input.parts === 0 &&
-    input.cursor === input.prefix.length &&
+    input.cursor === promptOffsetWidth(input.prefix) &&
     input.prefix.trim().length >= input.min
   )
 }
@@ -32,7 +35,7 @@ export function ghostAccept(prefix: string, ghost: string) {
 
 export function ghostLayout(input: { ghost: string; row: number; col: number; width: number; rows: number }) {
   const result: { top: number; left: number; text: string }[] = []
-  const chars = [...input.ghost]
+  const chars = Grapheme.split(input.ghost)
   let top = input.row
   let left = input.col
 

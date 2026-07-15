@@ -395,8 +395,20 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const settings = SessionAutocomplete.settings((yield* config.get()).autocomplete)
       if (Flag.SLOPCODE_DISABLE_AUTOCOMPLETE || !settings.enabled) return { completion: "", model }
       return yield* autocompleteSvc
-        .complete({ model: ctx.payload.model, prefix: ctx.payload.prefix, settings })
+        .complete({
+          requestID: ctx.payload.requestID,
+          model: ctx.payload.model,
+          prefix: ctx.payload.prefix,
+          settings,
+        })
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
+    const abortAutocomplete = Effect.fn("SessionHttpApi.abortAutocomplete")(function* (ctx: {
+      params: { sessionID: SessionID; requestID: string }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* autocompleteSvc.abort(ctx.params.requestID)
     })
 
     const promptAsync = Effect.fn("SessionHttpApi.promptAsync")(function* (ctx: {
@@ -556,6 +568,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("unshare", unshare)
       .handle("summarize", summarize)
       .handle("autocomplete", autocomplete)
+      .handle("abortAutocomplete", abortAutocomplete)
       .handle("prompt", prompt)
       .handle("promptAsync", promptAsync)
       .handle("command", command)

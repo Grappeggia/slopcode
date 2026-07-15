@@ -71,6 +71,9 @@ export namespace ProviderTest {
           getSmallModel: Effect.fn("TestProvider.getSmallModel")((providerID) =>
             Effect.succeed(providerID === row.id ? mdl : undefined),
           ),
+          getSmallModelForProvider: Effect.fn("TestProvider.getSmallModelForProvider")((providerID) =>
+            Effect.succeed(providerID === row.id ? mdl : undefined),
+          ),
           defaultModel: Effect.fn("TestProvider.defaultModel")(() =>
             Effect.succeed({ providerID: row.id, modelID: mdl.id }),
           ),

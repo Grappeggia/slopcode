@@ -4,7 +4,6 @@ import { ModelV2 } from "@slopcode-ai/core/model"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { Effect, Layer } from "effect"
 import { SessionAutocomplete } from "../../src/session/autocomplete"
-import { Provider } from "../../src/provider/provider"
 import { ProviderTest } from "../fake/provider"
 import { testEffect } from "../lib/effect"
 
@@ -59,6 +58,8 @@ describe("session autocomplete helpers", () => {
     ).toBe("tests")
     expect(SessionAutocomplete.normalize({ prefix: "write", completion: "tests", max: 96 })).toBe(" tests")
     expect(SessionAutocomplete.normalize({ prefix: "write ", completion: "tests   ", max: 4 })).toBe("test")
+    expect(SessionAutocomplete.normalize({ prefix: "", completion: "😀x", max: 2 })).toBe("😀")
+    expect(SessionAutocomplete.normalize({ prefix: "", completion: "😀x", max: 1 })).toBe("")
   })
 
   test("builds exactly fixed instructions and the bounded prefix", () => {

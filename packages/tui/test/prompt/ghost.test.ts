@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createGhostLifecycle, ghostAccept, ghostEligible, ghostLayout, ghostRemainder } from "../../src/prompt/ghost"
+import { promptOffsetWidth } from "../../src/prompt/display"
 
 describe("prompt ghost helpers", () => {
   test("only allows a focused plain prefix with the cursor at the end", () => {
@@ -22,6 +23,23 @@ describe("prompt ghost helpers", () => {
     expect(ghostEligible({ ...base, mode: "shell" })).toBe(false)
   })
 
+  test("compares textarea display offsets for wide and combined graphemes", () => {
+    for (const prefix of ["写测试", "e\u0301lan", "ship 👨‍👩‍👧‍👦"]) {
+      expect(
+        ghostEligible({
+          enabled: true,
+          prefix,
+          min: 1,
+          mode: "normal",
+          focused: true,
+          cursor: promptOffsetWidth(prefix),
+          popover: false,
+          parts: 0,
+        }),
+      ).toBe(true)
+    }
+  })
+
   test("accepts without changing the source until explicitly applied", () => {
     const prefix = "write focused "
     const ghost = "tests"
@@ -35,6 +53,13 @@ describe("prompt ghost helpers", () => {
     expect(ghostLayout({ ghost: "abcdefghijk", row: 1, col: 7, width: 10, rows: 6 })).toEqual([
       { top: 1, left: 7, text: "abc" },
       { top: 2, left: 0, text: "defghijk" },
+    ])
+  })
+
+  test("wraps whole graphemes without dropping later rows", () => {
+    expect(ghostLayout({ ghost: "😀e\u0301界x", row: 0, col: 3, width: 5, rows: 4 })).toEqual([
+      { top: 0, left: 3, text: "😀" },
+      { top: 1, left: 0, text: "e\u0301界x" },
     ])
   })
 })
