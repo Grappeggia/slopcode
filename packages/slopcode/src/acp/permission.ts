@@ -15,6 +15,7 @@ const permissionOptions: PermissionOption[] = [
   { optionId: "always", kind: "allow_always", name: "Always allow" },
   { optionId: "reject", kind: "reject_once", name: "Reject" },
 ]
+const permissionOptionsOnce = permissionOptions.filter((option) => option.optionId !== "always")
 
 export class Handler {
   private readonly queues = new Map<string, Promise<void>>()
@@ -62,7 +63,7 @@ export class Handler {
           kind: toToolKind(permission.permission),
           locations: toLocations(permission.permission, permission.metadata),
         },
-        options: permissionOptions,
+        options: permission.always.length ? permissionOptions : permissionOptionsOnce,
       })
       .catch(async () => {
         await this.reply(permission.id, "reject", session.cwd)
@@ -71,7 +72,7 @@ export class Handler {
 
     if (!result) return
 
-    const reply = selectedReply(result)
+    const reply = selectedReply(result, permission.always.length > 0)
     if (reply !== "once" && reply !== "always") {
       await this.reply(permission.id, "reject", session.cwd)
       return
@@ -111,9 +112,10 @@ export class Handler {
   }
 }
 
-function selectedReply(result: RequestPermissionResponse): Reply {
+function selectedReply(result: RequestPermissionResponse, persistent: boolean): Reply {
   if (result.outcome.outcome !== "selected") return "reject"
-  if (result.outcome.optionId === "once" || result.outcome.optionId === "always") return result.outcome.optionId
+  if (result.outcome.optionId === "once") return "once"
+  if (result.outcome.optionId === "always" && persistent) return "always"
   return "reject"
 }
 

@@ -95,6 +95,7 @@ function permissionAsked(
     permission?: string
     metadata?: Record<string, unknown>
     tool?: { messageID: string; callID: string }
+    always?: string[]
   } = {},
 ) {
   return {
@@ -106,7 +107,7 @@ function permissionAsked(
       permission: input.permission ?? "bash",
       patterns: ["*"],
       metadata: input.metadata ?? { command: "printf hello" },
-      always: [],
+      always: input.always ?? [],
       ...(input.tool ? { tool: input.tool } : {}),
     },
   } as PermissionEvent
@@ -158,11 +159,36 @@ describe("acp permissions", () => {
       },
       options: [
         { optionId: "once", kind: "allow_once", name: "Allow once" },
-        { optionId: "always", kind: "allow_always", name: "Always allow" },
         { optionId: "reject", kind: "reject_once", name: "Reject" },
       ],
     })
     expect(harness.replies).toEqual([{ requestID: "perm_1", reply: "once", directory: "/workspace" }])
+  })
+
+  it("rejects an Always response when no resources can be persisted", async () => {
+    const harness = createHarness(() => Promise.resolve({ outcome: { outcome: "selected", optionId: "always" } }))
+    await createSession(harness.session, "ses_a")
+
+    void harness.subscription.handle(permissionAsked("ses_a", "perm_empty"))
+    await pollUntil(() => harness.replies.length === 1, "empty permission was never replied")
+
+    expect(harness.requests[0].options.map((option) => option.optionId)).toEqual(["once", "reject"])
+    expect(harness.replies).toEqual([{ requestID: "perm_empty", reply: "reject", directory: "/workspace" }])
+  })
+
+  it("offers and maps Always when persistable resources are present", async () => {
+    const harness = createHarness(() => Promise.resolve({ outcome: { outcome: "selected", optionId: "always" } }))
+    await createSession(harness.session, "ses_a")
+
+    void harness.subscription.handle(permissionAsked("ses_a", "perm_persist", { always: ["git status"] }))
+    await pollUntil(() => harness.replies.length === 1, "persistable permission was never replied")
+
+    expect(harness.requests[0].options).toEqual([
+      { optionId: "once", kind: "allow_once", name: "Allow once" },
+      { optionId: "always", kind: "allow_always", name: "Always allow" },
+      { optionId: "reject", kind: "reject_once", name: "Reject" },
+    ])
+    expect(harness.replies).toEqual([{ requestID: "perm_persist", reply: "always", directory: "/workspace" }])
   })
 
   it("forwards external_directory metadata and locations to requestPermission", async () => {
@@ -256,7 +282,7 @@ describe("acp permissions", () => {
     await createSession(harness.session, "ses_a")
 
     harness.subscription.handle(permissionAsked("ses_a", "perm_1"))
-    harness.subscription.handle(permissionAsked("ses_a", "perm_2"))
+    harness.subscription.handle(permissionAsked("ses_a", "perm_2", { always: ["*"] }))
 
     await pollUntil(() => harness.requests.length === 1, "first permission was never requested")
     expect(harness.requests.map((request) => request.toolCall.toolCallId)).toEqual(["perm_1"])
