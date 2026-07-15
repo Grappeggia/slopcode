@@ -64,7 +64,7 @@ export function SessionStrip() {
             </>
           )}
         </For>
-        <Show when={layout().hidden > 0}>
+        <Show when={layout().showHidden}>
           <text fg={theme.textMuted}>{`+${layout().hidden}`}</text>
         </Show>
         <Show when={layout().next}>

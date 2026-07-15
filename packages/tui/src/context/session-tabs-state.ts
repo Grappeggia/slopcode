@@ -1,11 +1,13 @@
 export const DRAFT_TAB_ID = "__draft__"
 
 export type SessionTabStatus = "working" | "retrying" | "waiting" | "ready" | "idle" | "disconnected" | "unknown"
+export type SessionStatusType = "idle" | "busy" | "retry"
 
 export type SessionTabDescriptor = {
   id: string
   title?: string
   workspaceID?: string
+  status?: SessionStatusType
 }
 
 export type SessionTab =
@@ -28,21 +30,90 @@ function session(input: SessionTabDescriptor, pendingTitle?: boolean): Extract<S
     id: input.id,
     ...(input.title === undefined ? {} : { title: input.title }),
     ...(input.workspaceID === undefined ? {} : { workspaceID: input.workspaceID }),
+    ...(input.status === undefined ? {} : { status: input.status }),
     ...(pendingTitle ? { pendingTitle: true } : {}),
   }
 }
 
-export function sessionRoot(id: string, sessions: SessionFamilyMember[]) {
-  const index = new Map(sessions.map((item) => [item.id, item]))
-  const seen = new Set<string>()
-  let current = id
-  while (!seen.has(current)) {
-    seen.add(current)
-    const parent = index.get(current)?.parentID
-    if (!parent) return current
-    current = parent
+function merge(
+  tab: Extract<SessionTab, { type: "session" }>,
+  input: SessionTabDescriptor,
+  pendingTitle = tab.pendingTitle,
+) {
+  return session(
+    {
+      id: input.id,
+      title: input.title ?? tab.title,
+      workspaceID: input.workspaceID ?? tab.workspaceID,
+      status: input.status ?? tab.status,
+    },
+    pendingTitle,
+  )
+}
+
+export function sessionFamilyIndex(sessions: SessionFamilyMember[]) {
+  const byID = new Map(sessions.map((item) => [item.id, item]))
+  const roots = new Map<string, string>()
+
+  function resolve(id: string) {
+    const cached = roots.get(id)
+    if (cached) return cached
+    const path: string[] = []
+    const seen = new Set<string>()
+    let current = id
+    let root = id
+
+    while (true) {
+      const known = roots.get(current)
+      if (known) {
+        root = known
+        break
+      }
+      if (seen.has(current)) {
+        root = current
+        break
+      }
+      seen.add(current)
+      path.push(current)
+      const parent = byID.get(current)?.parentID
+      if (!parent) {
+        root = current
+        break
+      }
+      current = parent
+    }
+
+    path.forEach((item) => roots.set(item, root))
+    return root
   }
-  return current
+
+  sessions.forEach((item) => resolve(item.id))
+  const families = new Map<string, SessionFamilyMember[]>()
+  sessions.forEach((item) => {
+    const root = roots.get(item.id) ?? item.id
+    const family = families.get(root)
+    if (family) {
+      family.push(item)
+      return
+    }
+    families.set(root, [item])
+  })
+  return { roots, families }
+}
+
+export function sessionRoot(id: string, sessions: SessionFamilyMember[]) {
+  return sessionFamilyIndex(sessions).roots.get(id) ?? id
+}
+
+export function sessionFamilyStatus(
+  family: SessionFamilyMember[],
+  statuses: Record<string, { type: SessionStatusType } | undefined>,
+) {
+  const values = family.map((item) => statuses[item.id]?.type)
+  if (values.includes("retry")) return "retry" as const
+  if (values.includes("busy")) return "busy" as const
+  if (values.includes("idle")) return "idle" as const
+  return undefined
 }
 
 export function activateSessionTab(state: SessionTabsState, id: string): SessionTabsState {
@@ -71,7 +142,7 @@ export function promoteDraftTab(state: SessionTabsState, input: SessionTabDescri
     return {
       tabs: state.tabs
         .filter((tab) => tab.type !== "draft")
-        .map((tab) => (tab.id === input.id ? session(input, true) : tab)),
+        .map((tab) => (tab.id === input.id && tab.type === "session" ? merge(tab, input, true) : tab)),
       active: input.id,
     }
   }
@@ -101,14 +172,7 @@ export function visitSessionTab(state: SessionTabsState, input: SessionTabDescri
   return {
     tabs: state.tabs.map((tab, current) => {
       if (current !== index || tab.type !== "session") return tab
-      return session(
-        {
-          id: tab.id,
-          title: input.title ?? tab.title,
-          workspaceID: input.workspaceID ?? tab.workspaceID,
-        },
-        tab.pendingTitle,
-      )
+      return merge(tab, input)
     }),
     active: input.id,
   }
@@ -127,14 +191,14 @@ export function replaceSessionTab(
     return {
       tabs: state.tabs
         .filter((_, current) => current !== index)
-        .map((tab) => (tab.id === input.id ? session(input, tab.type === "session" && tab.pendingTitle) : tab)),
+        .map((tab) => (tab.id === input.id && tab.type === "session" ? merge(tab, input) : tab)),
       active: state.active === from ? input.id : state.active,
     }
   }
 
   const tabs = state.tabs.slice()
   const previous = tabs[index]
-  tabs[index] = session(input, previous?.type === "session" && previous.pendingTitle)
+  tabs[index] = previous?.type === "session" ? merge(previous, input) : session(input)
   return {
     tabs,
     active: state.active === from ? input.id : state.active,
@@ -160,7 +224,7 @@ export function refreshSessionTabs(state: SessionTabsState, sessions: SessionTab
     if (tab.type === "draft") return tab
     const item = index.get(tab.id)
     if (!item) return tab
-    return session(item, tab.pendingTitle)
+    return merge(tab, item)
   })
   return { tabs, active: state.active }
 }
@@ -179,6 +243,6 @@ export function sessionTabStatus(input: {
   if (input.status === "retry") return "retrying"
   if (input.status === "busy" || input.fallback === "working" || input.fallback === "compacting") return "working"
   if (input.draft || input.pending) return "ready"
-  if (input.known) return "idle"
+  if (input.status === "idle" || input.fallback === "idle" || input.known) return "idle"
   return "unknown"
 }

@@ -43,4 +43,29 @@ describe("session strip layout", () => {
     expect(sessionStripTabLabel({ id: "ses_1", title: "One", status: "retrying" }, true)).toBe("↻ * One")
     expect(sessionStripTabLabel({ id: "ses_1", title: "One", status: "disconnected" }, false)).toBe("! One")
   })
+
+  test("renders nothing and accounts for no cells at zero width", () => {
+    const result = layoutSessionStrip(tabs, { active: "ses_4", width: 0 })
+
+    expect(result).toEqual({
+      tabs: [],
+      hidden: tabs.length,
+      before: 0,
+      after: tabs.length,
+      showHidden: false,
+      used: 0,
+    })
+  })
+
+  test("only exposes no-fit overflow controls that fit tiny widths", () => {
+    const one = layoutSessionStrip(tabs, { active: "ses_4", width: 1 })
+    const count = layoutSessionStrip(tabs, { active: "ses_4", width: 2 })
+    const next = layoutSessionStrip(tabs, { active: "ses_4", width: 4 })
+
+    expect(one).toMatchObject({ tabs: [], hidden: 7, showHidden: false, next: undefined, used: 0 })
+    expect(count).toMatchObject({ tabs: [], hidden: 7, showHidden: true, next: undefined, used: 2 })
+    expect(next).toMatchObject({ tabs: [], hidden: 7, showHidden: true, next: "ses_1", used: 4 })
+    expect(Bun.stringWidth(`${next.showHidden ? `+${next.hidden}` : ""}${next.next ? "│>" : ""}`)).toBe(next.used)
+    expect([one, count, next].every((item, index) => item.used <= [1, 2, 4][index])).toBe(true)
+  })
 })

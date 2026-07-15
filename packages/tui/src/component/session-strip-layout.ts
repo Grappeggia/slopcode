@@ -13,6 +13,7 @@ export type SessionStripLayout = {
   after: number
   prev?: string
   next?: string
+  showHidden: boolean
   used: number
 }
 
@@ -91,6 +92,7 @@ function measure(
       after,
       prev: before > 0 ? tabs[start - 1]?.id : undefined,
       next: after > 0 ? tabs[end + 1]?.id : undefined,
+      showHidden: hidden > 0,
       used,
       cap,
     }
@@ -116,8 +118,11 @@ export function layoutSessionStrip(
   tabs: SessionStripTab[],
   input: { active?: string; width: number },
 ): SessionStripLayout {
-  if (tabs.length === 0 || input.width <= 0) {
-    return { tabs: [], hidden: tabs.length, before: 0, after: 0, used: 0 }
+  if (tabs.length === 0) {
+    return { tabs: [], hidden: 0, before: 0, after: 0, showHidden: false, used: 0 }
+  }
+  if (input.width <= 0) {
+    return { tabs: [], hidden: tabs.length, before: 0, after: tabs.length, showHidden: false, used: 0 }
   }
 
   const active = tabs.findIndex((tab) => tab.id === input.active)
@@ -132,13 +137,17 @@ export function layoutSessionStrip(
   ).filter((item): item is Fit => item !== undefined)
 
   if (fits.length === 0) {
+    const count = width(`+${tabs.length}`)
+    const showHidden = count <= input.width
+    const next = showHidden && count + width(SEP + ">") <= input.width ? tabs[0]?.id : undefined
     return {
       tabs: [],
       hidden: tabs.length,
       before: 0,
       after: tabs.length,
-      next: tabs[0]?.id,
-      used: width(`+${tabs.length}`),
+      next,
+      showHidden,
+      used: showHidden ? count + (next ? width(SEP + ">") : 0) : 0,
     }
   }
 
@@ -152,6 +161,7 @@ export function layoutSessionStrip(
     after: best.after,
     prev: best.prev,
     next: best.next,
+    showHidden: best.showHidden,
     used: best.used,
   }
 }

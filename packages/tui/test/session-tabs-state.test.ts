@@ -6,6 +6,7 @@ import {
   openDraftTab,
   promoteDraftTab,
   refreshSessionTabs,
+  sessionFamilyIndex,
   sessionRoot,
   sessionTabStatus,
   visitSessionTab,
@@ -34,6 +35,27 @@ describe("session tabs", () => {
         { id: "ses_grandchild", parentID: "ses_child" },
       ]),
     ).toBe("ses_root")
+  })
+
+  test("indexes roots and families once for nested sessions", () => {
+    const sessions = [
+      { id: "ses_root" },
+      { id: "ses_child", parentID: "ses_root" },
+      { id: "ses_grandchild", parentID: "ses_child" },
+      { id: "ses_other" },
+    ]
+    const index = sessionFamilyIndex(sessions)
+
+    expect(index.roots).toEqual(
+      new Map([
+        ["ses_root", "ses_root"],
+        ["ses_child", "ses_root"],
+        ["ses_grandchild", "ses_root"],
+        ["ses_other", "ses_other"],
+      ]),
+    )
+    expect(index.families.get("ses_root")?.map((item) => item.id)).toEqual(["ses_root", "ses_child", "ses_grandchild"])
+    expect(index.families.get("ses_other")?.map((item) => item.id)).toEqual(["ses_other"])
   })
 
   test("opens one reusable draft and promotes it in place", () => {
@@ -85,7 +107,13 @@ describe("session tabs", () => {
   test("refreshes known descriptors without pruning sessions omitted by workspace sync", () => {
     const state = {
       tabs: [
-        { type: "session" as const, id: "ses_other", title: "Other workspace", workspaceID: "work_other" },
+        {
+          type: "session" as const,
+          id: "ses_other",
+          title: "Other workspace",
+          workspaceID: "work_other",
+          status: "busy" as const,
+        },
         { type: "session" as const, id: "ses_local", title: "Old local title" },
       ],
       active: "ses_local",
@@ -93,7 +121,13 @@ describe("session tabs", () => {
 
     expect(refreshSessionTabs(state, [{ id: "ses_local", title: "Current local title" }])).toEqual({
       tabs: [
-        { type: "session", id: "ses_other", title: "Other workspace", workspaceID: "work_other" },
+        {
+          type: "session",
+          id: "ses_other",
+          title: "Other workspace",
+          workspaceID: "work_other",
+          status: "busy",
+        },
         { type: "session", id: "ses_local", title: "Current local title" },
       ],
       active: "ses_local",
@@ -107,6 +141,9 @@ describe("session tabs", () => {
     expect(sessionTabStatus({ known: true, status: "idle" })).toBe("idle")
     expect(sessionTabStatus({ known: false, draft: true })).toBe("ready")
     expect(sessionTabStatus({ known: true, connected: false })).toBe("disconnected")
+    expect(sessionTabStatus({ known: false, status: "busy", connected: true })).toBe("working")
+    expect(sessionTabStatus({ known: false, status: "idle", connected: true })).toBe("idle")
+    expect(sessionTabStatus({ known: false, connected: true })).toBe("unknown")
     expect(sessionTabStatus({ known: false })).toBe("unknown")
   })
 })

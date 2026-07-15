@@ -8,33 +8,37 @@ import { SDKProvider } from "../src/context/sdk"
 import { SessionTabsProvider, useSessionTabs } from "../src/context/session-tabs"
 import { SyncContext, type useSync } from "../src/context/sync"
 import { TestTuiContexts } from "./fixture/tui-environment"
-import { createFetch, eventSource } from "./fixture/tui-sdk"
+import { createEventSource, createFetch, directory } from "./fixture/tui-sdk"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
 test("draft promotion, root visits, workspace refresh, and local close compose through providers", async () => {
   let tabs!: ReturnType<typeof useSessionTabs>
   let route!: ReturnType<typeof useRoute>
   let sessions!: (value: { id: string; title: string; parentID?: string; workspaceID?: string }[]) => void
+  let statuses!: (value: Record<string, { type: "idle" | "busy" | "retry" }>) => void
+  const events = createEventSource()
 
   function Harness() {
     const [data, setData] = createStore<{
       session: { id: string; title: string; parentID?: string; workspaceID?: string }[]
-      session_status: Record<string, never>
+      session_status: Record<string, { type: "idle" | "busy" | "retry" }>
       permission: Record<string, never>
       question: Record<string, never>
       message: Record<string, never>
     }>({
       session: [
-        { id: "ses_1", title: "One" },
+        { id: "ses_1", title: "One", workspaceID: "work_1" },
         { id: "ses_2", title: "Two", workspaceID: "work_2" },
         { id: "ses_child", title: "Child", parentID: "ses_2", workspaceID: "work_2" },
+        { id: "ses_3", title: "Three", workspaceID: "work_3" },
       ],
-      session_status: {},
+      session_status: { ses_1: { type: "busy" } },
       permission: {},
       question: {},
       message: {},
     })
     sessions = (value) => setData("session", value)
+    statuses = (value) => setData("session_status", value)
     const sync = {
       data,
       session: {
@@ -69,7 +73,7 @@ test("draft promotion, root visits, workspace refresh, and local close compose t
 
   const app = await testRender(() => (
     <TestTuiContexts>
-      <SDKProvider url="http://test" events={eventSource()} fetch={createFetch().fetch}>
+      <SDKProvider url="http://test" events={events.source} fetch={createFetch().fetch}>
         <ProjectProvider>
           <RouteProvider>
             <Harness />
@@ -92,10 +96,33 @@ test("draft promotion, root visits, workspace refresh, and local close compose t
     expect(tabs.ids()).toEqual(["ses_1", "ses_2"])
     expect(tabs.active()).toBe("ses_2")
 
-    sessions([{ id: "ses_2", title: "Two renamed", workspaceID: "work_2" }])
+    route.navigate({ type: "session", sessionID: "ses_3" })
     await app.renderOnce()
-    expect(tabs.tabs().map((tab) => tab.title)).toEqual(["One", "Two renamed"])
+    route.navigate({ type: "session", sessionID: "ses_child" })
+    await app.renderOnce()
 
+    sessions([{ id: "ses_2", title: "Two renamed", workspaceID: "work_2" }])
+    statuses({ ses_2: { type: "idle" } })
+    await app.renderOnce()
+    expect(tabs.tabs().map((tab) => [tab.title, tab.status])).toEqual([
+      ["One", "working"],
+      ["Two renamed", "idle"],
+      ["Three", "unknown"],
+    ])
+
+    events.emit({
+      directory,
+      project: "proj_test",
+      payload: {
+        id: "evt_workspace_disconnected",
+        type: "workspace.status",
+        properties: { workspaceID: "work_3", status: "disconnected" },
+      },
+    })
+    await app.renderOnce()
+    expect(tabs.tabs().find((tab) => tab.id === "ses_3")?.status).toBe("disconnected")
+
+    tabs.close("ses_3")
     tabs.close("ses_2")
     await app.renderOnce()
     expect(route.data).toEqual({ type: "session", sessionID: "ses_1" })
