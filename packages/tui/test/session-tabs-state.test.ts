@@ -134,6 +134,32 @@ describe("session tabs", () => {
     })
   })
 
+  test("clears cached workspace when a session warps back to local", () => {
+    const state = {
+      tabs: [
+        {
+          type: "session" as const,
+          id: "ses_1",
+          title: "One",
+          workspaceID: "work_1",
+        },
+      ],
+      active: "ses_1",
+    }
+
+    expect(visitSessionTab(state, { id: "ses_1", title: "One renamed" }).tabs[0]).toEqual({
+      type: "session",
+      id: "ses_1",
+      title: "One renamed",
+      workspaceID: "work_1",
+    })
+    expect(refreshSessionTabs(state, [{ id: "ses_1", title: "One local", workspaceID: undefined }]).tabs[0]).toEqual({
+      type: "session",
+      id: "ses_1",
+      title: "One local",
+    })
+  })
+
   test("derives all useful tab states with blocking and connection precedence", () => {
     expect(sessionTabStatus({ known: true, status: "busy" })).toBe("working")
     expect(sessionTabStatus({ known: true, status: "retry" })).toBe("retrying")

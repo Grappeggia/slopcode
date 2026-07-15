@@ -8,6 +8,7 @@ export type SessionTabDescriptor = {
   title?: string
   workspaceID?: string
   status?: SessionStatusType
+  waiting?: boolean
 }
 
 export type SessionTab =
@@ -31,6 +32,7 @@ function session(input: SessionTabDescriptor, pendingTitle?: boolean): Extract<S
     ...(input.title === undefined ? {} : { title: input.title }),
     ...(input.workspaceID === undefined ? {} : { workspaceID: input.workspaceID }),
     ...(input.status === undefined ? {} : { status: input.status }),
+    ...(input.waiting === undefined ? {} : { waiting: input.waiting }),
     ...(pendingTitle ? { pendingTitle: true } : {}),
   }
 }
@@ -40,15 +42,25 @@ function merge(
   input: SessionTabDescriptor,
   pendingTitle = tab.pendingTitle,
 ) {
-  return session(
+  const next = session(
     {
       id: input.id,
-      title: input.title ?? tab.title,
-      workspaceID: input.workspaceID ?? tab.workspaceID,
-      status: input.status ?? tab.status,
+      title: "title" in input ? input.title : tab.title,
+      workspaceID: "workspaceID" in input ? input.workspaceID : tab.workspaceID,
+      status: "status" in input ? input.status : tab.status,
+      waiting: "waiting" in input ? input.waiting : tab.waiting,
     },
     pendingTitle,
   )
+  if (
+    next.title === tab.title &&
+    next.workspaceID === tab.workspaceID &&
+    next.status === tab.status &&
+    next.waiting === tab.waiting &&
+    next.pendingTitle === tab.pendingTitle
+  )
+    return tab
+  return next
 }
 
 export function sessionFamilyIndex(sessions: SessionFamilyMember[]) {
@@ -226,6 +238,7 @@ export function refreshSessionTabs(state: SessionTabsState, sessions: SessionTab
     if (!item) return tab
     return merge(tab, item)
   })
+  if (tabs.every((tab, current) => tab === state.tabs[current])) return state
   return { tabs, active: state.active }
 }
 

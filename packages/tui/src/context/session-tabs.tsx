@@ -32,14 +32,12 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
     const families = createMemo(() => sessionFamilyIndex(sync.data.session))
 
     createEffect(() => {
-      const index = families()
       const sessions = sync.data.session
         .filter((item) => item.parentID === undefined)
         .map((item) => ({
           id: item.id,
           title: item.title,
           workspaceID: item.workspaceID,
-          status: sessionFamilyStatus(index.families.get(item.id) ?? [item], sync.data.session_status),
         }))
       setState((current) => refreshSessionTabs(current, sessions))
     })
@@ -57,13 +55,37 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       if (sync.session.get(current.sessionID)) roots.set(current.sessionID, resolved)
       const id = roots.get(current.sessionID) ?? resolved
       const info = sync.session.get(id)
+      const status = sessionFamilyStatus(index.families.get(id) ?? [], sync.data.session_status)
       const descriptor = {
         id,
-        title: info?.title,
-        workspaceID: info?.workspaceID,
-        status: sessionFamilyStatus(index.families.get(id) ?? [], sync.data.session_status),
+        ...(info ? { title: info.title, workspaceID: info.workspaceID } : {}),
+        ...(status ? { status } : {}),
       }
       setState((value) => visitSessionTab(replaceSessionTab(value, current.sessionID, descriptor), descriptor))
+    })
+
+    function activity(id: string, index: ReturnType<typeof sessionFamilyIndex>): SessionTabDescriptor {
+      const family = index.families.get(id)
+      const members = family ?? [{ id }]
+      const authoritative = family !== undefined && sync.status === "complete"
+      const status = sessionFamilyStatus(members, sync.data.session_status)
+      const known = members.some(
+        (item) => Object.hasOwn(sync.data.permission, item.id) || Object.hasOwn(sync.data.question, item.id),
+      )
+      const waiting = members.some(
+        (item) => (sync.data.permission[item.id]?.length ?? 0) > 0 || (sync.data.question[item.id]?.length ?? 0) > 0,
+      )
+      return {
+        id,
+        ...(status ? { status } : authoritative ? { status: "idle" as const } : {}),
+        ...(known || authoritative ? { waiting } : {}),
+      }
+    }
+
+    createEffect(() => {
+      const index = families()
+      const updates = state().tabs.flatMap((tab) => (tab.type === "session" ? [activity(tab.id, index)] : []))
+      setState((current) => refreshSessionTabs(current, updates))
     })
 
     const tabs = createMemo(() => {
@@ -77,18 +99,14 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
         const title = info?.title ?? tab.title
         const pending = tab.pendingTitle && (!title || isDefaultTitle(title))
         const workspace = tab.workspaceID ? project.workspace.status(tab.workspaceID) : undefined
-        const family = index.families.get(tab.id) ?? []
-        const waiting = family.some(
-          (item) => (sync.data.permission[item.id]?.length ?? 0) > 0 || (sync.data.question[item.id]?.length ?? 0) > 0,
-        )
-        const status = sessionFamilyStatus(family, sync.data.session_status) ?? tab.status
+        const current = activity(tab.id, index)
         return {
           id: tab.id,
           title: pending ? "New Session" : (title ?? tab.id),
           status: sessionTabStatus({
             pending,
-            waiting,
-            status,
+            waiting: current.waiting ?? tab.waiting,
+            status: current.status ?? tab.status,
             fallback: info ? sync.session.status(tab.id) : undefined,
             known: info !== undefined,
             connected:

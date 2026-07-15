@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import { createStore } from "solid-js/store"
+import { createStore, reconcile } from "solid-js/store"
 import { expect, test } from "bun:test"
 import { ProjectProvider } from "../src/context/project"
 import { RouteProvider, useRoute } from "../src/context/route"
@@ -16,14 +16,18 @@ test("draft promotion, root visits, workspace refresh, and local close compose t
   let route!: ReturnType<typeof useRoute>
   let sessions!: (value: { id: string; title: string; parentID?: string; workspaceID?: string }[]) => void
   let statuses!: (value: Record<string, { type: "idle" | "busy" | "retry" }>) => void
+  let permissions!: (value: Record<string, unknown[]>) => void
+  let questions!: (value: Record<string, unknown[]>) => void
+  let complete!: () => void
   const events = createEventSource()
 
   function Harness() {
     const [data, setData] = createStore<{
       session: { id: string; title: string; parentID?: string; workspaceID?: string }[]
+      status: "partial" | "complete"
       session_status: Record<string, { type: "idle" | "busy" | "retry" }>
-      permission: Record<string, never>
-      question: Record<string, never>
+      permission: Record<string, unknown[]>
+      question: Record<string, unknown[]>
       message: Record<string, never>
     }>({
       session: [
@@ -32,15 +36,22 @@ test("draft promotion, root visits, workspace refresh, and local close compose t
         { id: "ses_child", title: "Child", parentID: "ses_2", workspaceID: "work_2" },
         { id: "ses_3", title: "Three", workspaceID: "work_3" },
       ],
+      status: "partial",
       session_status: { ses_1: { type: "busy" } },
       permission: {},
       question: {},
       message: {},
     })
     sessions = (value) => setData("session", value)
-    statuses = (value) => setData("session_status", value)
+    statuses = (value) => setData("session_status", reconcile(value))
+    permissions = (value) => setData("permission", value)
+    questions = (value) => setData("question", value)
+    complete = () => setData("status", "complete")
     const sync = {
       data,
+      get status() {
+        return data.status
+      },
       session: {
         get(id: string) {
           return data.session.find((item) => item.id === id)
@@ -109,6 +120,34 @@ test("draft promotion, root visits, workspace refresh, and local close compose t
       ["Two renamed", "idle"],
       ["Three", "unknown"],
     ])
+
+    statuses({ ses_1: { type: "retry" }, ses_2: { type: "idle" } })
+    await app.renderOnce()
+    expect(tabs.tabs().find((tab) => tab.id === "ses_1")?.status).toBe("retrying")
+
+    permissions({ ses_1: [{}] })
+    await app.renderOnce()
+    expect(tabs.tabs().find((tab) => tab.id === "ses_1")?.status).toBe("waiting")
+    permissions({ ses_1: [] })
+    await app.renderOnce()
+    expect(tabs.tabs().find((tab) => tab.id === "ses_1")?.status).toBe("retrying")
+
+    questions({ ses_1: [{}] })
+    await app.renderOnce()
+    expect(tabs.tabs().find((tab) => tab.id === "ses_1")?.status).toBe("waiting")
+    questions({ ses_1: [] })
+    statuses({ ses_2: { type: "idle" } })
+    await app.renderOnce()
+    expect(tabs.tabs().find((tab) => tab.id === "ses_1")?.status).toBe("retrying")
+
+    sessions([{ id: "ses_1", title: "One local", workspaceID: undefined }])
+    statuses({})
+    complete()
+    await app.renderOnce()
+    expect(tabs.tabs().find((tab) => tab.id === "ses_1")).toMatchObject({
+      title: "One local",
+      status: "idle",
+    })
 
     events.emit({
       directory,
