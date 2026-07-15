@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store"
 import { dirname } from "node:path"
-import { createMemo, For, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { useTheme, selectedForeground } from "../../context/theme"
@@ -18,6 +18,14 @@ import { useTuiConfig } from "../../config"
 import { SLOPCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { density, isCompact } from "../../util/density"
+import {
+  createPermissionBatchState,
+  permissionBatchMove,
+  permissionBatchReply,
+  permissionBatchToggle,
+  permissionQueue,
+  type PermissionBatchOption,
+} from "./permission-batch"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -110,7 +118,7 @@ function TextBody(props: { title: string; description?: string; icon?: string })
   )
 }
 
-export function PermissionPrompt(props: { request: PermissionRequest; directory?: string }) {
+function PermissionSinglePrompt(props: { request: PermissionRequest; directory?: string }) {
   const sdk = useSDK()
   const project = useProject()
   const sync = useSync()
@@ -438,6 +446,183 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
         })()}
       </Match>
     </Switch>
+  )
+}
+
+function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory?: string }) {
+  const sdk = useSDK()
+  const project = useProject()
+  const { theme } = useTheme()
+  const [store, setStore] = createStore({
+    ...createPermissionBatchState(props.requests),
+    submitting: false,
+  })
+  const selected = createMemo(() => props.requests.filter((item) => store.selected.includes(item.id)))
+  const persistent = createMemo(() => props.requests.every((item) => item.always.length > 0))
+
+  createEffect(() => {
+    const ids = props.requests.map((item) => item.id)
+    setStore("selected", (current) => {
+      const kept = current.filter((id) => ids.includes(id))
+      return [...kept, ...ids.filter((id) => !kept.includes(id))]
+    })
+    setStore("focused", (current) => Math.min(current, Math.max(ids.length - 1, 0)))
+  })
+
+  const submit = (reply: NonNullable<ReturnType<typeof permissionBatchReply>["reply"]>) => {
+    setStore("submitting", true)
+    void sdk.client.permission
+      .replyBatch({
+        ...reply,
+        directory: props.directory,
+        workspace: project.workspace.current(),
+      })
+      .catch(() => setStore("submitting", false))
+  }
+
+  const run = (option: PermissionBatchOption) => {
+    if (store.submitting) return
+    const next = permissionBatchReply(store, props.requests, option)
+    if (next.state.stage !== store.stage) setStore("stage", next.state.stage)
+    if (next.reply) submit(next.reply)
+  }
+
+  useBindings(() => ({
+    mode: SLOPCODE_BASE_MODE,
+    bindings: [
+      {
+        key: "up",
+        desc: "Previous forecast permission",
+        group: "Permission",
+        cmd: () => setStore(permissionBatchMove(store, props.requests, -1)),
+      },
+      {
+        key: "k",
+        desc: "Previous forecast permission",
+        group: "Permission",
+        cmd: () => setStore(permissionBatchMove(store, props.requests, -1)),
+      },
+      {
+        key: "down",
+        desc: "Next forecast permission",
+        group: "Permission",
+        cmd: () => setStore(permissionBatchMove(store, props.requests, 1)),
+      },
+      {
+        key: "j",
+        desc: "Next forecast permission",
+        group: "Permission",
+        cmd: () => setStore(permissionBatchMove(store, props.requests, 1)),
+      },
+      {
+        key: "space",
+        desc: "Toggle forecast permission",
+        group: "Permission",
+        cmd: () => {
+          if (store.stage !== "review") return
+          const request = props.requests[store.focused]
+          if (request) setStore(permissionBatchToggle(store, request.id))
+        },
+      },
+    ],
+  }))
+
+  return (
+    <Switch>
+      <Match when={store.stage === "always"}>
+        <Prompt
+          title="Remember selected build permissions"
+          body={
+            <box paddingLeft={1} flexDirection="column" gap={1}>
+              <text fg={theme.textMuted}>These exact permissions will be remembered for this Git project.</text>
+              <For each={selected()}>
+                {(request) => (
+                  <box flexDirection="column">
+                    <text fg={theme.text}>{request.permission}</text>
+                    <For each={request.always}>{(resource) => <text fg={theme.textMuted}>{"- " + resource}</text>}</For>
+                  </box>
+                )}
+              </For>
+            </box>
+          }
+          options={{ confirm: "Confirm", cancel: "Cancel" }}
+          escapeKey="cancel"
+          onSelect={(option) => run(option)}
+        />
+      </Match>
+      <Match when={true}>
+        <Prompt
+          title="Review build permissions"
+          header={
+            <box flexDirection="column">
+              <box flexDirection="row" gap={1}>
+                <text fg={theme.warning}>△</text>
+                <text fg={theme.text}>Review build permissions</text>
+                <text fg={theme.textMuted}>{`(${selected().length}/${props.requests.length} selected)`}</text>
+              </box>
+              <box paddingLeft={2}>
+                <text fg={theme.textMuted}>Up/down focuses, space toggles. Unselected permissions are skipped.</text>
+              </box>
+            </box>
+          }
+          body={
+            <scrollbox height={Math.min(Math.max(props.requests.length * 3, 6), 12)}>
+              <box flexDirection="column">
+                <For each={props.requests}>
+                  {(request, index) => {
+                    const focused = () => index() === store.focused
+                    const picked = () => store.selected.includes(request.id)
+                    return (
+                      <box
+                        paddingLeft={1}
+                        paddingRight={1}
+                        flexDirection="column"
+                        backgroundColor={focused() ? theme.backgroundElement : undefined}
+                        onMouseOver={() => setStore("focused", index())}
+                        onMouseUp={() => setStore(permissionBatchToggle(store, request.id))}
+                      >
+                        <text fg={focused() ? theme.secondary : picked() ? theme.text : theme.textMuted}>
+                          {`${picked() ? "[x]" : "[ ]"} ${request.permission}: ${request.patterns.join(", ")}`}
+                        </text>
+                        <box paddingLeft={4}>
+                          <text fg={theme.textMuted}>{request.reason}</text>
+                        </box>
+                      </box>
+                    )
+                  }}
+                </For>
+              </box>
+            </scrollbox>
+          }
+          options={
+            persistent()
+              ? { once: "Allow selected once", always: "Always allow selected", skip: "Skip all" }
+              : { once: "Allow selected once", skip: "Skip all" }
+          }
+          escapeKey="skip"
+          fullscreen
+          onSelect={(option) => {
+            if (option === "once" || option === "always" || option === "skip") run(option)
+          }}
+        />
+      </Match>
+    </Switch>
+  )
+}
+
+export function PermissionPrompt(props: { requests: PermissionRequest[]; directory?: string }) {
+  const requests = createMemo(() => permissionQueue(props.requests))
+  return (
+    <Show when={requests()[0]}>
+      {(request) => (
+        <Show
+          when={request().kind === "forecast"}
+          fallback={<PermissionSinglePrompt request={request()} directory={props.directory} />}
+        >
+          <PermissionBatchPrompt requests={requests()} directory={props.directory} />
+        </Show>
+      )}
+    </Show>
   )
 }
 

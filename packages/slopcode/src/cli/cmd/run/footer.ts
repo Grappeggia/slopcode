@@ -46,6 +46,7 @@ import type {
   FooterState,
   FooterSubagentState,
   FooterView,
+  PermissionBatchReply,
   PermissionReply,
   QuestionReject,
   QuestionReply,
@@ -87,6 +88,7 @@ type RunFooterOptions = {
   backgroundSubagents: boolean
   diffStyle: RunDiffStyle
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
+  onPermissionBatchReply: (input: PermissionBatchReply) => void | Promise<void>
   onQuestionReply: (input: QuestionReply) => void | Promise<void>
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
   onCycleVariant?: () => CycleResult | void
@@ -325,6 +327,7 @@ export class RunFooter implements FooterApi {
               agent: options.agentLabel,
               onSubmit: footer.handlePrompt,
               onPermissionReply: footer.handlePermissionReply,
+              onPermissionBatchReply: footer.handlePermissionBatchReply,
               onQuestionReply: footer.handleQuestionReply,
               onQuestionReject: footer.handleQuestionReject,
               onCycle: footer.handleCycle,
@@ -773,6 +776,11 @@ export class RunFooter implements FooterApi {
     }
 
     await this.options.onPermissionReply(input)
+  }
+
+  private handlePermissionBatchReply = async (input: PermissionBatchReply): Promise<void> => {
+    if (this.isClosed) return
+    await this.options.onPermissionBatchReply(input)
   }
 
   private handleQuestionReply = async (input: QuestionReply): Promise<void> => {

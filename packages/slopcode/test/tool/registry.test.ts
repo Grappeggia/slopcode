@@ -60,6 +60,14 @@ const withBrokenPlugin = testEffect(
     replacements: [...replacements, LayerNode.replace(Plugin.node, brokenPluginLayer)],
   }),
 )
+const headless = testEffect(
+  LayerNode.buildLayer(root, {
+    replacements: [
+      LayerNode.replace(Config.node, configLayer),
+      LayerNode.replace(RuntimeFlags.node, RuntimeFlags.layer({ experimentalPlanMode: true, client: "server" })),
+    ],
+  }),
+)
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -72,6 +80,14 @@ describe("tool.registry", () => {
       const ids = yield* registry.ids()
 
       expect(ids).not.toContain("task_status")
+    }),
+  )
+
+  headless.instance("does not expose plan permission forecasts to headless clients", () =>
+    Effect.gen(function* () {
+      const ids = yield* (yield* ToolRegistry.Service).ids()
+      expect(ids).not.toContain("plan_permissions")
+      expect(ids).not.toContain("plan_exit")
     }),
   )
 

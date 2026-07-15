@@ -21,6 +21,7 @@ import { entrySplash, exitSplash, splashMeta } from "./splash"
 import { resolveRunTheme } from "./theme"
 import type {
   FooterApi,
+  PermissionBatchReply,
   PermissionReply,
   QuestionReject,
   QuestionReply,
@@ -67,6 +68,7 @@ export type LifecycleInput = {
   tuiConfig: RunTuiConfig
   backgroundSubagents: boolean
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
+  onPermissionBatchReply: (input: PermissionBatchReply) => void | Promise<void>
   onQuestionReply: (input: QuestionReply) => void | Promise<void>
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
   onCycleVariant?: () => CycleResult | void
@@ -247,6 +249,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
       backgroundSubagents: input.backgroundSubagents,
       diffStyle: input.tuiConfig.diff_style ?? "auto",
       onPermissionReply: input.onPermissionReply,
+      onPermissionBatchReply: input.onPermissionBatchReply,
       onQuestionReply: input.onQuestionReply,
       onQuestionReject: input.onQuestionReject,
       onCycleVariant: input.onCycleVariant,

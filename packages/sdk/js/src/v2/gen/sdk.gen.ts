@@ -130,6 +130,8 @@ import type {
   PathGetResponses,
   PermissionListErrors,
   PermissionListResponses,
+  PermissionReplyBatchErrors,
+  PermissionReplyBatchResponses,
   PermissionReplyErrors,
   PermissionReplyResponses,
   PermissionRespondErrors,
@@ -3233,6 +3235,51 @@ export class Permission extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<PermissionReplyResponses, PermissionReplyErrors, ThrowOnError>({
       url: "/permission/{requestID}/reply",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Respond to a forecast batch
+   *
+   * Approve selected forecast permissions and skip every unselected item atomically.
+   */
+  public replyBatch<ThrowOnError extends boolean = false>(
+    parameters: {
+      batchID: string
+      directory?: string
+      workspace?: string
+      requestIDs?: Array<string>
+      reply?: "once" | "always" | "reject"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "batchID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "requestIDs" },
+            { in: "body", key: "reply" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      PermissionReplyBatchResponses,
+      PermissionReplyBatchErrors,
+      ThrowOnError
+    >({
+      url: "/permission/batch/{batchID}/reply",
       ...options,
       ...params,
       headers: {

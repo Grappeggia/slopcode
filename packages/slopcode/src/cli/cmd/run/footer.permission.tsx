@@ -17,6 +17,10 @@ import { For, Match, Show, Switch, createEffect, createMemo, createSignal } from
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
 import {
   createPermissionBodyState,
+  createPermissionBatchState,
+  permissionBatchMove,
+  permissionBatchReply,
+  permissionBatchToggle,
   permissionAlwaysLines,
   permissionCancel,
   permissionEscape,
@@ -28,11 +32,12 @@ import {
   permissionRun,
   permissionShift,
   type PermissionOption,
+  type PermissionBatchOption,
 } from "./permission.shared"
 import { footerWidthPolicy } from "./footer.width"
 import { toolFiletype } from "./tool"
 import { transparent, type RunBlockTheme, type RunFooterTheme } from "./theme"
-import type { PermissionReply, RunDiffStyle } from "./types"
+import type { PermissionBatchReply, PermissionReply, RunDiffStyle } from "./types"
 
 function buttons(
   list: PermissionOption[],
@@ -129,7 +134,7 @@ export function RejectField(props: {
   )
 }
 
-export function RunPermissionBody(props: {
+function RunPermissionSingleBody(props: {
   request: PermissionRequest
   theme: RunFooterTheme
   block: RunBlockTheme
@@ -469,5 +474,202 @@ export function RunPermissionBody(props: {
         </box>
       </Show>
     </box>
+  )
+}
+
+function RunPermissionBatchBody(props: {
+  requests: PermissionRequest[]
+  theme: RunFooterTheme
+  onReply: (input: PermissionBatchReply) => void | Promise<void>
+}) {
+  const [state, setState] = createSignal(createPermissionBatchState(props.requests))
+  const [selected, setSelected] = createSignal<PermissionBatchOption>("once")
+  const [submitting, setSubmitting] = createSignal(false)
+  const persistent = createMemo(() => props.requests.every((item) => item.always.length > 0))
+  const options = createMemo<PermissionBatchOption[]>(() =>
+    state().stage === "always" ? ["confirm", "cancel"] : persistent() ? ["once", "always", "skip"] : ["once", "skip"],
+  )
+
+  createEffect(() => {
+    const ids = props.requests.map((item) => item.id)
+    setState((current) => ({
+      ...current,
+      focused: Math.min(current.focused, Math.max(ids.length - 1, 0)),
+      selected: [
+        ...current.selected.filter((id) => ids.includes(id)),
+        ...ids.filter((id) => !current.selected.includes(id)),
+      ],
+    }))
+  })
+
+  const submit = async (reply: PermissionBatchReply) => {
+    setSubmitting(true)
+    try {
+      await props.onReply(reply)
+    } catch {
+      setSubmitting(false)
+    }
+  }
+
+  const run = (option: PermissionBatchOption) => {
+    if (submitting()) return
+    const current = state()
+    const next = permissionBatchReply(current, props.requests, option)
+    if (next.state !== current) setState(next.state)
+    if (option === "always") setSelected("confirm")
+    if (option === "cancel") setSelected("always")
+    if (next.reply) void submit(next.reply)
+  }
+
+  const shift = (step: number) => {
+    const list = options()
+    const index = Math.max(0, list.indexOf(selected()))
+    setSelected(list[(index + step + list.length) % list.length])
+  }
+
+  useKeyboard((event) => {
+    if (submitting()) {
+      event.preventDefault()
+      return
+    }
+    if (event.name === "up" || event.name === "k") {
+      setState((current) => permissionBatchMove(current, props.requests, -1))
+      event.preventDefault()
+      return
+    }
+    if (event.name === "down" || event.name === "j") {
+      setState((current) => permissionBatchMove(current, props.requests, 1))
+      event.preventDefault()
+      return
+    }
+    if (event.name === "space" && state().stage === "review") {
+      const request = props.requests[state().focused]
+      if (request) setState((current) => permissionBatchToggle(current, request.id))
+      event.preventDefault()
+      return
+    }
+    if (event.name === "left" || event.name === "h" || (event.name === "tab" && event.shift)) {
+      shift(-1)
+      event.preventDefault()
+      return
+    }
+    if (event.name === "right" || event.name === "l" || event.name === "tab") {
+      shift(1)
+      event.preventDefault()
+      return
+    }
+    if (event.name === "return") {
+      run(selected())
+      event.preventDefault()
+      return
+    }
+    if (event.name === "escape") {
+      run(state().stage === "always" ? "cancel" : "skip")
+      event.preventDefault()
+    }
+  })
+
+  return (
+    <box width="100%" height="100%" flexDirection="column" backgroundColor={props.theme.surface}>
+      <box flexDirection="column" gap={1} paddingLeft={2} paddingRight={2} paddingTop={1} flexShrink={0}>
+        <box flexDirection="row" gap={1}>
+          <text fg={props.theme.warning}>△</text>
+          <text fg={props.theme.text}>
+            {state().stage === "always" ? "Remember selected build permissions" : "Review build permissions"}
+          </text>
+          <text fg={props.theme.muted}>{`(${state().selected.length}/${props.requests.length} selected)`}</text>
+        </box>
+        <text fg={props.theme.muted}>
+          {state().stage === "always"
+            ? "Confirm project persistence for these exact resources."
+            : "Up/down focuses, space toggles. Unselected permissions are skipped."}
+        </text>
+      </box>
+      <scrollbox width="100%" height="100%" paddingLeft={2} paddingRight={2}>
+        <box flexDirection="column">
+          <For each={props.requests}>
+            {(request, index) => {
+              const focused = () => index() === state().focused
+              const picked = () => state().selected.includes(request.id)
+              return (
+                <Show when={state().stage === "review" || picked()}>
+                  <box
+                    flexDirection="column"
+                    paddingLeft={1}
+                    backgroundColor={focused() ? props.theme.line : transparent}
+                    onMouseOver={() => setState((current) => ({ ...current, focused: index() }))}
+                    onMouseUp={() => {
+                      if (state().stage === "review") setState((current) => permissionBatchToggle(current, request.id))
+                    }}
+                  >
+                    <text fg={focused() ? props.theme.highlight : picked() ? props.theme.text : props.theme.muted}>
+                      {`${picked() ? "[x]" : "[ ]"} ${request.permission}: ${request.patterns.join(", ")}`}
+                    </text>
+                    <text fg={props.theme.muted}>{request.reason}</text>
+                  </box>
+                </Show>
+              )
+            }}
+          </For>
+        </box>
+      </scrollbox>
+      <box
+        flexDirection="row"
+        gap={1}
+        paddingLeft={2}
+        paddingRight={2}
+        paddingTop={1}
+        paddingBottom={1}
+        backgroundColor={props.theme.pane}
+      >
+        <For each={options()}>
+          {(option) => (
+            <box
+              paddingLeft={1}
+              paddingRight={1}
+              backgroundColor={selected() === option ? props.theme.highlight : transparent}
+              onMouseOver={() => setSelected(option)}
+              onMouseUp={() => run(option)}
+            >
+              <text fg={selected() === option ? props.theme.surface : props.theme.muted}>
+                {option === "once"
+                  ? "Allow selected once"
+                  : option === "always"
+                    ? "Always allow selected"
+                    : option === "skip"
+                      ? "Skip all"
+                      : permissionLabel(option)}
+              </text>
+            </box>
+          )}
+        </For>
+      </box>
+    </box>
+  )
+}
+
+export function RunPermissionBody(props: {
+  requests: PermissionRequest[]
+  theme: RunFooterTheme
+  block: RunBlockTheme
+  diffStyle?: RunDiffStyle
+  onReply: (input: PermissionReply) => void | Promise<void>
+  onBatchReply: (input: PermissionBatchReply) => void | Promise<void>
+}) {
+  return (
+    <Show
+      when={props.requests[0]?.kind === "forecast"}
+      fallback={
+        <RunPermissionSingleBody
+          request={props.requests[0]}
+          theme={props.theme}
+          block={props.block}
+          diffStyle={props.diffStyle}
+          onReply={props.onReply}
+        />
+      }
+    >
+      <RunPermissionBatchBody requests={props.requests} theme={props.theme} onReply={props.onBatchReply} />
+    </Show>
   )
 }

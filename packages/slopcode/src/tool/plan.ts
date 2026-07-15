@@ -4,13 +4,57 @@ import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { Question } from "../question"
 import { Session } from "@/session/session"
-import { MessageV2 } from "../session/message-v2"
 import { Provider } from "@/provider/provider"
 import { InstanceState } from "@/effect/instance-state"
 import { MessageID, PartID } from "../session/schema"
+import { Agent } from "../agent/agent"
+import { Permission } from "../permission"
 import EXIT_DESCRIPTION from "./plan-exit.txt"
 
 export const Parameters = Schema.Struct({})
+
+export const PlanPermissionsParameters = Schema.Struct({
+  permissions: Schema.Array(Permission.ForecastCandidate).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(Permission.ForecastLimits.candidates),
+  ),
+})
+
+export const PlanPermissionsTool = Tool.define(
+  "plan_permissions",
+  Effect.gen(function* () {
+    const agents = yield* Agent.Service
+    const permission = yield* Permission.Service
+    const session = yield* Session.Service
+
+    return {
+      description:
+        "Replace the likely build-mode permission forecast with exact actions and resources for review before leaving plan mode.",
+      parameters: PlanPermissionsParameters,
+      execute: (params: typeof PlanPermissionsParameters.Type, ctx: Tool.Context) =>
+        Effect.gen(function* () {
+          if (ctx.agent !== "plan") return yield* Effect.die("plan_permissions is available only to the plan agent")
+          const build = yield* agents.get("build")
+          if (!build) return yield* Effect.die("Build agent not found")
+          const info = yield* session.get(ctx.sessionID)
+          const candidates = yield* permission.forecast({
+            sessionID: ctx.sessionID,
+            ruleset: Permission.merge(build.permission, info.permission ?? []),
+            candidates: params.permissions,
+          })
+          return {
+            title: candidates.length
+              ? `Forecast ${candidates.length} build permission${candidates.length === 1 ? "" : "s"}`
+              : "No build permissions need review",
+            output: candidates.length
+              ? "The previous forecast was replaced. These exact permissions will be reviewed before build starts."
+              : "The previous forecast was cleared because every candidate is already allowed or denied by configuration.",
+            metadata: { permissions: candidates },
+          }
+        }).pipe(Effect.orDie),
+    }
+  }),
+)
 
 export const PlanExitTool = Tool.define(
   "plan_exit",
@@ -18,6 +62,7 @@ export const PlanExitTool = Tool.define(
     const session = yield* Session.Service
     const question = yield* Question.Service
     const provider = yield* Provider.Service
+    const permission = yield* Permission.Service
 
     return {
       description: EXIT_DESCRIPTION,
@@ -44,6 +89,11 @@ export const PlanExitTool = Tool.define(
           })
 
           if (answers[0]?.[0] === "No") yield* new Question.RejectedError()
+
+          yield* permission.review({
+            sessionID: ctx.sessionID,
+            tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
+          })
 
           const messages = yield* session.messages({ sessionID: ctx.sessionID }).pipe(Effect.orDie)
           const lastUser = messages.findLast((item) => item.info.role === "user" && item.info.model)

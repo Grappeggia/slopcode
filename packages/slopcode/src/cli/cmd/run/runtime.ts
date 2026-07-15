@@ -252,6 +252,10 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       log?.write("send.permission.reply", next)
       await ctx.sdk.permission.reply(next)
     },
+    onPermissionBatchReply: async (next) => {
+      log?.write("send.permission.batch", next)
+      await ctx.sdk.permission.replyBatch(next)
+    },
     onQuestionReply: async (next) => {
       if (state.demo?.questionReply(next)) {
         return

@@ -41,6 +41,7 @@ import type {
   FooterState,
   FooterSubagentState,
   FooterView,
+  PermissionBatchReply,
   PermissionReply,
   QuestionReject,
   QuestionReply,
@@ -92,6 +93,7 @@ type RunFooterViewProps = {
   agent: string
   onSubmit: (input: RunPrompt) => boolean
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
+  onPermissionBatchReply: (input: PermissionBatchReply) => void | Promise<void>
   onQuestionReply: (input: QuestionReply) => void | Promise<void>
   onQuestionReject: (input: QuestionReject) => void | Promise<void>
   onCycle: () => void
@@ -777,11 +779,12 @@ export function RunFooterView(props: RunFooterViewProps) {
                         </Match>
                         <Match when={active().type === "permission"}>
                           <RunPermissionBody
-                            request={permission()!.request}
+                            requests={permission()!.requests}
                             theme={theme()}
                             block={block()}
                             diffStyle={props.diffStyle}
                             onReply={props.onPermissionReply}
+                            onBatchReply={props.onPermissionBatchReply}
                           />
                         </Match>
                         <Match when={active().type === "question"}>

@@ -85,6 +85,24 @@ const list = () =>
     return yield* permission.list()
   })
 
+const forecast = (input: Parameters<Permission.Interface["forecast"]>[0]) =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    return yield* permission.forecast(input)
+  })
+
+const review = (sessionID: SessionID) =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    return yield* permission.review({ sessionID })
+  })
+
+const replyBatch = (input: Parameters<Permission.Interface["replyBatch"]>[0]) =>
+  Effect.gen(function* () {
+    const permission = yield* Permission.Service
+    return yield* permission.replyBatch(input)
+  })
+
 // fromConfig tests
 
 test("fromConfig - string value becomes wildcard rule", () => {
@@ -717,6 +735,316 @@ it.instance(
       expect(yield* waitForPending(1)).toHaveLength(1)
       yield* rejectAll()
       yield* Fiber.await(fiber)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "forecast replaces the session set, filters configured decisions, and deduplicates resources",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_forecast_replace")
+      const ruleset: PermissionV1.Ruleset = [
+        { permission: "bash", pattern: "git status", action: "ask" },
+        { permission: "bash", pattern: "git log", action: "allow" },
+        { permission: "bash", pattern: "git push", action: "deny" },
+        { permission: "read", pattern: "README.md", action: "ask" },
+      ]
+
+      expect(
+        yield* forecast({
+          sessionID,
+          ruleset,
+          candidates: [
+            {
+              action: "bash",
+              resources: ["git status", "git status", "git log", "git push"],
+              reason: "Inspect repository state",
+            },
+            { action: "bash", resources: ["git status"], reason: "Inspect repository state" },
+          ],
+        }),
+      ).toEqual([
+        {
+          action: "bash",
+          resources: ["git status"],
+          reason: "Inspect repository state",
+        },
+      ])
+
+      expect(
+        yield* forecast({
+          sessionID,
+          ruleset,
+          candidates: [{ action: "read", resources: ["README.md"], reason: "Review documentation" }],
+        }),
+      ).toEqual([{ action: "read", resources: ["README.md"], reason: "Review documentation" }])
+
+      const fiber = yield* review(sessionID).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(1)
+      expect(pending).toMatchObject([
+        {
+          sessionID,
+          permission: "read",
+          patterns: ["README.md"],
+          always: ["README.md"],
+          kind: "forecast",
+          reason: "Review documentation",
+        },
+      ])
+      expect(pending[0].batchID?.startsWith("pmb_")).toBe(true)
+      yield* replyBatch({ batchID: pending[0].batchID!, requestIDs: [], reply: "reject" })
+      expect(yield* Fiber.join(fiber)).toBe(true)
+      expect(yield* list()).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "forecast once grants are exact, session-scoped, consumed once, and never override runtime denies",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_forecast_once")
+      yield* forecast({
+        sessionID,
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        candidates: [{ action: "bash", resources: ["git status"], reason: "Inspect changes" }],
+      })
+      const reviewFiber = yield* review(sessionID).pipe(Effect.forkScoped)
+      const batch = yield* waitForPending(1)
+      yield* replyBatch({ batchID: batch[0].batchID!, requestIDs: [batch[0].id], reply: "once" })
+      yield* Fiber.join(reviewFiber)
+
+      const denied = yield* fail(
+        ask({
+          sessionID,
+          permission: "bash",
+          patterns: ["git status"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "deny" }],
+        }),
+      )
+      expect(denied).toBeInstanceOf(PermissionV1.DeniedError)
+
+      expect(
+        yield* ask({
+          sessionID,
+          permission: "bash",
+          patterns: ["git status"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        }),
+      ).toBeUndefined()
+
+      const otherSession = yield* ask({
+        sessionID: SessionID.make("ses_forecast_other"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(otherSession)
+
+      const consumed = yield* ask({
+        sessionID,
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(consumed)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "forecast once grants consume the complete resource set atomically",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_forecast_resource_set")
+      yield* forecast({
+        sessionID,
+        ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
+        candidates: [{ action: "read", resources: ["README.md", "AGENTS.md"], reason: "Review guidance" }],
+      })
+      const reviewFiber = yield* review(sessionID).pipe(Effect.forkScoped)
+      const batch = yield* waitForPending(1)
+      yield* replyBatch({ batchID: batch[0].batchID!, requestIDs: [batch[0].id], reply: "once" })
+      yield* Fiber.join(reviewFiber)
+
+      const subset = yield* ask({
+        sessionID,
+        permission: "read",
+        patterns: ["README.md"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(subset)
+
+      expect(
+        yield* ask({
+          sessionID,
+          permission: "read",
+          patterns: ["AGENTS.md", "README.md"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
+        }),
+      ).toBeUndefined()
+
+      const consumed = yield* ask({
+        sessionID,
+        permission: "read",
+        patterns: ["README.md", "AGENTS.md"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(consumed)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "forecast batch validation is atomic and skips every unselected request",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_forecast_atomic")
+      yield* forecast({
+        sessionID,
+        ruleset: [{ permission: "*", pattern: "*", action: "ask" }],
+        candidates: [
+          { action: "bash", resources: ["git status"], reason: "Inspect changes" },
+          { action: "read", resources: ["README.md"], reason: "Review docs" },
+        ],
+      })
+      const fiber = yield* review(sessionID).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(2)
+
+      expect(
+        Exit.isFailure(
+          yield* replyBatch({
+            batchID: pending[0].batchID!,
+            requestIDs: [pending[0].id, PermissionV1.ID.make("per_foreign")],
+            reply: "once",
+          }).pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      expect(yield* list()).toHaveLength(2)
+
+      yield* replyBatch({ batchID: pending[0].batchID!, requestIDs: [pending[0].id], reply: "once" })
+      expect(yield* Fiber.join(fiber)).toBe(true)
+      expect(yield* list()).toEqual([])
+
+      const granted = pending[0]
+      expect(
+        yield* ask({
+          sessionID,
+          permission: granted.permission,
+          patterns: [...granted.patterns],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: granted.permission, pattern: "*", action: "ask" }],
+        }),
+      ).toBeUndefined()
+
+      const skipped = pending[1]
+      const blocked = yield* ask({
+        sessionID,
+        permission: skipped.permission,
+        patterns: [...skipped.patterns],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: skipped.permission, pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(blocked)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "persistent forecast batch failure leaves every request pending and writes no partial approvals",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_forecast_persist_atomic")
+      yield* forecast({
+        sessionID,
+        ruleset: [{ permission: "*", pattern: "*", action: "ask" }],
+        candidates: [
+          { action: "bash", resources: ["git status"], reason: "Inspect changes" },
+          { action: "read", resources: ["README.md"], reason: "Review docs" },
+        ],
+      })
+      const fiber = yield* review(sessionID).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(2)
+      const { db } = yield* Database.Service
+      yield* db
+        .run(
+          "CREATE TRIGGER fail_forecast_permission_insert BEFORE INSERT ON permission WHEN NEW.action = 'read' BEGIN SELECT RAISE(FAIL, 'forced forecast failure'); END",
+        )
+        .pipe(Effect.orDie)
+
+      expect(
+        Exit.isFailure(
+          yield* replyBatch({
+            batchID: pending[0].batchID!,
+            requestIDs: pending.map((item) => item.id),
+            reply: "always",
+          }).pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      expect(yield* list()).toHaveLength(2)
+      const ctx = yield* InstanceState.context
+      expect(yield* (yield* PermissionSaved.Service).list({ projectID: ctx.project.id })).toEqual([])
+
+      yield* db.run("DROP TRIGGER fail_forecast_permission_insert").pipe(Effect.orDie)
+      yield* replyBatch({ batchID: pending[0].batchID!, requestIDs: [], reply: "reject" })
+      expect(yield* Fiber.join(fiber)).toBe(true)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "interrupted forecast reviews publish terminal replies and clear transient requests",
+  () =>
+    Effect.gen(function* () {
+      const bridge = yield* EventV2Bridge.Service
+      const replies: PermissionV1.ID[] = []
+      const unsubscribe = yield* bridge.listen((event) => {
+        if (event.type === Permission.Event.Replied.type) replies.push(decodeReply(event.data).requestID)
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const sessionID = SessionID.make("ses_forecast_cleanup")
+      yield* forecast({
+        sessionID,
+        ruleset: [{ permission: "*", pattern: "*", action: "ask" }],
+        candidates: [
+          { action: "bash", resources: ["git status"], reason: "Inspect changes" },
+          { action: "read", resources: ["README.md"], reason: "Review docs" },
+        ],
+      })
+      const fiber = yield* review(sessionID).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(2)
+      yield* Fiber.interrupt(fiber)
+
+      expect(yield* list()).toEqual([])
+      expect(replies.toSorted()).toEqual(pending.map((item) => item.id).toSorted())
     }),
   { git: true },
 )

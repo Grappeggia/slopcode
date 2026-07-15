@@ -325,6 +325,14 @@ const scenarios: Scenario[] = [
       body: { reply: "once" },
     }))
     .json(404, object, "status"),
+  http.protected
+    .post("/permission/batch/{batchID}/reply", "permission.replyBatch")
+    .at((ctx) => ({
+      path: route("/permission/batch/{batchID}/reply", { batchID: "pmb_httpapi" }),
+      headers: ctx.headers(),
+      body: { requestIDs: [], reply: "reject" },
+    }))
+    .status(400),
   http.protected.get("/question", "question.list").json(200, array),
   http.protected
     .post("/question/{requestID}/reply", "question.reply.invalid")

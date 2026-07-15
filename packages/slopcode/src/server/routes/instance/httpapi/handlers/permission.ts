@@ -1,7 +1,7 @@
 import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { Permission } from "@/permission"
 import { Effect } from "effect"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { PermissionNotFoundError } from "../errors"
 
@@ -36,6 +36,16 @@ export const permissionHandlers = HttpApiBuilder.group(InstanceHttpApi, "permiss
       return true
     })
 
-    return handlers.handle("list", list).handle("reply", reply)
+    const replyBatch = Effect.fn("PermissionHttpApi.replyBatch")(function* (ctx: {
+      params: { batchID: PermissionV1.BatchID }
+      payload: PermissionV1.BatchReplyBody
+    }) {
+      yield* svc
+        .replyBatch({ batchID: ctx.params.batchID, requestIDs: ctx.payload.requestIDs, reply: ctx.payload.reply })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      return true
+    })
+
+    return handlers.handle("list", list).handle("reply", reply).handle("replyBatch", replyBatch)
   }),
 )

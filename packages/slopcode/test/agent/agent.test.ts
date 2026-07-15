@@ -86,6 +86,18 @@ it.instance("plan agent denies edits except .slopcode/plans/*", () =>
   }),
 )
 
+it.instance("only the plan agent allows plan permission forecasts", () =>
+  Effect.gen(function* () {
+    const plan = yield* load((svc) => svc.get("plan"))
+    const build = yield* load((svc) => svc.get("build"))
+    const general = yield* load((svc) => svc.get("general"))
+
+    expect(evalPerm(plan, "plan_permissions")).toBe("allow")
+    expect(evalPerm(build, "plan_permissions")).toBe("deny")
+    expect(evalPerm(general, "plan_permissions")).toBe("deny")
+  }),
+)
+
 it.instance("goal agent has correct default properties", () =>
   Effect.gen(function* () {
     const goal = yield* load((svc) => svc.get("goal"))

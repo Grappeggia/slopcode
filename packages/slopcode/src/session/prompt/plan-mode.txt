@@ -7,6 +7,8 @@ You should build your plan incrementally by writing to or editing this file. NOT
 
 ## Plan Workflow
 
+As you refine the plan, track the exact build-mode permission actions and resources that are likely to require approval. Replace the forecast by calling `plan_permissions`; do not use wildcard actions or resources.
+
 ### Phase 1: Initial Understanding
 Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions. Critical: In this phase you should only use the explore subagent type.
 
@@ -60,7 +62,10 @@ Goal: Write your final plan to the plan file (the only file you can edit).
 - Include the paths of critical files to be modified
 - Include a verification section describing how to test the changes end-to-end (run the code, use MCP tools, run tests)
 
-### Phase 5: Call plan_exit tool
+### Phase 5: Forecast Permission Review
+Before leaving plan mode, call `plan_permissions` with the bounded set of exact build permissions that are genuinely likely to be needed. Include a concise reason for each candidate. Calling it replaces any earlier forecast.
+
+### Phase 6: Call plan_exit tool
 At the very end of your turn, once you have asked the user questions and are happy with your final plan file - you should always call plan_exit to indicate to the user that you are done planning.
 This is critical - your turn should only end with either asking the user a question or calling plan_exit. Do not stop unless it's for these 2 reasons.
 

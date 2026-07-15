@@ -172,7 +172,7 @@ export type RunEntryBody =
 // "prompt".
 export type FooterView =
   | { type: "prompt" }
-  | { type: "permission"; request: PermissionRequest }
+  | { type: "permission"; requests: PermissionRequest[] }
   | { type: "question"; request: QuestionRequest }
 
 export type FooterPromptRoute =
@@ -281,6 +281,11 @@ export type FooterEvent =
     }
 
 export type PermissionReply = Parameters<SlopcodeClient["permission"]["reply"]>[0]
+export type PermissionBatchReply = {
+  batchID: string
+  requestIDs: string[]
+  reply: "once" | "always" | "reject"
+}
 
 export type QuestionReply = Parameters<SlopcodeClient["question"]["reply"]>[0]
 

@@ -202,6 +202,7 @@ async function renderFooter(
           agent="slopcode"
           onSubmit={input.onSubmit ?? (() => true)}
           onPermissionReply={() => {}}
+          onPermissionBatchReply={() => {}}
           onQuestionReply={() => {}}
           onQuestionReject={() => {}}
           onCycle={input.onCycle ?? (() => {})}
@@ -955,6 +956,7 @@ test("direct footer shows editable prompts and additional queued work while runn
           agent="slopcode"
           onSubmit={() => true}
           onPermissionReply={() => {}}
+          onPermissionBatchReply={() => {}}
           onQuestionReply={() => {}}
           onQuestionReject={() => {}}
           onCycle={() => {}}

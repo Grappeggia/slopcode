@@ -9,6 +9,11 @@ import {
   permissionOptions,
   permissionReject,
   permissionRun,
+  createPermissionBatchState,
+  permissionBatchMove,
+  permissionBatchReply,
+  permissionBatchToggle,
+  permissionQueue,
 } from "@/cli/cmd/run/permission.shared"
 
 function req(input: Partial<PermissionRequest> = {}): PermissionRequest {
@@ -146,5 +151,44 @@ describe("run permission shared", () => {
   test("hides persistent actions and copy when no resources can be saved", () => {
     expect(permissionOptions("permission", false)).toEqual(["once", "reject"])
     expect(permissionAlwaysLines(req({ always: [] }))).toEqual([])
+  })
+
+  test("keeps ordinary requests FIFO and groups only one forecast batch", () => {
+    const forecast = req({ id: "per_forecast", kind: "forecast", batchID: "pmb_one" })
+    const first = req({ id: "per_first" })
+    const second = req({ id: "per_second" })
+
+    expect(permissionQueue([forecast, first, second])).toEqual([first])
+    expect(
+      permissionQueue([
+        forecast,
+        req({ id: "per_same", kind: "forecast", batchID: "pmb_one" }),
+        req({ id: "per_other", kind: "forecast", batchID: "pmb_two" }),
+      ]),
+    ).toHaveLength(2)
+  })
+
+  test("supports keyboard selection and confirmed persistent replies for forecast batches", () => {
+    const requests = [
+      req({ id: "per_a", kind: "forecast", batchID: "pmb_one", always: ["git status"] }),
+      req({ id: "per_b", kind: "forecast", batchID: "pmb_one", always: ["README.md"] }),
+    ]
+    const initial = createPermissionBatchState(requests)
+
+    expect(permissionBatchMove(initial, requests, -1).focused).toBe(1)
+    expect(permissionBatchToggle(initial, "per_a").selected).toEqual(["per_b"])
+    const confirm = permissionBatchReply(initial, requests, "always")
+    expect(confirm.reply).toBeUndefined()
+    expect(confirm.state.stage).toBe("always")
+    expect(permissionBatchReply(confirm.state, requests, "confirm").reply).toEqual({
+      batchID: "pmb_one",
+      requestIDs: ["per_a", "per_b"],
+      reply: "always",
+    })
+    expect(permissionBatchReply(initial, requests, "skip").reply).toEqual({
+      batchID: "pmb_one",
+      requestIDs: [],
+      reply: "reject",
+    })
   })
 })

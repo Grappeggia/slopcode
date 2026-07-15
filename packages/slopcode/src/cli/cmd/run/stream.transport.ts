@@ -283,14 +283,18 @@ function sameView(a: FooterView, b: FooterView) {
     return false
   }
 
-  return a.request === b.request
+  if (a.type === "question" && b.type === "question") return a.request === b.request
+  if (a.type === "permission" && b.type === "permission") {
+    return a.requests.length === b.requests.length && a.requests.every((item, index) => item === b.requests[index])
+  }
+  return false
 }
 
 function blockerOrder(order: Map<string, number>, id: string) {
   return order.get(id) ?? Number.MAX_SAFE_INTEGER
 }
 
-function firstByOrder<T extends { id: string }>(left: T[], right: T[], order: Map<string, number>) {
+function byOrder<T extends { id: string }>(left: T[], right: T[], order: Map<string, number>) {
   return [...left, ...right].sort((a, b) => {
     const next = blockerOrder(order, a.id) - blockerOrder(order, b.id)
     if (next !== 0) {
@@ -298,13 +302,13 @@ function firstByOrder<T extends { id: string }>(left: T[], right: T[], order: Ma
     }
 
     return a.id.localeCompare(b.id)
-  })[0]
+  })
 }
 
 function pickView(data: SessionData, subagent: SubagentData, order: Map<string, number>): FooterView {
   return pickBlockerView({
-    permission: firstByOrder(data.permissions, listSubagentPermissions(subagent), order),
-    question: firstByOrder(data.questions, listSubagentQuestions(subagent), order),
+    permissions: byOrder(data.permissions, listSubagentPermissions(subagent), order),
+    question: byOrder(data.questions, listSubagentQuestions(subagent), order)[0],
   })
 }
 

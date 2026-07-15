@@ -1964,6 +1964,9 @@ export type GlobalEvent = {
             [key: string]: unknown
           }
           always: Array<string>
+          kind?: "forecast"
+          batchID?: string
+          reason?: string
           tool?: {
             messageID: string
             callID: string
@@ -3170,6 +3173,9 @@ export type PermissionRequest = {
     [key: string]: unknown
   }
   always: Array<string>
+  kind?: "forecast"
+  batchID?: string
+  reason?: string
   tool?: {
     messageID: string
     callID: string
@@ -7063,6 +7069,9 @@ export type EventPermissionAsked = {
       [key: string]: unknown
     }
     always: Array<string>
+    kind?: "forecast"
+    batchID?: string
+    reason?: string
     tool?: {
       messageID: string
       callID: string
@@ -9613,6 +9622,39 @@ export type PermissionReplyResponses = {
 }
 
 export type PermissionReplyResponse = PermissionReplyResponses[keyof PermissionReplyResponses]
+
+export type PermissionReplyBatchData = {
+  body?: {
+    requestIDs: Array<string>
+    reply: "once" | "always" | "reject"
+  }
+  path: {
+    batchID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/permission/batch/{batchID}/reply"
+}
+
+export type PermissionReplyBatchErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type PermissionReplyBatchError = PermissionReplyBatchErrors[keyof PermissionReplyBatchErrors]
+
+export type PermissionReplyBatchResponses = {
+  /**
+   * Permission forecast batch processed successfully
+   */
+  200: boolean
+}
+
+export type PermissionReplyBatchResponse = PermissionReplyBatchResponses[keyof PermissionReplyBatchResponses]
 
 export type ProviderListData = {
   body?: never

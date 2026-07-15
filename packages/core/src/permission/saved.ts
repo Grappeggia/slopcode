@@ -35,9 +35,21 @@ export const AddInput = Schema.Struct({
 }).annotate({ identifier: "PermissionSaved.AddInput" })
 export type AddInput = typeof AddInput.Type
 
+export const AddBatchInput = Schema.Struct({
+  projectID: ProjectV2.ID,
+  entries: Schema.Array(
+    Schema.Struct({
+      action: Schema.String,
+      resources: Schema.Array(Schema.String),
+    }),
+  ),
+}).annotate({ identifier: "PermissionSaved.AddBatchInput" })
+export type AddBatchInput = typeof AddBatchInput.Type
+
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
   readonly add: (input: AddInput) => Effect.Effect<void>
+  readonly addBatch: (input: AddBatchInput) => Effect.Effect<void>
   readonly remove: (input: { id: ID; projectID: ProjectV2.ID }) => Effect.Effect<boolean>
   readonly clear: (projectID: ProjectV2.ID) => Effect.Effect<number>
 }
@@ -66,22 +78,39 @@ export const layer = Layer.effect(
       )
     })
 
-    const add = Effect.fn("PermissionSaved.add")(function* (input: AddInput) {
+    const addBatch = Effect.fn("PermissionSaved.addBatch")(function* (input: AddBatchInput) {
       if (input.projectID === ProjectV2.ID.global) return
-      if (!input.resources.length) return
+      const rows = Array.from(
+        new Map(
+          input.entries
+            .flatMap((entry) => entry.resources.map((resource) => ({ action: entry.action, resource })))
+            .map((item) => [JSON.stringify([item.action, item.resource]), item]),
+        ).values(),
+      )
+      if (!rows.length) return
       yield* db
-        .insert(PermissionTable)
-        .values(
-          input.resources.map((resource) => ({
-            id: ID.create(),
-            project_id: input.projectID,
-            action: input.action,
-            resource,
-          })),
+        .transaction((tx) =>
+          tx
+            .insert(PermissionTable)
+            .values(
+              rows.map((item) => ({
+                id: ID.create(),
+                project_id: input.projectID,
+                action: item.action,
+                resource: item.resource,
+              })),
+            )
+            .onConflictDoNothing()
+            .run(),
         )
-        .onConflictDoNothing()
-        .run()
         .pipe(Effect.orDie)
+    })
+
+    const add = Effect.fn("PermissionSaved.add")(function* (input: AddInput) {
+      yield* addBatch({
+        projectID: input.projectID,
+        entries: [{ action: input.action, resources: input.resources }],
+      })
     })
 
     const remove = Effect.fn("PermissionSaved.remove")(function* (input: { id: ID; projectID: ProjectV2.ID }) {
@@ -106,7 +135,7 @@ export const layer = Layer.effect(
       return rows.length
     })
 
-    return Service.of({ list, add, remove, clear })
+    return Service.of({ list, add, addBatch, remove, clear })
   }),
 )
 

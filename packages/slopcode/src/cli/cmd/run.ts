@@ -1,4 +1,3 @@
-import type { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 // CLI entry point for `slopcode run`.
 //
 // Handles three modes:
@@ -23,6 +22,7 @@ import { Filesystem } from "@/util/filesystem"
 import { createSlopcodeClient, type SlopcodeClient, type ToolPart } from "@slopcode-ai/sdk/v2"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
+import { runPermissionRules, runPromptTools } from "./run/permission-rules"
 
 type ModelInput = Parameters<SlopcodeClient["session"]["prompt"]>[0]["model"]
 
@@ -380,25 +380,7 @@ export const RunCommand = effectCmd({
         process.exit(1)
       }
 
-      const rules: PermissionV1.Ruleset = interactive
-        ? []
-        : [
-            {
-              permission: "question",
-              action: "deny",
-              pattern: "*",
-            },
-            {
-              permission: "plan_enter",
-              action: "deny",
-              pattern: "*",
-            },
-            {
-              permission: "plan_exit",
-              action: "deny",
-              pattern: "*",
-            },
-          ]
+      const rules = runPermissionRules(interactive)
 
       function title() {
         if (args.title === undefined) return
@@ -814,6 +796,7 @@ export const RunCommand = effectCmd({
             agent,
             model,
             variant: args.variant,
+            tools: runPromptTools(interactive),
             parts: [...files, { type: "text", text: message }],
           })
           if (result.error) {

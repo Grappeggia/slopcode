@@ -28,6 +28,7 @@ import type { Event, Part, PermissionRequest, QuestionRequest, ToolPart } from "
 import * as Locale from "@/util/locale"
 import { toolView } from "./tool"
 import type { FooterOutput, FooterPatch, FooterView, StreamCommit } from "./types"
+import { permissionQueue } from "./permission.shared"
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -216,9 +217,10 @@ function out(data: SessionData, commits: SessionCommit[], footer?: FooterOutput)
   }
 }
 
-export function pickBlockerView(input: { permission?: PermissionRequest; question?: QuestionRequest }): FooterView {
-  if (input.permission) {
-    return { type: "permission", request: input.permission }
+export function pickBlockerView(input: { permissions?: PermissionRequest[]; question?: QuestionRequest }): FooterView {
+  const permissions = permissionQueue(input.permissions ?? [])
+  if (permissions.length) {
+    return { type: "permission", requests: permissions }
   }
 
   if (input.question) {
@@ -242,7 +244,7 @@ export function blockerStatus(view: FooterView) {
 
 function pickSessionView(data: SessionData): FooterView {
   return pickBlockerView({
-    permission: data.permissions[0],
+    permissions: data.permissions,
     question: data.questions[0],
   })
 }
