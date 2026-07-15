@@ -5234,6 +5234,102 @@
         ]
       }
     },
+    "/permission/batch/{batchID}/reply": {
+      "post": {
+        "tags": ["permission"],
+        "operationId": "permission.replyBatch",
+        "parameters": [
+          {
+            "name": "batchID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^pmb_"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Permission forecast batch processed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "boolean",
+                  "description": "Permission forecast batch processed successfully"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Approve selected forecast permissions and skip every unselected item atomically.",
+        "summary": "Respond to a forecast batch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "requestIDs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^per"
+                    },
+                    "maxItems": 16
+                  },
+                  "reply": {
+                    "type": "string",
+                    "enum": ["once", "always", "reject"]
+                  }
+                },
+                "required": ["requestIDs", "reply"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.permission.replyBatch({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/provider": {
       "get": {
         "tags": ["provider"],
@@ -21206,6 +21302,22 @@
                           "type": "string"
                         }
                       },
+                      "kind": {
+                        "type": "string",
+                        "enum": ["forecast"]
+                      },
+                      "batchID": {
+                        "type": "string",
+                        "pattern": "^pmb_"
+                      },
+                      "batchSize": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 16
+                      },
+                      "reason": {
+                        "type": "string"
+                      },
                       "tool": {
                         "type": "object",
                         "properties": {
@@ -24746,6 +24858,22 @@
             "items": {
               "type": "string"
             }
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["forecast"]
+          },
+          "batchID": {
+            "type": "string",
+            "pattern": "^pmb_"
+          },
+          "batchSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          },
+          "reason": {
+            "type": "string"
           },
           "tool": {
             "type": "object",
@@ -38060,6 +38188,22 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["forecast"]
+              },
+              "batchID": {
+                "type": "string",
+                "pattern": "^pmb_"
+              },
+              "batchSize": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16
+              },
+              "reason": {
+                "type": "string"
               },
               "tool": {
                 "type": "object",
