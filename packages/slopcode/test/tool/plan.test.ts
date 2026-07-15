@@ -30,6 +30,7 @@ const root = LayerNode.group([
   EventV2Bridge.node,
 ])
 const decodeMessage = Schema.decodeUnknownSync(SessionV1.Event.MessageUpdated.data)
+const decodeAsked = Schema.decodeUnknownSync(Permission.Event.Asked.data)
 const decodeReply = Schema.decodeUnknownSync(Permission.Event.Replied.data)
 const it = testEffect(
   LayerNode.buildLayer(root, {
@@ -316,4 +317,76 @@ it.instance(
       expect(yield* permissions.list()).toEqual([])
     }),
   { git: true },
+)
+
+it.instance("concurrent plan exits join an active review before one build transition", () =>
+  Effect.gen(function* () {
+    const registry = yield* ToolRegistry.Service
+    const tools = yield* registry.all()
+    const forecast = tools.find((item) => item.id === "plan_permissions")
+    const exit = tools.find((item) => item.id === "plan_exit")
+    if (!forecast || !exit) throw new Error("plan tools not found")
+    const sessions = yield* Session.Service
+    const questions = yield* Question.Service
+    const permissions = yield* Permission.Service
+    const session = yield* sessions.create({ title: "Concurrent plan exit" })
+    const publishing = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const builds: MessageID[] = []
+    const unsubscribe = yield* (yield* EventV2Bridge.Service).listen((event) => {
+      if (event.type === Permission.Event.Asked.type && decodeAsked(event.data).sessionID === session.id)
+        return Deferred.succeed(publishing, undefined).pipe(Effect.andThen(Deferred.await(release)))
+      if (event.type === SessionV1.Event.MessageUpdated.type) {
+        const info = decodeMessage(event.data).info
+        if (info.role === "user" && info.agent === "build") builds.push(info.id)
+      }
+      return Effect.void
+    })
+    yield* Effect.addFinalizer(() => unsubscribe)
+    yield* (yield* Database.Service).db
+      .insert(SessionTable)
+      .values(Session.toRow(session))
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* sessions.updateMessage({
+      id: MessageID.make("msg_plan_concurrent_user"),
+      sessionID: session.id,
+      role: "user",
+      time: { created: Date.now() },
+      agent: "plan",
+      model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
+    })
+    yield* forecast.execute(
+      { permissions: [{ action: "doom_loop", resources: ["bash"], reason: "Continue checks" }] },
+      context(session.id),
+    )
+
+    const review = yield* permissions
+      .review({
+        sessionID: session.id,
+        policy: () => Effect.succeed([{ permission: "doom_loop", pattern: "*", action: "ask" }]),
+      })
+      .pipe(Effect.forkScoped)
+    yield* Deferred.await(publishing)
+    const batch = yield* permissions.list()
+    const first = yield* exit.execute({}, context(session.id)).pipe(Effect.forkScoped)
+    const second = yield* exit.execute({}, context(session.id)).pipe(Effect.forkScoped)
+    yield* wait(questions.list())
+    expect(yield* questions.list()).toHaveLength(1)
+    const question = (yield* questions.list())[0]
+    yield* questions.reply({ requestID: question.id, answers: [["Yes"]] })
+    expect(batch).toHaveLength(1)
+    expect(builds).toHaveLength(0)
+    const response = yield* permissions
+      .replyBatch({ batchID: batch[0].batchID!, requestIDs: [], reply: "reject" })
+      .pipe(Effect.forkScoped)
+    yield* Deferred.succeed(release, undefined)
+    yield* Fiber.join(response)
+
+    expect(yield* Fiber.join(review)).toBe(true)
+    expect((yield* Fiber.join(first)).title).toBe("Switching to build agent")
+    expect((yield* Fiber.join(second)).title).toBe("Switching to build agent")
+    expect(builds).toHaveLength(1)
+  }),
 )
