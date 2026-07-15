@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { runPermissionRules, runPromptTools, runSessionPermission } from "@/cli/cmd/run/permission-rules"
+import { runPermissionRules, runSessionPermission } from "@/cli/cmd/run/permission-rules"
 
 test("headless runs deny forecast tools and suppress them for resumed sessions", () => {
   expect(runPermissionRules(false)).toContainEqual({
@@ -7,17 +7,14 @@ test("headless runs deny forecast tools and suppress them for resumed sessions",
     action: "deny",
     pattern: "*",
   })
-  expect(runPromptTools(false)).toEqual({ plan_permissions: false })
-  expect(
-    runSessionPermission([{ permission: "plan_permissions", pattern: "*", action: "allow" }], false).at(-1),
-  ).toEqual({
-    permission: "plan_permissions",
-    action: "deny",
-    pattern: "*",
-  })
+  const ordinary = { permission: "bash", pattern: "git status", action: "ask" as const }
+  const rules = runPermissionRules(false)
+  const first = [ordinary, ...runSessionPermission([ordinary], false)]
+  expect(first).toEqual([ordinary, ...rules])
+  expect(runSessionPermission(first, false)).toEqual([])
 })
 
 test("interactive and mini runs keep plan permission review available", () => {
   expect(runPermissionRules(true)).toEqual([])
-  expect(runPromptTools(true)).toBeUndefined()
+  expect(runSessionPermission(undefined, true)).toEqual([])
 })

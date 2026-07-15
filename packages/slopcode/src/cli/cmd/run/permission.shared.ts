@@ -57,6 +57,22 @@ export type PermissionBatchReply = {
   reply: "once" | "always" | "reject"
 }
 
+export async function permissionBatchSubmit(input: {
+  send: () => Promise<void>
+  error: (error: unknown) => void
+  done: () => void
+}) {
+  try {
+    await input.send()
+    return true
+  } catch (error) {
+    input.error(error)
+    return false
+  } finally {
+    input.done()
+  }
+}
+
 function dict(v: unknown): Dict {
   if (!v || typeof v !== "object" || Array.isArray(v)) {
     return {}

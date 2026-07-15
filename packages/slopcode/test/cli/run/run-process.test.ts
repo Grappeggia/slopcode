@@ -7,6 +7,7 @@ import { describe, expect } from "bun:test"
 import { Database } from "bun:sqlite"
 import { Effect } from "effect"
 import path from "node:path"
+import { isRecord } from "@/util/record"
 import { cliIt } from "../../lib/cli-process"
 import { testProviderConfig } from "../../lib/test-provider"
 
@@ -60,12 +61,56 @@ describe("slopcode run (non-interactive subprocess)", () => {
         const seedInput = (yield* llm.inputs).findLast((input) => JSON.stringify(input).includes("seed plan session"))
         expect(tools(seedInput)).not.toContain("plan_permissions")
 
-        const clear = () => {
+        const ordinary = { permission: "bash", pattern: "git status", action: "ask" }
+        const reset = () => {
           const db = new Database(env.SLOPCODE_DB)
-          db.query("UPDATE session SET permission = NULL WHERE id = ?").run(sessionID)
+          db.query("UPDATE session SET permission = ? WHERE id = ?").run(JSON.stringify([ordinary]), sessionID)
+          const rows = db
+            .query<
+              { id: string; data: string },
+              [string]
+            >("SELECT id, data FROM event WHERE aggregate_id = ? AND type LIKE 'session.%'")
+            .all(sessionID)
+          let changed = 0
+          rows.forEach((row) => {
+            const data: unknown = JSON.parse(row.data)
+            if (!isRecord(data) || !isRecord(data.info) || data.info.id !== sessionID) return
+            data.info.permission = [ordinary]
+            db.query("UPDATE event SET data = ? WHERE id = ?").run(JSON.stringify(data), row.id)
+            changed += 1
+          })
           db.close()
+          return changed
         }
-        clear()
+        const persisted = () => {
+          const db = new Database(env.SLOPCODE_DB)
+          const row = db
+            .query<{ permission: string | null }, [string]>("SELECT permission FROM session WHERE id = ?")
+            .get(sessionID)
+          db.close()
+          if (!row) throw new Error("session disappeared")
+          const parsed: unknown = row.permission ? JSON.parse(row.permission) : []
+          const rules = Array.isArray(parsed) ? parsed.filter(isRecord) : []
+          return {
+            counts: Object.fromEntries(
+              ["question", "plan_enter", "plan_exit", "plan_permissions"].map((permission) => [
+                permission,
+                rules.filter(
+                  (rule: { permission?: string; pattern?: string; action?: string }) =>
+                    rule.permission === permission && rule.pattern === "*" && rule.action === "deny",
+                ).length,
+              ]),
+            ),
+            ordinary: rules.filter(
+              (rule: { permission?: string; pattern?: string; action?: string }) =>
+                rule.permission === ordinary.permission &&
+                rule.pattern === ordinary.pattern &&
+                rule.action === ordinary.action,
+            ).length,
+          }
+        }
+        expect(reset()).toBeGreaterThan(0)
+        expect(persisted().ordinary).toBe(1)
 
         yield* llm.text("resume complete")
         const resumed = yield* slopcode.run("resume plan session", {
@@ -79,7 +124,22 @@ describe("slopcode run (non-interactive subprocess)", () => {
           JSON.stringify(input).includes("resume plan session"),
         )
         expect(tools(resumedInput)).not.toContain("plan_permissions")
-        clear()
+        yield* llm.text("resume again complete")
+        slopcode.expectExit(
+          yield* slopcode.run("resume plan session again", {
+            agent: "plan",
+            env,
+            extraArgs: ["--session", sessionID],
+            timeoutMs: 60_000,
+          }),
+          0,
+        )
+        expect(persisted()).toEqual({
+          counts: { question: 1, plan_enter: 1, plan_exit: 1, plan_permissions: 1 },
+          ordinary: 1,
+        })
+        expect(reset()).toBeGreaterThan(0)
+        expect(persisted().ordinary).toBe(1)
 
         yield* llm.text("command complete")
         const result = yield* slopcode.run("", {
@@ -94,6 +154,21 @@ describe("slopcode run (non-interactive subprocess)", () => {
         const input = (yield* llm.inputs).at(-1)
         expect(tools(input).length).toBeGreaterThan(0)
         expect(tools(input)).not.toContain("plan_permissions")
+        yield* llm.text("command again complete")
+        slopcode.expectExit(
+          yield* slopcode.run("", {
+            agent: "plan",
+            command: "forecast",
+            env,
+            extraArgs: ["--session", sessionID],
+            timeoutMs: 60_000,
+          }),
+          0,
+        )
+        expect(persisted()).toEqual({
+          counts: { question: 1, plan_enter: 1, plan_exit: 1, plan_permissions: 1 },
+          ordinary: 1,
+        })
 
         yield* llm.text("new command complete")
         const fresh = yield* slopcode.run("", {
@@ -107,7 +182,7 @@ describe("slopcode run (non-interactive subprocess)", () => {
         expect(tools(freshInput).length).toBeGreaterThan(0)
         expect(tools(freshInput)).not.toContain("plan_permissions")
       }),
-    90_000,
+    150_000,
   )
 
   // Regression for #27371: an unknown model used to hang the process forever

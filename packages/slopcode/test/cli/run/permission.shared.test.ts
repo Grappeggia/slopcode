@@ -12,6 +12,7 @@ import {
   createPermissionBatchState,
   permissionBatchMove,
   permissionBatchReply,
+  permissionBatchSubmit,
   permissionBatchSync,
   permissionBatchToggle,
   permissionQueue,
@@ -205,5 +206,40 @@ describe("run permission shared", () => {
       requestIDs: ["per_a", "per_b", "per_c"],
       selected: ["per_b", "per_c"],
     })
+  })
+
+  test("batch submission surfaces a failure, resets busy state, and retries", async () => {
+    let submitting = true
+    const errors: unknown[] = []
+    let attempt = 0
+    const send = async () => {
+      attempt += 1
+      if (attempt === 1) throw new Error("temporary API failure")
+    }
+
+    expect(
+      await permissionBatchSubmit({
+        send,
+        error: (error) => errors.push(error),
+        done: () => {
+          submitting = false
+        },
+      }),
+    ).toBe(false)
+    expect(submitting).toBe(false)
+    expect(errors[0]).toBeInstanceOf(Error)
+
+    submitting = true
+    expect(
+      await permissionBatchSubmit({
+        send,
+        error: (error) => errors.push(error),
+        done: () => {
+          submitting = false
+        },
+      }),
+    ).toBe(true)
+    expect(submitting).toBe(false)
+    expect(attempt).toBe(2)
   })
 })

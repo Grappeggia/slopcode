@@ -20,13 +20,29 @@ import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./run
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
 import { trace } from "./trace"
 import { cycleVariant, formatModelLabel, resolveSavedVariant, resolveVariant, saveVariant } from "./variant.shared"
-import type { LocalReplayAnchor, LocalReplayRow, RunInput, RunPrompt, RunProvider, StreamCommit } from "./types"
+import type {
+  LocalReplayAnchor,
+  LocalReplayRow,
+  PermissionBatchReply,
+  RunInput,
+  RunPrompt,
+  RunProvider,
+  StreamCommit,
+} from "./types"
 
 /** @internal Exported for testing */
 export { pickVariant, resolveVariant } from "./variant.shared"
 
 /** @internal Exported for testing */
 export { runPromptQueue } from "./runtime.queue"
+
+export async function sendPermissionBatch(
+  permission: { replyBatch: (input: PermissionBatchReply) => Promise<{ error?: unknown }> },
+  input: PermissionBatchReply,
+) {
+  const result = await permission.replyBatch(input)
+  if (result.error) throw result.error
+}
 
 type BootContext = Pick<
   RunInput,
@@ -254,7 +270,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     },
     onPermissionBatchReply: async (next) => {
       log?.write("send.permission.batch", next)
-      await ctx.sdk.permission.replyBatch(next)
+      await sendPermissionBatch(ctx.sdk.permission, next)
     },
     onQuestionReply: async (next) => {
       if (state.demo?.questionReply(next)) {

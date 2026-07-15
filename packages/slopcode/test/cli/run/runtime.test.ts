@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { SlopcodeClient } from "@slopcode-ai/sdk/v2"
-import { runInteractiveMode } from "@/cli/cmd/run/runtime"
+import { runInteractiveMode, sendPermissionBatch } from "@/cli/cmd/run/runtime"
 import type { FooterApi, RunProvider } from "@/cli/cmd/run/types"
 
 type SessionMessage = NonNullable<Awaited<ReturnType<SlopcodeClient["session"]["messages"]>>["data"]>[number]
@@ -136,6 +136,24 @@ afterEach(() => {
 })
 
 describe("run interactive runtime", () => {
+  test("generated batch errors reject and a later retry succeeds", async () => {
+    let attempt = 0
+    const permission = {
+      replyBatch: async () =>
+        attempt++ === 0 ? { error: new Error("temporary API failure") } : { data: true, error: undefined },
+    }
+    const input = { batchID: "pmb_retry", requestIDs: ["per_retry"], reply: "once" as const }
+
+    expect(
+      await sendPermissionBatch(permission, input).then(
+        () => undefined,
+        (error) => (error instanceof Error ? error.message : String(error)),
+      ),
+    ).toBe("temporary API failure")
+    await sendPermissionBatch(permission, input)
+    expect(attempt).toBe(2)
+  })
+
   test("waits for provider metadata before eager replay transport bootstrap", async () => {
     const providersStarted = defer<void>()
     const providers = defer<void>()

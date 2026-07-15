@@ -4,7 +4,7 @@ import { BoxRenderable, RGBA, type RootRenderable } from "@opentui/core"
 import { testRender, useRenderer } from "@opentui/solid"
 import { createSignal } from "solid-js"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
-import type { QuestionRequest } from "@slopcode-ai/sdk/v2"
+import type { PermissionRequest, QuestionRequest } from "@slopcode-ai/sdk/v2"
 import { SlopcodeKeymapProvider, registerSlopcodeKeymap } from "@slopcode-ai/tui/keymap"
 import {
   RUN_COMMAND_PANEL_ROWS,
@@ -32,7 +32,7 @@ import type {
   StreamCommit,
 } from "@/cli/cmd/run/types"
 import { RunQuestionBody } from "@/cli/cmd/run/footer.question"
-import { RejectField } from "@/cli/cmd/run/footer.permission"
+import { RejectField, RunPermissionBody } from "@/cli/cmd/run/footer.permission"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 const tuiConfig = createTuiResolvedConfig()
@@ -1288,6 +1288,71 @@ test("direct permission rejection submits through keymap return binding", async 
   } finally {
     app.renderer.currentFocusedRenderable?.blur()
     app.renderer.currentFocusedEditor?.blur()
+    off?.()
+    app.renderer.destroy()
+  }
+})
+
+test("direct forecast review surfaces batch failure and allows retry", async () => {
+  let attempts = 0
+  let off: (() => void) | undefined
+  const requests: PermissionRequest[] = [
+    {
+      id: "per_retry",
+      sessionID: "ses_retry",
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+      kind: "forecast",
+      batchID: "pmb_retry",
+      batchSize: 1,
+      reason: "Inspect state",
+    },
+  ]
+
+  function Harness() {
+    const renderer = useRenderer()
+    const keymap = createDefaultOpenTuiKeymap(renderer)
+    off = registerSlopcodeKeymap(keymap, renderer, tuiConfig)
+    return (
+      <SlopcodeKeymapProvider keymap={keymap}>
+        <RunPermissionBody
+          requests={requests}
+          theme={RUN_THEME_FALLBACK.footer}
+          block={RUN_THEME_FALLBACK.block}
+          onReply={() => {}}
+          onBatchReply={async () => {
+            attempts += 1
+            if (attempts === 1) throw { data: { message: "temporary API failure" } }
+          }}
+        />
+      </SlopcodeKeymapProvider>
+    )
+  }
+
+  const app = await testRender(
+    () => (
+      <box width={100} height={18}>
+        <Harness />
+      </box>
+    ),
+    { width: 100, height: 18, kittyKeyboard: true },
+  )
+
+  try {
+    await app.renderOnce()
+    app.mockInput.pressEnter()
+    await Bun.sleep(20)
+    await app.renderOnce()
+    expect(attempts).toBe(1)
+    expect(app.captureCharFrame()).toContain("temporary API failure")
+
+    app.mockInput.pressEnter()
+    await Bun.sleep(20)
+    await app.renderOnce()
+    expect(attempts).toBe(2)
+  } finally {
     off?.()
     app.renderer.destroy()
   }

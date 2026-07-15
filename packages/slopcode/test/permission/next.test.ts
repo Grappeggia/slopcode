@@ -1132,6 +1132,249 @@ it.instance(
   { git: true },
 )
 
+for (const answer of ["once", "always", "reject"] as const) {
+  it.instance(
+    `terminal listener defects cannot roll back a settled ${answer === "reject" ? "skip" : answer} batch`,
+    () =>
+      Effect.gen(function* () {
+        const sessionID = SessionID.make(`ses_terminal_defect_${answer}`)
+        const terminal: PermissionV1.ID[] = []
+        const unsubscribe = yield* (yield* EventV2Bridge.Service).listen((event) => {
+          if (event.type !== Permission.Event.Replied.type) return Effect.void
+          const item = decodeReply(event.data)
+          if (item.sessionID !== sessionID) return Effect.void
+          terminal.push(item.requestID)
+          return Effect.die(new Error("terminal listener failed"))
+        })
+        yield* Effect.addFinalizer(() => unsubscribe)
+        yield* forecast({
+          sessionID,
+          ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+          candidates: [{ action: "bash", resources: ["git status"], reason: "Inspect state" }],
+        })
+        const reviewFiber = yield* review(sessionID).pipe(Effect.forkScoped)
+        const pending = yield* waitForPending(1)
+
+        yield* replyBatch({
+          batchID: pending[0].batchID!,
+          requestIDs: answer === "reject" ? [] : [pending[0].id],
+          reply: answer,
+        })
+        expect(yield* Fiber.join(reviewFiber)).toBe(true)
+        expect(yield* list()).toEqual([])
+        expect(terminal).toEqual([pending[0].id])
+        expect(
+          Exit.isFailure(
+            yield* replyBatch({
+              batchID: pending[0].batchID!,
+              requestIDs: [],
+              reply: "reject",
+            }).pipe(Effect.exit),
+          ),
+        ).toBe(true)
+
+        if (answer === "always") {
+          const ctx = yield* InstanceState.context
+          expect(yield* (yield* PermissionSaved.Service).list({ projectID: ctx.project.id })).toHaveLength(1)
+        }
+        if (answer === "once") {
+          expect(
+            yield* ask({
+              sessionID,
+              permission: "bash",
+              patterns: ["git status"],
+              metadata: {},
+              always: [],
+              ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+            }),
+          ).toBeUndefined()
+        }
+      }),
+    { git: true },
+  )
+}
+
+for (const answer of ["once", "always", "reject"] as const) {
+  it.instance(
+    `a suspended terminal listener cannot hang ${answer === "reject" ? "skip" : answer} batch settlement`,
+    () =>
+      Effect.gen(function* () {
+        const sessionID = SessionID.make(`ses_terminal_suspended_${answer}`)
+        const unsubscribe = yield* (yield* EventV2Bridge.Service).listen((event) => {
+          if (event.type !== Permission.Event.Replied.type) return Effect.void
+          if (decodeReply(event.data).sessionID !== sessionID) return Effect.void
+          return Effect.never
+        })
+        yield* Effect.addFinalizer(() => unsubscribe)
+        yield* forecast({
+          sessionID,
+          ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+          candidates: [{ action: "bash", resources: ["git status"], reason: "Inspect state" }],
+        })
+        const reviewFiber = yield* review(sessionID).pipe(Effect.forkScoped)
+        const pending = yield* waitForPending(1)
+
+        yield* replyBatch({
+          batchID: pending[0].batchID!,
+          requestIDs: answer === "reject" ? [] : [pending[0].id],
+          reply: answer,
+        }).pipe(Effect.timeout("3 seconds"))
+        expect(yield* Fiber.join(reviewFiber)).toBe(true)
+        expect(yield* list()).toEqual([])
+        if (answer === "always") {
+          const ctx = yield* InstanceState.context
+          expect(yield* (yield* PermissionSaved.Service).list({ projectID: ctx.project.id })).toHaveLength(1)
+        }
+      }),
+    { git: true },
+  )
+}
+
+it.instance(
+  "a suspended terminal listener cannot hang interrupted review settlement",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_terminal_suspended_interrupt")
+      const unsubscribe = yield* (yield* EventV2Bridge.Service).listen((event) => {
+        if (event.type !== Permission.Event.Replied.type) return Effect.void
+        if (decodeReply(event.data).sessionID !== sessionID) return Effect.void
+        return Effect.never
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+      yield* forecast({
+        sessionID,
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        candidates: [{ action: "bash", resources: ["git status"], reason: "Inspect state" }],
+      })
+      const reviewFiber = yield* review(sessionID).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+
+      yield* Fiber.interrupt(reviewFiber).pipe(Effect.timeout("3 seconds"))
+      expect(yield* list()).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "terminal publication cannot delay durable cleanup or the next forecast cycle",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_terminal_cleanup_order")
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const unsubscribe = yield* (yield* EventV2Bridge.Service).listen((event) => {
+        if (event.type !== Permission.Event.Replied.type) return Effect.void
+        if (decodeReply(event.data).sessionID !== sessionID) return Effect.void
+        return Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+      yield* forecast({
+        sessionID,
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        candidates: [{ action: "bash", resources: ["git status"], reason: "Inspect state" }],
+      })
+      const reviewFiber = yield* review(sessionID).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(1)
+      const response = yield* replyBatch({
+        batchID: pending[0].batchID!,
+        requestIDs: [pending[0].id],
+        reply: "once",
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+
+      expect(yield* list()).toEqual([])
+      expect(yield* Fiber.join(reviewFiber)).toBe(true)
+      expect(
+        yield* forecast({
+          sessionID,
+          ruleset: [{ permission: "read", pattern: "*", action: "ask" }],
+          candidates: [{ action: "read", resources: ["README.md"], reason: "Review docs" }],
+        }),
+      ).toHaveLength(1)
+
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(response)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "the same session can complete two independent forecast review cycles",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_forecast_two_cycles")
+      const ruleset: PermissionV1.Ruleset = [{ permission: "*", pattern: "*", action: "ask" }]
+      yield* forecast({
+        sessionID,
+        ruleset,
+        candidates: [{ action: "bash", resources: ["git status"], reason: "First cycle" }],
+      })
+      const first = yield* review(sessionID).pipe(Effect.forkScoped)
+      const firstBatch = yield* waitForPending(1)
+      yield* replyBatch({ batchID: firstBatch[0].batchID!, requestIDs: [], reply: "reject" })
+      expect(yield* Fiber.join(first)).toBe(true)
+
+      expect(
+        yield* forecast({
+          sessionID,
+          ruleset,
+          candidates: [{ action: "read", resources: ["README.md"], reason: "Second cycle" }],
+        }),
+      ).toHaveLength(1)
+      const second = yield* review(sessionID).pipe(Effect.forkScoped)
+      const secondBatch = yield* waitForPending(1)
+      expect(secondBatch[0]).toMatchObject({ permission: "read", reason: "Second cycle" })
+      yield* replyBatch({ batchID: secondBatch[0].batchID!, requestIDs: [], reply: "reject" })
+      expect(yield* Fiber.join(second)).toBe(true)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "an old-generation forecast queued during reply cannot populate the reopened cycle",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_forecast_old_cycle")
+      const ruleset: PermissionV1.Ruleset = [{ permission: "*", pattern: "*", action: "ask" }]
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      yield* forecast({
+        sessionID,
+        ruleset,
+        candidates: [{ action: "bash", resources: ["git status"], reason: "Current cycle" }],
+      })
+      const reviewFiber = yield* review(sessionID, () =>
+        Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as(ruleset)),
+      ).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(1)
+      const response = yield* replyBatch({
+        batchID: pending[0].batchID!,
+        requestIDs: [pending[0].id],
+        reply: "once",
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+      const late = yield* forecast({
+        sessionID,
+        ruleset,
+        candidates: [{ action: "read", resources: ["stale.md"], reason: "Stale cycle" }],
+      }).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(response)
+      yield* Fiber.join(reviewFiber)
+
+      expect(yield* Fiber.join(late)).toEqual([])
+      expect(
+        yield* forecast({
+          sessionID,
+          ruleset,
+          candidates: [{ action: "read", resources: ["fresh.md"], reason: "Fresh cycle" }],
+        }),
+      ).toEqual([{ action: "read", resources: ["fresh.md"], reason: "Fresh cycle" }])
+    }),
+  { git: true },
+)
+
 it.instance(
   "forecast once grants are exact, session-scoped, consumed once, and never override runtime denies",
   () =>

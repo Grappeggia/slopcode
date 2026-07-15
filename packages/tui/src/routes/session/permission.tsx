@@ -18,10 +18,13 @@ import { useTuiConfig } from "../../config"
 import { SLOPCODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { density, isCompact } from "../../util/density"
+import { errorMessage } from "../../util/error"
+import { useToast } from "../../ui/toast"
 import {
   createPermissionBatchState,
   permissionBatchMove,
   permissionBatchReply,
+  permissionBatchSubmit,
   permissionBatchSync,
   permissionBatchToggle,
   permissionQueue,
@@ -453,6 +456,7 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
 function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory?: string }) {
   const sdk = useSDK()
   const project = useProject()
+  const toast = useToast()
   const { theme } = useTheme()
   const [store, setStore] = createStore({
     ...createPermissionBatchState(props.requests),
@@ -468,13 +472,16 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
 
   const submit = (reply: NonNullable<ReturnType<typeof permissionBatchReply>["reply"]>) => {
     setStore("submitting", true)
-    void sdk.client.permission
-      .replyBatch({
-        ...reply,
-        directory: props.directory,
-        workspace: project.workspace.current(),
-      })
-      .catch(() => setStore("submitting", false))
+    void permissionBatchSubmit({
+      send: () =>
+        sdk.client.permission.replyBatch({
+          ...reply,
+          directory: props.directory,
+          workspace: project.workspace.current(),
+        }),
+      error: (error) => toast.show({ variant: "error", message: errorMessage(error) }),
+      done: () => setStore("submitting", false),
+    })
   }
 
   const run = (option: PermissionBatchOption) => {

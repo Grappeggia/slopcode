@@ -15,6 +15,23 @@ export type PermissionBatchReply = {
   reply: "once" | "always" | "reject"
 }
 
+export async function permissionBatchSubmit(input: {
+  send: () => Promise<{ error?: unknown }>
+  error: (error: unknown) => void
+  done: () => void
+}) {
+  try {
+    const result = await input.send()
+    if (result.error) throw result.error
+    return true
+  } catch (error) {
+    input.error(error)
+    return false
+  } finally {
+    input.done()
+  }
+}
+
 export function permissionQueue(requests: PermissionRequest[]) {
   const blocking = requests.find((item) => item.kind !== "forecast")
   if (blocking) return [blocking]

@@ -90,6 +90,7 @@ type PendingEntry = BlockingEntry | ForecastEntry
 
 interface Batch {
   sessionID: PermissionV1.Request["sessionID"]
+  generation: number
   requestIDs: PermissionV1.ID[]
   deferred: Deferred.Deferred<void>
   policy: () => Effect.Effect<PermissionV1.Ruleset>
@@ -99,6 +100,12 @@ interface Batch {
 interface Grant {
   permission: string
   resources: string[]
+}
+
+interface TerminalReply {
+  sessionID: PermissionV1.Request["sessionID"]
+  requestID: PermissionV1.ID
+  reply: PermissionV1.Reply
 }
 
 interface State {
@@ -131,6 +138,18 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const saved = yield* PermissionSaved.Service
     const lock = Semaphore.makeUnsafe(1)
+    const terminal = Effect.fnUntraced(function* (input: TerminalReply) {
+      yield* events.publish(Event.Replied, input).pipe(
+        Effect.interruptible,
+        Effect.timeoutOrElse({
+          duration: "1 second",
+          orElse: () => Effect.logWarning("permission terminal event publication timed out", input),
+        }),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("permission terminal event publication failed", { ...input, cause }),
+        ),
+      )
+    })
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -145,31 +164,32 @@ export const layer = Layer.effect(
         }
 
         yield* Effect.addFinalizer(() =>
-          lock.withPermits(1)(
-            Effect.uninterruptible(
-              Effect.gen(function* () {
-                for (const item of state.pending.values()) {
-                  if (item.kind === "blocking") yield* Deferred.fail(item.deferred, new PermissionV1.RejectedError())
-                }
-                for (const batch of state.batches.values()) {
-                  batch.phase = "settling"
-                  for (const requestID of batch.requestIDs) {
-                    const item = state.pending.get(requestID)
-                    if (!item || item.kind !== "forecast") continue
-                    yield* events.publish(Event.Replied, {
-                      sessionID: item.info.sessionID,
-                      requestID,
-                      reply: "reject",
-                    })
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              const replies = yield* lock.withPermits(1)(
+                Effect.gen(function* () {
+                  const replies: TerminalReply[] = []
+                  for (const item of state.pending.values()) {
+                    if (item.kind === "blocking") yield* Deferred.fail(item.deferred, new PermissionV1.RejectedError())
                   }
-                  yield* Deferred.succeed(batch.deferred, undefined)
-                }
-                state.pending.clear()
-                state.forecasts.clear()
-                state.batches.clear()
-                state.grants.clear()
-              }),
-            ),
+                  for (const batch of state.batches.values()) {
+                    batch.phase = "settling"
+                    for (const requestID of batch.requestIDs) {
+                      const item = state.pending.get(requestID)
+                      if (!item || item.kind !== "forecast") continue
+                      replies.push({ sessionID: item.info.sessionID, requestID, reply: "reject" })
+                    }
+                    yield* Deferred.succeed(batch.deferred, undefined)
+                  }
+                  state.pending.clear()
+                  state.forecasts.clear()
+                  state.batches.clear()
+                  state.grants.clear()
+                  return replies
+                }),
+              )
+              yield* Effect.forEach(replies, terminal, { discard: true, concurrency: "unbounded" })
+            }),
           ),
         )
 
@@ -269,11 +289,13 @@ export const layer = Layer.effect(
 
     const forecast = Effect.fn("Permission.forecast")(function* (raw: ForecastInput) {
       const input = yield* Schema.decodeUnknownEffect(ForecastInput)(raw)
+      const snapshot = (yield* InstanceState.get(state)).forecasts.get(input.sessionID)
+      const generation = snapshot?.generation ?? 0
       return yield* lock.withPermits(1)(
         Effect.gen(function* () {
           const current = yield* InstanceState.get(state)
           const previous = current.forecasts.get(input.sessionID)
-          if (previous?.phase === "closed") return []
+          if (previous?.phase === "closed" || (previous && previous.generation !== generation)) return []
           const candidates: ForecastCandidate[] = []
           const seen = new Set<string>()
 
@@ -293,7 +315,7 @@ export const layer = Layer.effect(
 
           current.forecasts.set(input.sessionID, {
             phase: "open",
-            generation: (previous?.generation ?? 0) + 1,
+            generation,
             candidates,
           })
           return candidates
@@ -301,31 +323,43 @@ export const layer = Layer.effect(
       )
     })
 
-    const settleLocked = Effect.fnUntraced(function* (current: State, batchID: PermissionV1.BatchID) {
-      const batch = current.batches.get(batchID)
-      if (!batch) return
-      batch.phase = "settling"
-      for (const requestID of batch.requestIDs) {
-        const item = current.pending.get(requestID)
-        if (!item || item.kind !== "forecast") continue
-        yield* events.publish(Event.Replied, {
-          sessionID: item.info.sessionID,
-          requestID,
-          reply: "reject",
-        })
-        current.pending.delete(requestID)
-      }
+    const finishLocked = Effect.fnUntraced(function* (current: State, batchID: PermissionV1.BatchID, batch: Batch) {
+      for (const requestID of batch.requestIDs) current.pending.delete(requestID)
       current.batches.delete(batchID)
+      const forecast = current.forecasts.get(batch.sessionID)
+      if (forecast?.phase === "closed" && forecast.generation === batch.generation) {
+        current.forecasts.set(batch.sessionID, {
+          phase: "open",
+          generation: batch.generation + 1,
+          candidates: [],
+        })
+      }
       yield* Deferred.succeed(batch.deferred, undefined)
     })
 
+    const settleLocked = Effect.fnUntraced(function* (current: State, batchID: PermissionV1.BatchID) {
+      const batch = current.batches.get(batchID)
+      if (!batch) return []
+      batch.phase = "settling"
+      const replies = batch.requestIDs.flatMap((requestID): TerminalReply[] => {
+        const item = current.pending.get(requestID)
+        if (!item || item.kind !== "forecast") return []
+        return [{ sessionID: item.info.sessionID, requestID, reply: "reject" }]
+      })
+      yield* finishLocked(current, batchID, batch)
+      return replies
+    })
+
     const settle = (batchID: PermissionV1.BatchID) =>
-      lock.withPermits(1)(
-        Effect.uninterruptible(
-          Effect.gen(function* () {
-            yield* settleLocked(yield* InstanceState.get(state), batchID)
-          }),
-        ),
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const replies = yield* lock.withPermits(1)(
+            Effect.gen(function* () {
+              return yield* settleLocked(yield* InstanceState.get(state), batchID)
+            }),
+          )
+          yield* Effect.forEach(replies, terminal, { discard: true, concurrency: "unbounded" })
+        }),
       )
 
     const review = Effect.fn("Permission.review")(
@@ -341,16 +375,27 @@ export const layer = Layer.effect(
                 const current = yield* InstanceState.get(state)
                 const forecast = current.forecasts.get(input.sessionID)
                 if (!forecast) {
-                  current.forecasts.set(input.sessionID, { phase: "closed", generation: 1, candidates: [] })
+                  current.forecasts.set(input.sessionID, {
+                    phase: "open",
+                    generation: 1,
+                    candidates: [],
+                  })
                   return undefined
                 }
                 if (forecast.phase === "closed") return undefined
                 current.forecasts.set(input.sessionID, {
                   phase: "closed",
-                  generation: forecast.generation + 1,
+                  generation: forecast.generation,
                   candidates: [],
                 })
-                if (!forecast.candidates.length) return undefined
+                if (!forecast.candidates.length) {
+                  current.forecasts.set(input.sessionID, {
+                    phase: "open",
+                    generation: forecast.generation + 1,
+                    candidates: [],
+                  })
+                  return undefined
+                }
 
                 const batchID = PermissionV1.BatchID.ascending()
                 const deferred = yield* Deferred.make<void>()
@@ -371,6 +416,7 @@ export const layer = Layer.effect(
                 }))
                 const batch: Batch = {
                   sessionID: input.sessionID,
+                  generation: forecast.generation,
                   requestIDs: requests.map((item) => item.id),
                   deferred,
                   policy: input.policy,
@@ -391,98 +437,105 @@ export const layer = Layer.effect(
     )
 
     const replyBatch = Effect.fn("Permission.replyBatch")((raw: PermissionV1.BatchReplyInput) =>
-      lock.withPermits(1)(
-        Effect.uninterruptible(
-          Effect.gen(function* () {
-            const input = yield* Schema.decodeUnknownEffect(PermissionV1.BatchReplyInput)(raw)
-            const current = yield* InstanceState.get(state)
-            const batch = current.batches.get(input.batchID)
-            if (!batch)
-              return yield* new PermissionV1.BatchError({ batchID: input.batchID, message: "Forecast batch not found" })
-            if (batch.phase !== "pending")
-              return yield* new PermissionV1.BatchError({ batchID: input.batchID, message: "Forecast batch is busy" })
-            const selected = new Set(input.requestIDs)
-            if (selected.size !== input.requestIDs.length || (input.reply === "reject" && selected.size > 0))
-              return yield* new PermissionV1.BatchError({
-                batchID: input.batchID,
-                message: "Forecast selection is invalid",
-              })
-            if (input.requestIDs.some((id) => !batch.requestIDs.includes(id)))
-              return yield* new PermissionV1.BatchError({
-                batchID: input.batchID,
-                message: "Forecast selection contains a request outside the batch",
-              })
+      Effect.gen(function* () {
+        const replies = yield* lock.withPermits(1)(
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              const input = yield* Schema.decodeUnknownEffect(PermissionV1.BatchReplyInput)(raw)
+              const current = yield* InstanceState.get(state)
+              const batch = current.batches.get(input.batchID)
+              if (!batch)
+                return yield* new PermissionV1.BatchError({
+                  batchID: input.batchID,
+                  message: "Forecast batch not found",
+                })
+              if (batch.phase !== "pending")
+                return yield* new PermissionV1.BatchError({ batchID: input.batchID, message: "Forecast batch is busy" })
+              const selected = new Set(input.requestIDs)
+              if (selected.size !== input.requestIDs.length || (input.reply === "reject" && selected.size > 0))
+                return yield* new PermissionV1.BatchError({
+                  batchID: input.batchID,
+                  message: "Forecast selection is invalid",
+                })
+              if (input.requestIDs.some((id) => !batch.requestIDs.includes(id)))
+                return yield* new PermissionV1.BatchError({
+                  batchID: input.batchID,
+                  message: "Forecast selection contains a request outside the batch",
+                })
 
-            const requests = batch.requestIDs
-              .map((id) => current.pending.get(id))
-              .filter((item): item is ForecastEntry => item?.kind === "forecast" && item.info.batchID === input.batchID)
-            if (requests.length !== batch.requestIDs.length)
-              return yield* new PermissionV1.BatchError({
-                batchID: input.batchID,
-                message: "Forecast batch is incomplete",
-              })
+              const requests = batch.requestIDs
+                .map((id) => current.pending.get(id))
+                .filter(
+                  (item): item is ForecastEntry => item?.kind === "forecast" && item.info.batchID === input.batchID,
+                )
+              if (requests.length !== batch.requestIDs.length)
+                return yield* new PermissionV1.BatchError({
+                  batchID: input.batchID,
+                  message: "Forecast batch is incomplete",
+                })
 
-            batch.phase = "replying"
-            const policy = yield* batch.policy()
-            const approved = yield* approvals()
-            const project = yield* projectID()
-            const decisions = requests.map((item) => {
-              if (!selected.has(item.info.id)) return { item, reply: "reject" as const, resources: [] }
-              const actions = item.info.patterns.map((pattern) => ({
-                pattern,
-                action: resolve(item.info.permission, pattern, policy, approved),
-              }))
-              if (actions.some((action) => action.action === "deny"))
-                return { item, reply: "reject" as const, resources: [] }
-              const resources = actions.filter((action) => action.action === "ask").map((action) => action.pattern)
-              if (!resources.length) return { item, reply: "once" as const, resources }
-              const persistent = input.reply === "always" && Boolean(project) && item.info.always.length > 0
-              return { item, reply: persistent ? ("always" as const) : ("once" as const), resources }
-            })
-            const persistent = decisions.filter((item) => item.reply === "always")
-            if (persistent.length && project) {
-              yield* saved.addBatch({
-                projectID: project,
-                entries: persistent.map((item) => ({
-                  action: item.item.info.permission,
-                  resources: item.resources,
-                })),
+              batch.phase = "replying"
+              const policy = yield* batch.policy()
+              const approved = yield* approvals()
+              const project = yield* projectID()
+              const decisions = requests.map((item) => {
+                if (!selected.has(item.info.id)) return { item, reply: "reject" as const, resources: [] }
+                const actions = item.info.patterns.map((pattern) => ({
+                  pattern,
+                  action: resolve(item.info.permission, pattern, policy, approved),
+                }))
+                if (actions.some((action) => action.action === "deny"))
+                  return { item, reply: "reject" as const, resources: [] }
+                const resources = actions.filter((action) => action.action === "ask").map((action) => action.pattern)
+                if (!resources.length) return { item, reply: "once" as const, resources }
+                const persistent = input.reply === "always" && Boolean(project) && item.info.always.length > 0
+                return { item, reply: persistent ? ("always" as const) : ("once" as const), resources }
               })
-            }
+              const persistent = decisions.filter((item) => item.reply === "always")
+              if (persistent.length && project) {
+                yield* saved.addBatch({
+                  projectID: project,
+                  entries: persistent.map((item) => ({
+                    action: item.item.info.permission,
+                    resources: item.resources,
+                  })),
+                })
+              }
 
-            const once = decisions.filter((item) => item.reply === "once" && item.resources.length)
-            if (once.length) {
-              const grants = current.grants.get(batch.sessionID) ?? []
-              grants.push(
-                ...once.map((item) => ({
-                  permission: item.item.info.permission,
-                  resources: [...new Set(item.resources)].toSorted(),
-                })),
+              const once = decisions.filter((item) => item.reply === "once" && item.resources.length)
+              if (once.length) {
+                const grants = current.grants.get(batch.sessionID) ?? []
+                grants.push(
+                  ...once.map((item) => ({
+                    permission: item.item.info.permission,
+                    resources: [...new Set(item.resources)].toSorted(),
+                  })),
+                )
+                if (grants.length) current.grants.set(batch.sessionID, grants)
+              }
+
+              const replies = decisions.map(
+                (decision): TerminalReply => ({
+                  sessionID: decision.item.info.sessionID,
+                  requestID: decision.item.info.id,
+                  reply: decision.reply,
+                }),
               )
-              if (grants.length) current.grants.set(batch.sessionID, grants)
-            }
-
-            for (const decision of decisions) {
-              yield* events.publish(Event.Replied, {
-                sessionID: decision.item.info.sessionID,
-                requestID: decision.item.info.id,
-                reply: decision.reply,
-              })
-            }
-            for (const requestID of batch.requestIDs) current.pending.delete(requestID)
-            current.batches.delete(input.batchID)
-            return yield* Deferred.succeed(batch.deferred, undefined)
-          }).pipe(
-            Effect.ensuring(
-              Effect.gen(function* () {
-                const current = yield* InstanceState.get(state)
-                const batch = current.batches.get(raw.batchID)
-                if (batch?.phase === "replying") batch.phase = "pending"
-              }),
+              yield* finishLocked(current, input.batchID, batch)
+              return replies
+            }).pipe(
+              Effect.ensuring(
+                Effect.gen(function* () {
+                  const current = yield* InstanceState.get(state)
+                  const batch = current.batches.get(raw.batchID)
+                  if (batch?.phase === "replying") batch.phase = "pending"
+                }),
+              ),
             ),
           ),
-        ),
-      ),
+        )
+        yield* Effect.forEach(replies, terminal, { discard: true, concurrency: "unbounded" })
+      }),
     )
 
     const reply = Effect.fn("Permission.reply")((input: PermissionV1.ReplyInput) =>

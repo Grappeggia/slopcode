@@ -4,6 +4,7 @@ import {
   createPermissionBatchState,
   permissionBatchMove,
   permissionBatchReply,
+  permissionBatchSubmit,
   permissionBatchSync,
   permissionBatchToggle,
   permissionQueue,
@@ -70,4 +71,55 @@ test("incremental batch events preserve deselection and select only new requests
     requestIDs: ["per_a", "per_b", "per_c"],
     selected: ["per_b", "per_c"],
   })
+})
+
+test("generated SDK errors reset submission state and allow a successful retry", async () => {
+  let submitting = true
+  const errors: unknown[] = []
+  let attempt = 0
+  const send = () =>
+    attempt++ === 0
+      ? Promise.resolve({ error: new Error("temporary persistence failure") })
+      : attempt === 2
+        ? Promise.reject(new Error("temporary transport failure"))
+        : Promise.resolve({ data: true, error: undefined })
+
+  expect(
+    await permissionBatchSubmit({
+      send,
+      error: (error) => errors.push(error),
+      done: () => {
+        submitting = false
+      },
+    }),
+  ).toBe(false)
+  expect(submitting).toBe(false)
+  expect(errors[0]).toBeInstanceOf(Error)
+
+  submitting = true
+  expect(
+    await permissionBatchSubmit({
+      send,
+      error: (error) => errors.push(error),
+      done: () => {
+        submitting = false
+      },
+    }),
+  ).toBe(false)
+  expect(submitting).toBe(false)
+  expect(attempt).toBe(2)
+
+  submitting = true
+  expect(
+    await permissionBatchSubmit({
+      send,
+      error: (error) => errors.push(error),
+      done: () => {
+        submitting = false
+      },
+    }),
+  ).toBe(true)
+  expect(submitting).toBe(false)
+  expect(errors).toHaveLength(2)
+  expect(attempt).toBe(3)
 })

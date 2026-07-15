@@ -32,6 +32,9 @@ import { batch, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
+import { useToast } from "../ui/toast"
+import { errorMessage } from "../util/error"
+import { permissionBatchSubmit } from "../routes/session/permission-batch"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -134,11 +137,12 @@ export const {
     const event = useEvent()
     const project = useProject()
     const sdk = useSDK()
+    const toast = useToast()
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
     const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
-    const autoBatches = new Map<string, { expected: number; requestIDs: Set<string> }>()
+    const autoBatches = new Map<string, { expected: number; requests: Map<string, PermissionRequest> }>()
     const autoReplied = new Set<string>()
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
@@ -190,20 +194,36 @@ export const {
               if (autoReplied.has(request.batchID)) break
               const batch = autoBatches.get(request.batchID) ?? {
                 expected: request.batchSize ?? 1,
-                requestIDs: new Set<string>(),
+                requests: new Map<string, PermissionRequest>(),
               }
               batch.expected = Math.max(batch.expected, request.batchSize ?? 1)
-              batch.requestIDs.add(request.id)
+              batch.requests.set(request.id, request)
               autoBatches.set(request.batchID, batch)
-              if (batch.requestIDs.size < batch.expected) break
+              if (batch.requests.size < batch.expected) break
               autoBatches.delete(request.batchID)
               autoReplied.add(request.batchID)
-              void sdk.client.permission.replyBatch({
-                batchID: request.batchID,
-                requestIDs: [...batch.requestIDs].toSorted(),
-                reply: "once",
-                directory,
-                workspace,
+              const requests = [...batch.requests.values()].toSorted((a, b) => a.id.localeCompare(b.id))
+              void permissionBatchSubmit({
+                send: () =>
+                  sdk.client.permission.replyBatch({
+                    batchID: request.batchID!,
+                    requestIDs: requests.map((item) => item.id),
+                    reply: "once",
+                    directory,
+                    workspace,
+                  }),
+                error: (error) => {
+                  permission.set("normal")
+                  toast.show({ variant: "error", message: errorMessage(error) })
+                  const current = store.permission[request.sessionID] ?? []
+                  const merged = new Map([...current, ...requests].map((item) => [item.id, item]))
+                  setStore(
+                    "permission",
+                    request.sessionID,
+                    [...merged.values()].toSorted((a, b) => a.id.localeCompare(b.id)),
+                  )
+                },
+                done: () => autoReplied.delete(request.batchID!),
               })
               break
             }

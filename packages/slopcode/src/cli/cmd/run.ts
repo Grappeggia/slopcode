@@ -22,7 +22,7 @@ import { Filesystem } from "@/util/filesystem"
 import { createSlopcodeClient, type SlopcodeClient, type ToolPart } from "@slopcode-ai/sdk/v2"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
-import { runPermissionRules, runPromptTools, runSessionPermission } from "./run/permission-rules"
+import { runPermissionRules, runSessionPermission } from "./run/permission-rules"
 
 type ModelInput = Parameters<SlopcodeClient["session"]["prompt"]>[0]["model"]
 
@@ -763,14 +763,14 @@ export const RunCommand = effectCmd({
         const client = args.attach ? attachSDK(cwd) : sdk
 
         if (!interactive) {
-          const updated = await client.session.update({
-            sessionID,
-            permission: runSessionPermission(sess.permission, false),
-          })
-          if (updated.error) {
-            if (!emit("error", { error: updated.error })) UI.error(formatRunError(updated.error))
-            process.exitCode = 1
-            return
+          const permission = runSessionPermission(sess.permission, false)
+          if (permission.length) {
+            const updated = await client.session.update({ sessionID, permission })
+            if (updated.error) {
+              if (!emit("error", { error: updated.error })) UI.error(formatRunError(updated.error))
+              process.exitCode = 1
+              return
+            }
           }
         }
 
@@ -815,7 +815,6 @@ export const RunCommand = effectCmd({
             agent,
             model,
             variant: args.variant,
-            tools: runPromptTools(interactive),
             parts: [...files, { type: "text", text: message }],
           })
           if (result.error) {

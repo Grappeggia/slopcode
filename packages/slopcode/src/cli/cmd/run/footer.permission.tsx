@@ -15,11 +15,13 @@ import type { TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
+import { errorMessage } from "@slopcode-ai/tui/util/error"
 import {
   createPermissionBodyState,
   createPermissionBatchState,
   permissionBatchMove,
   permissionBatchReply,
+  permissionBatchSubmit,
   permissionBatchSync,
   permissionBatchToggle,
   permissionAlwaysLines,
@@ -486,6 +488,7 @@ function RunPermissionBatchBody(props: {
   const [state, setState] = createSignal(createPermissionBatchState(props.requests))
   const [selected, setSelected] = createSignal<PermissionBatchOption>("once")
   const [submitting, setSubmitting] = createSignal(false)
+  const [error, setError] = createSignal<string>()
   const persistent = createMemo(() => props.requests.every((item) => item.always.length > 0))
   const options = createMemo<PermissionBatchOption[]>(() =>
     state().stage === "always" ? ["confirm", "cancel"] : persistent() ? ["once", "always", "skip"] : ["once", "skip"],
@@ -497,11 +500,12 @@ function RunPermissionBatchBody(props: {
 
   const submit = async (reply: PermissionBatchReply) => {
     setSubmitting(true)
-    try {
-      await props.onReply(reply)
-    } catch {
-      setSubmitting(false)
-    }
+    setError(undefined)
+    await permissionBatchSubmit({
+      send: () => Promise.resolve(props.onReply(reply)),
+      error: (error) => setError(errorMessage(error)),
+      done: () => setSubmitting(false),
+    })
   }
 
   const run = (option: PermissionBatchOption) => {
@@ -577,6 +581,7 @@ function RunPermissionBatchBody(props: {
             ? "Confirm project persistence for these exact resources."
             : "Up/down focuses, space toggles. Unselected permissions are skipped."}
         </text>
+        <Show when={error()}>{(message) => <text fg={props.theme.error}>{message()}</text>}</Show>
       </box>
       <scrollbox width="100%" height="100%" paddingLeft={2} paddingRight={2}>
         <box flexDirection="column">

@@ -3,7 +3,7 @@ import { LayerNode } from "@slopcode-ai/core/effect/layer-node"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
 import { Database } from "@slopcode-ai/core/database/database"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
-import { Effect, Exit, Fiber, Result, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, Result, Schema } from "effect"
 import { ProviderV2 } from "@slopcode-ai/core/provider"
 import { ModelV2 } from "@slopcode-ai/core/model"
 import { Agent } from "@/agent/agent"
@@ -30,6 +30,7 @@ const root = LayerNode.group([
   EventV2Bridge.node,
 ])
 const decodeMessage = Schema.decodeUnknownSync(SessionV1.Event.MessageUpdated.data)
+const decodeReply = Schema.decodeUnknownSync(Permission.Event.Replied.data)
 const it = testEffect(
   LayerNode.buildLayer(root, {
     replacements: [
@@ -179,13 +180,20 @@ it.instance("plan exit reviews and skips every forecast before switching to buil
     const permissions = yield* Permission.Service
     const bridge = yield* EventV2Bridge.Service
     const updates: Array<{ role: string; agent?: string }> = []
-    const unsubscribe = yield* bridge.listen((event) => {
-      if (event.type === SessionV1.Event.MessageUpdated.type) {
-        const info = decodeMessage(event.data).info
-        updates.push({ role: info.role, agent: info.agent })
-      }
-      return Effect.void
-    })
+    const terminal = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const unsubscribe = yield* bridge.listen((event) =>
+      Effect.gen(function* () {
+        if (event.type === Permission.Event.Replied.type && decodeReply(event.data).sessionID === session.id) {
+          yield* Deferred.succeed(terminal, undefined)
+          yield* Deferred.await(release)
+        }
+        if (event.type === SessionV1.Event.MessageUpdated.type) {
+          const info = decodeMessage(event.data).info
+          updates.push({ role: info.role, agent: info.agent })
+        }
+      }),
+    )
     yield* Effect.addFinalizer(() => unsubscribe)
     const session = yield* sessions.create({ title: "Plan" })
     yield* (yield* Database.Service).db
@@ -216,12 +224,17 @@ it.instance("plan exit reviews and skips every forecast before switching to buil
     const batch = yield* wait(permissions.list())
     expect(batch).toHaveLength(1)
     expect(batch[0]).toMatchObject({ kind: "forecast", reason: "Continue repeated checks" })
-    yield* permissions.replyBatch({ batchID: batch[0].batchID!, requestIDs: [], reply: "reject" })
+    const response = yield* permissions
+      .replyBatch({ batchID: batch[0].batchID!, requestIDs: [], reply: "reject" })
+      .pipe(Effect.forkScoped)
+    yield* Deferred.await(terminal)
 
-    const result = yield* Fiber.join(fiber)
+    const result = yield* Fiber.join(fiber).pipe(Effect.timeout("500 millis"))
     expect(result.title).toBe("Switching to build agent")
     expect(updates.at(-1)).toMatchObject({ role: "user", agent: "build" })
     expect(yield* permissions.list()).toEqual([])
+    yield* Deferred.succeed(release, undefined)
+    yield* Fiber.join(response)
   }),
 )
 
@@ -244,4 +257,63 @@ it.instance("skipping a forecast never rejects the plan transition", () =>
     yield* permission.replyBatch({ batchID: batch[0].batchID!, requestIDs: [], reply: "reject" })
     expect(yield* Fiber.join(review)).toBe(true)
   }),
+)
+
+it.instance(
+  "plan exit remains pending after persistence failure and completes after retry",
+  () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.all()
+      const forecast = tools.find((item) => item.id === "plan_permissions")
+      const exit = tools.find((item) => item.id === "plan_exit")
+      if (!forecast || !exit) throw new Error("plan tools not found")
+      const sessions = yield* Session.Service
+      const questions = yield* Question.Service
+      const permissions = yield* Permission.Service
+      const database = yield* Database.Service
+      const session = yield* sessions.create({ title: "Retry plan" })
+      yield* database.db
+        .insert(SessionTable)
+        .values(Session.toRow(session))
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* sessions.updateMessage({
+        id: MessageID.make("msg_plan_retry_user"),
+        sessionID: session.id,
+        role: "user",
+        time: { created: Date.now() },
+        agent: "plan",
+        model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
+      })
+      yield* forecast.execute(
+        { permissions: [{ action: "doom_loop", resources: ["bash"], reason: "Continue checks" }] },
+        context(session.id),
+      )
+      const transition = yield* exit.execute({}, context(session.id)).pipe(Effect.forkScoped)
+      const question = (yield* wait(questions.list()))[0]
+      yield* questions.reply({ requestID: question.id, answers: [["Yes"]] })
+      const batch = yield* wait(permissions.list())
+      yield* database.db
+        .run(
+          "CREATE TRIGGER fail_plan_forecast_insert BEFORE INSERT ON permission WHEN NEW.action = 'doom_loop' BEGIN SELECT RAISE(FAIL, 'forced plan persistence failure'); END",
+        )
+        .pipe(Effect.orDie)
+
+      expect(
+        Exit.isFailure(
+          yield* permissions
+            .replyBatch({ batchID: batch[0].batchID!, requestIDs: [batch[0].id], reply: "always" })
+            .pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      expect(yield* permissions.list()).toHaveLength(1)
+
+      yield* database.db.run("DROP TRIGGER fail_plan_forecast_insert").pipe(Effect.orDie)
+      yield* permissions.replyBatch({ batchID: batch[0].batchID!, requestIDs: [batch[0].id], reply: "always" })
+      expect((yield* Fiber.join(transition)).title).toBe("Switching to build agent")
+      expect(yield* permissions.list()).toEqual([])
+    }),
+  { git: true },
 )
