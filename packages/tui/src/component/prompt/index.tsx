@@ -58,6 +58,7 @@ import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { density, isCompact, isDense } from "../../util/density"
+import { useSessionTabs } from "../../context/session-tabs"
 
 export type PromptProps = {
   sessionID?: string
@@ -163,6 +164,7 @@ export function Prompt(props: PromptProps) {
   const route = useRoute()
   const project = useProject()
   const sync = useSync()
+  const tabs = useSessionTabs()
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
@@ -1072,6 +1074,11 @@ export function Prompt(props: PromptProps) {
       }
 
       sessionID = res.data.id
+      tabs.promoteDraft({
+        id: sessionID,
+        title: res.data.title,
+        workspaceID: res.data.workspaceID,
+      })
     }
 
     const inputText = expandTrackedPastedText(

@@ -34,6 +34,7 @@ import { useEvent } from "./context/event"
 import { SDKProvider, useSDK } from "./context/sdk"
 import { StartupLoading } from "./component/startup-loading"
 import { SyncProvider, useSync } from "./context/sync"
+import { SessionTabsProvider, useSessionTabs } from "./context/session-tabs"
 import { DataProvider } from "./context/data"
 import { LocalProvider, useLocal } from "./context/local"
 import { LocationProvider } from "./context/location"
@@ -84,10 +85,14 @@ import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
+import { SessionStrip } from "./component/session-strip"
 
 const appGlobalBindingCommands = [
   "session.list",
   "session.new",
+  "session.tabs.previous",
+  "session.tabs.next",
+  "session.tabs.close",
   "session.quick_switch.1",
   "session.quick_switch.2",
   "session.quick_switch.3",
@@ -297,30 +302,32 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                           <PermissionProvider>
                                             <ProjectProvider>
                                               <SyncProvider>
-                                                <DataProvider>
-                                                  <ThemeProvider mode={mode}>
-                                                    <LocalProvider>
-                                                      <PromptStashProvider>
-                                                        <DialogProvider>
-                                                          <FrecencyProvider>
-                                                            <PromptHistoryProvider>
-                                                              <PromptRefProvider>
-                                                                <EditorContextProvider>
-                                                                  <LocationProvider>
-                                                                    <App
-                                                                      onSnapshot={input.onSnapshot}
-                                                                      pluginHost={input.pluginHost}
-                                                                    />
-                                                                  </LocationProvider>
-                                                                </EditorContextProvider>
-                                                              </PromptRefProvider>
-                                                            </PromptHistoryProvider>
-                                                          </FrecencyProvider>
-                                                        </DialogProvider>
-                                                      </PromptStashProvider>
-                                                    </LocalProvider>
-                                                  </ThemeProvider>
-                                                </DataProvider>
+                                                <SessionTabsProvider>
+                                                  <DataProvider>
+                                                    <ThemeProvider mode={mode}>
+                                                      <LocalProvider>
+                                                        <PromptStashProvider>
+                                                          <DialogProvider>
+                                                            <FrecencyProvider>
+                                                              <PromptHistoryProvider>
+                                                                <PromptRefProvider>
+                                                                  <EditorContextProvider>
+                                                                    <LocationProvider>
+                                                                      <App
+                                                                        onSnapshot={input.onSnapshot}
+                                                                        pluginHost={input.pluginHost}
+                                                                      />
+                                                                    </LocationProvider>
+                                                                  </EditorContextProvider>
+                                                                </PromptRefProvider>
+                                                              </PromptHistoryProvider>
+                                                            </FrecencyProvider>
+                                                          </DialogProvider>
+                                                        </PromptStashProvider>
+                                                      </LocalProvider>
+                                                    </ThemeProvider>
+                                                  </DataProvider>
+                                                </SessionTabsProvider>
                                               </SyncProvider>
                                             </ProjectProvider>
                                           </PermissionProvider>
@@ -370,6 +377,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const themeState = useTheme()
   const { theme, mode, setMode, locked, lock, unlock } = themeState
   const sync = useSync()
+  const tabs = useSessionTabs()
   const project = useProject()
   const exit = useExit()
   const promptRef = usePromptRef()
@@ -578,10 +586,35 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         slashName: "new",
         slashAliases: ["clear"],
         run: () => {
-          route.navigate({
-            type: "home",
-          })
+          tabs.openDraft()
           dialog.clear()
+        },
+      },
+      {
+        name: "session.tabs.previous",
+        title: "Previous session tab",
+        category: "Session",
+        hidden: true,
+        enabled: tabs.switchable(),
+        run: () => tabs.previous(),
+      },
+      {
+        name: "session.tabs.next",
+        title: "Next session tab",
+        category: "Session",
+        hidden: true,
+        enabled: tabs.switchable(),
+        run: () => tabs.next(),
+      },
+      {
+        name: "session.tabs.close",
+        title: "Close session tab",
+        category: "Session",
+        hidden: true,
+        enabled: tabs.active() !== undefined,
+        run: () => {
+          const id = tabs.active()
+          if (id) tabs.close(id)
         },
       },
       {
@@ -990,8 +1023,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   })
 
   event.on("session.deleted", (evt) => {
-    if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
-      route.navigate({ type: "home" })
+    const current = route.data.type === "session" && route.data.sessionID === evt.properties.info.id
+    const active = tabs.active() === evt.properties.info.id
+    const open = tabs.ids().includes(evt.properties.info.id)
+    tabs.close(evt.properties.info.id)
+    if (current && !open) route.navigate({ type: "home" })
+    if (active || current) {
       toast.show({
         variant: "info",
         message: "The current session was deleted",
@@ -1093,6 +1130,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       </Show>
       <Show when={ready()}>
         <box flexGrow={1} minHeight={0} flexDirection="column">
+          <SessionStrip />
           <Switch>
             <Match when={route.data.type === "home"}>
               <Home />
