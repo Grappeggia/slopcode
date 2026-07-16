@@ -184,6 +184,8 @@ const nativeSide = SessionSideQuestion.layer.pipe(
   Layer.provide(readerHooks),
 )
 const nativeIt = testEffect(Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, nativeSide))
+const supported = process.platform === "linux" || process.platform === "darwin"
+const secureIt = supported ? it.instance : it.instance.skip
 
 beforeEach(() => {
   requests.length = 0
@@ -598,7 +600,7 @@ it.instance("rejects untrimmed empty input when the service is called directly",
   }),
 )
 
-it.instance("continues private read calls transiently and reports bounded usage without persistence", () =>
+secureIt("continues private read calls transiently and reports bounded usage without persistence", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
@@ -678,7 +680,7 @@ it.instance("continues private read calls transiently and reports bounded usage 
   }),
 )
 
-it.instance("rejects a maximum read continuation before a small-context provider request", () =>
+secureIt("rejects a maximum read continuation before a small-context provider request", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
@@ -1049,7 +1051,7 @@ it.instance("interrupts provider work when the side stream is interrupted", () =
   }),
 )
 
-it.instance("interrupts an in-flight private read when the side stream is interrupted", () =>
+secureIt("interrupts an in-flight private read when the side stream is interrupted", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create({

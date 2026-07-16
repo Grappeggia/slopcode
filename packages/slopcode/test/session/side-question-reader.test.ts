@@ -14,6 +14,9 @@ import { testEffect } from "../lib/effect"
 
 const env = Layer.mergeAll(FSUtil.defaultLayer, Permission.defaultLayer)
 const it = testEffect(env)
+const supported = process.platform === "linux" || process.platform === "darwin"
+const secureIt = supported ? it.instance : it.instance.skip
+const unsupportedIt = supported ? it.instance.skip : it.instance
 const allow = [{ permission: "read", pattern: "*", action: "allow" }] satisfies PermissionV1.Ruleset
 
 const options = (id: string, signal = new AbortController().signal) =>
@@ -30,7 +33,7 @@ const execute = (
 }
 
 describe("SideQuestionReader", () => {
-  it.instance("reads regular text with bounded offset and limit", () =>
+  secureIt("reads regular text with bounded offset and limit", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       yield* Effect.promise(() => fs.writeFile(path.join(fixture.directory, "notes.txt"), "one\ntwo\nthree\nfour"))
@@ -109,7 +112,7 @@ describe("SideQuestionReader", () => {
     }),
   )
 
-  it.instance("requires configured and pre-approved external references", () =>
+  it.instance("requires configured external references", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       const docs = path.join(path.dirname(fixture.directory), `docs-${path.basename(fixture.directory)}`)
@@ -128,9 +131,23 @@ describe("SideQuestionReader", () => {
         ),
       )
 
+      yield* Effect.promise(() => fs.rm(docs, { recursive: true, force: true }))
+      expect(yield* (yield* Permission.Service).list()).toEqual([])
+    }),
+  )
+
+  secureIt("reads pre-approved external references", () =>
+    Effect.gen(function* () {
+      const fixture = yield* TestInstance
+      const docs = path.join(path.dirname(fixture.directory), `docs-${path.basename(fixture.directory)}`)
+      yield* Effect.promise(async () => {
+        await fs.mkdir(docs)
+        await fs.writeFile(path.join(docs, "guide.txt"), "reference guide")
+      })
+
       const reader = yield* SideQuestionReader.make({
         ruleset: [...allow, { permission: "external_directory", pattern: path.join(docs, "*"), action: "allow" }],
-        reference,
+        reference: (name) => Effect.succeed(name === "docs" ? docs : undefined),
       })
       const result = yield* Effect.promise(() => execute(reader, { path: "guide.txt", reference: "docs" }, "guide"))
       expect(result.output).toContain("reference guide")
@@ -243,7 +260,7 @@ describe("SideQuestionReader", () => {
     }),
   )
 
-  it.instance("atomically rejects a sixth canonical file under concurrent reads", () =>
+  secureIt("atomically rejects a sixth canonical file under concurrent reads", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       yield* Effect.promise(() =>
@@ -267,7 +284,7 @@ describe("SideQuestionReader", () => {
     }),
   )
 
-  it.instance("counts repeated canonical reads once and resets each question", () =>
+  secureIt("counts repeated canonical reads once and resets each question", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       yield* Effect.promise(() =>
@@ -296,7 +313,7 @@ describe("SideQuestionReader", () => {
     }),
   )
 
-  it.instance("counts hard links as one opened file identity", () =>
+  secureIt("counts hard links as one opened file identity", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       const original = path.join(fixture.directory, "original.txt")
@@ -313,9 +330,8 @@ describe("SideQuestionReader", () => {
     }),
   )
 
-  it.instance("pins verified identity descriptors until the request scope closes", () =>
+  secureIt("pins verified identity descriptors until the request scope closes", () =>
     Effect.gen(function* () {
-      if (process.platform !== "linux" && process.platform !== "darwin") return
       const fixture = yield* TestInstance
       const target = path.join(fixture.directory, "pinned.txt")
       yield* Effect.promise(() => fs.writeFile(target, "pinned content"))
@@ -356,7 +372,7 @@ describe("SideQuestionReader", () => {
     }),
   )
 
-  it.instance("enforces call and cumulative line limits", () =>
+  secureIt("enforces call and cumulative line limits", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       yield* Effect.promise(() =>
@@ -405,7 +421,7 @@ describe("SideQuestionReader", () => {
     }),
   )
 
-  it.instance("caps cumulative returned bytes before another chunk is exposed", () =>
+  secureIt("caps cumulative returned bytes before another chunk is exposed", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       yield* Effect.promise(() =>
@@ -428,7 +444,7 @@ describe("SideQuestionReader", () => {
     }),
   )
 
-  it.instance("interrupts in-flight file work when the tool signal aborts", () =>
+  secureIt("interrupts in-flight file work when the tool signal aborts", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       yield* Effect.promise(() => fs.writeFile(path.join(fixture.directory, "slow.txt"), "slow"))
@@ -452,6 +468,34 @@ describe("SideQuestionReader", () => {
       ctrl.abort()
       yield* Effect.promise(async () => expect(result).rejects.toThrow(/abort/i))
       yield* Deferred.await(stopped)
+    }),
+  )
+
+  unsupportedIt("fails closed when secure file reads are unsupported", () =>
+    Effect.gen(function* () {
+      const fixture = yield* TestInstance
+      yield* Effect.promise(() => fs.writeFile(path.join(fixture.directory, "secret.txt"), "private context"))
+      let started = false
+      const reader = yield* SideQuestionReader.make({
+        ruleset: allow,
+        reference: () => Effect.succeed(undefined),
+        hooks: {
+          beforeRead: () =>
+            Effect.sync(() => {
+              started = true
+            }),
+        },
+      })
+
+      const failure = yield* Effect.promise(() =>
+        execute(reader, { path: "secret.txt" }, "unsupported").then(
+          () => "read unexpectedly succeeded",
+          (cause: unknown) => (cause instanceof Error ? cause.message : String(cause)),
+        ),
+      )
+      expect(failure).toBe(`Secure side reads are not supported on ${process.platform}`)
+      expect(started).toBe(false)
+      expect(reader.usage()).toEqual({ calls: 1, files: 0, lines: 0, bytes: 0 })
     }),
   )
 })

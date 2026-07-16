@@ -40,6 +40,7 @@ const it = testEffect(
     httpApiLayer,
   ),
 )
+const supported = process.platform === "linux" || process.platform === "darwin"
 
 const original = {
   SLOPCODE_SERVER_PASSWORD: Flag.SLOPCODE_SERVER_PASSWORD,
@@ -208,6 +209,11 @@ function resetState() {
 
 function httpapi<A, E>(name: string, effect: Effect.Effect<A, E, TestScope>) {
   it.live(name, effect)
+}
+
+function secureHttpapi<A, E>(name: string, effect: Effect.Effect<A, E, TestScope>) {
+  const register = supported ? it.live : it.live.skip
+  register(name, effect)
 }
 
 function httpapiInstance<A, E>(
@@ -857,7 +863,7 @@ describe("HttpApi SDK", () => {
     ),
   )
 
-  httpapi(
+  secureHttpapi(
     "streams typed side-question reads and ordered follow-ups without persistence",
     withFakeLlmProject(
       "raw",
