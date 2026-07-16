@@ -4,6 +4,8 @@ import { useProject } from "./project"
 import { useRoute } from "./route"
 import { useSync } from "./sync"
 import { isDefaultTitle } from "../util/session"
+import type { Session } from "@slopcode-ai/sdk/v2"
+import type { PromptInfo } from "../prompt/history"
 import {
   DRAFT_TAB_ID,
   activateSessionTab,
@@ -30,8 +32,46 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
     const [state, setState] = createSignal<SessionTabsState>({ tabs: [] })
     const scope = crypto.randomUUID()
     const [draft, setDraft] = createSignal(crypto.randomUUID().toString())
+    const [revision, setRevision] = createSignal(0)
     const roots = new Map<string, string>()
+    const owners = new Map<
+      string,
+      {
+        prompt?: { prompt: PromptInfo; cursor: number }
+        provisional?: { directory: string; workspace?: string; session?: Session; move: boolean }
+      }
+    >()
     const families = createMemo(() => sessionFamilyIndex(sync.data.session))
+
+    function update(
+      owner: string,
+      key: "prompt" | "provisional",
+      value:
+        | { prompt: PromptInfo; cursor: number }
+        | { directory: string; workspace?: string; session?: Session; move: boolean }
+        | undefined,
+    ) {
+      const current = owners.get(owner) ?? {}
+      const next = { ...current, [key]: value }
+      owners.delete(owner)
+      if (next.prompt || next.provisional) owners.set(owner, next)
+      while (owners.size > 32) owners.delete(owners.keys().next().value!)
+    }
+
+    function clear(owner: string) {
+      owners.delete(owner)
+    }
+
+    function valid(owner: string) {
+      if (owner === draft()) return true
+      const prefix = `${scope}:`
+      if (!owner.startsWith(prefix)) return false
+      const id = owner.slice(prefix.length)
+      return (
+        state().tabs.some((tab) => tab.type === "session" && tab.id === id) ||
+        (route.data.type === "session" && route.data.sessionID === id)
+      )
+    }
 
     createEffect(() => {
       const sessions = sync.data.session
@@ -138,6 +178,12 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       const current = state()
       const next = closeSessionTab(current, id)
       if (next === current) return
+      if (id === DRAFT_TAB_ID) {
+        clear(draft())
+        setDraft(crypto.randomUUID())
+      } else {
+        clear(`${scope}:${id}`)
+      }
       setState(next)
       if (current.active !== id) return
       if (!next.active || next.active === DRAFT_TAB_ID) {
@@ -160,6 +206,36 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       active,
       scope,
       draft,
+      owner(sessionID?: string) {
+        return sessionID ? `${scope}:${sessionID}` : draft()
+      },
+      prompt: {
+        revision,
+        take(owner: string) {
+          const saved = owners.get(owner)?.prompt
+          update(owner, "prompt", undefined)
+          return saved
+        },
+        save(owner: string, value: { prompt: PromptInfo; cursor: number }) {
+          if (!valid(owner)) return false
+          update(owner, "prompt", value)
+          setRevision((value) => value + 1)
+          return true
+        },
+        clear(owner: string) {
+          update(owner, "prompt", undefined)
+        },
+      },
+      provisional: {
+        get(owner: string) {
+          return owners.get(owner)?.provisional
+        },
+        save(owner: string, value: { directory: string; workspace?: string; session?: Session; move: boolean }) {
+          if (owner !== draft()) return false
+          update(owner, "provisional", value)
+          return true
+        },
+      },
       visible: createMemo(() => tabs().length > 0),
       switchable: createMemo(() => ids().length > 1),
       open,
@@ -171,6 +247,7 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
         return move(1)
       },
       openDraft() {
+        clear(draft())
         setDraft(crypto.randomUUID())
         setState((value) => openDraftTab(value))
         route.navigate({ type: "home" })
@@ -178,6 +255,7 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       promoteDraft(input: SessionTabDescriptor, owner = draft()) {
         if (owner !== draft()) return false
         setState((value) => promoteDraftTab(value, input))
+        clear(owner)
         return true
       },
     }

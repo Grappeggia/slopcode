@@ -148,11 +148,10 @@ function formatEditorContext(selection: EditorSelection) {
   return `<system-reminder>${ranges.join("\n")} This may or may not be relevant to the current task.</system-reminder>\n`
 }
 
-let stashed: { prompt: PromptInfo; cursor: number; owner: string } | undefined
-
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
+  let disposed = false
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable | undefined>()
 
   const leader = useLeaderActive()
@@ -167,7 +166,7 @@ export function Prompt(props: PromptProps) {
   const project = useProject()
   const sync = useSync()
   const tabs = useSessionTabs()
-  const promptOwner = props.sessionID ? `${tabs.scope}:${props.sessionID}` : tabs.draft()
+  const promptOwner = tabs.owner(props.sessionID)
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
@@ -646,14 +645,7 @@ export function Prompt(props: PromptProps) {
       input.gotoBufferEnd()
     },
     reset() {
-      ghost?.clear()
-      input.clear()
-      input.extmarks.clear()
-      setStore("prompt", {
-        input: "",
-        parts: [],
-      })
-      setStore("extmarkToPartIndex", new Map())
+      resetPrompt()
     },
     submit() {
       void submit()
@@ -661,22 +653,36 @@ export function Prompt(props: PromptProps) {
   }
 
   onMount(() => {
-    const saved = stashed
-    stashed = undefined
+    const saved = tabs.prompt.take(promptOwner)
     if (store.prompt.input) return
-    if (saved?.owner === promptOwner && saved.prompt.input) {
-      input.setText(saved.prompt.input)
-      setStore("prompt", saved.prompt)
-      restoreExtmarksFromParts(saved.prompt.parts)
-      input.cursorOffset = saved.cursor
-    }
+    if (saved && (saved.prompt.input || saved.prompt.parts.length > 0)) restorePrompt(saved)
   })
+
+  createEffect(
+    on(
+      tabs.prompt.revision,
+      () => {
+        if (disposed) return
+        const saved = tabs.prompt.take(promptOwner)
+        if (!saved) return
+        if (!store.prompt.input && store.prompt.parts.length === 0) {
+          restorePrompt(saved)
+          return
+        }
+        stash.push({ input: saved.prompt.input, parts: saved.prompt.parts })
+      },
+      { defer: true },
+    ),
+  )
 
   onCleanup(() => {
     ghost?.clear()
-    if (store.prompt.input) {
-      stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset, owner: promptOwner }
-    }
+    if (store.prompt.input || store.prompt.parts.length > 0)
+      tabs.prompt.save(promptOwner, {
+        prompt: structuredClone(unwrap(store.prompt)),
+        cursor: input && !input.isDestroyed ? input.cursorOffset : store.prompt.input.length,
+      })
+    else tabs.prompt.clear(promptOwner)
     setInputTarget(undefined)
     props.ref?.(undefined)
   })
@@ -977,7 +983,6 @@ export function Prompt(props: PromptProps) {
   })
 
   const submitting = new Set<string>()
-  let disposed = false
   onCleanup(() => (disposed = true))
   createEffect(
     on(
@@ -1091,6 +1096,14 @@ export function Prompt(props: PromptProps) {
     const projectWorkspace = project.workspace.current()
     const commandName = inputText.startsWith("/") ? inputText.split("\n")[0].split(" ")[0].slice(1) : undefined
     const isCommand = commandName !== undefined && sync.data.command.some((item) => item.name === commandName)
+    const saved = { prompt, cursor: input.cursorOffset }
+    const unchanged = () =>
+      current() &&
+      input &&
+      !input.isDestroyed &&
+      input.plainText === prompt.input &&
+      store.mode === mode &&
+      JSON.stringify(unwrap(store.prompt).parts) === JSON.stringify(prompt.parts)
     const target = props.sessionID
       ? {
           sessionID: props.sessionID,
@@ -1104,41 +1117,67 @@ export function Prompt(props: PromptProps) {
             promptModelWarning()
             return undefined
           }
-          const directory = await move.getDirectory(inputText)
-          if (move.pending() && !directory) return undefined
-          const finish = Boolean(move.progress())
-          const workspaceID = selectedWorkspace
-            ? selectedWorkspace.type === "existing"
-              ? selectedWorkspace.workspaceID
-              : undefined
-            : projectWorkspace
-          const res = await sdk.client.session.create({
-            directory: directory ?? projectDirectory,
-            workspace: workspaceID,
-            agent,
-            model: {
-              providerID: selectedModel.providerID,
-              id: selectedModel.modelID,
-              variant,
-            },
-          })
+          const existing = tabs.provisional.get(owner)
+          const moving = !existing && move.pending()
+          const moved = existing ? undefined : await move.getDirectory(inputText)
+          if (moving && !moved) return undefined
+          const directory = existing?.directory ?? moved ?? projectDirectory
+          const prepared =
+            existing ??
+            ({
+              directory,
+              workspace: selectedWorkspace
+                ? selectedWorkspace.type === "existing"
+                  ? selectedWorkspace.workspaceID
+                  : undefined
+                : projectWorkspace,
+              move: Boolean(move.progress()),
+              session: undefined,
+            } as const)
+          if (!existing) tabs.provisional.save(owner, prepared)
+          if (prepared.session)
+            return {
+              sessionID: prepared.session.id,
+              directory: prepared.directory,
+              workspace: prepared.workspace,
+              created: prepared.session,
+              finish: prepared.move,
+            }
 
-          if (res.error) {
-            if (finish && current()) move.finishSubmit()
-            console.log("Creating a session failed:", res.error)
-            toast.show({
-              message: "Creating a session failed. Open console for more details.",
-              variant: "error",
+          const created = await sdk.client.session
+            .create({
+              directory: prepared.directory,
+              workspace: prepared.workspace,
+              agent,
+              model: {
+                providerID: selectedModel.providerID,
+                id: selectedModel.modelID,
+                variant,
+              },
             })
-            return undefined
-          }
+            .then((result) => {
+              if (result.error) throw result.error
+              return result.data
+            })
+            .catch((error) => {
+              if (prepared.move) move.finishSubmit(false)
+              console.log("Creating a session failed:", error)
+              toast.show({
+                message: "Creating a session failed. Open console for more details.",
+                variant: "error",
+              })
+              return undefined
+            })
+          if (!created) return undefined
 
+          const provisional = { ...prepared, session: created }
+          tabs.provisional.save(owner, provisional)
           return {
-            sessionID: res.data.id,
-            directory: res.data.directory,
-            workspace: res.data.workspaceID,
-            created: res.data,
-            finish,
+            sessionID: created.id,
+            directory: provisional.directory,
+            workspace: provisional.workspace,
+            created,
+            finish: provisional.move,
           }
         })()
     if (!target) return false
@@ -1191,16 +1230,32 @@ export function Prompt(props: PromptProps) {
       return false
     }
 
+    const retryOwner = target.created ? tabs.owner(sessionID) : owner
+    const recover = (title: string, error: unknown) => {
+      if (!tabs.prompt.save(retryOwner, saved)) stash.push({ input: saved.prompt.input, parts: saved.prompt.parts })
+      toast.show({
+        title,
+        message: errorMessage(error),
+        variant: "error",
+      })
+    }
+    const detachedClear = unchanged()
+
     if (mode === "shell") {
       move.startSubmit()
-      void sdk.client.session.shell({
-        sessionID,
-        directory: target.directory,
-        workspace: target.workspace,
-        agent,
-        model: selectedModel,
-        command: inputText,
-      })
+      void sdk.client.session
+        .shell(
+          {
+            sessionID,
+            directory: target.directory,
+            workspace: target.workspace,
+            agent,
+            model: selectedModel,
+            command: inputText,
+          },
+          { throwOnError: true },
+        )
+        .catch((error) => recover("Failed to run shell command", error))
       if (current()) setStore("mode", "normal")
     } else if (isCommand) {
       move.startSubmit()
@@ -1210,21 +1265,26 @@ export function Prompt(props: PromptProps) {
       const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
-      void sdk.client.session.command({
-        sessionID,
-        directory: target.directory,
-        workspace: target.workspace,
-        command: command.slice(1),
-        arguments: args,
-        agent,
-        model: `${selectedModel.providerID}/${selectedModel.modelID}`,
-        variant,
-        parts: parts.filter((part) => part.type === "file"),
-      })
+      void sdk.client.session
+        .command(
+          {
+            sessionID,
+            directory: target.directory,
+            workspace: target.workspace,
+            command: command.slice(1),
+            arguments: args,
+            agent,
+            model: `${selectedModel.providerID}/${selectedModel.modelID}`,
+            variant,
+            parts: parts.filter((part) => part.type === "file"),
+          },
+          { throwOnError: true },
+        )
+        .catch((error) => recover("Failed to run command", error))
     } else {
       move.startSubmit()
       try {
-        await sdk.client.session.prompt(
+        await sdk.client.session.promptAsync(
           {
             sessionID,
             directory: target.directory,
@@ -1249,13 +1309,14 @@ export function Prompt(props: PromptProps) {
           message: errorMessage(error),
           variant: "error",
         })
-        if (target.finish && current()) move.finishSubmit()
+        if (target.finish) move.finishSubmit(false)
         return false
       }
     }
 
     history.append({ ...prompt, mode })
     if (!current()) return true
+    const clear = mode === "normal" && !isCommand ? unchanged() : detachedClear
     if (target.created)
       tabs.promoteDraft(
         {
@@ -1266,7 +1327,12 @@ export function Prompt(props: PromptProps) {
         owner,
       )
     if (editorParts.length > 0) editor.markSelectionSent()
-    resetPrompt()
+    if (clear) resetPrompt()
+    if (!clear && target.created)
+      tabs.prompt.save(tabs.owner(sessionID), {
+        prompt: structuredClone(unwrap(store.prompt)),
+        cursor: input.cursorOffset,
+      })
     props.onSubmit?.()
 
     if (!props.sessionID) {
@@ -1410,7 +1476,15 @@ export function Prompt(props: PromptProps) {
     resetPrompt()
   }
 
+  function restorePrompt(saved: { prompt: PromptInfo; cursor: number }) {
+    input.setText(saved.prompt.input)
+    setStore("prompt", saved.prompt)
+    restoreExtmarksFromParts(saved.prompt.parts)
+    input.cursorOffset = saved.cursor
+  }
+
   function resetPrompt() {
+    ghost?.clear()
     input.clear()
     input.extmarks.clear()
     setStore("prompt", {
@@ -1418,6 +1492,7 @@ export function Prompt(props: PromptProps) {
       parts: [],
     })
     setStore("extmarkToPartIndex", new Map())
+    tabs.prompt.clear(promptOwner)
   }
 
   const highlight = createMemo(() => {
