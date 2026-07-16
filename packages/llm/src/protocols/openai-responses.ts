@@ -62,7 +62,7 @@ const OpenAIResponsesReasoningSummaryText = Schema.Struct({
 
 const OpenAIResponsesReasoningItem = Schema.Struct({
   type: Schema.tag("reasoning"),
-  id: Schema.String,
+  id: Schema.optionalKey(Schema.String),
   summary: Schema.Array(OpenAIResponsesReasoningSummaryText),
   encrypted_content: optionalNull(Schema.String),
 })
@@ -126,6 +126,7 @@ type OpenAIResponsesReasoningInput = {
   summary: Array<{ type: "summary_text"; text: string }>
   encrypted_content?: string | null
 }
+type OpenAIResponsesReasoningReplay = Omit<OpenAIResponsesReasoningInput, "id">
 
 const OpenAIResponsesFunctionTool = Schema.Struct({
   type: Schema.tag("function"),
@@ -493,7 +494,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
 
     if (message.role === "assistant") {
       const content: TextPart[] = []
-      const reasoningItems: Record<string, OpenAIResponsesReasoningInput> = {}
+      const reasoningItems: Record<string, OpenAIResponsesReasoningReplay> = {}
       const reasoningReferences = new Set<string>()
       const hostedToolReferences = new Set<string>()
       const flushText = () => {
@@ -510,7 +511,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
           flushText()
           const reasoning = lowerReasoning(part)
           if (!reasoning) continue
-          if (store !== false && reasoning.id) {
+          if (store !== false) {
             if (!reasoningReferences.has(reasoning.id)) input.push({ type: "item_reference", id: reasoning.id })
             reasoningReferences.add(reasoning.id)
             continue
@@ -522,8 +523,13 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
               existing.encrypted_content = reasoning.encrypted_content
             continue
           }
-          reasoningItems[reasoning.id] = reasoning
-          input.push(reasoning)
+          const replay = {
+            type: reasoning.type,
+            summary: reasoning.summary,
+            encrypted_content: reasoning.encrypted_content,
+          }
+          reasoningItems[reasoning.id] = replay
+          input.push(replay)
           continue
         }
         if (part.type === "tool-call") {

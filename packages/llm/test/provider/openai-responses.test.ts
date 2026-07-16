@@ -559,7 +559,7 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("filters malformed replay item ids while accepting future prefixes", () =>
+  it.effect("filters malformed replay item ids and omits stateless reasoning ids", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({
@@ -613,11 +613,10 @@ describe("OpenAI Responses route", () => {
       expect(prepared.body.input).toEqual([
         {
           type: "reasoning",
-          id: "future_123",
           encrypted_content: "encrypted-future",
           summary: [{ type: "summary_text", text: "valid future state" }],
         },
-        { type: "custom_tool_call", call_id: "call_1", name: "patch", input: "patch" },
+        { type: "custom_tool_call", id: undefined, call_id: "call_1", name: "patch", input: "patch" },
         {
           type: "custom_tool_call",
           id: "future_tool",
@@ -742,7 +741,6 @@ describe("OpenAI Responses route", () => {
           },
           {
             type: "reasoning",
-            id: "rs_continuation_1",
             encrypted_content: "encrypted-continuation-state",
             summary: [{ type: "summary_text", text: "I inspected the previous turn." }],
           },
@@ -1996,7 +1994,6 @@ describe("OpenAI Responses route", () => {
                   { role: "user", content: [{ type: "input_text", text: "What changed?" }] },
                   {
                     type: "reasoning",
-                    id: "rs_1",
                     encrypted_content: "encrypted-state",
                     summary: [{ type: "summary_text", text: "Checked the previous diff." }],
                   },
@@ -2050,7 +2047,6 @@ describe("OpenAI Responses route", () => {
         { role: "assistant", content: [{ type: "output_text", text: "Before." }] },
         {
           type: "reasoning",
-          id: "rs_1",
           encrypted_content: "encrypted-state",
           summary: [{ type: "summary_text", text: "Checked order." }],
         },
@@ -2144,7 +2140,6 @@ describe("OpenAI Responses route", () => {
       expect(prepared.body.input).toEqual([
         {
           type: "reasoning",
-          id: "rs_1",
           encrypted_content: "encrypted-state",
           summary: [
             { type: "summary_text", text: "First" },

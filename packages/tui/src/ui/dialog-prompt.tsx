@@ -87,7 +87,7 @@ export function DialogPrompt(props: DialogPromptProps) {
         </text>
       </box>
       <box gap={compact() ? 0 : 1}>
-        {props.description}
+        {props.description?.()}
         <textarea
           height={compact() ? 2 : 3}
           ref={(val: TextareaRenderable) => {

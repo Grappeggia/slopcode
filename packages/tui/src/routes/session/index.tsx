@@ -1678,7 +1678,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           customBorderChars={SplitBorder.customBorderChars}
           borderColor={theme.error}
         >
-          <text fg={theme.textMuted}>{props.message.error?.data.message}</text>
+          <text fg={theme.textMuted}>{errorMessage(props.message.error)}</text>
         </box>
       </Show>
       <Switch>
@@ -2159,6 +2159,7 @@ function BlockTool(props: {
   onClick?: () => void
   part?: ToolPart
   spinner?: boolean
+  suffix?: string | number
 }) {
   const { theme } = useTheme()
   const ctx = use()
@@ -2167,7 +2168,7 @@ function BlockTool(props: {
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
   return (
     <box
-      id={props.part ? `tool-block-${props.part.messageID}-${props.part.id}` : undefined}
+      id={props.part ? toolBlockID(props.part, props.suffix) : undefined}
       border={ctx.compact() ? undefined : ["left"]}
       paddingTop={ctx.compact() ? 0 : 1}
       paddingBottom={ctx.compact() ? 0 : 1}
@@ -2597,8 +2598,8 @@ function ApplyPatch(props: ToolProps) {
     <Switch>
       <Match when={files().length > 0}>
         <For each={files()}>
-          {(file) => (
-            <BlockTool title={title(file)} part={props.part}>
+          {(file, index) => (
+            <BlockTool title={title(file)} part={props.part} suffix={index()}>
               <Show
                 when={file.type !== "delete"}
                 fallback={
@@ -2755,6 +2756,10 @@ const toolDisplays = new Set([
 
 export function toolDisplay(tool: string) {
   return toolDisplays.has(tool) ? tool : "generic"
+}
+
+export function toolBlockID(part: { messageID: string; id: string }, suffix?: string | number) {
+  return `tool-block-${part.messageID}-${part.id}${suffix === undefined ? "" : `-${suffix}`}`
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
