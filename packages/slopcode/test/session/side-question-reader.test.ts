@@ -48,7 +48,23 @@ describe("SideQuestionReader", () => {
     }),
   )
 
-  it.instance("rejects lexical, absolute, symlink, directory, binary, and media reads", () =>
+  it.instance("rejects lexical escapes and absolute paths before secure access", () =>
+    Effect.gen(function* () {
+      const fixture = yield* TestInstance
+      const reader = yield* SideQuestionReader.make({ ruleset: allow, reference: () => Effect.succeed(undefined) })
+
+      yield* Effect.promise(async () =>
+        expect(execute(reader, { path: "../outside.txt" }, "lexical")).rejects.toThrow(/escapes/i),
+      )
+      yield* Effect.promise(async () =>
+        expect(execute(reader, { path: path.join(fixture.directory, "outside.txt") }, "absolute")).rejects.toThrow(
+          /workspace-relative/i,
+        ),
+      )
+    }),
+  )
+
+  secureIt("rejects symlink, directory, binary, and media reads", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       const outside = path.join(path.dirname(fixture.directory), `outside-${path.basename(fixture.directory)}.txt`)
@@ -61,21 +77,21 @@ describe("SideQuestionReader", () => {
       })
       const reader = yield* SideQuestionReader.make({ ruleset: allow, reference: () => Effect.succeed(undefined) })
 
-      for (const [index, input] of [
-        { path: "../outside.txt" },
-        { path: outside },
-        { path: "escape.txt" },
-        { path: "folder" },
-        { path: "binary.dat" },
-        { path: "image.png" },
+      for (const [index, item] of [
+        { input: { path: "escape.txt" }, message: /unavailable/i },
+        { input: { path: "folder" }, message: /regular files/i },
+        { input: { path: "binary.dat" }, message: /binary/i },
+        { input: { path: "image.png" }, message: /media/i },
       ].entries()) {
-        yield* Effect.promise(async () => expect(execute(reader, input, `rejected_${index}`)).rejects.toThrow())
+        yield* Effect.promise(async () =>
+          expect(execute(reader, item.input, `rejected_${index}`)).rejects.toThrow(item.message),
+        )
       }
       yield* Effect.promise(() => fs.rm(outside, { force: true }))
     }),
   )
 
-  it.instance("rejects a file replaced by a symlink after canonical authorization", () =>
+  secureIt("rejects a file replaced by a symlink after canonical authorization", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       const target = path.join(fixture.directory, "target.txt")
@@ -130,6 +146,9 @@ describe("SideQuestionReader", () => {
           /unavailable/i,
         ),
       )
+      yield* Effect.promise(async () =>
+        expect(execute(blocked, { path: "../secret.txt", reference: "docs" }, "escape")).rejects.toThrow(/escapes/i),
+      )
 
       yield* Effect.promise(() => fs.rm(docs, { recursive: true, force: true }))
       expect(yield* (yield* Permission.Service).list()).toEqual([])
@@ -151,9 +170,6 @@ describe("SideQuestionReader", () => {
       })
       const result = yield* Effect.promise(() => execute(reader, { path: "guide.txt", reference: "docs" }, "guide"))
       expect(result.output).toContain("reference guide")
-      yield* Effect.promise(async () =>
-        expect(execute(reader, { path: "../secret.txt", reference: "docs" }, "escape")).rejects.toThrow(/escapes/i),
-      )
       yield* Effect.promise(() => fs.rm(docs, { recursive: true, force: true }))
       expect(yield* (yield* Permission.Service).list()).toEqual([])
     }),

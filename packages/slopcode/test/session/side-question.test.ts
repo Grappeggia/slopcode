@@ -747,7 +747,7 @@ it.instance("rejects provider-hosted read execution", () =>
   }),
 )
 
-it.instance("rejects structurally forged private read results", () =>
+secureIt("rejects structurally forged private read results", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
@@ -787,7 +787,7 @@ it.instance("rejects structurally forged private read results", () =>
   }),
 )
 
-it.instance("rejects private results paired with a different emitted input", () =>
+secureIt("rejects private results paired with a different emitted input", () =>
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
