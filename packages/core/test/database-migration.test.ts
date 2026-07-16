@@ -4,7 +4,7 @@ import { fileURLToPath } from "url"
 import path from "path"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@slopcode-ai/effect-drizzle-sqlite"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { eq, inArray, sql } from "drizzle-orm"
 import { DatabaseMigration } from "@slopcode-ai/core/database/migration"
 import { migrations } from "@slopcode-ai/core/database/migration.gen"
@@ -21,6 +21,7 @@ import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import sessionMetadataMigration from "@slopcode-ai/core/database/migration/20260511173437_session-metadata"
 import permissionScopesMigration from "@slopcode-ai/core/database/migration/20260716031712_permission_scopes"
+import permissionScopeConstraintsMigration from "@slopcode-ai/core/database/migration/20260716053152_permission_scope_constraints"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@slopcode-ai/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -33,7 +34,7 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 describe("DatabaseMigration", () => {
-  test("backfills legacy permissions and cascades exact session grants", async () => {
+  test("backfills legacy permissions, quarantines malformed rows, and enforces exact grant invariants", async () => {
     await run(
       Effect.gen(function* () {
         const db = yield* makeDb
@@ -62,13 +63,40 @@ describe("DatabaseMigration", () => {
         `)
 
         yield* DatabaseMigration.applyOnly(db, [permissionScopesMigration])
+        yield* db.run(sql`
+          INSERT INTO permission (id, project_id, action, resource, scope, match, session_id, time_created, time_updated)
+          VALUES ('psv_session', 'project_old', 'bash', 'echo *', 'session', 'exact', 'ses_old', 1, 1),
+                 ('psv_bad_scope', 'project_old', 'bash', 'bad', 'invalid', 'pattern', NULL, 1, 1),
+                 ('psv_bad_global', 'project_old', 'bash', 'bad', 'global', 'exact', NULL, 1, 1),
+                 ('psv_bad_owner', 'global', 'bash', 'bad', 'session', 'exact', 'ses_old', 1, 1)
+        `)
+        yield* DatabaseMigration.applyOnly(db, [permissionScopeConstraintsMigration])
         expect(
-          yield* db.all<{ id: string; project_id: string; scope: string; match: string }>(
-            sql`SELECT id, project_id, scope, match FROM permission ORDER BY id`,
+          yield* db.all<{ id: string; project_id: string; scope: string; match: string; session_id: string | null }>(
+            sql`SELECT id, project_id, scope, match, session_id FROM permission ORDER BY id`,
           ),
         ).toEqual([
-          { id: "psv_project", project_id: "project_old", scope: "project", match: "pattern" },
-          { id: "psv_quarantined", project_id: "global", scope: "project", match: "pattern" },
+          {
+            id: "psv_project",
+            project_id: "project_old",
+            scope: "project",
+            match: "pattern",
+            session_id: null,
+          },
+          {
+            id: "psv_quarantined",
+            project_id: "global",
+            scope: "project",
+            match: "pattern",
+            session_id: null,
+          },
+          {
+            id: "psv_session",
+            project_id: "project_old",
+            scope: "session",
+            match: "exact",
+            session_id: "ses_old",
+          },
         ])
         expect(
           yield* db.get<{ on_delete: string }>(
@@ -76,10 +104,18 @@ describe("DatabaseMigration", () => {
           ),
         ).toEqual({ on_delete: "CASCADE" })
 
-        yield* db.run(sql`
-          INSERT INTO permission (id, project_id, action, resource, scope, match, session_id, time_created, time_updated)
-          VALUES ('psv_session', 'project_old', 'bash', 'echo *', 'session', 'exact', 'ses_old', 1, 1)
-        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO permission (id, project_id, action, resource, scope, match, session_id, time_created, time_updated)
+                VALUES ('psv_invalid_after', 'project_old', 'bash', 'bad', 'global', 'exact', NULL, 1, 1)
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
         yield* db.run(sql`DELETE FROM session WHERE id = 'ses_old'`)
         expect(yield* db.get(sql`SELECT count(*) AS count FROM permission WHERE id = 'psv_session'`)).toEqual({
           count: 0,

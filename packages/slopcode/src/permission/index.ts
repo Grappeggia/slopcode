@@ -724,42 +724,6 @@ export const layer = Layer.effect(
               return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
             if (existing.kind === "forecast") return { kind: "forecast" as const, batchID: existing.info.batchID }
 
-            const project = yield* projectID()
-            const approved = yield* approvals(existing.info.sessionID)
-            const ruleset = yield* existing.policy()
-            const actions = existing.info.patterns.map((pattern) => ({
-              pattern,
-              action: resolve(existing.info.permission, pattern, ruleset, approved),
-            }))
-            const resources = actions.filter((action) => action.action === "ask").map((action) => action.pattern)
-            const requested =
-              input.reply === "always" && (!existing.info.always.length || !project)
-                ? ("once" as const)
-                : (input.reply === "session" || input.reply === "global") && !existing.info.grant?.resources.length
-                  ? ("once" as const)
-                  : input.reply
-            const answer = actions.some((action) => action.action === "deny")
-              ? ("reject" as const)
-              : resources.length
-                ? requested
-                : ("once" as const)
-            if (answer === "always" && project) {
-              yield* saved.add({
-                scope: "project",
-                projectID: project,
-                action: existing.info.permission,
-                resources: existing.info.always,
-              })
-            }
-            if (answer === "session")
-              yield* saved.add({
-                scope: "session",
-                sessionID: existing.info.sessionID,
-                action: existing.info.permission,
-                resources,
-              })
-            if (answer === "global") yield* saved.add({ scope: "global", action: existing.info.permission, resources })
-
             const replies: TerminalReply[] = []
             const settle = Effect.fnUntraced(function* (
               id: PermissionV1.ID,
@@ -776,6 +740,59 @@ export const layer = Layer.effect(
               else yield* Deferred.succeed(item.deferred, undefined)
               replies.push({ sessionID: item.info.sessionID, requestID: item.info.id, reply })
             })
+
+            if (input.reply === "reject") {
+              for (const [id, item] of current.pending.entries()) {
+                if (item.kind !== "blocking" || item.answer || item.info.sessionID !== existing.info.sessionID) continue
+                const error =
+                  item === existing && input.message
+                    ? new PermissionV1.CorrectedError({ feedback: input.message })
+                    : new PermissionV1.RejectedError()
+                yield* settle(id, item, "reject", error)
+              }
+              return { kind: "blocking" as const, replies }
+            }
+
+            const project = yield* projectID()
+            const approved = yield* approvals(existing.info.sessionID)
+            const ruleset = yield* existing.policy()
+            const actions = existing.info.patterns.map((pattern) => ({
+              pattern,
+              action: resolve(existing.info.permission, pattern, ruleset, approved),
+            }))
+            const resources = actions.filter((action) => action.action === "ask").map((action) => action.pattern)
+            const shown = new Set(existing.info.grant?.resources ?? [])
+            const exact = resources.filter((resource) => shown.has(resource))
+            const expanded = Boolean(existing.info.grant) && resources.some((resource) => !shown.has(resource))
+            const requested =
+              input.reply === "always" && (!existing.info.always.length || !project)
+                ? ("once" as const)
+                : (input.reply === "session" || input.reply === "global") && !existing.info.grant?.resources.length
+                  ? ("once" as const)
+                  : input.reply
+            const answer =
+              actions.some((action) => action.action === "deny") || expanded
+                ? ("reject" as const)
+                : resources.length
+                  ? requested
+                  : ("once" as const)
+            if (answer === "always" && project) {
+              yield* saved.add({
+                scope: "project",
+                projectID: project,
+                action: existing.info.permission,
+                resources: existing.info.always,
+              })
+            }
+            if (answer === "session")
+              yield* saved.add({
+                scope: "session",
+                sessionID: existing.info.sessionID,
+                action: existing.info.permission,
+                resources: exact,
+              })
+            if (answer === "global")
+              yield* saved.add({ scope: "global", action: existing.info.permission, resources: exact })
 
             if (answer === "reject") {
               for (const [id, item] of current.pending.entries()) {

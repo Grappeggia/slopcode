@@ -457,6 +457,145 @@ describe("PermissionV2", () => {
     }),
   )
 
+  it.effect("fails closed when revalidation expands beyond the displayed exact resources", () =>
+    Effect.gen(function* () {
+      yield* setup([
+        { action: "bash", resource: "*", effect: "ask" },
+        { action: "bash", resource: "configured", effect: "allow" },
+      ])
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({ scope: "global", action: "bash", resources: ["revoked"] })
+      const prior = (yield* saved.list({ scope: "global" }))[0]
+      const input = assertion({ action: "bash", resources: ["shown", "configured", "revoked"] })
+      const { service, fiber, request } = yield* waitForRequest(input)
+      expect(request.grant?.resources).toEqual(["shown"])
+
+      yield* setRules([{ action: "bash", resource: "*", effect: "ask" }])
+      yield* saved.remove({ id: prior.id, scope: "global" })
+      yield* service.reply({ requestID: request.id, reply: "global" })
+
+      expect(yield* Fiber.join(fiber).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+      expect(yield* saved.list({ scope: "global" })).toEqual([])
+    }),
+  )
+
+  it.effect("persists only the displayed exact resources still unresolved", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const input = assertion({ action: "bash", resources: ["keep", "narrowed"] })
+      const { service, fiber, request } = yield* waitForRequest(input)
+      expect(request.grant?.resources).toEqual(["keep", "narrowed"])
+      yield* setRules([
+        { action: "bash", resource: "*", effect: "ask" },
+        { action: "bash", resource: "narrowed", effect: "allow" },
+      ])
+
+      yield* service.reply({ requestID: request.id, reply: "global" })
+      yield* Fiber.join(fiber)
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toMatchObject([
+        { action: "bash", resource: "keep" },
+      ])
+    }),
+  )
+
+  it.effect("keeps an explicit reject after revalidation allows the request", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { service, fiber, request } = yield* waitForRequest(assertion({ action: "bash" }))
+      yield* setRules([{ action: "bash", resource: "*", effect: "allow" }])
+      yield* service.reply({ requestID: request.id, reply: "reject" })
+
+      const failure = yield* Fiber.join(fiber).pipe(Effect.flip)
+      expect(failure).toBeInstanceOf(PermissionV2.RejectedError)
+    }),
+  )
+
+  it.effect("allows exactly one concurrent once session global or reject reply", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const events = yield* EventV2.Service
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const replies: PermissionV2.Reply[] = []
+      const { service, fiber, request } = yield* waitForRequest(assertion({ action: "bash" }))
+      const unsubscribe = yield* events.listen((event) => {
+        if (event.type !== PermissionV2.Event.Replied.type || event.data.requestID !== request.id) return Effect.void
+        replies.push(event.data.reply)
+        if (event.data.reply !== "global") return Effect.void
+        return Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+
+      const winner = yield* service.reply({ requestID: request.id, reply: "global" }).pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+      const losers = yield* Effect.all(
+        (["once", "session", "reject"] as const).map((reply) =>
+          service.reply({ requestID: request.id, reply }).pipe(Effect.exit),
+        ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkScoped)
+      yield* Deferred.succeed(release, undefined)
+
+      yield* Fiber.join(winner)
+      expect(yield* Fiber.join(losers)).toEqual([
+        expect.objectContaining({ _tag: "Failure" }),
+        expect.objectContaining({ _tag: "Failure" }),
+        expect.objectContaining({ _tag: "Failure" }),
+      ])
+      yield* Fiber.join(fiber)
+      expect(replies).toEqual(["global"])
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toHaveLength(1)
+    }),
+  )
+
+  it.effect("lets interruption claim a pending request before a late reply", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const events = yield* EventV2.Service
+      const replies: PermissionV2.Reply[] = []
+      const unsubscribe = yield* events.listen((event) => {
+        if (event.type === PermissionV2.Event.Replied.type) replies.push(event.data.reply)
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const { service, fiber, request } = yield* waitForRequest(assertion({ action: "bash" }))
+
+      yield* Fiber.interrupt(fiber)
+      expect(yield* service.reply({ requestID: request.id, reply: "global" }).pipe(Effect.exit)).toMatchObject({
+        _tag: "Failure",
+      })
+      expect(replies).toEqual(["reject"])
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toEqual([])
+    }),
+  )
+
+  it.effect("keeps a claimed global reply authoritative over a losing interruption", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const events = yield* EventV2.Service
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const replies: PermissionV2.Reply[] = []
+      const { service, fiber, request } = yield* waitForRequest(assertion({ action: "bash" }))
+      const unsubscribe = yield* events.listen((event) => {
+        if (event.type !== PermissionV2.Event.Replied.type || event.data.requestID !== request.id) return Effect.void
+        replies.push(event.data.reply)
+        return Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+
+      const approved = yield* service.reply({ requestID: request.id, reply: "global" }).pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+      const interrupted = yield* Fiber.interrupt(fiber).pipe(Effect.forkScoped)
+      yield* Fiber.join(interrupted)
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(approved)
+
+      expect(replies).toEqual(["global"])
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toHaveLength(1)
+    }),
+  )
+
   it.effect("keeps multi-resource global persistence atomic and retryable", () =>
     Effect.gen(function* () {
       yield* setup()

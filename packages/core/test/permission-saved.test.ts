@@ -1,13 +1,14 @@
 import { describe, expect } from "bun:test"
 import { Database } from "@slopcode-ai/core/database/database"
+import { PermissionTable } from "@slopcode-ai/core/permission/sql"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { Project } from "@slopcode-ai/core/project"
 import { ProjectTable } from "@slopcode-ai/core/project/sql"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
-import { Effect, Layer } from "effect"
-import { eq } from "drizzle-orm"
+import { Effect, Exit, Layer } from "effect"
+import { eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -99,6 +100,50 @@ describe("PermissionSaved", () => {
       expect(yield* saved.remove({ id: item.id, scope: "session", sessionID: first })).toBe(true)
       expect(yield* saved.clear({ scope: "global" })).toBe(1)
       expect(yield* saved.list()).toEqual([])
+    }),
+  )
+
+  it.effect("rejects malformed scope match session and ownership combinations", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { db } = yield* Database.Service
+      const insert = (id: string, owner: string, scope: string, match: string, session?: string) =>
+        db.run(sql`
+          INSERT INTO permission
+            (id, project_id, action, resource, scope, match, session_id, time_created, time_updated)
+          VALUES (${id}, ${owner}, 'bash', 'git status', ${scope}, ${match}, ${session ?? null}, 1, 1)
+        `)
+
+      for (const row of [
+        ["psv_invalid_scope", projectID, "invalid", "pattern"],
+        ["psv_invalid_match", projectID, "project", "invalid"],
+        ["psv_project_exact", projectID, "project", "exact"],
+        ["psv_project_session", projectID, "project", "pattern", first],
+        ["psv_session_pattern", projectID, "session", "pattern", first],
+        ["psv_session_missing", projectID, "session", "exact"],
+        ["psv_session_owner", Project.ID.global, "session", "exact", first],
+        ["psv_global_project", projectID, "global", "exact"],
+        ["psv_global_session", Project.ID.global, "global", "exact", first],
+      ] as const) {
+        expect(Exit.isFailure(yield* insert(...row).pipe(Effect.exit))).toBe(true)
+      }
+      expect(yield* db.select().from(PermissionTable).all()).toEqual([])
+    }),
+  )
+
+  it.effect("filters malformed legacy rows during runtime decoding", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { db } = yield* Database.Service
+      yield* db.run(sql`PRAGMA ignore_check_constraints = ON`)
+      yield* db.run(sql`
+        INSERT INTO permission
+          (id, project_id, action, resource, scope, match, session_id, time_created, time_updated)
+        VALUES ('psv_malformed_runtime', ${projectID}, 'bash', 'git status', 'global', 'exact', NULL, 1, 1)
+      `)
+      yield* db.run(sql`PRAGMA ignore_check_constraints = OFF`)
+
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toEqual([])
     }),
   )
 })

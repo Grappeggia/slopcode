@@ -13,6 +13,7 @@ import { ACPSession } from "@/acp/session"
 type PermissionEvent = Extract<Event, { type: "permission.asked" }>
 type PermissionReplyParams = Parameters<SlopcodeClient["permission"]["reply"]>[0]
 type PermissionBatchReplyParams = Parameters<SlopcodeClient["permission"]["replyBatch"]>[0]
+type PermissionBatchReplyResult = { data?: boolean; error?: unknown }
 type SessionUpdateParams = Parameters<AgentSideConnection["sessionUpdate"]>[0]
 
 const pollUntil = async (
@@ -37,6 +38,8 @@ function makeSessionService() {
 function createHarness(
   requestPermission: (params: RequestPermissionRequest) => Promise<RequestPermissionResponse> = () =>
     Promise.resolve({ outcome: { outcome: "selected", optionId: "once" } }),
+  replyBatch: (params: PermissionBatchReplyParams) => Promise<PermissionBatchReplyResult> = () =>
+    Promise.resolve({ data: true }),
 ) {
   const replies: PermissionReplyParams[] = []
   const batches: PermissionBatchReplyParams[] = []
@@ -51,7 +54,7 @@ function createHarness(
       },
       replyBatch: (params: PermissionBatchReplyParams) => {
         batches.push(params)
-        return Promise.resolve({ data: true })
+        return replyBatch(params)
       },
     },
     session: {
@@ -252,6 +255,69 @@ describe("acp permissions", () => {
       reply: "once",
     })
     expect(harness.replies).toEqual([])
+  })
+
+  it("retains failed forecast batches for retry on SDK errors and throws", async () => {
+    let call = 0
+    const harness = createHarness(undefined, () => {
+      call++
+      if (call === 1) return Promise.resolve({ error: { name: "BatchError", data: { message: "failed" } } })
+      if (call === 2) return Promise.reject(new Error("transport failed"))
+      return Promise.resolve({ data: true })
+    })
+    await createSession(harness.session, "ses_a")
+    const first = permissionAsked("ses_a", "per_retry_one", {
+      kind: "forecast",
+      batchID: "pmb_retry",
+      batchSize: 2,
+    })
+    const second = permissionAsked("ses_a", "per_retry_two", {
+      kind: "forecast",
+      batchID: "pmb_retry",
+      batchSize: 2,
+    })
+
+    harness.subscription.handle(first)
+    harness.subscription.handle(second)
+    await pollUntil(() => harness.batches.length === 1, "failed batch was never attempted")
+    await pollUntil(() => {
+      harness.subscription.handle(second)
+      return harness.batches.length === 2
+    }, "SDK error did not leave the batch retryable")
+    await pollUntil(() => {
+      harness.subscription.handle(first)
+      return harness.batches.length === 3
+    }, "thrown error did not leave the batch retryable")
+
+    expect(harness.batches).toEqual([
+      expect.objectContaining({ batchID: "pmb_retry", requestIDs: ["per_retry_one", "per_retry_two"] }),
+      expect.objectContaining({ batchID: "pmb_retry", requestIDs: ["per_retry_one", "per_retry_two"] }),
+      expect.objectContaining({ batchID: "pmb_retry", requestIDs: ["per_retry_one", "per_retry_two"] }),
+    ])
+  })
+
+  it("rejects a forecast batch instead of flattening mixed selected scopes", async () => {
+    const harness = createHarness((params) =>
+      Promise.resolve({
+        outcome: {
+          outcome: "selected",
+          optionId: params.toolCall.toolCallId === "per_mixed_one" ? "session" : "once",
+        },
+      }),
+    )
+    await createSession(harness.session, "ses_a")
+    const batch = {
+      grant: { resources: ["git status"], scopes: ["session", "global"] as ("session" | "global")[] },
+      kind: "forecast" as const,
+      batchID: "pmb_mixed",
+      batchSize: 2,
+    }
+
+    harness.subscription.handle(permissionAsked("ses_a", "per_mixed_one", batch))
+    harness.subscription.handle(permissionAsked("ses_a", "per_mixed_two", batch))
+    await pollUntil(() => harness.batches.length === 1, "mixed forecast batch was never replied")
+
+    expect(harness.batches[0]).toMatchObject({ batchID: "pmb_mixed", requestIDs: [], reply: "reject" })
   })
 
   it("forwards external_directory metadata and locations to requestPermission", async () => {

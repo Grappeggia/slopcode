@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm"
-import { sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { check, foreignKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 import { Timestamps } from "../database/schema.sql"
 import type { ProjectV2 } from "../project"
 import { ProjectTable } from "../project/sql"
@@ -19,12 +19,21 @@ export const PermissionTable = sqliteTable(
     resource: text().notNull(),
     scope: text().$type<PermissionSaved.Scope>().notNull().default("project"),
     match: text().$type<PermissionSaved.Match>().notNull().default("pattern"),
-    session_id: text()
-      .$type<SessionSchema.ID>()
-      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    session_id: text().$type<SessionSchema.ID>(),
     ...Timestamps,
   },
   (table) => [
+    foreignKey({
+      columns: [table.session_id, table.project_id],
+      foreignColumns: [SessionTable.id, SessionTable.project_id],
+      name: "permission_session_owner_fk",
+    }).onDelete("cascade"),
+    check(
+      "permission_scope_match_check",
+      sql`(${table.scope} = 'project' AND ${table.match} = 'pattern' AND ${table.session_id} IS NULL)
+        OR (${table.scope} = 'session' AND ${table.match} = 'exact' AND ${table.session_id} IS NOT NULL)
+        OR (${table.scope} = 'global' AND ${table.match} = 'exact' AND ${table.session_id} IS NULL AND ${table.project_id} = 'global')`,
+    ),
     uniqueIndex("permission_project_scope_action_resource_match_idx")
       .on(table.project_id, table.scope, table.action, table.resource, table.match)
       .where(sql`${table.session_id} IS NULL`),

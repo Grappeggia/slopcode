@@ -9,6 +9,13 @@ import { Effect } from "effect"
 type PermissionEvent = Extract<Event, { type: "permission.asked" }>
 type Reply = "once" | "session" | "global" | "reject"
 type Connection = Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile">>
+type Batch = {
+  expected: number
+  events: Map<string, PermissionEvent>
+  sessionID: string
+  processing: boolean
+  decision?: { requestIDs: string[]; reply: Reply; edits: PermissionEvent[] }
+}
 
 const base: PermissionOption[] = [
   { optionId: "once", kind: "allow_once", name: "Allow once" },
@@ -23,10 +30,7 @@ const confirm: PermissionOption[] = [
 
 export class Handler {
   private readonly queues = new Map<string, Promise<void>>()
-  private readonly batches = new Map<
-    string,
-    { expected: number; events: Map<string, PermissionEvent>; sessionID: string }
-  >()
+  private readonly batches = new Map<string, Batch>()
 
   constructor(
     private readonly input: {
@@ -43,18 +47,21 @@ export class Handler {
         expected: permission.batchSize ?? 1,
         events: new Map<string, PermissionEvent>(),
         sessionID: permission.sessionID,
+        processing: false,
       }
       batch.expected = Math.max(batch.expected, permission.batchSize ?? 1)
       batch.events.set(permission.id, event)
       this.batches.set(permission.batchID, batch)
-      if (batch.events.size < batch.expected) return
-      this.batches.delete(permission.batchID)
-      this.enqueue(permission.sessionID, () =>
-        this.processBatch(
-          permission.batchID!,
-          [...batch.events.values()].toSorted((a, b) => a.properties.id.localeCompare(b.properties.id)),
-        ),
-      )
+      if (batch.events.size < batch.expected || batch.processing) return
+      batch.processing = true
+      this.enqueue(permission.sessionID, async () => {
+        try {
+          await this.processBatch(permission.batchID!, batch)
+          if (this.batches.get(permission.batchID!) === batch) this.batches.delete(permission.batchID!)
+        } catch {
+          if (this.batches.get(permission.batchID!) === batch) batch.processing = false
+        }
+      })
       return
     }
     this.enqueue(permission.sessionID, () => this.process(event))
@@ -82,28 +89,39 @@ export class Handler {
     await this.reply(permission.id, reply, session.cwd)
   }
 
-  private async processBatch(batchID: string, events: PermissionEvent[]) {
+  private async processBatch(batchID: string, batch: Batch) {
+    const events = [...batch.events.values()].toSorted((a, b) => a.properties.id.localeCompare(b.properties.id))
     const first = events[0]?.properties
     if (!first) return
     const session = await Effect.runPromise(this.input.session.tryGet(first.sessionID))
     if (!session) return
-    const selected: string[] = []
-    const replies: Reply[] = []
-    for (const event of events) {
-      const reply = await this.choose(event.properties)
-      if (reply === "reject") continue
-      selected.push(event.properties.id)
-      replies.push(reply)
-      if (event.properties.permission === "edit")
-        await this.writeProposedEdit(session.id, event.properties.metadata).catch(() => {})
+    if (!batch.decision) {
+      const selected: string[] = []
+      const replies: Reply[] = []
+      const edits: PermissionEvent[] = []
+      for (const event of events) {
+        const reply = await this.choose(event.properties)
+        if (reply === "reject") continue
+        selected.push(event.properties.id)
+        replies.push(reply)
+        if (event.properties.permission === "edit") edits.push(event)
+      }
+      const mixed = replies.some((reply) => reply !== replies[0])
+      batch.decision = {
+        requestIDs: mixed ? [] : selected,
+        reply: !selected.length || mixed ? "reject" : replies[0]!,
+        edits: mixed ? [] : edits,
+      }
     }
-    const reply = replies.length && replies.every((item) => item === replies[0]) ? replies[0]! : "once"
-    await this.input.sdk.permission.replyBatch({
+    const result = await this.input.sdk.permission.replyBatch({
       batchID,
-      requestIDs: selected,
-      reply: selected.length ? reply : "reject",
+      requestIDs: batch.decision.requestIDs,
+      reply: batch.decision.reply,
       directory: session.cwd,
     })
+    if ("error" in result && result.error) throw new Error("Forecast batch reply failed")
+    for (const event of batch.decision.edits)
+      await this.writeProposedEdit(session.id, event.properties.metadata).catch(() => {})
   }
 
   private async choose(permission: PermissionRequest): Promise<Reply> {

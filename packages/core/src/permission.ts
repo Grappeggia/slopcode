@@ -1,6 +1,6 @@
 export * as PermissionV2 from "./permission"
 
-import { Context, Deferred, Effect as EffectRuntime, Layer, Schema } from "effect"
+import { Context, Deferred, Effect as EffectRuntime, Layer, Schema, Semaphore } from "effect"
 import { EventV2 } from "./event"
 import { Location } from "./location"
 import { AgentV2 } from "./agent"
@@ -142,6 +142,7 @@ interface Pending {
   readonly agent?: AgentV2.ID
   readonly rules?: Ruleset
   readonly deferred: Deferred.Deferred<void, RejectedError | CorrectedError>
+  phase: "pending" | "replying"
 }
 
 export const layer = Layer.effect(
@@ -153,6 +154,7 @@ export const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const pending = new Map<ID, Pending>()
+    const lock = Semaphore.makeUnsafe(1)
     const legacy = location.project.id !== Project.ID.global && location.vcs?.type === "git"
 
     yield* EffectRuntime.addFinalizer(() =>
@@ -271,7 +273,7 @@ export const layer = Layer.effect(
       EffectRuntime.uninterruptible(
         EffectRuntime.gen(function* () {
           const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
-          const item = { request, agent, rules, deferred }
+          const item: Pending = { request, agent, rules, deferred, phase: "pending" }
           if (pending.has(request.id)) return yield* EffectRuntime.die(`Duplicate pending permission ID: ${request.id}`)
           pending.set(request.id, item)
           yield* events
@@ -301,8 +303,22 @@ export const layer = Layer.effect(
           const item = yield* create(request(input, result.grant ?? []), input.agent, input.rules)
           return yield* restore(Deferred.await(item.deferred)).pipe(
             EffectRuntime.ensuring(
-              EffectRuntime.sync(() => {
-                pending.delete(item.request.id)
+              EffectRuntime.gen(function* () {
+                const claimed = yield* lock.withPermit(
+                  EffectRuntime.sync(() => {
+                    if (pending.get(item.request.id) !== item || item.phase !== "pending") return false
+                    item.phase = "replying"
+                    pending.delete(item.request.id)
+                    return true
+                  }),
+                )
+                if (!claimed) return
+                yield* events.publish(Event.Replied, {
+                  sessionID: item.request.sessionID,
+                  requestID: item.request.id,
+                  reply: "reject",
+                })
+                yield* Deferred.fail(item.deferred, new RejectedError())
               }),
             ),
           )
@@ -310,109 +326,167 @@ export const layer = Layer.effect(
       ),
     )
 
+    const claim = (requestID: ID) =>
+      lock.withPermit(
+        EffectRuntime.gen(function* () {
+          const item = pending.get(requestID)
+          if (!item || item.phase !== "pending") return yield* new NotFoundError({ requestID })
+          item.phase = "replying"
+          return item
+        }),
+      )
+
+    const release = (item: Pending) =>
+      lock.withPermit(
+        EffectRuntime.sync(() => {
+          if (pending.get(item.request.id) === item && item.phase === "replying") item.phase = "pending"
+        }),
+      )
+
+    const settle = (item: Pending, reply: Reply, error?: RejectedError | CorrectedError) =>
+      EffectRuntime.gen(function* () {
+        yield* events.publish(Event.Replied, {
+          sessionID: item.request.sessionID,
+          requestID: item.request.id,
+          reply,
+        })
+        yield* lock.withPermit(
+          EffectRuntime.gen(function* () {
+            if (pending.get(item.request.id) !== item || item.phase !== "replying") return
+            pending.delete(item.request.id)
+            if (error) yield* Deferred.fail(item.deferred, error)
+            else yield* Deferred.succeed(item.deferred, undefined)
+          }),
+        )
+      })
+
     const reply = EffectRuntime.fn("PermissionV2.reply")((input: ReplyInput) =>
       EffectRuntime.uninterruptible(
         EffectRuntime.gen(function* () {
-          const existing = pending.get(input.requestID)
-          if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
-          const current = yield* evaluateInput({
-            ...existing.request,
-            agent: existing.agent,
-            rules: existing.rules,
-          }).pipe(
-            EffectRuntime.catchTag("Session.NotFoundError", () =>
-              EffectRuntime.fail(new NotFoundError({ requestID: input.requestID })),
-            ),
-          )
-          const requested =
-            input.reply === "always" && !existing.request.save?.length
-              ? ("once" as const)
-              : (input.reply === "session" || input.reply === "global") &&
-                  (!existing.request.grant?.resources.length || current.forced)
+          const existing = yield* claim(input.requestID)
+          return yield* EffectRuntime.gen(function* () {
+            const current =
+              input.reply === "reject"
+                ? undefined
+                : yield* evaluateInput({
+                    ...existing.request,
+                    agent: existing.agent,
+                    rules: existing.rules,
+                  }).pipe(
+                    EffectRuntime.catchTag("Session.NotFoundError", () =>
+                      EffectRuntime.fail(new NotFoundError({ requestID: input.requestID })),
+                    ),
+                  )
+            const requested =
+              input.reply === "always" && !existing.request.save?.length
                 ? ("once" as const)
-                : input.reply
-          const answer =
-            current.effect === "deny" ? ("reject" as const) : current.effect === "allow" ? "once" : requested
+                : (input.reply === "session" || input.reply === "global") &&
+                    (!existing.request.grant?.resources.length || current?.forced)
+                  ? ("once" as const)
+                  : input.reply
+            const shown = new Set(existing.request.grant?.resources ?? [])
+            const resources = current?.grant.filter((resource) => shown.has(resource)) ?? []
+            const expanded = current?.grant.some((resource) => !shown.has(resource))
+            const answer =
+              input.reply === "reject" || current?.effect === "deny" || expanded
+                ? ("reject" as const)
+                : current?.effect === "allow"
+                  ? "once"
+                  : requested
 
-          if (answer === "always") {
-            yield* saved.add({
-              scope: "project",
-              projectID: location.project.id,
-              action: existing.request.action,
-              resources: existing.request.save ?? [],
-            })
-          }
-          if (answer === "session")
-            yield* saved.add({
-              scope: "session",
-              sessionID: existing.request.sessionID,
-              action: existing.request.action,
-              resources: current.grant,
-            })
-          if (answer === "global")
-            yield* saved.add({
-              scope: "global",
-              action: existing.request.action,
-              resources: current.grant,
-            })
-
-          yield* events.publish(Event.Replied, {
-            sessionID: existing.request.sessionID,
-            requestID: existing.request.id,
-            reply: answer,
-          })
-
-          if (answer === "reject") {
-            yield* Deferred.fail(
-              existing.deferred,
-              input.message ? new CorrectedError({ feedback: input.message }) : new RejectedError(),
-            )
-            pending.delete(input.requestID)
-            for (const [id, item] of pending) {
-              if (item.request.sessionID !== existing.request.sessionID) continue
-              yield* events.publish(Event.Replied, {
-                sessionID: item.request.sessionID,
-                requestID: item.request.id,
-                reply: "reject",
+            if (answer === "always") {
+              yield* saved.add({
+                scope: "project",
+                projectID: location.project.id,
+                action: existing.request.action,
+                resources: existing.request.save ?? [],
               })
-              yield* Deferred.fail(item.deferred, new RejectedError())
-              pending.delete(id)
             }
-            return
-          }
+            if (answer === "session")
+              yield* saved.add({
+                scope: "session",
+                sessionID: existing.request.sessionID,
+                action: existing.request.action,
+                resources,
+              })
+            if (answer === "global")
+              yield* saved.add({
+                scope: "global",
+                action: existing.request.action,
+                resources,
+              })
 
-          yield* Deferred.succeed(existing.deferred, undefined)
-          pending.delete(input.requestID)
-          if (answer !== "always" && answer !== "session" && answer !== "global") return
+            if (answer === "reject") {
+              const related = yield* lock.withPermit(
+                EffectRuntime.sync(() =>
+                  Array.from(pending.values()).filter((item) => {
+                    if (
+                      item === existing ||
+                      item.phase !== "pending" ||
+                      item.request.sessionID !== existing.request.sessionID
+                    )
+                      return false
+                    item.phase = "replying"
+                    return true
+                  }),
+                ),
+              )
+              yield* settle(
+                existing,
+                answer,
+                input.message ? new CorrectedError({ feedback: input.message }) : new RejectedError(),
+              )
+              yield* EffectRuntime.forEach(related, (item) => settle(item, "reject", new RejectedError()), {
+                discard: true,
+              })
+              return
+            }
 
-          for (const [id, item] of pending) {
-            if (answer !== "global" && item.request.sessionID !== existing.request.sessionID) continue
-            const result = yield* evaluateInput({ ...item.request, agent: item.agent, rules: item.rules }).pipe(
-              EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
+            yield* settle(existing, answer)
+            if (answer !== "always" && answer !== "session" && answer !== "global") return
+
+            const candidates = yield* lock.withPermit(
+              EffectRuntime.sync(() =>
+                Array.from(pending.values()).filter(
+                  (item) =>
+                    item.phase === "pending" &&
+                    (answer === "global" || item.request.sessionID === existing.request.sessionID),
+                ),
+              ),
             )
-            if (!result || result.effect !== "allow") continue
-            yield* events.publish(Event.Replied, {
-              sessionID: item.request.sessionID,
-              requestID: item.request.id,
-              reply: answer,
-            })
-            yield* Deferred.succeed(item.deferred, undefined)
-            pending.delete(id)
-          }
+            for (const item of candidates) {
+              const result = yield* evaluateInput({ ...item.request, agent: item.agent, rules: item.rules }).pipe(
+                EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
+              )
+              if (!result || result.effect !== "allow") continue
+              const claimed = yield* lock.withPermit(
+                EffectRuntime.gen(function* () {
+                  if (pending.get(item.request.id) !== item || item.phase !== "pending") return false
+                  item.phase = "replying"
+                  return true
+                }),
+              )
+              if (claimed) yield* settle(item, answer)
+            }
+          }).pipe(EffectRuntime.onError(() => release(existing)))
         }),
       ),
     )
 
     const list = EffectRuntime.fn("PermissionV2.list")(function* () {
-      return Array.from(pending.values(), (item) => item.request)
+      return yield* lock.withPermit(EffectRuntime.sync(() => Array.from(pending.values(), (item) => item.request)))
     })
 
     const get = EffectRuntime.fn("PermissionV2.get")(function* (id: ID) {
-      return pending.get(id)?.request
+      return yield* lock.withPermit(EffectRuntime.sync(() => pending.get(id)?.request))
     })
 
     const forSession = EffectRuntime.fn("PermissionV2.forSession")(function* (sessionID: SessionV2.ID) {
-      return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
+      return yield* lock.withPermit(
+        EffectRuntime.sync(() =>
+          Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID),
+        ),
+      )
     })
 
     return Service.of({ ask, assert, reply, get, forSession, list })

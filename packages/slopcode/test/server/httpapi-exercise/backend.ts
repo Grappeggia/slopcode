@@ -19,14 +19,17 @@ export function call(scenario: ActiveScenario, ctx: SeededContext<unknown>, opti
 
 export function callAuthProbe(scenario: ActiveScenario, credentials: "missing" | "valid" = "missing") {
   return Effect.promise(async () => {
+    const backend = app(await runtime(), { auth: { password: "secret" } })
+    const response = await backend.request("http://localhost/global/health", {
+      headers: { authorization: basic("slopcode", "secret") },
+    })
+    await response.arrayBuffer()
     const controller = new AbortController()
     return Promise.race([
-      Promise.resolve(
-        app(await runtime(), { auth: { password: "secret" } }).request(
-          toAuthProbeRequest(scenario, credentials, controller.signal),
-        ),
-      ).then((response) => capture(response, scenario.capture)),
-      Bun.sleep(5_000).then(() => {
+      Promise.resolve(backend.request(toAuthProbeRequest(scenario, credentials, controller.signal))).then((response) =>
+        capture(response, scenario.capture),
+      ),
+      Bun.sleep(1_000).then(() => {
         controller.abort("auth probe timed out")
         return {
           status: 0,

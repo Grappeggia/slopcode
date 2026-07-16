@@ -28,5 +28,17 @@ export const Info = Schema.Struct({
   match: Match,
   action: Schema.String,
   resource: Schema.String,
-}).annotate({ identifier: "PermissionSaved.Info" })
+})
+  .check(
+    Schema.makeFilter((value) => {
+      if (value.scope === "project")
+        return value.match === "pattern" && value.sessionID === undefined ? undefined : "Invalid project permission"
+      if (value.scope === "global")
+        return value.match === "exact" && value.sessionID === undefined && value.projectID === ProjectID.global
+          ? undefined
+          : "Invalid global permission"
+      return value.match === "exact" && value.sessionID !== undefined ? undefined : "Invalid session permission"
+    }),
+  )
+  .annotate({ identifier: "PermissionSaved.Info" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}

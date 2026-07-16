@@ -114,7 +114,10 @@ export default {
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
           CONSTRAINT \`fk_permission_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE,
-          CONSTRAINT \`fk_permission_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
+          CONSTRAINT \`permission_session_owner_fk\` FOREIGN KEY (\`session_id\`,\`project_id\`) REFERENCES \`session\`(\`id\`,\`project_id\`) ON DELETE CASCADE,
+          CONSTRAINT "permission_scope_match_check" CHECK(("scope" = 'project' AND "match" = 'pattern' AND "session_id" IS NULL)
+                OR ("scope" = 'session' AND "match" = 'exact' AND "session_id" IS NOT NULL)
+                OR ("scope" = 'global' AND "match" = 'exact' AND "session_id" IS NULL AND "project_id" = 'global'))
         );
       `)
       yield* tx.run(`
@@ -319,6 +322,7 @@ export default {
       )
       yield* tx.run(`CREATE INDEX \`session_message_time_created_idx\` ON \`session_message\` (\`time_created\`);`)
       yield* tx.run(`CREATE INDEX \`session_project_idx\` ON \`session\` (\`project_id\`);`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`session_id_project_idx\` ON \`session\` (\`id\`,\`project_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_workspace_idx\` ON \`session\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);`)
       yield* tx.run(`CREATE INDEX \`todo_session_idx\` ON \`todo\` (\`session_id\`);`)

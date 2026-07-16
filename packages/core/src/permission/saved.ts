@@ -34,7 +34,19 @@ export const Info = Schema.Struct({
   match: Match,
   action: Schema.String,
   resource: Schema.String,
-}).annotate({ identifier: "PermissionSaved.Info" })
+})
+  .check(
+    Schema.makeFilter((value) => {
+      if (value.scope === "project")
+        return value.match === "pattern" && value.sessionID === undefined ? undefined : "Invalid project permission"
+      if (value.scope === "global")
+        return value.match === "exact" && value.sessionID === undefined && value.projectID === ProjectV2.ID.global
+          ? undefined
+          : "Invalid global permission"
+      return value.match === "exact" && value.sessionID !== undefined ? undefined : "Invalid session permission"
+    }),
+  )
+  .annotate({ identifier: "PermissionSaved.Info" })
 export type Info = typeof Info.Type
 
 export const ListInput = Schema.Struct({
@@ -115,22 +127,28 @@ export const layer = Layer.effect(
       if (input?.sessionID) filters.push(eq(PermissionTable.session_id, input.sessionID))
       if (input?.scope) filters.push(eq(PermissionTable.scope, input.scope))
       const rows = yield* db
-        .select()
+        .select({
+          row: PermissionTable,
+          owner: SessionTable.project_id,
+        })
         .from(PermissionTable)
+        .leftJoin(SessionTable, eq(PermissionTable.session_id, SessionTable.id))
         .where(filters.length ? and(...filters) : undefined)
         .all()
         .pipe(Effect.orDie)
-      return rows.map(
-        (row): Info => ({
-          id: row.id,
-          projectID: row.project_id,
-          ...(row.session_id ? { sessionID: row.session_id } : {}),
-          scope: row.scope,
-          match: row.match,
-          action: row.action,
-          resource: row.resource,
-        }),
-      )
+      return rows
+        .map((item) => ({
+          id: item.row.id,
+          projectID: item.row.project_id,
+          ...(item.row.session_id ? { sessionID: item.row.session_id } : {}),
+          scope: item.row.scope,
+          match: item.row.match,
+          action: item.row.action,
+          resource: item.row.resource,
+          owner: item.owner,
+        }))
+        .filter((item) => Schema.is(Info)(item) && (item.scope !== "session" || item.owner === item.projectID))
+        .map(({ owner: _, ...item }) => item)
     })
 
     const addBatch = Effect.fn("PermissionSaved.addBatch")(function* (input: AddBatchInput) {

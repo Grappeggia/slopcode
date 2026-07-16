@@ -2163,6 +2163,96 @@ it.instance(
 )
 
 it.instance(
+  "ordinary scoped replies fail closed when live policy expands beyond the displayed grant",
+  () =>
+    Effect.gen(function* () {
+      const policy = yield* Ref.make<PermissionV1.Ruleset>([
+        { permission: "bash", pattern: "*", action: "ask" },
+        { permission: "bash", pattern: "configured", action: "allow" },
+      ])
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({ scope: "global", action: "bash", resources: ["revoked"] })
+      const prior = (yield* saved.list({ scope: "global" }))[0]
+      const fiber = yield* ask({
+        id: PermissionV1.ID.make("per_live_expansion"),
+        sessionID: SessionID.make("ses_live_expansion"),
+        permission: "bash",
+        patterns: ["shown", "configured", "revoked"],
+        metadata: {},
+        always: [],
+        ruleset: yield* Ref.get(policy),
+        policy: () => Ref.get(policy),
+      }).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(1)
+      expect(pending[0].grant?.resources).toEqual(["shown"])
+
+      yield* Ref.set(policy, [{ permission: "bash", pattern: "*", action: "ask" }])
+      yield* saved.remove({ id: prior.id, scope: "global" })
+      yield* reply({ requestID: PermissionV1.ID.make("per_live_expansion"), reply: "global" })
+
+      expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
+      expect(yield* saved.list({ scope: "global" })).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ordinary scoped replies persist only displayed resources still unresolved",
+  () =>
+    Effect.gen(function* () {
+      const policy = yield* Ref.make<PermissionV1.Ruleset>([{ permission: "bash", pattern: "*", action: "ask" }])
+      const fiber = yield* ask({
+        id: PermissionV1.ID.make("per_live_narrowing"),
+        sessionID: SessionID.make("ses_live_narrowing"),
+        permission: "bash",
+        patterns: ["keep", "narrowed"],
+        metadata: {},
+        always: [],
+        ruleset: yield* Ref.get(policy),
+        policy: () => Ref.get(policy),
+      }).pipe(Effect.forkScoped)
+      expect((yield* waitForPending(1))[0].grant?.resources).toEqual(["keep", "narrowed"])
+      yield* Ref.set(policy, [
+        { permission: "bash", pattern: "*", action: "ask" },
+        { permission: "bash", pattern: "narrowed", action: "allow" },
+      ])
+
+      yield* reply({ requestID: PermissionV1.ID.make("per_live_narrowing"), reply: "global" })
+      yield* Fiber.join(fiber)
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toMatchObject([
+        { action: "bash", resource: "keep" },
+      ])
+    }),
+  { git: true },
+)
+
+it.instance(
+  "reply - explicit reject still rejects after live policy allows",
+  () =>
+    Effect.gen(function* () {
+      const policy = yield* Ref.make<PermissionV1.Ruleset>([{ permission: "bash", pattern: "*", action: "ask" }])
+      const fiber = yield* ask({
+        id: PermissionV1.ID.make("per_reject_after_allow"),
+        sessionID: SessionID.make("ses_reject_after_allow"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: yield* Ref.get(policy),
+        policy: () => Ref.get(policy),
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* Ref.set(policy, [{ permission: "bash", pattern: "*", action: "allow" }])
+      yield* reply({ requestID: PermissionV1.ID.make("per_reject_after_allow"), reply: "reject" })
+
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(PermissionV1.RejectedError)
+    }),
+  { git: true },
+)
+
+it.instance(
   "reply - always persists approval and resolves",
   () =>
     Effect.gen(function* () {
