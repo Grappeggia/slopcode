@@ -20,6 +20,7 @@ import {
   onMount,
   onCleanup,
   batch,
+  For,
   Show,
   on,
 } from "solid-js"
@@ -1133,7 +1134,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           <SessionStrip />
           <Switch>
             <Match when={route.data.type === "home"}>
-              <Home />
+              <For each={[tabs.draft()]}>{() => <Home />}</For>
             </Match>
             <Match when={route.data.type === "session"}>
               <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>

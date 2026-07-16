@@ -148,7 +148,7 @@ function formatEditorContext(selection: EditorSelection) {
   return `<system-reminder>${ranges.join("\n")} This may or may not be relevant to the current task.</system-reminder>\n`
 }
 
-let stashed: { prompt: PromptInfo; cursor: number } | undefined
+let stashed: { prompt: PromptInfo; cursor: number; owner: string } | undefined
 
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
@@ -167,6 +167,7 @@ export function Prompt(props: PromptProps) {
   const project = useProject()
   const sync = useSync()
   const tabs = useSessionTabs()
+  const promptOwner = props.sessionID ? `${tabs.scope}:${props.sessionID}` : tabs.draft()
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
@@ -663,7 +664,7 @@ export function Prompt(props: PromptProps) {
     const saved = stashed
     stashed = undefined
     if (store.prompt.input) return
-    if (saved && saved.prompt.input) {
+    if (saved?.owner === promptOwner && saved.prompt.input) {
       input.setText(saved.prompt.input)
       setStore("prompt", saved.prompt)
       restoreExtmarksFromParts(saved.prompt.parts)
@@ -674,7 +675,7 @@ export function Prompt(props: PromptProps) {
   onCleanup(() => {
     ghost?.clear()
     if (store.prompt.input) {
-      stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
+      stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset, owner: promptOwner }
     }
     setInputTarget(undefined)
     props.ref?.(undefined)
@@ -975,25 +976,32 @@ export function Prompt(props: PromptProps) {
     }
   })
 
-  let submitting = false
+  const submitting = new Set<string>()
+  let disposed = false
+  onCleanup(() => (disposed = true))
+  createEffect(
+    on(
+      tabs.draft,
+      () => {
+        if (!props.sessionID) resetPrompt()
+      },
+      { defer: true },
+    ),
+  )
   async function submit() {
     ghost?.clear()
-    // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
-    // input's native onSubmit racing another dispatch). Without this guard,
-    // a second call slips past the empty-input check before the first call
-    // clears `store.prompt.input`, then awaits its own `session.create` and
-    // ultimately reads the now-empty store — sending a phantom empty prompt
-    // to a freshly created session.
-    if (submitting) return false
-    submitting = true
+    const owner = props.sessionID ? promptOwner : tabs.draft()
+    if (submitting.has(owner)) return false
+    submitting.add(owner)
     try {
-      return await submitInner()
+      return await submitInner(owner)
     } finally {
-      submitting = false
+      submitting.delete(owner)
     }
   }
 
-  async function submitInner() {
+  async function submitInner(owner: string) {
+    const current = () => !disposed && (props.sessionID ? promptOwner === owner : tabs.draft() === owner)
     workspace.clearNotice()
 
     // IME: double-defer may fire before onContentChange flushes the last
@@ -1005,18 +1013,18 @@ export function Prompt(props: PromptProps) {
     }
     if (props.disabled) return false
     if (workspace.creating() || move.creating()) return false
-    const agent = local.agent.current()
-    if (!agent) return false
+    const currentAgent = local.agent.current()
+    if (!currentAgent) return false
     if (auto()?.visible) return false
-    if (!store.prompt.input && agent.name !== "goal") return false
+    if (!store.prompt.input && currentAgent.name !== "goal") return false
     const trimmed = store.prompt.input.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       void exit()
       return true
     }
-    const selectedModel = local.model.current()
-    if (!selectedModel && agent.name !== "goal") {
-      void promptModelWarning()
+    const currentModel = local.model.current()
+    if (!currentModel && currentAgent.name !== "goal") {
+      promptModelWarning()
       return false
     }
 
@@ -1045,102 +1053,22 @@ export function Prompt(props: PromptProps) {
       return true
     }
 
-    let sessionID = props.sessionID
-    let finishMoveProgress = false
-    if (sessionID == null) {
-      if (!selectedModel) {
-        void promptModelWarning()
-        return false
-      }
-      const selectedWorkspace = workspace.selection()
-      const workspaceID = selectedWorkspace?.type === "existing" ? selectedWorkspace.workspaceID : undefined
-
-      const directory = await move.getDirectory(store.prompt.input)
-      if (move.pending() && !directory) return false
-      finishMoveProgress = Boolean(move.progress())
-
-      const res = await sdk.client.session.create({
-        directory,
-        workspace: workspaceID,
-        agent: agent.name,
-        model: {
-          providerID: selectedModel.providerID,
-          id: selectedModel.modelID,
-          variant,
-        },
-      })
-
-      if (res.error) {
-        if (finishMoveProgress) move.finishSubmit()
-        console.log("Creating a session failed:", res.error)
-
-        toast.show({
-          message: "Creating a session failed. Open console for more details.",
-          variant: "error",
-        })
-
-        return true
-      }
-
-      sessionID = res.data.id
-      tabs.promoteDraft({
-        id: sessionID,
-        title: res.data.title,
-        workspaceID: res.data.workspaceID,
-      })
-    }
-
+    const prompt = structuredClone(unwrap(store.prompt))
+    const mode = store.mode
     const inputText = expandTrackedPastedText(
-      store.prompt.input,
+      prompt.input,
       input.extmarks.getAllForTypeId(promptPartTypeId).flatMap((extmark) => {
         const partIndex = store.extmarkToPartIndex.get(extmark.id)
-        const part = partIndex === undefined ? undefined : store.prompt.parts[partIndex]
+        const part = partIndex === undefined ? undefined : prompt.parts[partIndex]
         if (part?.type !== "text") return []
         return [{ start: extmark.start, end: extmark.end, text: part.text }]
       }),
     )
-
-    // Filter out text parts (pasted content) since they're now expanded inline
-    const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
-
-    if (agent.name === "goal") {
-      const current = sync.session.get(sessionID)?.metadata
-      const existing = goal(current?.goal)
-      const result = goalAction(inputText, existing)
-
-      if (result.type === "show") {
-        await DialogAlert.show(dialog, "Goal", result.message)
-        resetPrompt()
-        return true
-      }
-
-      if (result.type === "missing") {
-        toast.show({ message: result.message, variant: "warning" })
-        resetPrompt()
-        return true
-      }
-
-      const updated = await sdk.client.session.update({
-        sessionID,
-        metadata: goalMetadata(current, result.next),
-      })
-      if (updated.error) {
-        toast.show({ message: errorMessage(updated.error), variant: "error" })
-        return false
-      }
-      toast.show({ message: result.message, variant: "success" })
-      resetPrompt()
-      dialog.clear()
-      return true
-    }
-
-    if (!selectedModel) {
-      void promptModelWarning()
-      return false
-    }
-
-    // Capture mode before it gets reset
-    const currentMode = store.mode
+    const parts = prompt.parts.filter((part) => part.type !== "text")
+    const agent = currentAgent.name
+    const selectedModel = currentModel
+      ? { providerID: currentModel.providerID, modelID: currentModel.modelID }
+      : undefined
     const editorSelection = editorContext()
     const editorParts =
       editorSelection && editor.labelState() === "pending"
@@ -1158,25 +1086,124 @@ export function Prompt(props: PromptProps) {
             },
           ]
         : []
+    const selectedWorkspace = workspace.selection()
+    const projectDirectory = project.instance.directory()
+    const projectWorkspace = project.workspace.current()
+    const commandName = inputText.startsWith("/") ? inputText.split("\n")[0].split(" ")[0].slice(1) : undefined
+    const isCommand = commandName !== undefined && sync.data.command.some((item) => item.name === commandName)
+    const target = props.sessionID
+      ? {
+          sessionID: props.sessionID,
+          directory: workspaceSession?.directory ?? projectDirectory,
+          workspace: workspaceSession?.workspaceID,
+          created: undefined,
+          finish: false,
+        }
+      : await (async () => {
+          if (!selectedModel) {
+            promptModelWarning()
+            return undefined
+          }
+          const directory = await move.getDirectory(inputText)
+          if (move.pending() && !directory) return undefined
+          const finish = Boolean(move.progress())
+          const workspaceID = selectedWorkspace
+            ? selectedWorkspace.type === "existing"
+              ? selectedWorkspace.workspaceID
+              : undefined
+            : projectWorkspace
+          const res = await sdk.client.session.create({
+            directory: directory ?? projectDirectory,
+            workspace: workspaceID,
+            agent,
+            model: {
+              providerID: selectedModel.providerID,
+              id: selectedModel.modelID,
+              variant,
+            },
+          })
 
-    if (store.mode === "shell") {
+          if (res.error) {
+            if (finish && current()) move.finishSubmit()
+            console.log("Creating a session failed:", res.error)
+            toast.show({
+              message: "Creating a session failed. Open console for more details.",
+              variant: "error",
+            })
+            return undefined
+          }
+
+          return {
+            sessionID: res.data.id,
+            directory: res.data.directory,
+            workspace: res.data.workspaceID,
+            created: res.data,
+            finish,
+          }
+        })()
+    if (!target) return false
+    const sessionID = target.sessionID
+
+    if (currentAgent.name === "goal") {
+      if (target.created && current())
+        tabs.promoteDraft(
+          {
+            id: target.created.id,
+            title: target.created.title,
+            workspaceID: target.created.workspaceID,
+          },
+          owner,
+        )
+      const currentMetadata = sync.session.get(sessionID)?.metadata
+      const existing = goal(currentMetadata?.goal)
+      const result = goalAction(inputText, existing)
+
+      if (result.type === "show") {
+        await DialogAlert.show(dialog, "Goal", result.message)
+        if (current()) resetPrompt()
+        return true
+      }
+
+      if (result.type === "missing") {
+        toast.show({ message: result.message, variant: "warning" })
+        if (current()) resetPrompt()
+        return true
+      }
+
+      const updated = await sdk.client.session.update({
+        sessionID,
+        metadata: goalMetadata(currentMetadata, result.next),
+      })
+      if (updated.error) {
+        toast.show({ message: errorMessage(updated.error), variant: "error" })
+        return false
+      }
+      toast.show({ message: result.message, variant: "success" })
+      if (current()) {
+        resetPrompt()
+        dialog.clear()
+      }
+      return true
+    }
+
+    if (!selectedModel) {
+      promptModelWarning()
+      return false
+    }
+
+    if (mode === "shell") {
       move.startSubmit()
       void sdk.client.session.shell({
         sessionID,
-        agent: agent.name,
-        model: {
-          providerID: selectedModel.providerID,
-          modelID: selectedModel.modelID,
-        },
+        directory: target.directory,
+        workspace: target.workspace,
+        agent,
+        model: selectedModel,
         command: inputText,
       })
-      setStore("mode", "normal")
-    } else if (
-      inputText.startsWith("/") &&
-      sync.data.command.some((x) => x.name === inputText.split("\n")[0].split(" ")[0].slice(1))
-    ) {
+      if (current()) setStore("mode", "normal")
+    } else if (isCommand) {
       move.startSubmit()
-      // Parse command from first line, preserve multi-line content in arguments
       const firstLineEnd = inputText.indexOf("\n")
       const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
       const [command, ...firstLineArgs] = firstLine.split(" ")
@@ -1185,21 +1212,24 @@ export function Prompt(props: PromptProps) {
 
       void sdk.client.session.command({
         sessionID,
+        directory: target.directory,
+        workspace: target.workspace,
         command: command.slice(1),
         arguments: args,
-        agent: agent.name,
+        agent,
         model: `${selectedModel.providerID}/${selectedModel.modelID}`,
         variant,
-        parts: nonTextParts.filter((x) => x.type === "file"),
+        parts: parts.filter((part) => part.type === "file"),
       })
     } else {
       move.startSubmit()
-      sdk.client.session
-        .prompt(
+      try {
+        await sdk.client.session.prompt(
           {
             sessionID,
-            ...selectedModel,
-            agent: agent.name,
+            directory: target.directory,
+            workspace: target.workspace,
+            agent,
             model: selectedModel,
             variant,
             parts: [
@@ -1208,44 +1238,42 @@ export function Prompt(props: PromptProps) {
                 type: "text",
                 text: inputText,
               },
-              ...nonTextParts,
+              ...parts,
             ],
           },
           { throwOnError: true },
         )
-        .catch((error) => {
-          toast.show({
-            title: "Failed to send prompt",
-            message: errorMessage(error),
-            variant: "error",
-          })
+      } catch (error) {
+        toast.show({
+          title: "Failed to send prompt",
+          message: errorMessage(error),
+          variant: "error",
         })
-      if (editorParts.length > 0) editor.markSelectionSent()
+        if (target.finish && current()) move.finishSubmit()
+        return false
+      }
     }
-    history.append({
-      ...store.prompt,
-      mode: currentMode,
-    })
-    input.extmarks.clear()
-    setStore("prompt", {
-      input: "",
-      parts: [],
-    })
-    setStore("extmarkToPartIndex", new Map())
+
+    history.append({ ...prompt, mode })
+    if (!current()) return true
+    if (target.created)
+      tabs.promoteDraft(
+        {
+          id: target.created.id,
+          title: target.created.title,
+          workspaceID: target.created.workspaceID,
+        },
+        owner,
+      )
+    if (editorParts.length > 0) editor.markSelectionSent()
+    resetPrompt()
     props.onSubmit?.()
 
-    // temporary hack to make sure the message is sent
     if (!props.sessionID) {
       if (editorParts.length > 0) editor.preserveSelectionFromNewSession()
-      setTimeout(() => {
-        route.navigate({
-          type: "session",
-          sessionID,
-        })
-      }, 50)
+      route.navigate({ type: "session", sessionID })
     }
-    input.clear()
-    if (finishMoveProgress) move.finishSubmit()
+    if (target.finish) move.finishSubmit()
     return true
   }
 

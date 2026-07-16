@@ -28,6 +28,8 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
     const sync = useSync()
     const project = useProject()
     const [state, setState] = createSignal<SessionTabsState>({ tabs: [] })
+    const scope = crypto.randomUUID()
+    const [draft, setDraft] = createSignal(crypto.randomUUID().toString())
     const roots = new Map<string, string>()
     const families = createMemo(() => sessionFamilyIndex(sync.data.session))
 
@@ -156,6 +158,8 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       tabs,
       ids,
       active,
+      scope,
+      draft,
       visible: createMemo(() => tabs().length > 0),
       switchable: createMemo(() => ids().length > 1),
       open,
@@ -167,11 +171,14 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
         return move(1)
       },
       openDraft() {
+        setDraft(crypto.randomUUID())
         setState((value) => openDraftTab(value))
         route.navigate({ type: "home" })
       },
-      promoteDraft(input: SessionTabDescriptor) {
+      promoteDraft(input: SessionTabDescriptor, owner = draft()) {
+        if (owner !== draft()) return false
         setState((value) => promoteDraftTab(value, input))
+        return true
       },
     }
   },
