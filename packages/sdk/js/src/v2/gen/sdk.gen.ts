@@ -316,6 +316,8 @@ import type {
   V2ModelListResponses,
   V2PermissionRequestListErrors,
   V2PermissionRequestListResponses,
+  V2PermissionSavedClearErrors,
+  V2PermissionSavedClearResponses,
   V2PermissionSavedListErrors,
   V2PermissionSavedListResponses,
   V2PermissionSavedRemoveErrors,
@@ -352,6 +354,12 @@ import type {
   V2SessionPermissionListResponses,
   V2SessionPermissionReplyErrors,
   V2SessionPermissionReplyResponses,
+  V2SessionPermissionSavedClearErrors,
+  V2SessionPermissionSavedClearResponses,
+  V2SessionPermissionSavedListErrors,
+  V2SessionPermissionSavedListResponses,
+  V2SessionPermissionSavedRemoveErrors,
+  V2SessionPermissionSavedRemoveResponses,
   V2SessionPromptErrors,
   V2SessionPromptResponses,
   V2SessionQuestionListErrors,
@@ -3214,7 +3222,7 @@ export class Permission extends HeyApiClient {
       requestID: string
       directory?: string
       workspace?: string
-      reply?: "once" | "always" | "reject"
+      reply?: "once" | "session" | "global" | "always" | "reject"
       message?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -3256,7 +3264,7 @@ export class Permission extends HeyApiClient {
       directory?: string
       workspace?: string
       requestIDs?: Array<string>
-      reply?: "once" | "always" | "reject"
+      reply?: "once" | "session" | "global" | "always" | "reject"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3303,7 +3311,7 @@ export class Permission extends HeyApiClient {
       permissionID: string
       directory?: string
       workspace?: string
-      response?: "once" | "always" | "reject"
+      response?: "once" | "session" | "global" | "always" | "reject"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5396,6 +5404,104 @@ export class Agent extends HeyApiClient {
   }
 }
 
+export class Saved extends HeyApiClient {
+  /**
+   * List session permission grants
+   *
+   * Retrieve exact grants owned by one session.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<
+      V2SessionPermissionSavedListResponses,
+      V2SessionPermissionSavedListErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/permission/saved",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Remove session permission grant
+   *
+   * Remove an exact grant owned by one session.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      V2SessionPermissionSavedRemoveResponses,
+      V2SessionPermissionSavedRemoveErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/permission/saved/{id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Clear session permission grants
+   *
+   * Clear every exact grant owned by one explicitly confirmed session.
+   */
+  public clear<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      confirm?: true
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "confirm" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      V2SessionPermissionSavedClearResponses,
+      V2SessionPermissionSavedClearErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/permission/saved/clear",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Permission2 extends HeyApiClient {
   /**
    * List session permission requests
@@ -5461,6 +5567,11 @@ export class Permission2 extends HeyApiClient {
         ...params.headers,
       },
     })
+  }
+
+  private _saved?: Saved
+  get saved(): Saved {
+    return (this._saved ??= new Saved({ client: this.client }))
   }
 }
 
@@ -6334,7 +6445,7 @@ export class Request extends HeyApiClient {
   }
 }
 
-export class Saved extends HeyApiClient {
+export class Saved2 extends HeyApiClient {
   /**
    * List saved permissions
    *
@@ -6342,11 +6453,22 @@ export class Saved extends HeyApiClient {
    */
   public list<ThrowOnError extends boolean = false>(
     parameters?: {
+      scope?: "project" | "global"
       projectID?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "projectID" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "scope" },
+            { in: "query", key: "projectID" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<
       V2PermissionSavedListResponses,
       V2PermissionSavedListErrors,
@@ -6366,10 +6488,23 @@ export class Saved extends HeyApiClient {
   public remove<ThrowOnError extends boolean = false>(
     parameters: {
       id: string
+      scope?: "project" | "global"
+      projectID?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "id" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "scope" },
+            { in: "query", key: "projectID" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).delete<
       V2PermissionSavedRemoveResponses,
       V2PermissionSavedRemoveErrors,
@@ -6380,6 +6515,43 @@ export class Saved extends HeyApiClient {
       ...params,
     })
   }
+
+  /**
+   * Clear saved permissions
+   *
+   * Clear one explicitly confirmed saved permission scope.
+   */
+  public clear<ThrowOnError extends boolean = false>(
+    parameters: {
+      body:
+        | {
+            scope: "global"
+            confirm: true
+          }
+        | {
+            scope: "project"
+            projectID?: string
+            confirm: true
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "body", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      V2PermissionSavedClearResponses,
+      V2PermissionSavedClearErrors,
+      ThrowOnError
+    >({
+      url: "/api/permission/saved/clear",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Permission3 extends HeyApiClient {
@@ -6388,9 +6560,9 @@ export class Permission3 extends HeyApiClient {
     return (this._request ??= new Request({ client: this.client }))
   }
 
-  private _saved?: Saved
-  get saved(): Saved {
-    return (this._saved ??= new Saved({ client: this.client }))
+  private _saved?: Saved2
+  get saved(): Saved2 {
+    return (this._saved ??= new Saved2({ client: this.client }))
   }
 }
 

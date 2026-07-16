@@ -228,11 +228,12 @@ describe("Project directory persistence", () => {
         .pipe(Effect.orDie)
       const saved = yield* PermissionSaved.Service
       yield* saved.add({
+        scope: "project",
         projectID: original.project.id,
         action: "bash",
         resources: ["git status", "bun test"],
       })
-      yield* saved.add({ projectID: remoteID, action: "bash", resources: ["git status"] })
+      yield* saved.add({ scope: "project", projectID: remoteID, action: "bash", resources: ["git status"] })
       const retained = (yield* saved.list({ projectID: original.project.id })).find(
         (item) => item.resource === "bun test",
       )!

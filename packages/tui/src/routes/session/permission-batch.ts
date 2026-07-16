@@ -1,18 +1,18 @@
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
 
 export type PermissionBatchState = {
-  stage: "review" | "always"
+  stage: "review" | "global"
   focused: number
   requestIDs: string[]
   selected: string[]
 }
 
-export type PermissionBatchOption = "once" | "always" | "skip" | "confirm" | "cancel"
+export type PermissionBatchOption = "once" | "session" | "global" | "skip" | "confirm" | "cancel"
 
 export type PermissionBatchReply = {
   batchID: string
   requestIDs: string[]
-  reply: "once" | "always" | "reject"
+  reply: "once" | "session" | "global" | "reject"
 }
 
 export async function permissionBatchSubmit(input: {
@@ -75,15 +75,16 @@ export function permissionBatchReply(
   requests: PermissionRequest[],
   option: PermissionBatchOption,
 ): { state: PermissionBatchState; reply?: PermissionBatchReply } {
-  if (option === "always" && state.stage === "review") return { state: { ...state, stage: "always" } }
+  if (option === "global" && state.stage === "review") return { state: { ...state, stage: "global" } }
   if (option === "cancel") return { state: { ...state, stage: "review" } }
   const batchID = requests[0]?.batchID
   if (!batchID) return { state }
   if (option === "skip") return { state, reply: { batchID, requestIDs: [], reply: "reject" } }
   if (!state.selected.length) return { state }
   if (option === "once") return { state, reply: { batchID, requestIDs: state.selected, reply: "once" } }
-  if (option === "confirm" && state.stage === "always") {
-    return { state, reply: { batchID, requestIDs: state.selected, reply: "always" } }
+  if (option === "session") return { state, reply: { batchID, requestIDs: state.selected, reply: "session" } }
+  if (option === "confirm" && state.stage === "global") {
+    return { state, reply: { batchID, requestIDs: state.selected, reply: "global" } }
   }
   return { state }
 }

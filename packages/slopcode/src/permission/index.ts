@@ -35,11 +35,7 @@ const ExactAction = Schema.String.check(
   Schema.isMaxLength(ForecastLimits.action),
   Schema.isPattern(/^[A-Za-z0-9_:-]+$/),
 )
-const ExactResource = Schema.String.check(
-  Schema.isMinLength(1),
-  Schema.isMaxLength(ForecastLimits.resource),
-  Schema.isPattern(/^[^*?]+$/),
-)
+const ExactResource = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(ForecastLimits.resource))
 export const ForecastCandidate = Schema.Struct({
   action: ExactAction,
   resources: Schema.Array(ExactResource).check(Schema.isMinLength(1), Schema.isMaxLength(ForecastLimits.resources)),
@@ -54,12 +50,15 @@ export const ForecastInput = Schema.Struct({
 }).annotate({ identifier: "PermissionForecastInput" })
 export type ForecastInput = typeof ForecastInput.Type
 
+type AskInput = PermissionV1.AskInput & { policy?: () => Effect.Effect<PermissionV1.Ruleset> }
+
 export interface Interface {
-  readonly ask: (input: PermissionV1.AskInput) => Effect.Effect<void, PermissionV1.Error>
+  readonly ask: (input: AskInput) => Effect.Effect<void, PermissionV1.Error>
   readonly query: (input: {
     permission: string
     pattern: string
     ruleset: PermissionV1.Ruleset
+    sessionID?: PermissionV1.Request["sessionID"]
   }) => Effect.Effect<PermissionV1.Action>
   readonly reply: (input: PermissionV1.ReplyInput) => Effect.Effect<void, PermissionV1.NotFoundError>
   readonly forecast: (input: ForecastInput) => Effect.Effect<ReadonlyArray<ForecastCandidate>, Schema.SchemaError>
@@ -72,12 +71,14 @@ export interface Interface {
     input: PermissionV1.BatchReplyInput,
   ) => Effect.Effect<void, PermissionV1.BatchError | Schema.SchemaError>
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>>
+  readonly get: (id: PermissionV1.ID) => Effect.Effect<PermissionV1.Request | undefined>
 }
 
 interface BlockingEntry {
   kind: "blocking"
   info: PermissionV1.Request
   ruleset: PermissionV1.Ruleset
+  policy: () => Effect.Effect<PermissionV1.Ruleset>
   deferred: Deferred.Deferred<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>
   phase: "publishing" | "pending"
   answer?: {
@@ -227,37 +228,48 @@ export const layer = Layer.effect(
       return ctx.project.id === ProjectV2.ID.global || ctx.project.vcs !== "git" ? undefined : ctx.project.id
     })
 
-    const approvals = Effect.fnUntraced(function* () {
+    const approvals = Effect.fnUntraced(function* (sessionID?: PermissionV1.Request["sessionID"]) {
       const project = yield* projectID()
-      if (!project) return []
-      return (yield* saved.list({ projectID: project })).map(
-        (item): PermissionV1.Rule => ({ permission: item.action, pattern: item.resource, action: "allow" }),
-      )
+      return yield* Effect.all([
+        saved.list({ scope: "global" }),
+        sessionID ? saved.list({ scope: "session", sessionID }) : Effect.succeed([]),
+        project ? saved.list({ scope: "project", projectID: project }) : Effect.succeed([]),
+      ]).pipe(Effect.map((rows) => rows.flat()))
     })
+
+    function approved(permission: string, pattern: string, rows: ReadonlyArray<PermissionSaved.Info>) {
+      return rows.some((row) =>
+        row.match === "exact"
+          ? row.action === permission && row.resource === pattern
+          : Wildcard.match(permission, row.action) && Wildcard.match(pattern, row.resource),
+      )
+    }
 
     function resolve(
       permission: string,
       pattern: string,
       ruleset: PermissionV1.Ruleset,
-      approved: PermissionV1.Ruleset,
+      rows: ReadonlyArray<PermissionSaved.Info>,
     ) {
       const configured = evaluate(permission, pattern, ruleset)
       if (configured.action !== "ask") return configured.action
-      return evaluate(permission, pattern, approved).action === "allow" ? "allow" : "ask"
+      if (permission === "external_directory") return "ask"
+      return approved(permission, pattern, rows) ? "allow" : "ask"
     }
 
     const query = Effect.fn("Permission.query")(function* (input: {
       permission: string
       pattern: string
       ruleset: PermissionV1.Ruleset
+      sessionID?: PermissionV1.Request["sessionID"]
     }) {
-      return resolve(input.permission, input.pattern, input.ruleset, yield* approvals())
+      return resolve(input.permission, input.pattern, input.ruleset, yield* approvals(input.sessionID))
     })
 
-    const ask = Effect.fn("Permission.ask")(function* (input: PermissionV1.AskInput) {
-      const { ruleset, ...request } = input
+    const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
+      const { ruleset, policy, ...request } = input
       const needed: string[] = []
-      const approved = yield* approvals()
+      const approved = yield* approvals(request.sessionID)
 
       for (const pattern of request.patterns) {
         const action = resolve(request.permission, pattern, ruleset, approved)
@@ -282,12 +294,23 @@ export const layer = Layer.effect(
         patterns: request.patterns,
         metadata: request.metadata,
         always: (yield* projectID()) ? request.always : [],
+        grant:
+          request.permission === "external_directory"
+            ? undefined
+            : { resources, scopes: ["session" as const, "global" as const] },
         tool: request.tool,
       }
       yield* Effect.logInfo("asking", { id, permission: info.permission, patterns: info.patterns })
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
-      const entry: BlockingEntry = { kind: "blocking", info, ruleset, deferred, phase: "publishing" }
+      const entry: BlockingEntry = {
+        kind: "blocking",
+        info,
+        ruleset,
+        policy: policy ?? (() => Effect.succeed(ruleset)),
+        deferred,
+        phase: "publishing",
+      }
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           yield* restore(lock.take(1))
@@ -368,7 +391,14 @@ export const layer = Layer.effect(
           for (const candidate of input.candidates) {
             const resources: string[] = []
             for (const resource of new Set(candidate.resources)) {
-              if ((yield* query({ permission: candidate.action, pattern: resource, ruleset: input.ruleset })) === "ask")
+              if (
+                (yield* query({
+                  permission: candidate.action,
+                  pattern: resource,
+                  ruleset: input.ruleset,
+                  sessionID: input.sessionID,
+                })) === "ask"
+              )
                 resources.push(resource)
             }
             if (!resources.length) continue
@@ -516,6 +546,10 @@ export const layer = Layer.effect(
                   patterns: [...candidate.resources],
                   metadata: {},
                   always: persist ? [...candidate.resources] : [],
+                  grant:
+                    candidate.action === "external_directory"
+                      ? undefined
+                      : { resources: [...candidate.resources], scopes: ["session" as const, "global" as const] },
                   kind: "forecast",
                   batchID,
                   batchSize: size,
@@ -591,7 +625,7 @@ export const layer = Layer.effect(
             batch.phase = "replying"
             return yield* Effect.gen(function* () {
               const policy = yield* batch.policy()
-              const approved = yield* approvals()
+              const approved = yield* approvals(batch.sessionID)
               const project = yield* projectID()
               const decisions = requests.map((item) => {
                 if (!selected.has(item.info.id)) return { item, reply: "reject" as const, resources: [] }
@@ -603,12 +637,40 @@ export const layer = Layer.effect(
                   return { item, reply: "reject" as const, resources: [] }
                 const resources = actions.filter((action) => action.action === "ask").map((action) => action.pattern)
                 if (!resources.length) return { item, reply: "once" as const, resources }
-                const persistent = input.reply === "always" && Boolean(project) && item.info.always.length > 0
-                return { item, reply: persistent ? ("always" as const) : ("once" as const), resources }
+                const scoped =
+                  (input.reply === "session" || input.reply === "global") && Boolean(item.info.grant?.resources.length)
+                const legacy = input.reply === "always" && Boolean(project) && item.info.always.length > 0
+                return {
+                  item,
+                  reply: scoped ? input.reply : legacy ? ("always" as const) : ("once" as const),
+                  resources,
+                }
               })
-              const persistent = decisions.filter((item) => item.reply === "always")
-              if (persistent.length && project) {
+              const persistent = decisions.filter(
+                (item) => item.reply === "always" || item.reply === "session" || item.reply === "global",
+              )
+              if (persistent.length && input.reply === "session") {
                 yield* saved.addBatch({
+                  scope: "session",
+                  sessionID: batch.sessionID,
+                  entries: persistent.map((item) => ({
+                    action: item.item.info.permission,
+                    resources: item.resources,
+                  })),
+                })
+              }
+              if (persistent.length && input.reply === "global") {
+                yield* saved.addBatch({
+                  scope: "global",
+                  entries: persistent.map((item) => ({
+                    action: item.item.info.permission,
+                    resources: item.resources,
+                  })),
+                })
+              }
+              if (persistent.length && input.reply === "always" && project) {
+                yield* saved.addBatch({
+                  scope: "project",
                   projectID: project,
                   entries: persistent.map((item) => ({
                     action: item.item.info.permission,
@@ -663,14 +725,40 @@ export const layer = Layer.effect(
             if (existing.kind === "forecast") return { kind: "forecast" as const, batchID: existing.info.batchID }
 
             const project = yield* projectID()
-            const answer = input.reply === "always" && (!existing.info.always.length || !project) ? "once" : input.reply
+            const approved = yield* approvals(existing.info.sessionID)
+            const ruleset = yield* existing.policy()
+            const actions = existing.info.patterns.map((pattern) => ({
+              pattern,
+              action: resolve(existing.info.permission, pattern, ruleset, approved),
+            }))
+            const resources = actions.filter((action) => action.action === "ask").map((action) => action.pattern)
+            const requested =
+              input.reply === "always" && (!existing.info.always.length || !project)
+                ? ("once" as const)
+                : (input.reply === "session" || input.reply === "global") && !existing.info.grant?.resources.length
+                  ? ("once" as const)
+                  : input.reply
+            const answer = actions.some((action) => action.action === "deny")
+              ? ("reject" as const)
+              : resources.length
+                ? requested
+                : ("once" as const)
             if (answer === "always" && project) {
               yield* saved.add({
+                scope: "project",
                 projectID: project,
                 action: existing.info.permission,
                 resources: existing.info.always,
               })
             }
+            if (answer === "session")
+              yield* saved.add({
+                scope: "session",
+                sessionID: existing.info.sessionID,
+                action: existing.info.permission,
+                resources,
+              })
+            if (answer === "global") yield* saved.add({ scope: "global", action: existing.info.permission, resources })
 
             const replies: TerminalReply[] = []
             const settle = Effect.fnUntraced(function* (
@@ -704,14 +792,16 @@ export const layer = Layer.effect(
             yield* settle(input.requestID, existing, answer)
             if (answer === "once") return { kind: "blocking" as const, replies }
 
-            const approved = yield* approvals()
             for (const [id, item] of current.pending.entries()) {
-              if (item.kind !== "blocking" || item.answer || item.info.sessionID !== existing.info.sessionID) continue
+              if (item.kind !== "blocking" || item.answer) continue
+              if (answer !== "global" && item.info.sessionID !== existing.info.sessionID) continue
+              const approved = yield* approvals(item.info.sessionID)
+              const ruleset = yield* item.policy()
               const ok = item.info.patterns.every(
-                (pattern) => resolve(item.info.permission, pattern, item.ruleset, approved) === "allow",
+                (pattern) => resolve(item.info.permission, pattern, ruleset, approved) === "allow",
               )
               if (!ok) continue
-              yield* settle(id, item, "always")
+              yield* settle(id, item, answer)
             }
             return { kind: "blocking" as const, replies }
           }).pipe(Effect.ensuring(lock.release(1)))
@@ -742,7 +832,15 @@ export const layer = Layer.effect(
       )
     })
 
-    return Service.of({ ask, query, reply, forecast, review, replyBatch, list })
+    const get = Effect.fn("Permission.get")(function* (id: PermissionV1.ID) {
+      return yield* lock.withPermits(1)(
+        Effect.gen(function* () {
+          return (yield* InstanceState.get(state)).pending.get(id)?.info
+        }),
+      )
+    })
+
+    return Service.of({ ask, query, reply, forecast, review, replyBatch, list, get })
   }),
 )
 

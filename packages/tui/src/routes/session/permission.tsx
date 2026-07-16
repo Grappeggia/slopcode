@@ -9,7 +9,7 @@ import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useSync } from "../../context/sync"
 import { useProject } from "../../context/project"
-import { permissionActions, permissionAlwaysLines } from "./permission-copy"
+import { permissionActions, permissionGrantLines } from "./permission-copy"
 import { filetype } from "../../util/filetype"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -31,7 +31,7 @@ import {
   type PermissionBatchOption,
 } from "./permission-batch"
 
-type PermissionStage = "permission" | "always" | "reject"
+type PermissionStage = "permission" | "global" | "reject"
 
 function EditBody(props: { request: PermissionRequest }) {
   const themeState = useTheme()
@@ -149,27 +149,18 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
 
   return (
     <Switch>
-      <Match when={store.stage === "always"}>
+      <Match when={store.stage === "global"}>
         <Prompt
-          title="Always allow"
+          title="Confirm global permission"
           body={
-            <Switch>
-              <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
-                <TextBody title={permissionAlwaysLines(props.request.permission, props.request.always)[0]} />
-              </Match>
-              <Match when={true}>
-                <box paddingLeft={1} gap={1}>
-                  <text fg={theme.textMuted}>
-                    {permissionAlwaysLines(props.request.permission, props.request.always)[0]}
-                  </text>
-                  <box>
-                    <For each={permissionAlwaysLines(props.request.permission, props.request.always).slice(1)}>
-                      {(line) => <text fg={theme.text}>{line}</text>}
-                    </For>
-                  </box>
-                </box>
-              </Match>
-            </Switch>
+            <box paddingLeft={1} gap={1}>
+              <text fg={theme.warning}>This grant applies in every project and non-Git directory.</text>
+              <For
+                each={permissionGrantLines("global", props.request.permission, props.request.grant?.resources ?? [])}
+              >
+                {(line) => <text fg={theme.text}>{line}</text>}
+              </For>
+            </box>
           }
           options={{ confirm: "Confirm", cancel: "Cancel" }}
           escapeKey="cancel"
@@ -177,7 +168,7 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
             setStore("stage", "permission")
             if (option === "cancel") return
             void sdk.client.permission.reply({
-              reply: "always",
+              reply: "global",
               requestID: props.request.id,
               directory: props.directory,
               workspace: project.workspace.current(),
@@ -415,12 +406,21 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
               title="Permission required"
               header={header()}
               body={current.body}
-              options={permissionActions(props.request.always)}
+              options={permissionActions(props.request.grant?.resources ?? [])}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
-                if (option === "always") {
-                  setStore("stage", "always")
+                if (option === "global") {
+                  setStore("stage", "global")
+                  return
+                }
+                if (option === "session") {
+                  void sdk.client.permission.reply({
+                    reply: "session",
+                    requestID: props.request.id,
+                    directory: props.directory,
+                    workspace: project.workspace.current(),
+                  })
                   return
                 }
                 if (option === "reject") {
@@ -463,7 +463,7 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
     submitting: false,
   })
   const selected = createMemo(() => props.requests.filter((item) => store.selected.includes(item.id)))
-  const persistent = createMemo(() => props.requests.every((item) => item.always.length > 0))
+  const persistent = createMemo(() => props.requests.every((item) => item.grant?.resources.length))
 
   createEffect(() => {
     const requests = props.requests
@@ -533,17 +533,21 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
 
   return (
     <Switch>
-      <Match when={store.stage === "always"}>
+      <Match when={store.stage === "global"}>
         <Prompt
-          title="Remember selected build permissions"
+          title="Confirm global build permissions"
           body={
             <box paddingLeft={1} flexDirection="column" gap={1}>
-              <text fg={theme.textMuted}>These exact permissions will be remembered for this Git project.</text>
+              <text fg={theme.warning}>
+                These exact permissions will apply across every project and non-Git directory.
+              </text>
               <For each={selected()}>
                 {(request) => (
                   <box flexDirection="column">
                     <text fg={theme.text}>{request.permission}</text>
-                    <For each={request.always}>{(resource) => <text fg={theme.textMuted}>{"- " + resource}</text>}</For>
+                    <For each={request.grant?.resources ?? []}>
+                      {(resource) => <text fg={theme.textMuted}>{"- " + resource}</text>}
+                    </For>
                   </box>
                 )}
               </For>
@@ -600,13 +604,18 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
           }
           options={
             persistent()
-              ? { once: "Allow selected once", always: "Always allow selected", skip: "Skip all" }
+              ? {
+                  once: "Allow selected once",
+                  session: "Allow selected for session",
+                  global: "Remember selected globally",
+                  skip: "Skip all",
+                }
               : { once: "Allow selected once", skip: "Skip all" }
           }
           escapeKey="skip"
           fullscreen
           onSelect={(option) => {
-            if (option === "once" || option === "always" || option === "skip") run(option)
+            if (option === "once" || option === "session" || option === "global" || option === "skip") run(option)
           }}
         />
       </Match>

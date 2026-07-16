@@ -20,6 +20,7 @@ import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { SessionSchema } from "@slopcode-ai/core/session/schema"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
 import sessionMetadataMigration from "@slopcode-ai/core/database/migration/20260511173437_session-metadata"
+import permissionScopesMigration from "@slopcode-ai/core/database/migration/20260716031712_permission_scopes"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@slopcode-ai/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -32,6 +33,61 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 describe("DatabaseMigration", () => {
+  test("backfills legacy permissions and cascades exact session grants", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE project (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL)`)
+        yield* db.run(sql`
+          CREATE TABLE permission (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+            action TEXT NOT NULL,
+            resource TEXT NOT NULL,
+            time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL
+          )
+        `)
+        yield* db.run(
+          sql`CREATE UNIQUE INDEX permission_project_action_resource_idx ON permission(project_id, action, resource)`,
+        )
+        yield* db.run(sql`INSERT INTO project (id) VALUES ('global'), ('project_old')`)
+        yield* db.run(sql`INSERT INTO session (id, project_id) VALUES ('ses_old', 'project_old')`)
+        yield* db.run(sql`
+          INSERT INTO permission (id, project_id, action, resource, time_created, time_updated)
+          VALUES ('psv_project', 'project_old', 'bash', 'git *', 1, 1),
+                 ('psv_quarantined', 'global', 'bash', '*', 1, 1)
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [permissionScopesMigration])
+        expect(
+          yield* db.all<{ id: string; project_id: string; scope: string; match: string }>(
+            sql`SELECT id, project_id, scope, match FROM permission ORDER BY id`,
+          ),
+        ).toEqual([
+          { id: "psv_project", project_id: "project_old", scope: "project", match: "pattern" },
+          { id: "psv_quarantined", project_id: "global", scope: "project", match: "pattern" },
+        ])
+        expect(
+          yield* db.get<{ on_delete: string }>(
+            sql`SELECT on_delete FROM pragma_foreign_key_list('permission') WHERE "table" = 'session'`,
+          ),
+        ).toEqual({ on_delete: "CASCADE" })
+
+        yield* db.run(sql`
+          INSERT INTO permission (id, project_id, action, resource, scope, match, session_id, time_created, time_updated)
+          VALUES ('psv_session', 'project_old', 'bash', 'echo *', 'session', 'exact', 'ses_old', 1, 1)
+        `)
+        yield* db.run(sql`DELETE FROM session WHERE id = 'ses_old'`)
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM permission WHERE id = 'psv_session'`)).toEqual({
+          count: 0,
+        })
+      }),
+    )
+  })
+
   test("serializes concurrent embedded initialization for one database path", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "embedded.sqlite")

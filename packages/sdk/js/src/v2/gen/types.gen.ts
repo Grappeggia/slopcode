@@ -713,6 +713,11 @@ export type Todo = {
   priority: string
 }
 
+export type PermissionGrant = {
+  resources: Array<string>
+  scopes: Array<"session" | "global">
+}
+
 export type SessionStatus =
   | {
       type: "idle"
@@ -1716,6 +1721,7 @@ export type GlobalEvent = {
           action: string
           resources: Array<string>
           save?: Array<string>
+          grant?: PermissionV2Grant
           metadata?: {
             [key: string]: unknown
           }
@@ -1964,6 +1970,7 @@ export type GlobalEvent = {
             [key: string]: unknown
           }
           always: Array<string>
+          grant?: PermissionGrant
           kind?: "forecast"
           batchID?: string
           batchSize?: number
@@ -1980,7 +1987,7 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           requestID: string
-          reply: "once" | "always" | "reject"
+          reply: "once" | "session" | "global" | "always" | "reject"
         }
       }
     | {
@@ -3174,6 +3181,7 @@ export type PermissionRequest = {
     [key: string]: unknown
   }
   always: Array<string>
+  grant?: PermissionGrant
   kind?: "forecast"
   batchID?: string
   batchSize?: number
@@ -3706,13 +3714,18 @@ export type SessionNextRetryError = {
   }
 }
 
+export type PermissionV2Grant = {
+  resources: Array<string>
+  scopes: Array<"session" | "global">
+}
+
 export type PermissionV2Source = {
   type: "tool"
   messageID: string
   callID: string
 }
 
-export type PermissionV2Reply = "once" | "always" | "reject"
+export type PermissionV2Reply = "once" | "session" | "global" | "always" | "reject"
 
 export type QuestionV2Option = {
   /**
@@ -5609,15 +5622,23 @@ export type PermissionV2Request = {
   action: string
   resources: Array<string>
   save?: Array<string>
+  grant?: PermissionV2Grant
   metadata?: {
     [key: string]: unknown
   }
   source?: PermissionV2Source
 }
 
+export type PermissionSavedScope = "project" | "session" | "global"
+
+export type PermissionSavedMatch = "pattern" | "exact"
+
 export type PermissionSavedInfo = {
   id: string
   projectID: string
+  sessionID?: string
+  scope: PermissionSavedScope
+  match: PermissionSavedMatch
   action: string
   resource: string
 }
@@ -6800,6 +6821,7 @@ export type EventPermissionV2Asked = {
     action: string
     resources: Array<string>
     save?: Array<string>
+    grant?: PermissionV2Grant
     metadata?: {
       [key: string]: unknown
     }
@@ -7071,6 +7093,7 @@ export type EventPermissionAsked = {
       [key: string]: unknown
     }
     always: Array<string>
+    grant?: PermissionGrant
     kind?: "forecast"
     batchID?: string
     batchSize?: number
@@ -7088,7 +7111,7 @@ export type EventPermissionReplied = {
   properties: {
     sessionID: string
     requestID: string
-    reply: "once" | "always" | "reject"
+    reply: "once" | "session" | "global" | "always" | "reject"
   }
 }
 
@@ -9591,7 +9614,7 @@ export type PermissionListResponse = PermissionListResponses[keyof PermissionLis
 
 export type PermissionReplyData = {
   body?: {
-    reply: "once" | "always" | "reject"
+    reply: "once" | "session" | "global" | "always" | "reject"
     message?: string
   }
   path: {
@@ -9629,7 +9652,7 @@ export type PermissionReplyResponse = PermissionReplyResponses[keyof PermissionR
 export type PermissionReplyBatchData = {
   body?: {
     requestIDs: Array<string>
-    reply: "once" | "always" | "reject"
+    reply: "once" | "session" | "global" | "always" | "reject"
   }
   path: {
     batchID: string
@@ -10881,7 +10904,7 @@ export type SessionUnrevertResponse = SessionUnrevertResponses[keyof SessionUnre
 
 export type PermissionRespondData = {
   body?: {
-    response: "once" | "always" | "reject"
+    response: "once" | "session" | "global" | "always" | "reject"
   }
   path: {
     sessionID: string
@@ -12799,6 +12822,7 @@ export type V2PermissionSavedListData = {
   body?: never
   path?: never
   query?: {
+    scope?: "project" | "global"
     projectID?: string
   }
   url: "/api/permission/saved"
@@ -12833,7 +12857,10 @@ export type V2PermissionSavedRemoveData = {
   path: {
     id: string
   }
-  query?: never
+  query?: {
+    scope?: "project" | "global"
+    projectID?: string
+  }
   url: "/api/permission/saved/{id}"
 }
 
@@ -12858,6 +12885,164 @@ export type V2PermissionSavedRemoveResponses = {
 }
 
 export type V2PermissionSavedRemoveResponse = V2PermissionSavedRemoveResponses[keyof V2PermissionSavedRemoveResponses]
+
+export type V2PermissionSavedClearData = {
+  body:
+    | {
+        scope: "global"
+        confirm: true
+      }
+    | {
+        scope: "project"
+        projectID?: string
+        confirm: true
+      }
+  path?: never
+  query?: never
+  url: "/api/permission/saved/clear"
+}
+
+export type V2PermissionSavedClearErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2PermissionSavedClearError = V2PermissionSavedClearErrors[keyof V2PermissionSavedClearErrors]
+
+export type V2PermissionSavedClearResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type V2PermissionSavedClearResponse = V2PermissionSavedClearResponses[keyof V2PermissionSavedClearResponses]
+
+export type V2SessionPermissionSavedListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/permission/saved"
+}
+
+export type V2SessionPermissionSavedListErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionPermissionSavedListError =
+  V2SessionPermissionSavedListErrors[keyof V2SessionPermissionSavedListErrors]
+
+export type V2SessionPermissionSavedListResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: Array<PermissionSavedInfo>
+  }
+}
+
+export type V2SessionPermissionSavedListResponse =
+  V2SessionPermissionSavedListResponses[keyof V2SessionPermissionSavedListResponses]
+
+export type V2SessionPermissionSavedRemoveData = {
+  body?: never
+  path: {
+    sessionID: string
+    id: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/permission/saved/{id}"
+}
+
+export type V2SessionPermissionSavedRemoveErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionPermissionSavedRemoveError =
+  V2SessionPermissionSavedRemoveErrors[keyof V2SessionPermissionSavedRemoveErrors]
+
+export type V2SessionPermissionSavedRemoveResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionPermissionSavedRemoveResponse =
+  V2SessionPermissionSavedRemoveResponses[keyof V2SessionPermissionSavedRemoveResponses]
+
+export type V2SessionPermissionSavedClearData = {
+  body: {
+    confirm: true
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/permission/saved/clear"
+}
+
+export type V2SessionPermissionSavedClearErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionPermissionSavedClearError =
+  V2SessionPermissionSavedClearErrors[keyof V2SessionPermissionSavedClearErrors]
+
+export type V2SessionPermissionSavedClearResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type V2SessionPermissionSavedClearResponse =
+  V2SessionPermissionSavedClearResponses[keyof V2SessionPermissionSavedClearResponses]
 
 export type V2SessionPermissionListData = {
   body?: never

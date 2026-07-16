@@ -192,6 +192,7 @@ describe("PermissionV2", () => {
         .run()
         .pipe(Effect.orDie)
       yield* (yield* PermissionSaved.Service).add({
+        scope: "project",
         projectID,
         action: "read",
         resources: ["secret"],
@@ -224,6 +225,7 @@ describe("PermissionV2", () => {
         .run()
         .pipe(Effect.orDie)
       yield* (yield* PermissionSaved.Service).add({
+        scope: "project",
         projectID,
         action: "external_directory",
         resources: ["/outside/file"],
@@ -327,7 +329,7 @@ describe("PermissionV2", () => {
     Effect.gen(function* () {
       yield* setup()
       const saved = yield* PermissionSaved.Service
-      yield* saved.add({ projectID, action: "bash", resources: ["pwd"] })
+      yield* saved.add({ scope: "project", projectID, action: "bash", resources: ["pwd"] })
 
       const service = yield* PermissionV2.Service
       expect(yield* service.ask(assertion({ action: "bash", resources: ["pwd"] }))).toEqual({
@@ -379,6 +381,104 @@ describe("PermissionV2", () => {
       expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_again") })).toMatchObject({
         effect: "ask",
       })
+    }),
+  )
+
+  it.effect("persists literal session resources without interpreting glob metacharacters", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const exact = "echo * ? [abc]"
+      const input = assertion({ action: "bash", resources: [exact], save: ["legacy *"] })
+      const { service, fiber, request } = yield* waitForRequest(input)
+      expect(request.grant).toEqual({ resources: [exact], scopes: ["session", "global"] })
+      yield* service.reply({ requestID: request.id, reply: "session" })
+      yield* Fiber.join(fiber)
+
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_exact") })).toMatchObject({
+        effect: "allow",
+      })
+      expect(
+        yield* service.ask({
+          ...input,
+          id: PermissionV2.ID.create("per_pattern"),
+          resources: ["echo anything x a"],
+        }),
+      ).toMatchObject({ effect: "ask" })
+    }),
+  )
+
+  it.effect("does not inherit session grants into child sessions", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { db } = yield* Database.Service
+      const child = SessionV2.ID.make("ses_child")
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: child,
+          parent_id: SessionV2.ID.make("ses_test"),
+          project_id: projectID,
+          slug: "child",
+          directory: "/project",
+          title: "child",
+          version: "test",
+          agent: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const service = yield* PermissionV2.Service
+      const input = assertion({ action: "bash", resources: ["bun test"] })
+      const { fiber, request } = yield* waitForRequest(input)
+      yield* service.reply({ requestID: request.id, reply: "session" })
+      yield* Fiber.join(fiber)
+
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_parent") })).toMatchObject({
+        effect: "allow",
+      })
+
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_child"), sessionID: child })).toMatchObject(
+        {
+          effect: "ask",
+        },
+      )
+    }),
+  )
+
+  it.effect("revalidates configured denies before applying a scoped reply", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const input = assertion({ action: "bash", resources: ["rm -rf target"] })
+      const { service, fiber, request } = yield* waitForRequest(input)
+      yield* setRules([{ action: "bash", resource: "rm *", effect: "deny" }])
+      yield* service.reply({ requestID: request.id, reply: "global" })
+
+      expect(yield* Fiber.join(fiber).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toEqual([])
+    }),
+  )
+
+  it.effect("keeps multi-resource global persistence atomic and retryable", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const input = assertion({ action: "bash", resources: ["echo *", "file?.txt"] })
+      const { service, fiber, request } = yield* waitForRequest(input)
+      const { db } = yield* Database.Service
+      yield* db
+        .run(
+          "CREATE TRIGGER fail_global_permission BEFORE INSERT ON permission BEGIN SELECT RAISE(FAIL, 'forced permission failure'); END",
+        )
+        .pipe(Effect.orDie)
+
+      expect(yield* service.reply({ requestID: request.id, reply: "global" }).pipe(Effect.exit)).toMatchObject({
+        _tag: "Failure",
+      })
+      expect(yield* service.get(request.id)).toEqual(request)
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toEqual([])
+
+      yield* db.run("DROP TRIGGER fail_global_permission").pipe(Effect.orDie)
+      yield* service.reply({ requestID: request.id, reply: "global" })
+      yield* Fiber.join(fiber)
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toHaveLength(2)
     }),
   )
 
@@ -486,9 +586,11 @@ describe("PermissionV2", () => {
       ).toMatchObject([{ action: "read", resource: "src/*" }])
       const saved = yield* PermissionSaved.Service
       const id = (yield* saved.list())[0].id
-      expect(yield* saved.list()).toEqual([{ id, projectID, action: "read", resource: "src/*" }])
+      expect(yield* saved.list()).toEqual([
+        { id, projectID, scope: "project", match: "pattern", action: "read", resource: "src/*" },
+      ])
       yield* service.assert(assertion({ id: PermissionV2.ID.create("per_next"), resources: ["src/next.ts"] }))
-      expect(yield* saved.remove({ id, projectID })).toBe(true)
+      expect(yield* saved.remove({ id, scope: "project", projectID })).toBe(true)
       expect(yield* saved.list()).toEqual([])
     }),
   )
@@ -505,21 +607,21 @@ describe("PermissionV2", () => {
         .pipe(Effect.orDie)
 
       const saved = yield* PermissionSaved.Service
-      yield* saved.add({ projectID, action: "bash", resources: ["git status", "git status"] })
-      yield* saved.add({ projectID: other, action: "read", resources: ["README.md"] })
+      yield* saved.add({ scope: "project", projectID, action: "bash", resources: ["git status", "git status"] })
+      yield* saved.add({ scope: "project", projectID: other, action: "read", resources: ["README.md"] })
 
       const item = (yield* saved.list({ projectID }))[0]
       expect(yield* saved.list({ projectID })).toEqual([item])
       expect(item).toMatchObject({ action: "bash", resource: "git status" })
-      expect(yield* saved.remove({ id: item.id, projectID: other })).toBe(false)
+      expect(yield* saved.remove({ id: item.id, scope: "project", projectID: other })).toBe(false)
       expect(yield* saved.list({ projectID })).toEqual([item])
-      expect(yield* saved.clear(other)).toBe(1)
+      expect(yield* saved.clear({ scope: "project", projectID: other })).toBe(1)
       expect(yield* saved.list({ projectID: other })).toEqual([])
       expect(yield* saved.list({ projectID })).toEqual([item])
     }),
   )
 
-  it.effect("does not persist, expose, or mutate global saved permissions", () =>
+  it.effect("keeps legacy global-project rows quarantined but revocable", () =>
     Effect.gen(function* () {
       yield* setup()
       const saved = yield* PermissionSaved.Service
@@ -536,12 +638,13 @@ describe("PermissionV2", () => {
         .run()
         .pipe(Effect.orDie)
       const count = (yield* db.select().from(ProjectTable).all()).length
-      yield* saved.add({ projectID: Project.ID.global, action: "bash", resources: ["git status"] })
-      expect(yield* saved.list({ projectID: Project.ID.global })).toEqual([])
-      expect(yield* saved.remove({ id: legacy, projectID: Project.ID.global })).toBe(false)
-      expect(yield* saved.clear(Project.ID.global)).toBe(0)
-      expect(yield* saved.list()).not.toContainEqual(expect.objectContaining({ id: legacy }))
-      expect(yield* db.select().from(PermissionTable).where(eq(PermissionTable.id, legacy)).get()).toBeDefined()
+      expect(yield* saved.list({ projectID: Project.ID.global, scope: "global" })).toEqual([])
+      expect(yield* saved.list({ projectID: Project.ID.global, scope: "project" })).toMatchObject([
+        { id: legacy, scope: "project", match: "pattern" },
+      ])
+      expect(yield* saved.remove({ id: legacy, scope: "global" })).toBe(false)
+      expect(yield* saved.remove({ id: legacy, scope: "project", projectID: Project.ID.global })).toBe(true)
+      expect(yield* db.select().from(PermissionTable).where(eq(PermissionTable.id, legacy)).get()).toBeUndefined()
       expect((yield* db.select().from(ProjectTable).all()).length).toBe(count)
     }),
   )

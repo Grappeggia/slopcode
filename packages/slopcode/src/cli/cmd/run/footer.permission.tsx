@@ -4,7 +4,7 @@
 // "permission". Uses a three-stage state machine (permission.shared.ts):
 //
 //   permission → shows the request with Allow once / Always / Reject buttons
-//   always     → confirmation step before granting permanent access
+//   global     → confirmation step before granting global access
 //   reject     → text field for the rejection message
 //
 // Keyboard: left/right to select, enter to confirm, esc to reject.
@@ -24,7 +24,7 @@ import {
   permissionBatchSubmit,
   permissionBatchSync,
   permissionBatchToggle,
-  permissionAlwaysLines,
+  permissionGrantLines,
   permissionCancel,
   permissionEscape,
   permissionHover,
@@ -149,12 +149,12 @@ function RunPermissionSingleBody(props: {
   const info = createMemo(() => permissionInfo(props.request))
   const ft = createMemo(() => toolFiletype(info().file))
   const narrow = createMemo(() => footerWidthPolicy(dims().width).dialog.narrow)
-  const persistent = createMemo(() => props.request.always.length > 0)
+  const persistent = createMemo(() => Boolean(props.request.grant?.resources.length))
   const opts = createMemo(() => permissionOptions(state().stage, persistent()))
   const busy = createMemo(() => state().submitting)
   const title = createMemo(() => {
-    if (state().stage === "always") {
-      return "Always allow"
+    if (state().stage === "global") {
+      return "Confirm global permission"
     }
 
     if (state().stage === "reject") {
@@ -419,7 +419,7 @@ function RunPermissionSingleBody(props: {
                 }}
               >
                 <box width="100%" flexDirection="column" gap={1} paddingLeft={1}>
-                  <For each={permissionAlwaysLines(props.request)}>
+                  <For each={permissionGrantLines("global", props.request)}>
                     {(line) => (
                       <text fg={props.theme.text} wrapMode="word">
                         {line}
@@ -470,7 +470,7 @@ function RunPermissionSingleBody(props: {
                 enter <span style={{ fg: props.theme.muted }}>confirm</span>
               </text>
               <text fg={props.theme.text}>
-                esc <span style={{ fg: props.theme.muted }}>{state().stage === "always" ? "cancel" : "reject"}</span>
+                esc <span style={{ fg: props.theme.muted }}>{state().stage === "global" ? "cancel" : "reject"}</span>
               </text>
             </box>
           </Show>
@@ -489,9 +489,13 @@ function RunPermissionBatchBody(props: {
   const [selected, setSelected] = createSignal<PermissionBatchOption>("once")
   const [submitting, setSubmitting] = createSignal(false)
   const [error, setError] = createSignal<string>()
-  const persistent = createMemo(() => props.requests.every((item) => item.always.length > 0))
+  const persistent = createMemo(() => props.requests.every((item) => item.grant?.resources.length))
   const options = createMemo<PermissionBatchOption[]>(() =>
-    state().stage === "always" ? ["confirm", "cancel"] : persistent() ? ["once", "always", "skip"] : ["once", "skip"],
+    state().stage === "global"
+      ? ["confirm", "cancel"]
+      : persistent()
+        ? ["once", "session", "global", "skip"]
+        : ["once", "skip"],
   )
 
   createEffect(() => {
@@ -513,8 +517,8 @@ function RunPermissionBatchBody(props: {
     const current = state()
     const next = permissionBatchReply(current, props.requests, option)
     if (next.state !== current) setState(next.state)
-    if (option === "always") setSelected("confirm")
-    if (option === "cancel") setSelected("always")
+    if (option === "global") setSelected("confirm")
+    if (option === "cancel") setSelected("global")
     if (next.reply) void submit(next.reply)
   }
 
@@ -561,7 +565,7 @@ function RunPermissionBatchBody(props: {
       return
     }
     if (event.name === "escape") {
-      run(state().stage === "always" ? "cancel" : "skip")
+      run(state().stage === "global" ? "cancel" : "skip")
       event.preventDefault()
     }
   })
@@ -572,13 +576,13 @@ function RunPermissionBatchBody(props: {
         <box flexDirection="row" gap={1}>
           <text fg={props.theme.warning}>△</text>
           <text fg={props.theme.text}>
-            {state().stage === "always" ? "Remember selected build permissions" : "Review build permissions"}
+            {state().stage === "global" ? "Confirm global build permissions" : "Review build permissions"}
           </text>
           <text fg={props.theme.muted}>{`(${state().selected.length}/${props.requests.length} selected)`}</text>
         </box>
         <text fg={props.theme.muted}>
-          {state().stage === "always"
-            ? "Confirm project persistence for these exact resources."
+          {state().stage === "global"
+            ? "Confirm access to these exact resources across every project and non-Git directory."
             : "Up/down focuses, space toggles. Unselected permissions are skipped."}
         </text>
         <Show when={error()}>{(message) => <text fg={props.theme.error}>{message()}</text>}</Show>
@@ -632,11 +636,13 @@ function RunPermissionBatchBody(props: {
               <text fg={selected() === option ? props.theme.surface : props.theme.muted}>
                 {option === "once"
                   ? "Allow selected once"
-                  : option === "always"
-                    ? "Always allow selected"
-                    : option === "skip"
-                      ? "Skip all"
-                      : permissionLabel(option)}
+                  : option === "session"
+                    ? "Allow selected for session"
+                    : option === "global"
+                      ? "Remember selected globally"
+                      : option === "skip"
+                        ? "Skip all"
+                        : permissionLabel(option)}
               </text>
             </box>
           )}

@@ -31,6 +31,12 @@ export type Rule = typeof Rule.Type
 export const Ruleset = Schema.Array(Rule).annotate({ identifier: "PermissionRuleset" })
 export type Ruleset = typeof Ruleset.Type
 
+export const Grant = Schema.Struct({
+  resources: Schema.Array(Schema.String),
+  scopes: Schema.Array(Schema.Literals(["session", "global"])),
+}).annotate({ identifier: "PermissionGrant" })
+export type Grant = typeof Grant.Type
+
 export const Request = Schema.Struct({
   id: ID,
   sessionID: SessionSchema.ID,
@@ -38,6 +44,7 @@ export const Request = Schema.Struct({
   patterns: Schema.Array(Schema.String),
   metadata: Schema.Record(Schema.String, Schema.Unknown),
   always: Schema.Array(Schema.String),
+  grant: Schema.optional(Grant),
   kind: Schema.optional(Schema.Literal("forecast")),
   batchID: Schema.optional(BatchID),
   batchSize: Schema.optional(Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 16 }))),
@@ -49,7 +56,7 @@ export const Request = Schema.Struct({
 }).annotate({ identifier: "PermissionRequest" })
 export type Request = typeof Request.Type
 
-export const Reply = Schema.Literals(["once", "always", "reject"])
+export const Reply = Schema.Literals(["once", "session", "global", "always", "reject"])
 export type Reply = typeof Reply.Type
 
 export const ReplyBody = Schema.Struct({

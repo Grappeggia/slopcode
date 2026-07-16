@@ -4,6 +4,8 @@ import { Database } from "@slopcode-ai/core/database/database"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { ProjectV2 } from "@slopcode-ai/core/project"
 import { ProjectTable } from "@slopcode-ai/core/project/sql"
+import { SessionSchema } from "@slopcode-ai/core/session/schema"
+import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { Effect, Layer, Schema } from "effect"
 import fs from "fs/promises"
 import path from "path"
@@ -20,16 +22,17 @@ cliIt.live(
       expect(JSON.parse(empty.stdout)).toEqual([])
       const unavailable = yield* slopcode.spawn(["permission", "list"], { env })
       slopcode.expectExit(unavailable, 0)
-      expect(unavailable.stdout).toContain("Saved permissions are unavailable outside a Git project.")
+      expect(unavailable.stdout).toContain("Project permissions are unavailable outside a Git project")
 
       yield* Effect.gen(function* () {
         const saved = yield* PermissionSaved.Service
         yield* saved.add({
+          scope: "project",
           projectID: ProjectV2.ID.global,
           action: "bash",
           resources: ["git status", "bun test"],
         })
-      }).pipe(Effect.provide(PermissionSaved.layer.pipe(Layer.provide(Database.layerFromPath(db)))))
+      }).pipe(Effect.provide(PermissionSaved.layer.pipe(Layer.provideMerge(Database.layerFromPath(db)))))
       expect(JSON.parse((yield* slopcode.spawn(["permission", "list", "--json"], { env })).stdout)).toEqual([])
 
       const one = path.join(home, "non-git-one")
@@ -56,12 +59,47 @@ cliIt.live(
         return projects.find((item) => item.id !== ProjectV2.ID.global)!.id
       }).pipe(Effect.provide(Database.layerFromPath(db)))
       yield* Effect.gen(function* () {
-        yield* (yield* PermissionSaved.Service).add({
+        const { db: database } = yield* Database.Service
+        const sessionID = SessionSchema.ID.make("ses_cli_permissions")
+        yield* database
+          .insert(SessionTable)
+          .values({
+            id: sessionID,
+            project_id: project,
+            slug: "permissions",
+            directory: repo,
+            title: "permissions",
+            version: "test",
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const saved = yield* PermissionSaved.Service
+        yield* saved.add({
+          scope: "project",
           projectID: project,
           action: "bash",
           resources: ["git status", "bun test"],
         })
-      }).pipe(Effect.provide(PermissionSaved.layer.pipe(Layer.provide(Database.layerFromPath(db)))))
+        yield* saved.add({ scope: "session", sessionID, action: "bash", resources: ["echo *"] })
+        yield* saved.add({ scope: "global", action: "read", resources: ["README?.md"] })
+      }).pipe(Effect.provide(PermissionSaved.layer.pipe(Layer.provideMerge(Database.layerFromPath(db)))))
+
+      const global = yield* slopcode.spawn(["permission", "list", "--scope", "global", "--json"], {
+        env,
+        cwd: two,
+      })
+      slopcode.expectExit(global, 0)
+      expect(JSON.parse(global.stdout)).toMatchObject([
+        { scope: "global", match: "exact", action: "read", resource: "README?.md" },
+      ])
+      const session = yield* slopcode.spawn(
+        ["permission", "list", "--scope", "session", "--session", "ses_cli_permissions", "--json"],
+        { env, cwd: repo },
+      )
+      slopcode.expectExit(session, 0)
+      expect(JSON.parse(session.stdout)).toMatchObject([
+        { scope: "session", match: "exact", sessionID: "ses_cli_permissions", resource: "echo *" },
+      ])
 
       const json = yield* slopcode.spawn(["permission", "list", "--json"], { env, cwd: repo })
       slopcode.expectExit(json, 0)
@@ -76,8 +114,8 @@ cliIt.live(
       const blocked = yield* slopcode.spawn(["permission", "revoke", items[0].id], { env })
       expect(blocked.exitCode).not.toBe(0)
       const globalClear = yield* slopcode.spawn(["permission", "clear", "--all"], { env })
-      slopcode.expectExit(globalClear, 0)
-      expect(globalClear.stdout).toContain("Saved permissions are unavailable outside a Git project.")
+      expect(globalClear.exitCode).not.toBe(0)
+      expect(globalClear.stderr).toContain("Project permissions are unavailable outside a Git project")
       expect(
         JSON.parse((yield* slopcode.spawn(["permission", "list", "--json"], { env, cwd: repo })).stdout),
       ).toHaveLength(2)
@@ -105,6 +143,22 @@ cliIt.live(
       const final = yield* slopcode.spawn(["permission", "list", "--json"], { env, cwd: repo })
       slopcode.expectExit(final, 0)
       expect(JSON.parse(final.stdout)).toEqual([])
+      expect(
+        JSON.parse(
+          (yield* slopcode.spawn(
+            ["permission", "list", "--scope", "session", "--session", "ses_cli_permissions", "--json"],
+            { env, cwd: repo },
+          )).stdout,
+        ),
+      ).toHaveLength(1)
+      const globalGuard = yield* slopcode.spawn(["permission", "clear", "--scope", "global"], { env, cwd: repo })
+      expect(globalGuard.exitCode).not.toBe(0)
+      const globalCleared = yield* slopcode.spawn(["permission", "clear", "--scope", "global", "--all"], {
+        env,
+        cwd: repo,
+      })
+      slopcode.expectExit(globalCleared, 0)
+      expect(globalCleared.stdout).toContain("Cleared 1 saved permission.")
     }),
   90_000,
 )

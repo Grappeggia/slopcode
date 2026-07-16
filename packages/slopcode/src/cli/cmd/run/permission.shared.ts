@@ -4,7 +4,7 @@
 // machine has three stages:
 //
 //   permission → initial view with Allow once / Always / Reject options
-//   always     → confirmation step (Confirm / Cancel)
+//   global     → confirmation step (Confirm / Cancel)
 //   reject     → text input for rejection message
 //
 // permissionRun() is the main transition: given the current state and the
@@ -19,9 +19,9 @@ import { toolPath, toolPermissionInfo } from "./tool"
 
 type Dict = Record<string, unknown>
 
-export type PermissionStage = "permission" | "always" | "reject"
-export type PermissionOption = "once" | "always" | "reject" | "confirm" | "cancel"
-export type PermissionBatchOption = "once" | "always" | "skip" | "confirm" | "cancel"
+export type PermissionStage = "permission" | "global" | "reject"
+export type PermissionOption = "once" | "session" | "global" | "reject" | "confirm" | "cancel"
+export type PermissionBatchOption = "once" | "session" | "global" | "skip" | "confirm" | "cancel"
 
 export type PermissionBodyState = {
   requestID: string
@@ -45,7 +45,7 @@ export type PermissionStep = {
 }
 
 export type PermissionBatchState = {
-  stage: "review" | "always"
+  stage: "review" | "global"
   focused: number
   requestIDs: string[]
   selected: string[]
@@ -54,7 +54,7 @@ export type PermissionBatchState = {
 export type PermissionBatchReply = {
   batchID: string
   requestIDs: string[]
-  reply: "once" | "always" | "reject"
+  reply: "once" | "session" | "global" | "reject"
 }
 
 export async function permissionBatchSubmit(input: {
@@ -150,25 +150,26 @@ export function permissionBatchReply(
   requests: PermissionRequest[],
   option: PermissionBatchOption,
 ): { state: PermissionBatchState; reply?: PermissionBatchReply } {
-  if (option === "always" && state.stage === "review") return { state: { ...state, stage: "always" } }
+  if (option === "global" && state.stage === "review") return { state: { ...state, stage: "global" } }
   if (option === "cancel") return { state: { ...state, stage: "review" } }
   const batchID = requests[0]?.batchID
   if (!batchID) return { state }
   if (option === "skip") return { state, reply: { batchID, requestIDs: [], reply: "reject" } }
   if (!state.selected.length) return { state }
   if (option === "once") return { state, reply: { batchID, requestIDs: state.selected, reply: "once" } }
-  if (option === "confirm" && state.stage === "always") {
-    return { state, reply: { batchID, requestIDs: state.selected, reply: "always" } }
+  if (option === "session") return { state, reply: { batchID, requestIDs: state.selected, reply: "session" } }
+  if (option === "confirm" && state.stage === "global") {
+    return { state, reply: { batchID, requestIDs: state.selected, reply: "global" } }
   }
   return { state }
 }
 
 export function permissionOptions(stage: PermissionStage, persistent = true): PermissionOption[] {
   if (stage === "permission") {
-    return persistent ? ["once", "always", "reject"] : ["once", "reject"]
+    return persistent ? ["once", "session", "global", "reject"] : ["once", "reject"]
   }
 
-  if (stage === "always") {
+  if (stage === "global") {
     return ["confirm", "cancel"]
   }
 
@@ -209,21 +210,20 @@ export function permissionInfo(request: PermissionRequest): PermissionInfo {
   }
 }
 
-export function permissionAlwaysLines(request: PermissionRequest): string[] {
-  if (!request.always.length) return []
-  if (request.always.length === 1 && request.always[0] === "*") {
-    return [`This will remember ${request.permission} for this project until revoked.`]
-  }
-
+export function permissionGrantLines(scope: "session" | "global", request: PermissionRequest): string[] {
+  const resources = request.grant?.resources ?? []
+  if (!resources.length) return []
+  const lifetime = scope === "session" ? "for this session until revoked" : "globally across projects until revoked"
   return [
-    "This will remember the following patterns for this project until revoked.",
-    ...request.always.map((item) => `- ${item}`),
+    `${resources.length === 1 ? "This exact" : "These exact"} ${request.permission} resource${resources.length === 1 ? "" : "s"} will be allowed ${lifetime}.`,
+    ...resources.map((item) => `- ${item}`),
   ]
 }
 
 export function permissionLabel(option: PermissionOption): string {
   if (option === "once") return "Allow once"
-  if (option === "always") return "Allow always"
+  if (option === "session") return "Allow for session"
+  if (option === "global") return "Remember globally"
   if (option === "reject") return "Reject"
   if (option === "confirm") return "Confirm"
   return "Cancel"
@@ -264,11 +264,11 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
   }
 
   if (state.stage === "permission") {
-    if (option === "always") {
+    if (option === "global") {
       return {
         state: {
           ...state,
-          stage: "always",
+          stage: "global",
           selected: "confirm",
         },
       }
@@ -286,11 +286,11 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
 
     return {
       state,
-      reply: permissionReply(requestID, "once"),
+      reply: permissionReply(requestID, option === "session" ? "session" : "once"),
     }
   }
 
-  if (state.stage !== "always") {
+  if (state.stage !== "global") {
     return { state }
   }
 
@@ -299,14 +299,14 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
       state: {
         ...state,
         stage: "permission",
-        selected: "always",
+        selected: "global",
       },
     }
   }
 
   return {
     state,
-    reply: permissionReply(requestID, "always"),
+    reply: permissionReply(requestID, "global"),
   }
 }
 
@@ -327,11 +327,11 @@ export function permissionCancel(state: PermissionBodyState): PermissionBodyStat
 }
 
 export function permissionEscape(state: PermissionBodyState): PermissionBodyState {
-  if (state.stage === "always") {
+  if (state.stage === "global") {
     return {
       ...state,
       stage: "permission",
-      selected: "always",
+      selected: "global",
     }
   }
 

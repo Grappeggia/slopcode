@@ -133,6 +133,7 @@ function serialized(input: Omit<Read, "bytes">, lines: string[], resource: strin
 }
 
 export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
+  sessionID?: PermissionV1.Request["sessionID"]
   ruleset: PermissionV1.Ruleset
   reference: (name: string) => Effect.Effect<string | undefined, unknown>
   hooks?: HooksInterface
@@ -252,8 +253,12 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
           return yield* Effect.fail(new Error("Read path escapes its configured root"))
         const requestedResource = readResource(instance.worktree, requested)
         if (
-          (yield* permission.query({ permission: "read", pattern: requestedResource, ruleset: input.ruleset })) !==
-          "allow"
+          (yield* permission.query({
+            permission: "read",
+            pattern: requestedResource,
+            ruleset: input.ruleset,
+            sessionID: input.sessionID,
+          })) !== "allow"
         )
           return yield* Effect.fail(new Error(UNAVAILABLE))
         const base = yield* filesystem.realPath(selected).pipe(Effect.mapError(() => new Error(UNAVAILABLE)))
@@ -263,8 +268,12 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
         const canonicalResource = readResource(instance.worktree, canonical)
         if (
           canonicalResource !== requestedResource &&
-          (yield* permission.query({ permission: "read", pattern: canonicalResource, ruleset: input.ruleset })) !==
-            "allow"
+          (yield* permission.query({
+            permission: "read",
+            pattern: canonicalResource,
+            ruleset: input.ruleset,
+            sessionID: input.sessionID,
+          })) !== "allow"
         )
           return yield* Effect.fail(new Error(UNAVAILABLE))
 
@@ -278,6 +287,7 @@ export const make = Effect.fn("SideQuestionReader.make")(function* (input: {
               permission: "external_directory",
               pattern,
               ruleset: input.ruleset,
+              sessionID: input.sessionID,
             })) !== "allow"
           )
             return yield* Effect.fail(new Error(UNAVAILABLE))

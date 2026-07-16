@@ -45,12 +45,10 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
         Effect.fn(function* (ctx) {
           const location = yield* Location.Service
           const saved = yield* PermissionSaved.Service
+          if (ctx.query.scope === "global") return { data: yield* saved.list({ scope: "global" }) }
           const projectID = ctx.query.projectID ?? location.project.id
-          if (location.vcs?.type !== "git" || projectID === ProjectV2.ID.global || projectID !== location.project.id)
-            return { data: [] }
-          return {
-            data: yield* saved.list({ projectID }),
-          }
+          if (projectID !== location.project.id && projectID !== ProjectV2.ID.global) return { data: [] }
+          return { data: yield* saved.list({ scope: "project", projectID }) }
         }),
       )
       .handle(
@@ -58,9 +56,54 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
         Effect.fn(function* (ctx) {
           const location = yield* Location.Service
           const saved = yield* PermissionSaved.Service
-          if (location.vcs?.type === "git" && location.project.id !== ProjectV2.ID.global)
-            yield* saved.remove({ id: ctx.params.id, projectID: location.project.id })
+          if (ctx.query.scope === "global") yield* saved.remove({ id: ctx.params.id, scope: "global" })
+          else {
+            const projectID = ctx.query.projectID ?? location.project.id
+            if (projectID === location.project.id || projectID === ProjectV2.ID.global)
+              yield* saved.remove({ id: ctx.params.id, scope: "project", projectID })
+          }
           return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "permission.saved.clear",
+        Effect.fn(function* (ctx) {
+          const location = yield* Location.Service
+          const saved = yield* PermissionSaved.Service
+          if (ctx.payload.scope === "global") return { data: yield* saved.clear({ scope: "global" }) }
+          const projectID = ctx.payload.projectID ?? location.project.id
+          if (projectID !== location.project.id && projectID !== ProjectV2.ID.global) return { data: 0 }
+          return { data: yield* saved.clear({ scope: "project", projectID }) }
+        }),
+      )
+      .handle(
+        "session.permission.saved.list",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* (yield* PermissionSaved.Service).list({ scope: "session", sessionID: ctx.params.sessionID }),
+          }
+        }),
+      )
+      .handle(
+        "session.permission.saved.remove",
+        Effect.fn(function* (ctx) {
+          yield* (yield* PermissionSaved.Service).remove({
+            id: ctx.params.id,
+            scope: "session",
+            sessionID: ctx.params.sessionID,
+          })
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "session.permission.saved.clear",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* (yield* PermissionSaved.Service).clear({
+              scope: "session",
+              sessionID: ctx.params.sessionID,
+            }),
+          }
         }),
       )
   }),

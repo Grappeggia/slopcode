@@ -35,7 +35,10 @@ export const makePermissionGroup = <
     )
     .add(
       HttpApiEndpoint.get("permission.saved.list", "/api/permission/saved", {
-        query: Schema.Struct({ projectID: Project.ID.pipe(Schema.optional) }),
+        query: Schema.Struct({
+          scope: Schema.Literals(["project", "global"]).pipe(Schema.optional),
+          projectID: Project.ID.pipe(Schema.optional),
+        }),
         success: Schema.Struct({ data: Schema.Array(PermissionSaved.Info) }),
       }).annotateMerge(
         OpenApi.annotations({
@@ -48,6 +51,10 @@ export const makePermissionGroup = <
     .add(
       HttpApiEndpoint.delete("permission.saved.remove", "/api/permission/saved/:id", {
         params: { id: PermissionSaved.ID },
+        query: Schema.Struct({
+          scope: Schema.Literals(["project", "global"]).pipe(Schema.optional),
+          projectID: Project.ID.pipe(Schema.optional),
+        }),
         success: HttpApiSchema.NoContent,
       }).annotateMerge(
         OpenApi.annotations({
@@ -57,8 +64,73 @@ export const makePermissionGroup = <
         }),
       ),
     )
+    .add(
+      HttpApiEndpoint.post("permission.saved.clear", "/api/permission/saved/clear", {
+        payload: Schema.Union([
+          Schema.Struct({ scope: Schema.Literal("global"), confirm: Schema.Literal(true) }),
+          Schema.Struct({
+            scope: Schema.Literal("project"),
+            projectID: Project.ID.pipe(Schema.optional),
+            confirm: Schema.Literal(true),
+          }),
+        ]),
+        success: Schema.Struct({ data: Schema.Number }),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.permission.saved.clear",
+          summary: "Clear saved permissions",
+          description: "Clear one explicitly confirmed saved permission scope.",
+        }),
+      ),
+    )
     // Effect applies group middleware only to endpoints already added; session endpoints use session placement below.
     .middleware(locationMiddleware)
+    .add(
+      HttpApiEndpoint.get("session.permission.saved.list", "/api/session/:sessionID/permission/saved", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Schema.Array(PermissionSaved.Info) }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.permission.saved.list",
+            summary: "List session permission grants",
+            description: "Retrieve exact grants owned by one session.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.delete("session.permission.saved.remove", "/api/session/:sessionID/permission/saved/:id", {
+        params: { sessionID: Session.ID, id: PermissionSaved.ID },
+        success: HttpApiSchema.NoContent,
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.permission.saved.remove",
+            summary: "Remove session permission grant",
+            description: "Remove an exact grant owned by one session.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.permission.saved.clear", "/api/session/:sessionID/permission/saved/clear", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ confirm: Schema.Literal(true) }),
+        success: Schema.Struct({ data: Schema.Number }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.permission.saved.clear",
+            summary: "Clear session permission grants",
+            description: "Clear every exact grant owned by one explicitly confirmed session.",
+          }),
+        ),
+    )
     .add(
       HttpApiEndpoint.post("session.permission.create", "/api/session/:sessionID/permission", {
         params: { sessionID: Session.ID },

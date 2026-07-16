@@ -221,6 +221,7 @@ export const layer = Layer.effect(
           )
           const ruleset = Permission.merge(agent.permission, session.permission ?? [])
           const reader = yield* SideQuestionReader.make({
+            sessionID: input.sessionID,
             ruleset,
             hooks: readerHooks,
             reference: (name) =>

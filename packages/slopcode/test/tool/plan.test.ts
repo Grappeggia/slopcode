@@ -85,9 +85,11 @@ it.instance("exposes a bounded exact plan-only forecast tool", () =>
     ).toBe(true)
     expect(Result.isSuccess(Schema.decodeUnknownResult(tool.parameters)({ permissions: [] }))).toBe(true)
     expect(
-      Result.isFailure(
+      Result.isSuccess(
         Schema.decodeUnknownResult(tool.parameters)({
-          permissions: [{ action: "bash", resources: ["git *"], reason: "Too broad" }],
+          permissions: [
+            { action: "bash", resources: ["git *", "file?.txt", "[abc]"], reason: "Literal metacharacters" },
+          ],
         }),
       ),
     ).toBe(true)

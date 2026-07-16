@@ -18,6 +18,7 @@ function request(id: string, kind?: "forecast", batchID?: string): PermissionReq
     patterns: [id],
     metadata: {},
     always: [id],
+    grant: { resources: [id], scopes: ["session", "global"] },
     kind,
     batchID,
   }
@@ -43,17 +44,22 @@ test("batch keyboard and mouse state wraps focus and toggles exact rows", () => 
   expect(permissionBatchToggle(permissionBatchToggle(initial, "per_a"), "per_a").selected).toEqual(["per_b", "per_a"])
 })
 
-test("persistent batch approval requires confirmation and skip selects nothing", () => {
+test("session batch approval is immediate while global approval requires confirmation", () => {
   const requests = [request("per_a", "forecast", "pmb_one"), request("per_b", "forecast", "pmb_one")]
   const initial = createPermissionBatchState(requests)
-  const confirm = permissionBatchReply(initial, requests, "always")
+  expect(permissionBatchReply(initial, requests, "session").reply).toEqual({
+    batchID: "pmb_one",
+    requestIDs: ["per_a", "per_b"],
+    reply: "session",
+  })
+  const confirm = permissionBatchReply(initial, requests, "global")
 
-  expect(confirm.state.stage).toBe("always")
+  expect(confirm.state.stage).toBe("global")
   expect(confirm.reply).toBeUndefined()
   expect(permissionBatchReply(confirm.state, requests, "confirm").reply).toEqual({
     batchID: "pmb_one",
     requestIDs: ["per_a", "per_b"],
-    reply: "always",
+    reply: "global",
   })
   expect(permissionBatchReply(initial, requests, "skip").reply).toEqual({
     batchID: "pmb_one",

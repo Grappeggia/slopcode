@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
 import {
   createPermissionBodyState,
-  permissionAlwaysLines,
+  permissionGrantLines,
   permissionCancel,
   permissionEscape,
   permissionInfo,
@@ -40,20 +40,24 @@ describe("run permission shared", () => {
     })
   })
 
-  test("requires confirmation for allow always", () => {
-    const next = permissionRun(createPermissionBodyState("perm-1"), "perm-1", "always")
-    expect(next.state.stage).toBe("always")
+  test("allows a session grant directly and requires confirmation for global grants", () => {
+    expect(permissionRun(createPermissionBodyState("perm-1"), "perm-1", "session").reply).toEqual({
+      requestID: "perm-1",
+      reply: "session",
+    })
+    const next = permissionRun(createPermissionBodyState("perm-1"), "perm-1", "global")
+    expect(next.state.stage).toBe("global")
     expect(next.state.selected).toBe("confirm")
     expect(next.reply).toBeUndefined()
 
     expect(permissionRun(next.state, "perm-1", "confirm").reply).toEqual({
       requestID: "perm-1",
-      reply: "always",
+      reply: "global",
     })
 
     expect(permissionRun(next.state, "perm-1", "cancel").state).toMatchObject({
       stage: "permission",
-      selected: "always",
+      selected: "global",
     })
   })
 
@@ -78,9 +82,9 @@ describe("run permission shared", () => {
       selected: "reject",
     })
 
-    expect(permissionEscape({ ...next.state, stage: "always", selected: "confirm" })).toMatchObject({
+    expect(permissionEscape({ ...next.state, stage: "global", selected: "confirm" })).toMatchObject({
       stage: "permission",
-      selected: "always",
+      selected: "global",
     })
   })
 
@@ -138,21 +142,22 @@ describe("run permission shared", () => {
     })
   })
 
-  test("formats always-allow copy for wildcard and explicit patterns", () => {
-    expect(permissionAlwaysLines(req({ permission: "bash", always: ["*"] }))).toEqual([
-      "This will remember bash for this project until revoked.",
-    ])
-
-    expect(permissionAlwaysLines(req({ always: ["src/**/*.ts", "src/**/*.tsx"] }))).toEqual([
-      "This will remember the following patterns for this project until revoked.",
-      "- src/**/*.ts",
-      "- src/**/*.tsx",
+  test("formats exact grant copy without interpreting wildcard characters", () => {
+    expect(
+      permissionGrantLines(
+        "global",
+        req({ permission: "bash", grant: { resources: ["echo *", "file?.txt"], scopes: ["session", "global"] } }),
+      ),
+    ).toEqual([
+      "These exact bash resources will be allowed globally across projects until revoked.",
+      "- echo *",
+      "- file?.txt",
     ])
   })
 
   test("hides persistent actions and copy when no resources can be saved", () => {
     expect(permissionOptions("permission", false)).toEqual(["once", "reject"])
-    expect(permissionAlwaysLines(req({ always: [] }))).toEqual([])
+    expect(permissionGrantLines("global", req())).toEqual([])
   })
 
   test("keeps ordinary requests FIFO and groups only one forecast batch", () => {
@@ -179,13 +184,14 @@ describe("run permission shared", () => {
 
     expect(permissionBatchMove(initial, requests, -1).focused).toBe(1)
     expect(permissionBatchToggle(initial, "per_a").selected).toEqual(["per_b"])
-    const confirm = permissionBatchReply(initial, requests, "always")
+    expect(permissionBatchReply(initial, requests, "session").reply).toMatchObject({ reply: "session" })
+    const confirm = permissionBatchReply(initial, requests, "global")
     expect(confirm.reply).toBeUndefined()
-    expect(confirm.state.stage).toBe("always")
+    expect(confirm.state.stage).toBe("global")
     expect(permissionBatchReply(confirm.state, requests, "confirm").reply).toEqual({
       batchID: "pmb_one",
       requestIDs: ["per_a", "per_b"],
-      reply: "always",
+      reply: "global",
     })
     expect(permissionBatchReply(initial, requests, "skip").reply).toEqual({
       batchID: "pmb_one",

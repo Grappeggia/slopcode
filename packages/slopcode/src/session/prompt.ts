@@ -1552,6 +1552,10 @@ export const layer = Layer.effect(
             bypassAgentCheck,
             messages: msgs,
             promptOps,
+            policy: () =>
+              Effect.all([agents.get(agent.name), sessions.get(session.id).pipe(Effect.orDie)]).pipe(
+                Effect.map(([agent, session]) => Permission.merge(agent.permission, session.permission ?? [])),
+              ),
           }).pipe(
             Effect.provideService(Plugin.Service, plugin),
             Effect.provideService(Permission.Service, permission),

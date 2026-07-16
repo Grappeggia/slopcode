@@ -1,5 +1,6 @@
 import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { test, expect } from "bun:test"
+import { eq } from "drizzle-orm"
 import os from "os"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema } from "effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
@@ -8,6 +9,7 @@ import { Database } from "@slopcode-ai/core/database/database"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { PermissionTable } from "@slopcode-ai/core/permission/sql"
 import { ProjectTable } from "@slopcode-ai/core/project/sql"
+import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { Permission } from "../../src/permission"
 import { InstanceState } from "../../src/effect/instance-state"
 import { InstanceRef } from "../../src/effect/instance-ref"
@@ -1854,6 +1856,54 @@ it.instance(
 )
 
 it.instance(
+  "forecast batches persist every selected exact resource for one session",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_forecast_session_scope")
+      const ctx = yield* InstanceState.context
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: ctx.project.id,
+          slug: "forecast-session-scope",
+          directory: ctx.directory,
+          title: "forecast session scope",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const ruleset: PermissionV1.Ruleset = [{ permission: "bash", pattern: "*", action: "ask" }]
+      yield* forecast({
+        sessionID,
+        ruleset,
+        candidates: [{ action: "bash", resources: ["echo *", "file?.txt"], reason: "Run exact commands" }],
+      })
+      const active = yield* review(sessionID, () => Effect.succeed(ruleset)).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(1)
+      yield* replyBatch({ batchID: pending[0].batchID!, requestIDs: [pending[0].id], reply: "session" })
+      yield* Fiber.join(active)
+
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "session", sessionID })).toMatchObject([
+        { scope: "session", match: "exact", resource: "echo *" },
+        { scope: "session", match: "exact", resource: "file?.txt" },
+      ])
+      expect(
+        yield* ask({
+          sessionID,
+          permission: "bash",
+          patterns: ["echo *", "file?.txt"],
+          metadata: {},
+          always: [],
+          ruleset,
+        }),
+      ).toBeUndefined()
+    }),
+  { git: true },
+)
+
+it.instance(
   "persistent forecast batch failure leaves every request pending and writes no partial approvals",
   () =>
     Effect.gen(function* () {
@@ -2088,6 +2138,31 @@ it.instance(
 )
 
 it.instance(
+  "ordinary replies revalidate live policy before persisting or resolving",
+  () =>
+    Effect.gen(function* () {
+      const policy = yield* Ref.make<PermissionV1.Ruleset>([{ permission: "bash", pattern: "*", action: "ask" }])
+      const fiber = yield* ask({
+        id: PermissionV1.ID.make("per_live_policy"),
+        sessionID: SessionID.make("ses_live_policy"),
+        permission: "bash",
+        patterns: ["rm -rf target"],
+        metadata: {},
+        always: ["rm *"],
+        ruleset: yield* Ref.get(policy),
+        policy: () => Ref.get(policy),
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* Ref.set(policy, [{ permission: "bash", pattern: "rm *", action: "deny" }])
+      yield* reply({ requestID: PermissionV1.ID.make("per_live_policy"), reply: "global" })
+
+      expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toEqual([])
+    }),
+  { git: true },
+)
+
+it.instance(
   "reply - always persists approval and resolves",
   () =>
     Effect.gen(function* () {
@@ -2116,6 +2191,125 @@ it.instance(
       expect(result).toBeUndefined()
     }),
   { git: true },
+)
+
+it.instance(
+  "session grants survive reload, stay exact, and never reach sibling sessions",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_scope_owner")
+      const siblingID = SessionID.make("ses_scope_sibling")
+      const resource = "echo * ? [abc]"
+      const ctx = yield* InstanceState.context
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: ctx.project.id,
+          slug: "scope-owner",
+          directory: ctx.directory,
+          title: "scope owner",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const fiber = yield* ask({
+        id: PermissionV1.ID.make("per_session_scope"),
+        sessionID,
+        permission: "bash",
+        patterns: [resource],
+        metadata: {},
+        always: ["legacy *"],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(1)
+      expect(pending[0].grant).toEqual({ resources: [resource], scopes: ["session", "global"] })
+      yield* reply({ requestID: pending[0].id, reply: "session" })
+      yield* Fiber.join(fiber)
+
+      expect(
+        yield* ask({
+          sessionID,
+          permission: "bash",
+          patterns: [resource],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        }),
+      ).toBeUndefined()
+      const sibling = yield* ask({
+        sessionID: siblingID,
+        permission: "bash",
+        patterns: [resource],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(sibling)
+
+      yield* reloadInstance({ directory: (yield* TestInstance).directory })
+      expect(
+        yield* ask({
+          sessionID,
+          permission: "bash",
+          patterns: [resource],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        }),
+      ).toBeUndefined()
+      yield* db.delete(SessionTable).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      expect(yield* (yield* PermissionSaved.Service).list({ scope: "session", sessionID })).toEqual([])
+    }),
+  { git: true },
+)
+
+it.live("global exact grants cross Git and non-Git projects without widening metacharacters", () =>
+  Effect.gen(function* () {
+    const git = yield* tmpdirScoped({ git: true })
+    const plain = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const first = yield* store.load({ directory: git })
+    const second = yield* store.load({ directory: plain })
+    const resource = "echo * ? [abc]"
+    const active = yield* ask({
+      id: PermissionV1.ID.make("per_global_exact"),
+      sessionID: SessionID.make("ses_global_owner"),
+      permission: "bash",
+      patterns: [resource],
+      metadata: {},
+      always: ["legacy *"],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, first), Effect.forkScoped)
+    const pending = yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, first))
+    yield* reply({ requestID: pending[0].id, reply: "global" }).pipe(Effect.provideService(InstanceRef, first))
+    yield* Fiber.join(active)
+
+    expect(
+      yield* ask({
+        sessionID: SessionID.make("ses_global_other"),
+        permission: "bash",
+        patterns: [resource],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.provideService(InstanceRef, second)),
+    ).toBeUndefined()
+    const widened = yield* ask({
+      sessionID: SessionID.make("ses_global_widened"),
+      permission: "bash",
+      patterns: ["echo anything x a"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, second), Effect.forkScoped)
+    expect(yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, second))).toHaveLength(1)
+    yield* rejectAll().pipe(Effect.provideService(InstanceRef, second))
+    yield* Fiber.await(widened)
+  }),
 )
 
 it.instance(
@@ -2206,6 +2400,7 @@ it.instance(
     Effect.gen(function* () {
       const ctx = yield* InstanceState.context
       yield* (yield* PermissionSaved.Service).add({
+        scope: "project",
         projectID: ctx.project.id,
         action: "bash",
         resources: ["git status"],
@@ -2259,7 +2454,7 @@ it.instance(
     Effect.gen(function* () {
       const ctx = yield* InstanceState.context
       const saved = yield* PermissionSaved.Service
-      yield* saved.add({ projectID: ctx.project.id, action: "bash", resources: ["bun test"] })
+      yield* saved.add({ scope: "project", projectID: ctx.project.id, action: "bash", resources: ["bun test"] })
       const item = (yield* saved.list({ projectID: ctx.project.id }))[0]
 
       expect(
@@ -2273,7 +2468,7 @@ it.instance(
         }),
       ).toBeUndefined()
 
-      expect(yield* saved.remove({ id: item.id, projectID: ctx.project.id })).toBe(true)
+      expect(yield* saved.remove({ id: item.id, scope: "project", projectID: ctx.project.id })).toBe(true)
       const fiber = yield* ask({
         sessionID: SessionID.make("session_after_revoke"),
         permission: "bash",
@@ -2299,7 +2494,7 @@ it.live("shares approvals across one project's worktrees but isolates different 
     const worktree = yield* store.load({ directory: worktreeDir, project: main.project, worktree: main.worktree })
     const other = yield* store.load({ directory: otherDir })
     const saved = yield* PermissionSaved.Service
-    yield* saved.add({ projectID: main.project.id, action: "bash", resources: ["git status"] })
+    yield* saved.add({ scope: "project", projectID: main.project.id, action: "bash", resources: ["git status"] })
 
     expect(
       yield* ask({

@@ -34,11 +34,18 @@ export const Source = Schema.Union([
 ]).annotate({ identifier: "PermissionV2.Source" })
 export type Source = typeof Source.Type
 
+export const Grant = Schema.Struct({
+  resources: Schema.Array(Schema.String),
+  scopes: Schema.Array(Schema.Literals(["session", "global"])),
+}).annotate({ identifier: "PermissionV2.Grant" })
+export type Grant = typeof Grant.Type
+
 const RequestFields = {
   sessionID: SessionV2.ID,
   action: Schema.String,
   resources: Schema.Array(Schema.String),
   save: Schema.Array(Schema.String).pipe(Schema.optional),
+  grant: Grant.pipe(Schema.optional),
   metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(Schema.optional),
   source: Source.pipe(Schema.optional),
 }
@@ -49,7 +56,9 @@ export const Request = Schema.Struct({
 }).annotate({ identifier: "PermissionV2.Request" })
 export type Request = typeof Request.Type
 
-export const Reply = Schema.Literals(["once", "always", "reject"]).annotate({ identifier: "PermissionV2.Reply" })
+export const Reply = Schema.Literals(["once", "session", "global", "always", "reject"]).annotate({
+  identifier: "PermissionV2.Reply",
+})
 export type Reply = typeof Reply.Type
 
 export const AssertInput = Schema.Struct({
@@ -144,7 +153,7 @@ export const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const pending = new Map<ID, Pending>()
-    const persistent = location.project.id !== Project.ID.global && location.vcs?.type === "git"
+    const legacy = location.project.id !== Project.ID.global && location.vcs?.type === "git"
 
     yield* EffectRuntime.addFinalizer(() =>
       EffectRuntime.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new RejectedError()), {
@@ -158,12 +167,21 @@ export const layer = Layer.effect(
       ),
     )
 
-    const savedRules = EffectRuntime.fnUntraced(function* () {
-      if (!persistent) return []
-      return (yield* saved.list({ projectID: location.project.id })).map(
-        (item): Rule => ({ action: item.action, resource: item.resource, effect: "allow" }),
-      )
+    const approvals = EffectRuntime.fnUntraced(function* (sessionID: SessionV2.ID) {
+      return yield* EffectRuntime.all([
+        saved.list({ scope: "global" }),
+        saved.list({ scope: "session", sessionID }),
+        legacy ? saved.list({ scope: "project", projectID: location.project.id }) : EffectRuntime.succeed([]),
+      ]).pipe(EffectRuntime.map((rows) => rows.flat()))
     })
+
+    function approved(action: string, resource: string, rows: ReadonlyArray<PermissionSaved.Info>) {
+      return rows.some((row) =>
+        row.match === "exact"
+          ? row.action === action && row.resource === resource
+          : Wildcard.match(action, row.action) && Wildcard.match(resource, row.resource),
+      )
+    }
 
     const configured = EffectRuntime.fn("PermissionV2.configured")(function* (
       sessionID: SessionV2.ID,
@@ -216,21 +234,34 @@ export const layer = Layer.effect(
       const configuredRules = yield* configured(input.sessionID, input.agent, input.rules)
       const combined = [...configuredRules.rules, ...configuredRules.ceiling]
       if (denied(input, configuredRules.rules) || ceilingDenied(input, configuredRules.ceiling))
-        return { effect: "deny" as const, rules: combined }
-      if (ceilingAsks(input, configuredRules.ceiling)) return { effect: "ask" as const, rules: combined }
-      const all = [...configuredRules.rules, ...(yield* savedRules())]
-      const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
+        return { effect: "deny" as const, rules: combined, grant: [] as string[], forced: false }
+      if (ceilingAsks(input, configuredRules.ceiling))
+        return { effect: "ask" as const, rules: combined, grant: [] as string[], forced: true }
+      const rows = yield* approvals(input.sessionID)
+      const effects = input.resources.map((resource) => {
+        const effect = evaluate(input.action, resource, configuredRules.rules).effect
+        if (effect !== "ask") return effect
+        return approved(input.action, resource, rows) ? ("allow" as const) : effect
+      })
       const effect: Effect = effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow"
-      return { effect, rules: [...all, ...configuredRules.ceiling] }
+      return {
+        effect,
+        rules: combined,
+        grant: input.resources.filter((_, index) => effects[index] === "ask"),
+        forced: false,
+      }
     })
 
-    function request(input: AssertInput): Request {
+    function request(input: AssertInput, grant: string[]): Request {
       return {
         id: input.id ?? ID.create(),
         sessionID: input.sessionID,
         action: input.action,
         resources: input.resources,
-        save: persistent ? input.save : undefined,
+        save: legacy ? input.save : undefined,
+        grant: grant.length
+          ? { resources: [...new Set(grant)].toSorted(), scopes: ["session" as const, "global" as const] }
+          : undefined,
         metadata: input.metadata,
         source: input.source,
       }
@@ -252,7 +283,7 @@ export const layer = Layer.effect(
 
     const ask = EffectRuntime.fn("PermissionV2.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
-      const value = request(input)
+      const value = request(input, result.grant ?? [])
       if (result.effect === "ask") yield* create(value, input.agent, input.rules)
       return { id: value.id, effect: result.effect }
     })
@@ -267,7 +298,7 @@ export const layer = Layer.effect(
             })
           }
           if (result.effect === "allow") return
-          const item = yield* create(request(input), input.agent, input.rules)
+          const item = yield* create(request(input, result.grant ?? []), input.agent, input.rules)
           return yield* restore(Deferred.await(item.deferred)).pipe(
             EffectRuntime.ensuring(
               EffectRuntime.sync(() => {
@@ -284,15 +315,46 @@ export const layer = Layer.effect(
         EffectRuntime.gen(function* () {
           const existing = pending.get(input.requestID)
           if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
-          const answer = input.reply === "always" && !existing.request.save?.length ? "once" : input.reply
+          const current = yield* evaluateInput({
+            ...existing.request,
+            agent: existing.agent,
+            rules: existing.rules,
+          }).pipe(
+            EffectRuntime.catchTag("Session.NotFoundError", () =>
+              EffectRuntime.fail(new NotFoundError({ requestID: input.requestID })),
+            ),
+          )
+          const requested =
+            input.reply === "always" && !existing.request.save?.length
+              ? ("once" as const)
+              : (input.reply === "session" || input.reply === "global") &&
+                  (!existing.request.grant?.resources.length || current.forced)
+                ? ("once" as const)
+                : input.reply
+          const answer =
+            current.effect === "deny" ? ("reject" as const) : current.effect === "allow" ? "once" : requested
 
           if (answer === "always") {
             yield* saved.add({
+              scope: "project",
               projectID: location.project.id,
               action: existing.request.action,
               resources: existing.request.save ?? [],
             })
           }
+          if (answer === "session")
+            yield* saved.add({
+              scope: "session",
+              sessionID: existing.request.sessionID,
+              action: existing.request.action,
+              resources: current.grant,
+            })
+          if (answer === "global")
+            yield* saved.add({
+              scope: "global",
+              action: existing.request.action,
+              resources: current.grant,
+            })
 
           yield* events.publish(Event.Replied, {
             sessionID: existing.request.sessionID,
@@ -321,32 +383,18 @@ export const layer = Layer.effect(
 
           yield* Deferred.succeed(existing.deferred, undefined)
           pending.delete(input.requestID)
-          if (answer !== "always") return
+          if (answer !== "always" && answer !== "session" && answer !== "global") return
 
-          const rememberedRules = yield* savedRules()
           for (const [id, item] of pending) {
-            const input = { ...item.request }
-            const configuredRules = yield* configured(item.request.sessionID, item.agent, item.rules).pipe(
+            if (answer !== "global" && item.request.sessionID !== existing.request.sessionID) continue
+            const result = yield* evaluateInput({ ...item.request, agent: item.agent, rules: item.rules }).pipe(
               EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
             )
-            if (!configuredRules) continue
-            if (
-              denied(input, configuredRules.rules) ||
-              ceilingDenied(input, configuredRules.ceiling) ||
-              ceilingAsks(input, configuredRules.ceiling)
-            )
-              continue
-            const effective = [...configuredRules.rules, ...rememberedRules]
-            if (
-              !item.request.resources.every(
-                (resource) => evaluate(item.request.action, resource, effective).effect === "allow",
-              )
-            )
-              continue
+            if (!result || result.effect !== "allow") continue
             yield* events.publish(Event.Replied, {
               sessionID: item.request.sessionID,
               requestID: item.request.id,
-              reply: "always",
+              reply: answer,
             })
             yield* Deferred.succeed(item.deferred, undefined)
             pending.delete(id)

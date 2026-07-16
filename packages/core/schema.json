@@ -1,8 +1,8 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "47a99587-ad1c-4bf5-b5d3-275855245c91",
-  "prevIds": ["1b0d7c3f-deff-4561-81f8-98419ca9a6b2"],
+  "id": "7fe6aac5-f3d6-4f9c-af49-10f06ac5b19f",
+  "prevIds": ["47a99587-ad1c-4bf5-b5d3-275855245c91"],
   "ddl": [
     {
       "name": "workspace",
@@ -695,6 +695,36 @@
       "default": null,
       "generated": null,
       "name": "resource",
+      "entityType": "columns",
+      "table": "permission"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'project'",
+      "generated": null,
+      "name": "scope",
+      "entityType": "columns",
+      "table": "permission"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'pattern'",
+      "generated": null,
+      "name": "match",
+      "entityType": "columns",
+      "table": "permission"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
       "entityType": "columns",
       "table": "permission"
     },
@@ -1784,6 +1814,17 @@
       "table": "permission"
     },
     {
+      "columns": ["session_id"],
+      "tableTo": "session",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_permission_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "permission"
+    },
+    {
       "columns": ["project_id"],
       "tableTo": "project",
       "columnsTo": ["id"],
@@ -2149,18 +2190,56 @@
           "isExpression": false
         },
         {
+          "value": "scope",
+          "isExpression": false
+        },
+        {
           "value": "action",
           "isExpression": false
         },
         {
           "value": "resource",
           "isExpression": false
+        },
+        {
+          "value": "match",
+          "isExpression": false
         }
       ],
       "isUnique": true,
-      "where": null,
+      "where": "\"permission\".\"session_id\" IS NULL",
       "origin": "manual",
-      "name": "permission_project_action_resource_idx",
+      "name": "permission_project_scope_action_resource_match_idx",
+      "entityType": "indexes",
+      "table": "permission"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "scope",
+          "isExpression": false
+        },
+        {
+          "value": "action",
+          "isExpression": false
+        },
+        {
+          "value": "resource",
+          "isExpression": false
+        },
+        {
+          "value": "match",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"permission\".\"session_id\" IS NOT NULL",
+      "origin": "manual",
+      "name": "permission_session_scope_action_resource_match_idx",
       "entityType": "indexes",
       "table": "permission"
     },

@@ -208,9 +208,15 @@ export const layer = Layer.effect(
                 d.select().from(PermissionTable).where(eq(PermissionTable.project_id, oldID)).all(),
                 d.select().from(PermissionTable).where(eq(PermissionTable.project_id, newID)).all(),
               ])
-              const existing = new Set(target.map((item) => JSON.stringify([item.action, item.resource])))
+              const existing = new Set(
+                target.map((item) =>
+                  JSON.stringify([item.scope, item.match, item.session_id, item.action, item.resource]),
+                ),
+              )
               const duplicates = source
-                .filter((item) => existing.has(JSON.stringify([item.action, item.resource])))
+                .filter((item) =>
+                  existing.has(JSON.stringify([item.scope, item.match, item.session_id, item.action, item.resource])),
+                )
                 .map((item) => item.id)
               if (duplicates.length)
                 yield* d.delete(PermissionTable).where(inArray(PermissionTable.id, duplicates)).run()

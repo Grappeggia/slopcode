@@ -638,6 +638,7 @@ export const RunCommand = effectCmd({
         // created, and replies issued from inside the loop must use that client.
         async function loop(client: SlopcodeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
+          const batches = new Map<string, { expected: number; requests: Map<string, { id: string }> }>()
           let error: string | undefined
 
           for await (const event of events.stream) {
@@ -738,6 +739,25 @@ export const RunCommand = effectCmd({
             if (event.type === "permission.asked") {
               const permission = event.properties
               if (permission.sessionID !== sessionID) continue
+              if (permission.kind === "forecast" && permission.batchID) {
+                const batch = batches.get(permission.batchID) ?? {
+                  expected: permission.batchSize ?? 1,
+                  requests: new Map<string, { id: string }>(),
+                }
+                batch.expected = Math.max(batch.expected, permission.batchSize ?? 1)
+                batch.requests.set(permission.id, permission)
+                batches.set(permission.batchID, batch)
+                if (batch.requests.size < batch.expected) continue
+                const requests = [...batch.requests.values()].toSorted((a, b) => a.id.localeCompare(b.id))
+                const result = await client.permission.replyBatch({
+                  batchID: permission.batchID,
+                  requestIDs: auto ? requests.map((item) => item.id) : [],
+                  reply: auto ? "once" : "reject",
+                })
+                if (result.error) throw result.error
+                batches.delete(permission.batchID)
+                continue
+              }
 
               if (auto) {
                 await client.permission.reply({

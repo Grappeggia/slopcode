@@ -1,5 +1,6 @@
 import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
+import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
@@ -29,6 +30,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   bypassAgentCheck: boolean
   messages: SessionV1.WithParts[]
   promptOps: TaskPromptOps
+  policy: () => Effect.Effect<PermissionV1.Ruleset>
 }) {
   const tools: Record<string, AITool> = {}
   const run = yield* EffectBridge.make()
@@ -67,6 +69,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           sessionID: input.session.id,
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
           ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
+          policy: input.policy,
         })
         .pipe(Effect.orDie),
   })

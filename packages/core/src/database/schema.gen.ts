@@ -108,9 +108,13 @@ export default {
           \`project_id\` text NOT NULL,
           \`action\` text NOT NULL,
           \`resource\` text NOT NULL,
+          \`scope\` text DEFAULT 'project' NOT NULL,
+          \`match\` text DEFAULT 'pattern' NOT NULL,
+          \`session_id\` text,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
-          CONSTRAINT \`fk_permission_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
+          CONSTRAINT \`fk_permission_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE,
+          CONSTRAINT \`fk_permission_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
       `)
       yield* tx.run(`
@@ -282,7 +286,10 @@ export default {
         `CREATE UNIQUE INDEX \`memory_project_scope_hash_idx\` ON \`memory\` (\`scope\`,\`project_id\`,\`hash\`) WHERE "memory"."project_id" IS NOT NULL;`,
       )
       yield* tx.run(
-        `CREATE UNIQUE INDEX \`permission_project_action_resource_idx\` ON \`permission\` (\`project_id\`,\`action\`,\`resource\`);`,
+        `CREATE UNIQUE INDEX \`permission_project_scope_action_resource_match_idx\` ON \`permission\` (\`project_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NULL;`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`permission_session_scope_action_resource_match_idx\` ON \`permission\` (\`session_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NOT NULL;`,
       )
       yield* tx.run(
         `CREATE INDEX \`message_session_time_created_id_idx\` ON \`message\` (\`session_id\`,\`time_created\`,\`id\`);`,

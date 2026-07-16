@@ -26,7 +26,10 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
   )
   .add(
     HttpApiEndpoint.get("permission.saved.list", "/api/permission/saved", {
-      query: Schema.Struct({ projectID: ProjectV2.ID.pipe(Schema.optional) }),
+      query: Schema.Struct({
+        scope: Schema.Literals(["project", "global"]).pipe(Schema.optional),
+        projectID: ProjectV2.ID.pipe(Schema.optional),
+      }),
       success: Schema.Struct({ data: Schema.Array(PermissionSaved.Info) }),
     }).annotateMerge(
       OpenApi.annotations({
@@ -39,6 +42,10 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
   .add(
     HttpApiEndpoint.delete("permission.saved.remove", "/api/permission/saved/:id", {
       params: { id: PermissionSaved.ID },
+      query: Schema.Struct({
+        scope: Schema.Literals(["project", "global"]).pipe(Schema.optional),
+        projectID: ProjectV2.ID.pipe(Schema.optional),
+      }),
       success: HttpApiSchema.NoContent,
     }).annotateMerge(
       OpenApi.annotations({
@@ -48,7 +55,72 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
       }),
     ),
   )
+  .add(
+    HttpApiEndpoint.post("permission.saved.clear", "/api/permission/saved/clear", {
+      payload: Schema.Union([
+        Schema.Struct({ scope: Schema.Literal("global"), confirm: Schema.Literal(true) }),
+        Schema.Struct({
+          scope: Schema.Literal("project"),
+          projectID: ProjectV2.ID.pipe(Schema.optional),
+          confirm: Schema.Literal(true),
+        }),
+      ]),
+      success: Schema.Struct({ data: Schema.Number }),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "v2.permission.saved.clear",
+        summary: "Clear saved permissions",
+        description: "Clear one explicitly confirmed saved permission scope.",
+      }),
+    ),
+  )
   .middleware(LocationMiddleware)
+  .add(
+    HttpApiEndpoint.get("session.permission.saved.list", "/api/session/:sessionID/permission/saved", {
+      params: { sessionID: SessionV2.ID },
+      success: Schema.Struct({ data: Schema.Array(PermissionSaved.Info) }),
+      error: SessionNotFoundError,
+    })
+      .middleware(SessionLocationMiddleware)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.permission.saved.list",
+          summary: "List session permission grants",
+          description: "Retrieve exact grants owned by one session.",
+        }),
+      ),
+  )
+  .add(
+    HttpApiEndpoint.delete("session.permission.saved.remove", "/api/session/:sessionID/permission/saved/:id", {
+      params: { sessionID: SessionV2.ID, id: PermissionSaved.ID },
+      success: HttpApiSchema.NoContent,
+      error: SessionNotFoundError,
+    })
+      .middleware(SessionLocationMiddleware)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.permission.saved.remove",
+          summary: "Remove session permission grant",
+          description: "Remove an exact grant owned by one session.",
+        }),
+      ),
+  )
+  .add(
+    HttpApiEndpoint.post("session.permission.saved.clear", "/api/session/:sessionID/permission/saved/clear", {
+      params: { sessionID: SessionV2.ID },
+      payload: Schema.Struct({ confirm: Schema.Literal(true) }),
+      success: Schema.Struct({ data: Schema.Number }),
+      error: SessionNotFoundError,
+    })
+      .middleware(SessionLocationMiddleware)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.permission.saved.clear",
+          summary: "Clear session permission grants",
+          description: "Clear every exact grant owned by one explicitly confirmed session.",
+        }),
+      ),
+  )
   .add(
     HttpApiEndpoint.get("session.permission.list", "/api/session/:sessionID/permission", {
       params: { sessionID: SessionV2.ID },

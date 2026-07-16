@@ -874,6 +874,48 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({ path: route("/api/permission/saved/{id}", { id: "psv_httpapi_missing" }), headers: ctx.headers() }))
     .status(204, undefined, "status"),
   http.protected
+    .post("/api/permission/saved/clear", "v2.permission.saved.clear")
+    .at((ctx) => ({
+      path: "/api/permission/saved/clear",
+      headers: ctx.headers(),
+      body: { scope: "global", confirm: true },
+    }))
+    .json(
+      200,
+      data((value) => check(typeof value === "number", "saved clear should return a count")),
+    ),
+  http.protected
+    .get("/api/session/{sessionID}/permission/saved", "v2.session.permission.saved.list")
+    .seeded((ctx) => ctx.session({ title: "Session saved permissions" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/permission/saved", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, data(array)),
+  http.protected
+    .delete("/api/session/{sessionID}/permission/saved/{id}", "v2.session.permission.saved.remove")
+    .seeded((ctx) => ctx.session({ title: "Session saved permission removal" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/permission/saved/{id}", {
+        sessionID: ctx.state.id,
+        id: "psv_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .status(204, undefined, "status"),
+  http.protected
+    .post("/api/session/{sessionID}/permission/saved/clear", "v2.session.permission.saved.clear")
+    .seeded((ctx) => ctx.session({ title: "Session saved permission clear" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/permission/saved/clear", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { confirm: true },
+    }))
+    .json(
+      200,
+      data((value) => check(typeof value === "number", "session saved clear should return a count")),
+    ),
+  http.protected
     .get("/api/session", "v2.session.list")
     .at((ctx) => ({ path: "/api/session?roots=true", headers: ctx.headers() }))
     .json(
@@ -1516,6 +1558,34 @@ const scenarios: Scenario[] = [
         }),
       "status",
     ),
+  http.protected
+    .post("/session/{sessionID}/autocomplete", "session.autocomplete")
+    .seeded((ctx) => ctx.session({ title: "Autocomplete" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/autocomplete", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {
+        requestID: "httpapi-autocomplete",
+        model: { providerID: "slopcode", modelID: "big-pickle" },
+        prefix: "const value =",
+      },
+    }))
+    .json(200, (body) => {
+      object(body)
+      check(typeof body.completion === "string", "autocomplete should return text")
+      check(typeof body.model === "string", "autocomplete should return its model")
+    }),
+  http.protected
+    .delete("/session/{sessionID}/autocomplete/{requestID}", "session.abortAutocomplete")
+    .seeded((ctx) => ctx.session({ title: "Abort autocomplete" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/autocomplete/{requestID}", {
+        sessionID: ctx.state.id,
+        requestID: "httpapi-autocomplete-missing",
+      }),
+      headers: ctx.headers(),
+    }))
+    .json(200, boolean),
   http.protected
     .post("/session/{sessionID}/revert", "session.revert")
     .mutating()
