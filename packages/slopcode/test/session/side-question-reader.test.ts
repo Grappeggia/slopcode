@@ -64,30 +64,42 @@ describe("SideQuestionReader", () => {
     }),
   )
 
-  secureIt("rejects symlink, directory, binary, and media reads", () =>
+  it.instance("rejects symlink escapes and media before secure access", () =>
     Effect.gen(function* () {
       const fixture = yield* TestInstance
       const outside = path.join(path.dirname(fixture.directory), `outside-${path.basename(fixture.directory)}.txt`)
       yield* Effect.promise(async () => {
         await fs.writeFile(outside, "outside secret")
-        await fs.mkdir(path.join(fixture.directory, "folder"))
-        await fs.writeFile(path.join(fixture.directory, "binary.dat"), Buffer.from([0, 1, 2, 3]))
         await fs.writeFile(path.join(fixture.directory, "image.png"), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
         await fs.symlink(outside, path.join(fixture.directory, "escape.txt"))
       })
       const reader = yield* SideQuestionReader.make({ ruleset: allow, reference: () => Effect.succeed(undefined) })
 
-      for (const [index, item] of [
-        { input: { path: "escape.txt" }, message: /unavailable/i },
-        { input: { path: "folder" }, message: /regular files/i },
-        { input: { path: "binary.dat" }, message: /binary/i },
-        { input: { path: "image.png" }, message: /media/i },
-      ].entries()) {
-        yield* Effect.promise(async () =>
-          expect(execute(reader, item.input, `rejected_${index}`)).rejects.toThrow(item.message),
-        )
-      }
+      yield* Effect.promise(async () =>
+        expect(execute(reader, { path: "escape.txt" }, "symlink")).rejects.toThrow(/unavailable/i),
+      )
+      yield* Effect.promise(async () =>
+        expect(execute(reader, { path: "image.png" }, "media")).rejects.toThrow(/media/i),
+      )
       yield* Effect.promise(() => fs.rm(outside, { force: true }))
+    }),
+  )
+
+  secureIt("rejects directories and binary files after secure access", () =>
+    Effect.gen(function* () {
+      const fixture = yield* TestInstance
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(fixture.directory, "folder"))
+        await fs.writeFile(path.join(fixture.directory, "binary.dat"), Buffer.from([0, 1, 2, 3]))
+      })
+      const reader = yield* SideQuestionReader.make({ ruleset: allow, reference: () => Effect.succeed(undefined) })
+
+      yield* Effect.promise(async () =>
+        expect(execute(reader, { path: "folder" }, "directory")).rejects.toThrow(/regular files/i),
+      )
+      yield* Effect.promise(async () =>
+        expect(execute(reader, { path: "binary.dat" }, "binary")).rejects.toThrow(/binary/i),
+      )
     }),
   )
 
