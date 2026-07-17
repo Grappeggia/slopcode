@@ -172,7 +172,10 @@ const RESIZE_DELAY = 250
 const LOCAL_REPLAY_ROW_LIMIT = 100
 
 export async function resolvePermissionScope(sdk: SlopcodeClient, directory: string) {
-  const project = await sdk.project.current({ directory }).then((result) => result.data).catch(() => undefined)
+  const project = await sdk.project
+    .current({ directory })
+    .then((result) => result.data)
+    .catch(() => undefined)
   if (!project?.id) return undefined
   return project.vcs === "git" ? ("project" as const) : ("folder" as const)
 }

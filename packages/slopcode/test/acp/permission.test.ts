@@ -65,7 +65,9 @@ function createHarness(
       current: () => {
         if (vcs === "failure") return Promise.reject(new Error("project lookup failed"))
         if (vcs === "missing") return Promise.resolve({ data: undefined })
-        return Promise.resolve({ data: { id: "project", worktree: "/workspace", vcs: vcs === "git" ? "git" : undefined } })
+        return Promise.resolve({
+          data: { id: "project", worktree: "/workspace", vcs: vcs === "git" ? "git" : undefined },
+        })
       },
     },
   } as unknown as SlopcodeClient

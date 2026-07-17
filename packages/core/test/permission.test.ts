@@ -211,9 +211,9 @@ describe("PermissionV2", () => {
       const gate = yield* AdmissionGate
       const service = yield* PermissionV2.Service
       gate.armed = true
-      const fiber = yield* service.assert(assertion({ action: "bash", resources: ["git status"] })).pipe(
-        Effect.forkScoped,
-      )
+      const fiber = yield* service
+        .assert(assertion({ action: "bash", resources: ["git status"] }))
+        .pipe(Effect.forkScoped)
       yield* Deferred.await(gate.entered)
       yield* setRules([{ action: "bash", resource: "*", effect: "deny" }])
       yield* Deferred.succeed(gate.release, undefined)
@@ -249,8 +249,7 @@ describe("PermissionV2", () => {
             yield* Deferred.await(release)
             order.push("asked:end")
           })
-        if (event.type === PermissionV2.Event.Replied.type && event.data.requestID === targetID)
-          order.push("replied")
+        if (event.type === PermissionV2.Event.Replied.type && event.data.requestID === targetID) order.push("replied")
         return Effect.void
       })
       yield* Effect.addFinalizer(() => unsubscribe)
@@ -707,9 +706,9 @@ describe("PermissionV2", () => {
       expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_same") })).toMatchObject({
         effect: "allow",
       })
-      expect(
-        yield* service.ask({ ...input, id: PermissionV2.ID.create("per_other"), sessionID: other }),
-      ).toMatchObject({ effect: "ask" })
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_other"), sessionID: other })).toMatchObject(
+        { effect: "ask" },
+      )
       expect(yield* (yield* PermissionSaved.Service).list()).toEqual([])
     }),
   )
@@ -734,10 +733,24 @@ describe("PermissionV2", () => {
         .pipe(Effect.orDie)
       const service = yield* PermissionV2.Service
       const first = yield* service
-        .assert(assertion({ id: PermissionV2.ID.create("per_project_first"), action: "bash", resources: ["git status"], save: ["git *"] }))
+        .assert(
+          assertion({
+            id: PermissionV2.ID.create("per_project_first"),
+            action: "bash",
+            resources: ["git status"],
+            save: ["git *"],
+          }),
+        )
         .pipe(Effect.forkScoped)
       const second = yield* service
-        .assert(assertion({ id: PermissionV2.ID.create("per_project_second"), sessionID: other, action: "bash", resources: ["git status"] }))
+        .assert(
+          assertion({
+            id: PermissionV2.ID.create("per_project_second"),
+            sessionID: other,
+            action: "bash",
+            resources: ["git status"],
+          }),
+        )
         .pipe(Effect.forkScoped)
       yield* Effect.yieldNow
 

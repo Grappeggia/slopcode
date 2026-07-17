@@ -282,9 +282,7 @@ registrationIt.instance(
   () =>
     Effect.gen(function* () {
       const gate = yield* RegistrationGate
-      const policy = yield* Ref.make<PermissionV1.Ruleset>([
-        { permission: "bash", pattern: "*", action: "ask" },
-      ])
+      const policy = yield* Ref.make<PermissionV1.Ruleset>([{ permission: "bash", pattern: "*", action: "ask" }])
       const source = yield* ask({
         id: PermissionV1.ID.make("per_registration_deny_source"),
         sessionID: SessionID.make("ses_registration_deny_source"),
@@ -2941,9 +2939,9 @@ it.live("project fan-out evaluates live policy in the target worktree context", 
     )
 
     yield* Fiber.join(source)
-    expect(
-      (yield* list().pipe(Effect.provideService(InstanceRef, sibling))).map((item) => item.id),
-    ).toEqual([PermissionV1.ID.make("per_cross_worktree_context_target")])
+    expect((yield* list().pipe(Effect.provideService(InstanceRef, sibling))).map((item) => item.id)).toEqual([
+      PermissionV1.ID.make("per_cross_worktree_context_target"),
+    ])
     expect((yield* Ref.get(seen)).at(-1)).toBe(sibling.directory)
     yield* rejectAll().pipe(Effect.provideService(InstanceRef, sibling))
     yield* Fiber.await(target)
@@ -3021,9 +3019,9 @@ it.live("project fan-out isolates a defective target after durable commit", () =
     expect(terminal.filter((id) => id === sourceID)).toHaveLength(1)
     expect(terminal.filter((id) => id === healthyID)).toHaveLength(1)
     expect(terminal).not.toContain(defectiveID)
-    expect(
-      (yield* list().pipe(Effect.provideService(InstanceRef, defective))).map((item) => item.id),
-    ).toEqual([defectiveID])
+    expect((yield* list().pipe(Effect.provideService(InstanceRef, defective))).map((item) => item.id)).toEqual([
+      defectiveID,
+    ])
     expect(
       yield* (yield* PermissionSaved.Service).list({ scope: "project", projectID: main.project.id }),
     ).toMatchObject([{ action: "bash", resource: "git status" }])
@@ -3101,9 +3099,9 @@ it.live("Always does not settle pending requests in a live sibling worktree sess
     )
 
     yield* Fiber.join(source)
-    expect(
-      (yield* list().pipe(Effect.provideService(InstanceRef, sibling))).map((item) => item.id),
-    ).toEqual([PermissionV1.ID.make("per_cross_worktree_always_target")])
+    expect((yield* list().pipe(Effect.provideService(InstanceRef, sibling))).map((item) => item.id)).toEqual([
+      PermissionV1.ID.make("per_cross_worktree_always_target"),
+    ])
     yield* rejectAll().pipe(Effect.provideService(InstanceRef, sibling))
     yield* Fiber.await(target)
   }),
@@ -3142,9 +3140,9 @@ it.live("project reply does not settle pending requests in another non-Git direc
     )
 
     yield* Fiber.join(source)
-    expect(
-      (yield* list().pipe(Effect.provideService(InstanceRef, second))).map((item) => item.id),
-    ).toEqual([PermissionV1.ID.make("per_cross_directory_target")])
+    expect((yield* list().pipe(Effect.provideService(InstanceRef, second))).map((item) => item.id)).toEqual([
+      PermissionV1.ID.make("per_cross_directory_target"),
+    ])
     yield* rejectAll().pipe(Effect.provideService(InstanceRef, second))
     yield* Fiber.await(target)
   }),

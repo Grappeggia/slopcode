@@ -158,8 +158,7 @@ test("single permission replacement closes durable confirmation", async () => {
   const events = createEventSource()
   const replies: Array<{ id: string; reply: string }> = []
   const calls = createFetch(async (url, request) => {
-    if (url.pathname === "/project/current")
-      return json({ id: "proj_test", worktree: tmp.path, vcs: "git" })
+    if (url.pathname === "/project/current") return json({ id: "proj_test", worktree: tmp.path, vcs: "git" })
     if (url.pathname === "/project/proj_test/directories") return json([{ directory: tmp.path }])
     const match = url.pathname.match(/^\/permission\/(.+)\/reply$/)
     if (!match || !request) return undefined

@@ -267,10 +267,7 @@ export const layer = Layer.effect(
       }),
     )
 
-    const approvals = Effect.fnUntraced(function* (
-      sessionID?: PermissionV1.Request["sessionID"],
-      target?: State,
-    ) {
+    const approvals = Effect.fnUntraced(function* (sessionID?: PermissionV1.Request["sessionID"], target?: State) {
       const current = target ?? (yield* InstanceState.get(state))
       const rows = yield* Effect.all([
         saved.list({ scope: "global" }),

@@ -180,10 +180,7 @@ export const layer = Layer.effect(
         saved.list({ scope: "session", sessionID }),
         saved.listCurrent(location),
       ]).pipe(EffectRuntime.map((rows) => rows.flat()))
-      return [
-        ...rows,
-        ...(memory.get(sessionID) ?? []).map((item) => ({ ...item, match: "pattern" as const })),
-      ]
+      return [...rows, ...(memory.get(sessionID) ?? []).map((item) => ({ ...item, match: "pattern" as const }))]
     })
 
     function approved(
@@ -489,9 +486,7 @@ export const layer = Layer.effect(
             }
             if (answer === "always" && existing.request.save?.length) {
               const rows = memory.get(existing.request.sessionID) ?? []
-              rows.push(
-                ...existing.request.save.map((resource) => ({ action: existing.request.action, resource })),
-              )
+              rows.push(...existing.request.save.map((resource) => ({ action: existing.request.action, resource })))
               memory.set(existing.request.sessionID, rows)
             }
             if (answer === "session")

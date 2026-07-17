@@ -138,10 +138,7 @@ afterEach(() => {
 describe("run interactive runtime", () => {
   test("resolves only authoritative Git and folder permission scopes", async () => {
     const scope = (data: unknown) =>
-      resolvePermissionScope(
-        { project: { current: () => ok(data) } } as unknown as SlopcodeClient,
-        "/workspace",
-      )
+      resolvePermissionScope({ project: { current: () => ok(data) } } as unknown as SlopcodeClient, "/workspace")
 
     expect(await scope({ id: "git", worktree: "/git", vcs: "git" })).toBe("project")
     expect(await scope({ id: "folder", worktree: "/folder" })).toBe("folder")
