@@ -121,6 +121,7 @@ type AdmissionOutcome =
   | { readonly success: true; readonly message: SessionV1.WithParts }
   | { readonly success: false; readonly reason: AdmissionFailed["reason"] }
 type AdmissionOwner = { readonly identity: string; readonly terminal: Deferred.Deferred<AdmissionOutcome> }
+export type Admitted = { readonly message: SessionV1.WithParts; readonly resume: boolean }
 const registry = new WeakMap<object, Map<EventV2.ID, AdmissionOwner>>()
 
 function active(database: object) {
@@ -156,6 +157,10 @@ export interface Interface {
     input: PromptInput,
     guard?: Effect.Effect<void, E>,
   ) => Effect.Effect<SessionV1.WithParts, Image.Error | AdmissionFailed | E>
+  readonly admit: <E = never>(
+    input: PromptInput,
+    guard?: Effect.Effect<void, E>,
+  ) => Effect.Effect<Admitted, Image.Error | AdmissionFailed | E>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error | AdmissionFailed>
@@ -1204,7 +1209,7 @@ export const layer = Layer.effect(
       return message.value
     })
 
-    const prompt: Interface["prompt"] = Effect.fn("SessionPrompt.prompt")(function* <E = never>(
+    const admit: Interface["admit"] = Effect.fn("SessionPrompt.admit")(function* <E = never>(
       input: PromptInput,
       guard: Effect.Effect<void, E> = Effect.void,
     ) {
@@ -1217,7 +1222,7 @@ export const layer = Layer.effect(
       if (active) {
         if (active.identity !== identity) return yield* Effect.die(`Conflicting prompt admission ${messageID}`)
         const terminal = yield* Deferred.await(active.terminal)
-        if (terminal.success) return terminal.message
+        if (terminal.success) return { message: terminal.message, resume: false }
         return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason: terminal.reason })
       }
 
@@ -1357,6 +1362,14 @@ export const layer = Layer.effect(
           }),
         ),
       )
+      return admitted
+    })
+
+    const prompt: Interface["prompt"] = Effect.fn("SessionPrompt.prompt")(function* <E = never>(
+      input: PromptInput,
+      guard: Effect.Effect<void, E> = Effect.void,
+    ) {
+      const admitted = yield* admit(input, guard)
       if (!admitted.resume) return admitted.message
       return yield* loop({ sessionID: input.sessionID })
     })
@@ -1824,6 +1837,7 @@ export const layer = Layer.effect(
 
     return Service.of({
       cancel,
+      admit,
       prompt,
       loop,
       shell,

@@ -13,6 +13,7 @@ import { createEventSource, createFetch, json } from "./fixture/tui-sdk"
 import { tmpdir } from "./fixture/fixture"
 import { useHomeSessionDestination } from "../src/routes/home/session-destination"
 import type { HostSlots } from "../src/plugin/slots"
+import type { EditorIntegration } from "../src/context/editor"
 
 type Setup = Awaited<ReturnType<typeof createTestRenderer>>
 type CreatedEvent = GlobalEvent & {
@@ -86,11 +87,18 @@ function provider(id: string, modelID: string) {
   } satisfies Provider
 }
 
-function session(input: { id: string; directory: string; workspaceID?: string; model?: Model }): Session {
+function session(input: {
+  id: string
+  directory: string
+  workspaceID?: string
+  model?: Model
+  parentID?: string
+}): Session {
   return {
     id: input.id,
     slug: input.id,
     projectID: "proj_test",
+    parentID: input.parentID,
     workspaceID: input.workspaceID,
     directory: input.directory,
     title: "New Session",
@@ -136,6 +144,7 @@ async function mount(input: {
   fetch: typeof globalThis.fetch
   events: ReturnType<typeof createEventSource>["source"]
   setup?: (api: TuiPluginApi, slots: HostSlots) => void
+  editor?: EditorIntegration
 }) {
   await Bun.write(path.join(input.root, "state", "kv.json"), "{}")
   const setup = await createTestRenderer({ width: 100, height: 30, useThread: false })
@@ -152,6 +161,7 @@ async function mount(input: {
       config: createTuiResolvedConfig({ plugin_enabled: {} }),
       fetch: input.fetch,
       events: input.events,
+      editor: input.editor,
       args: input.args ?? {},
       pluginHost: {
         async start(value) {
@@ -664,6 +674,61 @@ describe.serial("new prompt integration", () => {
     }
   })
 
+  test("a replaced child tab migrates its owner draft to the canonical session", async () => {
+    await using tmp = await tmpdir()
+    await Promise.all(
+      ["data", "cache", "config", "state", "tmp", "bin", "log", "repos"].map((dir) =>
+        mkdir(path.join(tmp.path, dir), { recursive: true }),
+      ),
+    )
+    const events = createEventSource()
+    const root = session({ id: "ses_owner_root", directory: tmp.path })
+    const initial = session({ id: "ses_owner_child", directory: tmp.path })
+    const child = session({ id: initial.id, directory: initial.directory, parentID: root.id })
+    let harness!: ReturnType<typeof fixture>
+    harness = fixture({
+      root: tmp.path,
+      events,
+      sessions: [root, initial],
+      create: () => json(session({ id: "ses_unused", directory: tmp.path })),
+      admit(request) {
+        return harness.accepted(`${request.method} ${request.path}`)
+      },
+    })
+    const app = await mount({
+      root: tmp.path,
+      args: { sessionID: child.id },
+      fetch: harness.fetch,
+      events: events.source,
+    })
+
+    try {
+      await wait(() => routed(app.api, child.id) && focused(app.setup) !== undefined)
+      await app.setup.mockInput.typeText("child owner draft")
+      harness.sessions.set(child.id, child)
+      events.emit({
+        directory: tmp.path,
+        project: "proj_test",
+        payload: {
+          id: "evt_owner_child_updated",
+          type: "session.updated",
+          properties: { sessionID: child.id, info: child },
+        },
+      })
+      await wait(() => focused(app.setup) === undefined)
+      app.api.route.navigate("home")
+      await wait(() => app.api.route.current.name === "home" && focused(app.setup)?.plainText === "")
+      app.api.route.navigate("session", { sessionID: root.id })
+      await wait(() => routed(app.api, root.id) && focused(app.setup)?.plainText === "child owner draft").catch(() => {
+        throw new Error(
+          `canonical owner draft missing: route=${JSON.stringify(app.api.route.current)} text=${JSON.stringify(focused(app.setup)?.plainText)}`,
+        )
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
   test("a provisional session is reused after first-prompt admission fails", async () => {
     await using tmp = await tmpdir()
     await Promise.all(
@@ -705,6 +770,101 @@ describe.serial("new prompt integration", () => {
       expect(harness.requests.filter((item) => item.path === "/session" && item.method === "POST")).toHaveLength(1)
       expect(harness.requests.filter((item) => item.path === "/session/ses_provisional/prompt_async")).toHaveLength(2)
     } finally {
+      await app.close()
+    }
+  })
+
+  test("a lost 204 response retries one provisional session with one stable message ID", async () => {
+    await using tmp = await tmpdir()
+    await Promise.all(
+      ["data", "cache", "config", "state", "tmp", "bin", "log", "repos"].map((dir) =>
+        mkdir(path.join(tmp.path, dir), { recursive: true }),
+      ),
+    )
+    const events = createEventSource()
+    const durable = new Map<string, string>()
+    let harness!: ReturnType<typeof fixture>
+    harness = fixture({
+      root: tmp.path,
+      events,
+      create(request) {
+        const created = session({ id: "ses_lost_response", directory: tmp.path })
+        harness.sessions.set(created.id, created)
+        return harness.response(`${request.method} ${request.path}`, created)
+      },
+      admit(request, _, count) {
+        const payload = record(request.body)
+        const messageID = payload?.messageID
+        if (typeof messageID !== "string") throw new Error("missing message ID")
+        durable.set(messageID, promptText(payload) ?? "")
+        if (count === 1) throw new TypeError("response lost after durable admission")
+        return harness.accepted(`${request.method} ${request.path} #2`)
+      },
+    })
+    const app = await mount({ root: tmp.path, fetch: harness.fetch, events: events.source })
+
+    try {
+      await wait(() => focused(app.setup) !== undefined)
+      await app.setup.mockInput.typeText("retry one durable message")
+      app.setup.mockInput.pressEnter()
+      await wait(() => harness.requests.some((item) => item.path === "/session/ses_lost_response/prompt_async"))
+      await wait(() => focused(app.setup)?.plainText === "retry one durable message")
+
+      app.setup.mockInput.pressEnter()
+      await wait(() => routed(app.api, "ses_lost_response"))
+      const prompts = harness.requests.filter((item) => item.path === "/session/ses_lost_response/prompt_async")
+      expect(harness.requests.filter((item) => item.path === "/session" && item.method === "POST")).toHaveLength(1)
+      expect(prompts).toHaveLength(2)
+      expect(prompts.map((item) => record(item.body)?.messageID)).toEqual([
+        record(prompts[0]?.body)?.messageID,
+        record(prompts[0]?.body)?.messageID,
+      ])
+      expect(String(record(prompts[0]?.body)?.messageID)).toStartWith("msg_")
+      expect(durable).toEqual(new Map([[String(record(prompts[0]?.body)?.messageID), "retry one durable message"]]))
+    } finally {
+      await app.close()
+    }
+  })
+
+  test("changed Home input migrates only to its promoted session and closes with it", async () => {
+    await using tmp = await tmpdir()
+    await Promise.all(
+      ["data", "cache", "config", "state", "tmp", "bin", "log", "repos"].map((dir) =>
+        mkdir(path.join(tmp.path, dir), { recursive: true }),
+      ),
+    )
+    const events = createEventSource()
+    let release!: () => void
+    const delayed = new Promise<Response>((resolve) => (release = () => resolve(new Response(null, { status: 204 }))))
+    let harness!: ReturnType<typeof fixture>
+    harness = fixture({
+      root: tmp.path,
+      events,
+      create(request) {
+        const created = session({ id: "ses_promoted_edit", directory: tmp.path })
+        harness.sessions.set(created.id, created)
+        return harness.response(`${request.method} ${request.path}`, created)
+      },
+      admit: () => delayed,
+    })
+    const app = await mount({ root: tmp.path, fetch: harness.fetch, events: events.source })
+
+    try {
+      await wait(() => focused(app.setup) !== undefined)
+      await app.setup.mockInput.typeText("submitted Home text")
+      app.setup.mockInput.pressEnter()
+      await wait(() => harness.requests.some((item) => item.path === "/session/ses_promoted_edit/prompt_async"))
+      focused(app.setup)!.setText("edit made during admission")
+      await wait(() => focused(app.setup)?.plainText === "edit made during admission")
+      release()
+      await wait(
+        () => routed(app.api, "ses_promoted_edit") && focused(app.setup)?.plainText === "edit made during admission",
+      )
+
+      app.api.keymap.dispatchCommand("session.tabs.close")
+      await wait(() => app.api.route.current.name === "home" && focused(app.setup)?.plainText === "")
+    } finally {
+      release()
       await app.close()
     }
   })
@@ -792,6 +952,8 @@ describe.serial("new prompt integration", () => {
             json({ name: "SessionBusyError", data: { message: "busy", sessionID: existing.id } }, { status: 409 }),
           )),
     )
+    let shells = 0
+    let commands = 0
     let harness!: ReturnType<typeof fixture>
     harness = fixture({
       root: tmp.path,
@@ -803,13 +965,20 @@ describe.serial("new prompt integration", () => {
         return harness.accepted(`${request.method} ${request.path}`)
       },
       handle(request) {
-        if (request.path === "/session/ses_detached/shell") return shell
-        if (request.path === "/session/ses_detached/command")
+        if (request.path === "/session/ses_detached/shell") {
+          shells++
+          if (shells === 1) return shell
+          return json({})
+        }
+        if (request.path === "/session/ses_detached/command") {
+          commands++
+          if (commands > 1) return json({})
           return harness.response(
             `${request.method} ${request.path}`,
             { name: "BadRequest", data: { message: "command failed" } },
             400,
           )
+        }
         return undefined
       },
     })
@@ -832,25 +1001,120 @@ describe.serial("new prompt integration", () => {
       await wait(() => harness.requests.some((item) => item.path === "/session/ses_detached/prompt_async"))
       release()
       await wait(() => focused(app.setup)?.plainText === "printf exact-shell")
-
-      app.api.keymap.dispatchCommand("prompt.clear")
+      app.setup.mockInput.pressEnter()
+      await wait(() => harness.requests.filter((item) => item.path === "/session/ses_detached/shell").length === 2)
       await wait(() => focused(app.setup)?.plainText === "")
+
       await app.setup.mockInput.typeText("/review exact-command")
       app.setup.mockInput.pressEscape()
       app.api.keymap.dispatchCommand("prompt.submit")
       await wait(() => harness.requests.some((item) => item.path === "/session/ses_detached/command"))
       await wait(() => focused(app.setup)?.plainText === "/review exact-command")
+      app.setup.mockInput.pressEscape()
+      app.api.keymap.dispatchCommand("prompt.submit")
+      await wait(() => harness.requests.filter((item) => item.path === "/session/ses_detached/command").length === 2)
+      const shellID = record(
+        harness.requests.find((item) => item.path === "/session/ses_detached/shell")?.body,
+      )?.messageID
+      const commandID = record(
+        harness.requests.find((item) => item.path === "/session/ses_detached/command")?.body,
+      )?.messageID
+      expect(
+        harness.requests
+          .filter((item) => item.path === "/session/ses_detached/shell")
+          .map((item) => record(item.body)?.messageID),
+      ).toEqual([shellID, shellID])
+      expect(
+        harness.requests
+          .filter((item) => item.path === "/session/ses_detached/command")
+          .map((item) => record(item.body)?.messageID),
+      ).toEqual([commandID, commandID])
       expect(harness.requests.find((item) => item.path === "/session/ses_detached/shell")).toMatchObject({
         query: { directory: tmp.path },
-        body: { command: "printf exact-shell" },
+        body: { command: "printf exact-shell", messageID: expect.stringContaining("msg_") },
       })
       expect(harness.requests.find((item) => item.path === "/session/ses_detached/command")).toMatchObject({
         query: { directory: tmp.path },
-        body: { command: "review", arguments: "exact-command" },
+        body: { command: "review", arguments: "exact-command", messageID: expect.stringContaining("msg_") },
       })
     } finally {
       release()
       await app.close()
+    }
+  })
+
+  test("an editor selection changed during admission remains pending for the next prompt", async () => {
+    await using tmp = await tmpdir()
+    await Promise.all(
+      ["data", "cache", "config", "state", "tmp", "bin", "log", "repos"].map((dir) =>
+        mkdir(path.join(tmp.path, dir), { recursive: true }),
+      ),
+    )
+    const previous = process.env.ZED_TERM
+    process.env.ZED_TERM = "true"
+    const first = {
+      filePath: path.join(tmp.path, "first.ts"),
+      ranges: [{ text: "first", selection: { start: { line: 1, character: 0 }, end: { line: 1, character: 5 } } }],
+    }
+    const second = {
+      filePath: path.join(tmp.path, "second.ts"),
+      ranges: [{ text: "second", selection: { start: { line: 2, character: 0 }, end: { line: 2, character: 6 } } }],
+    }
+    let selected = first
+    let reads = 0
+    const editor: EditorIntegration = {
+      async selection() {
+        reads++
+        return { type: "selection", selection: selected }
+      },
+    }
+    const events = createEventSource()
+    const existing = session({ id: "ses_editor_fence", directory: tmp.path })
+    let release!: () => void
+    const delayed = new Promise<Response>((resolve) => (release = () => resolve(new Response(null, { status: 204 }))))
+    let harness!: ReturnType<typeof fixture>
+    harness = fixture({
+      root: tmp.path,
+      events,
+      sessions: [existing],
+      create: () => json(session({ id: "ses_unused", directory: tmp.path })),
+      admit(request, _, count) {
+        if (count === 1) return delayed
+        return harness.accepted(`${request.method} ${request.path}`)
+      },
+    })
+    const app = await mount({
+      root: tmp.path,
+      args: { sessionID: existing.id },
+      fetch: harness.fetch,
+      events: events.source,
+      editor,
+    })
+
+    try {
+      await wait(() => focused(app.setup) !== undefined && reads > 0)
+      await app.setup.mockInput.typeText("first with editor")
+      app.setup.mockInput.pressEnter()
+      await wait(() => harness.requests.some((item) => item.path === "/session/ses_editor_fence/prompt_async"))
+      const before = reads
+      selected = second
+      await wait(() => reads > before && app.setup.captureCharFrame().includes("second.ts"), 3_000)
+      release()
+      await wait(() => focused(app.setup)?.plainText === "")
+
+      await app.setup.mockInput.typeText("second with editor")
+      app.setup.mockInput.pressEnter()
+      await wait(
+        () => harness.requests.filter((item) => item.path === "/session/ses_editor_fence/prompt_async").length === 2,
+      )
+      const prompts = harness.requests.filter((item) => item.path === "/session/ses_editor_fence/prompt_async")
+      expect(JSON.stringify(record(prompts[0]?.body)?.parts)).toContain("first.ts")
+      expect(JSON.stringify(record(prompts[1]?.body)?.parts)).toContain("second.ts")
+    } finally {
+      release()
+      await app.close()
+      if (previous === undefined) delete process.env.ZED_TERM
+      else process.env.ZED_TERM = previous
     }
   })
 

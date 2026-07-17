@@ -23,6 +23,12 @@ import {
   type SessionTabsState,
 } from "./session-tabs-state"
 
+type Owner = {
+  prompt?: { prompt: PromptInfo; cursor: number; mode: "normal" | "shell" }
+  provisional?: { directory: string; workspace?: string; session?: Session; move: boolean }
+  submission?: Map<string, string>
+}
+
 export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimpleContext({
   name: "SessionTabs",
   init: () => {
@@ -31,39 +37,40 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
     const project = useProject()
     const [state, setState] = createSignal<SessionTabsState>({ tabs: [] })
     const scope = crypto.randomUUID()
-    const [draft, setDraft] = createSignal(crypto.randomUUID().toString())
+    const [draft, setDraft] = createSignal<string>(crypto.randomUUID())
     const [revision, setRevision] = createSignal(0)
     const roots = new Map<string, string>()
-    const owners = new Map<
-      string,
-      {
-        prompt?: { prompt: PromptInfo; cursor: number }
-        provisional?: { directory: string; workspace?: string; session?: Session; move: boolean }
-      }
-    >()
+    const aliases = new Map<string, string>()
+    const owners = new Map<string, Owner>()
     const families = createMemo(() => sessionFamilyIndex(sync.data.session))
 
     function update(
       owner: string,
-      key: "prompt" | "provisional",
+      key: "prompt" | "provisional" | "submission",
       value:
-        | { prompt: PromptInfo; cursor: number }
+        | { prompt: PromptInfo; cursor: number; mode: "normal" | "shell" }
         | { directory: string; workspace?: string; session?: Session; move: boolean }
+        | Map<string, string>
         | undefined,
     ) {
+      owner = canonical(owner)
       const current = owners.get(owner) ?? {}
       const next = { ...current, [key]: value }
       owners.delete(owner)
-      if (next.prompt || next.provisional) owners.set(owner, next)
-      while (owners.size > 32) owners.delete(owners.keys().next().value!)
+      if (next.prompt || next.provisional || next.submission) owners.set(owner, next)
     }
 
     function clear(owner: string) {
+      owner = canonical(owner)
       owners.delete(owner)
+      aliases.forEach((target, source) => {
+        if (source === owner || canonical(target) === owner) aliases.delete(source)
+      })
     }
 
     function valid(owner: string) {
-      if (owner === draft()) return true
+      owner = canonical(owner)
+      if (owner === draft()) return state().tabs.some((tab) => tab.type === "draft")
       const prefix = `${scope}:`
       if (!owner.startsWith(prefix)) return false
       const id = owner.slice(prefix.length)
@@ -71,6 +78,36 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
         state().tabs.some((tab) => tab.type === "session" && tab.id === id) ||
         (route.data.type === "session" && route.data.sessionID === id)
       )
+    }
+
+    function canonical(owner: string) {
+      const seen = new Set<string>()
+      let current = owner
+      while (aliases.has(current) && !seen.has(current)) {
+        seen.add(current)
+        current = aliases.get(current)!
+      }
+      return current
+    }
+
+    function merge(target: Owner | undefined, source: Owner) {
+      const submission =
+        target?.submission || source.submission
+          ? new Map([...(target?.submission ?? []), ...(source.submission ?? [])])
+          : undefined
+      return { ...target, ...source, ...(submission ? { submission } : {}) }
+    }
+
+    function migrate(from: string, to: string) {
+      const sourceOwner = canonical(from)
+      const targetOwner = canonical(to)
+      if (sourceOwner === targetOwner) return
+      aliases.set(from, targetOwner)
+      aliases.set(sourceOwner, targetOwner)
+      const source = owners.get(sourceOwner)
+      if (!source) return
+      owners.delete(sourceOwner)
+      owners.set(targetOwner, merge(owners.get(targetOwner), source))
     }
 
     createEffect(() => {
@@ -87,8 +124,7 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
     createEffect(() => {
       const current = route.data
       if (current.type === "home") {
-        if (state().tabs.some((tab) => tab.type === "draft"))
-          setState((value) => activateSessionTab(value, DRAFT_TAB_ID))
+        setState((value) => openDraftTab(value))
         return
       }
       if (current.type !== "session") return
@@ -103,6 +139,7 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
         ...(info ? { title: info.title, workspaceID: info.workspaceID } : {}),
         ...(status ? { status } : {}),
       }
+      migrate(`${scope}:${current.sessionID}`, `${scope}:${id}`)
       setState((value) => visitSessionTab(replaceSessionTab(value, current.sessionID, descriptor), descriptor))
     })
 
@@ -207,16 +244,17 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       scope,
       draft,
       owner(sessionID?: string) {
-        return sessionID ? `${scope}:${sessionID}` : draft()
+        return canonical(sessionID ? `${scope}:${sessionID}` : draft())
       },
       prompt: {
         revision,
         take(owner: string) {
+          owner = canonical(owner)
           const saved = owners.get(owner)?.prompt
           update(owner, "prompt", undefined)
           return saved
         },
-        save(owner: string, value: { prompt: PromptInfo; cursor: number }) {
+        save(owner: string, value: { prompt: PromptInfo; cursor: number; mode: "normal" | "shell" }) {
           if (!valid(owner)) return false
           update(owner, "prompt", value)
           setRevision((value) => value + 1)
@@ -228,12 +266,36 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       },
       provisional: {
         get(owner: string) {
+          owner = canonical(owner)
           return owners.get(owner)?.provisional
         },
         save(owner: string, value: { directory: string; workspace?: string; session?: Session; move: boolean }) {
-          if (owner !== draft()) return false
+          if (owner !== draft() || !valid(owner)) return false
           update(owner, "provisional", value)
           return true
+        },
+      },
+      submission: {
+        id(owner: string, identity: string) {
+          owner = canonical(owner)
+          const current = owners.get(owner)?.submission
+          const existing = current?.get(identity)
+          if (existing) return existing
+          const id = `msg_${crypto.randomUUID().replaceAll("-", "")}`
+          if (valid(owner)) update(owner, "submission", new Map(current).set(identity, id))
+          return id
+        },
+        clear(owner: string, identity?: string) {
+          owner = canonical(owner)
+          if (!identity) {
+            update(owner, "submission", undefined)
+            return
+          }
+          const current = owners.get(owner)?.submission
+          if (!current?.has(identity)) return
+          const next = new Map(current)
+          next.delete(identity)
+          update(owner, "submission", next.size > 0 ? next : undefined)
         },
       },
       visible: createMemo(() => tabs().length > 0),
@@ -254,8 +316,17 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       },
       promoteDraft(input: SessionTabDescriptor, owner = draft()) {
         if (owner !== draft()) return false
-        setState((value) => promoteDraftTab(value, input))
+        const source = owners.get(owner)
+        if (source?.prompt || source?.submission)
+          owners.set(
+            `${scope}:${input.id}`,
+            merge(owners.get(`${scope}:${input.id}`), {
+              ...(source.prompt ? { prompt: source.prompt } : {}),
+              ...(source.submission ? { submission: source.submission } : {}),
+            }),
+          )
         clear(owner)
+        setState((value) => promoteDraftTab(value, input))
         return true
       },
     }

@@ -99,7 +99,13 @@ test("draft promotion, root visits, workspace refresh, and local close compose t
     await app.renderOnce()
     expect(tabs.tabs().map((tab) => tab.title)).toEqual(["New Session"])
 
+    const draft = tabs.owner()
+    const submission = tabs.submission.id(draft, "first prompt")
     tabs.promoteDraft({ id: "ses_1", title: "New Session" })
+    expect(tabs.submission.id(tabs.owner("ses_1"), "first prompt")).toBe(submission)
+    expect(
+      tabs.prompt.save(draft, { prompt: { input: "stale Home", parts: [] }, cursor: 10, mode: "normal" }),
+    ).toBeFalse()
     route.navigate({ type: "session", sessionID: "ses_1" })
     await app.renderOnce()
     route.navigate({ type: "session", sessionID: "ses_child" })
@@ -168,6 +174,32 @@ test("draft promotion, root visits, workspace refresh, and local close compose t
     tabs.close("ses_1")
     await app.renderOnce()
     expect(route.data).toEqual({ type: "home" })
+
+    const retained = Array.from({ length: 40 }, (_, index) => `ses_retained_${index}`)
+    for (const id of retained) {
+      route.navigate({ type: "session", sessionID: id })
+      await app.renderOnce()
+      expect(
+        tabs.prompt.save(tabs.owner(id), {
+          prompt: { input: id, parts: [] },
+          cursor: id.length,
+          mode: id === retained[0] ? "shell" : "normal",
+        }),
+      ).toBeTrue()
+    }
+    expect(tabs.prompt.take(tabs.owner(retained[0]))).toMatchObject({
+      prompt: { input: retained[0] },
+      mode: "shell",
+    })
+    tabs.prompt.save(tabs.owner(retained[0]), {
+      prompt: { input: retained[0], parts: [] },
+      cursor: retained[0].length,
+      mode: "shell",
+    })
+    tabs.close(retained[0])
+    route.navigate({ type: "session", sessionID: retained[0] })
+    await app.renderOnce()
+    expect(tabs.prompt.take(tabs.owner(retained[0]))).toBeUndefined()
   } finally {
     app.renderer.destroy()
   }

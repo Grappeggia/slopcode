@@ -30,6 +30,7 @@ const database = Database.layerFromPath(":memory:")
 const runtime = SessionRuntime.layer.pipe(Layer.provide(database))
 const sessionID = SessionID.make("ses_control_test")
 const legacyCalls: SessionPrompt.PromptInput[] = []
+const legacyLoopCalls: SessionID[] = []
 const legacyCancelCalls: SessionID[] = []
 const legacyCancelGates: Effect.Effect<void>[] = []
 const v2Calls: Array<{ readonly prompt: string; readonly resume?: boolean; readonly format?: unknown }> = []
@@ -66,7 +67,17 @@ const legacy = Layer.succeed(
         legacyCalls.push(input)
         return legacyMessage
       }),
-    loop: () => Effect.succeed(legacyMessage),
+    admit: (input, guard) =>
+      Effect.gen(function* () {
+        yield* guard ?? Effect.void
+        legacyCalls.push(input)
+        return { message: legacyMessage, resume: input.noReply !== true }
+      }),
+    loop: (input) =>
+      Effect.sync(() => {
+        legacyLoopCalls.push(input.sessionID)
+        return legacyMessage
+      }),
     shell: () => Effect.die("unused"),
     command: () => Effect.die("unused"),
     resolvePromptParts: () => Effect.succeed([]),
@@ -140,6 +151,7 @@ const realSessions = SessionV2.layer.pipe(
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
   legacyCalls.length = 0
+  legacyLoopCalls.length = 0
   legacyCancelCalls.length = 0
   legacyCancelGates.length = 0
   v2Calls.length = 0
@@ -249,13 +261,20 @@ describe("SessionControl", () => {
     })
   })
 
-  it.effect("routes V1-owned prompts to SessionPrompt", () =>
+  it.effect("separates V1 admission from the synchronous prompt loop", () =>
     Effect.gen(function* () {
       yield* setup
       const control = yield* SessionControl.Service
 
+      expect(yield* control.admit({ sessionID, parts: [{ type: "text", text: "admit only" }] })).toMatchObject({
+        owner: "v1",
+        message: legacyMessage,
+        resume: true,
+      })
+      expect(legacyLoopCalls).toEqual([])
       expect(yield* control.prompt({ sessionID, parts: [{ type: "text", text: "legacy" }] })).toBe(legacyMessage)
-      expect(legacyCalls).toHaveLength(1)
+      expect(legacyCalls).toHaveLength(2)
+      expect(legacyLoopCalls).toEqual([sessionID])
       expect(v2Calls).toEqual([])
     }),
   )
@@ -305,6 +324,24 @@ describe("SessionControl", () => {
       ).toMatchObject({ prompt: { text: "next" } })
       expect(legacyCalls).toEqual([])
       expect(v2Calls).toEqual([{ prompt: "next", resume: false, format: undefined }])
+    }),
+  )
+
+  it.effect("returns V2 durable admission without waiting for execution", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const control = yield* SessionControl.Service
+      const runtime = yield* SessionRuntime.Service
+      yield* runtime.assign({ sessionID, owner: "v2", expectedOwner: "v1", expectedEpoch: 0 })
+
+      expect(yield* control.admit({ sessionID, parts: [{ type: "text", text: "admit next" }] })).toMatchObject({
+        owner: "v2",
+        message: { prompt: { text: "admit next" } },
+        resume: false,
+      })
+      expect(legacyCalls).toEqual([])
+      expect(legacyLoopCalls).toEqual([])
+      expect(v2Calls).toEqual([{ prompt: "admit next", resume: undefined, format: undefined }])
     }),
   )
 

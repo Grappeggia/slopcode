@@ -420,18 +420,22 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         !(yield* controlSvc.messages(ctx.params.sessionID).pipe(Effect.mapError(() => new HttpApiError.BadRequest({}))))
       )
         yield* requireSession(ctx.params.sessionID)
-      yield* controlSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            yield* Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause })
-            yield* events.publish(Session.Event.Error, {
-              sessionID: ctx.params.sessionID,
-              error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
-            })
-          }),
-        ),
-        Effect.forkIn(scope, { startImmediately: true }),
-      )
+      const admitted = yield* controlSvc
+        .admit({ ...ctx.payload, sessionID: ctx.params.sessionID })
+        .pipe(Effect.catchCause(() => Effect.fail(new HttpApiError.BadRequest({}))))
+      if (admitted.owner === "v1" && admitted.resume)
+        yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause })
+              yield* events.publish(Session.Event.Error, {
+                sessionID: ctx.params.sessionID,
+                error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+              })
+            }),
+          ),
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
       return HttpApiSchema.NoContent.make()
     })
 

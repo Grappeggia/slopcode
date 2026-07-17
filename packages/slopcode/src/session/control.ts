@@ -37,6 +37,18 @@ export interface Interface {
     | SessionRunner.RunError
     | SessionExecutionStatus.DurableTerminalError
   >
+  readonly admit: (
+    input: SessionPrompt.PromptInput,
+  ) => Effect.Effect<
+    | { readonly owner: "v1"; readonly message: SessionV1.WithParts; readonly resume: boolean }
+    | { readonly owner: "v2"; readonly message: SessionInput.Admitted; readonly resume: false },
+    | Image.Error
+    | SessionPrompt.AdmissionFailed
+    | SessionRuntime.Error
+    | SessionV2.Error
+    | SessionRunner.RunError
+    | SessionExecutionStatus.DurableTerminalError
+  >
   readonly statuses: () => Effect.Effect<
     ReadonlyArray<{ readonly sessionID: SessionID; readonly status: SessionExecutionStatus.Info }>
   >
@@ -51,24 +63,16 @@ export const layer = Layer.effect(
     const legacy = yield* SessionPrompt.Service
     const control = yield* CoreSessionControl.Service
 
-    const prompt = Effect.fn("SessionControl.prompt")(function* (input: SessionPrompt.PromptInput) {
+    const admit = Effect.fn("SessionControl.admit")(function* (input: SessionPrompt.PromptInput) {
       const info = yield* runtime.get(input.sessionID)
       if (info?.owner === "v2") {
-        const admitted = yield* control.prompt({
+        const message = yield* control.prompt({
           sessionID: input.sessionID,
           id: input.messageID ? SessionMessage.ID.make(input.messageID) : undefined,
           prompt: toPrompt(input.parts, input.format),
           resume: input.noReply === true ? false : undefined,
         })
-        if (input.noReply === true) return admitted
-        yield* control.wait(input.sessionID)
-        const result = yield* control.messages(input.sessionID)
-        const projected = projectV2(input.sessionID, result.messages, result.info)
-        const message = projected.find(
-          (message) => message.info.role === "assistant" && String(message.info.parentID) === String(admitted.id),
-        )
-        if (!message) return yield* Effect.die("V2 prompt completed without a projected message")
-        return message
+        return { owner: "v2" as const, message, resume: false as const }
       }
       const current = yield* runtime.assert({
         sessionID: input.sessionID,
@@ -76,12 +80,31 @@ export const layer = Layer.effect(
         state: "ready",
         epoch: info?.epoch,
       })
-      return yield* legacy.prompt(
+      const admitted = yield* legacy.admit(
         input,
         runtime
           .assert({ sessionID: input.sessionID, owner: "v1", state: "ready", epoch: current.epoch })
           .pipe(Effect.asVoid),
       )
+      return { owner: "v1" as const, ...admitted }
+    })
+
+    const prompt = Effect.fn("SessionControl.prompt")(function* (input: SessionPrompt.PromptInput) {
+      const admitted = yield* admit(input)
+      if (admitted.owner === "v2") {
+        if (input.noReply === true) return admitted.message
+        yield* control.wait(input.sessionID)
+        const result = yield* control.messages(input.sessionID)
+        const projected = projectV2(input.sessionID, result.messages, result.info)
+        const message = projected.find(
+          (message) =>
+            message.info.role === "assistant" && String(message.info.parentID) === String(admitted.message.id),
+        )
+        if (!message) return yield* Effect.die("V2 prompt completed without a projected message")
+        return message
+      }
+      if (!admitted.resume) return admitted.message
+      return yield* legacy.loop({ sessionID: input.sessionID })
     })
 
     const messages = Effect.fn("SessionControl.messages")(function* (sessionID: SessionID) {
@@ -101,6 +124,7 @@ export const layer = Layer.effect(
     })
 
     return Service.of({
+      admit,
       cancel,
       messages,
       prompt,

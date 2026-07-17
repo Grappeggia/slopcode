@@ -30,7 +30,7 @@ import { DialogProvider as DialogProviderList } from "./component/dialog-provide
 import { ErrorComponent } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { ProjectProvider, useProject } from "./context/project"
-import { EditorContextProvider } from "./context/editor"
+import { EditorContextProvider, type EditorIntegration } from "./context/editor"
 import { useEvent } from "./context/event"
 import { SDKProvider, useSDK } from "./context/sdk"
 import { StartupLoading } from "./component/startup-loading"
@@ -148,6 +148,7 @@ export type TuiInput = {
   fetch?: typeof fetch
   headers?: RequestInit["headers"]
   events?: EventSource
+  editor?: EditorIntegration
   pluginHost: TuiPluginHost
 }
 
@@ -312,7 +313,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                             <FrecencyProvider>
                                                               <PromptHistoryProvider>
                                                                 <PromptRefProvider>
-                                                                  <EditorContextProvider>
+                                                                  <EditorContextProvider integration={input.editor}>
                                                                     <LocationProvider>
                                                                       <App
                                                                         onSnapshot={input.onSnapshot}

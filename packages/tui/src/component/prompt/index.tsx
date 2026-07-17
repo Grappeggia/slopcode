@@ -681,6 +681,7 @@ export function Prompt(props: PromptProps) {
       tabs.prompt.save(promptOwner, {
         prompt: structuredClone(unwrap(store.prompt)),
         cursor: input && !input.isDestroyed ? input.cursorOffset : store.prompt.input.length,
+        mode: store.mode,
       })
     else tabs.prompt.clear(promptOwner)
     setInputTarget(undefined)
@@ -1074,7 +1075,8 @@ export function Prompt(props: PromptProps) {
     const selectedModel = currentModel
       ? { providerID: currentModel.providerID, modelID: currentModel.modelID }
       : undefined
-    const editorSelection = editorContext()
+    const context = editorContext()
+    const editorSelection = context ? structuredClone(unwrap(context)) : undefined
     const editorParts =
       editorSelection && editor.labelState() === "pending"
         ? [
@@ -1096,7 +1098,7 @@ export function Prompt(props: PromptProps) {
     const projectWorkspace = project.workspace.current()
     const commandName = inputText.startsWith("/") ? inputText.split("\n")[0].split(" ")[0].slice(1) : undefined
     const isCommand = commandName !== undefined && sync.data.command.some((item) => item.name === commandName)
-    const saved = { prompt, cursor: input.cursorOffset }
+    const saved = { prompt, cursor: input.cursorOffset, mode }
     const unchanged = () =>
       current() &&
       input &&
@@ -1230,6 +1232,20 @@ export function Prompt(props: PromptProps) {
       return false
     }
 
+    const identity = JSON.stringify({
+      sessionID,
+      directory: target.directory,
+      workspace: target.workspace,
+      inputText,
+      parts,
+      editorParts,
+      mode,
+      agent,
+      model: selectedModel,
+      variant,
+      commandName,
+    })
+    const messageID = tabs.submission.id(owner, identity)
     const retryOwner = target.created ? tabs.owner(sessionID) : owner
     const recover = (title: string, error: unknown) => {
       if (!tabs.prompt.save(retryOwner, saved)) stash.push({ input: saved.prompt.input, parts: saved.prompt.parts })
@@ -1249,12 +1265,17 @@ export function Prompt(props: PromptProps) {
             sessionID,
             directory: target.directory,
             workspace: target.workspace,
+            messageID,
             agent,
             model: selectedModel,
             command: inputText,
           },
           { throwOnError: true },
         )
+        .then(() => {
+          tabs.submission.clear(owner, identity)
+          tabs.submission.clear(retryOwner, identity)
+        })
         .catch((error) => recover("Failed to run shell command", error))
       if (current()) setStore("mode", "normal")
     } else if (isCommand) {
@@ -1271,6 +1292,7 @@ export function Prompt(props: PromptProps) {
             sessionID,
             directory: target.directory,
             workspace: target.workspace,
+            messageID,
             command: command.slice(1),
             arguments: args,
             agent,
@@ -1280,6 +1302,10 @@ export function Prompt(props: PromptProps) {
           },
           { throwOnError: true },
         )
+        .then(() => {
+          tabs.submission.clear(owner, identity)
+          tabs.submission.clear(retryOwner, identity)
+        })
         .catch((error) => recover("Failed to run command", error))
     } else {
       move.startSubmit()
@@ -1289,6 +1315,7 @@ export function Prompt(props: PromptProps) {
             sessionID,
             directory: target.directory,
             workspace: target.workspace,
+            messageID,
             agent,
             model: selectedModel,
             variant,
@@ -1312,6 +1339,7 @@ export function Prompt(props: PromptProps) {
         if (target.finish) move.finishSubmit(false)
         return false
       }
+      tabs.submission.clear(owner, identity)
     }
 
     history.append({ ...prompt, mode })
@@ -1326,12 +1354,13 @@ export function Prompt(props: PromptProps) {
         },
         owner,
       )
-    if (editorParts.length > 0) editor.markSelectionSent()
-    if (clear) resetPrompt()
+    if (editorParts.length > 0) editor.markSelectionSent(editorSelection)
+    if (clear) resetPrompt(false)
     if (!clear && target.created)
       tabs.prompt.save(tabs.owner(sessionID), {
         prompt: structuredClone(unwrap(store.prompt)),
         cursor: input.cursorOffset,
+        mode: store.mode,
       })
     props.onSubmit?.()
 
@@ -1476,14 +1505,15 @@ export function Prompt(props: PromptProps) {
     resetPrompt()
   }
 
-  function restorePrompt(saved: { prompt: PromptInfo; cursor: number }) {
+  function restorePrompt(saved: { prompt: PromptInfo; cursor: number; mode: "normal" | "shell" }) {
     input.setText(saved.prompt.input)
     setStore("prompt", saved.prompt)
+    setStore("mode", saved.mode)
     restoreExtmarksFromParts(saved.prompt.parts)
     input.cursorOffset = saved.cursor
   }
 
-  function resetPrompt() {
+  function resetPrompt(clearSubmission = true) {
     ghost?.clear()
     input.clear()
     input.extmarks.clear()
@@ -1493,6 +1523,7 @@ export function Prompt(props: PromptProps) {
     })
     setStore("extmarkToPartIndex", new Map())
     tabs.prompt.clear(promptOwner)
+    if (clearSubmission) tabs.submission.clear(promptOwner)
   }
 
   const highlight = createMemo(() => {
