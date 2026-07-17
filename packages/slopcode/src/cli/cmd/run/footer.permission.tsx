@@ -3,8 +3,8 @@
 // Renders inside the footer when the reducer pushes a FooterView of type
 // "permission". Uses a three-stage state machine (permission.shared.ts):
 //
-//   permission → shows the request with Allow once / Always / Reject buttons
-//   global     → confirmation step before granting global access
+//   permission → shows once / session / project / reject buttons
+//   project    → confirmation step before granting durable access
 //   reject     → text field for the rejection message
 //
 // Keyboard: left/right to select, enter to confirm, esc to reject.
@@ -24,7 +24,7 @@ import {
   permissionBatchSubmit,
   permissionBatchSync,
   permissionBatchToggle,
-  permissionGrantLines,
+  permissionProjectLines,
   permissionCancel,
   permissionEscape,
   permissionHover,
@@ -36,6 +36,7 @@ import {
   permissionShift,
   type PermissionOption,
   type PermissionBatchOption,
+  type PermissionScopeLabel,
 } from "./permission.shared"
 import { footerWidthPolicy } from "./footer.width"
 import { toolFiletype } from "./tool"
@@ -47,6 +48,7 @@ function buttons(
   selected: PermissionOption,
   theme: RunFooterTheme,
   disabled: boolean,
+  scope: PermissionScopeLabel,
   onHover: (option: PermissionOption) => void,
   onSelect: (option: PermissionOption) => void,
 ) {
@@ -65,7 +67,7 @@ function buttons(
               if (!disabled) onSelect(option)
             }}
           >
-            <text fg={option === selected ? theme.surface : theme.muted}>{permissionLabel(option)}</text>
+            <text fg={option === selected ? theme.surface : theme.muted}>{permissionLabel(option, scope)}</text>
           </box>
         )}
       </For>
@@ -142,6 +144,7 @@ function RunPermissionSingleBody(props: {
   theme: RunFooterTheme
   block: RunBlockTheme
   diffStyle?: RunDiffStyle
+  scope: PermissionScopeLabel
   onReply: (input: PermissionReply) => void | Promise<void>
 }) {
   const dims = useTerminalDimensions()
@@ -149,12 +152,12 @@ function RunPermissionSingleBody(props: {
   const info = createMemo(() => permissionInfo(props.request))
   const ft = createMemo(() => toolFiletype(info().file))
   const narrow = createMemo(() => footerWidthPolicy(dims().width).dialog.narrow)
-  const persistent = createMemo(() => Boolean(props.request.grant?.resources.length))
+  const persistent = createMemo(() => props.request.always.length > 0)
   const opts = createMemo(() => permissionOptions(state().stage, persistent()))
   const busy = createMemo(() => state().submitting)
   const title = createMemo(() => {
-    if (state().stage === "global") {
-      return "Confirm global permission"
+    if (state().stage === "project") {
+      return `Always allow for this ${props.scope}`
     }
 
     if (state().stage === "reject") {
@@ -419,7 +422,7 @@ function RunPermissionSingleBody(props: {
                 }}
               >
                 <box width="100%" flexDirection="column" gap={1} paddingLeft={1}>
-                  <For each={permissionGrantLines("global", props.request)}>
+                  <For each={permissionProjectLines(props.request, props.scope)}>
                     {(line) => (
                       <text fg={props.theme.text} wrapMode="word">
                         {line}
@@ -449,6 +452,7 @@ function RunPermissionSingleBody(props: {
             state().selected,
             props.theme,
             busy(),
+            props.scope,
             (option) => {
               setState((prev) => permissionHover(prev, option))
             },
@@ -470,7 +474,7 @@ function RunPermissionSingleBody(props: {
                 enter <span style={{ fg: props.theme.muted }}>confirm</span>
               </text>
               <text fg={props.theme.text}>
-                esc <span style={{ fg: props.theme.muted }}>{state().stage === "global" ? "cancel" : "reject"}</span>
+                esc <span style={{ fg: props.theme.muted }}>{state().stage === "project" ? "cancel" : "reject"}</span>
               </text>
             </box>
           </Show>
@@ -483,18 +487,19 @@ function RunPermissionSingleBody(props: {
 function RunPermissionBatchBody(props: {
   requests: PermissionRequest[]
   theme: RunFooterTheme
+  scope: PermissionScopeLabel
   onReply: (input: PermissionBatchReply) => void | Promise<void>
 }) {
   const [state, setState] = createSignal(createPermissionBatchState(props.requests))
   const [selected, setSelected] = createSignal<PermissionBatchOption>("once")
   const [submitting, setSubmitting] = createSignal(false)
   const [error, setError] = createSignal<string>()
-  const persistent = createMemo(() => props.requests.every((item) => item.grant?.resources.length))
+  const persistent = createMemo(() => props.requests.every((item) => item.always.length > 0))
   const options = createMemo<PermissionBatchOption[]>(() =>
-    state().stage === "global"
+    state().stage === "project"
       ? ["confirm", "cancel"]
       : persistent()
-        ? ["once", "session", "global", "skip"]
+        ? ["once", "always", "project", "skip"]
         : ["once", "skip"],
   )
 
@@ -517,8 +522,8 @@ function RunPermissionBatchBody(props: {
     const current = state()
     const next = permissionBatchReply(current, props.requests, option)
     if (next.state !== current) setState(next.state)
-    if (option === "global") setSelected("confirm")
-    if (option === "cancel") setSelected("global")
+    if (option === "project") setSelected("confirm")
+    if (option === "cancel") setSelected("project")
     if (next.reply) void submit(next.reply)
   }
 
@@ -565,7 +570,7 @@ function RunPermissionBatchBody(props: {
       return
     }
     if (event.name === "escape") {
-      run(state().stage === "global" ? "cancel" : "skip")
+      run(state().stage === "project" ? "cancel" : "skip")
       event.preventDefault()
     }
   })
@@ -576,13 +581,13 @@ function RunPermissionBatchBody(props: {
         <box flexDirection="row" gap={1}>
           <text fg={props.theme.warning}>△</text>
           <text fg={props.theme.text}>
-            {state().stage === "global" ? "Confirm global build permissions" : "Review build permissions"}
+            {state().stage === "project" ? `Always allow for this ${props.scope}` : "Review build permissions"}
           </text>
           <text fg={props.theme.muted}>{`(${state().selected.length}/${props.requests.length} selected)`}</text>
         </box>
         <text fg={props.theme.muted}>
-          {state().stage === "global"
-            ? "Confirm access to these exact resources across every project and non-Git directory."
+          {state().stage === "project"
+            ? `This approval survives restarts and remains active for this ${props.scope} until revoked.`
             : "Up/down focuses, space toggles. Unselected permissions are skipped."}
         </text>
         <Show when={error()}>{(message) => <text fg={props.theme.error}>{message()}</text>}</Show>
@@ -605,7 +610,9 @@ function RunPermissionBatchBody(props: {
                     }}
                   >
                     <text fg={focused() ? props.theme.highlight : picked() ? props.theme.text : props.theme.muted}>
-                      {`${picked() ? "[x]" : "[ ]"} ${request.permission}: ${request.patterns.join(", ")}`}
+                      {`${picked() ? "[x]" : "[ ]"} ${request.permission}: ${
+                        state().stage === "project" ? request.always.join(", ") : request.patterns.join(", ")
+                      }`}
                     </text>
                     <text fg={props.theme.muted}>{request.reason}</text>
                   </box>
@@ -636,13 +643,13 @@ function RunPermissionBatchBody(props: {
               <text fg={selected() === option ? props.theme.surface : props.theme.muted}>
                 {option === "once"
                   ? "Allow selected once"
-                  : option === "session"
-                    ? "Allow selected for session"
-                    : option === "global"
-                      ? "Remember selected globally"
+                  : option === "always"
+                    ? "Allow selected for this session"
+                    : option === "project"
+                      ? `Always allow selected for this ${props.scope}`
                       : option === "skip"
                         ? "Skip all"
-                        : permissionLabel(option)}
+                        : permissionLabel(option, props.scope)}
               </text>
             </box>
           )}
@@ -657,6 +664,7 @@ export function RunPermissionBody(props: {
   theme: RunFooterTheme
   block: RunBlockTheme
   diffStyle?: RunDiffStyle
+  scope: PermissionScopeLabel
   onReply: (input: PermissionReply) => void | Promise<void>
   onBatchReply: (input: PermissionBatchReply) => void | Promise<void>
 }) {
@@ -669,11 +677,17 @@ export function RunPermissionBody(props: {
           theme={props.theme}
           block={props.block}
           diffStyle={props.diffStyle}
+          scope={props.scope}
           onReply={props.onReply}
         />
       }
     >
-      <RunPermissionBatchBody requests={props.requests} theme={props.theme} onReply={props.onBatchReply} />
+      <RunPermissionBatchBody
+        requests={props.requests}
+        theme={props.theme}
+        scope={props.scope}
+        onReply={props.onBatchReply}
+      />
     </Show>
   )
 }

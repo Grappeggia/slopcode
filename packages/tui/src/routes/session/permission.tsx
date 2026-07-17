@@ -9,7 +9,7 @@ import { useSDK } from "../../context/sdk"
 import { SplitBorder } from "../../ui/border"
 import { useSync } from "../../context/sync"
 import { useProject } from "../../context/project"
-import { permissionActions, permissionGrantLines } from "./permission-copy"
+import { permissionActions, permissionProjectLines, type PermissionScopeLabel } from "./permission-copy"
 import { filetype } from "../../util/filetype"
 import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
@@ -31,7 +31,7 @@ import {
   type PermissionBatchOption,
 } from "./permission-batch"
 
-type PermissionStage = "permission" | "global" | "reject"
+type PermissionStage = "permission" | "project" | "reject"
 
 function EditBody(props: { request: PermissionRequest }) {
   const themeState = useTheme()
@@ -130,6 +130,7 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
     stage: "permission" as PermissionStage,
   })
   const pathFormatter = usePathFormatter()
+  const scope = createMemo<PermissionScopeLabel>(() => (project.data.project.vcs === "git" ? "project" : "folder"))
 
   const session = createMemo(() => sync.data.session.find((s) => s.id === props.request.sessionID))
 
@@ -149,16 +150,13 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
 
   return (
     <Switch>
-      <Match when={store.stage === "global"}>
+      <Match when={store.stage === "project"}>
         <Prompt
-          title="Confirm global permission"
+          title={`Always allow for this ${scope()}`}
           body={
             <box paddingLeft={1} gap={1}>
-              <text fg={theme.warning}>This grant applies in every project and non-Git directory.</text>
-              <For
-                each={permissionGrantLines("global", props.request.permission, props.request.grant?.resources ?? [])}
-              >
-                {(line) => <text fg={theme.text}>{line}</text>}
+              <For each={permissionProjectLines(props.request.always, scope())}>
+                {(line, index) => <text fg={index() < 2 ? theme.textMuted : theme.text}>{line}</text>}
               </For>
             </box>
           }
@@ -168,7 +166,7 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
             setStore("stage", "permission")
             if (option === "cancel") return
             void sdk.client.permission.reply({
-              reply: "global",
+              reply: "project",
               requestID: props.request.id,
               directory: props.directory,
               workspace: project.workspace.current(),
@@ -406,17 +404,17 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
               title="Permission required"
               header={header()}
               body={current.body}
-              options={permissionActions(props.request.grant?.resources ?? [])}
+              options={permissionActions(props.request.always, scope())}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
-                if (option === "global") {
-                  setStore("stage", "global")
+                if (option === "project") {
+                  setStore("stage", "project")
                   return
                 }
-                if (option === "session") {
+                if (option === "always") {
                   void sdk.client.permission.reply({
-                    reply: "session",
+                    reply: "always",
                     requestID: props.request.id,
                     directory: props.directory,
                     workspace: project.workspace.current(),
@@ -463,7 +461,8 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
     submitting: false,
   })
   const selected = createMemo(() => props.requests.filter((item) => store.selected.includes(item.id)))
-  const persistent = createMemo(() => props.requests.every((item) => item.grant?.resources.length))
+  const persistent = createMemo(() => props.requests.every((item) => item.always.length > 0))
+  const scope = createMemo<PermissionScopeLabel>(() => (project.data.project.vcs === "git" ? "project" : "folder"))
 
   createEffect(() => {
     const requests = props.requests
@@ -533,21 +532,20 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
 
   return (
     <Switch>
-      <Match when={store.stage === "global"}>
+      <Match when={store.stage === "project"}>
         <Prompt
-          title="Confirm global build permissions"
+          title={`Always allow for this ${scope()}`}
           body={
             <box paddingLeft={1} flexDirection="column" gap={1}>
-              <text fg={theme.warning}>
-                These exact permissions will apply across every project and non-Git directory.
+              <text fg={theme.textMuted}>
+                {`This approval survives restarts and remains active for this ${scope()} until revoked.`}
               </text>
+              <text fg={theme.textMuted}>The following exact patterns will always be allowed:</text>
               <For each={selected()}>
                 {(request) => (
                   <box flexDirection="column">
                     <text fg={theme.text}>{request.permission}</text>
-                    <For each={request.grant?.resources ?? []}>
-                      {(resource) => <text fg={theme.textMuted}>{"- " + resource}</text>}
-                    </For>
+                    <For each={request.always}>{(resource) => <text fg={theme.textMuted}>{"- " + resource}</text>}</For>
                   </box>
                 )}
               </For>
@@ -606,8 +604,8 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
             persistent()
               ? {
                   once: "Allow selected once",
-                  session: "Allow selected for session",
-                  global: "Remember selected globally",
+                  always: "Allow selected for this session",
+                  project: `Always allow selected for this ${scope()}`,
                   skip: "Skip all",
                 }
               : { once: "Allow selected once", skip: "Skip all" }
@@ -615,7 +613,7 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
           escapeKey="skip"
           fullscreen
           onSelect={(option) => {
-            if (option === "once" || option === "session" || option === "global" || option === "skip") run(option)
+            if (option === "once" || option === "always" || option === "project" || option === "skip") run(option)
           }}
         />
       </Match>

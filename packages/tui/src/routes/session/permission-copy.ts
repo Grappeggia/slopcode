@@ -1,18 +1,20 @@
-export function permissionGrantLines(scope: "session" | "global", permission: string, resources: string[]) {
-  if (!resources.length) return []
-  const lifetime = scope === "session" ? "for this session until revoked" : "globally across projects until revoked"
+export type PermissionScopeLabel = "project" | "folder"
+
+export function permissionProjectLines(patterns: string[], scope: PermissionScopeLabel) {
+  if (!patterns.length) return []
   return [
-    `${resources.length === 1 ? "This exact" : "These exact"} ${permission} resource${resources.length === 1 ? "" : "s"} will be allowed ${lifetime}.`,
-    ...resources.map((resource) => `- ${resource}`),
+    `This approval survives restarts and remains active for this ${scope} until revoked.`,
+    "The following exact patterns will always be allowed:",
+    ...patterns.map((pattern) => `- ${pattern}`),
   ]
 }
 
-export function permissionActions(resources: string[]): Record<string, string> {
-  if (!resources.length) return { once: "Allow once", reject: "Reject" } as const
+export function permissionActions(patterns: string[], scope: PermissionScopeLabel = "project"): Record<string, string> {
+  if (!patterns.length) return { once: "Allow once", reject: "Reject" } as const
   return {
     once: "Allow once",
-    session: "Allow for session",
-    global: "Remember globally",
+    always: "Allow for this session",
+    project: `Always allow for this ${scope}`,
     reject: "Reject",
   } as const
 }

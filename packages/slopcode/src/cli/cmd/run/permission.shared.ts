@@ -4,7 +4,7 @@
 // machine has three stages:
 //
 //   permission → initial view with Allow once / Always / Reject options
-//   global     → confirmation step (Confirm / Cancel)
+//   project    → confirmation step (Confirm / Cancel)
 //   reject     → text input for rejection message
 //
 // permissionRun() is the main transition: given the current state and the
@@ -19,9 +19,10 @@ import { toolPath, toolPermissionInfo } from "./tool"
 
 type Dict = Record<string, unknown>
 
-export type PermissionStage = "permission" | "global" | "reject"
-export type PermissionOption = "once" | "session" | "global" | "reject" | "confirm" | "cancel"
-export type PermissionBatchOption = "once" | "session" | "global" | "skip" | "confirm" | "cancel"
+export type PermissionStage = "permission" | "project" | "reject"
+export type PermissionScopeLabel = "project" | "folder"
+export type PermissionOption = "once" | "always" | "project" | "reject" | "confirm" | "cancel"
+export type PermissionBatchOption = "once" | "always" | "project" | "skip" | "confirm" | "cancel"
 
 export type PermissionBodyState = {
   requestID: string
@@ -45,7 +46,7 @@ export type PermissionStep = {
 }
 
 export type PermissionBatchState = {
-  stage: "review" | "global"
+  stage: "review" | "project"
   focused: number
   requestIDs: string[]
   selected: string[]
@@ -54,7 +55,7 @@ export type PermissionBatchState = {
 export type PermissionBatchReply = {
   batchID: string
   requestIDs: string[]
-  reply: "once" | "session" | "global" | "reject"
+  reply: "once" | "always" | "project" | "reject"
 }
 
 export async function permissionBatchSubmit(input: {
@@ -150,26 +151,26 @@ export function permissionBatchReply(
   requests: PermissionRequest[],
   option: PermissionBatchOption,
 ): { state: PermissionBatchState; reply?: PermissionBatchReply } {
-  if (option === "global" && state.stage === "review") return { state: { ...state, stage: "global" } }
+  if (option === "project" && state.stage === "review") return { state: { ...state, stage: "project" } }
   if (option === "cancel") return { state: { ...state, stage: "review" } }
   const batchID = requests[0]?.batchID
   if (!batchID) return { state }
   if (option === "skip") return { state, reply: { batchID, requestIDs: [], reply: "reject" } }
   if (!state.selected.length) return { state }
   if (option === "once") return { state, reply: { batchID, requestIDs: state.selected, reply: "once" } }
-  if (option === "session") return { state, reply: { batchID, requestIDs: state.selected, reply: "session" } }
-  if (option === "confirm" && state.stage === "global") {
-    return { state, reply: { batchID, requestIDs: state.selected, reply: "global" } }
+  if (option === "always") return { state, reply: { batchID, requestIDs: state.selected, reply: "always" } }
+  if (option === "confirm" && state.stage === "project") {
+    return { state, reply: { batchID, requestIDs: state.selected, reply: "project" } }
   }
   return { state }
 }
 
 export function permissionOptions(stage: PermissionStage, persistent = true): PermissionOption[] {
   if (stage === "permission") {
-    return persistent ? ["once", "session", "global", "reject"] : ["once", "reject"]
+    return persistent ? ["once", "always", "project", "reject"] : ["once", "reject"]
   }
 
-  if (stage === "global") {
+  if (stage === "project") {
     return ["confirm", "cancel"]
   }
 
@@ -210,20 +211,19 @@ export function permissionInfo(request: PermissionRequest): PermissionInfo {
   }
 }
 
-export function permissionGrantLines(scope: "session" | "global", request: PermissionRequest): string[] {
-  const resources = request.grant?.resources ?? []
-  if (!resources.length) return []
-  const lifetime = scope === "session" ? "for this session until revoked" : "globally across projects until revoked"
+export function permissionProjectLines(request: PermissionRequest, scope: PermissionScopeLabel): string[] {
+  if (!request.always.length) return []
   return [
-    `${resources.length === 1 ? "This exact" : "These exact"} ${request.permission} resource${resources.length === 1 ? "" : "s"} will be allowed ${lifetime}.`,
-    ...resources.map((item) => `- ${item}`),
+    `This approval survives restarts and remains active for this ${scope} until revoked.`,
+    "The following exact patterns will always be allowed:",
+    ...request.always.map((item) => `- ${item}`),
   ]
 }
 
-export function permissionLabel(option: PermissionOption): string {
+export function permissionLabel(option: PermissionOption, scope: PermissionScopeLabel): string {
   if (option === "once") return "Allow once"
-  if (option === "session") return "Allow for session"
-  if (option === "global") return "Remember globally"
+  if (option === "always") return "Allow for this session"
+  if (option === "project") return `Always allow for this ${scope}`
   if (option === "reject") return "Reject"
   if (option === "confirm") return "Confirm"
   return "Cancel"
@@ -264,11 +264,11 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
   }
 
   if (state.stage === "permission") {
-    if (option === "global") {
+    if (option === "project") {
       return {
         state: {
           ...state,
-          stage: "global",
+          stage: "project",
           selected: "confirm",
         },
       }
@@ -286,11 +286,11 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
 
     return {
       state,
-      reply: permissionReply(requestID, option === "session" ? "session" : "once"),
+      reply: permissionReply(requestID, option === "always" ? "always" : "once"),
     }
   }
 
-  if (state.stage !== "global") {
+  if (state.stage !== "project") {
     return { state }
   }
 
@@ -299,14 +299,14 @@ export function permissionRun(state: PermissionBodyState, requestID: string, opt
       state: {
         ...state,
         stage: "permission",
-        selected: "global",
+        selected: "project",
       },
     }
   }
 
   return {
     state,
-    reply: permissionReply(requestID, "global"),
+    reply: permissionReply(requestID, "project"),
   }
 }
 
@@ -327,11 +327,11 @@ export function permissionCancel(state: PermissionBodyState): PermissionBodyStat
 }
 
 export function permissionEscape(state: PermissionBodyState): PermissionBodyState {
-  if (state.stage === "global") {
+  if (state.stage === "project") {
     return {
       ...state,
       stage: "permission",
-      selected: "global",
+      selected: "project",
     }
   }
 

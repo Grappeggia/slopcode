@@ -284,7 +284,7 @@ export type PermissionReply = Parameters<SlopcodeClient["permission"]["reply"]>[
 export type PermissionBatchReply = {
   batchID: string
   requestIDs: string[]
-  reply: "once" | "session" | "global" | "reject"
+  reply: "once" | "always" | "project" | "reject"
 }
 
 export type QuestionReply = Parameters<SlopcodeClient["question"]["reply"]>[0]

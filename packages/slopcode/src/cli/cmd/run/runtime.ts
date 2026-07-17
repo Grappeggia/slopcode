@@ -209,7 +209,16 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           variant: undefined,
         })
   const savedTask = resolveSavedVariant(ctx.model)
-  const [tuiConfig, session, savedVariant] = await Promise.all([tuiConfigTask, sessionTask, savedTask])
+  const scopeTask = ctx.sdk.project
+    .current({ directory: ctx.directory })
+    .then((result) => (result.data?.vcs === "git" ? ("project" as const) : ("folder" as const)))
+    .catch(() => "folder" as const)
+  const [tuiConfig, session, savedVariant, permissionScope] = await Promise.all([
+    tuiConfigTask,
+    sessionTask,
+    savedTask,
+    scopeTask,
+  ])
   const state: RuntimeState = {
     shown: !session.first,
     aborting: false,
@@ -243,6 +252,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
 
   const shell = await (deps.createRuntimeLifecycle ?? createRuntimeLifecycle)({
     directory: ctx.directory,
+    permissionScope,
     findFiles: (query) =>
       ctx.sdk.find
         .files({ query, directory: ctx.directory })

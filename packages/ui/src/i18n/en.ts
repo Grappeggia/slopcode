@@ -144,9 +144,17 @@ export const dict: Record<string, string> = {
   "ui.common.next": "Next",
   "ui.common.submit": "Submit",
 
-  "ui.permission.deny": "Deny",
+  "ui.permission.deny": "Reject",
   "ui.permission.allowAlways": "Allow always",
   "ui.permission.allowOnce": "Allow once",
+  "ui.permission.allowSession": "Allow for this session",
+  "ui.permission.allowProject": "Always allow for this project",
+  "ui.permission.allowFolder": "Always allow for this folder",
+  "ui.permission.confirmProject": "Always allow for this project?",
+  "ui.permission.confirmFolder": "Always allow for this folder?",
+  "ui.permission.persistProject": "This approval survives restarts and remains active for this project until revoked.",
+  "ui.permission.persistFolder": "This approval survives restarts and remains active for this folder until revoked.",
+  "ui.permission.exactPatterns": "The following exact patterns will always be allowed:",
 
   "ui.message.expand": "Expand message",
   "ui.message.collapse": "Collapse message",

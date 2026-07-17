@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
 import {
   createPermissionBodyState,
-  permissionGrantLines,
+  permissionProjectLines,
   permissionCancel,
   permissionEscape,
   permissionInfo,
@@ -40,24 +40,24 @@ describe("run permission shared", () => {
     })
   })
 
-  test("allows a session grant directly and requires confirmation for global grants", () => {
-    expect(permissionRun(createPermissionBodyState("perm-1"), "perm-1", "session").reply).toEqual({
+  test("allows a session grant directly and requires confirmation for project grants", () => {
+    expect(permissionRun(createPermissionBodyState("perm-1"), "perm-1", "always").reply).toEqual({
       requestID: "perm-1",
-      reply: "session",
+      reply: "always",
     })
-    const next = permissionRun(createPermissionBodyState("perm-1"), "perm-1", "global")
-    expect(next.state.stage).toBe("global")
+    const next = permissionRun(createPermissionBodyState("perm-1"), "perm-1", "project")
+    expect(next.state.stage).toBe("project")
     expect(next.state.selected).toBe("confirm")
     expect(next.reply).toBeUndefined()
 
     expect(permissionRun(next.state, "perm-1", "confirm").reply).toEqual({
       requestID: "perm-1",
-      reply: "global",
+      reply: "project",
     })
 
     expect(permissionRun(next.state, "perm-1", "cancel").state).toMatchObject({
       stage: "permission",
-      selected: "global",
+      selected: "project",
     })
   })
 
@@ -82,9 +82,9 @@ describe("run permission shared", () => {
       selected: "reject",
     })
 
-    expect(permissionEscape({ ...next.state, stage: "global", selected: "confirm" })).toMatchObject({
+    expect(permissionEscape({ ...next.state, stage: "project", selected: "confirm" })).toMatchObject({
       stage: "permission",
-      selected: "global",
+      selected: "project",
     })
   })
 
@@ -142,14 +142,10 @@ describe("run permission shared", () => {
     })
   })
 
-  test("formats exact grant copy without interpreting wildcard characters", () => {
-    expect(
-      permissionGrantLines(
-        "global",
-        req({ permission: "bash", grant: { resources: ["echo *", "file?.txt"], scopes: ["session", "global"] } }),
-      ),
-    ).toEqual([
-      "These exact bash resources will be allowed globally across projects until revoked.",
+  test("formats durable copy without interpreting wildcard characters", () => {
+    expect(permissionProjectLines(req({ permission: "bash", always: ["echo *", "file?.txt"] }), "folder")).toEqual([
+      "This approval survives restarts and remains active for this folder until revoked.",
+      "The following exact patterns will always be allowed:",
       "- echo *",
       "- file?.txt",
     ])
@@ -157,7 +153,7 @@ describe("run permission shared", () => {
 
   test("hides persistent actions and copy when no resources can be saved", () => {
     expect(permissionOptions("permission", false)).toEqual(["once", "reject"])
-    expect(permissionGrantLines("global", req())).toEqual([])
+    expect(permissionProjectLines(req(), "project")).toEqual([])
   })
 
   test("keeps ordinary requests FIFO and groups only one forecast batch", () => {
@@ -184,14 +180,14 @@ describe("run permission shared", () => {
 
     expect(permissionBatchMove(initial, requests, -1).focused).toBe(1)
     expect(permissionBatchToggle(initial, "per_a").selected).toEqual(["per_b"])
-    expect(permissionBatchReply(initial, requests, "session").reply).toMatchObject({ reply: "session" })
-    const confirm = permissionBatchReply(initial, requests, "global")
+    expect(permissionBatchReply(initial, requests, "always").reply).toMatchObject({ reply: "always" })
+    const confirm = permissionBatchReply(initial, requests, "project")
     expect(confirm.reply).toBeUndefined()
-    expect(confirm.state.stage).toBe("global")
+    expect(confirm.state.stage).toBe("project")
     expect(permissionBatchReply(confirm.state, requests, "confirm").reply).toEqual({
       batchID: "pmb_one",
       requestIDs: ["per_a", "per_b"],
-      reply: "global",
+      reply: "project",
     })
     expect(permissionBatchReply(initial, requests, "skip").reply).toEqual({
       batchID: "pmb_one",

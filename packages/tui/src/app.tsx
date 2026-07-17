@@ -49,6 +49,7 @@ import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { DialogWorkspaceList } from "./component/dialog-workspace-list"
+import { DialogPermissions } from "./component/dialog-permissions"
 import { DialogConsoleOrg } from "./component/dialog-console-org"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
@@ -960,6 +961,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           kv.set("session_directory_filter_enabled", !kv.get("session_directory_filter_enabled", true))
           await sync.session.refresh()
           dialog.clear()
+        },
+      },
+      {
+        name: "permission.list",
+        title: "Manage permissions",
+        category: "System",
+        slashName: "permissions",
+        run: () => {
+          dialog.replace(() => <DialogPermissions />)
         },
       },
       {

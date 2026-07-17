@@ -7,7 +7,8 @@ import { toLocations, toToolKind, type ToolInput } from "./tool"
 import { Effect } from "effect"
 
 type PermissionEvent = Extract<Event, { type: "permission.asked" }>
-type Reply = "once" | "session" | "global" | "reject"
+type Reply = "once" | "always" | "project" | "reject"
+type Scope = "project" | "folder"
 type Connection = Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile">>
 type Batch = {
   expected: number
@@ -21,12 +22,16 @@ const base: PermissionOption[] = [
   { optionId: "once", kind: "allow_once", name: "Allow once" },
   { optionId: "reject", kind: "reject_once", name: "Reject" },
 ]
-const session = { optionId: "session", kind: "allow_always", name: "Allow for this session" } as const
-const global = { optionId: "global", kind: "allow_always", name: "Remember globally" } as const
-const confirm: PermissionOption[] = [
-  { optionId: "confirm_global", kind: "allow_always", name: "Confirm global access" },
-  { optionId: "cancel_global", kind: "reject_once", name: "Cancel" },
-]
+
+function options(scope: Scope, patterns: string[]): PermissionOption[] {
+  if (!patterns.length) return base
+  return [
+    base[0]!,
+    { optionId: "always", kind: "allow_always", name: "Allow for this session" },
+    { optionId: "project", kind: "allow_always", name: `Always allow for this ${scope}` },
+    base[1]!,
+  ]
+}
 
 export class Handler {
   private readonly queues = new Map<string, Promise<void>>()
@@ -82,7 +87,7 @@ export class Handler {
     const permission = event.properties
     const session = await Effect.runPromise(this.input.session.tryGet(permission.sessionID))
     if (!session) return
-    const reply = await this.choose(permission)
+    const reply = await this.choose(permission, session.cwd)
     if (reply !== "reject" && permission.permission === "edit") {
       await this.writeProposedEdit(session.id, permission.metadata).catch(() => {})
     }
@@ -100,7 +105,7 @@ export class Handler {
       const replies: Reply[] = []
       const edits: PermissionEvent[] = []
       for (const event of events) {
-        const reply = await this.choose(event.properties)
+        const reply = await this.choose(event.properties, session.cwd)
         if (reply === "reject") continue
         selected.push(event.properties.id)
         replies.push(reply)
@@ -124,34 +129,52 @@ export class Handler {
       await this.writeProposedEdit(session.id, event.properties.metadata).catch(() => {})
   }
 
-  private async choose(permission: PermissionRequest): Promise<Reply> {
+  private async choose(permission: PermissionRequest, directory: string): Promise<Reply> {
     if (!this.input.connection.requestPermission) return "reject"
-    const scopes = permission.grant?.resources.length ? (permission.grant.scopes ?? []) : []
-    const options = [
-      base[0]!,
-      ...(scopes.includes("session") ? [session] : []),
-      ...(scopes.includes("global") ? [global] : []),
-      base[1]!,
-    ]
-    const result = await this.request(permission, options).catch(() => undefined)
+    const scope = permission.always.length
+      ? await this.input.sdk.project
+          .current({ directory })
+          .then((result) => (result.data?.vcs === "git" ? ("project" as const) : ("folder" as const)))
+          .catch(() => "folder" as const)
+      : "folder"
+    const result = await this.request(permission, options(scope, permission.always)).catch(() => undefined)
     if (!result || result.outcome.outcome !== "selected") return "reject"
     if (result.outcome.optionId === "once") return "once"
-    if (result.outcome.optionId === "session" && scopes.includes("session")) return "session"
-    if (result.outcome.optionId !== "global" || !scopes.includes("global")) return "reject"
-    const confirmation = await this.request(permission, confirm).catch(() => undefined)
-    if (confirmation?.outcome.outcome !== "selected" || confirmation.outcome.optionId !== "confirm_global")
-      return "reject"
-    return "global"
+    if (result.outcome.optionId === "always" && permission.always.length) return "always"
+    if (result.outcome.optionId !== "project" || !permission.always.length) return "reject"
+    return (await this.confirm(permission, scope)) ? "project" : "reject"
   }
 
-  private request(permission: PermissionRequest, options: PermissionOption[]) {
+  private async confirm(permission: PermissionRequest, scope: Scope) {
+    const result = await this.request(
+      permission,
+      [
+        { optionId: "confirm", kind: "allow_always", name: "Confirm" },
+        { optionId: "cancel", kind: "reject_once", name: "Cancel" },
+      ],
+      {
+        title: `Always allow for this ${scope}?`,
+        rawInput: {
+          lifetime: "Survives restarts until revoked.",
+          exactPatterns: permission.always,
+        },
+      },
+    ).catch(() => undefined)
+    return result?.outcome.outcome === "selected" && result.outcome.optionId === "confirm"
+  }
+
+  private request(
+    permission: PermissionRequest,
+    options: PermissionOption[],
+    detail?: { title: string; rawInput: Record<string, unknown> },
+  ) {
     return this.input.connection.requestPermission!({
       sessionId: permission.sessionID,
       toolCall: {
         toolCallId: permission.tool?.callID ?? permission.id,
         status: "pending",
-        title: permission.permission,
-        rawInput: permission.metadata,
+        title: detail?.title ?? permission.permission,
+        rawInput: detail?.rawInput ?? permission.metadata,
         kind: toToolKind(permission.permission),
         locations: toLocations(permission.permission, permission.metadata),
       },

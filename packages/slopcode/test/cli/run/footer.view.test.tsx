@@ -185,6 +185,7 @@ async function renderFooter(
       <SlopcodeKeymapProvider keymap={keymap}>
         <RunFooterView
           directory="/tmp"
+          permissionScope="project"
           findFiles={async () => []}
           agents={() => []}
           resources={() => []}
@@ -933,6 +934,7 @@ test("direct footer shows editable prompts and additional queued work while runn
       <SlopcodeKeymapProvider keymap={keymap}>
         <RunFooterView
           directory="/tmp"
+          permissionScope="project"
           findFiles={async () => []}
           agents={() => []}
           resources={() => []}
@@ -1293,6 +1295,63 @@ test("direct permission rejection submits through keymap return binding", async 
   }
 })
 
+test("direct durable confirmation uses folder scope and exact patterns", async () => {
+  let off: (() => void) | undefined
+  const requests: PermissionRequest[] = [
+    {
+      id: "per_folder",
+      sessionID: "ses_folder",
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+    },
+  ]
+
+  function Harness() {
+    const renderer = useRenderer()
+    const keymap = createDefaultOpenTuiKeymap(renderer)
+    off = registerSlopcodeKeymap(keymap, renderer, tuiConfig)
+    return (
+      <SlopcodeKeymapProvider keymap={keymap}>
+        <RunPermissionBody
+          requests={requests}
+          scope="folder"
+          theme={RUN_THEME_FALLBACK.footer}
+          block={RUN_THEME_FALLBACK.block}
+          onReply={() => {}}
+          onBatchReply={() => {}}
+        />
+      </SlopcodeKeymapProvider>
+    )
+  }
+
+  const app = await testRender(
+    () => (
+      <box width={100} height={18}>
+        <Harness />
+      </box>
+    ),
+    { width: 100, height: 18, kittyKeyboard: true },
+  )
+
+  try {
+    await app.renderOnce()
+    app.mockInput.pressKey("ARROW_RIGHT")
+    app.mockInput.pressKey("ARROW_RIGHT")
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Always allow for this folder")
+    expect(frame).toContain("survives restarts")
+    expect(frame).toContain("git status")
+    expect(frame).not.toContain("Remember globally")
+  } finally {
+    off?.()
+    app.renderer.destroy()
+  }
+})
+
 test("direct forecast review surfaces batch failure and allows retry", async () => {
   let attempts = 0
   let off: (() => void) | undefined
@@ -1319,6 +1378,7 @@ test("direct forecast review surfaces batch failure and allows retry", async () 
       <SlopcodeKeymapProvider keymap={keymap}>
         <RunPermissionBody
           requests={requests}
+          scope="project"
           theme={RUN_THEME_FALLBACK.footer}
           block={RUN_THEME_FALLBACK.block}
           onReply={() => {}}

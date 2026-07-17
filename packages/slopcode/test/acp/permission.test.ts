@@ -40,6 +40,7 @@ function createHarness(
     Promise.resolve({ outcome: { outcome: "selected", optionId: "once" } }),
   replyBatch: (params: PermissionBatchReplyParams) => Promise<PermissionBatchReplyResult> = () =>
     Promise.resolve({ data: true }),
+  vcs: "git" | "folder" = "git",
 ) {
   const replies: PermissionReplyParams[] = []
   const batches: PermissionBatchReplyParams[] = []
@@ -59,6 +60,10 @@ function createHarness(
     },
     session: {
       message: () => Promise.resolve({ data: undefined }),
+    },
+    project: {
+      current: () =>
+        Promise.resolve({ data: { id: "project", worktree: "/workspace", vcs: vcs === "git" ? "git" : undefined } }),
     },
   } as unknown as SlopcodeClient
   const connection = {
@@ -193,46 +198,61 @@ describe("acp permissions", () => {
     expect(harness.replies).toEqual([{ requestID: "perm_empty", reply: "reject", directory: "/workspace" }])
   })
 
-  it("offers exact session and global choices without ambiguous Always", async () => {
-    const harness = createHarness(() => Promise.resolve({ outcome: { outcome: "selected", optionId: "session" } }))
+  it("offers and maps session and project choices without compatibility scopes", async () => {
+    const harness = createHarness(() => Promise.resolve({ outcome: { outcome: "selected", optionId: "always" } }))
     await createSession(harness.session, "ses_a")
 
     void harness.subscription.handle(
       permissionAsked("ses_a", "perm_persist", {
-        grant: { resources: ["git status"], scopes: ["session", "global"] },
+        always: ["git status"],
       }),
     )
     await pollUntil(() => harness.replies.length === 1, "persistable permission was never replied")
 
     expect(harness.requests[0].options).toEqual([
       { optionId: "once", kind: "allow_once", name: "Allow once" },
-      { optionId: "session", kind: "allow_always", name: "Allow for this session" },
-      { optionId: "global", kind: "allow_always", name: "Remember globally" },
+      { optionId: "always", kind: "allow_always", name: "Allow for this session" },
+      { optionId: "project", kind: "allow_always", name: "Always allow for this project" },
       { optionId: "reject", kind: "reject_once", name: "Reject" },
     ])
-    expect(harness.replies).toEqual([{ requestID: "perm_persist", reply: "session", directory: "/workspace" }])
+    expect(harness.replies).toEqual([{ requestID: "perm_persist", reply: "always", directory: "/workspace" }])
   })
 
-  it("requires a second explicit confirmation before a global grant", async () => {
+  it("requires exact-pattern confirmation before a folder grant", async () => {
     let call = 0
-    const harness = createHarness(() =>
-      Promise.resolve({ outcome: { outcome: "selected", optionId: call++ === 0 ? "global" : "confirm_global" } }),
+    const harness = createHarness(
+      () => Promise.resolve({ outcome: { outcome: "selected", optionId: call++ === 0 ? "project" : "confirm" } }),
+      undefined,
+      "folder",
     )
     await createSession(harness.session, "ses_a")
 
     harness.subscription.handle(
       permissionAsked("ses_a", "perm_global", {
-        grant: { resources: ["echo *"], scopes: ["session", "global"] },
+        always: ["echo *"],
       }),
     )
     await pollUntil(() => harness.replies.length === 1, "global permission was never replied")
 
     expect(harness.requests).toHaveLength(2)
-    expect(harness.requests[1].options).toEqual([
-      { optionId: "confirm_global", kind: "allow_always", name: "Confirm global access" },
-      { optionId: "cancel_global", kind: "reject_once", name: "Cancel" },
-    ])
-    expect(harness.replies[0]).toMatchObject({ reply: "global" })
+    expect(harness.requests[0].options[2]).toMatchObject({
+      optionId: "project",
+      name: "Always allow for this folder",
+    })
+    expect(harness.requests[1]).toMatchObject({
+      toolCall: {
+        title: "Always allow for this folder?",
+        rawInput: {
+          lifetime: "Survives restarts until revoked.",
+          exactPatterns: ["echo *"],
+        },
+      },
+      options: [
+        { optionId: "confirm", kind: "allow_always", name: "Confirm" },
+        { optionId: "cancel", kind: "reject_once", name: "Cancel" },
+      ],
+    })
+    expect(harness.replies[0]).toMatchObject({ reply: "project" })
   })
 
   it("collects every forecast item and replies to the batch atomically", async () => {
@@ -301,13 +321,13 @@ describe("acp permissions", () => {
       Promise.resolve({
         outcome: {
           outcome: "selected",
-          optionId: params.toolCall.toolCallId === "per_mixed_one" ? "session" : "once",
+          optionId: params.toolCall.toolCallId === "per_mixed_one" ? "always" : "once",
         },
       }),
     )
     await createSession(harness.session, "ses_a")
     const batch = {
-      grant: { resources: ["git status"], scopes: ["session", "global"] as ("session" | "global")[] },
+      always: ["git status"],
       kind: "forecast" as const,
       batchID: "pmb_mixed",
       batchSize: 2,
@@ -406,16 +426,12 @@ describe("acp permissions", () => {
       releaseFirst = () => resolve({ outcome: { outcome: "selected", optionId: "once" } })
     })
     const harness = createHarness(() =>
-      harness.requests.length === 1
-        ? first
-        : Promise.resolve({ outcome: { outcome: "selected", optionId: "session" } }),
+      harness.requests.length === 1 ? first : Promise.resolve({ outcome: { outcome: "selected", optionId: "always" } }),
     )
     await createSession(harness.session, "ses_a")
 
     harness.subscription.handle(permissionAsked("ses_a", "perm_1"))
-    harness.subscription.handle(
-      permissionAsked("ses_a", "perm_2", { grant: { resources: ["*"], scopes: ["session", "global"] } }),
-    )
+    harness.subscription.handle(permissionAsked("ses_a", "perm_2", { always: ["*"] }))
 
     await pollUntil(() => harness.requests.length === 1, "first permission was never requested")
     expect(harness.requests.map((request) => request.toolCall.toolCallId)).toEqual(["perm_1"])
@@ -426,7 +442,7 @@ describe("acp permissions", () => {
 
     expect(harness.replies.map((reply) => [reply.requestID, reply.reply])).toEqual([
       ["perm_1", "once"],
-      ["perm_2", "session"],
+      ["perm_2", "always"],
     ])
   })
 })

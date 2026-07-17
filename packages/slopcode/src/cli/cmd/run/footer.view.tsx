@@ -55,6 +55,7 @@ import type {
   RunTuiConfig,
 } from "./types"
 import type { RunTheme } from "./theme"
+import type { PermissionScopeLabel } from "./permission.shared"
 import { modelInfo } from "./variant.shared"
 
 const EMPTY_BORDER = {
@@ -73,6 +74,7 @@ const EMPTY_BORDER = {
 
 type RunFooterViewProps = {
   directory: string
+  permissionScope: PermissionScopeLabel
   findFiles: (query: string) => Promise<string[]>
   agents: () => RunAgent[]
   resources: () => RunResource[]
@@ -783,6 +785,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                             theme={theme()}
                             block={block()}
                             diffStyle={props.diffStyle}
+                            scope={props.permissionScope}
                             onReply={props.onPermissionReply}
                             onBatchReply={props.onPermissionBatchReply}
                           />

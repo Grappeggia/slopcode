@@ -212,6 +212,7 @@ export const Definitions = {
   "dialog.memory.add_project": keybind("ctrl+n", "Add project memory"),
   "dialog.memory.add_global": keybind("ctrl+g", "Add global memory"),
   "dialog.memory.delete": keybind("ctrl+d", "Delete memory"),
+  "dialog.permission.delete": keybind("ctrl+d", "Revoke saved permission"),
   "dialog.move_session.new": keybind("ctrl+m", "New project copy"),
   "dialog.move_session.delete": keybind("ctrl+d", "Delete project copy"),
   "dialog.move_session.refresh": keybind("ctrl+r", "Refresh project copies"),

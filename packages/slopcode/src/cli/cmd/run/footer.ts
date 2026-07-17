@@ -34,6 +34,7 @@ import { RUN_COMMAND_PANEL_ROWS, RUN_SUBAGENT_PANEL_ROWS } from "./footer.comman
 import { SUBAGENT_INSPECTOR_ROWS } from "./footer.subagent"
 import { PROMPT_MAX_ROWS, TEXTAREA_MIN_ROWS } from "./footer.prompt"
 import { RunFooterView } from "./footer.view"
+import type { PermissionScopeLabel } from "./permission.shared"
 import { RunScrollbackStream } from "./scrollback.surface"
 import { RUN_THEME_FALLBACK, resolveRunTheme, type RunTheme } from "./theme"
 import { modelInfo } from "./variant.shared"
@@ -70,6 +71,7 @@ type CycleResult = {
 
 type RunFooterOptions = {
   directory: string
+  permissionScope: PermissionScopeLabel
   findFiles: (query: string) => Promise<string[]>
   agents: RunAgent[]
   resources: RunResource[]
@@ -307,6 +309,7 @@ export class RunFooter implements FooterApi {
           get children() {
             return createComponent(RunFooterView, {
               directory: options.directory,
+              permissionScope: options.permissionScope,
               state: footer.state,
               view: footer.view,
               subagent: footer.subagent,

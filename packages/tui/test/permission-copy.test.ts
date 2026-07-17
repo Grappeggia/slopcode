@@ -1,13 +1,15 @@
 import { expect, test } from "bun:test"
-import { permissionActions, permissionGrantLines } from "../src/routes/session/permission-copy"
+import { permissionActions, permissionProjectLines } from "../src/routes/session/permission-copy"
 
-test("scoped approval copy explains exact session and global persistence", () => {
-  expect(permissionGrantLines("session", "bash", ["echo *"])).toEqual([
-    "This exact bash resource will be allowed for this session until revoked.",
+test("durable approval copy explains restart lifetime and exact patterns", () => {
+  expect(permissionProjectLines(["echo *"], "project")).toEqual([
+    "This approval survives restarts and remains active for this project until revoked.",
+    "The following exact patterns will always be allowed:",
     "- echo *",
   ])
-  expect(permissionGrantLines("global", "read", ["src/[abc]?.ts", "README*"])).toEqual([
-    "These exact read resources will be allowed globally across projects until revoked.",
+  expect(permissionProjectLines(["src/[abc]?.ts", "README*"], "folder")).toEqual([
+    "This approval survives restarts and remains active for this folder until revoked.",
+    "The following exact patterns will always be allowed:",
     "- src/[abc]?.ts",
     "- README*",
   ])
@@ -15,11 +17,11 @@ test("scoped approval copy explains exact session and global persistence", () =>
 
 test("requests without server grant candidates do not offer persistent scopes", () => {
   expect(permissionActions([])).toEqual({ once: "Allow once", reject: "Reject" })
-  expect(permissionActions(["git status"])).toEqual({
+  expect(permissionActions(["git status"], "folder")).toEqual({
     once: "Allow once",
-    session: "Allow for session",
-    global: "Remember globally",
+    always: "Allow for this session",
+    project: "Always allow for this folder",
     reject: "Reject",
   })
-  expect(permissionGrantLines("global", "bash", [])).toEqual([])
+  expect(permissionProjectLines([], "project")).toEqual([])
 })

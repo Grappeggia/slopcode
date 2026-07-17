@@ -17,6 +17,7 @@ import { registerSlopcodeKeymap } from "@slopcode-ai/tui/keymap"
 import { Session as SessionApi } from "@/session/session"
 import * as Locale from "@/util/locale"
 import { resolveInteractiveStdin } from "./runtime.stdin"
+import type { PermissionScopeLabel } from "./permission.shared"
 import { entrySplash, exitSplash, splashMeta } from "./splash"
 import { resolveRunTheme } from "./theme"
 import type {
@@ -54,6 +55,7 @@ type FooterLabels = {
 
 export type LifecycleInput = {
   directory: string
+  permissionScope: PermissionScopeLabel
   findFiles: (query: string) => Promise<string[]>
   agents: RunAgent[]
   resources: RunResource[]
@@ -233,6 +235,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
 
     const footer = new RunFooter(renderer, {
       directory: input.directory,
+      permissionScope: input.permissionScope,
       findFiles: input.findFiles,
       agents: input.agents,
       resources: input.resources,

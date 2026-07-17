@@ -44,22 +44,22 @@ test("batch keyboard and mouse state wraps focus and toggles exact rows", () => 
   expect(permissionBatchToggle(permissionBatchToggle(initial, "per_a"), "per_a").selected).toEqual(["per_b", "per_a"])
 })
 
-test("session batch approval is immediate while global approval requires confirmation", () => {
+test("session batch approval is immediate while project approval requires confirmation", () => {
   const requests = [request("per_a", "forecast", "pmb_one"), request("per_b", "forecast", "pmb_one")]
   const initial = createPermissionBatchState(requests)
-  expect(permissionBatchReply(initial, requests, "session").reply).toEqual({
+  expect(permissionBatchReply(initial, requests, "always").reply).toEqual({
     batchID: "pmb_one",
     requestIDs: ["per_a", "per_b"],
-    reply: "session",
+    reply: "always",
   })
-  const confirm = permissionBatchReply(initial, requests, "global")
+  const confirm = permissionBatchReply(initial, requests, "project")
 
-  expect(confirm.state.stage).toBe("global")
+  expect(confirm.state.stage).toBe("project")
   expect(confirm.reply).toBeUndefined()
   expect(permissionBatchReply(confirm.state, requests, "confirm").reply).toEqual({
     batchID: "pmb_one",
     requestIDs: ["per_a", "per_b"],
-    reply: "global",
+    reply: "project",
   })
   expect(permissionBatchReply(initial, requests, "skip").reply).toEqual({
     batchID: "pmb_one",
