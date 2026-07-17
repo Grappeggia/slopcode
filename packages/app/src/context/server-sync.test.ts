@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { canDisposeDirectory, pickDirectoriesToEvict } from "./global-sync/eviction"
 import { estimateRootSessionTotal, loadRootSessionsWithFallback } from "./global-sync/session-load"
+import { createOptimisticRegistry } from "./directory-sync"
+
+test("clears optimistic prompts with the server sync lifetime", () => {
+  const registry = createOptimisticRegistry()
+  registry.state.set("dir\nsession", new Map())
+
+  registry.clear()
+
+  expect(registry.state.size).toBe(0)
+})
 
 describe("pickDirectoriesToEvict", () => {
   test("keeps pinned stores and evicts idle stores", () => {

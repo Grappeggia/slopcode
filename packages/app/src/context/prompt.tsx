@@ -52,6 +52,15 @@ export type FileContextItem = {
 
 export type ContextItem = FileContextItem
 
+export type PromptMode = "normal" | "shell"
+
+export type PromptSnapshot = {
+  prompt: Prompt
+  cursor: number | undefined
+  context: (ContextItem & { key: string })[]
+  mode: PromptMode
+}
+
 export const DEFAULT_PROMPT: Prompt = [{ type: "text", content: "", start: 0, end: 0 }]
 
 function isSelectionEqual(a?: FileSelection, b?: FileSelection) {
@@ -98,8 +107,15 @@ function clonePart(part: ContentPart): ContentPart {
   }
 }
 
-function clonePrompt(prompt: Prompt): Prompt {
+export function clonePrompt(prompt: Prompt): Prompt {
   return prompt.map(clonePart)
+}
+
+function cloneContext(context: (ContextItem & { key: string })[]) {
+  return context.map((item) => ({
+    ...item,
+    selection: cloneSelection(item.selection),
+  }))
 }
 
 function contextItemKey(item: ContextItem) {
@@ -129,6 +145,7 @@ function createPromptActions(
     context: {
       items: (ContextItem & { key: string })[]
     }
+    mode: PromptMode
   }>,
 ) {
   return {
@@ -153,9 +170,9 @@ const MAX_PROMPT_SESSIONS = 20
 
 type PromptSession = ReturnType<typeof createPromptSession>
 
-type Scope = { draftID: string } | { dir: string; id?: string }
+export type PromptScope = { draftID: string } | { dir: string; id?: string }
 
-function scopeKey(scope: Scope) {
+function scopeKey(scope: PromptScope) {
   if ("draftID" in scope) return `draft:${scope.draftID}`
   return `${scope.dir}:${scope.id ?? WORKSPACE_KEY}`
 }
@@ -165,13 +182,13 @@ type PromptCacheEntry = {
   dispose: VoidFunction
 }
 
-function promptTarget(serverScope: ServerScope, scope: Scope) {
+function promptTarget(serverScope: ServerScope, scope: PromptScope) {
   if ("draftID" in scope) return Persist.draft(scope.draftID, "prompt")
   const legacy = `${scope.dir}/prompt${scope.id ? "/" + scope.id : ""}.v2`
   return Persist.serverScoped(serverScope, scope.dir, scope.id, "prompt", [legacy])
 }
 
-function createPromptSession(serverScope: ServerScope, scope: Scope) {
+function createPromptSession(serverScope: ServerScope, scope: PromptScope) {
   const [store, setStore, _, ready] = persisted(
     promptTarget(serverScope, scope),
     createStore<{
@@ -180,12 +197,14 @@ function createPromptSession(serverScope: ServerScope, scope: Scope) {
       context: {
         items: (ContextItem & { key: string })[]
       }
+      mode: PromptMode
     }>({
       prompt: clonePrompt(DEFAULT_PROMPT),
       cursor: undefined,
       context: {
         items: [],
       },
+      mode: "normal",
     }),
   )
 
@@ -196,6 +215,24 @@ function createPromptSession(serverScope: ServerScope, scope: Scope) {
     current: () => store.prompt,
     cursor: createMemo(() => store.cursor),
     dirty: () => !isPromptEqual(store.prompt, DEFAULT_PROMPT),
+    mode: () => store.mode,
+    snapshot: (): PromptSnapshot => ({
+      prompt: clonePrompt(store.prompt),
+      cursor: store.cursor,
+      context: cloneContext(store.context.items),
+      mode: store.mode,
+    }),
+    replace(snapshot: PromptSnapshot) {
+      batch(() => {
+        setStore("prompt", clonePrompt(snapshot.prompt))
+        setStore("cursor", snapshot.cursor)
+        setStore("context", "items", cloneContext(snapshot.context))
+        setStore("mode", snapshot.mode)
+      })
+    },
+    setMode(mode: PromptMode) {
+      setStore("mode", mode)
+    },
     context: {
       items: createMemo(() => store.context.items),
       add(item: ContextItem) {
@@ -261,7 +298,7 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
     }
 
     const owner = getOwner()
-    const load = (scope: Scope) => {
+    const load = (scope: PromptScope) => {
       const key = scopeKey(scope)
       const existing = cache.get(key)
       if (existing) {
@@ -286,13 +323,15 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
     const session = createMemo(() =>
       load(search.draftId ? { draftID: search.draftId } : { dir: params.dir!, id: params.id }),
     )
-    const pick = (scope?: Scope) => (scope ? load(scope) : session())
+    const pick = (scope?: PromptScope) => (scope ? load(scope) : session())
 
     return {
       ready: () => session().ready,
       current: () => session().current(),
       cursor: () => session().cursor(),
       dirty: () => session().dirty(),
+      mode: () => session().mode(),
+      snapshot: (scope?: PromptScope) => pick(scope).snapshot(),
       context: {
         items: () => session().context.items(),
         add: (item: ContextItem) => session().context.add(item),
@@ -302,8 +341,10 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
           session().context.updateComment(path, commentID, next),
         replaceComments: (items: FileContextItem[]) => session().context.replaceComments(items),
       },
-      set: (prompt: Prompt, cursorPosition?: number, scope?: Scope) => pick(scope).set(prompt, cursorPosition),
-      reset: (scope?: Scope) => pick(scope).reset(),
+      set: (prompt: Prompt, cursorPosition?: number, scope?: PromptScope) => pick(scope).set(prompt, cursorPosition),
+      reset: (scope?: PromptScope) => pick(scope).reset(),
+      replace: (snapshot: PromptSnapshot, scope?: PromptScope) => pick(scope).replace(snapshot),
+      setMode: (mode: PromptMode, scope?: PromptScope) => pick(scope).setMode(mode),
     }
   },
 })

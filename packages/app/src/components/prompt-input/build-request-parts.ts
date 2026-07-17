@@ -6,7 +6,7 @@ import type { AgentPart, FileAttachmentPart, ImageAttachmentPart, Prompt } from 
 import { Identifier } from "@/utils/id"
 import { createCommentMetadata, formatCommentNote } from "@/utils/comment-note"
 
-type PromptRequestPart = (TextPartInput | FilePartInput | AgentPartInput) & { id: string }
+export type PromptRequestPart = (TextPartInput | FilePartInput | AgentPartInput) & { id: string }
 
 type ContextFile = {
   key: string
@@ -199,3 +199,5 @@ export function buildRequestParts(input: BuildRequestPartsInput) {
     optimisticParts: requestParts.map((part) => toOptimisticPart(part, input.sessionID, input.messageID)),
   }
 }
+
+export type PreparedPrompt = ReturnType<typeof buildRequestParts>

@@ -290,13 +290,21 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     savedPrompt: null as PromptHistoryEntry | null,
     placeholder: Math.floor(Math.random() * EXAMPLES.length),
     draggingType: null,
-    mode: "normal",
+    mode: prompt.mode(),
     applyingHistory: false,
     variantOpen: false,
   })
   const [picker, setPicker] = createStore({
     projectOpen: false,
     projectSearch: "",
+  })
+  const writeMode = (mode: "normal" | "shell") => {
+    setStore("mode", mode)
+    prompt.setMode(mode)
+  }
+  createEffect(() => {
+    const mode = prompt.mode()
+    if (mode !== store.mode) setStore("mode", mode)
   })
 
   const buttonsSpring = useSpring(() => (store.mode === "normal" ? 1 : 0), { visualDuration: 0.2, bounce: 0 })
@@ -487,7 +495,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   const setMode = (mode: "normal" | "shell") => {
-    setStore("mode", mode)
+    writeMode(mode)
     setStore("popover", null)
     requestAnimationFrame(() => editorRef?.focus())
   }
@@ -1063,7 +1071,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           })
         }
 
-        setStore("mode", "normal")
+        writeMode("normal")
         setStore("popover", null)
         setStore("historyIndex", -1)
         setStore("savedPrompt", null)
@@ -1131,6 +1139,18 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return permission.isAutoAccepting(id, sdk.directory)
   })
 
+  const [agentsQuery, globalProvidersQuery, providersQuery] = useQueries(() => ({
+    queries: [
+      queryOptions.agents(pathKey(sdk.directory)),
+      queryOptions.providers(null),
+      queryOptions.providers(pathKey(sdk.directory)),
+    ],
+  }))
+
+  const agentsLoading = () => agentsQuery.isLoading
+  const agentsShouldFadeIn = createMemo((prev) => prev ?? agentsLoading())
+  const providersLoading = () => agentsLoading() || providersQuery.isLoading || globalProvidersQuery.isLoading
+  const providersShouldFadeIn = createMemo((prev) => prev ?? providersLoading())
   const { abort, handleSubmit } = createPromptSubmit({
     info,
     imageAttachments,
@@ -1145,7 +1165,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     resetHistoryNavigation: () => {
       resetHistoryNavigation(true)
     },
-    setMode: (mode) => setStore("mode", mode),
+    setMode,
     setPopover: (popover) => setStore("popover", popover),
     newSessionWorktree: () => props.newSessionWorktree,
     onNewSessionWorktreeReset: props.onNewSessionWorktreeReset,
@@ -1153,6 +1173,35 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onQueue: props.onQueue,
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
+    draftReady: () => prompt.ready()() && comments.ready(),
+  })
+
+  const [queued, setQueued] = createSignal(false)
+  let disposed = false
+  const customCommand = () => {
+    const text = prompt
+      .current()
+      .map((part) => ("content" in part ? part.content : ""))
+      .join("")
+    if (!text.startsWith("/")) return false
+    return sync.data.command.some((item) => item.name === text.split(" ")[0]?.slice(1))
+  }
+  const submitPrompt = (event: Event) => {
+    if (!params.id && store.mode === "normal" && !customCommand() && providersLoading()) {
+      event.preventDefault()
+      setQueued(true)
+      return
+    }
+    void handleSubmit(event)
+  }
+  createEffect(() => {
+    if (!queued() || providersLoading() || disposed) return
+    setQueued(false)
+    void handleSubmit(new Event("submit", { cancelable: true }))
+  })
+  onCleanup(() => {
+    disposed = true
+    setQueued(false)
   })
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -1184,7 +1233,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (event.key === "!" && store.mode === "normal") {
       const cursorPosition = getCursorPosition(editorRef)
       if (cursorPosition === 0) {
-        setStore("mode", "shell")
+        writeMode("shell")
         setStore("popover", null)
         event.preventDefault()
         return
@@ -1200,7 +1249,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       }
 
       if (store.mode === "shell") {
-        setStore("mode", "normal")
+        writeMode("normal")
         event.preventDefault()
         event.stopPropagation()
         return
@@ -1224,7 +1273,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (store.mode === "shell") {
       const { collapsed, cursorPosition, textLength } = getCaretState()
       if (event.key === "Backspace" && collapsed && cursorPosition === 0 && textLength === 0) {
-        setStore("mode", "normal")
+        writeMode("normal")
         event.preventDefault()
         return
       }
@@ -1313,22 +1362,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       ) {
         return
       }
-      void handleSubmit(event)
+      submitPrompt(event)
     }
   }
-
-  const [agentsQuery, globalProvidersQuery, providersQuery] = useQueries(() => ({
-    queries: [
-      queryOptions.agents(pathKey(sdk.directory)),
-      queryOptions.providers(null),
-      queryOptions.providers(pathKey(sdk.directory)),
-    ],
-  }))
-
-  const agentsLoading = () => agentsQuery.isLoading
-  const agentsShouldFadeIn = createMemo((prev) => prev ?? agentsLoading())
-  const providersLoading = () => agentsLoading() || providersQuery.isLoading || globalProvidersQuery.isLoading
-  const providersShouldFadeIn = createMemo((prev) => prev ?? providersLoading())
 
   const [promptReady] = createResource(
     () => prompt.ready().promise,
@@ -1489,7 +1525,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           <div class="flex flex-col gap-3">
             <DockShellForm
               data-component={newSession() ? "session-new-composer" : "session-composer"}
-              onSubmit={handleSubmit}
+              onSubmit={submitPrompt}
               classList={{
                 "group/prompt-input min-h-[96px] w-full rounded-xl bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]": true,
                 "border-icon-info-active border-dashed": store.draggingType !== null,
@@ -1661,7 +1697,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         </Match>
         <Match when>
           <DockShellForm
-            onSubmit={handleSubmit}
+            onSubmit={submitPrompt}
             classList={{
               "group/prompt-input": true,
               "focus-within:shadow-xs-border": true,
@@ -1841,7 +1877,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       variant="ghost"
                       class="text-text-base"
                       onClick={() => {
-                        setStore("mode", "normal")
+                        writeMode("normal")
                       }}
                     >
                       {language.t("common.cancel")}
