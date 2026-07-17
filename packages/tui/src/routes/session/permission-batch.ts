@@ -80,14 +80,14 @@ export function permissionBatchPersistent(state: PermissionBatchState, requests:
 export function permissionBatchActions(
   state: PermissionBatchState,
   requests: PermissionRequest[],
-  scope: "project" | "folder",
+  scope?: "project" | "folder",
 ): Record<string, string> {
-  if (state.stage === "project") return { confirm: "Confirm", cancel: "Cancel" }
+  if (state.stage === "project" && scope) return { confirm: "Confirm", cancel: "Cancel" }
   if (!permissionBatchPersistent(state, requests)) return { once: "Allow selected once", reject: "Reject all" }
   return {
     once: "Allow selected once",
     always: "Allow selected for this session",
-    project: `Always allow selected for this ${scope}`,
+    ...(scope ? { project: `Always allow selected for this ${scope}` } : {}),
     reject: "Reject all",
   }
 }

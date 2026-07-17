@@ -34,7 +34,7 @@ afterAll(async () => {
   await server.close()
 })
 
-async function render(input: { request: PermissionRequest; scope: "project" | "folder"; project?: boolean }) {
+async function render(input: { request: PermissionRequest; scope?: "project" | "folder"; project?: boolean }) {
   return (await fixture()).renderPermissionDock(input)
 }
 
@@ -45,8 +45,9 @@ async function fixture() {
 }
 
 test("maps Git and non-Git locations to project and folder copy", () => {
-  expect(permissionScope("git")).toBe("project")
-  expect(permissionScope(undefined)).toBe("folder")
+  expect(permissionScope({ id: "git", vcs: "git" })).toBe("project")
+  expect(permissionScope({ id: "folder" })).toBe("folder")
+  expect(permissionScope(undefined)).toBeUndefined()
 })
 
 test("sends visible session and project decisions unchanged", async () => {
@@ -61,6 +62,14 @@ test("renders the four visible choices for persistable requests", async () => {
   expect(html).toContain("Always allow for this project")
   expect(html).toContain("Reject")
   expect(html).not.toContain("Remember globally")
+})
+
+test("does not offer durable approval before project metadata is known", async () => {
+  const html = await render({ request: request(["git status"]) })
+
+  expect(html).toContain("Allow for this session")
+  expect(html).not.toContain("Always allow for this project")
+  expect(html).not.toContain("Always allow for this folder")
 })
 
 test("renders durable confirmation lifetime and exact patterns", async () => {

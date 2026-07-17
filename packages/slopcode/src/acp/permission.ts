@@ -23,12 +23,12 @@ const base: PermissionOption[] = [
   { optionId: "reject", kind: "reject_once", name: "Reject" },
 ]
 
-function options(scope: Scope, patterns: string[]): PermissionOption[] {
+function options(scope: Scope | undefined, patterns: string[]): PermissionOption[] {
   if (!patterns.length) return base
   return [
     base[0]!,
     { optionId: "always", kind: "allow_always", name: "Allow for this session" },
-    { optionId: "project", kind: "allow_always", name: `Always allow for this ${scope}` },
+    ...(scope ? [{ optionId: "project", kind: "allow_always", name: `Always allow for this ${scope}` } as const] : []),
     base[1]!,
   ]
 }
@@ -134,14 +134,17 @@ export class Handler {
     const scope = permission.always.length
       ? await this.input.sdk.project
           .current({ directory })
-          .then((result) => (result.data?.vcs === "git" ? ("project" as const) : ("folder" as const)))
-          .catch(() => "folder" as const)
-      : "folder"
+          .then((result) => {
+            if (!result.data?.id) return undefined
+            return result.data.vcs === "git" ? ("project" as const) : ("folder" as const)
+          })
+          .catch(() => undefined)
+      : undefined
     const result = await this.request(permission, options(scope, permission.always)).catch(() => undefined)
     if (!result || result.outcome.outcome !== "selected") return "reject"
     if (result.outcome.optionId === "once") return "once"
     if (result.outcome.optionId === "always" && permission.always.length) return "always"
-    if (result.outcome.optionId !== "project" || !permission.always.length) return "reject"
+    if (result.outcome.optionId !== "project" || !permission.always.length || !scope) return "reject"
     return (await this.confirm(permission, scope)) ? "project" : "reject"
   }
 

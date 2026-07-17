@@ -1,9 +1,10 @@
-import type { PermissionRequest, SlopcodeClient } from "@slopcode-ai/sdk/v2"
+import type { PermissionRequest, Project, SlopcodeClient } from "@slopcode-ai/sdk/v2"
 
 export type PermissionDecision = "once" | "always" | "project" | "reject"
 
-export function permissionScope(vcs?: string) {
-  return vcs === "git" ? ("project" as const) : ("folder" as const)
+export function permissionScope(project?: Pick<Project, "id" | "vcs">) {
+  if (!project?.id) return undefined
+  return project.vcs === "git" ? ("project" as const) : ("folder" as const)
 }
 
 export function permissionRespond(

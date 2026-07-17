@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { SlopcodeClient } from "@slopcode-ai/sdk/v2"
-import { runInteractiveMode, sendPermissionBatch } from "@/cli/cmd/run/runtime"
+import { resolvePermissionScope, runInteractiveMode, sendPermissionBatch } from "@/cli/cmd/run/runtime"
 import type { FooterApi, RunProvider } from "@/cli/cmd/run/types"
 
 type SessionMessage = NonNullable<Awaited<ReturnType<SlopcodeClient["session"]["messages"]>>["data"]>[number]
@@ -136,6 +136,24 @@ afterEach(() => {
 })
 
 describe("run interactive runtime", () => {
+  test("resolves only authoritative Git and folder permission scopes", async () => {
+    const scope = (data: unknown) =>
+      resolvePermissionScope(
+        { project: { current: () => ok(data) } } as unknown as SlopcodeClient,
+        "/workspace",
+      )
+
+    expect(await scope({ id: "git", worktree: "/git", vcs: "git" })).toBe("project")
+    expect(await scope({ id: "folder", worktree: "/folder" })).toBe("folder")
+    expect(await scope(undefined)).toBeUndefined()
+    expect(
+      await resolvePermissionScope(
+        { project: { current: () => Promise.reject(new Error("project lookup failed")) } } as unknown as SlopcodeClient,
+        "/failed",
+      ),
+    ).toBeUndefined()
+  })
+
   test("generated batch errors reject and a later retry succeeds", async () => {
     let attempt = 0
     const permission = {

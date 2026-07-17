@@ -157,6 +157,10 @@ describe("run permission shared", () => {
     expect(permissionProjectLines(req(), "project")).toEqual([])
   })
 
+  test("keeps session approval but hides durable approval when scope is unknown", () => {
+    expect(permissionOptions("permission", true, false)).toEqual(["once", "always", "reject"])
+  })
+
   test("keeps ordinary requests FIFO and groups only one forecast batch", () => {
     const forecast = req({ id: "per_forecast", kind: "forecast", batchID: "pmb_one" })
     const first = req({ id: "per_first" })

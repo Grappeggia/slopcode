@@ -25,7 +25,7 @@ export function SessionPermissionDock(props: {
   return (
     <SessionPermissionDockView
       {...props}
-      scope={permissionScope(sync.project?.vcs)}
+      scope={permissionScope(sync.project)}
       toolDescription={toolDescription()}
       t={(key) => language.t(key as Parameters<typeof language.t>[0])}
       button={Button}

@@ -1,4 +1,4 @@
-import { For, Show, type Component, type JSX } from "solid-js"
+import { createEffect, For, Show, type Component, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
 import type { ButtonProps } from "@slopcode-ai/ui/button"
@@ -8,7 +8,7 @@ import type { PermissionDecision } from "./session-permission"
 export function SessionPermissionDockView(props: {
   request: PermissionRequest
   responding: boolean
-  scope: "project" | "folder"
+  scope?: "project" | "folder"
   toolDescription: string
   t: (key: string) => string
   button: Component<ButtonProps>
@@ -18,6 +18,11 @@ export function SessionPermissionDockView(props: {
 }) {
   const [store, setStore] = createStore({ project: props.project ?? false })
   const Button = props.button
+  const project = () => store.project && props.scope !== undefined
+
+  createEffect(() => {
+    if (!props.scope) setStore("project", false)
+  })
 
   return (
     <DockPrompt
@@ -26,7 +31,7 @@ export function SessionPermissionDockView(props: {
         <div data-slot="permission-row" data-variant="header">
           <span data-slot="permission-icon">{props.icon}</span>
           <div data-slot="permission-header-title">
-            {store.project
+            {project()
               ? props.t(props.scope === "project" ? "ui.permission.confirmProject" : "ui.permission.confirmFolder")
               : props.t("notification.permission.title")}
           </div>
@@ -37,7 +42,7 @@ export function SessionPermissionDockView(props: {
           <div />
           <div data-slot="permission-footer-actions">
             <Show
-              when={store.project}
+              when={project()}
               fallback={
                 <>
                   <Button
@@ -57,14 +62,18 @@ export function SessionPermissionDockView(props: {
                     >
                       {props.t("ui.permission.allowSession")}
                     </Button>
-                    <Button
-                      variant="secondary"
-                      size="normal"
-                      onClick={() => setStore("project", true)}
-                      disabled={props.responding}
-                    >
-                      {props.t(props.scope === "project" ? "ui.permission.allowProject" : "ui.permission.allowFolder")}
-                    </Button>
+                    <Show when={props.scope}>
+                      <Button
+                        variant="secondary"
+                        size="normal"
+                        onClick={() => setStore("project", true)}
+                        disabled={props.responding}
+                      >
+                        {props.t(
+                          props.scope === "project" ? "ui.permission.allowProject" : "ui.permission.allowFolder",
+                        )}
+                      </Button>
+                    </Show>
                   </Show>
                   <Button
                     variant="primary"
@@ -83,7 +92,9 @@ export function SessionPermissionDockView(props: {
               <Button
                 variant="primary"
                 size="normal"
-                onClick={() => props.onDecide("project")}
+                onClick={() => {
+                  if (props.scope) props.onDecide("project")
+                }}
                 disabled={props.responding}
               >
                 {props.t("ui.common.confirm")}
@@ -93,14 +104,14 @@ export function SessionPermissionDockView(props: {
         </>
       }
     >
-      <Show when={!store.project && props.toolDescription}>
+      <Show when={!project() && props.toolDescription}>
         <div data-slot="permission-row">
           <span data-slot="permission-spacer" aria-hidden="true" />
           <div data-slot="permission-hint">{props.toolDescription}</div>
         </div>
       </Show>
 
-      <Show when={store.project}>
+      <Show when={project()}>
         <div data-slot="permission-row">
           <span data-slot="permission-spacer" aria-hidden="true" />
           <div data-slot="permission-hint">
@@ -109,14 +120,14 @@ export function SessionPermissionDockView(props: {
         </div>
       </Show>
 
-      <Show when={(store.project ? props.request.always : props.request.patterns).length > 0}>
+      <Show when={(project() ? props.request.always : props.request.patterns).length > 0}>
         <div data-slot="permission-row">
           <span data-slot="permission-spacer" aria-hidden="true" />
           <div data-slot="permission-patterns">
-            <Show when={store.project}>
+            <Show when={project()}>
               <span data-slot="permission-hint">{props.t("ui.permission.exactPatterns")}</span>
             </Show>
-            <For each={store.project ? props.request.always : props.request.patterns}>
+            <For each={project() ? props.request.always : props.request.patterns}>
               {(pattern) => <code class="text-12-regular text-text-base break-all">{pattern}</code>}
             </For>
           </div>

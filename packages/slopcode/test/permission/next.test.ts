@@ -2950,6 +2950,88 @@ it.live("project fan-out evaluates live policy in the target worktree context", 
   }),
 )
 
+it.live("project fan-out isolates a defective target after durable commit", () =>
+  Effect.gen(function* () {
+    const mainDir = yield* tmpdirScoped({ git: true })
+    const defectiveDir = yield* tmpdirScoped()
+    const healthyDir = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const main = yield* store.load({ directory: mainDir })
+    const defective = yield* store.load({ directory: defectiveDir, project: main.project, worktree: main.worktree })
+    const healthy = yield* store.load({ directory: healthyDir, project: main.project, worktree: main.worktree })
+    const calls = yield* Ref.make(0)
+    const completed = yield* Ref.make(0)
+    const terminal: PermissionV1.ID[] = []
+    const unsubscribe = yield* (yield* EventV2Bridge.Service).listen((event) => {
+      if (event.type === Permission.Event.Replied.type) terminal.push(decodeReply(event.data).requestID)
+      return Effect.void
+    })
+    yield* Effect.addFinalizer(() => unsubscribe)
+    const sourceID = PermissionV1.ID.make("per_cross_worktree_defect_source")
+    const defectiveID = PermissionV1.ID.make("per_cross_worktree_defect_target")
+    const healthyID = PermissionV1.ID.make("per_cross_worktree_healthy_target")
+    const source = yield* ask({
+      id: sourceID,
+      sessionID: SessionID.make("ses_cross_worktree_defect_source"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(
+      Effect.ensuring(Ref.update(completed, (count) => count + 1)),
+      Effect.provideService(InstanceRef, main),
+      Effect.forkScoped,
+    )
+    const broken = yield* ask({
+      id: defectiveID,
+      sessionID: SessionID.make("ses_cross_worktree_defect_target"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      policy: () =>
+        Ref.updateAndGet(calls, (count) => count + 1).pipe(
+          Effect.flatMap((count) =>
+            count === 1
+              ? Effect.succeed([{ permission: "bash", pattern: "*", action: "ask" }] as PermissionV1.Ruleset)
+              : Effect.die(new Error("target policy defect")),
+          ),
+        ),
+    }).pipe(Effect.provideService(InstanceRef, defective), Effect.forkScoped)
+    const settled = yield* ask({
+      id: healthyID,
+      sessionID: SessionID.make("ses_cross_worktree_healthy_target"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, healthy), Effect.forkScoped)
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, main))
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, defective))
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, healthy))
+
+    yield* reply({ requestID: sourceID, reply: "project" }).pipe(Effect.provideService(InstanceRef, main))
+
+    yield* Fiber.join(source)
+    yield* Fiber.join(settled).pipe(Effect.timeout("1 second"))
+    expect(yield* Ref.get(completed)).toBe(1)
+    expect(terminal.filter((id) => id === sourceID)).toHaveLength(1)
+    expect(terminal.filter((id) => id === healthyID)).toHaveLength(1)
+    expect(terminal).not.toContain(defectiveID)
+    expect(
+      (yield* list().pipe(Effect.provideService(InstanceRef, defective))).map((item) => item.id),
+    ).toEqual([defectiveID])
+    expect(
+      yield* (yield* PermissionSaved.Service).list({ scope: "project", projectID: main.project.id }),
+    ).toMatchObject([{ action: "bash", resource: "git status" }])
+    yield* rejectAll().pipe(Effect.provideService(InstanceRef, defective))
+    yield* Fiber.await(broken)
+  }),
+)
+
 it.live("project batch settles matching pending requests in a live sibling worktree", () =>
   Effect.gen(function* () {
     const mainDir = yield* tmpdirScoped({ git: true })

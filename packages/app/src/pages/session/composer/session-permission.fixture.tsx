@@ -11,7 +11,7 @@ function Button(props: ButtonProps) {
 
 export function renderPermissionDock(input: {
   request: PermissionRequest
-  scope: "project" | "folder"
+  scope?: "project" | "folder"
   project?: boolean
 }) {
   const t = (key: string) => (dict as Record<string, string>)[key] ?? key

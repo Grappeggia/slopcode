@@ -25,3 +25,11 @@ test("requests without server grant candidates do not offer persistent scopes", 
   })
   expect(permissionProjectLines([], "project")).toEqual([])
 })
+
+test("unknown project metadata preserves session approval without offering a durable scope", () => {
+  expect(permissionActions(["git status"], undefined)).toEqual({
+    once: "Allow once",
+    always: "Allow for this session",
+    reject: "Reject",
+  })
+})

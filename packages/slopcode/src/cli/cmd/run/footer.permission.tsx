@@ -154,10 +154,10 @@ function RunPermissionSingleBody(props: {
   const ft = createMemo(() => toolFiletype(info().file))
   const narrow = createMemo(() => footerWidthPolicy(dims().width).dialog.narrow)
   const persistent = createMemo(() => props.request.always.length > 0)
-  const opts = createMemo(() => permissionOptions(state().stage, persistent()))
+  const opts = createMemo(() => permissionOptions(state().stage, persistent(), props.scope !== undefined))
   const busy = createMemo(() => state().submitting)
   const title = createMemo(() => {
-    if (state().stage === "project") {
+    if (state().stage === "project" && props.scope) {
       return `Always allow for this ${props.scope}`
     }
 
@@ -198,6 +198,7 @@ function RunPermissionSingleBody(props: {
   }
 
   const run = (option: PermissionOption) => {
+    if ((option === "project" || option === "confirm") && !props.scope) return
     const cur = state()
     const next = permissionRun(cur, props.request.id, option)
     if (next.state !== cur) {
@@ -498,9 +499,13 @@ function RunPermissionBatchBody(props: {
   const persistent = createMemo(() => permissionBatchPersistent(state(), props.requests))
   const options = createMemo<PermissionBatchOption[]>(() =>
     state().stage === "project"
-      ? ["confirm", "cancel"]
+      ? props.scope
+        ? ["confirm", "cancel"]
+        : []
       : persistent()
-        ? ["once", "always", "project", "reject"]
+        ? props.scope
+          ? ["once", "always", "project", "reject"]
+          : ["once", "always", "reject"]
         : ["once", "reject"],
   )
 
@@ -529,6 +534,7 @@ function RunPermissionBatchBody(props: {
 
   const run = (option: PermissionBatchOption) => {
     if (submitting()) return
+    if ((option === "project" || option === "confirm") && !props.scope) return
     const current = state()
     const next = permissionBatchReply(current, props.requests, option)
     if (next.state !== current) setState(next.state)

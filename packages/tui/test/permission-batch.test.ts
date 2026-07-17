@@ -74,6 +74,11 @@ test("session batch approval is immediate while project approval requires confir
     project: "Always allow selected for this project",
     reject: "Reject all",
   })
+  expect(permissionBatchActions(initial, requests, undefined)).toEqual({
+    once: "Allow selected once",
+    always: "Allow selected for this session",
+    reject: "Reject all",
+  })
 })
 
 test("project batch approval derives eligibility from selected rows and revalidates confirmation", () => {

@@ -361,7 +361,17 @@ export const layer = Layer.effect(
           if (item.kind !== "blocking" || item.answer) continue
           if (reply !== "project" && reply !== "global" && item.info.sessionID !== sessionID) continue
           const rows = yield* approvals(item.info.sessionID, target)
-          const ruleset = yield* item.policy().pipe(Effect.provideService(InstanceRef, target.context))
+          const ruleset = yield* item.policy().pipe(
+            Effect.provideService(InstanceRef, target.context),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("permission pending policy evaluation failed", {
+                requestID: item.info.id,
+                directory: target.context.directory,
+                cause,
+              }).pipe(Effect.as(undefined)),
+            ),
+          )
+          if (!ruleset) continue
           const ok = item.info.patterns.every(
             (pattern) => resolve(item.info.permission, pattern, ruleset, rows) === "allow",
           )

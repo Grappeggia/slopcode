@@ -40,7 +40,7 @@ function createHarness(
     Promise.resolve({ outcome: { outcome: "selected", optionId: "once" } }),
   replyBatch: (params: PermissionBatchReplyParams) => Promise<PermissionBatchReplyResult> = () =>
     Promise.resolve({ data: true }),
-  vcs: "git" | "folder" = "git",
+  vcs: "git" | "folder" | "missing" | "failure" = "git",
 ) {
   const replies: PermissionReplyParams[] = []
   const batches: PermissionBatchReplyParams[] = []
@@ -62,8 +62,11 @@ function createHarness(
       message: () => Promise.resolve({ data: undefined }),
     },
     project: {
-      current: () =>
-        Promise.resolve({ data: { id: "project", worktree: "/workspace", vcs: vcs === "git" ? "git" : undefined } }),
+      current: () => {
+        if (vcs === "failure") return Promise.reject(new Error("project lookup failed"))
+        if (vcs === "missing") return Promise.resolve({ data: undefined })
+        return Promise.resolve({ data: { id: "project", worktree: "/workspace", vcs: vcs === "git" ? "git" : undefined } })
+      },
     },
   } as unknown as SlopcodeClient
   const connection = {
@@ -254,6 +257,24 @@ describe("acp permissions", () => {
     })
     expect(harness.replies[0]).toMatchObject({ reply: "project" })
   })
+
+  for (const metadata of ["missing", "failure"] as const) {
+    it(`does not offer or submit durable approval when project metadata is ${metadata}`, async () => {
+      const harness = createHarness(
+        () => Promise.resolve({ outcome: { outcome: "selected", optionId: "project" } }),
+        undefined,
+        metadata,
+      )
+      await createSession(harness.session, "ses_a")
+
+      harness.subscription.handle(permissionAsked("ses_a", `perm_${metadata}`, { always: ["git status"] }))
+      await pollUntil(() => harness.replies.length === 1, `${metadata} permission was never replied`)
+
+      expect(harness.requests).toHaveLength(1)
+      expect(harness.requests[0].options.map((option) => option.optionId)).toEqual(["once", "always", "reject"])
+      expect(harness.replies[0]).toMatchObject({ reply: "reject" })
+    })
+  }
 
   it("collects every forecast item and replies to the batch atomically", async () => {
     const harness = createHarness()

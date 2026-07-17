@@ -12,7 +12,7 @@
 //   3. starts the stream transport (SDK event subscription), lazily for fresh
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
-import { createSlopcodeClient } from "@slopcode-ai/sdk/v2"
+import { createSlopcodeClient, type SlopcodeClient } from "@slopcode-ai/sdk/v2"
 import { Flag } from "@slopcode-ai/core/flag/flag"
 import { MessageID } from "@/session/schema"
 import { createRunDemo } from "./demo"
@@ -171,6 +171,12 @@ function variantsFor(providers: RunProvider[], model: RunInput["model"]) {
 const RESIZE_DELAY = 250
 const LOCAL_REPLAY_ROW_LIMIT = 100
 
+export async function resolvePermissionScope(sdk: SlopcodeClient, directory: string) {
+  const project = await sdk.project.current({ directory }).then((result) => result.data).catch(() => undefined)
+  if (!project?.id) return undefined
+  return project.vcs === "git" ? ("project" as const) : ("folder" as const)
+}
+
 async function resolveExitTitle(
   ctx: BootContext,
   input: RunRuntimeInput,
@@ -209,10 +215,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           variant: undefined,
         })
   const savedTask = resolveSavedVariant(ctx.model)
-  const scopeTask = ctx.sdk.project
-    .current({ directory: ctx.directory })
-    .then((result) => (result.data?.vcs === "git" ? ("project" as const) : ("folder" as const)))
-    .catch(() => "folder" as const)
+  const scopeTask = resolvePermissionScope(ctx.sdk, ctx.directory)
   const [tuiConfig, session, savedVariant, permissionScope] = await Promise.all([
     tuiConfigTask,
     sessionTask,

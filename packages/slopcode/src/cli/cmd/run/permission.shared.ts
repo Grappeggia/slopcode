@@ -20,7 +20,7 @@ import { toolPath, toolPermissionInfo } from "./tool"
 type Dict = Record<string, unknown>
 
 export type PermissionStage = "permission" | "project" | "reject"
-export type PermissionScopeLabel = "project" | "folder"
+export type PermissionScopeLabel = "project" | "folder" | undefined
 export type PermissionOption = "once" | "always" | "project" | "reject" | "confirm" | "cancel"
 export type PermissionBatchOption = "once" | "always" | "project" | "reject" | "confirm" | "cancel"
 
@@ -178,13 +178,14 @@ export function permissionBatchReply(
   return { state }
 }
 
-export function permissionOptions(stage: PermissionStage, persistent = true): PermissionOption[] {
+export function permissionOptions(stage: PermissionStage, persistent = true, durable = persistent): PermissionOption[] {
   if (stage === "permission") {
-    return persistent ? ["once", "always", "project", "reject"] : ["once", "reject"]
+    if (!persistent) return ["once", "reject"]
+    return durable ? ["once", "always", "project", "reject"] : ["once", "always", "reject"]
   }
 
   if (stage === "project") {
-    return ["confirm", "cancel"]
+    return durable ? ["confirm", "cancel"] : []
   }
 
   return []
@@ -225,7 +226,7 @@ export function permissionInfo(request: PermissionRequest): PermissionInfo {
 }
 
 export function permissionProjectLines(request: PermissionRequest, scope: PermissionScopeLabel): string[] {
-  if (!request.always.length) return []
+  if (!request.always.length || !scope) return []
   return [
     `This approval survives restarts and remains active for this ${scope} until revoked.`,
     "The following exact patterns will always be allowed:",
@@ -236,7 +237,7 @@ export function permissionProjectLines(request: PermissionRequest, scope: Permis
 export function permissionLabel(option: PermissionOption, scope: PermissionScopeLabel): string {
   if (option === "once") return "Allow once"
   if (option === "always") return "Allow for this session"
-  if (option === "project") return `Always allow for this ${scope}`
+  if (option === "project") return scope ? `Always allow for this ${scope}` : "Always allow"
   if (option === "reject") return "Reject"
   if (option === "confirm") return "Confirm"
   return "Cancel"

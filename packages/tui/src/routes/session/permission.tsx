@@ -131,7 +131,22 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
     stage: "permission" as PermissionStage,
   })
   const pathFormatter = usePathFormatter()
-  const scope = createMemo<PermissionScopeLabel>(() => (project.data.project.vcs === "git" ? "project" : "folder"))
+  const scope = createMemo<PermissionScopeLabel | undefined>(() => {
+    if (!project.data.project.id) return undefined
+    return project.data.project.vcs === "git" ? "project" : "folder"
+  })
+
+  let requestID = props.request.id
+  createEffect(() => {
+    const id = props.request.id
+    if (id === requestID) return
+    requestID = id
+    setStore("stage", "permission")
+  })
+
+  createEffect(() => {
+    if (!scope()) setStore("stage", "permission")
+  })
 
   const session = createMemo(() => sync.data.session.find((s) => s.id === props.request.sessionID))
 
@@ -165,7 +180,7 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
           escapeKey="cancel"
           onSelect={(option) => {
             setStore("stage", "permission")
-            if (option === "cancel") return
+            if (option === "cancel" || !scope()) return
             void sdk.client.permission.reply({
               reply: "project",
               requestID: props.request.id,
@@ -410,6 +425,7 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
               fullscreen
               onSelect={(option) => {
                 if (option === "project") {
+                  if (!scope()) return
                   setStore("stage", "project")
                   return
                 }
@@ -462,11 +478,15 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
     submitting: false,
   })
   const selected = createMemo(() => props.requests.filter((item) => store.selected.includes(item.id)))
-  const scope = createMemo<PermissionScopeLabel>(() => (project.data.project.vcs === "git" ? "project" : "folder"))
+  const scope = createMemo<PermissionScopeLabel | undefined>(() => {
+    if (!project.data.project.id) return undefined
+    return project.data.project.vcs === "git" ? "project" : "folder"
+  })
 
   createEffect(() => {
     const requests = props.requests
-    setStore(untrack(() => permissionBatchSync(store, requests)))
+    const next = untrack(() => permissionBatchSync(store, requests))
+    setStore(!scope() && next.stage === "project" ? { ...next, stage: "review" } : next)
   })
 
   const submit = (reply: NonNullable<ReturnType<typeof permissionBatchReply>["reply"]>) => {
@@ -485,6 +505,7 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
 
   const run = (option: PermissionBatchOption) => {
     if (store.submitting) return
+    if ((option === "project" || option === "confirm") && !scope()) return
     const next = permissionBatchReply(store, props.requests, option)
     if (next.state.stage !== store.stage) setStore("stage", next.state.stage)
     if (next.reply) submit(next.reply)
