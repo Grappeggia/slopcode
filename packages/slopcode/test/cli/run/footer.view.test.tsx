@@ -25,6 +25,7 @@ import type {
   FooterSubagentTab,
   FooterView,
   PermissionBatchReply,
+  PermissionReply,
   RunCommand,
   RunInput,
   RunPrompt,
@@ -1347,6 +1348,77 @@ test("direct durable confirmation uses folder scope and exact patterns", async (
     expect(frame).toContain("survives restarts")
     expect(frame).toContain("git status")
     expect(frame).not.toContain("Remember globally")
+  } finally {
+    off?.()
+    app.renderer.destroy()
+  }
+})
+
+test("direct unknown-scope keyboard navigation cycles through every visible option", async () => {
+  let off: (() => void) | undefined
+  const replies: PermissionReply[] = []
+  const requests: PermissionRequest[] = [
+    {
+      id: "per_unknown_scope",
+      sessionID: "ses_unknown_scope",
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+    },
+  ]
+
+  function Harness() {
+    const renderer = useRenderer()
+    const keymap = createDefaultOpenTuiKeymap(renderer)
+    off = registerSlopcodeKeymap(keymap, renderer, tuiConfig)
+    return (
+      <SlopcodeKeymapProvider keymap={keymap}>
+        <RunPermissionBody
+          requests={requests}
+          scope={undefined}
+          theme={RUN_THEME_FALLBACK.footer}
+          block={RUN_THEME_FALLBACK.block}
+          onReply={(reply) => {
+            replies.push(reply)
+            return Promise.reject(new Error("keep permission open"))
+          }}
+          onBatchReply={() => {}}
+        />
+      </SlopcodeKeymapProvider>
+    )
+  }
+
+  const app = await testRender(
+    () => (
+      <box width={120} height={18}>
+        <Harness />
+      </box>
+    ),
+    { width: 120, height: 18, kittyKeyboard: true },
+  )
+
+  try {
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Allow once")
+    expect(frame).toContain("Allow for this session")
+    expect(frame).toContain("Reject")
+    expect(frame).not.toContain("Always allow")
+
+    app.mockInput.pressEnter()
+    await Bun.sleep(10)
+    app.mockInput.pressKey("ARROW_RIGHT")
+    app.mockInput.pressEnter()
+    await Bun.sleep(10)
+    app.mockInput.pressKey("ARROW_RIGHT")
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+
+    expect(replies.map((reply) => reply.reply)).toEqual(["once", "always"])
+    expect(app.captureCharFrame()).toContain("Reject permission")
+    expect(app.captureCharFrame()).not.toContain("Always allow for this")
+    expect(replies.some((reply) => reply.reply === "project")).toBe(false)
   } finally {
     off?.()
     app.renderer.destroy()

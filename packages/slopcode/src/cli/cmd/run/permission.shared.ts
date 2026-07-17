@@ -251,8 +251,13 @@ export function permissionReply(requestID: string, reply: PermissionReply["reply
   }
 }
 
-export function permissionShift(state: PermissionBodyState, dir: -1 | 1, persistent = true): PermissionBodyState {
-  const list = permissionOptions(state.stage, persistent)
+export function permissionShift(
+  state: PermissionBodyState,
+  dir: -1 | 1,
+  persistent = true,
+  durable = persistent,
+): PermissionBodyState {
+  const list = permissionOptions(state.stage, persistent, durable)
   if (list.length === 0) {
     return state
   }

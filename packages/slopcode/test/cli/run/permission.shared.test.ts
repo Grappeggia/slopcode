@@ -9,6 +9,7 @@ import {
   permissionOptions,
   permissionReject,
   permissionRun,
+  permissionShift,
   createPermissionBatchState,
   permissionBatchMove,
   permissionBatchPersistent,
@@ -159,6 +160,17 @@ describe("run permission shared", () => {
 
   test("keeps session approval but hides durable approval when scope is unknown", () => {
     expect(permissionOptions("permission", true, false)).toEqual(["once", "always", "reject"])
+    const initial = createPermissionBodyState("perm-1")
+    const always = permissionShift(initial, 1, true, false)
+    const reject = permissionShift(always, 1, true, false)
+    const wrapped = permissionShift(reject, 1, true, false)
+
+    expect([initial.selected, always.selected, reject.selected, wrapped.selected]).toEqual([
+      "once",
+      "always",
+      "reject",
+      "once",
+    ])
   })
 
   test("keeps ordinary requests FIFO and groups only one forecast batch", () => {

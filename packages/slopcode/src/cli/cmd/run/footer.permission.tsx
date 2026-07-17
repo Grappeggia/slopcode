@@ -178,7 +178,7 @@ function RunPermissionSingleBody(props: {
   })
 
   const shift = (dir: -1 | 1) => {
-    setState((prev) => permissionShift(prev, dir, persistent()))
+    setState((prev) => permissionShift(prev, dir, persistent(), props.scope !== undefined))
   }
 
   const submit = async (next: PermissionReply) => {
