@@ -13,8 +13,10 @@ describe("schema compatibility", () => {
   })
 
   test("current and V1 permission contracts expose scoped exact grants", () => {
+    expect(Schema.decodeUnknownSync(Permission.Reply)("project")).toBe("project")
     expect(Schema.decodeUnknownSync(Permission.Reply)("session")).toBe("session")
     expect(Schema.decodeUnknownSync(Permission.Reply)("global")).toBe("global")
+    expect(Schema.decodeUnknownSync(PermissionV1.Reply)("project")).toBe("project")
     expect(Schema.decodeUnknownSync(PermissionV1.Reply)("always")).toBe("always")
     const grant = { resources: ["echo *", "file?.txt", "[abc]"], scopes: ["session", "global"] as const }
     expect(Schema.decodeUnknownSync(Permission.Grant)(grant)).toEqual(grant)

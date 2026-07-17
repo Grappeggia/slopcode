@@ -3222,7 +3222,7 @@ export class Permission extends HeyApiClient {
       requestID: string
       directory?: string
       workspace?: string
-      reply?: "once" | "session" | "global" | "always" | "reject"
+      reply?: "once" | "session" | "global" | "always" | "project" | "reject"
       message?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -3264,7 +3264,7 @@ export class Permission extends HeyApiClient {
       directory?: string
       workspace?: string
       requestIDs?: Array<string>
-      reply?: "once" | "session" | "global" | "always" | "reject"
+      reply?: "once" | "session" | "global" | "always" | "project" | "reject"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3311,7 +3311,7 @@ export class Permission extends HeyApiClient {
       permissionID: string
       directory?: string
       workspace?: string
-      response?: "once" | "session" | "global" | "always" | "reject"
+      response?: "once" | "session" | "global" | "always" | "project" | "reject"
     },
     options?: Options<never, ThrowOnError>,
   ) {

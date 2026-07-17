@@ -11,7 +11,6 @@ import { Identifier } from "./util/identifier"
 import { Wildcard } from "./util/wildcard"
 import { PermissionSchema } from "./permission/schema"
 import { PermissionSaved } from "./permission/saved"
-import { Project } from "./project"
 
 export { Effect, Rule, Ruleset } from "./permission/schema"
 type Effect = PermissionSchema.Effect
@@ -56,7 +55,7 @@ export const Request = Schema.Struct({
 }).annotate({ identifier: "PermissionV2.Request" })
 export type Request = typeof Request.Type
 
-export const Reply = Schema.Literals(["once", "session", "global", "always", "reject"]).annotate({
+export const Reply = Schema.Literals(["once", "session", "global", "always", "project", "reject"]).annotate({
   identifier: "PermissionV2.Reply",
 })
 export type Reply = typeof Reply.Type
@@ -154,8 +153,8 @@ export const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const pending = new Map<ID, Pending>()
+    const memory = new Map<SessionV2.ID, Array<{ action: string; resource: string }>>()
     const lock = Semaphore.makeUnsafe(1)
-    const legacy = location.project.id !== Project.ID.global && location.vcs?.type === "git"
 
     yield* EffectRuntime.addFinalizer(() =>
       EffectRuntime.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new RejectedError()), {
@@ -164,20 +163,29 @@ export const layer = Layer.effect(
         EffectRuntime.ensuring(
           EffectRuntime.sync(() => {
             pending.clear()
+            memory.clear()
           }),
         ),
       ),
     )
 
     const approvals = EffectRuntime.fnUntraced(function* (sessionID: SessionV2.ID) {
-      return yield* EffectRuntime.all([
+      const rows = yield* EffectRuntime.all([
         saved.list({ scope: "global" }),
         saved.list({ scope: "session", sessionID }),
-        legacy ? saved.list({ scope: "project", projectID: location.project.id }) : EffectRuntime.succeed([]),
+        saved.listCurrent(location),
       ]).pipe(EffectRuntime.map((rows) => rows.flat()))
+      return [
+        ...rows,
+        ...(memory.get(sessionID) ?? []).map((item) => ({ ...item, match: "pattern" as const })),
+      ]
     })
 
-    function approved(action: string, resource: string, rows: ReadonlyArray<PermissionSaved.Info>) {
+    function approved(
+      action: string,
+      resource: string,
+      rows: ReadonlyArray<Pick<PermissionSaved.Info, "action" | "resource" | "match">>,
+    ) {
       return rows.some((row) =>
         row.match === "exact"
           ? row.action === action && row.resource === resource
@@ -260,7 +268,7 @@ export const layer = Layer.effect(
         sessionID: input.sessionID,
         action: input.action,
         resources: input.resources,
-        save: legacy ? input.save : undefined,
+        save: input.save,
         grant: grant.length
           ? { resources: [...new Set(grant)].toSorted(), scopes: ["session" as const, "global" as const] }
           : undefined,
@@ -378,7 +386,7 @@ export const layer = Layer.effect(
                     ),
                   )
             const requested =
-              input.reply === "always" && !existing.request.save?.length
+              input.reply === "project" && !existing.request.save?.length
                 ? ("once" as const)
                 : (input.reply === "session" || input.reply === "global") &&
                     (!existing.request.grant?.resources.length || current?.forced)
@@ -394,13 +402,19 @@ export const layer = Layer.effect(
                   ? "once"
                   : requested
 
-            if (answer === "always") {
+            if (answer === "project") {
               yield* saved.add({
-                scope: "project",
-                projectID: location.project.id,
+                ...PermissionSaved.current(location),
                 action: existing.request.action,
                 resources: existing.request.save ?? [],
               })
+            }
+            if (answer === "always" && existing.request.save?.length) {
+              const rows = memory.get(existing.request.sessionID) ?? []
+              rows.push(
+                ...existing.request.save.map((resource) => ({ action: existing.request.action, resource })),
+              )
+              memory.set(existing.request.sessionID, rows)
             }
             if (answer === "session")
               yield* saved.add({
@@ -454,14 +468,16 @@ export const layer = Layer.effect(
             }
 
             yield* settle(existing, answer)
-            if (answer !== "always" && answer !== "session" && answer !== "global") return
+            if (answer !== "always" && answer !== "project" && answer !== "session" && answer !== "global") return
 
             const candidates = yield* lock.withPermit(
               EffectRuntime.sync(() =>
                 Array.from(pending.values()).filter(
                   (item) =>
                     item.phase === "pending" &&
-                    (answer === "global" || item.request.sessionID === existing.request.sessionID),
+                    (answer === "global" ||
+                      answer === "project" ||
+                      item.request.sessionID === existing.request.sessionID),
                 ),
               ),
             )

@@ -44,7 +44,7 @@ export const Request = Schema.Struct({
 }).annotate({ identifier: "PermissionV2.Request" })
 export interface Request extends Schema.Schema.Type<typeof Request> {}
 
-export const Reply = Schema.Literals(["once", "session", "global", "always", "reject"]).annotate({
+export const Reply = Schema.Literals(["once", "session", "global", "always", "project", "reject"]).annotate({
   identifier: "PermissionV2.Reply",
 })
 export type Reply = typeof Reply.Type

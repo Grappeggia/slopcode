@@ -110,6 +110,50 @@ const commitEnv = Layer.mergeAll(
 )
 const commitIt = testEffect(commitEnv)
 
+class RegistrationGate extends Context.Service<
+  RegistrationGate,
+  { entered: Deferred.Deferred<void>; release: Deferred.Deferred<void>; armed: boolean }
+>()("@test/RegistrationGate") {}
+
+const registrationGateLayer = Layer.effect(
+  RegistrationGate,
+  Effect.gen(function* () {
+    return RegistrationGate.of({
+      entered: yield* Deferred.make<void>(),
+      release: yield* Deferred.make<void>(),
+      armed: false,
+    })
+  }),
+)
+const registrationSaved = Layer.effect(
+  PermissionSaved.Service,
+  Effect.gen(function* () {
+    const live = yield* PermissionSaved.Service
+    const gate = yield* RegistrationGate
+    return PermissionSaved.Service.of({
+      ...live,
+      listCurrent: (input) =>
+        Effect.gen(function* () {
+          const rows = yield* live.listCurrent(input)
+          if (!gate.armed) return rows
+          gate.armed = false
+          yield* Deferred.succeed(gate.entered, undefined)
+          yield* Deferred.await(gate.release)
+          return rows
+        }),
+    })
+  }),
+).pipe(Layer.provide(saved), Layer.provide(registrationGateLayer))
+const registrationEnv = Layer.mergeAll(
+  Permission.layer.pipe(Layer.provideMerge(registrationSaved), Layer.provide(events)),
+  events,
+  Database.defaultLayer,
+  CrossSpawnSpawner.defaultLayer,
+  InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
+  registrationGateLayer,
+)
+const registrationIt = testEffect(registrationEnv)
+
 const rejectAll = (message?: string) =>
   Effect.gen(function* () {
     const permission = yield* Permission.Service
@@ -185,6 +229,44 @@ const replyBatch = (input: Parameters<Permission.Interface["replyBatch"]>[0]) =>
     const permission = yield* Permission.Service
     return yield* permission.replyBatch(input)
   })
+
+registrationIt.instance(
+  "ask revalidates a stale snapshot before registering after project approval",
+  () =>
+    Effect.gen(function* () {
+      const gate = yield* RegistrationGate
+      const source = yield* ask({
+        id: PermissionV1.ID.make("per_registration_source_project"),
+        sessionID: SessionID.make("ses_registration_project_source"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: ["git status"],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+
+      gate.armed = true
+      const stale = yield* ask({
+        id: PermissionV1.ID.make("per_registration_stale_project"),
+        sessionID: SessionID.make("ses_registration_project_other"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(gate.entered)
+
+      yield* reply({ requestID: PermissionV1.ID.make("per_registration_source_project"), reply: "project" })
+      yield* Fiber.join(source)
+      yield* Deferred.succeed(gate.release, undefined)
+
+      yield* Fiber.join(stale).pipe(Effect.timeout("1 second"))
+      expect(yield* list()).toEqual([])
+    }),
+  { git: true },
+)
 
 // fromConfig tests
 
@@ -348,7 +430,7 @@ it.instance(
         })
         .pipe(Effect.forkChild)
       const pending = yield* waitForPending(1)
-      yield* permission.reply({ requestID: pending[0].id, reply: "always" })
+      yield* permission.reply({ requestID: pending[0].id, reply: "project" })
       yield* Fiber.join(first)
 
       events.length = 0
@@ -1085,7 +1167,7 @@ it.instance(
 )
 
 for (const mode of ["timeout", "defect"] as const) {
-  for (const answer of ["once", "always"] as const) {
+  for (const answer of ["once", "always", "project"] as const) {
     it.instance(
       `an ordinary ${answer} reply from an Asked listener wins against publication ${mode}`,
       () =>
@@ -1137,7 +1219,7 @@ for (const mode of ["timeout", "defect"] as const) {
 
           const ctx = yield* InstanceState.context
           expect(yield* (yield* PermissionSaved.Service).list({ projectID: ctx.project.id })).toHaveLength(
-            answer === "always" ? 1 : 0,
+            answer === "project" ? 1 : 0,
           )
         }),
       { git: true },
@@ -1253,7 +1335,7 @@ it.instance(
   { git: true },
 )
 
-for (const answer of ["once", "always"] as const) {
+for (const answer of ["once", "always", "project"] as const) {
   it.instance(
     `interruption wins deterministically against a queued ${answer} batch reply`,
     () =>
@@ -1368,7 +1450,7 @@ it.instance(
       const reviewFiber = yield* review(sessionID, () => Ref.get(policy)).pipe(Effect.forkScoped)
       const pending = yield* waitForPending(1)
       yield* Ref.set(policy, [{ permission: "bash", pattern: "*", action: "deny" }])
-      yield* replyBatch({ batchID: pending[0].batchID!, requestIDs: [pending[0].id], reply: "always" })
+      yield* replyBatch({ batchID: pending[0].batchID!, requestIDs: [pending[0].id], reply: "project" })
       yield* Fiber.join(reviewFiber)
 
       const ctx = yield* InstanceState.context
@@ -1386,6 +1468,83 @@ it.instance(
       expect(yield* waitForPending(1)).toHaveLength(1)
       yield* rejectAll()
       yield* Fiber.await(blocked)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "batch Always resolves matching blocking requests only in its session",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_batch_always_scope")
+      const same = yield* ask({
+        id: PermissionV1.ID.make("per_batch_always_same"),
+        sessionID,
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      const other = yield* ask({
+        id: PermissionV1.ID.make("per_batch_always_other"),
+        sessionID: SessionID.make("ses_batch_always_other"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(2)
+      yield* forecast({
+        sessionID,
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        candidates: [{ action: "bash", resources: ["git status"], reason: "Inspect state" }],
+      })
+      const active = yield* review(sessionID).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(3)
+      const batch = pending.find((item) => item.kind === "forecast")!
+
+      yield* replyBatch({ batchID: batch.batchID!, requestIDs: [batch.id], reply: "always" })
+
+      yield* Fiber.join(active)
+      yield* Fiber.join(same).pipe(Effect.timeout("1 second"))
+      expect((yield* list()).map((item) => item.id)).toEqual([PermissionV1.ID.make("per_batch_always_other")])
+      yield* rejectAll()
+      yield* Fiber.await(other)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "batch Project resolves matching blocking requests across sessions",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("ses_batch_project_source")
+      const blocking = yield* ask({
+        id: PermissionV1.ID.make("per_batch_project_other"),
+        sessionID: SessionID.make("ses_batch_project_other"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* forecast({
+        sessionID,
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+        candidates: [{ action: "bash", resources: ["git status"], reason: "Inspect state" }],
+      })
+      const active = yield* review(sessionID).pipe(Effect.forkScoped)
+      const pending = yield* waitForPending(2)
+      const batch = pending.find((item) => item.kind === "forecast")!
+
+      yield* replyBatch({ batchID: batch.batchID!, requestIDs: [batch.id], reply: "project" })
+
+      yield* Fiber.join(active)
+      yield* Fiber.join(blocking).pipe(Effect.timeout("1 second"))
+      expect(yield* list()).toEqual([])
     }),
   { git: true },
 )
@@ -1416,7 +1575,7 @@ commitIt.instance(
       const response = yield* replyBatch({
         batchID: pending[0].batchID!,
         requestIDs: [pending[0].id],
-        reply: "always",
+        reply: "project",
       }).pipe(Effect.forkScoped)
       yield* Deferred.await(gate.entered)
 
@@ -1426,7 +1585,7 @@ commitIt.instance(
       const interrupted = yield* Fiber.await(response).pipe(Effect.timeout("3 seconds"))
 
       expect(Exit.isFailure(interrupted) && Cause.hasInterrupts(interrupted.cause)).toBe(true)
-      expect(terminal).toEqual([{ requestID: pending[0].id, reply: "always" }])
+      expect(terminal).toEqual([{ requestID: pending[0].id, reply: "project" }])
       expect(yield* Fiber.join(active)).toBe(true)
       expect(yield* list()).toEqual([])
       const ctx = yield* InstanceState.context
@@ -1435,7 +1594,7 @@ commitIt.instance(
   { git: true },
 )
 
-for (const answer of ["once", "always", "reject"] as const) {
+for (const answer of ["once", "always", "project", "reject"] as const) {
   it.instance(
     `terminal listener defects cannot roll back a settled ${answer === "reject" ? "skip" : answer} batch`,
     () =>
@@ -1476,7 +1635,7 @@ for (const answer of ["once", "always", "reject"] as const) {
           ),
         ).toBe(true)
 
-        if (answer === "always") {
+        if (answer === "project") {
           const ctx = yield* InstanceState.context
           expect(yield* (yield* PermissionSaved.Service).list({ projectID: ctx.project.id })).toHaveLength(1)
         }
@@ -1497,7 +1656,7 @@ for (const answer of ["once", "always", "reject"] as const) {
   )
 }
 
-for (const answer of ["once", "always", "reject"] as const) {
+for (const answer of ["once", "always", "project", "reject"] as const) {
   it.instance(
     `a suspended terminal listener cannot hang ${answer === "reject" ? "skip" : answer} batch settlement`,
     () =>
@@ -1524,7 +1683,7 @@ for (const answer of ["once", "always", "reject"] as const) {
         }).pipe(Effect.timeout("3 seconds"))
         expect(yield* Fiber.join(reviewFiber)).toBe(true)
         expect(yield* list()).toEqual([])
-        if (answer === "always") {
+        if (answer === "project") {
           const ctx = yield* InstanceState.context
           expect(yield* (yield* PermissionSaved.Service).list({ projectID: ctx.project.id })).toHaveLength(1)
         }
@@ -1930,7 +2089,7 @@ it.instance(
           yield* replyBatch({
             batchID: pending[0].batchID!,
             requestIDs: pending.map((item) => item.id),
-            reply: "always",
+            reply: "project",
           }).pipe(Effect.exit),
         ),
       ).toBe(true)
@@ -2253,12 +2412,13 @@ it.instance(
 )
 
 it.instance(
-  "reply - always persists approval and resolves",
+  "reply - always stays in memory for the current session only",
   () =>
     Effect.gen(function* () {
+      const sessionID = SessionID.make("session_test")
       const fiber = yield* ask({
         id: PermissionV1.ID.make("per_test3"),
-        sessionID: SessionID.make("session_test"),
+        sessionID,
         permission: "bash",
         patterns: ["ls"],
         metadata: {},
@@ -2270,15 +2430,42 @@ it.instance(
       yield* reply({ requestID: PermissionV1.ID.make("per_test3"), reply: "always" })
       yield* Fiber.join(fiber)
 
-      const result = yield* ask({
+      expect(
+        yield* ask({
+          sessionID,
+          permission: "bash",
+          patterns: ["ls"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        }),
+      ).toBeUndefined()
+      expect(yield* (yield* PermissionSaved.Service).list()).toEqual([])
+
+      const other = yield* ask({
         sessionID: SessionID.make("session_test2"),
         permission: "bash",
         patterns: ["ls"],
         metadata: {},
         always: [],
         ruleset: [],
-      })
-      expect(result).toBeUndefined()
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(other)
+
+      yield* reloadInstance({ directory: (yield* TestInstance).directory })
+      const restarted = yield* ask({
+        sessionID,
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(restarted)
     }),
   { git: true },
 )
@@ -2403,7 +2590,7 @@ it.live("global exact grants cross Git and non-Git projects without widening met
 )
 
 it.instance(
-  "reply - empty Always resources resolve once without persistence",
+  "reply - empty Always resources resolve without persistence",
   () =>
     Effect.gen(function* () {
       const bridge = yield* EventV2Bridge.Service
@@ -2425,7 +2612,7 @@ it.instance(
       yield* waitForPending(1)
       yield* reply({ requestID: PermissionV1.ID.make("per_empty_always"), reply: "always" })
       yield* Fiber.join(first)
-      expect(replies).toEqual(["once"])
+      expect(replies).toEqual(["always"])
 
       const ctx = yield* InstanceState.context
       const saved = yield* PermissionSaved.Service
@@ -2447,7 +2634,7 @@ it.instance(
 )
 
 it.instance(
-  "reply - always persists exact deduplicated approvals across an instance restart",
+  "reply - project persists exact deduplicated approvals across an instance restart",
   () =>
     Effect.gen(function* () {
       const fiber = yield* ask({
@@ -2461,7 +2648,7 @@ it.instance(
       }).pipe(Effect.forkScoped)
 
       yield* waitForPending(1)
-      yield* reply({ requestID: PermissionV1.ID.make("per_restart"), reply: "always" })
+      yield* reply({ requestID: PermissionV1.ID.make("per_restart"), reply: "project" })
       yield* Fiber.join(fiber)
 
       const ctx = yield* InstanceState.context
@@ -2611,7 +2798,7 @@ it.live("shares approvals across one project's worktrees but isolates different 
   }),
 )
 
-it.live("does not persist or expose Always in two real non-git directories across reload", () =>
+it.live("keeps Always session-scoped in real non-git directories across reload", () =>
   Effect.gen(function* () {
     const one = yield* tmpdirScoped()
     const two = yield* tmpdirScoped()
@@ -2631,7 +2818,7 @@ it.live("does not persist or expose Always in two real non-git directories acros
       always: ["git status"],
       ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
     }).pipe(Effect.provideService(InstanceRef, first), Effect.forkScoped)
-    expect((yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, first)))[0].always).toEqual([])
+    expect((yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, first)))[0].always).toEqual(["git status"])
     yield* reply({ requestID: PermissionV1.ID.make("per_non_git"), reply: "always" }).pipe(
       Effect.provideService(InstanceRef, first),
     )
@@ -2647,7 +2834,9 @@ it.live("does not persist or expose Always in two real non-git directories acros
       always: ["git status"],
       ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
     }).pipe(Effect.provideService(InstanceRef, restarted), Effect.forkScoped)
-    expect((yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, restarted)))[0].always).toEqual([])
+    expect((yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, restarted)))[0].always).toEqual([
+      "git status",
+    ])
     yield* rejectAll().pipe(Effect.provideService(InstanceRef, restarted))
     yield* Fiber.await(restartedAsk)
 
@@ -2659,7 +2848,9 @@ it.live("does not persist or expose Always in two real non-git directories acros
       always: ["git status"],
       ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
     }).pipe(Effect.provideService(InstanceRef, second), Effect.forkScoped)
-    expect((yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, second)))[0].always).toEqual([])
+    expect((yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, second)))[0].always).toEqual([
+      "git status",
+    ])
     yield* rejectAll().pipe(Effect.provideService(InstanceRef, second))
     yield* Fiber.await(isolated)
     expect(yield* (yield* PermissionSaved.Service).list({ projectID: first.project.id })).toEqual([])
@@ -2667,8 +2858,62 @@ it.live("does not persist or expose Always in two real non-git directories acros
   }),
 )
 
+it.live("persists Project approvals per non-git directory", () =>
+  Effect.gen(function* () {
+    const one = yield* tmpdirScoped()
+    const two = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const first = yield* store.load({ directory: one })
+    const second = yield* store.load({ directory: two })
+    const approved = yield* ask({
+      id: PermissionV1.ID.make("per_non_git_project"),
+      sessionID: SessionID.make("session_non_git_project"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, first), Effect.forkScoped)
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, first))
+    yield* reply({ requestID: PermissionV1.ID.make("per_non_git_project"), reply: "project" }).pipe(
+      Effect.provideService(InstanceRef, first),
+    )
+    yield* Fiber.join(approved)
+
+    const restarted = yield* store.reload({ directory: one })
+    expect(
+      yield* ask({
+        sessionID: SessionID.make("session_non_git_project_restart"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.provideService(InstanceRef, restarted)),
+    ).toBeUndefined()
+
+    const isolated = yield* ask({
+      sessionID: SessionID.make("session_non_git_project_other"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, second), Effect.forkScoped)
+    expect(yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, second))).toHaveLength(1)
+    yield* rejectAll().pipe(Effect.provideService(InstanceRef, second))
+    yield* Fiber.await(isolated)
+    expect(
+      yield* (yield* PermissionSaved.Service).list({
+        scope: "directory",
+        directoryID: PermissionSaved.DirectoryID.create(first.directory),
+      }),
+    ).toMatchObject([{ action: "bash", resource: "git status" }])
+  }),
+)
+
 it.instance(
-  "keeps Always pending and retriable when database persistence fails",
+  "keeps Project pending and retriable when database persistence fails",
   () =>
     Effect.gen(function* () {
       const bridge = yield* EventV2Bridge.Service
@@ -2697,17 +2942,17 @@ it.instance(
 
       expect(
         Exit.isFailure(
-          yield* reply({ requestID: PermissionV1.ID.make("per_database_failure"), reply: "always" }).pipe(Effect.exit),
+          yield* reply({ requestID: PermissionV1.ID.make("per_database_failure"), reply: "project" }).pipe(Effect.exit),
         ),
       ).toBe(true)
       expect(yield* list()).toHaveLength(1)
       expect(replies).toEqual([])
 
       yield* db.run("DROP TRIGGER fail_permission_insert").pipe(Effect.orDie)
-      yield* reply({ requestID: PermissionV1.ID.make("per_database_failure"), reply: "always" })
+      yield* reply({ requestID: PermissionV1.ID.make("per_database_failure"), reply: "project" })
       yield* Fiber.join(fiber)
       expect(yield* list()).toEqual([])
-      expect(replies).toEqual(["always"])
+      expect(replies).toEqual(["project"])
     }),
   { git: true },
 )
@@ -2741,7 +2986,7 @@ it.instance(
 
       const replyFiber = yield* reply({
         requestID: PermissionV1.ID.make("per_interrupted_reply"),
-        reply: "always",
+        reply: "project",
       }).pipe(Effect.forkScoped)
       yield* Deferred.await(entered)
       const interrupt = yield* Fiber.interrupt(replyFiber).pipe(Effect.forkScoped)
@@ -2798,6 +3043,39 @@ it.instance(
       expect(Exit.isFailure(eb)).toBe(true)
       if (Exit.isFailure(ea)) expect(Cause.squash(ea.cause)).toBeInstanceOf(PermissionV1.RejectedError)
       if (Exit.isFailure(eb)) expect(Cause.squash(eb.cause)).toBeInstanceOf(PermissionV1.RejectedError)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "reply - project resolves matching pending requests across sessions",
+  () =>
+    Effect.gen(function* () {
+      const first = yield* ask({
+        id: PermissionV1.ID.make("per_project_first"),
+        sessionID: SessionID.make("session_project_first"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: ["git status"],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      const second = yield* ask({
+        id: PermissionV1.ID.make("per_project_second"),
+        sessionID: SessionID.make("session_project_second"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+
+      yield* waitForPending(2)
+      yield* reply({ requestID: PermissionV1.ID.make("per_project_first"), reply: "project" })
+
+      yield* Fiber.join(first)
+      yield* Fiber.join(second)
+      expect(yield* list()).toEqual([])
     }),
   { git: true },
 )

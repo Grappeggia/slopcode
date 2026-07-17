@@ -52,7 +52,7 @@ export const Request = Schema.Struct({
 }).annotate({ identifier: "PermissionRequest" })
 export type Request = typeof Request.Type
 
-export const Reply = Schema.Literals(["once", "session", "global", "always", "reject"])
+export const Reply = Schema.Literals(["once", "session", "global", "always", "project", "reject"])
 export type Reply = typeof Reply.Type
 
 export const ReplyBody = Schema.Struct({ reply: Reply, message: Schema.optional(Schema.String) }).annotate({

@@ -308,14 +308,14 @@ it.instance(
       expect(
         Exit.isFailure(
           yield* permissions
-            .replyBatch({ batchID: batch[0].batchID!, requestIDs: [batch[0].id], reply: "always" })
+            .replyBatch({ batchID: batch[0].batchID!, requestIDs: [batch[0].id], reply: "project" })
             .pipe(Effect.exit),
         ),
       ).toBe(true)
       expect(yield* permissions.list()).toHaveLength(1)
 
       yield* database.db.run("DROP TRIGGER fail_plan_forecast_insert").pipe(Effect.orDie)
-      yield* permissions.replyBatch({ batchID: batch[0].batchID!, requestIDs: [batch[0].id], reply: "always" })
+      yield* permissions.replyBatch({ batchID: batch[0].batchID!, requestIDs: [batch[0].id], reply: "project" })
       expect((yield* Fiber.join(transition)).title).toBe("Switching to build agent")
       expect(yield* permissions.list()).toEqual([])
     }),

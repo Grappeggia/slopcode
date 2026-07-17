@@ -51,6 +51,24 @@ const layer = PermissionV2.locationLayer.pipe(
   Layer.provideMerge(saved),
 )
 const it = testEffect(layer)
+const nonGit = Layer.succeed(
+  Location.Service,
+  Location.Service.of({
+    ...location({ directory: AbsolutePath.make("/tmp") }),
+    project: { id: Project.ID.global, directory: AbsolutePath.make("/") },
+  }),
+)
+const nonGitIt = testEffect(
+  PermissionV2.locationLayer.pipe(
+    Layer.provideMerge(database),
+    Layer.provideMerge(store),
+    Layer.provideMerge(events),
+    Layer.provideMerge(nonGit),
+    Layer.provideMerge(sessions),
+    Layer.provideMerge(SessionExecution.noopLayer),
+    Layer.provideMerge(saved),
+  ),
+)
 
 function setup(rules: PermissionV2.Ruleset = []) {
   return Effect.gen(function* () {
@@ -498,6 +516,79 @@ describe("PermissionV2", () => {
     }),
   )
 
+  it.effect("keeps Always approvals in memory for the current session only", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { db } = yield* Database.Service
+      const other = SessionV2.ID.make("ses_other")
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: other,
+          project_id: projectID,
+          slug: "other",
+          directory: "/project",
+          title: "other",
+          version: "test",
+          agent: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const input = assertion({ action: "bash", resources: ["git status"], save: ["git *"] })
+      const { service, fiber, request } = yield* waitForRequest(input)
+      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* Fiber.join(fiber)
+
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_same") })).toMatchObject({
+        effect: "allow",
+      })
+      expect(
+        yield* service.ask({ ...input, id: PermissionV2.ID.create("per_other"), sessionID: other }),
+      ).toMatchObject({ effect: "ask" })
+      expect(yield* (yield* PermissionSaved.Service).list()).toEqual([])
+    }),
+  )
+
+  it.effect("persists Project approvals and resolves matching requests across sessions", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { db } = yield* Database.Service
+      const other = SessionV2.ID.make("ses_project_other")
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: other,
+          project_id: projectID,
+          slug: "project-other",
+          directory: "/project",
+          title: "project other",
+          version: "test",
+          agent: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const service = yield* PermissionV2.Service
+      const first = yield* service
+        .assert(assertion({ id: PermissionV2.ID.create("per_project_first"), action: "bash", resources: ["git status"], save: ["git *"] }))
+        .pipe(Effect.forkScoped)
+      const second = yield* service
+        .assert(assertion({ id: PermissionV2.ID.create("per_project_second"), sessionID: other, action: "bash", resources: ["git status"] }))
+        .pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+
+      yield* service.reply({ requestID: PermissionV2.ID.create("per_project_first"), reply: "project" })
+      yield* Fiber.join(first)
+      yield* Fiber.join(second)
+      expect(
+        yield* (yield* PermissionSaved.Service).listCurrent({
+          directory: AbsolutePath.make("/project"),
+          project: { id: projectID, directory: AbsolutePath.make("/project") },
+          vcs: { type: "git", store: AbsolutePath.make("/project/.git") },
+        }),
+      ).toMatchObject([{ action: "bash", resource: "git *" }])
+    }),
+  )
+
   it.effect("keeps an explicit reject after revalidation allows the request", () =>
     Effect.gen(function* () {
       yield* setup()
@@ -699,7 +790,7 @@ describe("PermissionV2", () => {
         save: ["git status", "rm -rf target"],
       })
       const { service, fiber, request } = yield* waitForRequest(input)
-      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* service.reply({ requestID: request.id, reply: "project" })
       yield* Fiber.join(fiber)
       expect(yield* (yield* PermissionSaved.Service).list()).toMatchObject([
         { action: "bash", resource: "git status" },
@@ -726,7 +817,7 @@ describe("PermissionV2", () => {
       const resource = ShellParser.opaque("cmd.exe", "curl https://example.test/Auth/Path?token=TokenABC")
       const input = assertion({ action: "bash", resources: [resource], save: [resource] })
       const { service, fiber, request } = yield* waitForRequest(input)
-      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* service.reply({ requestID: request.id, reply: "project" })
       yield* Fiber.join(fiber)
 
       expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_opaque_saved") })).toMatchObject({
@@ -782,7 +873,7 @@ describe("PermissionV2", () => {
       yield* Effect.addFinalizer(() => unsubscribe)
       const fiber = yield* service.assert(assertion({ save: ["src/*"] })).pipe(Effect.forkScoped)
       const request = yield* Deferred.await(asked)
-      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* service.reply({ requestID: request.id, reply: "project" })
       yield* Fiber.join(fiber)
 
       const { db } = yield* Database.Service
@@ -851,6 +942,33 @@ describe("PermissionV2", () => {
       expect(yield* saved.remove({ id: legacy, scope: "project", projectID: Project.ID.global })).toBe(true)
       expect(yield* db.select().from(PermissionTable).where(eq(PermissionTable.id, legacy)).get()).toBeUndefined()
       expect((yield* db.select().from(ProjectTable).all()).length).toBe(count)
+    }),
+  )
+})
+
+describe("PermissionV2 non-Git persistence", () => {
+  nonGitIt.effect("persists Project approvals for the current directory", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const input = assertion({ action: "bash", resources: ["pwd"], save: ["pwd"] })
+      const { service, fiber, request } = yield* waitForRequest(input)
+      yield* service.reply({ requestID: request.id, reply: "project" })
+      yield* Fiber.join(fiber)
+
+      expect(
+        yield* (yield* PermissionSaved.Service).list({
+          scope: "directory",
+          directoryID: PermissionSaved.DirectoryID.create("/tmp"),
+        }),
+      ).toMatchObject([{ projectID: Project.ID.global, action: "bash", resource: "pwd" }])
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_non_git_saved") })).toMatchObject({
+        effect: "allow",
+      })
+
+      yield* setRules([{ action: "bash", resource: "*", effect: "deny" }])
+      expect(yield* service.ask({ ...input, id: PermissionV2.ID.create("per_non_git_denied") })).toMatchObject({
+        effect: "deny",
+      })
     }),
   )
 })

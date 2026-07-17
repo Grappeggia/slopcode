@@ -1987,7 +1987,7 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           requestID: string
-          reply: "once" | "session" | "global" | "always" | "reject"
+          reply: "once" | "session" | "global" | "always" | "project" | "reject"
         }
       }
     | {
@@ -3725,7 +3725,7 @@ export type PermissionV2Source = {
   callID: string
 }
 
-export type PermissionV2Reply = "once" | "session" | "global" | "always" | "reject"
+export type PermissionV2Reply = "once" | "session" | "global" | "always" | "project" | "reject"
 
 export type QuestionV2Option = {
   /**
@@ -7112,7 +7112,7 @@ export type EventPermissionReplied = {
   properties: {
     sessionID: string
     requestID: string
-    reply: "once" | "session" | "global" | "always" | "reject"
+    reply: "once" | "session" | "global" | "always" | "project" | "reject"
   }
 }
 
@@ -9615,7 +9615,7 @@ export type PermissionListResponse = PermissionListResponses[keyof PermissionLis
 
 export type PermissionReplyData = {
   body?: {
-    reply: "once" | "session" | "global" | "always" | "reject"
+    reply: "once" | "session" | "global" | "always" | "project" | "reject"
     message?: string
   }
   path: {
@@ -9653,7 +9653,7 @@ export type PermissionReplyResponse = PermissionReplyResponses[keyof PermissionR
 export type PermissionReplyBatchData = {
   body?: {
     requestIDs: Array<string>
-    reply: "once" | "session" | "global" | "always" | "reject"
+    reply: "once" | "session" | "global" | "always" | "project" | "reject"
   }
   path: {
     batchID: string
@@ -10905,7 +10905,7 @@ export type SessionUnrevertResponse = SessionUnrevertResponses[keyof SessionUnre
 
 export type PermissionRespondData = {
   body?: {
-    response: "once" | "session" | "global" | "always" | "reject"
+    response: "once" | "session" | "global" | "always" | "project" | "reject"
   }
   path: {
     sessionID: string

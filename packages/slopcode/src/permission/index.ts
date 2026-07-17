@@ -9,6 +9,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { ProjectV2 } from "@slopcode-ai/core/project"
+import { AbsolutePath } from "@slopcode-ai/core/schema"
 
 export const Event = {
   Asked: EventV2.define({ type: "permission.asked", schema: PermissionV1.Request.fields }),
@@ -124,6 +125,7 @@ interface State {
   batches: Map<PermissionV1.BatchID, Batch>
   active: Map<PermissionV1.Request["sessionID"], PermissionV1.BatchID>
   grants: Map<PermissionV1.Request["sessionID"], Grant[]>
+  approvals: Map<PermissionV1.Request["sessionID"], Grant[]>
 }
 
 export function evaluate(permission: string, pattern: string, ...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule {
@@ -182,6 +184,7 @@ export const layer = Layer.effect(
           batches: new Map<PermissionV1.BatchID, Batch>(),
           active: new Map<PermissionV1.Request["sessionID"], PermissionV1.BatchID>(),
           grants: new Map<PermissionV1.Request["sessionID"], Grant[]>(),
+          approvals: new Map<PermissionV1.Request["sessionID"], Grant[]>(),
         }
 
         yield* Effect.addFinalizer(() =>
@@ -211,6 +214,7 @@ export const layer = Layer.effect(
                   state.batches.clear()
                   state.active.clear()
                   state.grants.clear()
+                  state.approvals.clear()
                   return replies
                 }),
               )
@@ -223,21 +227,50 @@ export const layer = Layer.effect(
       }),
     )
 
-    const projectID = Effect.fnUntraced(function* () {
+    const location = Effect.fnUntraced(function* () {
       const ctx = yield* InstanceState.context
-      return ctx.project.id === ProjectV2.ID.global || ctx.project.vcs !== "git" ? undefined : ctx.project.id
+      return {
+        directory: AbsolutePath.make(ctx.directory),
+        project: { id: ctx.project.id, directory: AbsolutePath.make(ctx.worktree) },
+        vcs:
+          ctx.project.id !== ProjectV2.ID.global && ctx.project.vcs === "git"
+            ? { type: "git" as const, store: AbsolutePath.make(ctx.worktree) }
+            : undefined,
+      }
     })
 
     const approvals = Effect.fnUntraced(function* (sessionID?: PermissionV1.Request["sessionID"]) {
-      const project = yield* projectID()
-      return yield* Effect.all([
+      const rows = yield* Effect.all([
         saved.list({ scope: "global" }),
         sessionID ? saved.list({ scope: "session", sessionID }) : Effect.succeed([]),
-        project ? saved.list({ scope: "project", projectID: project }) : Effect.succeed([]),
+        saved.listCurrent(yield* location()),
       ]).pipe(Effect.map((rows) => rows.flat()))
+      if (!sessionID) return rows
+      return [
+        ...rows,
+        ...((yield* InstanceState.get(state)).approvals.get(sessionID) ?? []).flatMap((item) =>
+          item.resources.map((resource) => ({ action: item.permission, resource, match: "pattern" as const })),
+        ),
+      ]
     })
 
-    function approved(permission: string, pattern: string, rows: ReadonlyArray<PermissionSaved.Info>) {
+    const approve = Effect.fnUntraced(function* (
+      sessionID: PermissionV1.Request["sessionID"],
+      permission: string,
+      resources: ReadonlyArray<string>,
+    ) {
+      if (!resources.length) return
+      const current = yield* InstanceState.get(state)
+      const rows = current.approvals.get(sessionID) ?? []
+      rows.push({ permission, resources: [...new Set(resources)].toSorted() })
+      current.approvals.set(sessionID, rows)
+    })
+
+    function approved(
+      permission: string,
+      pattern: string,
+      rows: ReadonlyArray<Pick<PermissionSaved.Info, "action" | "resource" | "match">>,
+    ) {
       return rows.some((row) =>
         row.match === "exact"
           ? row.action === permission && row.resource === pattern
@@ -249,13 +282,51 @@ export const layer = Layer.effect(
       permission: string,
       pattern: string,
       ruleset: PermissionV1.Ruleset,
-      rows: ReadonlyArray<PermissionSaved.Info>,
+      rows: ReadonlyArray<Pick<PermissionSaved.Info, "action" | "resource" | "match">>,
     ) {
       const configured = evaluate(permission, pattern, ruleset)
       if (configured.action !== "ask") return configured.action
       if (permission === "external_directory") return "ask"
       return approved(permission, pattern, rows) ? "allow" : "ask"
     }
+
+    const settleBlocking = Effect.fnUntraced(function* (
+      current: State,
+      id: PermissionV1.ID,
+      item: BlockingEntry,
+      reply: PermissionV1.Reply,
+      error?: PermissionV1.RejectedError | PermissionV1.CorrectedError,
+    ) {
+      if (item.phase === "publishing") {
+        item.answer = { reply, ...(error ? { error } : {}) }
+        return undefined
+      }
+      current.pending.delete(id)
+      if (error) yield* Deferred.fail(item.deferred, error)
+      else yield* Deferred.succeed(item.deferred, undefined)
+      return { sessionID: item.info.sessionID, requestID: item.info.id, reply }
+    })
+
+    const resolvePending = Effect.fnUntraced(function* (
+      current: State,
+      reply: "always" | "project" | "session" | "global",
+      sessionID: PermissionV1.Request["sessionID"],
+    ) {
+      const replies: TerminalReply[] = []
+      for (const [id, item] of current.pending.entries()) {
+        if (item.kind !== "blocking" || item.answer) continue
+        if (reply !== "project" && reply !== "global" && item.info.sessionID !== sessionID) continue
+        const rows = yield* approvals(item.info.sessionID)
+        const ruleset = yield* item.policy()
+        const ok = item.info.patterns.every(
+          (pattern) => resolve(item.info.permission, pattern, ruleset, rows) === "allow",
+        )
+        if (!ok) continue
+        const settled = yield* settleBlocking(current, id, item, reply)
+        if (settled) replies.push(settled)
+      }
+      return replies
+    })
 
     const query = Effect.fn("Permission.query")(function* (input: {
       permission: string
@@ -293,7 +364,7 @@ export const layer = Layer.effect(
         permission: request.permission,
         patterns: request.patterns,
         metadata: request.metadata,
-        always: (yield* projectID()) ? request.always : [],
+        always: request.always,
         grant:
           request.permission === "external_directory"
             ? undefined
@@ -316,6 +387,9 @@ export const layer = Layer.effect(
           yield* restore(lock.take(1))
           const registered = yield* Effect.gen(function* () {
             const current = yield* InstanceState.get(state)
+            const rows = yield* approvals(request.sessionID)
+            if (request.patterns.every((pattern) => resolve(request.permission, pattern, ruleset, rows) === "allow"))
+              return false
             const grants = current.grants.get(request.sessionID) ?? []
             const grant = grants.findIndex(
               (item) =>
@@ -537,7 +611,6 @@ export const layer = Layer.effect(
 
                 const batchID = PermissionV1.BatchID.ascending()
                 const deferred = yield* Deferred.make<void>()
-                const persist = Boolean(yield* projectID())
                 const size = forecast.candidates.length
                 const requests = forecast.candidates.map((candidate): ForecastEntry["info"] => ({
                   id: PermissionV1.ID.ascending(),
@@ -545,7 +618,7 @@ export const layer = Layer.effect(
                   permission: candidate.action,
                   patterns: [...candidate.resources],
                   metadata: {},
-                  always: persist ? [...candidate.resources] : [],
+                  always: [...candidate.resources],
                   grant:
                     candidate.action === "external_directory"
                       ? undefined
@@ -626,7 +699,6 @@ export const layer = Layer.effect(
             return yield* Effect.gen(function* () {
               const policy = yield* batch.policy()
               const approved = yield* approvals(batch.sessionID)
-              const project = yield* projectID()
               const decisions = requests.map((item) => {
                 if (!selected.has(item.info.id)) return { item, reply: "reject" as const, resources: [] }
                 const actions = item.info.patterns.map((pattern) => ({
@@ -639,15 +711,22 @@ export const layer = Layer.effect(
                 if (!resources.length) return { item, reply: "once" as const, resources }
                 const scoped =
                   (input.reply === "session" || input.reply === "global") && Boolean(item.info.grant?.resources.length)
-                const legacy = input.reply === "always" && Boolean(project) && item.info.always.length > 0
+                const durable = input.reply === "project" && item.info.always.length > 0
                 return {
                   item,
-                  reply: scoped ? input.reply : legacy ? ("always" as const) : ("once" as const),
+                  reply:
+                    input.reply === "always"
+                      ? ("always" as const)
+                      : scoped
+                        ? input.reply
+                        : durable
+                          ? ("project" as const)
+                          : ("once" as const),
                   resources,
                 }
               })
               const persistent = decisions.filter(
-                (item) => item.reply === "always" || item.reply === "session" || item.reply === "global",
+                (item) => item.reply === "project" || item.reply === "session" || item.reply === "global",
               )
               if (persistent.length && input.reply === "session") {
                 yield* saved.addBatch({
@@ -668,15 +747,20 @@ export const layer = Layer.effect(
                   })),
                 })
               }
-              if (persistent.length && input.reply === "always" && project) {
+              if (persistent.length && input.reply === "project") {
+                const owner = PermissionSaved.current(yield* location())
                 yield* saved.addBatch({
-                  scope: "project",
-                  projectID: project,
+                  ...owner,
                   entries: persistent.map((item) => ({
                     action: item.item.info.permission,
-                    resources: item.resources,
+                    resources: item.item.info.always,
                   })),
                 })
+              }
+
+              for (const item of decisions) {
+                if (item.reply !== "always") continue
+                yield* approve(batch.sessionID, item.item.info.permission, item.item.info.always)
               }
 
               const once = decisions.filter((item) => item.reply === "once" && item.resources.length)
@@ -698,6 +782,11 @@ export const layer = Layer.effect(
                   reply: decision.reply,
                 }),
               )
+              if (
+                (input.reply === "always" || input.reply === "project") &&
+                decisions.some((item) => item.reply === input.reply)
+              )
+                replies.push(...(yield* resolvePending(current, input.reply, batch.sessionID)))
               yield* finishLocked(current, input.batchID, batch)
               return replies
             }).pipe(
@@ -731,14 +820,8 @@ export const layer = Layer.effect(
               reply: PermissionV1.Reply,
               error?: PermissionV1.RejectedError | PermissionV1.CorrectedError,
             ) {
-              if (item.phase === "publishing") {
-                item.answer = { reply, ...(error ? { error } : {}) }
-                return
-              }
-              current.pending.delete(id)
-              if (error) yield* Deferred.fail(item.deferred, error)
-              else yield* Deferred.succeed(item.deferred, undefined)
-              replies.push({ sessionID: item.info.sessionID, requestID: item.info.id, reply })
+              const settled = yield* settleBlocking(current, id, item, reply, error)
+              if (settled) replies.push(settled)
             })
 
             if (input.reply === "reject") {
@@ -753,7 +836,6 @@ export const layer = Layer.effect(
               return { kind: "blocking" as const, replies }
             }
 
-            const project = yield* projectID()
             const approved = yield* approvals(existing.info.sessionID)
             const ruleset = yield* existing.policy()
             const actions = existing.info.patterns.map((pattern) => ({
@@ -765,7 +847,7 @@ export const layer = Layer.effect(
             const exact = resources.filter((resource) => shown.has(resource))
             const expanded = Boolean(existing.info.grant) && resources.some((resource) => !shown.has(resource))
             const requested =
-              input.reply === "always" && (!existing.info.always.length || !project)
+              input.reply === "project" && !existing.info.always.length
                 ? ("once" as const)
                 : (input.reply === "session" || input.reply === "global") && !existing.info.grant?.resources.length
                   ? ("once" as const)
@@ -776,14 +858,16 @@ export const layer = Layer.effect(
                 : resources.length
                   ? requested
                   : ("once" as const)
-            if (answer === "always" && project) {
+            if (answer === "project") {
+              const owner = PermissionSaved.current(yield* location())
               yield* saved.add({
-                scope: "project",
-                projectID: project,
+                ...owner,
                 action: existing.info.permission,
                 resources: existing.info.always,
               })
             }
+            if (answer === "always")
+              yield* approve(existing.info.sessionID, existing.info.permission, existing.info.always)
             if (answer === "session")
               yield* saved.add({
                 scope: "session",
@@ -808,18 +892,7 @@ export const layer = Layer.effect(
 
             yield* settle(input.requestID, existing, answer)
             if (answer === "once") return { kind: "blocking" as const, replies }
-
-            for (const [id, item] of current.pending.entries()) {
-              if (item.kind !== "blocking" || item.answer) continue
-              if (answer !== "global" && item.info.sessionID !== existing.info.sessionID) continue
-              const approved = yield* approvals(item.info.sessionID)
-              const ruleset = yield* item.policy()
-              const ok = item.info.patterns.every(
-                (pattern) => resolve(item.info.permission, pattern, ruleset, approved) === "allow",
-              )
-              if (!ok) continue
-              yield* settle(id, item, answer)
-            }
+            replies.push(...(yield* resolvePending(current, answer, existing.info.sessionID)))
             return { kind: "blocking" as const, replies }
           }).pipe(Effect.ensuring(lock.release(1)))
 
