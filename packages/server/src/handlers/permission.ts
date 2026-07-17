@@ -46,6 +46,8 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
           const location = yield* Location.Service
           const saved = yield* PermissionSaved.Service
           if (ctx.query.scope === "global") return { data: yield* saved.list({ scope: "global" }) }
+          if (ctx.query.scope === undefined && ctx.query.projectID === undefined)
+            return { data: yield* saved.listCurrent(location) }
           const projectID = ctx.query.projectID ?? location.project.id
           if (projectID !== location.project.id && projectID !== ProjectV2.ID.global) return { data: [] }
           return { data: yield* saved.list({ scope: "project", projectID }) }
@@ -57,6 +59,8 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
           const location = yield* Location.Service
           const saved = yield* PermissionSaved.Service
           if (ctx.query.scope === "global") yield* saved.remove({ id: ctx.params.id, scope: "global" })
+          else if (ctx.query.scope === undefined && ctx.query.projectID === undefined)
+            yield* saved.removeCurrent({ id: ctx.params.id, location })
           else {
             const projectID = ctx.query.projectID ?? location.project.id
             if (projectID === location.project.id || projectID === ProjectV2.ID.global)

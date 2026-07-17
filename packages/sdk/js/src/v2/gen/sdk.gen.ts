@@ -6449,7 +6449,7 @@ export class Saved2 extends HeyApiClient {
   /**
    * List saved permissions
    *
-   * Retrieve saved permissions, optionally filtered by project.
+   * Retrieve saved permissions for the current location or an explicit project/global scope.
    */
   public list<ThrowOnError extends boolean = false>(
     parameters?: {
@@ -6483,7 +6483,7 @@ export class Saved2 extends HeyApiClient {
   /**
    * Remove saved permission
    *
-   * Remove a saved permission by ID.
+   * Remove a saved permission by ID from the current location or an explicit project/global scope.
    */
   public remove<ThrowOnError extends boolean = false>(
     parameters: {

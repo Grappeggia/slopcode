@@ -20,6 +20,7 @@ export const PermissionTable = sqliteTable(
     scope: text().$type<PermissionSaved.Scope>().notNull().default("project"),
     match: text().$type<PermissionSaved.Match>().notNull().default("pattern"),
     session_id: text().$type<SessionSchema.ID>(),
+    directory_id: text().$type<PermissionSaved.DirectoryID>(),
     ...Timestamps,
   },
   (table) => [
@@ -31,14 +32,22 @@ export const PermissionTable = sqliteTable(
     check(
       "permission_scope_match_check",
       sql`(${table.scope} = 'project' AND ${table.match} = 'pattern' AND ${table.session_id} IS NULL)
-        OR (${table.scope} = 'session' AND ${table.match} = 'exact' AND ${table.session_id} IS NOT NULL)
-        OR (${table.scope} = 'global' AND ${table.match} = 'exact' AND ${table.session_id} IS NULL AND ${table.project_id} = 'global')`,
+        AND ${table.directory_id} IS NULL
+        OR (${table.scope} = 'session' AND ${table.match} = 'exact' AND ${table.session_id} IS NOT NULL
+          AND ${table.directory_id} IS NULL)
+        OR (${table.scope} = 'global' AND ${table.match} = 'exact' AND ${table.session_id} IS NULL
+          AND ${table.directory_id} IS NULL AND ${table.project_id} = 'global')
+        OR (${table.scope} = 'directory' AND ${table.match} = 'pattern' AND ${table.session_id} IS NULL
+          AND ${table.directory_id} IS NOT NULL AND ${table.project_id} = 'global')`,
     ),
     uniqueIndex("permission_project_scope_action_resource_match_idx")
       .on(table.project_id, table.scope, table.action, table.resource, table.match)
-      .where(sql`${table.session_id} IS NULL`),
+      .where(sql`${table.session_id} IS NULL AND ${table.directory_id} IS NULL`),
     uniqueIndex("permission_session_scope_action_resource_match_idx")
       .on(table.session_id, table.scope, table.action, table.resource, table.match)
       .where(sql`${table.session_id} IS NOT NULL`),
+    uniqueIndex("permission_directory_scope_action_resource_match_idx")
+      .on(table.directory_id, table.scope, table.action, table.resource, table.match)
+      .where(sql`${table.directory_id} IS NOT NULL`),
   ],
 )

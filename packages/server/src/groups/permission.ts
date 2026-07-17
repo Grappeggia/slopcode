@@ -35,7 +35,7 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
       OpenApi.annotations({
         identifier: "v2.permission.saved.list",
         summary: "List saved permissions",
-        description: "Retrieve saved permissions, optionally filtered by project.",
+        description: "Retrieve saved permissions for the current location or an explicit project/global scope.",
       }),
     ),
   )
@@ -51,7 +51,7 @@ export const PermissionGroup = HttpApiGroup.make("server.permission")
       OpenApi.annotations({
         identifier: "v2.permission.saved.remove",
         summary: "Remove saved permission",
-        description: "Remove a saved permission by ID.",
+        description: "Remove a saved permission by ID from the current location or an explicit project/global scope.",
       }),
     ),
   )

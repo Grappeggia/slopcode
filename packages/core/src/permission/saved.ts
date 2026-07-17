@@ -4,12 +4,15 @@ import { and, eq, type SQL } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { LayerNode } from "../effect/layer-node"
+import { FSUtil } from "../fs-util"
+import type { Location } from "../location"
 import { ProjectV2 } from "../project"
 import { ProjectTable } from "../project/sql"
 import { AbsolutePath, withStatics } from "../schema"
 import { SessionSchema } from "../session/schema"
 import { SessionTable } from "../session/sql"
 import { Identifier } from "../util/identifier"
+import { Hash } from "../util/hash"
 import { PermissionTable } from "./sql"
 
 export const ID = Schema.String.pipe(
@@ -18,7 +21,13 @@ export const ID = Schema.String.pipe(
 )
 export type ID = typeof ID.Type
 
-export const Scope = Schema.Literals(["project", "session", "global"]).annotate({
+export const DirectoryID = Schema.String.pipe(
+  Schema.brand("PermissionSaved.DirectoryID"),
+  withStatics((schema) => ({ create: (directory: string) => schema.make(Hash.sha256(FSUtil.resolve(directory))) })),
+)
+export type DirectoryID = typeof DirectoryID.Type
+
+export const Scope = Schema.Literals(["project", "session", "global", "directory"]).annotate({
   identifier: "PermissionSaved.Scope",
 })
 export type Scope = typeof Scope.Type
@@ -30,6 +39,7 @@ export const Info = Schema.Struct({
   id: ID,
   projectID: ProjectV2.ID,
   sessionID: SessionSchema.ID.pipe(Schema.optional),
+  directoryID: DirectoryID.pipe(Schema.optional),
   scope: Scope,
   match: Match,
   action: Schema.String,
@@ -38,12 +48,26 @@ export const Info = Schema.Struct({
   .check(
     Schema.makeFilter((value) => {
       if (value.scope === "project")
-        return value.match === "pattern" && value.sessionID === undefined ? undefined : "Invalid project permission"
+        return value.match === "pattern" && value.sessionID === undefined && value.directoryID === undefined
+          ? undefined
+          : "Invalid project permission"
       if (value.scope === "global")
-        return value.match === "exact" && value.sessionID === undefined && value.projectID === ProjectV2.ID.global
+        return value.match === "exact" &&
+          value.sessionID === undefined &&
+          value.directoryID === undefined &&
+          value.projectID === ProjectV2.ID.global
           ? undefined
           : "Invalid global permission"
-      return value.match === "exact" && value.sessionID !== undefined ? undefined : "Invalid session permission"
+      if (value.scope === "directory")
+        return value.match === "pattern" &&
+          value.sessionID === undefined &&
+          value.directoryID !== undefined &&
+          value.projectID === ProjectV2.ID.global
+          ? undefined
+          : "Invalid directory permission"
+      return value.match === "exact" && value.sessionID !== undefined && value.directoryID === undefined
+        ? undefined
+        : "Invalid session permission"
     }),
   )
   .annotate({ identifier: "PermissionSaved.Info" })
@@ -52,6 +76,7 @@ export type Info = typeof Info.Type
 export const ListInput = Schema.Struct({
   projectID: ProjectV2.ID.pipe(Schema.optional),
   sessionID: SessionSchema.ID.pipe(Schema.optional),
+  directoryID: DirectoryID.pipe(Schema.optional),
   scope: Scope.pipe(Schema.optional),
 }).annotate({ identifier: "PermissionSaved.ListInput" })
 export type ListInput = typeof ListInput.Type
@@ -67,6 +92,7 @@ export const AddBatchInput = Schema.Union([
   Schema.Struct({ scope: Schema.Literal("project"), projectID: ProjectV2.ID, entries: Entries }),
   Schema.Struct({ scope: Schema.Literal("session"), sessionID: SessionSchema.ID, entries: Entries }),
   Schema.Struct({ scope: Schema.Literal("global"), entries: Entries }),
+  Schema.Struct({ scope: Schema.Literal("directory"), directoryID: DirectoryID, entries: Entries }),
 ]).annotate({ identifier: "PermissionSaved.AddBatchInput" })
 export type AddBatchInput = typeof AddBatchInput.Type
 
@@ -74,6 +100,12 @@ export const AddInput = Schema.Union([
   Schema.Struct({
     scope: Schema.Literal("project"),
     projectID: ProjectV2.ID,
+    action: Schema.String,
+    resources: Schema.Array(Schema.String),
+  }),
+  Schema.Struct({
+    scope: Schema.Literal("directory"),
+    directoryID: DirectoryID,
     action: Schema.String,
     resources: Schema.Array(Schema.String),
   }),
@@ -95,6 +127,7 @@ export const SelectInput = Schema.Union([
   Schema.Struct({ scope: Schema.Literal("project"), projectID: ProjectV2.ID }),
   Schema.Struct({ scope: Schema.Literal("session"), sessionID: SessionSchema.ID }),
   Schema.Struct({ scope: Schema.Literal("global") }),
+  Schema.Struct({ scope: Schema.Literal("directory"), directoryID: DirectoryID }),
 ]).annotate({ identifier: "PermissionSaved.SelectInput" })
 export type SelectInput = typeof SelectInput.Type
 
@@ -104,6 +137,13 @@ export interface Interface {
   readonly addBatch: (input: AddBatchInput) => Effect.Effect<void>
   readonly remove: (input: SelectInput & { id: ID }) => Effect.Effect<boolean>
   readonly clear: (input: SelectInput) => Effect.Effect<number>
+  readonly listCurrent: (
+    location: Pick<Location.Interface, "directory" | "project" | "vcs">,
+  ) => Effect.Effect<ReadonlyArray<Info>>
+  readonly removeCurrent: (input: {
+    id: ID
+    location: Pick<Location.Interface, "directory" | "project" | "vcs">
+  }) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/v2/PermissionSaved") {}
@@ -113,7 +153,15 @@ function selected(input: SelectInput) {
     return and(eq(PermissionTable.scope, input.scope), eq(PermissionTable.project_id, input.projectID))
   if (input.scope === "session")
     return and(eq(PermissionTable.scope, input.scope), eq(PermissionTable.session_id, input.sessionID))
+  if (input.scope === "directory")
+    return and(eq(PermissionTable.scope, input.scope), eq(PermissionTable.directory_id, input.directoryID))
   return eq(PermissionTable.scope, input.scope)
+}
+
+export function current(location: Pick<Location.Interface, "directory" | "project" | "vcs">): SelectInput {
+  if (location.vcs?.type === "git" && location.project.id !== ProjectV2.ID.global)
+    return { scope: "project", projectID: location.project.id }
+  return { scope: "directory", directoryID: DirectoryID.create(location.directory) }
 }
 
 export const layer = Layer.effect(
@@ -125,6 +173,7 @@ export const layer = Layer.effect(
       const filters: SQL[] = []
       if (input?.projectID) filters.push(eq(PermissionTable.project_id, input.projectID))
       if (input?.sessionID) filters.push(eq(PermissionTable.session_id, input.sessionID))
+      if (input?.directoryID) filters.push(eq(PermissionTable.directory_id, input.directoryID))
       if (input?.scope) filters.push(eq(PermissionTable.scope, input.scope))
       const rows = yield* db
         .select({
@@ -141,6 +190,7 @@ export const layer = Layer.effect(
           id: item.row.id,
           projectID: item.row.project_id,
           ...(item.row.session_id ? { sessionID: item.row.session_id } : {}),
+          ...(item.row.directory_id ? { directoryID: item.row.directory_id } : {}),
           scope: item.row.scope,
           match: item.row.match,
           action: item.row.action,
@@ -163,7 +213,7 @@ export const layer = Layer.effect(
       yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
-            if (input.scope === "global")
+            if (input.scope === "global" || input.scope === "directory")
               yield* tx
                 .insert(ProjectTable)
                 .values({ id: ProjectV2.ID.global, worktree: AbsolutePath.make("/"), sandboxes: [] })
@@ -175,7 +225,7 @@ export const layer = Layer.effect(
                 : undefined
             if (input.scope === "session" && !session) return yield* Effect.die(`Session not found: ${input.sessionID}`)
             const projectID =
-              input.scope === "global"
+              input.scope === "global" || input.scope === "directory"
                 ? ProjectV2.ID.global
                 : input.scope === "session"
                   ? session!.project_id
@@ -187,8 +237,12 @@ export const layer = Layer.effect(
                   id: ID.create(),
                   project_id: projectID,
                   session_id: input.scope === "session" ? input.sessionID : null,
+                  directory_id: input.scope === "directory" ? input.directoryID : null,
                   scope: input.scope,
-                  match: input.scope === "project" ? ("pattern" as const) : ("exact" as const),
+                  match:
+                    input.scope === "project" || input.scope === "directory"
+                      ? ("pattern" as const)
+                      : ("exact" as const),
                   action: item.action,
                   resource: item.resource,
                 })),
@@ -204,6 +258,8 @@ export const layer = Layer.effect(
       const entries = [{ action: input.action, resources: input.resources }]
       if (input.scope === "project") return yield* addBatch({ scope: input.scope, projectID: input.projectID, entries })
       if (input.scope === "session") return yield* addBatch({ scope: input.scope, sessionID: input.sessionID, entries })
+      if (input.scope === "directory")
+        return yield* addBatch({ scope: input.scope, directoryID: input.directoryID, entries })
       return yield* addBatch({ scope: input.scope, entries })
     })
 
@@ -227,7 +283,20 @@ export const layer = Layer.effect(
       return rows.length
     })
 
-    return Service.of({ list, add, addBatch, remove, clear })
+    const listCurrent = Effect.fn("PermissionSaved.listCurrent")(function* (
+      location: Pick<Location.Interface, "directory" | "project" | "vcs">,
+    ) {
+      return yield* list(current(location))
+    })
+
+    const removeCurrent = Effect.fn("PermissionSaved.removeCurrent")(function* (input: {
+      id: ID
+      location: Pick<Location.Interface, "directory" | "project" | "vcs">
+    }) {
+      return yield* remove({ id: input.id, ...current(input.location) })
+    })
+
+    return Service.of({ list, add, addBatch, remove, clear, listCurrent, removeCurrent })
   }),
 )
 

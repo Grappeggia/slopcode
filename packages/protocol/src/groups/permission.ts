@@ -9,6 +9,11 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenAp
 import { PermissionNotFoundError, SessionNotFoundError } from "../errors"
 import { LocationQuery, locationQueryOpenApi } from "./location"
 
+export const PermissionSavedQuery = Schema.Struct({
+  scope: Schema.Literals(["project", "global"]).pipe(Schema.optional),
+  projectID: Project.ID.pipe(Schema.optional),
+})
+
 export const makePermissionGroup = <
   LocationId extends HttpApiMiddleware.AnyId,
   LocationService,
@@ -35,32 +40,26 @@ export const makePermissionGroup = <
     )
     .add(
       HttpApiEndpoint.get("permission.saved.list", "/api/permission/saved", {
-        query: Schema.Struct({
-          scope: Schema.Literals(["project", "global"]).pipe(Schema.optional),
-          projectID: Project.ID.pipe(Schema.optional),
-        }),
+        query: PermissionSavedQuery,
         success: Schema.Struct({ data: Schema.Array(PermissionSaved.Info) }),
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "v2.permission.saved.list",
           summary: "List saved permissions",
-          description: "Retrieve saved permissions, optionally filtered by project.",
+          description: "Retrieve saved permissions for the current location or an explicit project/global scope.",
         }),
       ),
     )
     .add(
       HttpApiEndpoint.delete("permission.saved.remove", "/api/permission/saved/:id", {
         params: { id: PermissionSaved.ID },
-        query: Schema.Struct({
-          scope: Schema.Literals(["project", "global"]).pipe(Schema.optional),
-          projectID: Project.ID.pipe(Schema.optional),
-        }),
+        query: PermissionSavedQuery,
         success: HttpApiSchema.NoContent,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "v2.permission.saved.remove",
           summary: "Remove saved permission",
-          description: "Remove a saved permission by ID.",
+          description: "Remove a saved permission by ID from the current location or an explicit project/global scope.",
         }),
       ),
     )

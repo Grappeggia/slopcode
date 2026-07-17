@@ -2,12 +2,13 @@ import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
 import { LocationServiceMap, withPluginHost } from "@slopcode-ai/core/location-layer"
 import { PluginPackage } from "@slopcode-ai/core/plugin/package"
+import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Layer, Option } from "effect"
 import { Api } from "./api"
 import { ServerAuth } from "./auth"
-import { handlers } from "./handlers"
+import { makeHandlers } from "./handlers"
 import { authorizationLayer } from "./middleware/authorization"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { PluginServer } from "./plugin"
@@ -17,9 +18,11 @@ export function createRoutes(
   host?: Layer.Layer<PluginPackage.Host>,
   locations?: Layer.Layer<LocationServiceMap>,
   events: Layer.Layer<EventV2.Service> = EventV2.defaultLayer,
+  database: Layer.Layer<Database.Service> = Database.defaultLayer,
+  saved?: Layer.Layer<PermissionSaved.Service>,
 ) {
   return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
-    Layer.provide(handlers),
+    Layer.provide(makeHandlers(database, saved)),
     Layer.provide(authorizationLayer),
     Layer.provide(schemaErrorLayer),
     Layer.provide(
@@ -28,7 +31,7 @@ export function createRoutes(
         : ServerAuth.Config.defaultLayer,
     ),
     Layer.provide(locations ?? (host ? withPluginHost(host) : LocationServiceMap.layer)),
-    Layer.provide(Database.defaultLayer),
+    Layer.provide(database),
     Layer.provide(events),
     Layer.provide(FetchHttpClient.layer),
   )

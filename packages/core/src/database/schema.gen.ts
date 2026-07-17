@@ -111,13 +111,19 @@ export default {
           \`scope\` text DEFAULT 'project' NOT NULL,
           \`match\` text DEFAULT 'pattern' NOT NULL,
           \`session_id\` text,
+          \`directory_id\` text,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
           CONSTRAINT \`fk_permission_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE,
           CONSTRAINT \`permission_session_owner_fk\` FOREIGN KEY (\`session_id\`,\`project_id\`) REFERENCES \`session\`(\`id\`,\`project_id\`) ON DELETE CASCADE,
           CONSTRAINT "permission_scope_match_check" CHECK(("scope" = 'project' AND "match" = 'pattern' AND "session_id" IS NULL)
-                OR ("scope" = 'session' AND "match" = 'exact' AND "session_id" IS NOT NULL)
-                OR ("scope" = 'global' AND "match" = 'exact' AND "session_id" IS NULL AND "project_id" = 'global'))
+                AND "directory_id" IS NULL
+                OR ("scope" = 'session' AND "match" = 'exact' AND "session_id" IS NOT NULL
+                  AND "directory_id" IS NULL)
+                OR ("scope" = 'global' AND "match" = 'exact' AND "session_id" IS NULL
+                  AND "directory_id" IS NULL AND "project_id" = 'global')
+                OR ("scope" = 'directory' AND "match" = 'pattern' AND "session_id" IS NULL
+                  AND "directory_id" IS NOT NULL AND "project_id" = 'global'))
         );
       `)
       yield* tx.run(`
@@ -289,10 +295,13 @@ export default {
         `CREATE UNIQUE INDEX \`memory_project_scope_hash_idx\` ON \`memory\` (\`scope\`,\`project_id\`,\`hash\`) WHERE "memory"."project_id" IS NOT NULL;`,
       )
       yield* tx.run(
-        `CREATE UNIQUE INDEX \`permission_project_scope_action_resource_match_idx\` ON \`permission\` (\`project_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NULL;`,
+        `CREATE UNIQUE INDEX \`permission_project_scope_action_resource_match_idx\` ON \`permission\` (\`project_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NULL AND "permission"."directory_id" IS NULL;`,
       )
       yield* tx.run(
         `CREATE UNIQUE INDEX \`permission_session_scope_action_resource_match_idx\` ON \`permission\` (\`session_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NOT NULL;`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`permission_directory_scope_action_resource_match_idx\` ON \`permission\` (\`directory_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."directory_id" IS NOT NULL;`,
       )
       yield* tx.run(
         `CREATE INDEX \`message_session_time_created_id_idx\` ON \`message\` (\`session_id\`,\`time_created\`,\`id\`);`,

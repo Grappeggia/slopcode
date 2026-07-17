@@ -1,3 +1,5 @@
+import fs from "node:fs/promises"
+import path from "node:path"
 import { describe, expect } from "bun:test"
 import { Database } from "@slopcode-ai/core/database/database"
 import { PermissionTable } from "@slopcode-ai/core/permission/sql"
@@ -10,6 +12,7 @@ import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { Effect, Exit, Layer } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { tmpdir } from "./fixture/tmpdir"
 
 const database = Database.layerFromPath(":memory:")
 const layer = PermissionSaved.layer.pipe(Layer.provideMerge(database))
@@ -47,6 +50,58 @@ function setup() {
 }
 
 describe("PermissionSaved", () => {
+  it.effect("shares Git ownership and isolates normalized non-Git directory ownership", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const saved = yield* PermissionSaved.Service
+      const root = yield* Effect.promise(() => tmpdir())
+      yield* Effect.addFinalizer(() => Effect.promise(() => root[Symbol.asyncDispose]()))
+      yield* Effect.promise(() =>
+        Promise.all([fs.mkdir(path.join(root.path, "first")), fs.mkdir(path.join(root.path, "second"))]),
+      )
+      const first = AbsolutePath.make(yield* Effect.promise(() => fs.realpath(path.join(root.path, "first"))))
+      const second = AbsolutePath.make(yield* Effect.promise(() => fs.realpath(path.join(root.path, "second"))))
+      const alias = AbsolutePath.make(path.join(root.path, "first-alias"))
+      const gitA = AbsolutePath.make(path.join(root.path, "git-a"))
+      const gitB = AbsolutePath.make(path.join(root.path, "git-b"))
+      yield* Effect.promise(() => fs.symlink(first, alias))
+
+      const local = (directory: AbsolutePath): Location.Interface => ({
+        directory,
+        project: { id: Project.ID.global, directory },
+      })
+      const git = (directory: AbsolutePath): Location.Interface => ({
+        directory,
+        project: { id: projectID, directory: gitA },
+        vcs: { type: "git", store: AbsolutePath.make(path.join(gitA, ".git")) },
+      })
+
+      yield* saved.add({
+        scope: "directory",
+        directoryID: PermissionSaved.DirectoryID.create(first),
+        action: "bash",
+        resources: ["pwd", "pwd"],
+      })
+      yield* saved.add({ scope: "project", projectID, action: "bash", resources: ["git status"] })
+
+      expect(yield* saved.listCurrent(local(first))).toMatchObject([
+        { scope: "directory", match: "pattern", action: "bash", resource: "pwd" },
+      ])
+      expect(yield* saved.listCurrent(local(alias))).toHaveLength(1)
+      expect(yield* saved.listCurrent(local(second))).toEqual([])
+      expect(yield* saved.listCurrent(git(gitA))).toMatchObject([
+        { scope: "project", projectID, action: "bash", resource: "git status" },
+      ])
+      expect(yield* saved.listCurrent(git(gitB))).toHaveLength(1)
+
+      const item = (yield* saved.listCurrent(local(first)))[0]
+      expect(yield* saved.removeCurrent({ id: item.id, location: local(second) })).toBe(false)
+      expect(yield* saved.removeCurrent({ id: item.id, location: git(gitA) })).toBe(false)
+      expect(yield* saved.removeCurrent({ id: item.id, location: local(alias) })).toBe(true)
+      expect(yield* saved.listCurrent(local(first))).toEqual([])
+    }),
+  )
+
   it.effect("stores exact session and global grants alongside legacy project patterns", () =>
     Effect.gen(function* () {
       yield* setup()
@@ -124,6 +179,30 @@ describe("PermissionSaved", () => {
         ["psv_session_owner", Project.ID.global, "session", "exact", first],
         ["psv_global_project", projectID, "global", "exact"],
         ["psv_global_session", Project.ID.global, "global", "exact", first],
+      ] as const) {
+        expect(Exit.isFailure(yield* insert(...row).pipe(Effect.exit))).toBe(true)
+      }
+      expect(yield* db.select().from(PermissionTable).all()).toEqual([])
+    }),
+  )
+
+  it.effect("rejects malformed directory ownership combinations", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { db } = yield* Database.Service
+      const insert = (id: string, owner: string, scope: string, match: string, directory?: string) =>
+        db.run(sql`
+          INSERT INTO permission
+            (id, project_id, action, resource, scope, match, session_id, directory_id, time_created, time_updated)
+          VALUES (${id}, ${owner}, 'bash', 'pwd', ${scope}, ${match}, NULL, ${directory ?? null}, 1, 1)
+        `)
+
+      for (const row of [
+        ["psv_directory_project", projectID, "directory", "pattern", "owner"],
+        ["psv_directory_exact", Project.ID.global, "directory", "exact", "owner"],
+        ["psv_directory_missing", Project.ID.global, "directory", "pattern"],
+        ["psv_project_directory", projectID, "project", "pattern", "owner"],
+        ["psv_global_directory", Project.ID.global, "global", "exact", "owner"],
       ] as const) {
         expect(Exit.isFailure(yield* insert(...row).pipe(Effect.exit))).toBe(true)
       }

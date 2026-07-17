@@ -5629,7 +5629,7 @@ export type PermissionV2Request = {
   source?: PermissionV2Source
 }
 
-export type PermissionSavedScope = "project" | "session" | "global"
+export type PermissionSavedScope = "project" | "session" | "global" | "directory"
 
 export type PermissionSavedMatch = "pattern" | "exact"
 
@@ -5637,6 +5637,7 @@ export type PermissionSavedInfo = {
   id: string
   projectID: string
   sessionID?: string
+  directoryID?: string
   scope: PermissionSavedScope
   match: PermissionSavedMatch
   action: string

@@ -48,5 +48,32 @@ describe("schema compatibility", () => {
         sessionID: "ses_test",
       }),
     ).toBe(false)
+    expect(
+      Schema.is(PermissionSaved.Info)({
+        ...base,
+        projectID: "global",
+        directoryID: "directory",
+        scope: "directory",
+        match: "pattern",
+      }),
+    ).toBe(true)
+    expect(
+      Schema.is(PermissionSaved.Info)({
+        ...base,
+        projectID: "project",
+        directoryID: "directory",
+        scope: "directory",
+        match: "pattern",
+      }),
+    ).toBe(false)
+    expect(
+      Schema.is(PermissionSaved.Info)({
+        ...base,
+        projectID: "global",
+        directoryID: "directory",
+        scope: "project",
+        match: "pattern",
+      }),
+    ).toBe(false)
   })
 })

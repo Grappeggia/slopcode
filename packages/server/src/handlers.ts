@@ -46,7 +46,7 @@ export const isolatedSessionServices = Layer.mergeAll(
   status,
 ).pipe(Layer.orDie)
 
-export const rawHandlers = Layer.mergeAll(
+const raw = Layer.mergeAll(
   HealthHandler,
   LocationHandler,
   AgentHandler,
@@ -64,12 +64,17 @@ export const rawHandlers = Layer.mergeAll(
   QuestionHandler,
   ReferenceHandler,
   ProjectCopyHandler,
-).pipe(
-  Layer.provide(sessionLocationLayer),
-  Layer.provide(locationLayer),
-  Layer.provide(PermissionSaved.defaultLayer),
-  Layer.provide(Credential.defaultLayer),
 )
+
+export const makeRawHandlers = (saved: Layer.Layer<PermissionSaved.Service> = PermissionSaved.defaultLayer) =>
+  raw.pipe(
+    Layer.provide(sessionLocationLayer),
+    Layer.provide(locationLayer),
+    Layer.provide(saved),
+    Layer.provide(Credential.defaultLayer),
+  )
+
+export const rawHandlers = makeRawHandlers()
 
 const graph = Layer.effect(
   SessionGraph.Service,
@@ -80,9 +85,15 @@ const graph = Layer.effect(
   ),
 ).pipe(Layer.provide(SessionControl.layer), Layer.provide(sessionServices), Layer.provide(SessionRuntime.defaultLayer))
 
-export const handlers = rawHandlers.pipe(
-  Layer.provide(graph),
-  Layer.provide(SessionRuntime.defaultLayer),
-  Layer.provide(ProjectV2.defaultLayer),
-  Layer.provide(Database.defaultLayer),
-)
+export const makeHandlers = (
+  database: Layer.Layer<Database.Service> = Database.defaultLayer,
+  saved: Layer.Layer<PermissionSaved.Service> = PermissionSaved.layer.pipe(Layer.provide(database)),
+) =>
+  makeRawHandlers(saved).pipe(
+    Layer.provide(graph),
+    Layer.provide(SessionRuntime.defaultLayer),
+    Layer.provide(ProjectV2.defaultLayer),
+    Layer.provide(database),
+  )
+
+export const handlers = makeHandlers()
