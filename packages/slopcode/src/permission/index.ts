@@ -11,6 +11,8 @@ import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { ProjectV2 } from "@slopcode-ai/core/project"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { Location } from "@slopcode-ai/core/location"
+import { InstanceRef } from "@/effect/instance-ref"
+import type { InstanceContext } from "@/project/instance-context"
 
 export const Event = {
   Asked: EventV2.define({ type: "permission.asked", schema: PermissionV1.Request.fields }),
@@ -119,6 +121,7 @@ interface TerminalReply {
 }
 
 interface State {
+  context: InstanceContext
   location: Location.Info
   owner: Extract<PermissionSaved.SelectInput, { scope: "project" | "directory" }>
   pending: Map<PermissionV1.ID, PendingEntry>
@@ -198,6 +201,7 @@ export const layer = Layer.effect(
               : undefined,
         })
         const state = {
+          context: ctx,
           location,
           owner,
           pending: new Map<PermissionV1.ID, PendingEntry>(),
@@ -357,7 +361,7 @@ export const layer = Layer.effect(
           if (item.kind !== "blocking" || item.answer) continue
           if (reply !== "project" && reply !== "global" && item.info.sessionID !== sessionID) continue
           const rows = yield* approvals(item.info.sessionID, target)
-          const ruleset = yield* item.policy()
+          const ruleset = yield* item.policy().pipe(Effect.provideService(InstanceRef, target.context))
           const ok = item.info.patterns.every(
             (pattern) => resolve(item.info.permission, pattern, ruleset, rows) === "allow",
           )

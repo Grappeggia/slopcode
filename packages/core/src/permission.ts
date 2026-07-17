@@ -141,7 +141,12 @@ interface Pending {
   readonly agent?: AgentV2.ID
   readonly rules?: Ruleset
   readonly deferred: Deferred.Deferred<void, RejectedError | CorrectedError>
+  published: boolean
   phase: "pending" | "replying"
+  answer?: {
+    reply: Reply
+    error?: RejectedError | CorrectedError
+  }
 }
 
 export const layer = Layer.effect(
@@ -291,6 +296,7 @@ export const layer = Layer.effect(
                 agent: input.agent,
                 rules: input.rules,
                 deferred,
+                published: false,
                 phase: "pending",
               }
               if (pending.has(value.id)) return yield* EffectRuntime.die(`Duplicate pending permission ID: ${value.id}`)
@@ -299,17 +305,50 @@ export const layer = Layer.effect(
             }),
           )
           if (!admission.item) return admission
-          yield* events
-            .publish(Event.Asked, admission.value)
-            .pipe(
-              EffectRuntime.onError(() =>
-                lock.withPermit(
-                  EffectRuntime.sync(() => {
-                    if (pending.get(admission.value.id) === admission.item) pending.delete(admission.value.id)
-                  }),
-                ),
-              ),
+          const asked = yield* events.publish(Event.Asked, admission.value).pipe(EffectRuntime.exit)
+          const answer = yield* lock.withPermit(
+            EffectRuntime.sync(() => {
+              if (pending.get(admission.value.id) !== admission.item) return undefined
+              admission.item.published = true
+              return admission.item.answer
+            }),
+          )
+          if (answer) {
+            const terminal = yield* events
+              .publish(Event.Replied, {
+                sessionID: admission.value.sessionID,
+                requestID: admission.value.id,
+                reply: answer.reply,
+              })
+              .pipe(EffectRuntime.exit)
+            if (Exit.isFailure(terminal)) {
+              yield* lock.withPermit(
+                EffectRuntime.sync(() => {
+                  if (pending.get(admission.value.id) !== admission.item || admission.item.answer !== answer) return
+                  admission.item.phase = "pending"
+                  admission.item.answer = undefined
+                }),
+              )
+              return admission
+            }
+            yield* lock.withPermit(
+              EffectRuntime.gen(function* () {
+                if (pending.get(admission.value.id) !== admission.item || admission.item.answer !== answer) return
+                pending.delete(admission.value.id)
+                if (answer.error) yield* Deferred.fail(admission.item.deferred, answer.error)
+                else yield* Deferred.succeed(admission.item.deferred, undefined)
+              }),
             )
+            return admission
+          }
+          if (Exit.isFailure(asked)) {
+            yield* lock.withPermit(
+              EffectRuntime.sync(() => {
+                if (pending.get(admission.value.id) === admission.item) pending.delete(admission.value.id)
+              }),
+            )
+            return yield* EffectRuntime.failCause(asked.cause)
+          }
           return admission
         }),
       )
@@ -384,6 +423,14 @@ export const layer = Layer.effect(
 
     const settle = (item: Pending, reply: Reply, error?: RejectedError | CorrectedError) =>
       EffectRuntime.gen(function* () {
+        const queued = yield* lock.withPermit(
+          EffectRuntime.sync(() => {
+            if (pending.get(item.request.id) !== item || item.phase !== "replying" || item.published) return false
+            item.answer = { reply, ...(error ? { error } : {}) }
+            return true
+          }),
+        )
+        if (queued) return
         yield* events.publish(Event.Replied, {
           sessionID: item.request.sessionID,
           requestID: item.request.id,

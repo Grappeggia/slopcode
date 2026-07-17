@@ -2891,6 +2891,65 @@ it.live("project reply settles matching pending requests in a live sibling workt
   }),
 )
 
+it.live("project fan-out evaluates live policy in the target worktree context", () =>
+  Effect.gen(function* () {
+    const mainDir = yield* tmpdirScoped({ git: true })
+    const siblingDir = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const main = yield* store.load({ directory: mainDir })
+    const sibling = yield* store.load({ directory: siblingDir, project: main.project, worktree: main.worktree })
+    const contextual = yield* Ref.make(false)
+    const seen = yield* Ref.make<string[]>([])
+    const source = yield* ask({
+      id: PermissionV1.ID.make("per_cross_worktree_context_source"),
+      sessionID: SessionID.make("ses_cross_worktree_context_source"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, main), Effect.forkScoped)
+    const target = yield* ask({
+      id: PermissionV1.ID.make("per_cross_worktree_context_target"),
+      sessionID: SessionID.make("ses_cross_worktree_context_target"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      policy: () =>
+        Effect.gen(function* () {
+          const ctx = yield* InstanceState.context
+          yield* Ref.update(seen, (items) => [...items, ctx.directory])
+          if (!(yield* Ref.get(contextual)))
+            return [{ permission: "bash", pattern: "*", action: "ask" }] as PermissionV1.Ruleset
+          return [
+            {
+              permission: "bash",
+              pattern: "*",
+              action: ctx.directory === sibling.directory ? ("deny" as const) : ("ask" as const),
+            },
+          ]
+        }),
+    }).pipe(Effect.provideService(InstanceRef, sibling), Effect.forkScoped)
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, main))
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, sibling))
+    yield* Ref.set(contextual, true)
+
+    yield* reply({ requestID: PermissionV1.ID.make("per_cross_worktree_context_source"), reply: "project" }).pipe(
+      Effect.provideService(InstanceRef, main),
+    )
+
+    yield* Fiber.join(source)
+    expect(
+      (yield* list().pipe(Effect.provideService(InstanceRef, sibling))).map((item) => item.id),
+    ).toEqual([PermissionV1.ID.make("per_cross_worktree_context_target")])
+    expect((yield* Ref.get(seen)).at(-1)).toBe(sibling.directory)
+    yield* rejectAll().pipe(Effect.provideService(InstanceRef, sibling))
+    yield* Fiber.await(target)
+  }),
+)
+
 it.live("project batch settles matching pending requests in a live sibling worktree", () =>
   Effect.gen(function* () {
     const mainDir = yield* tmpdirScoped({ git: true })

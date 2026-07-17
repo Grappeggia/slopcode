@@ -225,6 +225,82 @@ describe("PermissionV2", () => {
     }),
   )
 
+  it.effect("publishes Asked completely before concurrent project fan-out settles the request", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* PermissionV2.Service
+      const source = yield* waitForRequest(
+        assertion({
+          id: PermissionV2.ID.create("per_publish_source"),
+          action: "bash",
+          resources: ["git status"],
+          save: ["git status"],
+        }),
+      )
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const order: string[] = []
+      const targetID = PermissionV2.ID.create("per_publish_target")
+      const unsubscribe = yield* (yield* EventV2.Service).listen((event) => {
+        if (event.type === PermissionV2.Event.Asked.type && event.data.id === targetID)
+          return Effect.gen(function* () {
+            order.push("asked:start")
+            yield* Deferred.succeed(entered, undefined)
+            yield* Deferred.await(release)
+            order.push("asked:end")
+          })
+        if (event.type === PermissionV2.Event.Replied.type && event.data.requestID === targetID)
+          order.push("replied")
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const target = yield* service
+        .assert(
+          assertion({
+            id: targetID,
+            action: "bash",
+            resources: ["git status"],
+          }),
+        )
+        .pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+
+      yield* service.reply({ requestID: source.request.id, reply: "project" })
+      const before = [...order]
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(source.fiber)
+      yield* Fiber.join(target)
+
+      expect(before).toEqual(["asked:start"])
+      expect(order).toEqual(["asked:start", "asked:end", "replied"])
+    }),
+  )
+
+  it.effect("lets an Asked listener queue a reply without deadlocking publication", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* PermissionV2.Service
+      const requestID = PermissionV2.ID.create("per_publish_listener_reply")
+      const order: string[] = []
+      const unsubscribe = yield* (yield* EventV2.Service).listen((event) => {
+        if (event.type === PermissionV2.Event.Asked.type && event.data.id === requestID)
+          return Effect.gen(function* () {
+            order.push("asked:start")
+            yield* service.reply({ requestID, reply: "once" })
+            order.push("asked:end")
+          })
+        if (event.type === PermissionV2.Event.Replied.type && event.data.requestID === requestID) order.push("replied")
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+
+      yield* service.assert(assertion({ id: requestID, action: "bash", resources: ["git status"] }))
+
+      expect(order).toEqual(["asked:start", "asked:end", "replied"])
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])
