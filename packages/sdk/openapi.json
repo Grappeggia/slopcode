@@ -5214,7 +5214,7 @@
                 "properties": {
                   "reply": {
                     "type": "string",
-                    "enum": ["once", "always", "reject"]
+                    "enum": ["once", "session", "global", "always", "reject"]
                   },
                   "message": {
                     "type": "string"
@@ -5313,7 +5313,7 @@
                   },
                   "reply": {
                     "type": "string",
-                    "enum": ["once", "always", "reject"]
+                    "enum": ["once", "session", "global", "always", "reject"]
                   }
                 },
                 "required": ["requestIDs", "reply"],
@@ -8586,7 +8586,7 @@
                 "properties": {
                   "response": {
                     "type": "string",
-                    "enum": ["once", "always", "reject"]
+                    "enum": ["once", "session", "global", "always", "reject"]
                   }
                 },
                 "required": ["response"],
@@ -13118,6 +13118,15 @@
         "operationId": "v2.permission.saved.list",
         "parameters": [
           {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["project", "global"]
+            },
+            "required": false
+          },
+          {
             "name": "projectID",
             "in": "query",
             "schema": {
@@ -13191,6 +13200,23 @@
               "type": "string"
             },
             "required": true
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["project", "global"]
+            },
+            "required": false
+          },
+          {
+            "name": "projectID",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
           }
         ],
         "security": [],
@@ -13225,6 +13251,406 @@
           {
             "lang": "js",
             "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.permission.saved.remove({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/permission/saved/clear": {
+      "post": {
+        "tags": ["permissions"],
+        "operationId": "v2.permission.saved.clear",
+        "parameters": [],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["NaN"]
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["Infinity"]
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["-Infinity"]
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["Infinity", "-Infinity", "NaN"]
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Clear one explicitly confirmed saved permission scope.",
+        "summary": "Clear saved permissions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "scope": {
+                        "type": "string",
+                        "enum": ["global"]
+                      },
+                      "confirm": {
+                        "type": "boolean",
+                        "enum": [true]
+                      }
+                    },
+                    "required": ["scope", "confirm"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "scope": {
+                        "type": "string",
+                        "enum": ["project"]
+                      },
+                      "projectID": {
+                        "type": "string"
+                      },
+                      "confirm": {
+                        "type": "boolean",
+                        "enum": [true]
+                      }
+                    },
+                    "required": ["scope", "confirm"],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.permission.saved.clear({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/session/{sessionID}/permission/saved": {
+      "get": {
+        "tags": ["permissions"],
+        "operationId": "v2.session.permission.saved.list",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PermissionSavedInfo"
+                      }
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Retrieve exact grants owned by one session.",
+        "summary": "List session permission grants",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.session.permission.saved.list({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/session/{sessionID}/permission/saved/{id}": {
+      "delete": {
+        "tags": ["permissions"],
+        "operationId": "v2.session.permission.saved.remove",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "204": {
+            "description": "<No Content>"
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Remove an exact grant owned by one session.",
+        "summary": "Remove session permission grant",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.session.permission.saved.remove({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/api/session/{sessionID}/permission/saved/clear": {
+      "post": {
+        "tags": ["permissions"],
+        "operationId": "v2.session.permission.saved.clear",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["NaN"]
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["Infinity"]
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["-Infinity"]
+                        },
+                        {
+                          "type": "string",
+                          "enum": ["Infinity", "-Infinity", "NaN"]
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Clear every exact grant owned by one explicitly confirmed session.",
+        "summary": "Clear session permission grants",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm": {
+                    "type": "boolean",
+                    "enum": [true]
+                  }
+                },
+                "required": ["confirm"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createSlopcodeClient } from \"@slopcode-ai/sdk\n\nconst client = createSlopcodeClient()\nawait client.v2.session.permission.saved.clear({\n  ...\n})"
           }
         ]
       }
@@ -16782,6 +17208,26 @@
           }
         },
         "required": ["content", "status", "priority"],
+        "additionalProperties": false
+      },
+      "PermissionGrant": {
+        "type": "object",
+        "properties": {
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["session", "global"]
+            }
+          }
+        },
+        "required": ["resources", "scopes"],
         "additionalProperties": false
       },
       "SessionStatus": {
@@ -20402,6 +20848,9 @@
                           "type": "string"
                         }
                       },
+                      "grant": {
+                        "$ref": "#/components/schemas/PermissionV2Grant"
+                      },
                       "metadata": {
                         "type": "object"
                       },
@@ -21302,6 +21751,9 @@
                           "type": "string"
                         }
                       },
+                      "grant": {
+                        "$ref": "#/components/schemas/PermissionGrant"
+                      },
                       "kind": {
                         "type": "string",
                         "enum": ["forecast"]
@@ -21363,7 +21815,7 @@
                       },
                       "reply": {
                         "type": "string",
-                        "enum": ["once", "always", "reject"]
+                        "enum": ["once", "session", "global", "always", "reject"]
                       }
                     },
                     "required": ["sessionID", "requestID", "reply"],
@@ -24859,6 +25311,9 @@
               "type": "string"
             }
           },
+          "grant": {
+            "$ref": "#/components/schemas/PermissionGrant"
+          },
           "kind": {
             "type": "string",
             "enum": ["forecast"]
@@ -26718,6 +27173,26 @@
         "required": ["message", "isRetryable"],
         "additionalProperties": false
       },
+      "PermissionV2Grant": {
+        "type": "object",
+        "properties": {
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["session", "global"]
+            }
+          }
+        },
+        "required": ["resources", "scopes"],
+        "additionalProperties": false
+      },
       "PermissionV2Source": {
         "type": "object",
         "properties": {
@@ -26737,7 +27212,7 @@
       },
       "PermissionV2Reply": {
         "type": "string",
-        "enum": ["once", "always", "reject"]
+        "enum": ["once", "session", "global", "always", "reject"]
       },
       "QuestionV2Option": {
         "type": "object",
@@ -33102,6 +33577,9 @@
               "type": "string"
             }
           },
+          "grant": {
+            "$ref": "#/components/schemas/PermissionV2Grant"
+          },
           "metadata": {
             "type": "object"
           },
@@ -33112,6 +33590,14 @@
         "required": ["id", "sessionID", "action", "resources"],
         "additionalProperties": false
       },
+      "PermissionSavedScope": {
+        "type": "string",
+        "enum": ["project", "session", "global"]
+      },
+      "PermissionSavedMatch": {
+        "type": "string",
+        "enum": ["pattern", "exact"]
+      },
       "PermissionSavedInfo": {
         "type": "object",
         "properties": {
@@ -33121,6 +33607,16 @@
           "projectID": {
             "type": "string"
           },
+          "sessionID": {
+            "type": "string",
+            "pattern": "^ses"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/PermissionSavedScope"
+          },
+          "match": {
+            "$ref": "#/components/schemas/PermissionSavedMatch"
+          },
           "action": {
             "type": "string"
           },
@@ -33128,7 +33624,7 @@
             "type": "string"
           }
         },
-        "required": ["id", "projectID", "action", "resource"],
+        "required": ["id", "projectID", "scope", "match", "action", "resource"],
         "additionalProperties": false
       },
       "FileSystemEntry": {
@@ -37297,6 +37793,9 @@
                   "type": "string"
                 }
               },
+              "grant": {
+                "$ref": "#/components/schemas/PermissionV2Grant"
+              },
               "metadata": {
                 "type": "object"
               },
@@ -38189,6 +38688,9 @@
                   "type": "string"
                 }
               },
+              "grant": {
+                "$ref": "#/components/schemas/PermissionGrant"
+              },
               "kind": {
                 "type": "string",
                 "enum": ["forecast"]
@@ -38250,7 +38752,7 @@
               },
               "reply": {
                 "type": "string",
-                "enum": ["once", "always", "reject"]
+                "enum": ["once", "session", "global", "always", "reject"]
               }
             },
             "required": ["sessionID", "requestID", "reply"],
