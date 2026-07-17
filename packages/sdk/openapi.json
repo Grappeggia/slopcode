@@ -5214,7 +5214,7 @@
                 "properties": {
                   "reply": {
                     "type": "string",
-                    "enum": ["once", "session", "global", "always", "reject"]
+                    "enum": ["once", "session", "global", "always", "project", "reject"]
                   },
                   "message": {
                     "type": "string"
@@ -5313,7 +5313,7 @@
                   },
                   "reply": {
                     "type": "string",
-                    "enum": ["once", "session", "global", "always", "reject"]
+                    "enum": ["once", "session", "global", "always", "project", "reject"]
                   }
                 },
                 "required": ["requestIDs", "reply"],
@@ -8586,7 +8586,7 @@
                 "properties": {
                   "response": {
                     "type": "string",
-                    "enum": ["once", "session", "global", "always", "reject"]
+                    "enum": ["once", "session", "global", "always", "project", "reject"]
                   }
                 },
                 "required": ["response"],
@@ -13178,7 +13178,7 @@
             }
           }
         },
-        "description": "Retrieve saved permissions, optionally filtered by project.",
+        "description": "Retrieve saved permissions for the current location or an explicit project/global scope.",
         "summary": "List saved permissions",
         "x-codeSamples": [
           {
@@ -13245,7 +13245,7 @@
             }
           }
         },
-        "description": "Remove a saved permission by ID.",
+        "description": "Remove a saved permission by ID from the current location or an explicit project/global scope.",
         "summary": "Remove saved permission",
         "x-codeSamples": [
           {
@@ -21815,7 +21815,7 @@
                       },
                       "reply": {
                         "type": "string",
-                        "enum": ["once", "session", "global", "always", "reject"]
+                        "enum": ["once", "session", "global", "always", "project", "reject"]
                       }
                     },
                     "required": ["sessionID", "requestID", "reply"],
@@ -27212,7 +27212,7 @@
       },
       "PermissionV2Reply": {
         "type": "string",
-        "enum": ["once", "session", "global", "always", "reject"]
+        "enum": ["once", "session", "global", "always", "project", "reject"]
       },
       "QuestionV2Option": {
         "type": "object",
@@ -33592,7 +33592,7 @@
       },
       "PermissionSavedScope": {
         "type": "string",
-        "enum": ["project", "session", "global"]
+        "enum": ["project", "session", "global", "directory"]
       },
       "PermissionSavedMatch": {
         "type": "string",
@@ -33610,6 +33610,9 @@
           "sessionID": {
             "type": "string",
             "pattern": "^ses"
+          },
+          "directoryID": {
+            "type": "string"
           },
           "scope": {
             "$ref": "#/components/schemas/PermissionSavedScope"
@@ -38752,7 +38755,7 @@
               },
               "reply": {
                 "type": "string",
-                "enum": ["once", "session", "global", "always", "reject"]
+                "enum": ["once", "session", "global", "always", "project", "reject"]
               }
             },
             "required": ["sessionID", "requestID", "reply"],

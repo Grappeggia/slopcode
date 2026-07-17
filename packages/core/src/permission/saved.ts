@@ -163,7 +163,9 @@ function selected(input: SelectInput) {
   return eq(PermissionTable.scope, input.scope)
 }
 
-export function current(location: Pick<Location.Interface, "directory" | "project" | "vcs">): SelectInput {
+export function current(
+  location: Pick<Location.Interface, "directory" | "project" | "vcs">,
+): Extract<SelectInput, { scope: "project" | "directory" }> {
   if (location.vcs?.type === "git" && location.project.id !== ProjectV2.ID.global)
     return { scope: "project", projectID: location.project.id }
   return { scope: "directory", directoryID: DirectoryID.create(location.directory) }

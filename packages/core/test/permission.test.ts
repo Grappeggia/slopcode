@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Cause, Deferred, Effect, Fiber, Layer } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { AgentV2 } from "@slopcode-ai/core/agent"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
@@ -70,6 +70,53 @@ const nonGitIt = testEffect(
   ),
 )
 
+class AdmissionGate extends Context.Service<
+  AdmissionGate,
+  { entered: Deferred.Deferred<void>; release: Deferred.Deferred<void>; armed: boolean }
+>()("@test/PermissionAdmissionGate") {}
+
+const admissionGate = Layer.effect(
+  AdmissionGate,
+  Effect.gen(function* () {
+    return AdmissionGate.of({
+      entered: yield* Deferred.make<void>(),
+      release: yield* Deferred.make<void>(),
+      armed: false,
+    })
+  }),
+)
+const admissionSaved = Layer.effect(
+  PermissionSaved.Service,
+  Effect.gen(function* () {
+    const live = yield* PermissionSaved.Service
+    const gate = yield* AdmissionGate
+    return PermissionSaved.Service.of({
+      ...live,
+      listCurrent: (input) =>
+        Effect.gen(function* () {
+          const rows = yield* live.listCurrent(input)
+          if (!gate.armed) return rows
+          gate.armed = false
+          yield* Deferred.succeed(gate.entered, undefined)
+          yield* Deferred.await(gate.release)
+          return rows
+        }),
+    })
+  }),
+).pipe(Layer.provide(saved))
+const admissionServices = admissionSaved.pipe(Layer.provideMerge(admissionGate))
+const admissionIt = testEffect(
+  PermissionV2.locationLayer.pipe(
+    Layer.provideMerge(database),
+    Layer.provideMerge(store),
+    Layer.provideMerge(events),
+    Layer.provideMerge(current),
+    Layer.provideMerge(sessions),
+    Layer.provideMerge(SessionExecution.noopLayer),
+    Layer.provideMerge(admissionServices),
+  ),
+)
+
 function setup(rules: PermissionV2.Ruleset = []) {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
@@ -136,6 +183,48 @@ function waitForRequest(input: PermissionV2.AssertInput = assertion()) {
 }
 
 describe("PermissionV2", () => {
+  admissionIt.effect("revalidates a fresh project grant under the admission lock", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const gate = yield* AdmissionGate
+      const service = yield* PermissionV2.Service
+      const input = assertion({ action: "bash", resources: ["git status"] })
+      gate.armed = true
+      const fiber = yield* service.assert(input).pipe(Effect.forkScoped)
+      yield* Deferred.await(gate.entered)
+      yield* (yield* PermissionSaved.Service).add({
+        scope: "project",
+        projectID,
+        action: "bash",
+        resources: ["git status"],
+      })
+      yield* Deferred.succeed(gate.release, undefined)
+
+      yield* Fiber.join(fiber).pipe(Effect.timeout("1 second"))
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
+  admissionIt.effect("revalidates a live deny under the admission lock", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const gate = yield* AdmissionGate
+      const service = yield* PermissionV2.Service
+      gate.armed = true
+      const fiber = yield* service.assert(assertion({ action: "bash", resources: ["git status"] })).pipe(
+        Effect.forkScoped,
+      )
+      yield* Deferred.await(gate.entered)
+      yield* setRules([{ action: "bash", resource: "*", effect: "deny" }])
+      yield* Deferred.succeed(gate.release, undefined)
+
+      const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("1 second"))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(PermissionV2.DeniedError)
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])

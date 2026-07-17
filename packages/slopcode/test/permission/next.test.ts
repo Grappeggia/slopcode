@@ -132,6 +132,15 @@ const registrationSaved = Layer.effect(
     const gate = yield* RegistrationGate
     return PermissionSaved.Service.of({
       ...live,
+      list: (input) =>
+        Effect.gen(function* () {
+          const rows = yield* live.list(input)
+          if (!gate.armed || (input?.scope !== "project" && input?.scope !== "directory")) return rows
+          gate.armed = false
+          yield* Deferred.succeed(gate.entered, undefined)
+          yield* Deferred.await(gate.release)
+          return rows
+        }),
       listCurrent: (input) =>
         Effect.gen(function* () {
           const rows = yield* live.listCurrent(input)
@@ -263,6 +272,51 @@ registrationIt.instance(
       yield* Deferred.succeed(gate.release, undefined)
 
       yield* Fiber.join(stale).pipe(Effect.timeout("1 second"))
+      expect(yield* list()).toEqual([])
+    }),
+  { git: true },
+)
+
+registrationIt.instance(
+  "ask applies a live deny before a concurrent project grant during admission",
+  () =>
+    Effect.gen(function* () {
+      const gate = yield* RegistrationGate
+      const policy = yield* Ref.make<PermissionV1.Ruleset>([
+        { permission: "bash", pattern: "*", action: "ask" },
+      ])
+      const source = yield* ask({
+        id: PermissionV1.ID.make("per_registration_deny_source"),
+        sessionID: SessionID.make("ses_registration_deny_source"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: ["git status"],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+
+      gate.armed = true
+      const stale = yield* ask({
+        id: PermissionV1.ID.make("per_registration_deny_stale"),
+        sessionID: SessionID.make("ses_registration_deny_target"),
+        permission: "bash",
+        patterns: ["git status"],
+        metadata: {},
+        always: [],
+        ruleset: yield* Ref.get(policy),
+        policy: () => Ref.get(policy),
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(gate.entered)
+
+      yield* Ref.set(policy, [{ permission: "bash", pattern: "*", action: "deny" }])
+      yield* reply({ requestID: PermissionV1.ID.make("per_registration_deny_source"), reply: "project" })
+      yield* Fiber.join(source)
+      yield* Deferred.succeed(gate.release, undefined)
+
+      const exit = yield* Fiber.await(stale).pipe(Effect.timeout("1 second"))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(PermissionV1.DeniedError)
       expect(yield* list()).toEqual([])
     }),
   { git: true },
@@ -2795,6 +2849,163 @@ it.live("shares approvals across one project's worktrees but isolates different 
     expect(yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, other))).toHaveLength(1)
     yield* rejectAll().pipe(Effect.provideService(InstanceRef, other))
     yield* Fiber.await(fiber)
+  }),
+)
+
+it.live("project reply settles matching pending requests in a live sibling worktree", () =>
+  Effect.gen(function* () {
+    const mainDir = yield* tmpdirScoped({ git: true })
+    const siblingDir = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const main = yield* store.load({ directory: mainDir })
+    const sibling = yield* store.load({ directory: siblingDir, project: main.project, worktree: main.worktree })
+    const source = yield* ask({
+      id: PermissionV1.ID.make("per_cross_worktree_source"),
+      sessionID: SessionID.make("ses_cross_worktree_source"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, main), Effect.forkScoped)
+    const target = yield* ask({
+      id: PermissionV1.ID.make("per_cross_worktree_target"),
+      sessionID: SessionID.make("ses_cross_worktree_target"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, sibling), Effect.forkScoped)
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, main))
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, sibling))
+
+    yield* reply({ requestID: PermissionV1.ID.make("per_cross_worktree_source"), reply: "project" }).pipe(
+      Effect.provideService(InstanceRef, main),
+    )
+
+    yield* Fiber.join(source)
+    yield* Fiber.join(target).pipe(Effect.timeout("1 second"))
+    expect(yield* list().pipe(Effect.provideService(InstanceRef, main))).toEqual([])
+    expect(yield* list().pipe(Effect.provideService(InstanceRef, sibling))).toEqual([])
+  }),
+)
+
+it.live("project batch settles matching pending requests in a live sibling worktree", () =>
+  Effect.gen(function* () {
+    const mainDir = yield* tmpdirScoped({ git: true })
+    const siblingDir = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const main = yield* store.load({ directory: mainDir })
+    const sibling = yield* store.load({ directory: siblingDir, project: main.project, worktree: main.worktree })
+    const target = yield* ask({
+      id: PermissionV1.ID.make("per_cross_worktree_batch_target"),
+      sessionID: SessionID.make("ses_cross_worktree_batch_target"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, sibling), Effect.forkScoped)
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, sibling))
+
+    const sessionID = SessionID.make("ses_cross_worktree_batch_source")
+    yield* forecast({
+      sessionID,
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      candidates: [{ action: "bash", resources: ["git status"], reason: "Inspect state" }],
+    }).pipe(Effect.provideService(InstanceRef, main))
+    const active = yield* review(sessionID).pipe(Effect.provideService(InstanceRef, main), Effect.forkScoped)
+    const pending = yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, main))
+    yield* replyBatch({ batchID: pending[0].batchID!, requestIDs: [pending[0].id], reply: "project" }).pipe(
+      Effect.provideService(InstanceRef, main),
+    )
+
+    yield* Fiber.join(active)
+    yield* Fiber.join(target).pipe(Effect.timeout("1 second"))
+    expect(yield* list().pipe(Effect.provideService(InstanceRef, sibling))).toEqual([])
+  }),
+)
+
+it.live("Always does not settle pending requests in a live sibling worktree session", () =>
+  Effect.gen(function* () {
+    const mainDir = yield* tmpdirScoped({ git: true })
+    const siblingDir = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const main = yield* store.load({ directory: mainDir })
+    const sibling = yield* store.load({ directory: siblingDir, project: main.project, worktree: main.worktree })
+    const source = yield* ask({
+      id: PermissionV1.ID.make("per_cross_worktree_always_source"),
+      sessionID: SessionID.make("ses_cross_worktree_always_source"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, main), Effect.forkScoped)
+    const target = yield* ask({
+      id: PermissionV1.ID.make("per_cross_worktree_always_target"),
+      sessionID: SessionID.make("ses_cross_worktree_always_target"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, sibling), Effect.forkScoped)
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, main))
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, sibling))
+
+    yield* reply({ requestID: PermissionV1.ID.make("per_cross_worktree_always_source"), reply: "always" }).pipe(
+      Effect.provideService(InstanceRef, main),
+    )
+
+    yield* Fiber.join(source)
+    expect(
+      (yield* list().pipe(Effect.provideService(InstanceRef, sibling))).map((item) => item.id),
+    ).toEqual([PermissionV1.ID.make("per_cross_worktree_always_target")])
+    yield* rejectAll().pipe(Effect.provideService(InstanceRef, sibling))
+    yield* Fiber.await(target)
+  }),
+)
+
+it.live("project reply does not settle pending requests in another non-Git directory", () =>
+  Effect.gen(function* () {
+    const firstDir = yield* tmpdirScoped()
+    const secondDir = yield* tmpdirScoped()
+    const store = yield* InstanceStore.Service
+    const first = yield* store.load({ directory: firstDir })
+    const second = yield* store.load({ directory: secondDir })
+    const source = yield* ask({
+      id: PermissionV1.ID.make("per_cross_directory_source"),
+      sessionID: SessionID.make("ses_cross_directory_source"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, first), Effect.forkScoped)
+    const target = yield* ask({
+      id: PermissionV1.ID.make("per_cross_directory_target"),
+      sessionID: SessionID.make("ses_cross_directory_target"),
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+    }).pipe(Effect.provideService(InstanceRef, second), Effect.forkScoped)
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, first))
+    yield* waitForPending(1).pipe(Effect.provideService(InstanceRef, second))
+
+    yield* reply({ requestID: PermissionV1.ID.make("per_cross_directory_source"), reply: "project" }).pipe(
+      Effect.provideService(InstanceRef, first),
+    )
+
+    yield* Fiber.join(source)
+    expect(
+      (yield* list().pipe(Effect.provideService(InstanceRef, second))).map((item) => item.id),
+    ).toEqual([PermissionV1.ID.make("per_cross_directory_target")])
+    yield* rejectAll().pipe(Effect.provideService(InstanceRef, second))
+    yield* Fiber.await(target)
   }),
 )
 

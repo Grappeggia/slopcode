@@ -10,6 +10,7 @@ import { EventV2 } from "@slopcode-ai/core/event"
 import { PermissionSaved } from "@slopcode-ai/core/permission/saved"
 import { ProjectV2 } from "@slopcode-ai/core/project"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
+import { Location } from "@slopcode-ai/core/location"
 
 export const Event = {
   Asked: EventV2.define({ type: "permission.asked", schema: PermissionV1.Request.fields }),
@@ -114,9 +115,12 @@ interface TerminalReply {
   sessionID: PermissionV1.Request["sessionID"]
   requestID: PermissionV1.ID
   reply: PermissionV1.Reply
+  location?: Location.Info
 }
 
 interface State {
+  location: Location.Info
+  owner: Extract<PermissionSaved.SelectInput, { scope: "project" | "directory" }>
   pending: Map<PermissionV1.ID, PendingEntry>
   forecasts: Map<
     PermissionV1.Request["sessionID"],
@@ -149,6 +153,7 @@ export const layer = Layer.effect(
     const saved = yield* PermissionSaved.Service
     const scope = yield* Scope.Scope
     const lock = Semaphore.makeUnsafe(1)
+    const states = new Set<State>()
     const publish = <A>(effect: Effect.Effect<A>, kind: "asked" | "terminal", input: object) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
@@ -171,11 +176,30 @@ export const layer = Layer.effect(
         }),
       )
     const asked = (input: PermissionV1.Request) => publish(events.publish(Event.Asked, input), "asked", input)
-    const terminal = (input: TerminalReply) => publish(events.publish(Event.Replied, input), "terminal", input)
+    const terminal = (input: TerminalReply) => {
+      const data = { sessionID: input.sessionID, requestID: input.requestID, reply: input.reply }
+      return publish(
+        events.publish(Event.Replied, data, input.location ? { location: input.location } : undefined),
+        "terminal",
+        data,
+      )
+    }
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
-        void ctx
+        const location = new Location.Info({
+          directory: AbsolutePath.make(ctx.directory),
+          project: { id: ctx.project.id, directory: AbsolutePath.make(ctx.worktree) },
+        })
+        const owner = PermissionSaved.current({
+          ...location,
+          vcs:
+            ctx.project.id !== ProjectV2.ID.global && ctx.project.vcs === "git"
+              ? { type: "git", store: AbsolutePath.make(ctx.worktree) }
+              : undefined,
+        })
         const state = {
+          location,
+          owner,
           pending: new Map<PermissionV1.ID, PendingEntry>(),
           forecasts: new Map<
             PermissionV1.Request["sessionID"],
@@ -186,6 +210,7 @@ export const layer = Layer.effect(
           grants: new Map<PermissionV1.Request["sessionID"], Grant[]>(),
           approvals: new Map<PermissionV1.Request["sessionID"], Grant[]>(),
         }
+        states.add(state)
 
         yield* Effect.addFinalizer(() =>
           Effect.uninterruptible(
@@ -198,14 +223,24 @@ export const layer = Layer.effect(
                     const answer = item.answer ?? { reply: "reject" as const, error: new PermissionV1.RejectedError() }
                     if (answer.error) yield* Deferred.fail(item.deferred, answer.error)
                     else yield* Deferred.succeed(item.deferred, undefined)
-                    replies.push({ sessionID: item.info.sessionID, requestID: item.info.id, reply: answer.reply })
+                    replies.push({
+                      sessionID: item.info.sessionID,
+                      requestID: item.info.id,
+                      reply: answer.reply,
+                      location: state.location,
+                    })
                   }
                   for (const batch of state.batches.values()) {
                     batch.phase = "settling"
                     for (const requestID of batch.exposed) {
                       const item = state.pending.get(requestID)
                       if (!item || item.kind !== "forecast") continue
-                      replies.push({ sessionID: item.info.sessionID, requestID, reply: "reject" })
+                      replies.push({
+                        sessionID: item.info.sessionID,
+                        requestID,
+                        reply: "reject",
+                        location: state.location,
+                      })
                     }
                     yield* Deferred.succeed(batch.deferred, undefined)
                   }
@@ -215,6 +250,7 @@ export const layer = Layer.effect(
                   state.active.clear()
                   state.grants.clear()
                   state.approvals.clear()
+                  states.delete(state)
                   return replies
                 }),
               )
@@ -227,28 +263,20 @@ export const layer = Layer.effect(
       }),
     )
 
-    const location = Effect.fnUntraced(function* () {
-      const ctx = yield* InstanceState.context
-      return {
-        directory: AbsolutePath.make(ctx.directory),
-        project: { id: ctx.project.id, directory: AbsolutePath.make(ctx.worktree) },
-        vcs:
-          ctx.project.id !== ProjectV2.ID.global && ctx.project.vcs === "git"
-            ? { type: "git" as const, store: AbsolutePath.make(ctx.worktree) }
-            : undefined,
-      }
-    })
-
-    const approvals = Effect.fnUntraced(function* (sessionID?: PermissionV1.Request["sessionID"]) {
+    const approvals = Effect.fnUntraced(function* (
+      sessionID?: PermissionV1.Request["sessionID"],
+      target?: State,
+    ) {
+      const current = target ?? (yield* InstanceState.get(state))
       const rows = yield* Effect.all([
         saved.list({ scope: "global" }),
         sessionID ? saved.list({ scope: "session", sessionID }) : Effect.succeed([]),
-        saved.listCurrent(yield* location()),
+        saved.list(current.owner),
       ]).pipe(Effect.map((rows) => rows.flat()))
       if (!sessionID) return rows
       return [
         ...rows,
-        ...((yield* InstanceState.get(state)).approvals.get(sessionID) ?? []).flatMap((item) =>
+        ...(current.approvals.get(sessionID) ?? []).flatMap((item) =>
           item.resources.map((resource) => ({ action: item.permission, resource, match: "pattern" as const })),
         ),
       ]
@@ -304,8 +332,17 @@ export const layer = Layer.effect(
       current.pending.delete(id)
       if (error) yield* Deferred.fail(item.deferred, error)
       else yield* Deferred.succeed(item.deferred, undefined)
-      return { sessionID: item.info.sessionID, requestID: item.info.id, reply }
+      return { sessionID: item.info.sessionID, requestID: item.info.id, reply, location: current.location }
     })
+
+    function sameOwner(
+      first: Extract<PermissionSaved.SelectInput, { scope: "project" | "directory" }>,
+      second: Extract<PermissionSaved.SelectInput, { scope: "project" | "directory" }>,
+    ) {
+      if (first.scope === "project" && second.scope === "project") return first.projectID === second.projectID
+      if (first.scope === "directory" && second.scope === "directory") return first.directoryID === second.directoryID
+      return false
+    }
 
     const resolvePending = Effect.fnUntraced(function* (
       current: State,
@@ -313,17 +350,21 @@ export const layer = Layer.effect(
       sessionID: PermissionV1.Request["sessionID"],
     ) {
       const replies: TerminalReply[] = []
-      for (const [id, item] of current.pending.entries()) {
-        if (item.kind !== "blocking" || item.answer) continue
-        if (reply !== "project" && reply !== "global" && item.info.sessionID !== sessionID) continue
-        const rows = yield* approvals(item.info.sessionID)
-        const ruleset = yield* item.policy()
-        const ok = item.info.patterns.every(
-          (pattern) => resolve(item.info.permission, pattern, ruleset, rows) === "allow",
-        )
-        if (!ok) continue
-        const settled = yield* settleBlocking(current, id, item, reply)
-        if (settled) replies.push(settled)
+      const targets =
+        reply === "project" ? Array.from(states).filter((item) => sameOwner(current.owner, item.owner)) : [current]
+      for (const target of targets) {
+        for (const [id, item] of target.pending.entries()) {
+          if (item.kind !== "blocking" || item.answer) continue
+          if (reply !== "project" && reply !== "global" && item.info.sessionID !== sessionID) continue
+          const rows = yield* approvals(item.info.sessionID, target)
+          const ruleset = yield* item.policy()
+          const ok = item.info.patterns.every(
+            (pattern) => resolve(item.info.permission, pattern, ruleset, rows) === "allow",
+          )
+          if (!ok) continue
+          const settled = yield* settleBlocking(target, id, item, reply)
+          if (settled) replies.push(settled)
+        }
       }
       return replies
     })
@@ -387,9 +428,17 @@ export const layer = Layer.effect(
           yield* restore(lock.take(1))
           const registered = yield* Effect.gen(function* () {
             const current = yield* InstanceState.get(state)
-            const rows = yield* approvals(request.sessionID)
-            if (request.patterns.every((pattern) => resolve(request.permission, pattern, ruleset, rows) === "allow"))
-              return false
+            const live = yield* entry.policy()
+            const rows = yield* approvals(request.sessionID, current)
+            const actions = request.patterns.map((pattern) => resolve(request.permission, pattern, live, rows))
+            if (actions.includes("deny"))
+              return {
+                registered: false as const,
+                error: new PermissionV1.DeniedError({
+                  ruleset: live.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+                }),
+              }
+            if (actions.every((action) => action === "allow")) return { registered: false as const, error: undefined }
             const grants = current.grants.get(request.sessionID) ?? []
             const grant = grants.findIndex(
               (item) =>
@@ -400,12 +449,13 @@ export const layer = Layer.effect(
             if (grant !== -1) {
               grants.splice(grant, 1)
               if (!grants.length) current.grants.delete(request.sessionID)
-              return false
+              return { registered: false as const, error: undefined }
             }
             current.pending.set(id, entry)
-            return true
+            return { registered: true as const, error: undefined }
           }).pipe(Effect.ensuring(lock.release(1)))
-          if (!registered) return undefined
+          if (registered.error) return yield* registered.error
+          if (!registered.registered) return undefined
 
           const cancel = () =>
             Effect.uninterruptible(
@@ -417,7 +467,12 @@ export const layer = Layer.effect(
                     current.pending.delete(id)
                     const error = new PermissionV1.RejectedError()
                     yield* Deferred.fail(deferred, error)
-                    return { sessionID: info.sessionID, requestID: info.id, reply: "reject" as const }
+                    return {
+                      sessionID: info.sessionID,
+                      requestID: info.id,
+                      reply: "reject" as const,
+                      location: current.location,
+                    }
                   }),
                 )
                 if (reply) yield* terminal(reply)
@@ -441,7 +496,12 @@ export const layer = Layer.effect(
               current.pending.delete(id)
               if (answer.error) yield* Deferred.fail(deferred, answer.error)
               else yield* Deferred.succeed(deferred, undefined)
-              return { sessionID: info.sessionID, requestID: info.id, reply: answer.reply }
+              return {
+                sessionID: info.sessionID,
+                requestID: info.id,
+                reply: answer.reply,
+                location: current.location,
+              }
             }),
           )
           if (reply) yield* terminal(reply)
@@ -748,9 +808,8 @@ export const layer = Layer.effect(
                 })
               }
               if (persistent.length && input.reply === "project") {
-                const owner = PermissionSaved.current(yield* location())
                 yield* saved.addBatch({
-                  ...owner,
+                  ...current.owner,
                   entries: persistent.map((item) => ({
                     action: item.item.info.permission,
                     resources: item.item.info.always,
@@ -859,9 +918,8 @@ export const layer = Layer.effect(
                   ? requested
                   : ("once" as const)
             if (answer === "project") {
-              const owner = PermissionSaved.current(yield* location())
               yield* saved.add({
-                ...owner,
+                ...current.owner,
                 action: existing.info.permission,
                 resources: existing.info.always,
               })

@@ -277,25 +277,49 @@ export const layer = Layer.effect(
       }
     }
 
-    const create = (request: Request, agent?: AgentV2.ID, rules?: Ruleset) =>
+    const create = (input: AssertInput) =>
       EffectRuntime.uninterruptible(
         EffectRuntime.gen(function* () {
-          const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
-          const item: Pending = { request, agent, rules, deferred, phase: "pending" }
-          if (pending.has(request.id)) return yield* EffectRuntime.die(`Duplicate pending permission ID: ${request.id}`)
-          pending.set(request.id, item)
+          const admission = yield* lock.withPermit(
+            EffectRuntime.gen(function* () {
+              const result = yield* evaluateInput(input)
+              const value = request(input, result.grant ?? [])
+              if (result.effect !== "ask") return { result, value }
+              const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
+              const item: Pending = {
+                request: value,
+                agent: input.agent,
+                rules: input.rules,
+                deferred,
+                phase: "pending",
+              }
+              if (pending.has(value.id)) return yield* EffectRuntime.die(`Duplicate pending permission ID: ${value.id}`)
+              pending.set(value.id, item)
+              return { result, value, item }
+            }),
+          )
+          if (!admission.item) return admission
           yield* events
-            .publish(Event.Asked, request)
-            .pipe(EffectRuntime.onError(() => EffectRuntime.sync(() => pending.delete(request.id))))
-          return item
+            .publish(Event.Asked, admission.value)
+            .pipe(
+              EffectRuntime.onError(() =>
+                lock.withPermit(
+                  EffectRuntime.sync(() => {
+                    if (pending.get(admission.value.id) === admission.item) pending.delete(admission.value.id)
+                  }),
+                ),
+              ),
+            )
+          return admission
         }),
       )
 
     const ask = EffectRuntime.fn("PermissionV2.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
       const value = request(input, result.grant ?? [])
-      if (result.effect === "ask") yield* create(value, input.agent, input.rules)
-      return { id: value.id, effect: result.effect }
+      if (result.effect !== "ask") return { id: value.id, effect: result.effect }
+      const admission = yield* create(input)
+      return { id: admission.value.id, effect: admission.result.effect }
     })
 
     const assert = EffectRuntime.fn("PermissionV2.assert")((input: AssertInput) =>
@@ -308,7 +332,14 @@ export const layer = Layer.effect(
             })
           }
           if (result.effect === "allow") return
-          const item = yield* create(request(input, result.grant ?? []), input.agent, input.rules)
+          const admission = yield* create(input)
+          if (admission.result.effect === "deny") {
+            return yield* new DeniedError({
+              rules: relevant(input, admission.result.rules),
+            })
+          }
+          if (admission.result.effect === "allow") return
+          const item = admission.item!
           return yield* restore(Deferred.await(item.deferred)).pipe(
             EffectRuntime.ensuring(
               EffectRuntime.gen(function* () {
