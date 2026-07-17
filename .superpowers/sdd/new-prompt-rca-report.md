@@ -141,3 +141,33 @@ Review of the async boundary found that `/prompt_async` still returned before V1
 
 - Full TUI tests emit existing KV-state warnings for `/tmp/slopcode/state/kv.json`; the suite still completes with zero failures.
 - Changed-file oxlint reports 42 existing warnings and zero errors. Repository lint reports 4,921 existing warnings and zero errors.
+
+## Final Review Closure
+
+The final admission review found one server interruption window and three client recovery assumptions that were still unsafe: V1 could persist a prompt before the HTTP handler launched its loop, terminal HTTP rejections retained immutable message IDs, shell and command retries treated IDs as idempotency keys, and owner/stash recovery could lose mode or a competing draft.
+
+### Admission And Events
+
+- The V1 `prompt_async` admit-and-fork boundary is uninterruptible. Exact V1 replay requests resume through `ensureRunning` unless `noReply` is set, so replay repairs a missing loop, joins an active loop, and exits without provider work after a completed response.
+- The detached handler no longer republishes generic `session.error` events after a loop path already emitted its specific failure. The regression path records exactly one public event.
+- Real HTTP coverage interrupts at `internal.v1.prompt.completed`, verifies provider launch, and verifies that a conflicting terminal ID is rejected while a rotated ID is admitted.
+
+### Client Recovery
+
+- Normal prompts retain their ID only when no HTTP response exists. A definitive rejection clears the failed ID but retains the exact text, provisional session, destination, routing fields, and attachments for a fresh-ID retry.
+- Shell and command responses are classified by response presence. Definitive rejection restores the exact mode and text with a fresh ID; ambiguous delivery stays in prompt history, leaves the composer clear, and warns the user to inspect the session before manually running anything again.
+- Persistent stash entries now include prompt mode. Existing JSONL entries migrate to `normal`, while fallback recovery restores `shell` mode.
+- Owner migration keeps the source draft active and queues any competing target draft. Queue draining preserves mode, cursor, and attachment parts instead of overwriting either draft.
+
+### Final Verification
+
+- Focused V1 prompt tests: 79 pass, 1 skip. Focused HTTP handler tests: 29 pass. Focused TUI recovery/ownership/stash tests: 20 pass.
+- Full TUI: 285 pass, 1 skip.
+- Relevant SlopCode session and HTTP tests: 128 pass, 1 skip.
+- Relevant core durable-session tests: 93 pass.
+- Typechecks pass for `packages/slopcode`, `packages/tui`, and `packages/core`; Prettier and `git diff --check` pass.
+- Changed-file oxlint reports 53 existing warnings and zero errors. Repository lint reports 4,921 existing warnings and zero errors.
+
+### Remaining Operational Note
+
+- Shell and command endpoints still do not provide server-side idempotency. After ambiguous transport failure the TUI intentionally does not create an automatic retry path; the user must inspect session state before deciding whether to run the operation again.

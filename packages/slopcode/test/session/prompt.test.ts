@@ -966,7 +966,7 @@ admissionServer.instance(
 )
 
 terminalRaceServer.instance(
-  "concurrent exact retry returns at terminal while the admitted reply continues",
+  "concurrent exact retry joins the admitted reply instead of launching another loop",
   () =>
     Effect.gen(function* () {
       const { prompt, chat } = yield* boot()
@@ -993,9 +993,44 @@ terminalRaceServer.instance(
       yield* Effect.yieldNow
 
       expect(first.pollUnsafe()).toBeUndefined()
-      expect((yield* Fiber.join(retry)).info.id).toBe(input.messageID)
+      expect(retry.pollUnsafe()).toBeUndefined()
       expect(admissionCalls).toBe(1)
-      yield* Fiber.interrupt(first)
+      yield* prompt.cancel(chat.id)
+      yield* Fiber.join(first)
+      yield* Fiber.join(retry)
+    }),
+  { config: cfg },
+)
+
+terminalRaceServer.instance(
+  "exact replay repairs a durable V1 admission whose loop was never launched",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, chat } = yield* boot()
+      const runtime = yield* SessionRuntime.Service
+      const status = yield* SessionStatus.Service
+      const input = {
+        sessionID: chat.id,
+        messageID: MessageID.make("msg_admission_repair_loop"),
+        agent: "build",
+        parts: [{ type: "text" as const, text: "repair" }],
+      }
+      const guard = runtime.assert({ sessionID: chat.id, owner: "v1", state: "ready", epoch: 0 }).pipe(Effect.asVoid)
+      admissionCalls = 0
+
+      expect(yield* prompt.admit(input, guard)).toMatchObject({
+        message: { info: { id: input.messageID } },
+        resume: true,
+      })
+      const replay = yield* prompt.prompt(input, guard).pipe(Effect.forkChild)
+      yield* pollWithTimeout(
+        status.get(chat.id).pipe(Effect.map((value) => (value.type === "busy" ? true : undefined))),
+        "replayed admission did not launch its missing loop",
+      )
+
+      expect(admissionCalls).toBe(1)
+      yield* prompt.cancel(chat.id)
+      yield* Fiber.join(replay)
     }),
   { config: cfg },
 )
@@ -1042,6 +1077,10 @@ admissionServer.instance(
       }
       expect(admissionCalls).toBe(1)
       expect(terminal).toEqual([expect.objectContaining({ data: expect.objectContaining({ reason: "preparation" }) })])
+
+      const recoveredID = MessageID.make("msg_admission_plugin_recovered")
+      const recovered = yield* prompt.prompt({ ...input, messageID: recoveredID })
+      expect(recovered.info.id).toBe(recoveredID)
     }),
   { config: cfg },
 )

@@ -1,7 +1,6 @@
 import { PermissionV1 } from "@slopcode-ai/core/v1/permission"
 import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@slopcode-ai/core/v1/session"
-import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
 import { Permission } from "@/permission"
 import { SessionShare } from "@/share/session"
@@ -20,7 +19,6 @@ import { Todo } from "@/session/todo"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { MessageID, PartID, SessionID } from "@/session/schema"
-import { NamedError } from "@slopcode-ai/core/util/error"
 import { Observability } from "@slopcode-ai/core/observability"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
@@ -82,7 +80,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const statusSvc = yield* SessionStatus.Service
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
-    const events = yield* EventV2Bridge.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -420,23 +417,22 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         !(yield* controlSvc.messages(ctx.params.sessionID).pipe(Effect.mapError(() => new HttpApiError.BadRequest({}))))
       )
         yield* requireSession(ctx.params.sessionID)
-      const admitted = yield* controlSvc
-        .admit({ ...ctx.payload, sessionID: ctx.params.sessionID })
-        .pipe(Effect.catchCause(() => Effect.fail(new HttpApiError.BadRequest({}))))
-      if (admitted.owner === "v1" && admitted.resume)
-        yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              yield* Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause })
-              yield* events.publish(Session.Event.Error, {
-                sessionID: ctx.params.sessionID,
-                error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
-              })
-            }),
-          ),
-          Effect.forkIn(scope, { startImmediately: true }),
-        )
-      return HttpApiSchema.NoContent.make()
+      return yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const admitted = yield* controlSvc
+            .admit({ ...ctx.payload, sessionID: ctx.params.sessionID })
+            .pipe(Effect.catchCause(() => Effect.fail(new HttpApiError.BadRequest({}))))
+          if (admitted.owner === "v1" && admitted.resume)
+            yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
+              Effect.tapCause((cause) =>
+                Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause }),
+              ),
+              Effect.ignore,
+              Effect.forkIn(scope, { startImmediately: true }),
+            )
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
     })
 
     const command = Effect.fn("SessionHttpApi.command")(function* (ctx: {

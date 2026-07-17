@@ -10,6 +10,13 @@ test("stash JSONL skips corruption and retains newest entries", () => {
   const result = parsePromptStash(entries.join("\n"))
   expect(result).toHaveLength(MAX_STASH_ENTRIES)
   expect(result[0]?.input).toBe("2")
+  expect(result.every((entry) => entry.mode === "normal")).toBeTrue()
+})
+
+test("stash JSONL preserves shell mode", () => {
+  expect(parsePromptStash(JSON.stringify({ input: "pwd", parts: [], mode: "shell", timestamp: 1 }))).toEqual([
+    { input: "pwd", parts: [], mode: "shell", timestamp: 1 },
+  ])
 })
 
 test("frecency JSONL skips corruption, keeps latest path state, and limits entries", () => {

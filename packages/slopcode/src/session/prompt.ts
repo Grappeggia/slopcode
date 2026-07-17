@@ -1222,7 +1222,7 @@ export const layer = Layer.effect(
       if (active) {
         if (active.identity !== identity) return yield* Effect.die(`Conflicting prompt admission ${messageID}`)
         const terminal = yield* Deferred.await(active.terminal)
-        if (terminal.success) return { message: terminal.message, resume: false }
+        if (terminal.success) return { message: terminal.message, resume: input.noReply !== true }
         return yield* new AdmissionFailed({ sessionID: input.sessionID, messageID, reason: terminal.reason })
       }
 
@@ -1303,7 +1303,7 @@ export const layer = Layer.effect(
                 requested = true
               }),
           })
-          if (!requested) return { message: yield* recover(), resume: false }
+          if (!requested) return { message: yield* recover(), resume: input.noReply !== true }
 
           const state: { completed: boolean; reason: AdmissionFailed["reason"]; manifest?: string } = {
             completed: false,
@@ -1348,7 +1348,7 @@ export const layer = Layer.effect(
             }),
           ).pipe(Effect.exit)
           if (Exit.isFailure(result)) {
-            if (state.completed) return { message: yield* recover(), resume: false }
+            if (state.completed) return { message: yield* recover(), resume: input.noReply !== true }
             return yield* fail(state.reason)
           }
           return { message: result.value, resume: input.noReply !== true }

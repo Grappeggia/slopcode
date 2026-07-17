@@ -22,8 +22,9 @@ import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import * as HttpSessionError from "../../src/server/routes/instance/httpapi/handlers/session-errors"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { Session } from "@/session/session"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { GlobalBus } from "@/bus/global"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
-import { MessageV2 } from "../../src/session/message-v2"
 import { Database } from "@slopcode-ai/core/database/database"
 import {
   SessionExecutionStatusTable,
@@ -38,10 +39,9 @@ import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideInstanceEffect, TestInstance, tmpdirScoped } from "../fixture/fixture"
-import { reply, TestLLMServer } from "../lib/llm-server"
+import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
-import { testEffect } from "../lib/effect"
-import { waitGlobalBusEvent } from "./global-bus"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 
 const originalWorkspaces = Flag.SLOPCODE_EXPERIMENTAL_WORKSPACES
 const workspaceLayer = Workspace.defaultLayer.pipe(
@@ -70,6 +70,7 @@ const it = testEffect(
     instanceStoreLayer,
     Project.defaultLayer,
     Session.defaultLayer,
+    EventV2Bridge.defaultLayer,
     workspaceLayer,
     Database.defaultLayer,
     httpApiLayer,
@@ -945,6 +946,7 @@ describe("session HttpApi", () => {
       expect((yield* send("durable once")).status).toBe(204)
       expect((yield* send("durable once")).status).toBe(204)
       expect((yield* send("conflict")).status).toBe(400)
+      expect((yield* send("accepted with rotated ID", "msg_http_async_v1_rotated")).status).toBe(204)
       expect((yield* send("not admitted", "msg_http_async_v1_invalid", "missing-agent")).status).toBe(400)
 
       const messages = yield* Session.use
@@ -952,7 +954,49 @@ describe("session HttpApi", () => {
         .pipe(provideInstanceEffect(directory), Effect.orDie)
       expect(
         messages.filter((message) => message.info.role === "user").map((message) => String(message.info.id)),
-      ).toEqual([messageID])
+      ).toEqual([messageID, "msg_http_async_v1_rotated"])
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+  )
+
+  it.live("launches the V1 loop when interrupted exactly after durable admission", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const gate = Promise.withResolvers<void>()
+      yield* llm.hold("launched after interrupt", gate.promise)
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const session = yield* createSession({ title: "V1 atomic async launch" }).pipe(provideInstanceEffect(directory))
+      const events = yield* EventV2Bridge.Service
+      const admitted = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const messageID = "msg_http_async_v1_interrupt"
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === "internal.v1.prompt.completed" &&
+        typeof event.data === "object" &&
+        event.data !== null &&
+        "messageID" in event.data &&
+        event.data.messageID === messageID
+          ? Deferred.succeed(admitted, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.asVoid)
+          : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+
+      const requestFiber = yield* request(pathFor(SessionPaths.promptAsync, { sessionID: session.id }), {
+        method: "POST",
+        headers: { "x-slopcode-directory": directory, "content-type": "application/json" },
+        body: JSON.stringify({
+          messageID,
+          agent: "build",
+          model: { providerID: "test", modelID: "test-model" },
+          parts: [{ type: "text", text: "launch despite interrupt" }],
+        }),
+      }).pipe(Effect.forkChild)
+      yield* Deferred.await(admitted)
+      const interruption = yield* Fiber.interrupt(requestFiber).pipe(Effect.forkChild)
+      yield* Deferred.succeed(release, undefined)
+
+      yield* llm.wait(1)
+      gate.resolve()
+      yield* Fiber.join(interruption)
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )
 
@@ -1031,19 +1075,20 @@ describe("session HttpApi", () => {
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )
 
-  it.live("returns 204 before a V1 assistant failure and publishes session.error", () =>
+  it.live("publishes one session.error when a post-admission V1 failure already emits one", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer
-      const gate = Promise.withResolvers<void>()
-      yield* llm.push(reply().wait(gate.promise).contentFilter())
       const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
       const session = yield* createSession({ title: "V1 async execution failure" }).pipe(
         provideInstanceEffect(directory),
       )
-      const observed = yield* waitGlobalBusEvent({
-        predicate: (event) =>
-          event.payload.type === "session.error" && event.payload.properties.sessionID === session.id,
-      }).pipe(Effect.forkChild)
+      const errors: unknown[] = []
+      const listener = (event: Parameters<typeof GlobalBus.emit>[1]) => {
+        if (event.payload.type === "session.error" && event.payload.properties.sessionID === session.id)
+          errors.push(event)
+      }
+      GlobalBus.on("event", listener)
+      yield* Effect.addFinalizer(() => Effect.sync(() => GlobalBus.off("event", listener)))
 
       const response = yield* request(pathFor(SessionPaths.promptAsync, { sessionID: session.id }), {
         method: "POST",
@@ -1051,19 +1096,30 @@ describe("session HttpApi", () => {
         body: JSON.stringify({
           messageID: "msg_http_async_failed_loop",
           agent: "build",
-          model: { providerID: "test", modelID: "test-model" },
+          model: { providerID: "missing", modelID: "missing" },
           parts: [{ type: "text", text: "persist before failure" }],
         }),
       })
       expect(response.status).toBe(204)
-      yield* llm.wait(1)
-      gate.resolve()
-      yield* Fiber.join(observed)
+      yield* pollWithTimeout(
+        Effect.sync(() => (errors.length > 0 ? true : undefined)),
+        "V1 model failure did not publish session.error",
+      )
+      yield* pollWithTimeout(
+        request(SessionPaths.status, { headers: { "x-slopcode-directory": directory } }).pipe(
+          Effect.flatMap(responseJson),
+          Effect.map((status) =>
+            typeof status === "object" && status !== null && !Object.hasOwn(status, session.id) ? true : undefined,
+          ),
+        ),
+        "V1 loop did not settle after model failure",
+      )
 
       const messages = yield* Session.use
         .messages({ sessionID: session.id })
         .pipe(provideInstanceEffect(directory), Effect.orDie)
       expect(messages.some((message) => String(message.info.id) === "msg_http_async_failed_loop")).toBeTrue()
+      expect(errors).toHaveLength(1)
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )
 

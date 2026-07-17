@@ -130,9 +130,9 @@ function promptText(value: unknown) {
   return typeof part?.text === "string" ? part.text : undefined
 }
 
-async function wait(check: () => boolean, timeout = 4_000) {
+async function wait(check: () => boolean | Promise<boolean>, timeout = 4_000) {
   const start = Date.now()
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() - start > timeout) throw new Error("timed out waiting for condition")
     await Bun.sleep(10)
   }
@@ -737,6 +737,7 @@ describe.serial("new prompt integration", () => {
       ),
     )
     const events = createEventSource()
+    let rejectedID: string | undefined
     let harness!: ReturnType<typeof fixture>
     harness = fixture({
       root: tmp.path,
@@ -747,10 +748,20 @@ describe.serial("new prompt integration", () => {
         return harness.response(`${request.method} ${request.path}`, created)
       },
       admit(request, _, count) {
-        if (count === 1)
+        const messageID = record(request.body)?.messageID
+        if (typeof messageID !== "string") throw new Error("missing message ID")
+        if (count === 1) {
+          rejectedID = messageID
           return harness.response(
             `${request.method} ${request.path} #1`,
             { name: "BadRequest", data: { message: "reject once" } },
+            400,
+          )
+        }
+        if (messageID === rejectedID)
+          return harness.response(
+            `${request.method} ${request.path} #2`,
+            { name: "BadRequest", data: { message: "failed ID is immutable" } },
             400,
           )
         return harness.accepted(`${request.method} ${request.path} #2`)
@@ -768,7 +779,9 @@ describe.serial("new prompt integration", () => {
       app.setup.mockInput.pressEnter()
       await wait(() => routed(app.api, "ses_provisional"))
       expect(harness.requests.filter((item) => item.path === "/session" && item.method === "POST")).toHaveLength(1)
-      expect(harness.requests.filter((item) => item.path === "/session/ses_provisional/prompt_async")).toHaveLength(2)
+      const prompts = harness.requests.filter((item) => item.path === "/session/ses_provisional/prompt_async")
+      expect(prompts).toHaveLength(2)
+      expect(record(prompts[1]?.body)?.messageID).not.toBe(record(prompts[0]?.body)?.messageID)
     } finally {
       await app.close()
     }
@@ -1023,12 +1036,12 @@ describe.serial("new prompt integration", () => {
         harness.requests
           .filter((item) => item.path === "/session/ses_detached/shell")
           .map((item) => record(item.body)?.messageID),
-      ).toEqual([shellID, shellID])
+      ).not.toEqual([shellID, shellID])
       expect(
         harness.requests
           .filter((item) => item.path === "/session/ses_detached/command")
           .map((item) => record(item.body)?.messageID),
-      ).toEqual([commandID, commandID])
+      ).not.toEqual([commandID, commandID])
       expect(harness.requests.find((item) => item.path === "/session/ses_detached/shell")).toMatchObject({
         query: { directory: tmp.path },
         body: { command: "printf exact-shell", messageID: expect.stringContaining("msg_") },
@@ -1037,6 +1050,121 @@ describe.serial("new prompt integration", () => {
         query: { directory: tmp.path },
         body: { command: "review", arguments: "exact-command", messageID: expect.stringContaining("msg_") },
       })
+    } finally {
+      release()
+      await app.close()
+    }
+  })
+
+  test("a lost shell response reports unknown delivery without restoring a duplicate retry", async () => {
+    await using tmp = await tmpdir()
+    await Promise.all(
+      ["data", "cache", "config", "state", "tmp", "bin", "log", "repos"].map((dir) =>
+        mkdir(path.join(tmp.path, dir), { recursive: true }),
+      ),
+    )
+    const events = createEventSource()
+    const existing = session({ id: "ses_shell_unknown", directory: tmp.path })
+    let executions = 0
+    let harness!: ReturnType<typeof fixture>
+    harness = fixture({
+      root: tmp.path,
+      events,
+      sessions: [existing],
+      create: () => json(session({ id: "ses_unused", directory: tmp.path })),
+      admit(request) {
+        return harness.accepted(`${request.method} ${request.path}`)
+      },
+      handle(request) {
+        if (request.path !== "/session/ses_shell_unknown/shell") return undefined
+        executions++
+        throw new TypeError("response lost after shell execution")
+      },
+    })
+    const app = await mount({
+      root: tmp.path,
+      args: { sessionID: existing.id },
+      fetch: harness.fetch,
+      events: events.source,
+    })
+
+    try {
+      await wait(() => focused(app.setup) !== undefined)
+      app.setup.mockInput.pressKey("!")
+      await app.setup.mockInput.typeText("touch delivered-once")
+      app.setup.mockInput.pressEnter()
+      await wait(() => executions === 1)
+      await wait(() => focused(app.setup)?.plainText === "")
+      await wait(() => app.setup.captureCharFrame().includes("delivery is unknown"))
+      await wait(async () => {
+        const file = Bun.file(path.join(tmp.path, "state", "prompt-history.jsonl"))
+        return (await file.exists()) && (await file.text()).includes("touch delivered-once")
+      })
+
+      app.setup.mockInput.pressEnter()
+      await Bun.sleep(50)
+      expect(executions).toBe(1)
+      expect(harness.requests.filter((item) => item.path === "/session/ses_shell_unknown/shell")).toHaveLength(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test("an invalid-owner shell rejection falls back to stash with shell mode", async () => {
+    await using tmp = await tmpdir()
+    await Promise.all(
+      ["data", "cache", "config", "state", "tmp", "bin", "log", "repos"].map((dir) =>
+        mkdir(path.join(tmp.path, dir), { recursive: true }),
+      ),
+    )
+    const events = createEventSource()
+    const first = session({ id: "ses_shell_stale", directory: tmp.path })
+    const second = session({ id: "ses_shell_recovery", directory: tmp.path })
+    let release!: () => void
+    const delayed = new Promise<Response>(
+      (resolve) =>
+        (release = () =>
+          resolve(json({ name: "SessionBusyError", data: { message: "busy", sessionID: first.id } }, { status: 409 }))),
+    )
+    let harness!: ReturnType<typeof fixture>
+    harness = fixture({
+      root: tmp.path,
+      events,
+      sessions: [first, second],
+      create: () => json(session({ id: "ses_unused", directory: tmp.path })),
+      admit(request) {
+        return harness.accepted(`${request.method} ${request.path}`)
+      },
+      handle(request) {
+        if (request.path === "/session/ses_shell_stale/shell") return delayed
+        if (request.path === "/session/ses_shell_recovery/shell") return json({})
+        return undefined
+      },
+    })
+    const app = await mount({
+      root: tmp.path,
+      args: { sessionID: first.id },
+      fetch: harness.fetch,
+      events: events.source,
+    })
+
+    try {
+      await wait(() => focused(app.setup) !== undefined)
+      app.setup.mockInput.pressKey("!")
+      await app.setup.mockInput.typeText("printf recovered-shell")
+      app.setup.mockInput.pressEnter()
+      await wait(() => harness.requests.some((item) => item.path === "/session/ses_shell_stale/shell"))
+      app.api.keymap.dispatchCommand("session.tabs.close")
+      app.api.route.navigate("session", { sessionID: second.id })
+      await wait(() => routed(app.api, second.id) && focused(app.setup)?.plainText === "")
+      release()
+      await wait(() => app.setup.captureCharFrame().includes("Failed to run shell command"))
+
+      app.api.keymap.dispatchCommand("prompt.stash.pop")
+      await wait(() => focused(app.setup)?.plainText === "printf recovered-shell")
+      app.setup.mockInput.pressEnter()
+      await wait(() => harness.requests.some((item) => item.path === "/session/ses_shell_recovery/shell"))
+      expect(harness.requests.some((item) => item.path === "/session/ses_shell_recovery/prompt_async")).toBeFalse()
     } finally {
       release()
       await app.close()

@@ -25,6 +25,7 @@ import {
 
 type Owner = {
   prompt?: { prompt: PromptInfo; cursor: number; mode: "normal" | "shell" }
+  recovery?: { prompt: PromptInfo; cursor: number; mode: "normal" | "shell" }[]
   provisional?: { directory: string; workspace?: string; session?: Session; move: boolean }
   submission?: Map<string, string>
 }
@@ -57,7 +58,7 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       const current = owners.get(owner) ?? {}
       const next = { ...current, [key]: value }
       owners.delete(owner)
-      if (next.prompt || next.provisional || next.submission) owners.set(owner, next)
+      if (next.prompt || next.recovery?.length || next.provisional || next.submission) owners.set(owner, next)
     }
 
     function clear(owner: string) {
@@ -95,7 +96,18 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
         target?.submission || source.submission
           ? new Map([...(target?.submission ?? []), ...(source.submission ?? [])])
           : undefined
-      return { ...target, ...source, ...(submission ? { submission } : {}) }
+      const recovery = [
+        ...(target?.recovery ?? []),
+        ...(target?.prompt && source.prompt ? [target.prompt] : []),
+        ...(source.recovery ?? []),
+      ]
+      return {
+        ...target,
+        ...source,
+        ...(source.prompt ? { prompt: source.prompt } : {}),
+        ...(recovery.length ? { recovery } : {}),
+        ...(submission ? { submission } : {}),
+      }
     }
 
     function migrate(from: string, to: string) {
@@ -250,8 +262,13 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
         revision,
         take(owner: string) {
           owner = canonical(owner)
-          const saved = owners.get(owner)?.prompt
-          update(owner, "prompt", undefined)
+          const current = owners.get(owner)
+          const saved = current?.prompt
+          const [prompt, ...recovery] = current?.recovery ?? []
+          if (prompt) {
+            owners.set(owner, { ...current, prompt, recovery: recovery.length ? recovery : undefined })
+            setRevision((value) => value + 1)
+          } else update(owner, "prompt", undefined)
           return saved
         },
         save(owner: string, value: { prompt: PromptInfo; cursor: number; mode: "normal" | "shell" }) {
@@ -317,11 +334,12 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
       promoteDraft(input: SessionTabDescriptor, owner = draft()) {
         if (owner !== draft()) return false
         const source = owners.get(owner)
-        if (source?.prompt || source?.submission)
+        if (source?.prompt || source?.recovery?.length || source?.submission)
           owners.set(
             `${scope}:${input.id}`,
             merge(owners.get(`${scope}:${input.id}`), {
               ...(source.prompt ? { prompt: source.prompt } : {}),
+              ...(source.recovery?.length ? { recovery: source.recovery } : {}),
               ...(source.submission ? { submission: source.submission } : {}),
             }),
           )

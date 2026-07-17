@@ -669,7 +669,7 @@ export function Prompt(props: PromptProps) {
           restorePrompt(saved)
           return
         }
-        stash.push({ input: saved.prompt.input, parts: saved.prompt.parts })
+        stash.push({ input: saved.prompt.input, parts: saved.prompt.parts, mode: saved.mode })
       },
       { defer: true },
     ),
@@ -801,6 +801,7 @@ export function Prompt(props: PromptProps) {
           stash.push({
             input: store.prompt.input,
             parts: store.prompt.parts,
+            mode: store.mode,
           })
           input.extmarks.clear()
           input.clear()
@@ -819,6 +820,7 @@ export function Prompt(props: PromptProps) {
           if (entry) {
             input.setText(entry.input)
             setStore("prompt", { input: entry.input, parts: entry.parts })
+            setStore("mode", entry.mode)
             restoreExtmarksFromParts(entry.parts)
             input.gotoBufferEnd()
           }
@@ -836,6 +838,7 @@ export function Prompt(props: PromptProps) {
               onSelect={(entry) => {
                 input.setText(entry.input)
                 setStore("prompt", { input: entry.input, parts: entry.parts })
+                setStore("mode", entry.mode)
                 restoreExtmarksFromParts(entry.parts)
                 input.gotoBufferEnd()
               }}
@@ -1247,12 +1250,26 @@ export function Prompt(props: PromptProps) {
     })
     const messageID = tabs.submission.id(owner, identity)
     const retryOwner = target.created ? tabs.owner(sessionID) : owner
+    const clearID = () => {
+      tabs.submission.clear(owner, identity)
+      tabs.submission.clear(retryOwner, identity)
+    }
     const recover = (title: string, error: unknown) => {
-      if (!tabs.prompt.save(retryOwner, saved)) stash.push({ input: saved.prompt.input, parts: saved.prompt.parts })
+      clearID()
+      if (!tabs.prompt.save(retryOwner, saved))
+        stash.push({ input: saved.prompt.input, parts: saved.prompt.parts, mode: saved.mode })
       toast.show({
         title,
         message: errorMessage(error),
         variant: "error",
+      })
+    }
+    const uncertain = (title: string, error: unknown) => {
+      clearID()
+      toast.show({
+        title,
+        message: `Request delivery is unknown. Check the session before running it again. ${errorMessage(error)}`,
+        variant: "warning",
       })
     }
     const detachedClear = unchanged()
@@ -1260,23 +1277,21 @@ export function Prompt(props: PromptProps) {
     if (mode === "shell") {
       move.startSubmit()
       void sdk.client.session
-        .shell(
-          {
-            sessionID,
-            directory: target.directory,
-            workspace: target.workspace,
-            messageID,
-            agent,
-            model: selectedModel,
-            command: inputText,
-          },
-          { throwOnError: true },
-        )
-        .then(() => {
-          tabs.submission.clear(owner, identity)
-          tabs.submission.clear(retryOwner, identity)
+        .shell({
+          sessionID,
+          directory: target.directory,
+          workspace: target.workspace,
+          messageID,
+          agent,
+          model: selectedModel,
+          command: inputText,
         })
-        .catch((error) => recover("Failed to run shell command", error))
+        .then((result) => {
+          if (!result.error) return clearID()
+          if (result.response) return recover("Failed to run shell command", result.error)
+          uncertain("Shell command delivery unknown", result.error)
+        })
+        .catch((error) => uncertain("Shell command delivery unknown", error))
       if (current()) setStore("mode", "normal")
     } else if (isCommand) {
       move.startSubmit()
@@ -1287,49 +1302,54 @@ export function Prompt(props: PromptProps) {
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
       void sdk.client.session
-        .command(
-          {
-            sessionID,
-            directory: target.directory,
-            workspace: target.workspace,
-            messageID,
-            command: command.slice(1),
-            arguments: args,
-            agent,
-            model: `${selectedModel.providerID}/${selectedModel.modelID}`,
-            variant,
-            parts: parts.filter((part) => part.type === "file"),
-          },
-          { throwOnError: true },
-        )
-        .then(() => {
-          tabs.submission.clear(owner, identity)
-          tabs.submission.clear(retryOwner, identity)
+        .command({
+          sessionID,
+          directory: target.directory,
+          workspace: target.workspace,
+          messageID,
+          command: command.slice(1),
+          arguments: args,
+          agent,
+          model: `${selectedModel.providerID}/${selectedModel.modelID}`,
+          variant,
+          parts: parts.filter((part) => part.type === "file"),
         })
-        .catch((error) => recover("Failed to run command", error))
+        .then((result) => {
+          if (!result.error) return clearID()
+          if (result.response) return recover("Failed to run command", result.error)
+          uncertain("Command delivery unknown", result.error)
+        })
+        .catch((error) => uncertain("Command delivery unknown", error))
     } else {
       move.startSubmit()
       try {
-        await sdk.client.session.promptAsync(
-          {
-            sessionID,
-            directory: target.directory,
-            workspace: target.workspace,
-            messageID,
-            agent,
-            model: selectedModel,
-            variant,
-            parts: [
-              ...editorParts,
-              {
-                type: "text",
-                text: inputText,
-              },
-              ...parts,
-            ],
-          },
-          { throwOnError: true },
-        )
+        const result = await sdk.client.session.promptAsync({
+          sessionID,
+          directory: target.directory,
+          workspace: target.workspace,
+          messageID,
+          agent,
+          model: selectedModel,
+          variant,
+          parts: [
+            ...editorParts,
+            {
+              type: "text",
+              text: inputText,
+            },
+            ...parts,
+          ],
+        })
+        if (result.error) {
+          if (result.response) clearID()
+          toast.show({
+            title: "Failed to send prompt",
+            message: errorMessage(result.error),
+            variant: "error",
+          })
+          if (target.finish) move.finishSubmit(false)
+          return false
+        }
       } catch (error) {
         toast.show({
           title: "Failed to send prompt",
@@ -1339,7 +1359,7 @@ export function Prompt(props: PromptProps) {
         if (target.finish) move.finishSubmit(false)
         return false
       }
-      tabs.submission.clear(owner, identity)
+      clearID()
     }
 
     history.append({ ...prompt, mode })

@@ -200,6 +200,41 @@ test("draft promotion, root visits, workspace refresh, and local close compose t
     route.navigate({ type: "session", sessionID: retained[0] })
     await app.renderOnce()
     expect(tabs.prompt.take(tabs.owner(retained[0]))).toBeUndefined()
+
+    const root = "ses_collision_root"
+    const child = "ses_collision_child"
+    route.navigate({ type: "session", sessionID: root })
+    await app.renderOnce()
+    tabs.prompt.save(tabs.owner(root), {
+      prompt: {
+        input: "root shell draft",
+        parts: [{ type: "file", mime: "image/png", filename: "root.png", url: "data:image/png;base64,AA==" }],
+      },
+      cursor: 16,
+      mode: "shell",
+    })
+    route.navigate({ type: "session", sessionID: child })
+    await app.renderOnce()
+    tabs.prompt.save(tabs.owner(child), {
+      prompt: { input: "child draft", parts: [] },
+      cursor: 11,
+      mode: "normal",
+    })
+    sessions([
+      { id: root, title: "Collision root" },
+      { id: child, title: "Collision child", parentID: root },
+    ])
+    await app.renderOnce()
+
+    expect(tabs.owner(child)).toBe(tabs.owner(root))
+    expect(tabs.prompt.take(tabs.owner(root))).toMatchObject({
+      prompt: { input: "child draft" },
+      mode: "normal",
+    })
+    expect(tabs.prompt.take(tabs.owner(root))).toMatchObject({
+      prompt: { input: "root shell draft", parts: [{ type: "file", filename: "root.png" }] },
+      mode: "shell",
+    })
   } finally {
     app.renderer.destroy()
   }
