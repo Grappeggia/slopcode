@@ -24,6 +24,7 @@ import type {
   FooterSubagentState,
   FooterSubagentTab,
   FooterView,
+  PermissionBatchReply,
   RunCommand,
   RunInput,
   RunPrompt,
@@ -1414,6 +1415,84 @@ test("direct forecast review surfaces batch failure and allows retry", async () 
     await Bun.sleep(20)
     await app.renderOnce()
     expect(attempts).toBe(2)
+  } finally {
+    off?.()
+    app.renderer.destroy()
+  }
+})
+
+test("direct forecast actions normalize when a late row cannot be persisted", async () => {
+  let off: (() => void) | undefined
+  const initial: PermissionRequest[] = [
+    {
+      id: "per_saved",
+      sessionID: "ses_late",
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: ["git status"],
+      kind: "forecast",
+      batchID: "pmb_late",
+      batchSize: 2,
+    },
+  ]
+  const [requests, setRequests] = createSignal(initial)
+  const replies: PermissionBatchReply[] = []
+
+  function Harness() {
+    const renderer = useRenderer()
+    const keymap = createDefaultOpenTuiKeymap(renderer)
+    off = registerSlopcodeKeymap(keymap, renderer, tuiConfig)
+    return (
+      <SlopcodeKeymapProvider keymap={keymap}>
+        <RunPermissionBody
+          requests={requests()}
+          scope="project"
+          theme={RUN_THEME_FALLBACK.footer}
+          block={RUN_THEME_FALLBACK.block}
+          onReply={() => {}}
+          onBatchReply={(reply) => {
+            replies.push(reply)
+          }}
+        />
+      </SlopcodeKeymapProvider>
+    )
+  }
+
+  const app = await testRender(
+    () => (
+      <box width={160} height={18}>
+        <Harness />
+      </box>
+    ),
+    { width: 160, height: 18, kittyKeyboard: true },
+  )
+
+  try {
+    await app.renderOnce()
+    app.mockInput.pressKey("ARROW_RIGHT")
+    setRequests([
+      ...initial,
+      {
+        ...initial[0],
+        id: "per_once",
+        patterns: ["pwd"],
+        always: [],
+      },
+    ])
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(frame).not.toContain("Allow selected for this session")
+    expect(frame).not.toContain("Always allow selected for this project")
+
+    app.mockInput.pressEnter()
+    expect(replies).toEqual([
+      {
+        batchID: "pmb_late",
+        requestIDs: ["per_saved", "per_once"],
+        reply: "once",
+      },
+    ])
   } finally {
     off?.()
     app.renderer.destroy()

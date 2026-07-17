@@ -107,6 +107,7 @@ export function DialogPermissions() {
         {
           command: "dialog.permission.refresh",
           title: "refresh",
+          requiresSelection: false,
           onTrigger: () => void refresh(),
         },
       ]}

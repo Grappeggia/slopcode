@@ -505,6 +505,11 @@ function RunPermissionBatchBody(props: {
   )
 
   createEffect(() => {
+    const list = options()
+    if (!list.includes(selected())) setSelected(list[0])
+  })
+
+  createEffect(() => {
     setState((current) => {
       const next = permissionBatchSync(current, props.requests)
       if (current.stage === "project" && next.stage === "review") setSelected("once")

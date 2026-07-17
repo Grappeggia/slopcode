@@ -86,6 +86,7 @@ test("project batch approval derives eligibility from selected rows and revalida
     reject: "Reject all",
   })
   expect(permissionBatchReply(initial, requests, "project").state.stage).toBe("review")
+  expect(permissionBatchReply(initial, requests, "always").reply).toBeUndefined()
 
   const selected = permissionBatchToggle(initial, "per_once")
   expect(permissionBatchPersistent(selected, requests)).toBe(true)

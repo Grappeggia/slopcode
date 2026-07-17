@@ -106,7 +106,10 @@ export function permissionBatchReply(
   if (option === "reject") return { state, reply: { batchID, requestIDs: [], reply: "reject" } }
   if (!state.selected.length) return { state }
   if (option === "once") return { state, reply: { batchID, requestIDs: state.selected, reply: "once" } }
-  if (option === "always") return { state, reply: { batchID, requestIDs: state.selected, reply: "always" } }
+  if (option === "always") {
+    if (!permissionBatchPersistent(state, requests)) return { state }
+    return { state, reply: { batchID, requestIDs: state.selected, reply: "always" } }
+  }
   if (option === "confirm" && state.stage === "project") {
     if (!permissionBatchPersistent(state, requests)) return { state: { ...state, stage: "review" } }
     return { state, reply: { batchID, requestIDs: state.selected, reply: "project" } }

@@ -214,6 +214,7 @@ describe("run permission shared", () => {
     const invalid = permissionBatchReply(confirm, changed, "confirm")
     expect(invalid.state.stage).toBe("review")
     expect(invalid.reply).toBeUndefined()
+    expect(permissionBatchReply(initial, requests, "always").reply).toBeUndefined()
   })
 
   test("late selected non-persistable rows close project confirmation", () => {

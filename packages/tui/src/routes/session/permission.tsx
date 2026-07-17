@@ -718,7 +718,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
   )
 }
 
-function Prompt<const T extends Record<string, string>>(props: {
+export function Prompt<const T extends Record<string, string>>(props: {
   title: string
   header?: JSX.Element
   body: JSX.Element
@@ -730,14 +730,19 @@ function Prompt<const T extends Record<string, string>>(props: {
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
   const dimensions = useTerminalDimensions()
-  const keys = Object.keys(props.options) as (keyof T)[]
+  const keys = createMemo(() => Object.keys(props.options) as (keyof T)[])
   const [store, setStore] = createStore({
-    selected: keys[0],
+    selected: keys()[0],
     expanded: false,
   })
   const narrow = createMemo(() => dimensions().width < 80)
   const compact = createMemo(() => isCompact(density(dimensions())))
   const fullscreenHint = useCommandShortcut("permission.prompt.fullscreen")
+
+  createEffect(() => {
+    const list = keys()
+    if (!list.includes(store.selected)) setStore("selected", list[0])
+  })
 
   useBindings(() => ({
     mode: SLOPCODE_BASE_MODE,
@@ -767,8 +772,9 @@ function Prompt<const T extends Record<string, string>>(props: {
         desc: "Previous permission option",
         group: "Permission",
         cmd: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx - 1 + keys.length) % keys.length]
+          const list = keys()
+          const idx = list.indexOf(store.selected)
+          const next = list[(idx - 1 + list.length) % list.length]
           setStore("selected", next)
         },
       },
@@ -777,8 +783,9 @@ function Prompt<const T extends Record<string, string>>(props: {
         desc: "Previous permission option",
         group: "Permission",
         cmd: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx - 1 + keys.length) % keys.length]
+          const list = keys()
+          const idx = list.indexOf(store.selected)
+          const next = list[(idx - 1 + list.length) % list.length]
           setStore("selected", next)
         },
       },
@@ -787,8 +794,9 @@ function Prompt<const T extends Record<string, string>>(props: {
         desc: "Next permission option",
         group: "Permission",
         cmd: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx + 1) % keys.length]
+          const list = keys()
+          const idx = list.indexOf(store.selected)
+          const next = list[(idx + 1) % list.length]
           setStore("selected", next)
         },
       },
@@ -797,8 +805,9 @@ function Prompt<const T extends Record<string, string>>(props: {
         desc: "Next permission option",
         group: "Permission",
         cmd: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx + 1) % keys.length]
+          const list = keys()
+          const idx = list.indexOf(store.selected)
+          const next = list[(idx + 1) % list.length]
           setStore("selected", next)
         },
       },
@@ -885,7 +894,7 @@ function Prompt<const T extends Record<string, string>>(props: {
         alignItems={narrow() ? "flex-start" : "center"}
       >
         <box flexDirection="row" gap={1} flexShrink={0}>
-          <For each={keys}>
+          <For each={keys()}>
             {(option) => (
               <box
                 paddingLeft={1}
