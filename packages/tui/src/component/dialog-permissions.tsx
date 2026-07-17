@@ -10,6 +10,7 @@ import { errorMessage } from "../util/error"
 import {
   permissionRemove,
   permissionRemoveStep,
+  permissionSavedFooter,
   permissionSavedList,
   permissionSavedRemove,
   permissionSavedRows,
@@ -22,7 +23,8 @@ export function DialogPermissions() {
   const toast = useToast()
   const { theme } = useTheme()
   const [items, setItems] = createSignal<PermissionSavedInfo[]>([])
-  const [loading, setLoading] = createSignal(false)
+  const [status, setStatus] = createSignal<"loading" | "ready" | "error">("loading")
+  const [failure, setFailure] = createSignal<string>()
   const [confirming, setConfirming] = createSignal<string>()
   const [removing, setRemoving] = createSignal<string>()
   const scope = createMemo(() => (project.data.project.vcs === "git" ? "project" : "folder"))
@@ -32,17 +34,20 @@ export function DialogPermissions() {
   }
 
   async function refresh() {
-    setLoading(true)
+    setStatus("loading")
+    setFailure(undefined)
     try {
       await load()
+      setStatus("ready")
     } catch (error) {
+      setFailure(errorMessage(error))
+      setStatus("error")
       toast.show({ variant: "error", title: "Failed to load saved permissions", message: errorMessage(error) })
-    } finally {
-      setLoading(false)
     }
   }
 
-  async function remove(item: PermissionSavedInfo) {
+  async function remove(item?: PermissionSavedInfo) {
+    if (!item) return
     if (removing()) return
     const step = permissionRemoveStep(confirming(), item.id)
     setConfirming(step.confirming)
@@ -67,15 +72,17 @@ export function DialogPermissions() {
     setRemoving(undefined)
   }
 
-  const rows = createMemo<DialogSelectOption<PermissionSavedInfo>[]>(() =>
-    permissionSavedRows(items(), { scope: scope(), confirming: confirming(), removing: removing() }).map((row) => ({
-      title: row.title,
-      category: row.category,
-      value: row.item,
-      description: row.description,
-      footer: row.footer,
-      bg: confirming() === row.id ? theme.error : undefined,
-    })),
+  const rows = createMemo<DialogSelectOption<PermissionSavedInfo | undefined>[]>(() =>
+    permissionSavedRows(items(), { scope: scope(), confirming: confirming(), removing: removing() }, failure()).map(
+      (row) => ({
+        title: row.title,
+        category: row.category,
+        value: row.item,
+        description: row.description,
+        footer: row.footer,
+        bg: confirming() === row.id ? theme.error : undefined,
+      }),
+    ),
   )
 
   onMount(() => {
@@ -86,15 +93,21 @@ export function DialogPermissions() {
   return (
     <DialogSelect
       title={`Permissions for this ${scope()}`}
-      placeholder={loading() ? "Loading permissions" : "Search permissions"}
+      placeholder={status() === "loading" ? "Loading permissions" : "Search permissions"}
       options={rows()}
-      footer={!loading() && items().length === 0 ? `No saved permissions for this ${scope()}.` : undefined}
+      footer={permissionSavedFooter(status(), items(), scope())}
       onMove={() => setConfirming(undefined)}
       actions={[
         {
           command: "dialog.permission.delete",
           title: "delete",
+          disabled: (option) => !option?.value,
           onTrigger: (option) => void remove(option.value),
+        },
+        {
+          command: "dialog.permission.refresh",
+          title: "refresh",
+          onTrigger: () => void refresh(),
         },
       ]}
     />

@@ -2,6 +2,15 @@ import type { PermissionSavedInfo, SlopcodeClient } from "@slopcode-ai/sdk/v2"
 
 type Result<T> = { data?: T; error?: unknown }
 type Scope = "project" | "folder"
+export type PermissionSavedStatus = "loading" | "ready" | "error"
+type PermissionSavedRow = {
+  id: string
+  item: PermissionSavedInfo | undefined
+  title: string
+  category: string
+  description: string
+  footer: string
+}
 
 function options(workspace?: string) {
   return workspace ? { headers: { "x-slopcode-workspace": workspace } } : undefined
@@ -23,7 +32,19 @@ export async function permissionSavedRemove(client: SlopcodeClient, id: string, 
 export function permissionSavedRows(
   items: PermissionSavedInfo[],
   state: { scope: Scope; confirming?: string; removing?: string },
-) {
+  error?: string,
+): PermissionSavedRow[] {
+  if (error)
+    return [
+      {
+        id: "error",
+        item: undefined,
+        title: "Failed to load saved permissions",
+        category: "Error",
+        description: error,
+        footer: `Permissions for this ${state.scope} could not be loaded`,
+      },
+    ]
   return items.map((item) => ({
     id: item.id,
     item,
@@ -37,6 +58,12 @@ export function permissionSavedRows(
           : item.resource,
     footer: `Saved for this ${state.scope}`,
   }))
+}
+
+export function permissionSavedFooter(status: PermissionSavedStatus, items: PermissionSavedInfo[], scope: Scope) {
+  if (status === "error") return "Press ctrl+r to retry or esc to close."
+  if (status === "ready" && !items.length) return `No saved permissions for this ${scope}.`
+  return undefined
 }
 
 export function permissionRemoveStep(confirming: string | undefined, id: string) {

@@ -20,6 +20,7 @@ import {
   createPermissionBodyState,
   createPermissionBatchState,
   permissionBatchMove,
+  permissionBatchPersistent,
   permissionBatchReply,
   permissionBatchSubmit,
   permissionBatchSync,
@@ -494,17 +495,21 @@ function RunPermissionBatchBody(props: {
   const [selected, setSelected] = createSignal<PermissionBatchOption>("once")
   const [submitting, setSubmitting] = createSignal(false)
   const [error, setError] = createSignal<string>()
-  const persistent = createMemo(() => props.requests.every((item) => item.always.length > 0))
+  const persistent = createMemo(() => permissionBatchPersistent(state(), props.requests))
   const options = createMemo<PermissionBatchOption[]>(() =>
     state().stage === "project"
       ? ["confirm", "cancel"]
       : persistent()
-        ? ["once", "always", "project", "skip"]
-        : ["once", "skip"],
+        ? ["once", "always", "project", "reject"]
+        : ["once", "reject"],
   )
 
   createEffect(() => {
-    setState((current) => permissionBatchSync(current, props.requests))
+    setState((current) => {
+      const next = permissionBatchSync(current, props.requests)
+      if (current.stage === "project" && next.stage === "review") setSelected("once")
+      return next
+    })
   })
 
   const submit = async (reply: PermissionBatchReply) => {
@@ -524,6 +529,7 @@ function RunPermissionBatchBody(props: {
     if (next.state !== current) setState(next.state)
     if (option === "project") setSelected("confirm")
     if (option === "cancel") setSelected("project")
+    if (current.stage === "project" && next.state.stage === "review" && option !== "cancel") setSelected("once")
     if (next.reply) void submit(next.reply)
   }
 
@@ -570,7 +576,7 @@ function RunPermissionBatchBody(props: {
       return
     }
     if (event.name === "escape") {
-      run(state().stage === "project" ? "cancel" : "skip")
+      run(state().stage === "project" ? "cancel" : "reject")
       event.preventDefault()
     }
   })
@@ -647,8 +653,8 @@ function RunPermissionBatchBody(props: {
                     ? "Allow selected for this session"
                     : option === "project"
                       ? `Always allow selected for this ${props.scope}`
-                      : option === "skip"
-                        ? "Skip all"
+                      : option === "reject"
+                        ? "Reject all"
                         : permissionLabel(option, props.scope)}
               </text>
             </box>

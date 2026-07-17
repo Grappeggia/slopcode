@@ -2,7 +2,9 @@ import { expect, test } from "bun:test"
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
 import {
   createPermissionBatchState,
+  permissionBatchActions,
   permissionBatchMove,
+  permissionBatchPersistent,
   permissionBatchReply,
   permissionBatchSubmit,
   permissionBatchSync,
@@ -10,14 +12,14 @@ import {
   permissionQueue,
 } from "../src/routes/session/permission-batch"
 
-function request(id: string, kind?: "forecast", batchID?: string): PermissionRequest {
+function request(id: string, kind?: "forecast", batchID?: string, always = [id]): PermissionRequest {
   return {
     id,
     sessionID: "ses_test",
     permission: "bash",
     patterns: [id],
     metadata: {},
-    always: [id],
+    always,
     grant: { resources: [id], scopes: ["session", "global"] },
     kind,
     batchID,
@@ -61,10 +63,53 @@ test("session batch approval is immediate while project approval requires confir
     requestIDs: ["per_a", "per_b"],
     reply: "project",
   })
-  expect(permissionBatchReply(initial, requests, "skip").reply).toEqual({
+  expect(permissionBatchReply(initial, requests, "reject").reply).toEqual({
     batchID: "pmb_one",
     requestIDs: [],
     reply: "reject",
+  })
+  expect(permissionBatchActions(initial, requests, "project")).toEqual({
+    once: "Allow selected once",
+    always: "Allow selected for this session",
+    project: "Always allow selected for this project",
+    reject: "Reject all",
+  })
+})
+
+test("project batch approval derives eligibility from selected rows and revalidates confirmation", () => {
+  const requests = [request("per_saved", "forecast", "pmb_one"), request("per_once", "forecast", "pmb_one", [])]
+  const initial = createPermissionBatchState(requests)
+
+  expect(permissionBatchPersistent(initial, requests)).toBe(false)
+  expect(permissionBatchActions(initial, requests, "folder")).toEqual({
+    once: "Allow selected once",
+    reject: "Reject all",
+  })
+  expect(permissionBatchReply(initial, requests, "project").state.stage).toBe("review")
+
+  const selected = permissionBatchToggle(initial, "per_once")
+  expect(permissionBatchPersistent(selected, requests)).toBe(true)
+  expect(permissionBatchActions(selected, requests, "folder")).toHaveProperty(
+    "project",
+    "Always allow selected for this folder",
+  )
+  const confirm = permissionBatchReply(selected, requests, "project")
+  expect(confirm.state.stage).toBe("project")
+
+  const changed = requests.map((item) => (item.id === "per_saved" ? { ...item, always: [] } : item))
+  const invalid = permissionBatchReply(confirm.state, changed, "confirm")
+  expect(invalid.state.stage).toBe("review")
+  expect(invalid.reply).toBeUndefined()
+})
+
+test("late non-persistable rows close project confirmation", () => {
+  const initial = [request("per_saved", "forecast", "pmb_one")]
+  const confirm = permissionBatchReply(createPermissionBatchState(initial), initial, "project").state
+  const requests = [...initial, request("per_once", "forecast", "pmb_one", [])]
+
+  expect(permissionBatchSync(confirm, requests)).toMatchObject({
+    stage: "review",
+    selected: ["per_saved", "per_once"],
   })
 })
 

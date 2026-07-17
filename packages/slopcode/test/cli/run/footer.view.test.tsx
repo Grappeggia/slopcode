@@ -1393,15 +1393,17 @@ test("direct forecast review surfaces batch failure and allows retry", async () 
 
   const app = await testRender(
     () => (
-      <box width={100} height={18}>
+      <box width={160} height={18}>
         <Harness />
       </box>
     ),
-    { width: 100, height: 18, kittyKeyboard: true },
+    { width: 160, height: 18, kittyKeyboard: true },
   )
 
   try {
     await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("Reject all")
+    expect(app.captureCharFrame()).not.toContain("Skip all")
     app.mockInput.pressEnter()
     await Bun.sleep(20)
     await app.renderOnce()

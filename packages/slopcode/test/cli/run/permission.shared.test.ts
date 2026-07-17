@@ -11,6 +11,7 @@ import {
   permissionRun,
   createPermissionBatchState,
   permissionBatchMove,
+  permissionBatchPersistent,
   permissionBatchReply,
   permissionBatchSubmit,
   permissionBatchSync,
@@ -189,10 +190,40 @@ describe("run permission shared", () => {
       requestIDs: ["per_a", "per_b"],
       reply: "project",
     })
-    expect(permissionBatchReply(initial, requests, "skip").reply).toEqual({
+    expect(permissionBatchReply(initial, requests, "reject").reply).toEqual({
       batchID: "pmb_one",
       requestIDs: [],
       reply: "reject",
+    })
+  })
+
+  test("validates selected persistence before and during project confirmation", () => {
+    const requests = [
+      req({ id: "per_saved", kind: "forecast", batchID: "pmb_one", always: ["git status"] }),
+      req({ id: "per_once", kind: "forecast", batchID: "pmb_one", always: [] }),
+    ]
+    const initial = createPermissionBatchState(requests)
+
+    expect(permissionBatchPersistent(initial, requests)).toBe(false)
+    expect(permissionBatchReply(initial, requests, "project").state.stage).toBe("review")
+
+    const selected = permissionBatchToggle(initial, "per_once")
+    expect(permissionBatchPersistent(selected, requests)).toBe(true)
+    const confirm = permissionBatchReply(selected, requests, "project").state
+    const changed = requests.map((item) => (item.id === "per_saved" ? { ...item, always: [] } : item))
+    const invalid = permissionBatchReply(confirm, changed, "confirm")
+    expect(invalid.state.stage).toBe("review")
+    expect(invalid.reply).toBeUndefined()
+  })
+
+  test("late selected non-persistable rows close project confirmation", () => {
+    const initial = [req({ id: "per_saved", kind: "forecast", batchID: "pmb_one", always: ["git status"] })]
+    const confirm = permissionBatchReply(createPermissionBatchState(initial), initial, "project").state
+    const requests = [...initial, req({ id: "per_once", kind: "forecast", batchID: "pmb_one", always: [] })]
+
+    expect(permissionBatchSync(confirm, requests)).toMatchObject({
+      stage: "review",
+      selected: ["per_saved", "per_once"],
     })
   })
 

@@ -22,6 +22,7 @@ import { errorMessage } from "../../util/error"
 import { useToast } from "../../ui/toast"
 import {
   createPermissionBatchState,
+  permissionBatchActions,
   permissionBatchMove,
   permissionBatchReply,
   permissionBatchSubmit,
@@ -461,7 +462,6 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
     submitting: false,
   })
   const selected = createMemo(() => props.requests.filter((item) => store.selected.includes(item.id)))
-  const persistent = createMemo(() => props.requests.every((item) => item.always.length > 0))
   const scope = createMemo<PermissionScopeLabel>(() => (project.data.project.vcs === "git" ? "project" : "folder"))
 
   createEffect(() => {
@@ -600,20 +600,11 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
               </box>
             </scrollbox>
           }
-          options={
-            persistent()
-              ? {
-                  once: "Allow selected once",
-                  always: "Allow selected for this session",
-                  project: `Always allow selected for this ${scope()}`,
-                  skip: "Skip all",
-                }
-              : { once: "Allow selected once", skip: "Skip all" }
-          }
-          escapeKey="skip"
+          options={permissionBatchActions(store, props.requests, scope())}
+          escapeKey="reject"
           fullscreen
           onSelect={(option) => {
-            if (option === "once" || option === "always" || option === "project" || option === "skip") run(option)
+            if (option === "once" || option === "always" || option === "project" || option === "reject") run(option)
           }}
         />
       </Match>

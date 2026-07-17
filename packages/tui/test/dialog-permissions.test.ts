@@ -5,6 +5,7 @@ import {
   permissionRemove,
   permissionRemoveStep,
   permissionSavedList,
+  permissionSavedFooter,
   permissionSavedRemove,
   permissionSavedRows,
 } from "../src/component/dialog-permissions.shared"
@@ -113,4 +114,13 @@ test("listing surfaces current-location API failures", async () => {
     }),
   })
   expect(permissionSavedList(sdk)).rejects.toThrow("scope list failed")
+  expect(permissionSavedRows([], { scope: "folder" }, "scope list failed")).toEqual([
+    expect.objectContaining({
+      title: "Failed to load saved permissions",
+      description: "scope list failed",
+      item: undefined,
+    }),
+  ])
+  expect(permissionSavedFooter("error", [], "folder")).toBe("Press ctrl+r to retry or esc to close.")
+  expect(permissionSavedFooter("ready", [], "folder")).toBe("No saved permissions for this folder.")
 })

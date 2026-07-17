@@ -7,7 +7,7 @@ export type PermissionBatchState = {
   selected: string[]
 }
 
-export type PermissionBatchOption = "once" | "always" | "project" | "skip" | "confirm" | "cancel"
+export type PermissionBatchOption = "once" | "always" | "project" | "reject" | "confirm" | "cancel"
 
 export type PermissionBatchReply = {
   batchID: string
@@ -48,12 +48,14 @@ export function createPermissionBatchState(requests: PermissionRequest[]): Permi
 export function permissionBatchSync(state: PermissionBatchState, requests: PermissionRequest[]): PermissionBatchState {
   const requestIDs = requests.map((item) => item.id)
   const known = new Set(state.requestIDs)
-  return {
+  const next = {
     ...state,
     focused: Math.min(state.focused, Math.max(requestIDs.length - 1, 0)),
     requestIDs,
     selected: [...state.selected.filter((id) => requestIDs.includes(id)), ...requestIDs.filter((id) => !known.has(id))],
   }
+  if (next.stage === "project" && !permissionBatchPersistent(next, requests)) return { ...next, stage: "review" }
+  return next
 }
 
 export function permissionBatchMove(state: PermissionBatchState, requests: PermissionRequest[], step: number) {
@@ -70,20 +72,43 @@ export function permissionBatchToggle(state: PermissionBatchState, requestID: st
   }
 }
 
+export function permissionBatchPersistent(state: PermissionBatchState, requests: PermissionRequest[]) {
+  if (!state.selected.length) return false
+  return state.selected.every((id) => Boolean(requests.find((item) => item.id === id)?.always.length))
+}
+
+export function permissionBatchActions(
+  state: PermissionBatchState,
+  requests: PermissionRequest[],
+  scope: "project" | "folder",
+): Record<string, string> {
+  if (state.stage === "project") return { confirm: "Confirm", cancel: "Cancel" }
+  if (!permissionBatchPersistent(state, requests)) return { once: "Allow selected once", reject: "Reject all" }
+  return {
+    once: "Allow selected once",
+    always: "Allow selected for this session",
+    project: `Always allow selected for this ${scope}`,
+    reject: "Reject all",
+  }
+}
+
 export function permissionBatchReply(
   state: PermissionBatchState,
   requests: PermissionRequest[],
   option: PermissionBatchOption,
 ): { state: PermissionBatchState; reply?: PermissionBatchReply } {
-  if (option === "project" && state.stage === "review") return { state: { ...state, stage: "project" } }
+  if (option === "project" && state.stage === "review") {
+    return permissionBatchPersistent(state, requests) ? { state: { ...state, stage: "project" } } : { state }
+  }
   if (option === "cancel") return { state: { ...state, stage: "review" } }
   const batchID = requests[0]?.batchID
   if (!batchID) return { state }
-  if (option === "skip") return { state, reply: { batchID, requestIDs: [], reply: "reject" } }
+  if (option === "reject") return { state, reply: { batchID, requestIDs: [], reply: "reject" } }
   if (!state.selected.length) return { state }
   if (option === "once") return { state, reply: { batchID, requestIDs: state.selected, reply: "once" } }
   if (option === "always") return { state, reply: { batchID, requestIDs: state.selected, reply: "always" } }
   if (option === "confirm" && state.stage === "project") {
+    if (!permissionBatchPersistent(state, requests)) return { state: { ...state, stage: "review" } }
     return { state, reply: { batchID, requestIDs: state.selected, reply: "project" } }
   }
   return { state }
