@@ -958,6 +958,56 @@ describe("session HttpApi", () => {
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )
 
+  it.live("orders shared client IDs before V1 assistants and handles a rapid active-turn prompt once", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const gate = Promise.withResolvers<void>()
+      yield* llm.hold("first response", gate.promise)
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const session = yield* createSession({ title: "Monotonic V1 prompt IDs" }).pipe(provideInstanceEffect(directory))
+      const headers = { "x-slopcode-directory": directory, "content-type": "application/json" }
+      const send = (messageID: MessageID, text: string) =>
+        request(pathFor(SessionPaths.promptAsync, { sessionID: session.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            messageID,
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            parts: [{ type: "text", text }],
+          }),
+        })
+      const first = MessageID.ascending()
+
+      expect((yield* send(first, "first active prompt")).status).toBe(204)
+      yield* llm.wait(1)
+      const second = MessageID.ascending()
+      expect((yield* send(second, "rapid second prompt")).status).toBe(204)
+      yield* llm.text("second response")
+      gate.resolve()
+      yield* pollWithTimeout(
+        request(SessionPaths.status, { headers }).pipe(
+          Effect.flatMap(responseJson),
+          Effect.map((status) =>
+            typeof status === "object" && status !== null && !Object.hasOwn(status, session.id) ? true : undefined,
+          ),
+        ),
+        "V1 loop did not finish both monotonic prompts",
+      )
+
+      const messages = (yield* Session.use
+        .messages({ sessionID: session.id })
+        .pipe(provideInstanceEffect(directory), Effect.orDie)).toSorted((a, b) => a.info.id.localeCompare(b.info.id))
+      const users = messages.filter((message) => message.info.role === "user")
+      const assistants = messages.filter((message) => message.info.role === "assistant")
+      expect(users.map((message) => message.info.id)).toEqual([first, second])
+      expect(assistants).toHaveLength(2)
+      expect(first < assistants[0].info.id).toBeTrue()
+      expect(second < assistants[1].info.id).toBeTrue()
+      expect(yield* llm.calls).toBe(2)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+  )
+
   it.live("launches the V1 loop when interrupted exactly after durable admission", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer
@@ -1075,7 +1125,7 @@ describe("session HttpApi", () => {
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )
 
-  it.live("publishes one session.error when a post-admission V1 failure already emits one", () =>
+  it.live("centralizes a former self-publishing missing-model failure to one session.error", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer
       const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
@@ -1119,6 +1169,37 @@ describe("session HttpApi", () => {
         .messages({ sessionID: session.id })
         .pipe(provideInstanceEffect(directory), Effect.orDie)
       expect(messages.some((message) => String(message.info.id) === "msg_http_async_failed_loop")).toBeTrue()
+      expect(errors).toHaveLength(1)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+  )
+
+  it.live("sync V1 message returns an error and publishes missing-model failure once", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const session = yield* createSession({ title: "V1 sync execution failure" }).pipe(
+        provideInstanceEffect(directory),
+      )
+      const errors: unknown[] = []
+      const listener = (event: Parameters<typeof GlobalBus.emit>[1]) => {
+        if (event.payload.type === "session.error" && event.payload.properties.sessionID === session.id)
+          errors.push(event)
+      }
+      GlobalBus.on("event", listener)
+      yield* Effect.addFinalizer(() => Effect.sync(() => GlobalBus.off("event", listener)))
+
+      const response = yield* request(`/session/${session.id}/message`, {
+        method: "POST",
+        headers: { "x-slopcode-directory": directory, "content-type": "application/json" },
+        body: JSON.stringify({
+          messageID: MessageID.ascending(),
+          agent: "build",
+          model: { providerID: "missing", modelID: "missing" },
+          parts: [{ type: "text", text: "fail synchronously" }],
+        }),
+      })
+
+      expect(response.status).toBeGreaterThanOrEqual(400)
       expect(errors).toHaveLength(1)
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
   )

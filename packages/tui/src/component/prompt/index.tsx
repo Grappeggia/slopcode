@@ -112,6 +112,11 @@ const money = new Intl.NumberFormat("en-US", {
 })
 
 const DRAFT_RETENTION_MIN_CHARS = 20
+const ambiguous = new Set([408, 425, 429, 499])
+
+function rejected(response: Response | undefined) {
+  return !!response && response.status >= 400 && response.status < 500 && !ambiguous.has(response.status)
+}
 
 function randomIndex(count: number) {
   if (count <= 0) return 0
@@ -1288,7 +1293,7 @@ export function Prompt(props: PromptProps) {
         })
         .then((result) => {
           if (!result.error) return clearID()
-          if (result.response) return recover("Failed to run shell command", result.error)
+          if (rejected(result.response)) return recover("Failed to run shell command", result.error)
           uncertain("Shell command delivery unknown", result.error)
         })
         .catch((error) => uncertain("Shell command delivery unknown", error))
@@ -1316,7 +1321,7 @@ export function Prompt(props: PromptProps) {
         })
         .then((result) => {
           if (!result.error) return clearID()
-          if (result.response) return recover("Failed to run command", result.error)
+          if (rejected(result.response)) return recover("Failed to run command", result.error)
           uncertain("Command delivery unknown", result.error)
         })
         .catch((error) => uncertain("Command delivery unknown", error))
@@ -1341,7 +1346,7 @@ export function Prompt(props: PromptProps) {
           ],
         })
         if (result.error) {
-          if (result.response) clearID()
+          if (rejected(result.response)) clearID()
           toast.show({
             title: "Failed to send prompt",
             message: errorMessage(result.error),

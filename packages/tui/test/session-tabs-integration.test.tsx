@@ -10,6 +10,7 @@ import { SyncContext, type useSync } from "../src/context/sync"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createEventSource, createFetch, directory } from "./fixture/tui-sdk"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+import { MessageID } from "@slopcode-ai/core/v1/session"
 
 test("draft promotion, root visits, workspace refresh, and local close compose through providers", async () => {
   let tabs!: ReturnType<typeof useSessionTabs>
@@ -101,6 +102,8 @@ test("draft promotion, root visits, workspace refresh, and local close compose t
 
     const draft = tabs.owner()
     const submission = tabs.submission.id(draft, "first prompt")
+    expect(submission).toHaveLength(30)
+    expect(submission < MessageID.ascending()).toBeTrue()
     tabs.promoteDraft({ id: "ses_1", title: "New Session" })
     expect(tabs.submission.id(tabs.owner("ses_1"), "first prompt")).toBe(submission)
     expect(

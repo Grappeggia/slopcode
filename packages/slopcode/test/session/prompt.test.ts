@@ -1418,6 +1418,41 @@ it.instance("loop surfaces content-filter finishes as session errors", () =>
   }),
 )
 
+it.instance("loop publishes an unexpected runtime ownership failure exactly once", () =>
+  Effect.gen(function* () {
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const events = yield* EventV2Bridge.Service
+    const { db } = yield* Database.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    const errors: unknown[] = []
+    const off = yield* events.listen((event) => {
+      if (event.type !== Session.Event.Error.type) return Effect.void
+      if (
+        typeof event.data === "object" &&
+        event.data !== null &&
+        "sessionID" in event.data &&
+        event.data.sessionID === chat.id
+      )
+        errors.push(event)
+      return Effect.void
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "persist before runtime failure" }],
+    })
+    yield* db.update(SessionTable).set({ runtime: "v2" }).where(eq(SessionTable.id, chat.id)).run()
+
+    const exit = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.exit)
+    yield* off
+
+    expect(Exit.isFailure(exit)).toBeTrue()
+    expect(errors).toHaveLength(1)
+  }),
+)
+
 it.instance("loop stops provider overflow instead of auto-compacting when disabled", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig((url) => ({

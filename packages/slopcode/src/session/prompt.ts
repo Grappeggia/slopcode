@@ -337,7 +337,9 @@ export const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       const promptOps = yield* ops()
       const { task: taskTool } = yield* registry.named()
-      const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
+      const taskModel = task.model
+        ? yield* getModel(task.model.providerID, task.model.modelID, sessionID, false)
+        : model
       const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
         id: MessageID.ascending(),
         role: "assistant",
@@ -388,7 +390,6 @@ export const layer = Layer.effect(
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${task.agent}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
         throw error
       }
 
@@ -685,18 +686,16 @@ export const layer = Layer.effect(
       providerID: ProviderV2.ID,
       modelID: ModelV2.ID,
       sessionID: SessionID,
+      report = true,
     ) {
       const exit = yield* provider.getModel(providerID, modelID).pipe(Effect.exit)
       if (Exit.isSuccess(exit)) return exit.value
       const err = Cause.squash(exit.cause)
       if (Provider.ModelNotFoundError.isInstance(err)) {
         const hint = err.suggestions?.length ? ` Did you mean: ${err.suggestions.join(", ")}?` : ""
-        yield* events.publish(Session.Event.Error, {
-          sessionID,
-          error: new NamedError.Unknown({
-            message: `Model not found: ${err.providerID}/${err.modelID}.${hint}`,
-          }).toObject(),
-        })
+        const error = new NamedError.Unknown({ message: `Model not found: ${err.providerID}/${err.modelID}.${hint}` })
+        if (report) yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+        return yield* Effect.die(error)
       }
       return yield* Effect.die(err)
     })
@@ -1471,7 +1470,7 @@ export const layer = Layer.effect(
             history: msgs,
           }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-        const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+        const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID, false)
         const task = tasks.pop()
 
         if (task?.type === "subtask") {
@@ -1505,7 +1504,6 @@ export const layer = Layer.effect(
           const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
           const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
           const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
-          yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
           throw error
         }
         const maxSteps = agent.steps ?? Infinity
@@ -1693,12 +1691,28 @@ export const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      const row = yield* assertV1(input.sessionID)
-      return yield* state.ensureRunning(
-        input.sessionID,
-        lastAssistant(input.sessionID),
-        runLoop(input.sessionID, row.runtime_epoch),
+      const work = Effect.gen(function* () {
+        const row = yield* assertV1(input.sessionID)
+        return yield* runLoop(input.sessionID, row.runtime_epoch)
+      }).pipe(
+        Effect.tapCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.void
+          const failure = Cause.squash(cause)
+          const data =
+            typeof failure === "object" && failure !== null && "data" in failure && typeof failure.data === "object"
+              ? failure.data
+              : undefined
+          const message =
+            data && data !== null && "message" in data && typeof data.message === "string"
+              ? data.message
+              : failure instanceof Error && failure.message
+                ? failure.message
+                : Cause.pretty(cause)
+          const error = new NamedError.Unknown({ message }).toObject()
+          return events.publish(Session.Event.Error, { sessionID: input.sessionID, error })
+        }),
       )
+      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), work)
     })
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(

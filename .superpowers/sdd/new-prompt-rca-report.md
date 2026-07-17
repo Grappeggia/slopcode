@@ -171,3 +171,38 @@ The final admission review found one server interruption window and three client
 ### Remaining Operational Note
 
 - Shell and command endpoints still do not provide server-side idempotency. After ambiguous transport failure the TUI intentionally does not create an automatic retry path; the user must inspect session state before deciding whether to run the operation again.
+
+## Release Gate Closure
+
+The release gate identified three remaining cross-boundary assumptions: TUI-generated message IDs were not time ordered, any HTTP response was treated as an authoritative rejection, and V1 thrown loop failures had no single owner for `session.error` publication.
+
+### Canonical Message Ordering
+
+- TUI submission ownership now allocates `MessageID.ascending()` values and keeps the existing owner/identity map, so retries reuse the same canonical ID until success or a definitive rejection.
+- The TUI context regression verifies the canonical ID shape and that a submitted ID sorts before the next shared generated message ID.
+- A real V1 HTTP regression holds the first provider turn, submits a rapid second prompt, and verifies both user IDs sort before their generated assistants, both turns complete, and the provider runs exactly twice.
+
+### Transport Authority
+
+- Only 4xx client rejections are definitive, excluding timeout or retry statuses 408, 425, 429, and 499. Network failures, 5xx responses, and timeout-like responses remain ambiguous.
+- An ambiguous normal prompt retains its text and stable message ID. Ambiguous shell and command delivery keeps history but leaves the composer clear and displays an explicit delivery-unknown warning.
+- TUI integration coverage exercises a 502 prompt with stable-ID retry, a 503 shell response, and a 504 command response without duplicate-ready recovery.
+
+### Single V1 Error Owner
+
+- The coordinated V1 loop work effect publishes one normalized `session.error` for every non-interruption failure before propagating the cause. Shared callers observe the coordinated result instead of each publishing independently.
+- Missing-model and missing-agent paths inside the loop no longer publish before throwing. Non-throw terminal conditions, including content-filter responses, retain their explicit event publication.
+- Async missing-model, unexpected runtime-owner, and synchronous `/message` missing-model regressions each assert exactly one event; synchronous HTTP still returns an error response.
+
+### Release Verification
+
+- Focused V1 prompt: 80 pass, 1 skip. Focused session HTTP: 31 pass. Focused TUI prompt/ownership/stash: 21 pass.
+- Full TUI: 286 pass, 1 skip.
+- Relevant SlopCode session/control/HTTP: 131 pass, 1 skip.
+- Relevant core durable-session: 93 pass.
+- Typechecks pass for `packages/slopcode`, `packages/tui`, and `packages/core`; Prettier and `git diff --check` pass.
+- Changed-file oxlint reports 50 existing warnings and zero errors. Repository lint reports 4,921 existing warnings and zero errors.
+
+### Remaining Operational Note
+
+- Ambiguous shell and command delivery remains intentionally manual because those endpoints have no server-side side-effect idempotency guarantee.

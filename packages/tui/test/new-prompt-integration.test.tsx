@@ -1110,6 +1110,81 @@ describe.serial("new prompt integration", () => {
     }
   })
 
+  test("502 prompt and 503/504 detached responses remain ambiguous", async () => {
+    await using tmp = await tmpdir()
+    await Promise.all(
+      ["data", "cache", "config", "state", "tmp", "bin", "log", "repos"].map((dir) =>
+        mkdir(path.join(tmp.path, dir), { recursive: true }),
+      ),
+    )
+    const events = createEventSource()
+    const existing = session({ id: "ses_proxy_errors", directory: tmp.path })
+    let prompts = 0
+    let harness!: ReturnType<typeof fixture>
+    harness = fixture({
+      root: tmp.path,
+      events,
+      sessions: [existing],
+      commands: ["review"],
+      create: () => json(session({ id: "ses_unused", directory: tmp.path })),
+      admit(request) {
+        prompts++
+        if (prompts === 1)
+          return harness.response(
+            `${request.method} ${request.path}`,
+            { name: "BadGateway", data: { message: "proxy lost admission response" } },
+            502,
+          )
+        return harness.accepted(`${request.method} ${request.path}`)
+      },
+      handle(request) {
+        if (request.path === "/session/ses_proxy_errors/shell")
+          return json({ name: "Unavailable", data: { message: "shell response unavailable" } }, { status: 503 })
+        if (request.path === "/session/ses_proxy_errors/command")
+          return json({ name: "Timeout", data: { message: "command response timed out" } }, { status: 504 })
+        return undefined
+      },
+    })
+    const app = await mount({
+      root: tmp.path,
+      args: { sessionID: existing.id },
+      fetch: harness.fetch,
+      events: events.source,
+    })
+
+    try {
+      await wait(() => focused(app.setup) !== undefined)
+      await app.setup.mockInput.typeText("ambiguous proxy prompt")
+      app.setup.mockInput.pressEnter()
+      await wait(() => harness.controls.response.some((item) => item.status === 502))
+      expect(focused(app.setup)?.plainText).toBe("ambiguous proxy prompt")
+      const first = harness.requests.find((item) => item.path === "/session/ses_proxy_errors/prompt_async")
+
+      app.setup.mockInput.pressEnter()
+      await wait(() => focused(app.setup)?.plainText === "")
+      const admitted = harness.requests.filter((item) => item.path === "/session/ses_proxy_errors/prompt_async")
+      expect(admitted).toHaveLength(2)
+      expect(record(admitted[1]?.body)?.messageID).toBe(record(first?.body)?.messageID)
+
+      app.setup.mockInput.pressKey("!")
+      await app.setup.mockInput.typeText("touch maybe-delivered")
+      app.setup.mockInput.pressEnter()
+      await wait(() => app.setup.captureCharFrame().includes("Shell command delivery unknown"))
+      expect(focused(app.setup)?.plainText).toBe("")
+      app.setup.mockInput.pressEnter()
+      expect(harness.requests.filter((item) => item.path === "/session/ses_proxy_errors/shell")).toHaveLength(1)
+
+      await app.setup.mockInput.typeText("/review maybe-delivered")
+      app.setup.mockInput.pressEnter()
+      await wait(() => app.setup.captureCharFrame().includes("Command delivery unknown"))
+      expect(focused(app.setup)?.plainText).toBe("")
+      app.setup.mockInput.pressEnter()
+      expect(harness.requests.filter((item) => item.path === "/session/ses_proxy_errors/command")).toHaveLength(1)
+    } finally {
+      await app.close()
+    }
+  })
+
   test("an invalid-owner shell rejection falls back to stash with shell mode", async () => {
     await using tmp = await tmpdir()
     await Promise.all(

@@ -6,6 +6,7 @@ import { useSync } from "./sync"
 import { isDefaultTitle } from "../util/session"
 import type { Session } from "@slopcode-ai/sdk/v2"
 import type { PromptInfo } from "../prompt/history"
+import { MessageID } from "@slopcode-ai/core/v1/session"
 import {
   DRAFT_TAB_ID,
   activateSessionTab,
@@ -298,7 +299,7 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
           const current = owners.get(owner)?.submission
           const existing = current?.get(identity)
           if (existing) return existing
-          const id = `msg_${crypto.randomUUID().replaceAll("-", "")}`
+          const id = MessageID.ascending()
           if (valid(owner)) update(owner, "submission", new Map(current).set(identity, id))
           return id
         },
