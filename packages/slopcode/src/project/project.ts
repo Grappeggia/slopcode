@@ -218,8 +218,13 @@ export const layer = Layer.effect(
                   existing.has(JSON.stringify([item.scope, item.match, item.session_id, item.action, item.resource])),
                 )
                 .map((item) => item.id)
-              if (duplicates.length)
-                yield* d.delete(PermissionTable).where(inArray(PermissionTable.id, duplicates)).run()
+              const duplicateIDs = new Set(duplicates)
+              // Session grants reference both columns, so move them out while ownership changes.
+              const scoped = source.filter(
+                (item) => item.scope === "session" && item.session_id && !duplicateIDs.has(item.id),
+              )
+              const removed = [...duplicates, ...scoped.map((item) => item.id)]
+              if (removed.length) yield* d.delete(PermissionTable).where(inArray(PermissionTable.id, removed)).run()
               yield* d
                 .update(PermissionTable)
                 .set({ project_id: newID })
@@ -231,6 +236,11 @@ export const layer = Layer.effect(
                 .set({ project_id: newID, time_updated: sql`${SessionTable.time_updated}` })
                 .where(eq(SessionTable.project_id, oldID))
                 .run()
+              if (scoped.length)
+                yield* d
+                  .insert(PermissionTable)
+                  .values(scoped.map((item) => ({ ...item, project_id: newID })))
+                  .run()
               yield* d
                 .update(WorkspaceTable)
                 .set({ project_id: newID })

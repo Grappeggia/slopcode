@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer } from "effect"
 import { AgentV2 } from "@slopcode-ai/core/agent"
 import { Database } from "@slopcode-ai/core/database/database"
 import { EventV2 } from "@slopcode-ai/core/event"
@@ -593,6 +593,72 @@ describe("PermissionV2", () => {
 
       expect(replies).toEqual(["global"])
       expect(yield* (yield* PermissionSaved.Service).list({ scope: "global" })).toHaveLength(1)
+    }),
+  )
+
+  it.effect("releases original and secondary reject claims after listener failures", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const primary = yield* waitForRequest(
+        assertion({ id: PermissionV2.ID.create("per_fanout_primary"), action: "bash", resources: ["first"] }),
+      )
+      const secondaryID = PermissionV2.ID.create("per_fanout_secondary")
+      const secondaryFiber = yield* primary.service
+        .assert(assertion({ id: secondaryID, action: "bash", resources: ["second"] }))
+        .pipe(Effect.forkScoped)
+      const secondaryRequest = yield* Effect.gen(function* () {
+        while (true) {
+          const request = yield* primary.service.get(secondaryID)
+          if (request) return request
+          yield* Effect.yieldNow
+        }
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: "1 second",
+          orElse: () => Effect.die("secondary fanout request was not registered"),
+        }),
+      )
+      const secondary = { fiber: secondaryFiber, request: secondaryRequest }
+      expect((yield* primary.service.list()).map((request) => request.id).toSorted()).toEqual([
+        primary.request.id,
+        secondary.request.id,
+      ])
+      const events = yield* EventV2.Service
+      let failPrimary = true
+      let failSecondary = true
+      const unsubscribe = yield* events.listen((event) => {
+        if (event.type !== PermissionV2.Event.Replied.type) return Effect.void
+        if (event.data.requestID === primary.request.id && failPrimary) {
+          failPrimary = false
+          return Effect.die(new Error("primary listener failed"))
+        }
+        if (event.data.requestID === secondary.request.id && failSecondary) {
+          failSecondary = false
+          return Effect.die(new Error("secondary listener failed"))
+        }
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => unsubscribe)
+
+      const retried = yield* primary.service.reply({ requestID: primary.request.id, reply: "reject" }).pipe(Effect.exit)
+      expect(retried).toMatchObject({ _tag: "Failure" })
+      if (retried._tag === "Failure") expect(Cause.squash(retried.cause)).not.toBeInstanceOf(PermissionV2.NotFoundError)
+      expect(yield* primary.service.get(primary.request.id)).toEqual(primary.request)
+      expect(yield* primary.service.get(secondary.request.id)).toEqual(secondary.request)
+
+      const second = yield* primary.service.reply({ requestID: primary.request.id, reply: "reject" }).pipe(Effect.exit)
+      expect(second).toMatchObject({ _tag: "Failure" })
+      if (second._tag === "Failure") {
+        expect(Cause.squash(second.cause)).not.toBeInstanceOf(PermissionV2.NotFoundError)
+        expect(String(Cause.squash(second.cause))).toContain("secondary listener failed")
+      }
+      expect(yield* primary.service.get(primary.request.id)).toBeUndefined()
+      expect(yield* Fiber.await(primary.fiber)).toMatchObject({ _tag: "Failure" })
+      expect(yield* primary.service.get(secondary.request.id)).toEqual(secondary.request)
+
+      yield* primary.service.reply({ requestID: secondary.request.id, reply: "reject" })
+      expect(yield* Fiber.await(secondary.fiber)).toMatchObject({ _tag: "Failure" })
+      expect(yield* primary.service.list()).toEqual([])
     }),
   )
 

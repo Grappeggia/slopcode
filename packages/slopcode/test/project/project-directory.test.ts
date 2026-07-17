@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { $ } from "bun"
 import path from "path"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import { Hash } from "@slopcode-ai/core/util/hash"
@@ -10,6 +10,8 @@ import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { Database } from "@slopcode-ai/core/database/database"
 import { ProjectDirectoryTable, ProjectTable } from "@slopcode-ai/core/project/sql"
 import { ProjectV2 } from "@slopcode-ai/core/project"
+import { SessionV2 } from "@slopcode-ai/core/session"
+import { SessionTable } from "@slopcode-ai/core/session/sql"
 import { Project } from "@/project/project"
 import { tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -227,6 +229,30 @@ describe("Project directory persistence", () => {
         .run()
         .pipe(Effect.orDie)
       const saved = yield* PermissionSaved.Service
+      const sourceSession = SessionV2.ID.make("ses_project_permission_source")
+      const targetSession = SessionV2.ID.make("ses_project_permission_target")
+      yield* db
+        .insert(SessionTable)
+        .values([
+          {
+            id: sourceSession,
+            project_id: original.project.id,
+            slug: "source",
+            directory: tmp,
+            title: "source",
+            version: "test",
+          },
+          {
+            id: targetSession,
+            project_id: remoteID,
+            slug: "target",
+            directory: "/tmp/existing-permission-project",
+            title: "target",
+            version: "test",
+          },
+        ])
+        .run()
+        .pipe(Effect.orDie)
       yield* saved.add({
         scope: "project",
         projectID: original.project.id,
@@ -234,9 +260,17 @@ describe("Project directory persistence", () => {
         resources: ["git status", "bun test"],
       })
       yield* saved.add({ scope: "project", projectID: remoteID, action: "bash", resources: ["git status"] })
+      yield* saved.add({
+        scope: "session",
+        sessionID: sourceSession,
+        action: "bash",
+        resources: ["git status", "bun test"],
+      })
+      yield* saved.add({ scope: "session", sessionID: targetSession, action: "bash", resources: ["git status"] })
       const retained = (yield* saved.list({ projectID: original.project.id })).find(
         (item) => item.resource === "bun test",
       )!
+      expect(yield* db.get<{ foreign_keys: number }>(sql`PRAGMA foreign_keys`)).toEqual({ foreign_keys: 1 })
       yield* Effect.promise(() =>
         $`git remote add origin git@github.com:project-directory-test/permissions.git`.cwd(tmp).quiet(),
       )
@@ -246,7 +280,9 @@ describe("Project directory persistence", () => {
       expect(migrated.project.id).toBe(remoteID)
       expect(yield* saved.list({ projectID: original.project.id })).toEqual([])
       expect(
-        (yield* saved.list({ projectID: remoteID })).toSorted((a, b) => a.resource.localeCompare(b.resource)),
+        (yield* saved.list({ projectID: remoteID, scope: "project" })).toSorted((a, b) =>
+          a.resource.localeCompare(b.resource),
+        ),
       ).toMatchObject([
         { id: retained.id, action: "bash", resource: "bun test" },
         { action: "bash", resource: "git status" },
@@ -254,6 +290,15 @@ describe("Project directory persistence", () => {
       expect(
         yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, original.project.id)).get(),
       ).toBeUndefined()
+      expect((yield* db.select().from(SessionTable).where(eq(SessionTable.id, sourceSession)).get())?.project_id).toBe(
+        remoteID,
+      )
+      expect(
+        (yield* saved.list({ scope: "session", sessionID: sourceSession })).map((item) => item.resource).toSorted(),
+      ).toEqual(["bun test", "git status"])
+      expect(yield* saved.list({ scope: "session", sessionID: targetSession })).toMatchObject([
+        { projectID: remoteID, resource: "git status" },
+      ])
     }),
   )
 })

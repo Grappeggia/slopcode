@@ -1,6 +1,6 @@
 export * as PermissionV2 from "./permission"
 
-import { Context, Deferred, Effect as EffectRuntime, Layer, Schema, Semaphore } from "effect"
+import { Context, Deferred, Effect as EffectRuntime, Exit, Layer, Schema, Semaphore } from "effect"
 import { EventV2 } from "./event"
 import { Location } from "./location"
 import { AgentV2 } from "./agent"
@@ -358,7 +358,7 @@ export const layer = Layer.effect(
             else yield* Deferred.succeed(item.deferred, undefined)
           }),
         )
-      })
+      }).pipe(EffectRuntime.onExit((exit) => (Exit.isFailure(exit) ? release(item) : EffectRuntime.void)))
 
     const reply = EffectRuntime.fn("PermissionV2.reply")((input: ReplyInput) =>
       EffectRuntime.uninterruptible(
@@ -431,14 +431,25 @@ export const layer = Layer.effect(
                   }),
                 ),
               )
-              yield* settle(
-                existing,
-                answer,
-                input.message ? new CorrectedError({ feedback: input.message }) : new RejectedError(),
+              const claimed = [existing, ...related]
+              // Complete each terminal before a later listener can fail the fan-out.
+              yield* EffectRuntime.gen(function* () {
+                for (const item of claimed) {
+                  yield* settle(
+                    item,
+                    answer,
+                    item === existing && input.message
+                      ? new CorrectedError({ feedback: input.message })
+                      : new RejectedError(),
+                  )
+                }
+              }).pipe(
+                EffectRuntime.onExit((exit) =>
+                  Exit.isFailure(exit)
+                    ? EffectRuntime.forEach(claimed, release, { discard: true })
+                    : EffectRuntime.void,
+                ),
               )
-              yield* EffectRuntime.forEach(related, (item) => settle(item, "reject", new RejectedError()), {
-                discard: true,
-              })
               return
             }
 
@@ -468,7 +479,7 @@ export const layer = Layer.effect(
               )
               if (claimed) yield* settle(item, answer)
             }
-          }).pipe(EffectRuntime.onError(() => release(existing)))
+          }).pipe(EffectRuntime.onExit((exit) => (Exit.isFailure(exit) ? release(existing) : EffectRuntime.void)))
         }),
       ),
     )
