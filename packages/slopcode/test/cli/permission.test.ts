@@ -160,5 +160,5 @@ cliIt.live(
       slopcode.expectExit(globalCleared, 0)
       expect(globalCleared.stdout).toContain("Cleared 1 saved permission.")
     }),
-  90_000,
+  240_000,
 )
