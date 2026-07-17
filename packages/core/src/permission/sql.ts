@@ -38,7 +38,8 @@ export const PermissionTable = sqliteTable(
         OR (${table.scope} = 'global' AND ${table.match} = 'exact' AND ${table.session_id} IS NULL
           AND ${table.directory_id} IS NULL AND ${table.project_id} = 'global')
         OR (${table.scope} = 'directory' AND ${table.match} = 'pattern' AND ${table.session_id} IS NULL
-          AND ${table.directory_id} IS NOT NULL AND ${table.project_id} = 'global')`,
+          AND ${table.directory_id} IS NOT NULL AND length(${table.directory_id}) = 64
+          AND ${table.directory_id} NOT GLOB '*[^0-9a-f]*' AND ${table.project_id} = 'global')`,
     ),
     uniqueIndex("permission_project_scope_action_resource_match_idx")
       .on(table.project_id, table.scope, table.action, table.resource, table.match)

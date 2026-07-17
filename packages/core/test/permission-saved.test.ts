@@ -9,7 +9,7 @@ import { ProjectTable } from "@slopcode-ai/core/project/sql"
 import { AbsolutePath } from "@slopcode-ai/core/schema"
 import { SessionV2 } from "@slopcode-ai/core/session"
 import { SessionTable } from "@slopcode-ai/core/session/sql"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Layer, Schema } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { tmpdir } from "./fixture/tmpdir"
@@ -50,6 +50,14 @@ function setup() {
 }
 
 describe("PermissionSaved", () => {
+  it.effect("accepts only lowercase SHA-256 directory owners", () =>
+    Effect.sync(() => {
+      expect(Schema.is(PermissionSaved.DirectoryID)("a".repeat(64))).toBe(true)
+      for (const value of ["/tmp/project", "a".repeat(63), "A".repeat(64), "g".repeat(64)])
+        expect(Schema.is(PermissionSaved.DirectoryID)(value)).toBe(false)
+    }),
+  )
+
   it.effect("shares Git ownership and isolates normalized non-Git directory ownership", () =>
     Effect.gen(function* () {
       yield* setup()
@@ -190,6 +198,7 @@ describe("PermissionSaved", () => {
     Effect.gen(function* () {
       yield* setup()
       const { db } = yield* Database.Service
+      const directoryID = "a".repeat(64)
       const insert = (id: string, owner: string, scope: string, match: string, directory?: string) =>
         db.run(sql`
           INSERT INTO permission
@@ -198,11 +207,15 @@ describe("PermissionSaved", () => {
         `)
 
       for (const row of [
-        ["psv_directory_project", projectID, "directory", "pattern", "owner"],
-        ["psv_directory_exact", Project.ID.global, "directory", "exact", "owner"],
+        ["psv_directory_project", projectID, "directory", "pattern", directoryID],
+        ["psv_directory_exact", Project.ID.global, "directory", "exact", directoryID],
         ["psv_directory_missing", Project.ID.global, "directory", "pattern"],
-        ["psv_project_directory", projectID, "project", "pattern", "owner"],
-        ["psv_global_directory", Project.ID.global, "global", "exact", "owner"],
+        ["psv_project_directory", projectID, "project", "pattern", directoryID],
+        ["psv_global_directory", Project.ID.global, "global", "exact", directoryID],
+        ["psv_directory_raw", Project.ID.global, "directory", "pattern", "/tmp/project"],
+        ["psv_directory_short", Project.ID.global, "directory", "pattern", "a".repeat(63)],
+        ["psv_directory_upper", Project.ID.global, "directory", "pattern", "A".repeat(64)],
+        ["psv_directory_nonhex", Project.ID.global, "directory", "pattern", "g".repeat(64)],
       ] as const) {
         expect(Exit.isFailure(yield* insert(...row).pipe(Effect.exit))).toBe(true)
       }

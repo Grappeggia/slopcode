@@ -2685,7 +2685,7 @@
       "table": "todo"
     },
     {
-      "value": "(\"scope\" = 'project' AND \"match\" = 'pattern' AND \"session_id\" IS NULL)\n        AND \"directory_id\" IS NULL\n        OR (\"scope\" = 'session' AND \"match\" = 'exact' AND \"session_id\" IS NOT NULL\n          AND \"directory_id\" IS NULL)\n        OR (\"scope\" = 'global' AND \"match\" = 'exact' AND \"session_id\" IS NULL\n          AND \"directory_id\" IS NULL AND \"project_id\" = 'global')\n        OR (\"scope\" = 'directory' AND \"match\" = 'pattern' AND \"session_id\" IS NULL\n          AND \"directory_id\" IS NOT NULL AND \"project_id\" = 'global')",
+      "value": "(\"scope\" = 'project' AND \"match\" = 'pattern' AND \"session_id\" IS NULL)\n        AND \"directory_id\" IS NULL\n        OR (\"scope\" = 'session' AND \"match\" = 'exact' AND \"session_id\" IS NOT NULL\n          AND \"directory_id\" IS NULL)\n        OR (\"scope\" = 'global' AND \"match\" = 'exact' AND \"session_id\" IS NULL\n          AND \"directory_id\" IS NULL AND \"project_id\" = 'global')\n        OR (\"scope\" = 'directory' AND \"match\" = 'pattern' AND \"session_id\" IS NULL\n          AND \"directory_id\" IS NOT NULL AND length(\"directory_id\") = 64\n          AND \"directory_id\" NOT GLOB '*[^0-9a-f]*' AND \"project_id\" = 'global')",
       "name": "permission_scope_match_check",
       "entityType": "checks",
       "table": "permission"

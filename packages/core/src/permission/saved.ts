@@ -22,6 +22,11 @@ export const ID = Schema.String.pipe(
 export type ID = typeof ID.Type
 
 export const DirectoryID = Schema.String.pipe(
+  Schema.check(
+    Schema.makeFilter((value) =>
+      /^[0-9a-f]{64}$/.test(value) ? undefined : "Expected a lowercase 64-character SHA-256 value",
+    ),
+  ),
   Schema.brand("PermissionSaved.DirectoryID"),
   withStatics((schema) => ({ create: (directory: string) => schema.make(Hash.sha256(FSUtil.resolve(directory))) })),
 )

@@ -3,10 +3,17 @@ import type { DatabaseMigration } from "../migration"
 
 export default {
   id: "20260717051925_permission_directory_owner",
+  strict: true,
   up(tx) {
     return Effect.gen(function* () {
-      yield* tx.run(`ALTER TABLE \`permission\` ADD \`directory_id\` text;`)
-      yield* tx.run(`PRAGMA foreign_keys=OFF;`)
+      const tables = yield* tx.all<{ name: string }>(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('permission', '__new_permission');`,
+      )
+      const current = tables.some((table) => table.name === "permission")
+      const replacement = tables.some((table) => table.name === "__new_permission")
+      if (!current && replacement) yield* tx.run(`ALTER TABLE \`__new_permission\` RENAME TO \`permission\`;`)
+      if (!current && !replacement) return yield* Effect.die("Permission table not found")
+      yield* tx.run(`DROP TABLE IF EXISTS \`__new_permission\`;`)
       yield* tx.run(`
         CREATE TABLE \`__new_permission\` (
           \`id\` text PRIMARY KEY,
@@ -28,16 +35,27 @@ export default {
                 OR ("scope" = 'global' AND "match" = 'exact' AND "session_id" IS NULL
                   AND "directory_id" IS NULL AND "project_id" = 'global')
                 OR ("scope" = 'directory' AND "match" = 'pattern' AND "session_id" IS NULL
-                  AND "directory_id" IS NOT NULL AND "project_id" = 'global'))
+                  AND "directory_id" IS NOT NULL AND length("directory_id") = 64
+                  AND "directory_id" NOT GLOB '*[^0-9a-f]*' AND "project_id" = 'global'))
         );
       `)
-      yield* tx.run(`INSERT INTO \`__new_permission\`(\`id\`, \`project_id\`, \`action\`, \`resource\`, \`scope\`, \`match\`, \`session_id\`, \`time_created\`, \`time_updated\`) SELECT \`id\`, \`project_id\`, \`action\`, \`resource\`, \`scope\`, \`match\`, \`session_id\`, \`time_created\`, \`time_updated\` FROM \`permission\`;`)
+      const columns = yield* tx.all<{ name: string }>(`PRAGMA table_info('permission');`)
+      yield* tx.run(
+        columns.some((column) => column.name === "directory_id")
+          ? `INSERT INTO \`__new_permission\`(\`id\`, \`project_id\`, \`action\`, \`resource\`, \`scope\`, \`match\`, \`session_id\`, \`directory_id\`, \`time_created\`, \`time_updated\`) SELECT \`id\`, \`project_id\`, \`action\`, \`resource\`, \`scope\`, \`match\`, \`session_id\`, \`directory_id\`, \`time_created\`, \`time_updated\` FROM \`permission\`;`
+          : `INSERT INTO \`__new_permission\`(\`id\`, \`project_id\`, \`action\`, \`resource\`, \`scope\`, \`match\`, \`session_id\`, \`time_created\`, \`time_updated\`) SELECT \`id\`, \`project_id\`, \`action\`, \`resource\`, \`scope\`, \`match\`, \`session_id\`, \`time_created\`, \`time_updated\` FROM \`permission\`;`,
+      )
       yield* tx.run(`DROP TABLE \`permission\`;`)
       yield* tx.run(`ALTER TABLE \`__new_permission\` RENAME TO \`permission\`;`)
-      yield* tx.run(`PRAGMA foreign_keys=ON;`)
-      yield* tx.run(`CREATE UNIQUE INDEX \`permission_project_scope_action_resource_match_idx\` ON \`permission\` (\`project_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NULL AND "permission"."directory_id" IS NULL;`)
-      yield* tx.run(`CREATE UNIQUE INDEX \`permission_session_scope_action_resource_match_idx\` ON \`permission\` (\`session_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NOT NULL;`)
-      yield* tx.run(`CREATE UNIQUE INDEX \`permission_directory_scope_action_resource_match_idx\` ON \`permission\` (\`directory_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."directory_id" IS NOT NULL;`)
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`permission_project_scope_action_resource_match_idx\` ON \`permission\` (\`project_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NULL AND "permission"."directory_id" IS NULL;`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`permission_session_scope_action_resource_match_idx\` ON \`permission\` (\`session_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."session_id" IS NOT NULL;`,
+      )
+      yield* tx.run(
+        `CREATE UNIQUE INDEX \`permission_directory_scope_action_resource_match_idx\` ON \`permission\` (\`directory_id\`,\`scope\`,\`action\`,\`resource\`,\`match\`) WHERE "permission"."directory_id" IS NOT NULL;`,
+      )
     })
   },
 } satisfies DatabaseMigration.Migration

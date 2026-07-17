@@ -151,21 +151,34 @@ describe("DatabaseMigration", () => {
         `)
         yield* db.run(sql`CREATE UNIQUE INDEX session_id_project_idx ON session(id, project_id)`)
         yield* db.run(sql`INSERT INTO project (id) VALUES ('global'), ('project_old')`)
+        yield* db.run(sql`INSERT INTO session (id, project_id) VALUES ('ses_directory_migration', 'project_old')`)
         yield* db.run(sql`
           INSERT INTO permission (id, project_id, action, resource, scope, match, session_id, time_created, time_updated)
           VALUES ('psv_project', 'project_old', 'bash', 'git *', 'project', 'pattern', NULL, 1, 1),
-                 ('psv_global', 'global', 'read', 'README', 'global', 'exact', NULL, 1, 1)
+                 ('psv_global', 'global', 'read', 'README', 'global', 'exact', NULL, 1, 1),
+                 ('psv_session', 'project_old', 'bash', 'echo *', 'session', 'exact', 'ses_directory_migration', 1, 1)
         `)
 
         yield* DatabaseMigration.applyOnly(db, [permissionDirectoryOwnerMigration])
         expect(yield* db.all(sql`SELECT id, scope, directory_id FROM permission ORDER BY id`)).toEqual([
           { id: "psv_global", scope: "global", directory_id: null },
           { id: "psv_project", scope: "project", directory_id: null },
+          { id: "psv_session", scope: "session", directory_id: null },
         ])
+        expect(
+          yield* db.get<{ on_delete: string }>(
+            sql`SELECT on_delete FROM pragma_foreign_key_list('permission') WHERE "table" = 'session'`,
+          ),
+        ).toEqual({ on_delete: "CASCADE" })
+        yield* db.run(sql`DELETE FROM session WHERE id = 'ses_directory_migration'`)
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM permission WHERE id = 'psv_session'`)).toEqual({
+          count: 0,
+        })
+        const directoryID = "a".repeat(64)
         yield* db.run(sql`
           INSERT INTO permission
             (id, project_id, action, resource, scope, match, session_id, directory_id, time_created, time_updated)
-          VALUES ('psv_directory', 'global', 'bash', 'pwd', 'directory', 'pattern', NULL, 'owner-a', 1, 1)
+          VALUES ('psv_directory', 'global', 'bash', 'pwd', 'directory', 'pattern', NULL, ${directoryID}, 1, 1)
         `)
         expect(
           Exit.isFailure(
@@ -174,7 +187,7 @@ describe("DatabaseMigration", () => {
                 sql`
               INSERT INTO permission
                 (id, project_id, action, resource, scope, match, session_id, directory_id, time_created, time_updated)
-              VALUES ('psv_directory_duplicate', 'global', 'bash', 'pwd', 'directory', 'pattern', NULL, 'owner-a', 1, 1)
+              VALUES ('psv_directory_duplicate', 'global', 'bash', 'pwd', 'directory', 'pattern', NULL, ${directoryID}, 1, 1)
             `,
               )
               .pipe(Effect.exit),
@@ -187,12 +200,90 @@ describe("DatabaseMigration", () => {
                 sql`
               INSERT INTO permission
                 (id, project_id, action, resource, scope, match, session_id, directory_id, time_created, time_updated)
-              VALUES ('psv_directory_crossed', 'project_old', 'bash', 'pwd', 'directory', 'pattern', NULL, 'owner-b', 1, 1)
+              VALUES ('psv_directory_crossed', 'project_old', 'bash', 'pwd', 'directory', 'pattern', NULL, ${"b".repeat(64)}, 1, 1)
             `,
               )
               .pipe(Effect.exit),
           ),
         ).toBe(true)
+        for (const value of ["/tmp/project", "a".repeat(63), "A".repeat(64), "g".repeat(64)]) {
+          expect(
+            Exit.isFailure(
+              yield* db
+                .run(
+                  sql`
+                  INSERT INTO permission
+                    (id, project_id, action, resource, scope, match, session_id, directory_id, time_created, time_updated)
+                  VALUES (${`psv_invalid_${value.length}_${value[0]}`}, 'global', 'bash', ${value}, 'directory', 'pattern', NULL, ${value}, 1, 1)
+                `,
+                )
+                .pipe(Effect.exit),
+            ),
+          ).toBe(true)
+        }
+      }),
+    )
+  })
+
+  test("rolls back a failed directory owner migration and succeeds on retry", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE project (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE UNIQUE INDEX session_id_project_idx ON session(id, project_id)`)
+        yield* db.run(sql`
+          CREATE TABLE permission (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+            action TEXT NOT NULL,
+            resource TEXT NOT NULL,
+            scope TEXT DEFAULT 'project' NOT NULL,
+            match TEXT DEFAULT 'pattern' NOT NULL,
+            session_id TEXT,
+            time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL,
+            FOREIGN KEY (session_id, project_id) REFERENCES session(id, project_id) ON DELETE CASCADE,
+            CHECK((scope = 'project' AND match = 'pattern' AND session_id IS NULL)
+              OR (scope = 'session' AND match = 'exact' AND session_id IS NOT NULL)
+              OR (scope = 'global' AND match = 'exact' AND session_id IS NULL AND project_id = 'global'))
+          )
+        `)
+        yield* db.run(sql`INSERT INTO project (id) VALUES ('global'), ('project_retry')`)
+        yield* db.run(sql`
+          INSERT INTO permission (id, project_id, action, resource, scope, match, session_id, time_created, time_updated)
+          VALUES ('psv_retry_valid', 'project_retry', 'bash', 'git *', 'project', 'pattern', NULL, 1, 1)
+        `)
+        yield* db.run(sql`PRAGMA ignore_check_constraints = ON`)
+        yield* db.run(sql`
+          INSERT INTO permission (id, project_id, action, resource, scope, match, session_id, time_created, time_updated)
+          VALUES ('psv_retry_invalid', 'project_retry', 'bash', 'bad', 'invalid', 'pattern', NULL, 1, 1)
+        `)
+        yield* db.run(sql`PRAGMA ignore_check_constraints = OFF`)
+
+        expect(
+          Exit.isFailure(yield* DatabaseMigration.applyOnly(db, [permissionDirectoryOwnerMigration]).pipe(Effect.exit)),
+        ).toBe(true)
+        expect(yield* db.get(sql`PRAGMA foreign_keys`)).toEqual({ foreign_keys: 1 })
+        expect(
+          yield* db.get(sql`SELECT name FROM pragma_table_info('permission') WHERE name = 'directory_id'`),
+        ).toBeUndefined()
+        expect(
+          yield* db.get(sql`SELECT id FROM migration WHERE id = ${permissionDirectoryOwnerMigration.id}`),
+        ).toBeUndefined()
+
+        yield* db.run(sql`DELETE FROM permission WHERE id = 'psv_retry_invalid'`)
+        yield* DatabaseMigration.applyOnly(db, [permissionDirectoryOwnerMigration])
+        expect(
+          yield* db.get(sql`SELECT name FROM pragma_table_info('permission') WHERE name = 'directory_id'`),
+        ).toEqual({ name: "directory_id" })
+        expect(yield* db.get(sql`SELECT id FROM migration WHERE id = ${permissionDirectoryOwnerMigration.id}`)).toEqual(
+          { id: permissionDirectoryOwnerMigration.id },
+        )
+        expect(yield* db.get(sql`SELECT id FROM permission WHERE id = 'psv_retry_valid'`)).toEqual({
+          id: "psv_retry_valid",
+        })
       }),
     )
   })

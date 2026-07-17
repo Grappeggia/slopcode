@@ -12,7 +12,14 @@ export const ID = Schema.String.pipe(
 )
 export type ID = typeof ID.Type
 
-export const DirectoryID = Schema.String.pipe(Schema.brand("PermissionSaved.DirectoryID"))
+export const DirectoryID = Schema.String.pipe(
+  Schema.check(
+    Schema.makeFilter((value) =>
+      /^[0-9a-f]{64}$/.test(value) ? undefined : "Expected a lowercase 64-character SHA-256 value",
+    ),
+  ),
+  Schema.brand("PermissionSaved.DirectoryID"),
+)
 export type DirectoryID = typeof DirectoryID.Type
 
 export const Scope = Schema.Literals(["project", "session", "global", "directory"]).annotate({

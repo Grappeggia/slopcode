@@ -123,7 +123,8 @@ export default {
                 OR ("scope" = 'global' AND "match" = 'exact' AND "session_id" IS NULL
                   AND "directory_id" IS NULL AND "project_id" = 'global')
                 OR ("scope" = 'directory' AND "match" = 'pattern' AND "session_id" IS NULL
-                  AND "directory_id" IS NOT NULL AND "project_id" = 'global'))
+                  AND "directory_id" IS NOT NULL AND length("directory_id") = 64
+                  AND "directory_id" NOT GLOB '*[^0-9a-f]*' AND "project_id" = 'global'))
         );
       `)
       yield* tx.run(`

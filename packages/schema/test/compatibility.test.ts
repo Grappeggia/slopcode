@@ -23,6 +23,7 @@ describe("schema compatibility", () => {
 
   test("saved permission contracts reject malformed scope combinations", () => {
     const base = { id: "psv_test", action: "bash", resource: "git status" }
+    const directoryID = "a".repeat(64)
     expect(
       Schema.is(PermissionSaved.Info)({
         ...base,
@@ -52,7 +53,7 @@ describe("schema compatibility", () => {
       Schema.is(PermissionSaved.Info)({
         ...base,
         projectID: "global",
-        directoryID: "directory",
+        directoryID,
         scope: "directory",
         match: "pattern",
       }),
@@ -61,7 +62,7 @@ describe("schema compatibility", () => {
       Schema.is(PermissionSaved.Info)({
         ...base,
         projectID: "project",
-        directoryID: "directory",
+        directoryID,
         scope: "directory",
         match: "pattern",
       }),
@@ -70,10 +71,23 @@ describe("schema compatibility", () => {
       Schema.is(PermissionSaved.Info)({
         ...base,
         projectID: "global",
-        directoryID: "directory",
+        directoryID,
         scope: "project",
         match: "pattern",
       }),
     ).toBe(false)
+    for (const value of ["/tmp/project", "a".repeat(63), "A".repeat(64), "g".repeat(64)]) {
+      expect(Schema.is(PermissionSaved.DirectoryID)(value)).toBe(false)
+      expect(
+        Schema.is(PermissionSaved.Info)({
+          ...base,
+          projectID: "global",
+          directoryID: value,
+          scope: "directory",
+          match: "pattern",
+        }),
+      ).toBe(false)
+    }
+    expect(Schema.is(PermissionSaved.DirectoryID)(directoryID)).toBe(true)
   })
 })
