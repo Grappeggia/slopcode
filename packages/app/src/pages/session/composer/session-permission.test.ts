@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { createSlopcodeClient } from "@slopcode-ai/sdk/v2"
-import { permissionRespond, permissionScope } from "./session-permission"
+import { permissionScope } from "./session-permission"
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
 import { createServer, type ViteDevServer } from "vite"
 import solid from "vite-plugin-solid"
@@ -36,10 +35,13 @@ afterAll(async () => {
 })
 
 async function render(input: { request: PermissionRequest; scope: "project" | "folder"; project?: boolean }) {
-  const fixture = (await server.ssrLoadModule(
+  return (await fixture()).renderPermissionDock(input)
+}
+
+async function fixture() {
+  return (await server.ssrLoadModule(
     "/src/pages/session/composer/session-permission.fixture.tsx",
   )) as typeof import("./session-permission.fixture")
-  return fixture.renderPermissionDock(input)
 }
 
 test("maps Git and non-Git locations to project and folder copy", () => {
@@ -48,22 +50,7 @@ test("maps Git and non-Git locations to project and folder copy", () => {
 })
 
 test("sends visible session and project decisions unchanged", async () => {
-  const bodies: unknown[] = []
-  const client = createSlopcodeClient({
-    baseUrl: "http://localhost",
-    fetch: Object.assign(
-      async (input: RequestInfo | URL, init?: RequestInit) => {
-        bodies.push(await new Request(input, init).json())
-        return new Response(JSON.stringify(true), { headers: { "content-type": "application/json" } })
-      },
-      { preconnect: () => undefined },
-    ),
-  })
-
-  await permissionRespond(client, { id: "per_one", sessionID: "ses_one" }, "always", "/work")
-  await permissionRespond(client, { id: "per_two", sessionID: "ses_one" }, "project", "/work")
-
-  expect(bodies).toEqual([{ response: "always" }, { response: "project" }])
+  expect(await (await fixture()).respondPermission()).toEqual([{ response: "always" }, { response: "project" }])
 })
 
 test("renders the four visible choices for persistable requests", async () => {

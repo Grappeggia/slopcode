@@ -1,7 +1,8 @@
 import { renderToString } from "solid-js/web"
-import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
+import { createSlopcodeClient, type PermissionRequest } from "@slopcode-ai/sdk/v2"
 import { dict } from "@slopcode-ai/ui/i18n/en"
 import type { ButtonProps } from "@slopcode-ai/ui/button"
+import { permissionRespond } from "./session-permission"
 import { SessionPermissionDockView } from "./session-permission-view"
 
 function Button(props: ButtonProps) {
@@ -27,4 +28,22 @@ export function renderPermissionDock(input: {
       onDecide={() => {}}
     />
   ))
+}
+
+export async function respondPermission() {
+  const bodies: unknown[] = []
+  const client = createSlopcodeClient({
+    baseUrl: "http://localhost",
+    fetch: Object.assign(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(await new Request(input, init).json())
+        return new Response(JSON.stringify(true), { headers: { "content-type": "application/json" } })
+      },
+      { preconnect: () => undefined },
+    ),
+  })
+
+  await permissionRespond(client, { id: "per_one", sessionID: "ses_one" }, "always", "/work")
+  await permissionRespond(client, { id: "per_two", sessionID: "ses_one" }, "project", "/work")
+  return bodies
 }
