@@ -13,7 +13,9 @@ import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCle
 import "opentui-spinner/solid"
 import { createColors, createFrames } from "@slopcode-ai/tui/ui/spinner"
 import {
+  RUN_COMMAND_LIST_ROWS,
   RUN_SUBAGENT_PANEL_ROWS,
+  RUN_SUBAGENT_LIST_ROWS,
   RunCommandMenuBody,
   RunModelSelectBody,
   RunQueuedPromptSelectBody,
@@ -21,6 +23,7 @@ import {
   RunSubagentSelectBody,
   RunVariantSelectBody,
 } from "./footer.command"
+import { FOOTER_PANEL_MIN_ROWS, FOOTER_PERMISSION_MIN_ROWS, footerMenuRows } from "./footer.height"
 import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState } from "./footer.prompt"
@@ -134,6 +137,8 @@ export function RunFooterView(props: RunFooterViewProps) {
   })
   const [route, setRoute] = createSignal<FooterPromptRoute>({ type: "composer" })
   const [subagentMenuRows, setSubagentMenuRows] = createSignal(RUN_SUBAGENT_PANEL_ROWS)
+  const commandRows = createMemo(() => footerMenuRows(term().height, RUN_COMMAND_LIST_ROWS))
+  const subagentRows = createMemo(() => footerMenuRows(term().height, RUN_SUBAGENT_LIST_ROWS))
   const queuedPrompts = createMemo(() => props.queuedPrompts?.() ?? [])
   const skills = createMemo(() => (props.commands() ?? []).filter((item) => item.source === "skill"))
   const prompt = createMemo(() => active().type === "prompt" && route().type === "composer")
@@ -154,6 +159,9 @@ export function RunFooterView(props: RunFooterViewProps) {
       skilling() ||
       modeling() ||
       varianting(),
+  )
+  const panelMinimum = createMemo(() =>
+    active().type === "permission" ? FOOTER_PERMISSION_MIN_ROWS : FOOTER_PANEL_MIN_ROWS,
   )
   const selected = createMemo(() => {
     const current = route()
@@ -633,7 +641,7 @@ export function RunFooterView(props: RunFooterViewProps) {
       gap={0}
       padding={0}
     >
-      <Show when={panel() || inspecting()}>
+      <Show when={(panel() || inspecting()) && term().height >= panelMinimum()}>
         <box width="100%" height={1} flexShrink={0} backgroundColor="transparent" />
       </Show>
 
@@ -688,6 +696,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                             onClose={closePanel}
                             onSelect={openTab}
                             onRows={setSubagentMenuRows}
+                            rows={subagentRows}
                           />
                         </Match>
                         <Match when={selectingQueued()}>
@@ -702,6 +711,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                               queueMicrotask(() => composer.replacePrompt(item.prompt))
                             }}
                             onRows={setSubagentMenuRows}
+                            rows={subagentRows}
                           />
                         </Match>
                         <Match when={commanding()}>
@@ -735,12 +745,14 @@ export function RunFooterView(props: RunFooterViewProps) {
                               closePanel()
                             }}
                             onExit={props.onExit}
+                            rows={commandRows}
                           />
                         </Match>
                         <Match when={skilling()}>
                           <RunSkillSelectBody
                             theme={theme}
                             commands={props.commands}
+                            rows={commandRows}
                             onClose={closePanel}
                             onSelect={(name) => {
                               composer.replacePrompt({
@@ -760,6 +772,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                             theme={theme}
                             providers={props.providers}
                             current={props.currentModel}
+                            rows={commandRows}
                             onClose={closePanel}
                             onSelect={(model) => {
                               props.onModelSelect(model)
@@ -772,6 +785,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                             theme={theme}
                             variants={props.variants}
                             current={props.currentVariant}
+                            rows={commandRows}
                             onClose={closePanel}
                             onSelect={(variant) => {
                               props.onVariantSelect(variant)

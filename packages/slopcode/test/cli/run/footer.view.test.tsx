@@ -466,6 +466,54 @@ test("direct skill panel renders searchable skill list", async () => {
   }
 })
 
+test("direct skill panel keeps the selected item visible when list rows shrink", async () => {
+  const [commands] = createSignal<RunCommand[] | undefined>(
+    Array.from({ length: 12 }, (_, index) =>
+      command({
+        name: `skill-${String(index + 1).padStart(2, "0")}`,
+        description: `Skill ${index + 1}`,
+        source: "skill",
+      }),
+    ),
+  )
+  const [rows, setRows] = createSignal(4)
+
+  const app = await testRender(
+    () => (
+      <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
+        <RunSkillSelectBody
+          theme={() => RUN_THEME_FALLBACK.footer}
+          commands={commands}
+          rows={rows}
+          onClose={() => {}}
+          onSelect={() => {}}
+        />
+      </box>
+    ),
+    {
+      width: 100,
+      height: RUN_COMMAND_PANEL_ROWS,
+      kittyKeyboard: true,
+    },
+  )
+
+  try {
+    await app.renderOnce()
+    Array.from({ length: 6 }).forEach(() => app.mockInput.pressKey("ARROW_DOWN"))
+    await app.renderOnce()
+
+    setRows(1)
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+
+    expect(frame).toContain("skill-07")
+    expect(frame).not.toContain("skill-06")
+    expect(frame).not.toContain("skill-08")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("direct skill panel truncates long descriptions from the end", async () => {
   const [commands] = createSignal<RunCommand[] | undefined>([
     command({

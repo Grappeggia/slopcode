@@ -54,10 +54,11 @@ function moveOffset(value: number, input: { count: number; limit: number; select
   return Math.min(max, value)
 }
 
-export function createFooterMenuState(input: { count: Accessor<number>; limit?: number }) {
+export function createFooterMenuState(input: { count: Accessor<number>; limit?: number | Accessor<number> }) {
   const [selected, setSelected] = createSignal(0)
   const [offset, setOffset] = createSignal(0)
-  const limit = () => input.limit ?? FOOTER_MENU_ROWS
+  const limit = () =>
+    Math.max(1, Math.floor((typeof input.limit === "function" ? input.limit() : input.limit) ?? FOOTER_MENU_ROWS))
   const rows = createMemo(() => Math.max(1, Math.min(limit(), input.count())))
 
   const reveal = (index: number) => {
@@ -104,6 +105,10 @@ export function createFooterMenuState(input: { count: Accessor<number>; limit?: 
     setOffset((value) => moveOffset(value, { count, limit: limit(), selected: next, dir }))
   }
 
+  const page = (dir: -1 | 1) => {
+    reveal(selected() + dir * Math.max(1, rows() - 1))
+  }
+
   return {
     selected,
     offset,
@@ -111,6 +116,7 @@ export function createFooterMenuState(input: { count: Accessor<number>; limit?: 
     reveal,
     reset,
     move,
+    page,
   }
 }
 
@@ -130,7 +136,7 @@ export function RunFooterMenu(props: {
   headerColor?: ColorInput
 }) {
   const term = useTerminalDimensions()
-  const limit = () => props.limit ?? FOOTER_MENU_ROWS
+  const limit = () => Math.max(1, Math.floor(props.limit ?? FOOTER_MENU_ROWS))
   const border = () => props.border ?? true
   const [groupOffset, setGroupOffset] = createSignal(0)
   let previous = -1
