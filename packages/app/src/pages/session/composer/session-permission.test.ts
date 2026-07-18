@@ -59,7 +59,7 @@ test("renders the four visible choices for persistable requests", async () => {
 
   expect(html).toContain("Allow once")
   expect(html).toContain("Allow for this session")
-  expect(html).toContain("Always allow for this project")
+  expect(html).toContain("Always allow these patterns for this project")
   expect(html).toContain("Reject")
   expect(html).not.toContain("Remember globally")
 })
@@ -68,14 +68,14 @@ test("does not offer durable approval before project metadata is known", async (
   const html = await render({ request: request(["git status"]) })
 
   expect(html).toContain("Allow for this session")
-  expect(html).not.toContain("Always allow for this project")
-  expect(html).not.toContain("Always allow for this folder")
+  expect(html).not.toContain("Always allow these patterns for this project")
+  expect(html).not.toContain("Always allow these patterns for this folder")
 })
 
 test("renders durable confirmation lifetime and exact patterns", async () => {
   const html = await render({ request: request(["git *", "src/**/*.ts"]), scope: "folder", project: true })
 
-  expect(html).toContain("Always allow for this folder?")
+  expect(html).toContain("Always allow these patterns for this folder?")
   expect(html).toContain("survives restarts")
   expect(html).toContain("until revoked")
   expect(html).toContain("The following exact patterns will always be allowed:")
@@ -89,5 +89,5 @@ test("empty always patterns render only once and reject", async () => {
   expect(html).toContain("Allow once")
   expect(html).toContain("Reject")
   expect(html).not.toContain("Allow for this session")
-  expect(html).not.toContain("Always allow for this project")
+  expect(html).not.toContain("Always allow these patterns for this project")
 })

@@ -2724,6 +2724,101 @@ it.instance(
 )
 
 it.instance(
+  "reply - project persists external directory patterns across an instance restart",
+  () =>
+    Effect.gen(function* () {
+      const ruleset: PermissionV1.Ruleset = [{ permission: "external_directory", pattern: "*", action: "ask" }]
+      const fiber = yield* ask({
+        id: PermissionV1.ID.make("per_external_restart"),
+        sessionID: SessionID.make("session_external_restart"),
+        permission: "external_directory",
+        patterns: ["outside/shared/file.txt"],
+        metadata: {},
+        always: ["outside/shared/*"],
+        ruleset,
+      }).pipe(Effect.forkScoped)
+
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionV1.ID.make("per_external_restart"), reply: "project" })
+      yield* Fiber.join(fiber)
+      yield* reloadInstance({ directory: (yield* TestInstance).directory })
+
+      expect(
+        yield* (yield* Permission.Service).query({
+          sessionID: SessionID.make("session_external_after_restart"),
+          permission: "external_directory",
+          pattern: "outside/shared/nested/file.txt",
+          ruleset,
+        }),
+      ).toBe("allow")
+    }),
+  { git: true },
+)
+
+it.instance(
+  "reply - always remembers external directory patterns for the current session",
+  () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("session_external_always")
+      const ruleset: PermissionV1.Ruleset = [{ permission: "external_directory", pattern: "*", action: "ask" }]
+      const fiber = yield* ask({
+        id: PermissionV1.ID.make("per_external_always"),
+        sessionID,
+        permission: "external_directory",
+        patterns: ["outside/shared/file.txt"],
+        metadata: {},
+        always: ["outside/shared/*"],
+        ruleset,
+      }).pipe(Effect.forkScoped)
+
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionV1.ID.make("per_external_always"), reply: "always" })
+      yield* Fiber.join(fiber)
+      const permission = yield* Permission.Service
+
+      expect(
+        yield* permission.query({
+          sessionID,
+          permission: "external_directory",
+          pattern: "outside/shared/nested/file.txt",
+          ruleset,
+        }),
+      ).toBe("allow")
+      expect(
+        yield* permission.query({
+          sessionID: SessionID.make("session_external_other"),
+          permission: "external_directory",
+          pattern: "outside/shared/nested/file.txt",
+          ruleset,
+        }),
+      ).toBe("ask")
+    }),
+  { git: true },
+)
+
+it.instance(
+  "exact grants never authorize external directory access",
+  () =>
+    Effect.gen(function* () {
+      yield* (yield* PermissionSaved.Service).add({
+        scope: "global",
+        action: "external_directory",
+        resources: ["outside/shared/file.txt"],
+      })
+
+      expect(
+        yield* (yield* Permission.Service).query({
+          sessionID: SessionID.make("session_external_exact"),
+          permission: "external_directory",
+          pattern: "outside/shared/file.txt",
+          ruleset: [{ permission: "external_directory", pattern: "*", action: "ask" }],
+        }),
+      ).toBe("ask")
+    }),
+  { git: true },
+)
+
+it.instance(
   "saved approvals never override configured or task-ceiling denies and configured allows still win",
   () =>
     Effect.gen(function* () {

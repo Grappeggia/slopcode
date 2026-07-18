@@ -28,7 +28,9 @@ function options(scope: Scope | undefined, patterns: string[]): PermissionOption
   return [
     base[0]!,
     { optionId: "always", kind: "allow_always", name: "Allow for this session" },
-    ...(scope ? [{ optionId: "project", kind: "allow_always", name: `Always allow for this ${scope}` } as const] : []),
+    ...(scope
+      ? [{ optionId: "project", kind: "allow_always", name: `Always allow these patterns for this ${scope}` } as const]
+      : []),
     base[1]!,
   ]
 }
@@ -156,7 +158,7 @@ export class Handler {
         { optionId: "cancel", kind: "reject_once", name: "Cancel" },
       ],
       {
-        title: `Always allow for this ${scope}?`,
+        title: `Always allow these patterns for this ${scope}?`,
         rawInput: {
           lifetime: "Survives restarts until revoked.",
           exactPatterns: permission.always,

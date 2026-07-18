@@ -158,7 +158,7 @@ function RunPermissionSingleBody(props: {
   const busy = createMemo(() => state().submitting)
   const title = createMemo(() => {
     if (state().stage === "project" && props.scope) {
-      return `Always allow for this ${props.scope}`
+      return `Always allow these patterns for this ${props.scope}`
     }
 
     if (state().stage === "reject") {
@@ -598,7 +598,9 @@ function RunPermissionBatchBody(props: {
         <box flexDirection="row" gap={1}>
           <text fg={props.theme.warning}>△</text>
           <text fg={props.theme.text}>
-            {state().stage === "project" ? `Always allow for this ${props.scope}` : "Review build permissions"}
+            {state().stage === "project"
+              ? `Always allow selected patterns for this ${props.scope}`
+              : "Review build permissions"}
           </text>
           <text fg={props.theme.muted}>{`(${state().selected.length}/${props.requests.length} selected)`}</text>
         </box>
@@ -663,7 +665,7 @@ function RunPermissionBatchBody(props: {
                   : option === "always"
                     ? "Allow selected for this session"
                     : option === "project"
-                      ? `Always allow selected for this ${props.scope}`
+                      ? `Always allow selected patterns for this ${props.scope}`
                       : option === "reject"
                         ? "Reject all"
                         : permissionLabel(option, props.scope)}

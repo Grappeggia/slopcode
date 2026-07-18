@@ -217,7 +217,7 @@ describe("acp permissions", () => {
     expect(harness.requests[0].options).toEqual([
       { optionId: "once", kind: "allow_once", name: "Allow once" },
       { optionId: "always", kind: "allow_always", name: "Allow for this session" },
-      { optionId: "project", kind: "allow_always", name: "Always allow for this project" },
+      { optionId: "project", kind: "allow_always", name: "Always allow these patterns for this project" },
       { optionId: "reject", kind: "reject_once", name: "Reject" },
     ])
     expect(harness.replies).toEqual([{ requestID: "perm_persist", reply: "always", directory: "/workspace" }])
@@ -242,11 +242,11 @@ describe("acp permissions", () => {
     expect(harness.requests).toHaveLength(2)
     expect(harness.requests[0].options[2]).toMatchObject({
       optionId: "project",
-      name: "Always allow for this folder",
+      name: "Always allow these patterns for this folder",
     })
     expect(harness.requests[1]).toMatchObject({
       toolCall: {
-        title: "Always allow for this folder?",
+        title: "Always allow these patterns for this folder?",
         rawInput: {
           lifetime: "Survives restarts until revoked.",
           exactPatterns: ["echo *"],

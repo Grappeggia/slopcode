@@ -87,7 +87,7 @@ export function permissionBatchActions(
   return {
     once: "Allow selected once",
     always: "Allow selected for this session",
-    ...(scope ? { project: `Always allow selected for this ${scope}` } : {}),
+    ...(scope ? { project: `Always allow selected patterns for this ${scope}` } : {}),
     reject: "Reject all",
   }
 }

@@ -168,7 +168,7 @@ function PermissionSinglePrompt(props: { request: PermissionRequest; directory?:
     <Switch>
       <Match when={store.stage === "project"}>
         <Prompt
-          title={`Always allow for this ${scope()}`}
+          title={`Always allow these patterns for this ${scope()}`}
           body={
             <box paddingLeft={1} gap={1}>
               <For each={permissionProjectLines(props.request.always, scope())}>
@@ -555,7 +555,7 @@ function PermissionBatchPrompt(props: { requests: PermissionRequest[]; directory
     <Switch>
       <Match when={store.stage === "project"}>
         <Prompt
-          title={`Always allow for this ${scope()}`}
+          title={`Always allow these patterns for this ${scope()}`}
           body={
             <box paddingLeft={1} flexDirection="column" gap={1}>
               <text fg={theme.textMuted}>

@@ -102,18 +102,18 @@ test("permission Prompt reacts to available batch actions and normalizes selecti
     setOptions({
       once: "Allow selected once",
       always: "Allow selected for this session",
-      project: "Always allow selected for this project",
+      project: "Always allow selected patterns for this project",
       reject: "Reject all",
     })
     await waitFor(app, "Allow selected for this session")
     expect(app.captureCharFrame()).toContain("Allow selected for this session")
-    expect(app.captureCharFrame()).toContain("Always allow selected for this project")
+    expect(app.captureCharFrame()).toContain("Always allow selected patterns for this project")
 
     app.mockInput.pressKey("ARROW_RIGHT")
     app.mockInput.pressKey("ARROW_RIGHT")
     setOptions({ once: "Allow selected once", reject: "Reject all" })
     await waitFor(app, "Reject all")
-    expect(app.captureCharFrame()).not.toContain("Always allow selected for this project")
+    expect(app.captureCharFrame()).not.toContain("Always allow selected patterns for this project")
     app.mockInput.pressEnter()
     expect(selected).toEqual(["once"])
   } finally {
@@ -211,7 +211,7 @@ test("single permission replacement closes durable confirmation", async () => {
   )
 
   try {
-    await waitFor(app, "Always allow for this project")
+    await waitFor(app, "Always allow these patterns for this project")
     app.mockInput.pressKey("ARROW_RIGHT")
     app.mockInput.pressKey("ARROW_RIGHT")
     app.mockInput.pressEnter()

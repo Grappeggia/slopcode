@@ -1344,7 +1344,7 @@ test("direct durable confirmation uses folder scope and exact patterns", async (
     app.mockInput.pressEnter()
     await app.renderOnce()
     const frame = app.captureCharFrame()
-    expect(frame).toContain("Always allow for this folder")
+    expect(frame).toContain("Always allow these patterns for this folder")
     expect(frame).toContain("survives restarts")
     expect(frame).toContain("git status")
     expect(frame).not.toContain("Remember globally")
@@ -1417,7 +1417,7 @@ test("direct unknown-scope keyboard navigation cycles through every visible opti
 
     expect(replies.map((reply) => reply.reply)).toEqual(["once", "always"])
     expect(app.captureCharFrame()).toContain("Reject permission")
-    expect(app.captureCharFrame()).not.toContain("Always allow for this")
+    expect(app.captureCharFrame()).not.toContain("Always allow these patterns for this")
     expect(replies.some((reply) => reply.reply === "project")).toBe(false)
   } finally {
     off?.()
@@ -1555,7 +1555,7 @@ test("direct forecast actions normalize when a late row cannot be persisted", as
     await app.renderOnce()
     const frame = app.captureCharFrame()
     expect(frame).not.toContain("Allow selected for this session")
-    expect(frame).not.toContain("Always allow selected for this project")
+    expect(frame).not.toContain("Always allow selected patterns for this project")
 
     app.mockInput.pressEnter()
     expect(replies).toEqual([

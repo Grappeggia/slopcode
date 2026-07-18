@@ -14,7 +14,7 @@ export function permissionActions(patterns: string[], scope?: PermissionScopeLab
   return {
     once: "Allow once",
     always: "Allow for this session",
-    ...(scope ? { project: `Always allow for this ${scope}` } : {}),
+    ...(scope ? { project: `Always allow these patterns for this ${scope}` } : {}),
     reject: "Reject",
   } as const
 }

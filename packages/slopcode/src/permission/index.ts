@@ -300,11 +300,11 @@ export const layer = Layer.effect(
       pattern: string,
       rows: ReadonlyArray<Pick<PermissionSaved.Info, "action" | "resource" | "match">>,
     ) {
-      return rows.some((row) =>
-        row.match === "exact"
-          ? row.action === permission && row.resource === pattern
-          : Wildcard.match(permission, row.action) && Wildcard.match(pattern, row.resource),
-      )
+      return rows.some((row) => {
+        if (permission === "external_directory" && row.match === "exact") return false
+        if (row.match === "exact") return row.action === permission && row.resource === pattern
+        return Wildcard.match(permission, row.action) && Wildcard.match(pattern, row.resource)
+      })
     }
 
     function resolve(
@@ -315,7 +315,6 @@ export const layer = Layer.effect(
     ) {
       const configured = evaluate(permission, pattern, ruleset)
       if (configured.action !== "ask") return configured.action
-      if (permission === "external_directory") return "ask"
       return approved(permission, pattern, rows) ? "allow" : "ask"
     }
 

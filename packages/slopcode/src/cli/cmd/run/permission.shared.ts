@@ -237,7 +237,7 @@ export function permissionProjectLines(request: PermissionRequest, scope: Permis
 export function permissionLabel(option: PermissionOption, scope: PermissionScopeLabel): string {
   if (option === "once") return "Allow once"
   if (option === "always") return "Allow for this session"
-  if (option === "project") return scope ? `Always allow for this ${scope}` : "Always allow"
+  if (option === "project") return scope ? `Always allow these patterns for this ${scope}` : "Always allow"
   if (option === "reject") return "Reject"
   if (option === "confirm") return "Confirm"
   return "Cancel"

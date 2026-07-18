@@ -71,7 +71,7 @@ test("session batch approval is immediate while project approval requires confir
   expect(permissionBatchActions(initial, requests, "project")).toEqual({
     once: "Allow selected once",
     always: "Allow selected for this session",
-    project: "Always allow selected for this project",
+    project: "Always allow selected patterns for this project",
     reject: "Reject all",
   })
   expect(permissionBatchActions(initial, requests, undefined)).toEqual({
@@ -97,7 +97,7 @@ test("project batch approval derives eligibility from selected rows and revalida
   expect(permissionBatchPersistent(selected, requests)).toBe(true)
   expect(permissionBatchActions(selected, requests, "folder")).toHaveProperty(
     "project",
-    "Always allow selected for this folder",
+    "Always allow selected patterns for this folder",
   )
   const confirm = permissionBatchReply(selected, requests, "project")
   expect(confirm.state.stage).toBe("project")

@@ -20,7 +20,7 @@ test("requests without server grant candidates do not offer persistent scopes", 
   expect(permissionActions(["git status"], "folder")).toEqual({
     once: "Allow once",
     always: "Allow for this session",
-    project: "Always allow for this folder",
+    project: "Always allow these patterns for this folder",
     reject: "Reject",
   })
   expect(permissionProjectLines([], "project")).toEqual([])
