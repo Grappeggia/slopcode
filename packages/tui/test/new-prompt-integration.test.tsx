@@ -4,7 +4,7 @@ import { createTestRenderer } from "@opentui/core/testing"
 import type { TuiPluginApi } from "@slopcode-ai/plugin/tui"
 import type { Agent, GlobalEvent, Model, Provider, Session } from "@slopcode-ai/sdk/v2"
 import { Effect } from "effect"
-import { onMount } from "solid-js"
+import { createEffect, onMount } from "solid-js"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { Global } from "@slopcode-ai/core/global"
@@ -14,6 +14,7 @@ import { tmpdir } from "./fixture/fixture"
 import { useHomeSessionDestination } from "../src/routes/home/session-destination"
 import type { HostSlots } from "../src/plugin/slots"
 import type { EditorIntegration } from "../src/context/editor"
+import { useLocal } from "../src/context/local"
 
 type Setup = Awaited<ReturnType<typeof createTestRenderer>>
 type CreatedEvent = GlobalEvent & {
@@ -140,7 +141,7 @@ async function wait(check: () => boolean | Promise<boolean>, timeout = 4_000) {
 
 async function mount(input: {
   root: string
-  args?: { sessionID?: string }
+  args?: { sessionID?: string; agent?: string; prompt?: string }
   fetch: typeof globalThis.fetch
   events: ReturnType<typeof createEventSource>["source"]
   setup?: (api: TuiPluginApi, slots: HostSlots) => void
@@ -220,6 +221,14 @@ async function mount(input: {
 function SelectNewDestination() {
   const destination = useHomeSessionDestination()
   onMount(() => destination?.setDestination({ type: "new" }))
+  return null
+}
+
+function ModelReady(props: { ready: () => void }) {
+  const local = useLocal()
+  createEffect(() => {
+    if (local.model.ready) props.ready()
+  })
   return null
 }
 
@@ -358,6 +367,80 @@ function routed(api: TuiPluginApi, sessionID: string) {
 }
 
 describe.serial("new prompt integration", () => {
+  test("fast-boot --prompt waits for delayed --agent synchronization", async () => {
+    await using tmp = await tmpdir()
+    await Promise.all(
+      ["data", "cache", "config", "state", "tmp", "bin", "log", "repos"].map((dir) =>
+        mkdir(path.join(tmp.path, dir), { recursive: true }),
+      ),
+    )
+    const previous = process.env.SLOPCODE_FAST_BOOT
+    process.env.SLOPCODE_FAST_BOOT = "true"
+    const events = createEventSource()
+    const requested = { ...agent, name: "plan" }
+    let release!: (response: Response) => void
+    const delayed = new Promise<Response>((resolve) => (release = resolve))
+    let ready!: () => void
+    const models = new Promise<void>((resolve) => (ready = resolve))
+    let harness!: ReturnType<typeof fixture>
+    harness = fixture({
+      root: tmp.path,
+      events,
+      create(request) {
+        const created = { ...session({ id: "ses_agent", directory: tmp.path }), agent: requested.name }
+        harness.sessions.set(created.id, created)
+        queueMicrotask(() => harness.emit(created))
+        return harness.response(`${request.method} ${request.path}`, created)
+      },
+      admit(request) {
+        return harness.accepted(`${request.method} ${request.path}`)
+      },
+      handle(request) {
+        if (request.path === "/agent") return delayed
+        return undefined
+      },
+    })
+    let app: Awaited<ReturnType<typeof mount>> | undefined
+
+    try {
+      app = await mount({
+        root: tmp.path,
+        args: { agent: requested.name, prompt: "use the requested agent" },
+        fetch: harness.fetch,
+        events: events.source,
+        setup(_, slots) {
+          slots.register({
+            id: "test.agent-ready",
+            slots: { home_bottom: () => <ModelReady ready={ready} /> },
+          })
+        },
+      })
+      await models
+      await wait(() => focused(app!.setup)?.plainText === "use the requested agent")
+
+      expect(harness.requests.filter((item) => item.path === "/session" && item.method === "POST")).toHaveLength(0)
+      expect(app.setup.captureCharFrame()).not.toContain(`Agent not found: ${requested.name}`)
+
+      release(json([agent, requested]))
+      await wait(() => harness.requests.some((item) => item.path === "/session/ses_agent/prompt_async"))
+
+      expect(harness.requests.find((item) => item.path === "/session" && item.method === "POST")).toMatchObject({
+        body: { agent: requested.name },
+      })
+      expect(harness.requests.find((item) => item.path === "/session/ses_agent/prompt_async")).toMatchObject({
+        body: {
+          agent: requested.name,
+          parts: [{ type: "text", text: "use the requested agent" }],
+        },
+      })
+    } finally {
+      release(json([agent, requested]))
+      await app?.close()
+      if (previous === undefined) delete process.env.SLOPCODE_FAST_BOOT
+      else process.env.SLOPCODE_FAST_BOOT = previous
+    }
+  })
+
   test("/new keeps a workspace-only model on session create and first prompt", async () => {
     await using tmp = await tmpdir()
     await Promise.all(

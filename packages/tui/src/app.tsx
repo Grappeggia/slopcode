@@ -479,9 +479,15 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   })
 
   const args = useArgs()
+  let applied = false
+  createEffect(() => {
+    if (applied || sync.status === "loading" || !args.agent) return
+    applied = true
+    local.agent.set(args.agent)
+  })
+
   onMount(() => {
     batch(() => {
-      if (args.agent) local.agent.set(args.agent)
       if (args.model) {
         const { providerID, modelID } = Model.parse(args.model)
         if (!providerID || !modelID)

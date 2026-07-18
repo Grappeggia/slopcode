@@ -63,6 +63,7 @@ export function Home() {
     if (!sync.ready || !local.model.ready) return
     if (!args.prompt) return
     if (r.current.input !== args.prompt) return
+    if (args.agent && local.agent.current()?.name !== args.agent) return
     sent = true
     r.submit()
   })
