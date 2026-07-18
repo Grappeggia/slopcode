@@ -40,7 +40,7 @@ import {
   questionTabs,
   questionTotal,
 } from "./question.shared"
-import { FOOTER_PANEL_SPACER_ROWS, footerPanelMinimum } from "./footer.height"
+import { footerPanelExpandedMinimum } from "./footer.height"
 import { footerWidthPolicy } from "./footer.width"
 import type { RunFooterTheme } from "./theme"
 import type { QuestionReject, QuestionReply } from "./types"
@@ -69,9 +69,7 @@ export function RunQuestionBody(props: {
   const compact = createMemo(
     () =>
       narrow() &&
-      height() <=
-        footerPanelMinimum({ type: "question", narrow: true, single: questionSingle(props.request) }) +
-          FOOTER_PANEL_SPACER_ROWS,
+      height() < footerPanelExpandedMinimum({ type: "question", narrow: true, single: questionSingle(props.request) }),
   )
   const verb = createMemo(() => {
     if (confirm()) {

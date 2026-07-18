@@ -5,7 +5,7 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { registerSlopcodeKeymap } from "@slopcode-ai/tui/keymap"
 import { RunFooter } from "@/cli/cmd/run/footer"
 import { RUN_THEME_FALLBACK } from "@/cli/cmd/run/theme"
-import type { RunCommand } from "@/cli/cmd/run/types"
+import type { FooterView, RunCommand } from "@/cli/cmd/run/types"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 async function setup(input: { commands?: RunCommand[] } = {}) {
@@ -53,6 +53,29 @@ async function setup(input: { commands?: RunCommand[] } = {}) {
       unregister()
       app.renderer.destroy()
     },
+  }
+}
+
+async function expectBoundaries(view: FooterView, heights: number[], labels: string[], rows = labels) {
+  const out = await setup()
+
+  try {
+    out.footer.event({ type: "stream.view", view })
+    await out.app.renderOnce()
+    await out.app.waitForFrame((output) => labels.every((label) => output.includes(label)))
+    for (const height of heights) {
+      out.app.resize(70, height + 4)
+      expect(out.app.renderer.footerHeight).toBe(height)
+      expect(out.app.renderer.height).toBe(height)
+      await out.app.renderOnce()
+      const frame = await out.app.waitForFrame((output) => labels.every((label) => output.includes(label)))
+      labels.forEach((label) => expect(frame).toContain(label))
+      expect(new Set(rows.map((label) => frame.split("\n").findIndex((line) => line.includes(label)))).size).toBe(
+        rows.length,
+      )
+    }
+  } finally {
+    out.destroy()
   }
 }
 
@@ -206,4 +229,73 @@ test("open split footer menu follows final rows through shrink and grow", async 
   } finally {
     out.destroy()
   }
+})
+
+test("narrow single question preserves content through its expanded boundary", async () => {
+  await expectBoundaries(
+    {
+      type: "question",
+      request: {
+        id: "question-single-boundary",
+        sessionID: "session-1",
+        questions: [
+          {
+            question: "Choose the single boundary option",
+            header: "Single",
+            options: [{ label: "SINGLE OPTION", description: "Single boundary choice" }],
+          },
+        ],
+      },
+    },
+    [7, 8, 9, 10],
+    ["Choose the single boundary option", "select", "submit", "dismiss"],
+  )
+})
+
+test("narrow multi-question preserves content through its expanded boundary", async () => {
+  await expectBoundaries(
+    {
+      type: "question",
+      request: {
+        id: "question-multi-boundary",
+        sessionID: "session-1",
+        questions: [
+          {
+            question: "Choose the first boundary option",
+            header: "First",
+            options: [{ label: "MULTI OPTION", description: "First boundary choice" }],
+          },
+          {
+            question: "Choose the second boundary option",
+            header: "Second",
+            options: [{ label: "SECOND OPTION", description: "Second boundary choice" }],
+          },
+        ],
+      },
+    },
+    [8, 9, 10, 11, 12, 13],
+    ["Choose the first boundary option", "First", "Second", "Confirm", "tab", "select", "confirm", "dismiss"],
+    ["Choose the first boundary option", "First", "tab", "select", "confirm", "dismiss"],
+  )
+})
+
+test("narrow permission preserves content through its expanded boundary", async () => {
+  await expectBoundaries(
+    {
+      type: "permission",
+      requests: [
+        {
+          id: "permission-boundary",
+          sessionID: "session-1",
+          permission: "bash",
+          patterns: ["printf boundary-permission"],
+          metadata: {},
+          always: [],
+        },
+      ],
+    },
+    [9, 10, 11, 12],
+    ["boundary-permission", "Allow once", "Reject", "select", "confirm", "reject"],
+    ["boundary-permission", "Allow once", "select"],
+  )
 })

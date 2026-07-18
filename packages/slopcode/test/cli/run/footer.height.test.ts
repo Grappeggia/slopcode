@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { footerHeightPolicy, footerMenuRows, footerPanelMinimum } from "@/cli/cmd/run/footer.height"
+import {
+  footerHeightPolicy,
+  footerMenuRows,
+  footerPanelExpandedMinimum,
+  footerPanelMinimum,
+} from "@/cli/cmd/run/footer.height"
 
 describe("run footer height", () => {
   test("preserves preferred heights and reserves transcript rows when possible", () => {
@@ -38,5 +43,11 @@ describe("run footer height", () => {
     expect(footerHeightPolicy({ terminal: 11, preferred: 17, minimum: panel })).toBe(7)
     expect(footerHeightPolicy({ terminal: 12, preferred: 17, minimum: multi })).toBe(8)
     expect(footerHeightPolicy({ terminal: 13, preferred: 15, minimum: permission })).toBe(9)
+  })
+
+  test("keeps compact gaps until expanded narrow layouts fit", () => {
+    expect(footerPanelExpandedMinimum({ type: "question", narrow: true, single: true })).toBe(10)
+    expect(footerPanelExpandedMinimum({ type: "question", narrow: true, single: false })).toBe(13)
+    expect(footerPanelExpandedMinimum({ type: "permission", narrow: true })).toBe(12)
   })
 })

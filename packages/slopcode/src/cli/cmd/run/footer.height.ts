@@ -15,6 +15,17 @@ export function footerPanelMinimum(input: {
   return FOOTER_PANEL_MIN_ROWS
 }
 
+export function footerPanelExpandedMinimum(input: {
+  type: "panel" | "permission" | "question"
+  narrow: boolean
+  single?: boolean
+}) {
+  // Expanded permission/single layouts add two vertical gaps; multi-question adds one content and three action gaps.
+  const gaps =
+    !input.narrow || input.type === "panel" ? 0 : input.type === "permission" ? 2 : input.single === false ? 4 : 2
+  return footerPanelMinimum(input) + FOOTER_PANEL_SPACER_ROWS + gaps
+}
+
 export function footerHeightPolicy(input: { terminal: number; preferred: number; minimum: number }) {
   const terminal = Number.isFinite(input.terminal) ? Math.max(0, Math.floor(input.terminal)) : 0
   const preferred = Number.isFinite(input.preferred) ? Math.max(0, Math.floor(input.preferred)) : 0

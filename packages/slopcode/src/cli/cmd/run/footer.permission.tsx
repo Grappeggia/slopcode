@@ -40,7 +40,7 @@ import {
   type PermissionScopeLabel,
 } from "./permission.shared"
 import { footerWidthPolicy } from "./footer.width"
-import { FOOTER_PANEL_SPACER_ROWS, FOOTER_PERMISSION_MIN_ROWS } from "./footer.height"
+import { footerPanelExpandedMinimum } from "./footer.height"
 import { toolFiletype } from "./tool"
 import { transparent, type RunBlockTheme, type RunFooterTheme } from "./theme"
 import type { PermissionBatchReply, PermissionReply, RunDiffStyle } from "./types"
@@ -159,7 +159,9 @@ function RunPermissionSingleBody(props: {
     dims()
     return renderer.height
   })
-  const compact = createMemo(() => narrow() && height() <= FOOTER_PERMISSION_MIN_ROWS + FOOTER_PANEL_SPACER_ROWS)
+  const compact = createMemo(
+    () => narrow() && height() < footerPanelExpandedMinimum({ type: "permission", narrow: true }),
+  )
   const persistent = createMemo(() => props.request.always.length > 0)
   const opts = createMemo(() => permissionOptions(state().stage, persistent(), props.scope !== undefined))
   const busy = createMemo(() => state().submitting)
