@@ -804,7 +804,10 @@ function createLayer(input: StreamInput) {
         })
 
         const idle = Effect.fn("RunStreamTransport.idle")((fallback: boolean) =>
-          Effect.promise(() => input.sdk.session.status()).pipe(
+          Effect.tryPromise({
+            try: () => input.sdk.session.status(undefined, { throwOnError: true }),
+            catch: (error) => error,
+          }).pipe(
             Effect.map((out) => {
               const item = out.data?.[input.sessionID]
               return !item || item.type === "idle"
@@ -1281,26 +1284,28 @@ function createLayer(input: StreamInput) {
                     input.trace?.write("send.command", { sessionID: input.sessionID, command: command.name })
                   }).pipe(
                     Effect.andThen(
-                      Effect.promise(() =>
-                        input.sdk.session.command(
-                          {
-                            sessionID: input.sessionID,
-                            messageID: next.prompt.messageID,
-                            agent: next.agent,
-                            model: next.model ? `${next.model.providerID}/${next.model.modelID}` : undefined,
-                            variant: next.variant,
-                            command: command.name,
-                            arguments: command.arguments,
-                            parts: [
-                              ...(next.includeFiles ? next.files : []),
-                              ...next.prompt.parts.filter(
-                                (item): item is Extract<RunPromptPart, { type: "file" }> => item.type === "file",
-                              ),
-                            ],
-                          },
-                          { signal: turn.signal },
-                        ),
-                      ).pipe(
+                      Effect.tryPromise({
+                        try: () =>
+                          input.sdk.session.command(
+                            {
+                              sessionID: input.sessionID,
+                              messageID: next.prompt.messageID,
+                              agent: next.agent,
+                              model: next.model ? `${next.model.providerID}/${next.model.modelID}` : undefined,
+                              variant: next.variant,
+                              command: command.name,
+                              arguments: command.arguments,
+                              parts: [
+                                ...(next.includeFiles ? next.files : []),
+                                ...next.prompt.parts.filter(
+                                  (item): item is Extract<RunPromptPart, { type: "file" }> => item.type === "file",
+                                ),
+                              ],
+                            },
+                            { signal: turn.signal, throwOnError: true },
+                          ),
+                        catch: (error) => error,
+                      }).pipe(
                         Effect.tap(() =>
                           Effect.sync(() => {
                             input.trace?.write("send.command.ok", {
@@ -1322,11 +1327,14 @@ function createLayer(input: StreamInput) {
                     input.trace?.write("send.prompt", req)
                   }).pipe(
                     Effect.andThen(
-                      Effect.promise(() =>
-                        input.sdk.session.promptAsync(req, {
-                          signal: turn.signal,
-                        }),
-                      ),
+                      Effect.tryPromise({
+                        try: () =>
+                          input.sdk.session.promptAsync(req, {
+                            signal: turn.signal,
+                            throwOnError: true,
+                          }),
+                        catch: (error) => error,
+                      }),
                     ),
                     Effect.tap(() =>
                       Effect.sync(() => {
@@ -1336,6 +1344,7 @@ function createLayer(input: StreamInput) {
                         item.armed = true
                       }),
                     ),
+                    Effect.asVoid,
                   )
 
           yield* send.pipe(

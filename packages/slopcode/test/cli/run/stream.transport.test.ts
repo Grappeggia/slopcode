@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { SlopcodeClient, type GlobalEvent } from "@slopcode-ai/sdk/v2"
+import { createSlopcodeClient, SlopcodeClient, type GlobalEvent } from "@slopcode-ai/sdk/v2"
 import { createSessionTransport } from "@/cli/cmd/run/stream.transport"
 import type { FooterApi, FooterEvent, LocalReplayRow, RunFilePart, StreamCommit } from "@/cli/cmd/run/types"
 
@@ -449,6 +449,37 @@ function sdk(
   spyOn(client.question, "list").mockImplementation(questions)
 
   return client
+}
+
+function httpSdk(stream: EventStream, route: (request: Request) => Response | Promise<Response>) {
+  const client = createSlopcodeClient({
+    baseUrl: "https://slopcode.test",
+    fetch: (async (request: Request) => {
+      const path = new URL(request.url).pathname
+      if (
+        path === "/session/session-1/message" ||
+        path === "/session/session-1/children" ||
+        path === "/permission" ||
+        path === "/question"
+      ) {
+        return Response.json([])
+      }
+
+      return route(request)
+    }) as unknown as typeof globalThis.fetch,
+  })
+  spyOn(client.global, "event").mockImplementation(() => globalSse(wrapGlobalStream(stream)))
+  return client
+}
+
+function httpError(message: string) {
+  return Response.json(
+    {
+      name: "BadRequest",
+      data: { message },
+    },
+    { status: 400 },
+  )
 }
 
 describe("run stream transport", () => {
@@ -2068,6 +2099,143 @@ describe("run stream transport", () => {
     } finally {
       src.close()
       await transport.close()
+    }
+  })
+
+  test("rejects generated prompt and command failures and accepts a later turn", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    let prompts = 0
+    const client = httpSdk(src.stream, (request) => {
+      const path = new URL(request.url).pathname
+      if (path === "/session/session-1/status" || path === "/session/status") {
+        return Response.json({})
+      }
+
+      if (path === "/session/session-1/prompt_async") {
+        prompts += 1
+        queueMicrotask(() => {
+          src.push(busy())
+          src.push(idle())
+        })
+        return prompts === 1 ? httpError("prompt admission failed") : new Response(undefined, { status: 204 })
+      }
+
+      if (path === "/session/session-1/command") {
+        return httpError("command submission failed")
+      }
+
+      throw new Error(`unexpected request: ${request.method} ${path}`)
+    })
+    const transport = await createSessionTransport({
+      sdk: client,
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+
+    try {
+      await expect(
+        transport.runPromptTurn({
+          agent: undefined,
+          model: undefined,
+          variant: undefined,
+          prompt: { text: "fail prompt", parts: [] },
+          files: [],
+          includeFiles: false,
+        }),
+      ).rejects.toThrow("prompt admission failed")
+
+      await expect(
+        transport.runPromptTurn({
+          agent: undefined,
+          model: undefined,
+          variant: undefined,
+          prompt: {
+            text: "/forecast",
+            parts: [],
+            command: { name: "forecast", arguments: "" },
+          },
+          files: [],
+          includeFiles: false,
+        }),
+      ).rejects.toThrow("command submission failed")
+
+      await expect(
+        transport.runPromptTurn({
+          agent: undefined,
+          model: undefined,
+          variant: undefined,
+          prompt: { text: "retry prompt", parts: [] },
+          files: [],
+          includeFiles: false,
+        }),
+      ).resolves.toBeUndefined()
+      expect(prompts).toBe(2)
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
+  test("uses the polling fallback when generated status requests fail", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    let healthy = false
+    let calls = 0
+    let settled = false
+    const client = httpSdk(src.stream, (request) => {
+      const path = new URL(request.url).pathname
+      if (path === "/session/session-1/prompt_async") {
+        queueMicrotask(() => src.push(assistant("msg-status")))
+        return new Response(undefined, { status: 204 })
+      }
+
+      if (path === "/session/status") {
+        calls += 1
+        return healthy ? Response.json({}) : httpError("status unavailable")
+      }
+
+      throw new Error(`unexpected request: ${request.method} ${path}`)
+    })
+    const transport = await createSessionTransport({
+      sdk: client,
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+    const turn = transport
+      .runPromptTurn({
+        agent: undefined,
+        model: undefined,
+        variant: undefined,
+        prompt: { text: "keep running", parts: [] },
+        files: [],
+        includeFiles: false,
+      })
+      .then(() => {
+        settled = true
+      })
+
+    try {
+      await waitFor(() => (calls > 0 ? true : undefined))
+      await Bun.sleep(20)
+      expect(settled).toBe(false)
+
+      healthy = true
+      await Promise.race([
+        turn,
+        Bun.sleep(1_000).then(() => {
+          throw new Error("turn timed out after status recovered")
+        }),
+      ])
+      expect(calls).toBeGreaterThanOrEqual(2)
+    } finally {
+      src.close()
+      await transport.close()
+      await turn.catch(() => {})
     }
   })
 

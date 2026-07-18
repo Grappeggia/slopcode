@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { SlopcodeClient } from "@slopcode-ai/sdk/v2"
-import { resolvePermissionScope, runInteractiveMode, sendPermissionBatch } from "@/cli/cmd/run/runtime"
+import { createSlopcodeClient, SlopcodeClient } from "@slopcode-ai/sdk/v2"
+import {
+  resolvePermissionScope,
+  runInteractiveMode,
+  sendPermissionBatch,
+  type RunRuntimeDeps,
+} from "@/cli/cmd/run/runtime"
 import type { FooterApi, RunProvider } from "@/cli/cmd/run/types"
 
 type SessionMessage = NonNullable<Awaited<ReturnType<SlopcodeClient["session"]["messages"]>>["data"]>[number]
@@ -167,6 +172,95 @@ describe("run interactive runtime", () => {
     ).toBe("temporary API failure")
     await sendPermissionBatch(permission, input)
     expect(attempt).toBe(2)
+  })
+
+  test("propagates generated blocker mutation failures and permits retries", async () => {
+    const attempts = new Map<string, number>()
+    const sdk = createSlopcodeClient({
+      baseUrl: "https://slopcode.test",
+      fetch: (async (request: Request) => {
+        const path = new URL(request.url).pathname
+        if (
+          request.method === "POST" &&
+          (path === "/permission/per-1/reply" || path === "/question/que-1/reply" || path === "/question/que-1/reject")
+        ) {
+          const count = (attempts.get(path) ?? 0) + 1
+          attempts.set(path, count)
+          if (count === 1) throw new Error(`${path} failed`)
+          return Response.json(true)
+        }
+
+        if (path === "/config/providers") return Response.json({ providers: [], default: {} })
+        if (path === "/experimental/resource") return Response.json({})
+        if (path === "/project/current") return Response.json({ id: "project-1", vcs: "git" })
+        return Response.json([])
+      }) as unknown as typeof globalThis.fetch,
+    })
+    const ui = footer()
+    const ready = defer<Parameters<NonNullable<RunRuntimeDeps["createRuntimeLifecycle"]>>[0]>()
+    const task = runInteractiveMode(
+      {
+        sdk,
+        directory: "/tmp",
+        sessionID: "session-1",
+        sessionTitle: "Session",
+        resume: false,
+        agent: undefined,
+        model: undefined,
+        variant: undefined,
+        files: [],
+        thinking: true,
+        backgroundSubagents: false,
+      },
+      {
+        createRuntimeLifecycle: async (input) => {
+          ready.resolve(input)
+          return {
+            footer: ui,
+            onResize: () => () => {},
+            refreshTheme: () => {},
+            resetForReplay: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+          }
+        },
+        streamTransport: Promise.resolve({
+          createSessionTransport: async () => ({
+            runPromptTurn: async () => {},
+            selectSubagent: () => {},
+            replayOnResize: async () => false,
+            close: async () => {},
+          }),
+          formatUnknownError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        }),
+      },
+    )
+
+    try {
+      const callbacks = await ready.promise
+      const cases = [
+        {
+          path: "/permission/per-1/reply",
+          send: () => callbacks.onPermissionReply({ requestID: "per-1", reply: "once" }),
+        },
+        {
+          path: "/question/que-1/reply",
+          send: () => callbacks.onQuestionReply({ requestID: "que-1", answers: [["yes"]] }),
+        },
+        {
+          path: "/question/que-1/reject",
+          send: () => callbacks.onQuestionReject({ requestID: "que-1" }),
+        },
+      ]
+
+      for (const item of cases) {
+        await expect(item.send()).rejects.toThrow(`${item.path} failed`)
+        await expect(item.send()).resolves.toBeUndefined()
+        expect(attempts.get(item.path)).toBe(2)
+      }
+    } finally {
+      ui.close()
+      await task
+    }
   })
 
   test("waits for provider metadata before eager replay transport bootstrap", async () => {

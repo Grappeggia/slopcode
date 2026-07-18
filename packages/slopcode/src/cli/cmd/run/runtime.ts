@@ -282,7 +282,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
 
       log?.write("send.permission.reply", next)
-      await ctx.sdk.permission.reply(next)
+      await ctx.sdk.permission.reply(next, { throwOnError: true })
     },
     onPermissionBatchReply: async (next) => {
       log?.write("send.permission.batch", next)
@@ -293,14 +293,14 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         return
       }
 
-      await ctx.sdk.question.reply(next)
+      await ctx.sdk.question.reply(next, { throwOnError: true })
     },
     onQuestionReject: async (next) => {
       if (state.demo?.questionReject(next)) {
         return
       }
 
-      await ctx.sdk.question.reject(next)
+      await ctx.sdk.question.reject(next, { throwOnError: true })
     },
     onCycleVariant: () => {
       if (!state.model || state.variants.length === 0) {
