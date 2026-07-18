@@ -13,7 +13,7 @@
 // All state logic lives in question.shared.ts as a pure state machine.
 // This component just renders it and dispatches keyboard events.
 /** @jsxImportSource @opentui/solid */
-import type { TextareaRenderable } from "@opentui/core"
+import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js"
 import type { QuestionRequest } from "@slopcode-ai/sdk/v2"
@@ -76,9 +76,17 @@ export function RunQuestionBody(props: {
     return "confirm"
   })
   let area: TextareaRenderable | undefined
+  let scroll: ScrollBoxRenderable | undefined
+  const row = (tab: number, selected: number) => `run-question-${props.request.id}-${tab}-${selected}`
+  const context = createMemo(() => `${props.request.id}:${state().tab}`)
 
   createEffect(() => {
     setState((prev) => questionSync(prev, props.request.id))
+  })
+
+  createEffect(() => {
+    context()
+    scroll?.scrollTo(0)
   })
 
   const setTab = (tab: number) => {
@@ -86,7 +94,9 @@ export function RunQuestionBody(props: {
   }
 
   const move = (dir: -1 | 1) => {
-    setState((prev) => questionMove(prev, props.request, dir))
+    const next = questionMove(state(), props.request, dir)
+    setState(next)
+    scroll?.scrollChildIntoView(row(next.tab, next.selected))
   }
 
   const beginReply = async (input: QuestionReply) => {
@@ -127,6 +137,7 @@ export function RunQuestionBody(props: {
     const base = state()
     const cur = questionSetSelected(base, selected)
     const next = questionSelect(cur, props.request)
+    scroll?.scrollChildIntoView(row(base.tab, selected))
     if (next.state !== base) {
       setState(next.state)
     }
@@ -164,6 +175,27 @@ export function RunQuestionBody(props: {
     void beginReject(questionReject(props.request))
   }
 
+  const scrollContent = (name: string, lines: boolean) => {
+    if (name === "home" || name === "end") {
+      scroll?.scrollTo(name === "home" ? 0 : scroll.scrollHeight)
+      return true
+    }
+
+    const amount =
+      name === "pageup"
+        ? -(scroll?.height ?? 0)
+        : name === "pagedown"
+          ? (scroll?.height ?? 0)
+          : lines && (name === "up" || name === "k")
+            ? -1
+            : lines && (name === "down" || name === "j")
+              ? 1
+              : undefined
+    if (amount === undefined) return false
+    scroll?.scrollBy(amount)
+    return true
+  }
+
   useKeyboard((event) => {
     const cur = state()
     if (cur.submitting) {
@@ -196,6 +228,11 @@ export function RunQuestionBody(props: {
     if (!single() && event.name === "tab") {
       const dir = event.shift ? -1 : 1
       setTab((cur.tab + dir + questionTabs(props.request)) % questionTabs(props.request))
+      event.preventDefault()
+      return
+    }
+
+    if (scrollContent(event.name, questionConfirm(props.request, cur))) {
       event.preventDefault()
       return
     }
@@ -264,6 +301,7 @@ export function RunQuestionBody(props: {
 
       area.focus()
       area.cursorOffset = area.plainText.length
+      scroll?.scrollChildIntoView(row(state().tab, state().selected))
     })
   })
 
@@ -327,6 +365,10 @@ export function RunQuestionBody(props: {
                     foregroundColor: props.theme.line,
                   },
                 }}
+                ref={(item: ScrollBoxRenderable) => {
+                  scroll = item
+                  item.scrollTo(0)
+                }}
               >
                 <box width="100%" flexDirection="column" gap={1}>
                   <box paddingLeft={1}>
@@ -353,25 +395,29 @@ export function RunQuestionBody(props: {
             </box>
           }
         >
-          <box width="100%" flexGrow={1} flexShrink={1} paddingLeft={1} gap={1}>
-            <box>
-              <text fg={props.theme.text} wrapMode="word">
-                {info()?.question}
-                {info()?.multiple ? " (select all that apply)" : ""}
-              </text>
-            </box>
+          <box width="100%" flexGrow={1} flexShrink={1} paddingLeft={1}>
+            <scrollbox
+              width="100%"
+              height="100%"
+              verticalScrollbarOptions={{
+                trackOptions: {
+                  backgroundColor: props.theme.surface,
+                  foregroundColor: props.theme.line,
+                },
+              }}
+              ref={(item: ScrollBoxRenderable) => {
+                scroll = item
+                item.scrollTo(0)
+              }}
+            >
+              <box width="100%" flexDirection="column" gap={1}>
+                <box flexShrink={0}>
+                  <text fg={props.theme.text} wrapMode="word">
+                    {info()?.question}
+                    {info()?.multiple ? " (select all that apply)" : ""}
+                  </text>
+                </box>
 
-            <box flexGrow={1} flexShrink={1}>
-              <scrollbox
-                width="100%"
-                height="100%"
-                verticalScrollbarOptions={{
-                  trackOptions: {
-                    backgroundColor: props.theme.surface,
-                    foregroundColor: props.theme.line,
-                  },
-                }}
-              >
                 <box width="100%" flexDirection="column">
                   <For each={info()?.options ?? []}>
                     {(item, index) => {
@@ -379,8 +425,10 @@ export function RunQuestionBody(props: {
                       const hit = () => state().answers[state().tab]?.includes(item.label) ?? false
                       return (
                         <box
+                          id={row(state().tab, index())}
                           flexDirection="column"
                           gap={0}
+                          flexShrink={0}
                           onMouseOver={() => {
                             if (!disabled()) {
                               mark(index())
@@ -424,8 +472,10 @@ export function RunQuestionBody(props: {
 
                   <Show when={questionCustom(props.request, state())}>
                     <box
+                      id={row(state().tab, info()?.options.length ?? 0)}
                       flexDirection="column"
                       gap={0}
+                      flexShrink={0}
                       onMouseOver={() => {
                         if (!disabled()) {
                           mark(info()?.options.length ?? 0)
@@ -505,8 +555,8 @@ export function RunQuestionBody(props: {
                     </box>
                   </Show>
                 </box>
-              </scrollbox>
-            </box>
+              </box>
+            </scrollbox>
           </box>
         </Show>
       </box>

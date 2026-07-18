@@ -121,6 +121,17 @@ export function createPermissionBatchState(requests: PermissionRequest[]): Permi
   return { stage: "review", focused: 0, requestIDs, selected: requestIDs }
 }
 
+function permissionBatchFocus(state: PermissionBatchState, requests: PermissionRequest[]) {
+  if (state.stage !== "project" || state.selected.includes(requests[state.focused]?.id ?? "")) return state
+  return {
+    ...state,
+    focused: Math.max(
+      requests.findIndex((item) => state.selected.includes(item.id)),
+      0,
+    ),
+  }
+}
+
 export function permissionBatchSync(state: PermissionBatchState, requests: PermissionRequest[]): PermissionBatchState {
   const requestIDs = requests.map((item) => item.id)
   const known = new Set(state.requestIDs)
@@ -131,12 +142,17 @@ export function permissionBatchSync(state: PermissionBatchState, requests: Permi
     selected: [...state.selected.filter((id) => requestIDs.includes(id)), ...requestIDs.filter((id) => !known.has(id))],
   }
   if (next.stage === "project" && !permissionBatchPersistent(next, requests)) return { ...next, stage: "review" }
-  return next
+  return permissionBatchFocus(next, requests)
 }
 
 export function permissionBatchMove(state: PermissionBatchState, requests: PermissionRequest[], step: number) {
-  if (!requests.length) return state
-  return { ...state, focused: (state.focused + step + requests.length) % requests.length }
+  const visible = requests.flatMap((item, index) =>
+    state.stage === "review" || state.selected.includes(item.id) ? [index] : [],
+  )
+  if (!visible.length) return state
+  const index = visible.indexOf(state.focused)
+  const current = index === -1 ? (step > 0 ? -1 : 0) : index
+  return { ...state, focused: visible[(current + step + visible.length) % visible.length] }
 }
 
 export function permissionBatchToggle(state: PermissionBatchState, requestID: string) {
@@ -159,7 +175,10 @@ export function permissionBatchReply(
   option: PermissionBatchOption,
 ): { state: PermissionBatchState; reply?: PermissionBatchReply } {
   if (option === "project" && state.stage === "review") {
-    return permissionBatchPersistent(state, requests) ? { state: { ...state, stage: "project" } } : { state }
+    if (!permissionBatchPersistent(state, requests)) return { state }
+    return {
+      state: permissionBatchFocus({ ...state, stage: "project" }, requests),
+    }
   }
   if (option === "cancel") return { state: { ...state, stage: "review" } }
   const batchID = requests[0]?.batchID

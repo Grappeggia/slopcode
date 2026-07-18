@@ -11,7 +11,7 @@
 // The diff view (when available) uses the same diff component as scrollback
 // tool snapshots.
 /** @jsxImportSource @opentui/solid */
-import type { TextareaRenderable } from "@opentui/core"
+import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
@@ -156,6 +156,7 @@ function RunPermissionSingleBody(props: {
   const persistent = createMemo(() => props.request.always.length > 0)
   const opts = createMemo(() => permissionOptions(state().stage, persistent(), props.scope !== undefined))
   const busy = createMemo(() => state().submitting)
+  let scroll: ScrollBoxRenderable | undefined
   const title = createMemo(() => {
     if (state().stage === "project" && props.scope) {
       return `Always allow these patterns for this ${props.scope}`
@@ -174,6 +175,7 @@ function RunPermissionSingleBody(props: {
       return
     }
 
+    scroll?.scrollTo(0)
     setState(createPermissionBodyState(id))
   })
 
@@ -235,6 +237,30 @@ function RunPermissionSingleBody(props: {
       if (["left", "right", "h", "l", "tab", "return", "escape"].includes(event.name)) {
         event.preventDefault()
       }
+      return
+    }
+
+    if (event.name === "up" || event.name === "k") {
+      scroll?.scrollBy(-1)
+      event.preventDefault()
+      return
+    }
+
+    if (event.name === "down" || event.name === "j") {
+      scroll?.scrollBy(1)
+      event.preventDefault()
+      return
+    }
+
+    if (event.name === "pageup" || event.name === "pagedown") {
+      if (scroll) scroll.scrollBy(event.name === "pageup" ? -scroll.height : scroll.height)
+      event.preventDefault()
+      return
+    }
+
+    if (event.name === "home" || event.name === "end") {
+      scroll?.scrollTo(event.name === "home" ? 0 : scroll.scrollHeight)
+      event.preventDefault()
       return
     }
 
@@ -368,6 +394,10 @@ function RunPermissionSingleBody(props: {
                     foregroundColor: props.theme.line,
                   },
                 }}
+                ref={(item: ScrollBoxRenderable) => {
+                  scroll = item
+                  item.scrollTo(0)
+                }}
               >
                 <box width="100%" flexDirection="column" gap={1}>
                   <Show
@@ -421,6 +451,10 @@ function RunPermissionSingleBody(props: {
                     backgroundColor: props.theme.surface,
                     foregroundColor: props.theme.line,
                   },
+                }}
+                ref={(item: ScrollBoxRenderable) => {
+                  scroll = item
+                  item.scrollTo(0)
                 }}
               >
                 <box width="100%" flexDirection="column" gap={1} paddingLeft={1}>
@@ -508,6 +542,11 @@ function RunPermissionBatchBody(props: {
           : ["once", "always", "reject"]
         : ["once", "reject"],
   )
+  const context = createMemo(() => `${props.requests[0]?.batchID ?? props.requests[0]?.id}:${state().stage}`)
+  const focused = createMemo(() => [state().stage, props.requests[state().focused]?.id] as const)
+  let scroll: ScrollBoxRenderable | undefined
+
+  const row = (id: string) => `run-permission-${id}`
 
   createEffect(() => {
     const list = options()
@@ -520,6 +559,16 @@ function RunPermissionBatchBody(props: {
       if (current.stage === "project" && next.stage === "review") setSelected("once")
       return next
     })
+  })
+
+  createEffect(() => {
+    context()
+    scroll?.scrollTo(0)
+  })
+
+  createEffect(() => {
+    const id = focused()[1]
+    if (id) queueMicrotask(() => scroll?.scrollChildIntoView(row(id)))
   })
 
   const submit = async (reply: PermissionBatchReply) => {
@@ -550,18 +599,25 @@ function RunPermissionBatchBody(props: {
     setSelected(list[(index + step + list.length) % list.length])
   }
 
+  const move = (step: -1 | 1) => {
+    const next = permissionBatchMove(state(), props.requests, step)
+    setState(next)
+    const request = props.requests[next.focused]
+    if (request) scroll?.scrollChildIntoView(row(request.id))
+  }
+
   useKeyboard((event) => {
     if (submitting()) {
       event.preventDefault()
       return
     }
     if (event.name === "up" || event.name === "k") {
-      setState((current) => permissionBatchMove(current, props.requests, -1))
+      move(-1)
       event.preventDefault()
       return
     }
     if (event.name === "down" || event.name === "j") {
-      setState((current) => permissionBatchMove(current, props.requests, 1))
+      move(1)
       event.preventDefault()
       return
     }
@@ -611,7 +667,16 @@ function RunPermissionBatchBody(props: {
         </text>
         <Show when={error()}>{(message) => <text fg={props.theme.error}>{message()}</text>}</Show>
       </box>
-      <scrollbox width="100%" height="100%" paddingLeft={2} paddingRight={2}>
+      <scrollbox
+        width="100%"
+        height="100%"
+        paddingLeft={2}
+        paddingRight={2}
+        ref={(item: ScrollBoxRenderable) => {
+          scroll = item
+          item.scrollTo(0)
+        }}
+      >
         <box flexDirection="column">
           <For each={props.requests}>
             {(request, index) => {
@@ -620,6 +685,7 @@ function RunPermissionBatchBody(props: {
               return (
                 <Show when={state().stage === "review" || picked()}>
                   <box
+                    id={row(request.id)}
                     flexDirection="column"
                     paddingLeft={1}
                     backgroundColor={focused() ? props.theme.line : transparent}
