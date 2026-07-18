@@ -1,8 +1,9 @@
-import { TextAttributes } from "@opentui/core"
+import { CliRenderEvents, TextAttributes } from "@opentui/core"
+import { useRenderer } from "@opentui/solid"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { createStore } from "solid-js/store"
-import { For, Show } from "solid-js"
+import { For, Show, onCleanup } from "solid-js"
 import { useBindings } from "../keymap"
 import { DialogConfirm } from "../ui/dialog-confirm"
 import { useToast } from "../ui/toast"
@@ -16,13 +17,28 @@ export function DialogSessionDeleteFailed(props: {
   onDone?: () => void
 }) {
   const dialog = useDialog()
+  const owner = dialog.stack.at(-1)
+  const renderer = useRenderer()
   const toast = useToast()
   const { theme } = useTheme()
   const [store, setStore] = createStore({
     active: "restore" as "delete" | "restore",
     confirming: false,
+    reviewed: false,
   })
   let pending = false
+  let disposed = false
+  let waiting = false
+  const expose = () => {
+    if (!waiting) return
+    waiting = false
+    setStore("reviewed", true)
+  }
+  renderer.on(CliRenderEvents.FRAME, expose)
+  onCleanup(() => {
+    disposed = true
+    renderer.off(CliRenderEvents.FRAME, expose)
+  })
 
   const options = [
     {
@@ -46,16 +62,21 @@ export function DialogSessionDeleteFailed(props: {
     pending = true
     const result = await Promise.resolve()
       .then(() => option.run?.())
-      .catch((error) => {
-        toast.show({
-          variant: "error",
-          title: "Failed to recover session",
-          message: errorMessage(error),
-        })
-        return false
-      })
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      )
+    if (disposed || dialog.stack.at(-1) !== owner) return
     pending = false
-    if (result === false) return
+    if ("error" in result) {
+      toast.show({
+        variant: "error",
+        title: "Failed to recover session",
+        message: errorMessage(result.error),
+      })
+      return
+    }
+    if (result.value === false) return
     props.onDone?.()
     if (!props.onDone) dialog.clear()
   }
@@ -63,6 +84,8 @@ export function DialogSessionDeleteFailed(props: {
   function confirm(active = store.active) {
     if (pending) return
     if (active === "delete") {
+      waiting = true
+      setStore("reviewed", false)
       setStore("confirming", true)
       return
     }
@@ -134,11 +157,17 @@ export function DialogSessionDeleteFailed(props: {
         title="Delete Workspace"
         message={`Delete workspace "${props.workspace}"? All sessions attached to it will be deleted.`}
         close={false}
+        initial="cancel"
+        enabled={store.reviewed}
         onConfirm={() => {
           setStore("confirming", false)
+          setStore("reviewed", false)
           void run("delete")
         }}
-        onCancel={() => setStore("confirming", false)}
+        onCancel={() => {
+          setStore("confirming", false)
+          setStore("reviewed", false)
+        }}
       />
     </Show>
   )

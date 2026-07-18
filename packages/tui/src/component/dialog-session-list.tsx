@@ -244,9 +244,10 @@ export function DialogSessionList() {
           onTrigger: async (option) => {
             if (toDelete() === option.value) {
               const session = sessions().find((item) => item.id === option.value)
+              const status = () => (session?.workspaceID ? project.workspace.status(session.workspaceID) : undefined)
               const unavailable = () => {
-                const status = session?.workspaceID ? project.workspace.status(session.workspaceID) : undefined
-                return status === "disconnected" || status === "error"
+                const value = status()
+                return value === "disconnected" || value === "error"
               }
               const fail = (error: unknown) => {
                 if (session?.workspaceID && unavailable()) {
@@ -274,7 +275,8 @@ export function DialogSessionList() {
                 fail(err)
                 return
               }
-              if (session?.workspaceID && unavailable()) {
+              const workspace = status()
+              if (session?.workspaceID && workspace && workspace !== "connected") {
                 await sync.session.refresh()
               }
               if (search()) await refetch()

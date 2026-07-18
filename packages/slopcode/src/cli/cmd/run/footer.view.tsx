@@ -24,7 +24,7 @@ import {
   RunVariantSelectBody,
 } from "./footer.command"
 import { footerMenuRows, footerPanelMinimum } from "./footer.height"
-import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
+import { RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState } from "./footer.prompt"
 import { RunPermissionBody } from "./footer.permission"
@@ -388,6 +388,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     view: promptView,
     prompt,
     width,
+    height,
     theme,
     history: props.history,
     onSubmit: props.onSubmit,
@@ -837,7 +838,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                 selected={composer.selected}
                 offset={composer.offset}
                 rows={composer.rows}
-                limit={FOOTER_MENU_ROWS}
+                limit={composer.limit()}
                 border={false}
                 paddingLeft={0}
               />

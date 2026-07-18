@@ -33,7 +33,7 @@ function renderPermission(input: {
 }) {
   return testRender(
     () => (
-      <box width={input.width ?? 80} height={input.height ?? 12}>
+      <box width="100%" height="100%">
         <RunPermissionBody
           requests={input.requests}
           scope="project"
@@ -53,7 +53,7 @@ function renderPermission(input: {
 function renderQuestion(request: QuestionRequest, width = 48, height = 12, replies?: QuestionReply[]) {
   return testRender(
     () => (
-      <box width={width} height={height}>
+      <box width="100%" height="100%">
         <RunQuestionBody
           request={request}
           theme={RUN_THEME_FALLBACK.footer}
@@ -181,6 +181,40 @@ test("direct forecast focus follows overflow and skips hidden project rows", asy
   }
 })
 
+test("direct forecast keeps its focused row visible after a narrow physical shrink", async () => {
+  const requests = Array.from({ length: 12 }, (_, index) =>
+    permission({
+      id: `resize-per-${index}`,
+      permission: `resize-tool-${index}`,
+      patterns: [`resize-pattern-${index}`],
+      always: [`resize-pattern-${index}`],
+      kind: "forecast",
+      batchID: "pmb-resize",
+      batchSize: 12,
+      reason: `resize forecast reason ${index} with enough detail to wrap in a narrow terminal`,
+    }),
+  )
+  const app = await renderPermission({ requests, width: 100, height: 18 })
+
+  try {
+    await app.renderOnce()
+    Array.from({ length: 8 }).forEach(() => app.mockInput.pressKey("ARROW_DOWN"))
+    await app.waitForFrame((frame) => frame.includes("resize forecast reason 8"))
+
+    app.resize(42, 9)
+    await app.waitForFrame((frame) => frame.includes("[x] resize-tool-8"))
+
+    const focused = app
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .find((item) => item.text.includes("[x] resize-tool-8"))
+    expect(app.captureCharFrame()).toContain("[x] resize-tool-8")
+    expect(focused?.fg.toInts()).toEqual((RUN_THEME_FALLBACK.footer.highlight as RGBA).toInts())
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("direct question selection follows wrapped options through the custom row", async () => {
   const request = {
     id: "que-options",
@@ -213,6 +247,47 @@ test("direct question selection follows wrapped options through the custom row",
     app.mockInput.pressKey("HOME")
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("Choose the safest deployment")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct question re-reveals selection after shrink without ending manual review", async () => {
+  const request = {
+    id: "que-resize-selection",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: "BEGIN MANUAL REVIEW before selecting a deployment option.",
+        header: "Resize",
+        custom: false,
+        options: Array.from({ length: 9 }, (_, index) => ({
+          label: index === 7 ? "RESIZE TARGET ANSWER" : `Resize option ${index + 1}`,
+          description: `Detailed resize explanation ${index + 1} that wraps across several rows after the terminal becomes narrow.`,
+        })),
+      },
+    ],
+  } satisfies QuestionRequest
+  const app = await renderQuestion(request, 100, 18)
+
+  try {
+    await app.renderOnce()
+    Array.from({ length: 7 }).forEach(() => app.mockInput.pressKey("ARROW_DOWN"))
+    await app.waitForFrame((frame) => frame.includes("RESIZE TARGET ANSWER"))
+
+    app.resize(42, 9)
+    await app.waitForFrame((frame) => frame.includes("RESIZE TARGET ANSWER"))
+    expect(app.captureCharFrame()).toContain("RESIZE TARGET ANSWER")
+
+    app.mockInput.pressKey("HOME")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("BEGIN MANUAL REVIEW")
+    expect(app.captureCharFrame()).not.toContain("RESIZE TARGET ANSWER")
+
+    app.resize(38, 8)
+    await app.waitForFrame((frame) => frame.includes("BEGIN MANUAL REVIEW"))
+    expect(app.captureCharFrame()).toContain("BEGIN MANUAL REVIEW")
+    expect(app.captureCharFrame()).not.toContain("RESIZE TARGET ANSWER")
   } finally {
     app.renderer.destroy()
   }
@@ -505,6 +580,11 @@ test("direct custom answer textarea owns arrows home and end", async () => {
     await app.renderOnce()
     expect(area.logicalCursor.row).toBe(2)
     expect(body.scrollTop).toBe(top)
+
+    app.resize(44, 9)
+    await app.renderOnce()
+    expect(app.renderer.currentFocusedEditor).toBe(area)
+    expect(area.plainText).toBe("alpha\nbeta\ngamma")
   } finally {
     app.renderer.currentFocusedRenderable?.blur()
     app.renderer.currentFocusedEditor?.blur()

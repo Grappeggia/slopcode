@@ -77,7 +77,7 @@ function model(providerID: string, id: string) {
   } satisfies Model
 }
 
-function provider(id: string, modelID: string) {
+function provider(id: string, modelID: string): Provider {
   return {
     id,
     name: id,
@@ -141,7 +141,7 @@ async function wait(check: () => boolean | Promise<boolean>, timeout = 4_000) {
 
 async function mount(input: {
   root: string
-  args?: { sessionID?: string; agent?: string; prompt?: string }
+  args?: { sessionID?: string; agent?: string; model?: string; prompt?: string }
   fetch: typeof globalThis.fetch
   events: ReturnType<typeof createEventSource>["source"]
   setup?: (api: TuiPluginApi, slots: HostSlots) => void
@@ -237,6 +237,7 @@ function fixture(input: {
   events: ReturnType<typeof createEventSource>
   sessions?: Session[]
   workspace?: boolean
+  models?: Model[]
   commands?: string[]
   create: (request: RequestTrace, count: number) => Promise<Response> | Response
   admit: (request: RequestTrace, sessionID: string, count: number) => Promise<Response> | Response
@@ -246,6 +247,7 @@ function fixture(input: {
   const controls: ControlTrace = { response: [], event: [] }
   const sessions = new Map((input.sessions ?? []).map((item) => [item.id, item]))
   const global = provider("global", "global-model")
+  input.models?.forEach((item) => (global.models[item.id] = item))
   const workspace = provider("workspace", "workspace-model")
   let creates = 0
   let admits = 0
@@ -367,7 +369,7 @@ function routed(api: TuiPluginApi, sessionID: string) {
 }
 
 describe.serial("new prompt integration", () => {
-  test("fast-boot --prompt waits for delayed --agent synchronization", async () => {
+  test("fast-boot --prompt waits for delayed explicit agent and model synchronization", async () => {
     await using tmp = await tmpdir()
     await Promise.all(
       ["data", "cache", "config", "state", "tmp", "bin", "log", "repos"].map((dir) =>
@@ -377,7 +379,8 @@ describe.serial("new prompt integration", () => {
     const previous = process.env.SLOPCODE_FAST_BOOT
     process.env.SLOPCODE_FAST_BOOT = "true"
     const events = createEventSource()
-    const requested = { ...agent, name: "plan" }
+    const configured = model("global", "agent-model")
+    const requested = { ...agent, name: "plan", model: { providerID: "global", modelID: configured.id } }
     let release!: (response: Response) => void
     const delayed = new Promise<Response>((resolve) => (release = resolve))
     let ready!: () => void
@@ -386,6 +389,7 @@ describe.serial("new prompt integration", () => {
     harness = fixture({
       root: tmp.path,
       events,
+      models: [configured],
       create(request) {
         const created = { ...session({ id: "ses_agent", directory: tmp.path }), agent: requested.name }
         harness.sessions.set(created.id, created)
@@ -405,7 +409,11 @@ describe.serial("new prompt integration", () => {
     try {
       app = await mount({
         root: tmp.path,
-        args: { agent: requested.name, prompt: "use the requested agent" },
+        args: {
+          agent: requested.name,
+          model: "global/global-model",
+          prompt: "use the requested agent and model",
+        },
         fetch: harness.fetch,
         events: events.source,
         setup(_, slots) {
@@ -416,21 +424,26 @@ describe.serial("new prompt integration", () => {
         },
       })
       await models
-      await wait(() => focused(app!.setup)?.plainText === "use the requested agent")
+      await wait(() => focused(app!.setup)?.plainText === "use the requested agent and model")
 
       expect(harness.requests.filter((item) => item.path === "/session" && item.method === "POST")).toHaveLength(0)
       expect(app.setup.captureCharFrame()).not.toContain(`Agent not found: ${requested.name}`)
+      expect(app.setup.captureCharFrame()).not.toContain("Model global/global-model is not valid")
 
       release(json([agent, requested]))
       await wait(() => harness.requests.some((item) => item.path === "/session/ses_agent/prompt_async"))
 
       expect(harness.requests.find((item) => item.path === "/session" && item.method === "POST")).toMatchObject({
-        body: { agent: requested.name },
+        body: {
+          agent: requested.name,
+          model: { providerID: "global", id: "global-model" },
+        },
       })
       expect(harness.requests.find((item) => item.path === "/session/ses_agent/prompt_async")).toMatchObject({
         body: {
           agent: requested.name,
-          parts: [{ type: "text", text: "use the requested agent" }],
+          model: { providerID: "global", modelID: "global-model" },
+          parts: [{ type: "text", text: "use the requested agent and model" }],
         },
       })
     } finally {

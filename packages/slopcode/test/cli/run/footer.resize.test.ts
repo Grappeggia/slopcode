@@ -5,7 +5,7 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { registerSlopcodeKeymap } from "@slopcode-ai/tui/keymap"
 import { RunFooter } from "@/cli/cmd/run/footer"
 import { RUN_THEME_FALLBACK } from "@/cli/cmd/run/theme"
-import type { FooterView, RunCommand } from "@/cli/cmd/run/types"
+import type { FooterView, RunCommand, RunPrompt } from "@/cli/cmd/run/types"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 async function setup(input: { commands?: RunCommand[] } = {}) {
@@ -227,6 +227,49 @@ test("open split footer menu follows final rows through shrink and grow", async 
     expect(frame).toContain("task-07")
     expect(frame).toContain("task-08")
   } finally {
+    out.destroy()
+  }
+})
+
+test("open prompt autocomplete keeps a deep selection usable through shrink and grow", async () => {
+  const out = await setup({
+    commands: Array.from({ length: 20 }, (_, index) => ({
+      name: `task-${String(index + 1).padStart(2, "0")}`,
+      description: `Task ${index + 1}`,
+      template: "",
+      hints: [],
+      source: "command" as const,
+    })),
+  })
+  const prompts: RunPrompt[] = []
+  const off = out.footer.onPrompt((prompt) => prompts.push(prompt))
+
+  try {
+    await out.app.renderOnce()
+    out.app.mockInput.pressKey("/")
+    await out.app.waitForFrame((frame) => frame.includes("/task-01"))
+    Array.from({ length: 12 }).forEach(() => out.app.mockInput.pressKey("ARROW_DOWN"))
+    await out.app.renderOnce()
+    expect(out.app.captureCharFrame()).toContain("/task-10")
+
+    out.app.resize(100, 11)
+    await out.app.renderOnce()
+    expect(out.app.renderer.footerHeight).toBe(7)
+    expect(out.app.captureCharFrame()).toContain("/task-10")
+
+    out.app.mockInput.pressKey("ARROW_DOWN")
+    await out.app.renderOnce()
+    expect(out.app.captureCharFrame()).toContain("/task-11")
+
+    out.app.resize(100, 30)
+    await out.app.waitForFrame((frame) => frame.includes("/task-11") && frame.includes("/task-14"))
+    expect(out.app.renderer.footerHeight).toBe(12)
+
+    out.app.mockInput.pressEnter()
+    await out.app.renderOnce()
+    expect(prompts).toEqual([{ command: { name: "task-11", arguments: "" }, parts: [], text: "/task-11 " }])
+  } finally {
+    off()
     out.destroy()
   }
 })

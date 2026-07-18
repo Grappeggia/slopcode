@@ -92,6 +92,9 @@ export function RunQuestionBody(props: {
   const context = createMemo(() => `${props.request.id}:${state().tab}`)
   const target = createMemo(() => (confirm() ? undefined : row(state().tab, state().selected)))
   let generation = 0
+  let layout = ""
+  let reviewing = false
+  let resize: { id: string; generation: number } | undefined
   const exposed = new Set<string>()
 
   const shown = (selected: number) => {
@@ -106,16 +109,32 @@ export function RunQuestionBody(props: {
     Array.from({ length: questionTotal(props.request, state()) }, (_, selected) => selected)
       .filter(shown)
       .forEach((selected) => exposed.add(row(state().tab, selected)))
+    const pending = resize
+    resize = undefined
+    if (!pending || reviewing || generation !== pending.generation || target() !== pending.id) return
+    if (!exposed.has(pending.id)) follow(pending.id)
+  }
+
+  const reveal = (id: string) => {
+    const item = scroll?.content.findDescendantById(id)
+    if (!scroll || !item) return
+    if (item.y < scroll.viewport.y) {
+      scroll.scrollBy(item.y - scroll.viewport.y)
+      return
+    }
+    const bottom = scroll.viewport.y + scroll.viewport.height
+    if (item.y >= bottom) scroll.scrollBy(item.y - bottom + 1)
   }
 
   renderer.on(CliRenderEvents.FRAME, expose)
   onCleanup(() => renderer.off(CliRenderEvents.FRAME, expose))
 
   const follow = (id: string) => {
+    reviewing = false
     exposed.clear()
     const current = ++generation
     const run = () => {
-      if (current === generation && target() === id) scroll?.scrollChildIntoView(id)
+      if (current === generation && target() === id) reveal(id)
     }
     run()
     requestAnimationFrame(() => {
@@ -130,13 +149,21 @@ export function RunQuestionBody(props: {
 
   createEffect(() => {
     context()
+    reviewing = false
     exposed.clear()
     generation++
     scroll?.scrollTo(0)
   })
 
   createEffect(() => {
+    const next = `${dims().width}:${dims().height}:${height()}`
+    const resized = layout !== "" && layout !== next
+    layout = next
     const id = target()
+    if (resized) {
+      resize = !reviewing && state().selected > 0 && id ? { id, generation } : undefined
+      return
+    }
     if (!id || (exposed.has(id) && shown(state().selected))) return
     follow(id)
   })
@@ -225,6 +252,7 @@ export function RunQuestionBody(props: {
 
   const scrollContent = (name: string, lines: boolean) => {
     if (name === "home" || name === "end") {
+      reviewing = true
       exposed.clear()
       generation++
       scroll?.scrollTo(name === "home" ? 0 : scroll.scrollHeight)
@@ -242,6 +270,7 @@ export function RunQuestionBody(props: {
               ? 1
               : undefined
     if (amount === undefined) return false
+    reviewing = true
     exposed.clear()
     generation++
     scroll?.scrollBy(amount)

@@ -15,6 +15,8 @@ export type DialogConfirmProps = {
   onCancel?: () => void
   label?: string
   close?: boolean
+  initial?: "confirm" | "cancel"
+  enabled?: boolean
 }
 
 export type DialogConfirmResult = boolean | undefined
@@ -25,7 +27,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
   const dimensions = useTerminalDimensions()
   const compact = () => isCompact(density(dimensions()))
   const [store, setStore] = createStore({
-    active: "confirm" as "confirm" | "cancel",
+    active: props.initial ?? ("confirm" as "confirm" | "cancel"),
   })
 
   useBindings(() => ({
@@ -35,6 +37,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
         desc: "Confirm dialog selection",
         group: "Dialog",
         cmd: () => {
+          if (props.enabled === false) return
           if (store.active === "confirm") props.onConfirm?.()
           if (store.active === "cancel") props.onCancel?.()
           if (props.close !== false) dialog.clear()
@@ -79,6 +82,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
               paddingRight={1}
               backgroundColor={key === store.active ? theme.primary : undefined}
               onMouseUp={() => {
+                if (props.enabled === false) return
                 if (key === "confirm") props.onConfirm?.()
                 if (key === "cancel") props.onCancel?.()
                 if (props.close !== false) dialog.clear()

@@ -481,30 +481,29 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const args = useArgs()
   let applied = false
   createEffect(() => {
-    if (applied || sync.status === "loading" || !args.agent) return
+    if (applied || sync.status === "loading") return
     applied = true
-    local.agent.set(args.agent)
+    batch(() => {
+      if (args.agent) local.agent.set(args.agent)
+      if (!args.model) return
+      const { providerID, modelID } = Model.parse(args.model)
+      if (!providerID || !modelID)
+        return toast.show({
+          variant: "warning",
+          message: `Invalid model format: ${args.model}`,
+          duration: 3000,
+        })
+      local.model.set({ providerID, modelID }, { recent: true })
+    })
   })
 
   onMount(() => {
-    batch(() => {
-      if (args.model) {
-        const { providerID, modelID } = Model.parse(args.model)
-        if (!providerID || !modelID)
-          return toast.show({
-            variant: "warning",
-            message: `Invalid model format: ${args.model}`,
-            duration: 3000,
-          })
-        local.model.set({ providerID, modelID }, { recent: true })
-      }
-      if (args.sessionID && !args.fork) {
-        route.navigate({
-          type: "session",
-          sessionID: args.sessionID,
-        })
-      }
-    })
+    if (args.sessionID && !args.fork) {
+      route.navigate({
+        type: "session",
+        sessionID: args.sessionID,
+      })
+    }
   })
 
   let continued = false

@@ -535,6 +535,8 @@ function RunPermissionBatchBody(props: {
   scope: PermissionScopeLabel
   onReply: (input: PermissionBatchReply) => void | Promise<void>
 }) {
+  const renderer = useRenderer()
+  const dims = useTerminalDimensions()
   const [state, setState] = createSignal(createPermissionBatchState(props.requests))
   const [selected, setSelected] = createSignal<PermissionBatchOption>("once")
   const [submitting, setSubmitting] = createSignal(false)
@@ -556,6 +558,16 @@ function RunPermissionBatchBody(props: {
   let scroll: ScrollBoxRenderable | undefined
 
   const row = (id: string) => `run-permission-${id}`
+  const follow = (id: string) => {
+    const run = () => {
+      if (focused()[1] === id) scroll?.scrollChildIntoView(row(id))
+    }
+    run()
+    requestAnimationFrame(() => {
+      run()
+      requestAnimationFrame(run)
+    })
+  }
 
   createEffect(() => {
     const list = options()
@@ -576,8 +588,10 @@ function RunPermissionBatchBody(props: {
   })
 
   createEffect(() => {
+    dims()
+    renderer.height
     const id = focused()[1]
-    if (id) queueMicrotask(() => scroll?.scrollChildIntoView(row(id)))
+    if (id) queueMicrotask(() => follow(id))
   })
 
   const submit = async (reply: PermissionBatchReply) => {
@@ -612,7 +626,7 @@ function RunPermissionBatchBody(props: {
     const next = permissionBatchMove(state(), props.requests, step)
     setState(next)
     const request = props.requests[next.focused]
-    if (request) scroll?.scrollChildIntoView(row(request.id))
+    if (request) follow(request.id)
   }
 
   useKeyboard((event) => {

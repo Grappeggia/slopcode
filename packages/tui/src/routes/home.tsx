@@ -6,7 +6,7 @@ import { Toast } from "../ui/toast"
 import { useArgs } from "../context/args"
 import { useRouteData } from "../context/route"
 import { usePromptRef } from "../context/prompt"
-import { useLocal } from "../context/local"
+import { parseModel, useLocal } from "../context/local"
 import { usePluginRuntime } from "../plugin/runtime"
 import { useEditorContext } from "../context/editor"
 import { useTerminalDimensions } from "@opentui/solid"
@@ -61,9 +61,24 @@ export function Home() {
     if (sent) return
     if (!r) return
     if (!sync.ready || !local.model.ready) return
+    if ((args.agent || args.model) && sync.status === "loading") return
     if (!args.prompt) return
     if (r.current.input !== args.prompt) return
     if (args.agent && local.agent.current()?.name !== args.agent) return
+    if (args.model) {
+      const requested = parseModel(args.model)
+      const current = local.model.current()
+      const valid = sync.data.provider.some(
+        (provider) => provider.id === requested.providerID && provider.models[requested.modelID],
+      )
+      if (
+        valid &&
+        requested.providerID &&
+        requested.modelID &&
+        (current?.providerID !== requested.providerID || current.modelID !== requested.modelID)
+      )
+        return
+    }
     sent = true
     r.submit()
   })

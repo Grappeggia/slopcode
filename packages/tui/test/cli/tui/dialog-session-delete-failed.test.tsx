@@ -59,15 +59,18 @@ async function mountDialog(
   input: {
     onDelete?: Action
     onRestore?: Action
+    onDone?: () => void
   },
 ) {
   const state = path.join(root, "state")
   await mkdir(state, { recursive: true })
   await Bun.write(path.join(state, "kv.json"), "{}")
   const config = createTuiResolvedConfig()
+  let replace!: () => void
 
   function Open() {
     const dialog = useDialog()
+    replace = () => dialog.replace(() => <text>Replacement Dialog</text>)
     onMount(() =>
       dialog.replace(() => (
         <DialogSessionDeleteFailed
@@ -75,6 +78,7 @@ async function mountDialog(
           workspace="Workspace One"
           onDelete={input.onDelete}
           onRestore={input.onRestore}
+          onDone={input.onDone}
         />
       )),
     )
@@ -108,7 +112,7 @@ async function mountDialog(
 
   const app = await testRender(() => <Harness />, { width: 100, height: 30, kittyKeyboard: true })
   await shown(app, "Failed to Delete Session")
-  return app
+  return Object.assign(app, { replace })
 }
 
 test("failed session deletion defaults Enter to restore", async () => {
@@ -156,6 +160,14 @@ test("keyboard workspace deletion requires the named destructive confirmation", 
     expect(app.captureCharFrame()).toContain("All sessions attached")
     expect(app.captureCharFrame()).toContain("to it will be deleted.")
 
+    app.mockInput.pressEnter()
+    await shown(app, "Failed to Delete Session")
+    expect(deleted).toBe(0)
+
+    app.mockInput.pressKey("ARROW_LEFT")
+    app.mockInput.pressEnter()
+    await shown(app, "Delete Workspace")
+    app.mockInput.pressKey("ARROW_RIGHT")
     app.mockInput.pressEnter()
     await wait(app, () => deleted === 1, "workspace deletion")
   } finally {
@@ -247,6 +259,7 @@ test("pending workspace removal ignores duplicate confirmation input", async () 
     app.mockInput.pressEnter()
     await shown(app, 'Delete workspace "Workspace One"?')
 
+    app.mockInput.pressKey("ARROW_RIGHT")
     app.mockInput.pressEnter()
     app.mockInput.pressEnter()
     app.mockInput.pressEnter()
@@ -281,6 +294,77 @@ test("restore callback rejection is visible and retryable", async () => {
   }
 })
 
+test("a recovery callback resolved after Escape cannot mutate the replacement dialog", async () => {
+  await using tmp = await tmpdir()
+  let started = 0
+  let done = 0
+  let finish!: (result: boolean) => void
+  const pending = new Promise<boolean>((resolve) => (finish = resolve))
+  const app = await mountDialog(tmp.path, {
+    onRestore: () => {
+      started++
+      return pending
+    },
+    onDone: () => {
+      done++
+    },
+  })
+
+  try {
+    app.mockInput.pressEnter()
+    await wait(app, () => started === 1, "pending restore callback")
+    app.mockInput.pressEscape()
+    await app.renderOnce()
+    app.replace()
+    await shown(app, "Replacement Dialog")
+
+    finish(true)
+    await Bun.sleep(0)
+    await app.renderOnce()
+
+    expect(done).toBe(0)
+    expect(app.captureCharFrame()).toContain("Replacement Dialog")
+  } finally {
+    finish(false)
+    app.renderer.destroy()
+  }
+})
+
+test("buffered Enter cannot dismiss or accept workspace deletion before its warning renders", async () => {
+  await using tmp = await tmpdir()
+  let deleted = 0
+  const app = await mountDialog(tmp.path, {
+    onDelete: () => {
+      deleted++
+      return false
+    },
+  })
+  let paused = false
+
+  try {
+    app.mockInput.pressKey("ARROW_LEFT")
+    app.renderer.pause()
+    paused = true
+    const frame = app.renderer.frameId
+    app.mockInput.pressEnter()
+    app.mockInput.pressEnter()
+    expect(app.renderer.frameId).toBe(frame)
+    expect(deleted).toBe(0)
+
+    app.renderer.resume()
+    paused = false
+    await shown(app, "Delete Workspace")
+    expect(deleted).toBe(0)
+
+    await click(app, "Cancel")
+    await shown(app, "Failed to Delete Session")
+    expect(deleted).toBe(0)
+  } finally {
+    if (paused) app.renderer.resume()
+    app.renderer.destroy()
+  }
+})
+
 test("delete callback rejection restores usable recovery", async () => {
   await using tmp = await tmpdir()
   let attempts = 0
@@ -296,6 +380,7 @@ test("delete callback rejection restores usable recovery", async () => {
     app.mockInput.pressKey("ARROW_LEFT")
     app.mockInput.pressEnter()
     await shown(app, "Delete Workspace")
+    app.mockInput.pressKey("ARROW_RIGHT")
     app.mockInput.pressEnter()
     await shown(app, "delete callback failed")
     await shown(app, "Failed to Delete Session")
@@ -303,6 +388,7 @@ test("delete callback rejection restores usable recovery", async () => {
     app.mockInput.pressKey("ARROW_LEFT")
     app.mockInput.pressEnter()
     await shown(app, "Delete Workspace")
+    app.mockInput.pressKey("ARROW_RIGHT")
     app.mockInput.pressEnter()
     await wait(app, () => attempts === 2, "delete callback retry")
   } finally {
@@ -340,6 +426,7 @@ async function mountList(
   let deletes = 0
   let removals = 0
   let statuses = 0
+  let sessions = 0
   let dispatch!: (command: string) => void
   let registered!: (command: string) => boolean
   let current!: () => WorkspaceStatus | undefined
@@ -367,7 +454,10 @@ async function mountList(
       statuses++
       return json(input.status ? [{ workspaceID: "wrk_connected", status: input.status }] : [])
     }
-    if (url.pathname === "/session" && request?.method === "GET") return json([info(root)])
+    if (url.pathname === "/session" && request?.method === "GET") {
+      sessions++
+      return json([info(root)])
+    }
     if (url.pathname === "/session/ses_connected" && request?.method === "DELETE") {
       deletes++
       return (
@@ -446,6 +536,7 @@ async function mountList(
     app,
     deletes: () => deletes,
     removals: () => removals,
+    sessions: () => sessions,
     async attempt() {
       dispatch("session.delete")
       await shown(app, "again to confirm")
@@ -530,5 +621,20 @@ test("failure handling re-reads a workspace that reconnects during deletion", as
   } finally {
     release(json({ name: "SessionDeleteError", data: { message: "cleanup" } }, { status: 500 }))
     list.app.renderer.destroy()
+  }
+})
+
+test("successful deletion refreshes sessions for every known non-connected workspace state", async () => {
+  for (const status of ["connecting", "disconnected", "error"] as const) {
+    await using tmp = await tmpdir()
+    const list = await mountList(tmp.path, { status, remove: () => json(true) })
+    const before = list.sessions()
+
+    try {
+      await list.attempt()
+      await wait(list.app, () => list.sessions() > before, `${status} successful deletion refresh`)
+    } finally {
+      list.app.renderer.destroy()
+    }
   }
 })
