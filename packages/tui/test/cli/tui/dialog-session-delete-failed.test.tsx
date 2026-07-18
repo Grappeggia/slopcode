@@ -96,6 +96,7 @@ async function mountDialog(
                   <DialogProvider>
                     <Open />
                   </DialogProvider>
+                  <Toast />
                 </ToastProvider>
               </ThemeProvider>
             </KVProvider>
@@ -257,6 +258,58 @@ test("pending workspace removal ignores duplicate confirmation input", async () 
   }
 })
 
+test("restore callback rejection is visible and retryable", async () => {
+  await using tmp = await tmpdir()
+  let attempts = 0
+  const app = await mountDialog(tmp.path, {
+    onRestore: () => {
+      attempts++
+      if (attempts === 1) return Promise.reject(new Error("restore callback failed"))
+      return false
+    },
+  })
+
+  try {
+    app.mockInput.pressEnter()
+    await shown(app, "restore callback failed")
+    expect(app.captureCharFrame()).toContain("Failed to Delete Session")
+
+    app.mockInput.pressEnter()
+    await wait(app, () => attempts === 2, "restore callback retry")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("delete callback rejection restores usable recovery", async () => {
+  await using tmp = await tmpdir()
+  let attempts = 0
+  const app = await mountDialog(tmp.path, {
+    onDelete: () => {
+      attempts++
+      if (attempts === 1) return Promise.reject(new Error("delete callback failed"))
+      return false
+    },
+  })
+
+  try {
+    app.mockInput.pressKey("ARROW_LEFT")
+    app.mockInput.pressEnter()
+    await shown(app, "Delete Workspace")
+    app.mockInput.pressEnter()
+    await shown(app, "delete callback failed")
+    await shown(app, "Failed to Delete Session")
+
+    app.mockInput.pressKey("ARROW_LEFT")
+    app.mockInput.pressEnter()
+    await shown(app, "Delete Workspace")
+    app.mockInput.pressEnter()
+    await wait(app, () => attempts === 2, "delete callback retry")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 function info(root: string): Session {
   return {
     id: "ses_connected",
@@ -270,44 +323,57 @@ function info(root: string): Session {
   }
 }
 
-test("connected workspace session-delete failures surface the original error", async () => {
-  await using tmp = await tmpdir()
-  const state = path.join(tmp.path, "state")
+type WorkspaceStatus = "connected" | "connecting" | "disconnected" | "error"
+
+async function mountList(
+  root: string,
+  input: {
+    status?: WorkspaceStatus
+    remove?: () => Response | Promise<Response>
+  },
+) {
+  const state = path.join(root, "state")
   await mkdir(state, { recursive: true })
   await Bun.write(path.join(state, "kv.json"), "{}")
   const config = createTuiResolvedConfig()
   const events = createEventSource()
   let deletes = 0
   let removals = 0
+  let statuses = 0
   let dispatch!: (command: string) => void
   let registered!: (command: string) => boolean
+  let current!: () => WorkspaceStatus | undefined
   const calls = createFetch(async (url, request) => {
     if (url.pathname === "/config/providers") return json({ providers: [], default: {} })
-    if (url.pathname === "/project/current") return json({ id: "proj_test", worktree: tmp.path, vcs: "git" })
-    if (url.pathname === "/project/proj_test/directories") return json([{ directory: tmp.path }])
+    if (url.pathname === "/project/current") return json({ id: "proj_test", worktree: root, vcs: "git" })
+    if (url.pathname === "/project/proj_test/directories") return json([{ directory: root }])
     if (url.pathname === "/experimental/workspace") {
-      if (request?.method === "DELETE") {
-        removals++
-        return json(true)
-      }
       return json([
         {
           id: "wrk_connected",
           type: "worktree",
           name: "Workspace One",
-          directory: tmp.path,
+          directory: root,
           projectID: "proj_test",
           timeUsed: 1,
         },
       ])
     }
-    if (url.pathname === "/experimental/workspace/status") {
-      return json([{ workspaceID: "wrk_connected", status: "connected" }])
+    if (url.pathname === "/experimental/workspace/wrk_connected" && request?.method === "DELETE") {
+      removals++
+      return json(true)
     }
-    if (url.pathname === "/session" && request?.method === "GET") return json([info(tmp.path)])
+    if (url.pathname === "/experimental/workspace/status") {
+      statuses++
+      return json(input.status ? [{ workspaceID: "wrk_connected", status: input.status }] : [])
+    }
+    if (url.pathname === "/session" && request?.method === "GET") return json([info(root)])
     if (url.pathname === "/session/ses_connected" && request?.method === "DELETE") {
       deletes++
-      return json({ name: "SessionDeleteError", data: { message: "original delete failure" } }, { status: 500 })
+      return (
+        input.remove?.() ??
+        json({ name: "SessionDeleteError", data: { message: "original delete failure" } }, { status: 500 })
+      )
     }
     return undefined
   })
@@ -315,8 +381,9 @@ test("connected workspace session-delete failures surface the original error", a
   function Open() {
     const project = useProject()
     const sync = useSync()
+    current = () => project.workspace.status("wrk_connected")
     return (
-      <Show when={project.workspace.status("wrk_connected") === "connected" && sync.session.get("ses_connected")}>
+      <Show when={sync.session.get("ses_connected")}>
         <OpenList />
       </Show>
     )
@@ -336,7 +403,7 @@ test("connected workspace session-delete failures surface the original error", a
     onCleanup(registerSlopcodeKeymap(keymap, renderer, config))
 
     return (
-      <TestTuiContexts directory={tmp.path} paths={{ home: tmp.path, state, worktree: tmp.path }}>
+      <TestTuiContexts directory={root} paths={{ home: root, state, worktree: root }}>
         <ExitProvider exit={() => {}}>
           <SlopcodeKeymapProvider keymap={keymap}>
             <ArgsProvider>
@@ -344,7 +411,7 @@ test("connected workspace session-delete failures surface the original error", a
                 <ToastProvider>
                   <RouteProvider>
                     <TuiConfigProvider config={config}>
-                      <SDKProvider url="http://test" directory={tmp.path} fetch={calls.fetch} events={events.source}>
+                      <SDKProvider url="http://test" directory={root} fetch={calls.fetch} events={events.source}>
                         <PermissionProvider>
                           <ProjectProvider>
                             <SyncProvider>
@@ -372,19 +439,96 @@ test("connected workspace session-delete failures surface the original error", a
   }
 
   const app = await testRender(() => <Harness />, { width: 100, height: 30, kittyKeyboard: true })
-  try {
-    await shown(app, "Connected Session")
-    await wait(app, () => registered("session.delete"), "session delete command")
-    dispatch("session.delete")
-    await shown(app, "again to confirm")
-    dispatch("session.delete")
-    await wait(app, () => deletes === 1, "failed session delete request")
-    await shown(app, "original delete failure")
+  await shown(app, "Connected Session")
+  await wait(app, () => registered("session.delete"), "session delete command")
+  await wait(app, () => statuses > 0 && current() === input.status, "initial workspace status")
+  return {
+    app,
+    deletes: () => deletes,
+    removals: () => removals,
+    async attempt() {
+      dispatch("session.delete")
+      await shown(app, "again to confirm")
+      dispatch("session.delete")
+      await wait(app, () => deletes === 1, "failed session delete request")
+    },
+    async status(status: WorkspaceStatus) {
+      events.emit({
+        directory: root,
+        workspace: "wrk_connected",
+        project: "proj_test",
+        payload: {
+          id: `evt_${status}`,
+          type: "workspace.status",
+          properties: { workspaceID: "wrk_connected", status },
+        },
+      })
+      await wait(app, () => current() === status, `${status} workspace status`)
+    },
+  }
+}
 
-    expect(app.captureCharFrame()).toContain("Failed to delete session")
-    expect(app.captureCharFrame()).not.toContain("Failed to Delete Session")
-    expect(removals).toBe(0)
+test("known unavailable workspace preserves session-delete recovery", async () => {
+  await using tmp = await tmpdir()
+  const list = await mountList(tmp.path, { status: "disconnected" })
+
+  try {
+    await list.attempt()
+    await shown(list.app, "Failed to Delete Session")
+    expect(list.app.captureCharFrame()).toContain("Workspace One")
   } finally {
-    app.renderer.destroy()
+    list.app.renderer.destroy()
+  }
+})
+
+test("connected workspace session-delete failures surface the original error", async () => {
+  await using tmp = await tmpdir()
+  const list = await mountList(tmp.path, { status: "connected" })
+
+  try {
+    await list.attempt()
+    await shown(list.app, "original delete failure")
+
+    expect(list.app.captureCharFrame()).toContain("Failed to delete session")
+    expect(list.app.captureCharFrame()).not.toContain("Failed to Delete Session")
+    expect(list.removals()).toBe(0)
+  } finally {
+    list.app.renderer.destroy()
+  }
+})
+
+test("missing and connecting workspace statuses fail closed", async () => {
+  for (const status of [undefined, "connecting"] as const) {
+    await using tmp = await tmpdir()
+    const list = await mountList(tmp.path, { status })
+
+    try {
+      await list.attempt()
+      await shown(list.app, "original delete failure")
+      expect(list.app.captureCharFrame()).not.toContain("Failed to Delete Session")
+      expect(list.removals()).toBe(0)
+    } finally {
+      list.app.renderer.destroy()
+    }
+  }
+})
+
+test("failure handling re-reads a workspace that reconnects during deletion", async () => {
+  await using tmp = await tmpdir()
+  let release!: (response: Response) => void
+  const response = new Promise<Response>((resolve) => (release = resolve))
+  const list = await mountList(tmp.path, { status: "disconnected", remove: () => response })
+
+  try {
+    await list.attempt()
+    await list.status("connected")
+    release(json({ name: "SessionDeleteError", data: { message: "reconnected delete failure" } }, { status: 500 }))
+    await shown(list.app, "reconnected delete failure")
+
+    expect(list.app.captureCharFrame()).not.toContain("Failed to Delete Session")
+    expect(list.removals()).toBe(0)
+  } finally {
+    release(json({ name: "SessionDeleteError", data: { message: "cleanup" } }, { status: 500 }))
+    list.app.renderer.destroy()
   }
 })

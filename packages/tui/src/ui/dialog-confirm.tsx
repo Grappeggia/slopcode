@@ -14,6 +14,7 @@ export type DialogConfirmProps = {
   onConfirm?: () => void
   onCancel?: () => void
   label?: string
+  close?: boolean
 }
 
 export type DialogConfirmResult = boolean | undefined
@@ -36,7 +37,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
         cmd: () => {
           if (store.active === "confirm") props.onConfirm?.()
           if (store.active === "cancel") props.onCancel?.()
-          dialog.clear()
+          if (props.close !== false) dialog.clear()
         },
       },
       {
@@ -80,7 +81,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
               onMouseUp={() => {
                 if (key === "confirm") props.onConfirm?.()
                 if (key === "cancel") props.onCancel?.()
-                dialog.clear()
+                if (props.close !== false) dialog.clear()
               }}
             >
               <text fg={key === store.active ? theme.selectedListItemText : theme.textMuted}>
