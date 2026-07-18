@@ -1,6 +1,8 @@
 export const FOOTER_TRANSCRIPT_ROWS = 4
 export const FOOTER_PANEL_CHROME_ROWS = 7
-export const FOOTER_PANEL_MIN_ROWS = FOOTER_PANEL_CHROME_ROWS + 1
+export const FOOTER_PANEL_SPACER_ROWS = 1
+// At minimum height, the first content row replaces the decorative spacer.
+export const FOOTER_PANEL_MIN_ROWS = FOOTER_PANEL_CHROME_ROWS
 export const FOOTER_PERMISSION_MIN_ROWS = FOOTER_PANEL_MIN_ROWS + 2
 
 export function footerPanelMinimum(input: {

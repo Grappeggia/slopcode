@@ -27,12 +27,16 @@ describe("run footer height", () => {
     expect(footerMenuRows(7, 12)).toBe(1)
   })
 
-  test("accounts for compact narrow blocker controls", () => {
+  test("excludes the optional spacer from functional panel minima", () => {
+    const panel = footerPanelMinimum({ type: "panel", narrow: false })
+    const permission = footerPanelMinimum({ type: "permission", narrow: true })
     const multi = footerPanelMinimum({ type: "question", narrow: true, single: false })
-    expect(footerPanelMinimum({ type: "panel", narrow: false })).toBe(8)
-    expect(footerPanelMinimum({ type: "permission", narrow: true })).toBe(10)
-    expect(footerPanelMinimum({ type: "question", narrow: true, single: true })).toBe(8)
-    expect(multi).toBe(9)
-    expect(footerHeightPolicy({ terminal: 13, preferred: 17, minimum: multi })).toBe(9)
+    expect(panel).toBe(7)
+    expect(permission).toBe(9)
+    expect(footerPanelMinimum({ type: "question", narrow: true, single: true })).toBe(7)
+    expect(multi).toBe(8)
+    expect(footerHeightPolicy({ terminal: 11, preferred: 17, minimum: panel })).toBe(7)
+    expect(footerHeightPolicy({ terminal: 12, preferred: 17, minimum: multi })).toBe(8)
+    expect(footerHeightPolicy({ terminal: 13, preferred: 15, minimum: permission })).toBe(9)
   })
 })

@@ -652,7 +652,7 @@ export function RunFooterView(props: RunFooterViewProps) {
       gap={0}
       padding={0}
     >
-      <Show when={(panel() || inspecting()) && height() >= panelMinimum()}>
+      <Show when={(panel() || inspecting()) && height() > panelMinimum()}>
         <box width="100%" height={1} flexShrink={0} backgroundColor="transparent" />
       </Show>
 

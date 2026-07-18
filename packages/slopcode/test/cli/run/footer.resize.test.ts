@@ -133,12 +133,14 @@ test("split footer recalculates requested height only for physical resizes", asy
         ],
       },
     })
-    expect(app.renderer.footerHeight).toBe(10)
+    expect(app.renderer.footerHeight).toBe(9)
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("pwd")
     expect(app.captureCharFrame()).toContain("Allow once")
 
-    app.resize(70, 12)
+    app.resize(70, 13)
+    expect(app.renderer.footerHeight).toBe(9)
+    expect(app.renderer.height).toBe(9)
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("pwd")
     expect(app.captureCharFrame()).toContain("Allow once")
@@ -149,9 +151,9 @@ test("split footer recalculates requested height only for physical resizes", asy
 
     resizes = 0
     app.resize(70, 12)
-    expect(app.renderer.footerHeight).toBe(9)
-    expect(app.renderer.height).toBe(9)
-    expect(resizes).toBe(2)
+    expect(app.renderer.footerHeight).toBe(8)
+    expect(app.renderer.height).toBe(8)
+    expect(resizes).toBe(1)
     const frame = await app.waitForFrame((output) => output.includes("FIRST OPTION"))
     expect(frame).toContain("FIRST OPTION")
     expect(frame).toContain("tab")
@@ -189,9 +191,10 @@ test("open split footer menu follows final rows through shrink and grow", async 
     await out.app.renderOnce()
     expect(out.app.captureCharFrame()).toContain("task-07")
 
-    out.app.resize(100, 12)
+    out.app.resize(100, 11)
     await out.app.renderOnce()
-    expect(out.app.renderer.footerHeight).toBe(8)
+    expect(out.app.renderer.footerHeight).toBe(7)
+    expect(out.app.renderer.height).toBe(7)
     expect(out.app.captureCharFrame()).toContain("task-07")
 
     out.app.resize(100, 30)
