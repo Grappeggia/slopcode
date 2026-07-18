@@ -244,36 +244,33 @@ export function DialogSessionList() {
           onTrigger: async (option) => {
             if (toDelete() === option.value) {
               const session = sessions().find((item) => item.id === option.value)
-              const status = session?.workspaceID ? project.workspace.status(session.workspaceID) : undefined
+              const status = session?.workspaceID
+                ? (project.workspace.status(session.workspaceID) ?? "error")
+                : undefined
+              const fail = (error: unknown) => {
+                if (session?.workspaceID && status !== "connected") {
+                  recover(session)
+                  setToDelete(undefined)
+                  return
+                }
+                toast.show({
+                  variant: "error",
+                  title: "Failed to delete session",
+                  message: errorMessage(error),
+                })
+                setToDelete(undefined)
+              }
 
               try {
                 const result = await sdk.client.session.delete({
                   sessionID: option.value,
                 })
                 if (result.error) {
-                  if (session?.workspaceID) {
-                    recover(session)
-                  } else {
-                    toast.show({
-                      variant: "error",
-                      title: "Failed to delete session",
-                      message: errorMessage(result.error),
-                    })
-                  }
-                  setToDelete(undefined)
+                  fail(result.error)
                   return
                 }
               } catch (err) {
-                if (session?.workspaceID) {
-                  recover(session)
-                } else {
-                  toast.show({
-                    variant: "error",
-                    title: "Failed to delete session",
-                    message: errorMessage(err),
-                  })
-                }
-                setToDelete(undefined)
+                fail(err)
                 return
               }
               if (status && status !== "connected") {

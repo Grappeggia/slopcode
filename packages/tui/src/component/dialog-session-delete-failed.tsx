@@ -4,6 +4,7 @@ import { useDialog } from "../ui/dialog"
 import { createStore } from "solid-js/store"
 import { For } from "solid-js"
 import { useBindings } from "../keymap"
+import { DialogConfirm } from "../ui/dialog-confirm"
 
 export function DialogSessionDeleteFailed(props: {
   session: string
@@ -15,8 +16,9 @@ export function DialogSessionDeleteFailed(props: {
   const dialog = useDialog()
   const { theme } = useTheme()
   const [store, setStore] = createStore({
-    active: "delete" as "delete" | "restore",
+    active: "restore" as "delete" | "restore",
   })
+  let pending = false
 
   const options = [
     {
@@ -33,9 +35,27 @@ export function DialogSessionDeleteFailed(props: {
     },
   ]
 
-  async function confirm() {
-    const result = await options.find((item) => item.id === store.active)?.run?.()
-    if (result === false) return
+  async function confirm(active = store.active) {
+    if (pending) return
+    const option = options.find((item) => item.id === active)
+    if (!option) return
+    pending = true
+    if (option.id === "delete") {
+      const confirmed = await DialogConfirm.show(
+        dialog,
+        "Delete Workspace",
+        `Delete workspace "${props.workspace}"? All sessions attached to it will be deleted.`,
+      )
+      if (confirmed !== true) {
+        pending = false
+        return
+      }
+    }
+    const result = await option.run?.()
+    if (result === false) {
+      pending = false
+      return
+    }
     props.onDone?.()
     if (!props.onDone) dialog.clear()
   }
@@ -78,7 +98,7 @@ export function DialogSessionDeleteFailed(props: {
               backgroundColor={item.id === store.active ? theme.primary : undefined}
               onMouseUp={() => {
                 setStore("active", item.id)
-                void confirm()
+                void confirm(item.id)
               }}
             >
               <text
