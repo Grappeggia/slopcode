@@ -18,7 +18,7 @@ import type { SessionID } from "./schema"
 import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
-import type { Provider } from "@/provider/provider"
+import { Provider } from "@/provider/provider"
 import { Question } from "@/question"
 import { errorMessage } from "@/util/error"
 import { isRecord } from "@/util/record"
@@ -109,12 +109,17 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const provider = yield* Provider.Service
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
-      const initialSnapshot = yield* snapshot.track()
+      const [initialSnapshot, preload] = yield* Effect.all(
+        [snapshot.track(), provider.getLanguage(input.model).pipe(Effect.exit)],
+        { concurrency: "unbounded" },
+      )
+      if (Exit.isFailure(preload) && Cause.hasInterrupts(preload.cause)) return yield* Effect.interrupt
       const ctx: ProcessorContext = {
         assistantMessage: input.assistantMessage,
         sessionID: input.sessionID,
@@ -1075,6 +1080,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(RuntimeFlags.defaultLayer),
     Layer.provide(Database.defaultLayer),
     Layer.provide(EventV2Bridge.defaultLayer),
+    Layer.provide(Provider.defaultLayer),
   ),
 )
 
@@ -1092,6 +1098,7 @@ export const node = LayerNode.make(layer, [
   EventV2Bridge.node,
   RuntimeFlags.node,
   Database.node,
+  Provider.node,
 ])
 
 export * as SessionProcessor from "./processor"
