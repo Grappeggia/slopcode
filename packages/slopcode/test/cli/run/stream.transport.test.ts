@@ -42,6 +42,15 @@ async function waitFor<T>(check: () => T | undefined, timeout = 1_000): Promise<
   throw new Error("timed out waiting for value")
 }
 
+function bound<T>(task: Promise<T>, label: string) {
+  return Promise.race([
+    task,
+    Bun.sleep(1_000).then(() => {
+      throw new Error(`${label} timed out`)
+    }),
+  ])
+}
+
 function busy(sessionID = "session-1") {
   return {
     id: `evt-${sessionID}-busy`,
@@ -2174,6 +2183,135 @@ describe("run stream transport", () => {
       ).resolves.toBeUndefined()
       expect(prompts).toBe(2)
     } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
+  test("rejects generated shell agent lookup failures and accepts a later shell turn", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    let agents = 0
+    let shells = 0
+    const client = httpSdk(src.stream, (request) => {
+      const path = new URL(request.url).pathname
+      if (path === "/session/status") return Response.json({})
+      if (path === "/agent") {
+        agents += 1
+        return agents === 1
+          ? httpError("shell agent lookup failed")
+          : Response.json([{ name: "build", mode: "primary", hidden: false }])
+      }
+      if (path === "/session/session-1/shell") {
+        shells += 1
+        return new Response(undefined, { status: 204 })
+      }
+      throw new Error(`unexpected request: ${request.method} ${path}`)
+    })
+    const transport = await createSessionTransport({
+      sdk: client,
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+    const ctrl = new AbortController()
+    const first = transport.runPromptTurn({
+      agent: undefined,
+      model: undefined,
+      variant: undefined,
+      prompt: { text: "first shell", parts: [], mode: "shell" },
+      files: [],
+      includeFiles: false,
+      signal: ctrl.signal,
+    })
+
+    try {
+      await expect(bound(first, "shell agent lookup rejection")).rejects.toMatchObject({
+        message: "shell agent lookup failed",
+        cause: {
+          status: 400,
+          body: {
+            name: "BadRequest",
+            data: { message: "shell agent lookup failed" },
+          },
+        },
+      })
+      await expect(
+        bound(
+          transport.runPromptTurn({
+            agent: undefined,
+            model: undefined,
+            variant: undefined,
+            prompt: { text: "second shell", parts: [], mode: "shell" },
+            files: [],
+            includeFiles: false,
+          }),
+          "shell retry",
+        ),
+      ).resolves.toBeUndefined()
+      expect(agents).toBe(2)
+      expect(shells).toBe(1)
+    } finally {
+      ctrl.abort()
+      await first.catch(() => {})
+      src.close()
+      await transport.close()
+    }
+  })
+
+  test("rejects generated shell network failures and accepts a later shell turn", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    let shells = 0
+    const fault = new Error("shell transport disconnected")
+    const client = httpSdk(src.stream, (request) => {
+      const path = new URL(request.url).pathname
+      if (path === "/session/status") return Response.json({})
+      if (path === "/session/session-1/shell") {
+        shells += 1
+        if (shells === 1) throw fault
+        return new Response(undefined, { status: 204 })
+      }
+      throw new Error(`unexpected request: ${request.method} ${path}`)
+    })
+    const transport = await createSessionTransport({
+      sdk: client,
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+    const ctrl = new AbortController()
+    const first = transport.runPromptTurn({
+      agent: "build",
+      model: undefined,
+      variant: undefined,
+      prompt: { text: "first shell", parts: [], mode: "shell" },
+      files: [],
+      includeFiles: false,
+      signal: ctrl.signal,
+    })
+
+    try {
+      await expect(bound(first, "shell network rejection")).rejects.toBe(fault)
+      await expect(
+        bound(
+          transport.runPromptTurn({
+            agent: "build",
+            model: undefined,
+            variant: undefined,
+            prompt: { text: "second shell", parts: [], mode: "shell" },
+            files: [],
+            includeFiles: false,
+          }),
+          "shell retry",
+        ),
+      ).resolves.toBeUndefined()
+      expect(shells).toBe(2)
+    } finally {
+      ctrl.abort()
+      await first.catch(() => {})
       src.close()
       await transport.close()
     }

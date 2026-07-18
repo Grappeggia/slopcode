@@ -543,12 +543,13 @@ function createLayer(input: StreamInput) {
             return agent
           }
 
-          const list = yield* Effect.promise(() =>
-            input.sdk.app.agents(input.directory ? { directory: input.directory } : undefined, { throwOnError: true }),
-          ).pipe(
-            Effect.map((item) => item.data ?? []),
-            Effect.orElseSucceed(() => []),
-          )
+          const list = yield* Effect.tryPromise({
+            try: () =>
+              input.sdk.app.agents(input.directory ? { directory: input.directory } : undefined, {
+                throwOnError: true,
+              }),
+            catch: (error) => error,
+          }).pipe(Effect.map((item) => item.data ?? []))
           const next = list.find((item) => item.mode !== "subagent" && item.hidden !== true)?.name
           if (next) {
             return next
@@ -1249,17 +1250,19 @@ function createLayer(input: StreamInput) {
                     resolveShellAgent(next.agent)
                       .pipe(
                         Effect.flatMap((agent) =>
-                          Effect.promise(() =>
-                            input.sdk.session.shell(
-                              {
-                                sessionID: input.sessionID,
-                                agent,
-                                model: next.model,
-                                command: next.prompt.text,
-                              },
-                              { signal: turn.signal, throwOnError: true },
-                            ),
-                          ),
+                          Effect.tryPromise({
+                            try: () =>
+                              input.sdk.session.shell(
+                                {
+                                  sessionID: input.sessionID,
+                                  agent,
+                                  model: next.model,
+                                  command: next.prompt.text,
+                                },
+                                { signal: turn.signal, throwOnError: true },
+                              ),
+                            catch: (error) => error,
+                          }),
                         ),
                       )
                       .pipe(
