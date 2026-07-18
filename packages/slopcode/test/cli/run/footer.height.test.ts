@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { footerHeightPolicy, footerMenuRows } from "@/cli/cmd/run/footer.height"
+import { footerHeightPolicy, footerMenuRows, footerPanelMinimum } from "@/cli/cmd/run/footer.height"
 
 describe("run footer height", () => {
   test("preserves preferred heights and reserves transcript rows when possible", () => {
@@ -25,5 +25,14 @@ describe("run footer height", () => {
     expect(footerMenuRows(14, 10)).toBe(7)
     expect(footerMenuRows(8, 10)).toBe(1)
     expect(footerMenuRows(7, 12)).toBe(1)
+  })
+
+  test("accounts for compact narrow blocker controls", () => {
+    const multi = footerPanelMinimum({ type: "question", narrow: true, single: false })
+    expect(footerPanelMinimum({ type: "panel", narrow: false })).toBe(8)
+    expect(footerPanelMinimum({ type: "permission", narrow: true })).toBe(10)
+    expect(footerPanelMinimum({ type: "question", narrow: true, single: true })).toBe(8)
+    expect(multi).toBe(9)
+    expect(footerHeightPolicy({ terminal: 13, preferred: 17, minimum: multi })).toBe(9)
   })
 })

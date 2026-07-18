@@ -40,6 +40,7 @@ import {
   questionTabs,
   questionTotal,
 } from "./question.shared"
+import { footerPanelMinimum } from "./footer.height"
 import { footerWidthPolicy } from "./footer.width"
 import type { RunFooterTheme } from "./theme"
 import type { QuestionReject, QuestionReply } from "./types"
@@ -61,6 +62,15 @@ export function RunQuestionBody(props: {
   const picked = createMemo(() => questionPicked(state()))
   const disabled = createMemo(() => state().submitting)
   const narrow = createMemo(() => footerWidthPolicy(dims().width).dialog.narrow)
+  const height = createMemo(() => {
+    dims()
+    return renderer.height
+  })
+  const compact = createMemo(
+    () =>
+      narrow() &&
+      height() <= footerPanelMinimum({ type: "question", narrow: true, single: questionSingle(props.request) }),
+  )
   const verb = createMemo(() => {
     if (confirm()) {
       return "submit"
@@ -351,7 +361,7 @@ export function RunQuestionBody(props: {
     <box width="100%" height="100%" flexDirection="column">
       <box
         flexDirection="column"
-        gap={1}
+        gap={compact() ? 0 : 1}
         paddingLeft={1}
         paddingRight={3}
         paddingTop={1}
@@ -623,7 +633,7 @@ export function RunQuestionBody(props: {
         >
           <box
             flexDirection={narrow() ? "column" : "row"}
-            gap={narrow() ? 1 : 2}
+            gap={compact() ? 0 : narrow() ? 1 : 2}
             flexShrink={0}
             width={narrow() ? "100%" : undefined}
           >

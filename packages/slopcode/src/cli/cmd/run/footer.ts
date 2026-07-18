@@ -31,13 +31,15 @@ import { createComponent, createSignal, type Accessor, type Setter } from "solid
 import { createStore, reconcile } from "solid-js/store"
 import { SlopcodeKeymapProvider } from "@slopcode-ai/tui/keymap"
 import { RUN_COMMAND_PANEL_ROWS, RUN_SUBAGENT_PANEL_ROWS } from "./footer.command"
-import { FOOTER_PANEL_MIN_ROWS, FOOTER_PERMISSION_MIN_ROWS, footerHeightPolicy } from "./footer.height"
+import { footerHeightPolicy, footerPanelMinimum } from "./footer.height"
 import { SUBAGENT_INSPECTOR_ROWS } from "./footer.subagent"
 import { PROMPT_MAX_ROWS, TEXTAREA_MIN_ROWS } from "./footer.prompt"
 import { RunFooterView } from "./footer.view"
 import type { PermissionScopeLabel } from "./permission.shared"
+import { questionSingle } from "./question.shared"
 import { RunScrollbackStream } from "./scrollback.surface"
 import { RUN_THEME_FALLBACK, resolveRunTheme, type RunTheme } from "./theme"
+import { footerWidthPolicy } from "./footer.width"
 import { modelInfo } from "./variant.shared"
 import type {
   FooterApi,
@@ -182,7 +184,7 @@ export class RunFooter implements FooterApi {
   private flushError: unknown
   // Fixed portion of footer height above the textarea.
   private base: number
-  private terminalHeight: number
+  private terminal: { width: number; height: number }
   private rows = TEXTAREA_MIN_ROWS
   private agents: Accessor<RunAgent[]>
   private setAgents: Setter<RunAgent[]>
@@ -295,7 +297,7 @@ export class RunFooter implements FooterApi {
     this.queuedPrompts = queuedPrompts
     this.setQueuedPrompts = setQueuedPrompts
     this.base = Math.max(1, renderer.footerHeight - TEXTAREA_MIN_ROWS)
-    this.terminalHeight = renderer.terminalHeight
+    this.terminal = { width: renderer.terminalWidth, height: renderer.terminalHeight }
     this.scrollback = this.createScrollback(options.wrote ?? false)
 
     this.renderer.on(CliRenderEvents.DESTROY, this.handleDestroy)
@@ -705,7 +707,8 @@ export class RunFooter implements FooterApi {
   // Resizes the footer to fit the current view without consuming the whole
   // physical terminal when a smaller usable panel can preserve scrollback.
   private applyHeight(): void {
-    const type = this.view().type
+    const view = this.view()
+    const type = view.type
     const preferred =
       type === "permission"
         ? this.base + PERMISSION_ROWS
@@ -727,11 +730,13 @@ export class RunFooter implements FooterApi {
                         ? this.base + SUBAGENT_INSPECTOR_ROWS
                         : this.base + Math.max(TEXTAREA_MIN_ROWS, Math.min(PROMPT_MAX_ROWS, this.rows))
     const minimum =
-      type === "permission"
-        ? FOOTER_PERMISSION_MIN_ROWS
-        : type === "prompt" && this.promptRoute.type === "composer" && !this.autocomplete
-          ? this.base + TEXTAREA_MIN_ROWS
-          : FOOTER_PANEL_MIN_ROWS
+      type === "prompt" && this.promptRoute.type === "composer" && !this.autocomplete
+        ? this.base + TEXTAREA_MIN_ROWS
+        : footerPanelMinimum({
+            type: type === "permission" || type === "question" ? type : "panel",
+            narrow: footerWidthPolicy(this.renderer.terminalWidth).dialog.narrow,
+            single: type === "question" ? questionSingle(view.request) : undefined,
+          })
     const height = footerHeightPolicy({
       terminal: this.renderer.terminalHeight,
       preferred,
@@ -744,12 +749,13 @@ export class RunFooter implements FooterApi {
   }
 
   private handleResize = (): void => {
+    const width = this.renderer.terminalWidth
     const height = this.renderer.terminalHeight
-    if (height === this.terminalHeight) {
+    if (width === this.terminal.width && height === this.terminal.height) {
       return
     }
 
-    this.terminalHeight = height
+    this.terminal = { width, height }
     this.applyHeight()
   }
 

@@ -12,7 +12,7 @@
 // tool snapshots.
 /** @jsxImportSource @opentui/solid */
 import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
 import { errorMessage } from "@slopcode-ai/tui/util/error"
@@ -40,6 +40,7 @@ import {
   type PermissionScopeLabel,
 } from "./permission.shared"
 import { footerWidthPolicy } from "./footer.width"
+import { FOOTER_PERMISSION_MIN_ROWS } from "./footer.height"
 import { toolFiletype } from "./tool"
 import { transparent, type RunBlockTheme, type RunFooterTheme } from "./theme"
 import type { PermissionBatchReply, PermissionReply, RunDiffStyle } from "./types"
@@ -148,11 +149,17 @@ function RunPermissionSingleBody(props: {
   scope: PermissionScopeLabel
   onReply: (input: PermissionReply) => void | Promise<void>
 }) {
+  const renderer = useRenderer()
   const dims = useTerminalDimensions()
   const [state, setState] = createSignal(createPermissionBodyState(props.request.id))
   const info = createMemo(() => permissionInfo(props.request))
   const ft = createMemo(() => toolFiletype(info().file))
   const narrow = createMemo(() => footerWidthPolicy(dims().width).dialog.narrow)
+  const height = createMemo(() => {
+    dims()
+    return renderer.height
+  })
+  const compact = createMemo(() => narrow() && height() <= FOOTER_PERMISSION_MIN_ROWS)
   const persistent = createMemo(() => props.request.always.length > 0)
   const opts = createMemo(() => permissionOptions(state().stage, persistent(), props.scope !== undefined))
   const busy = createMemo(() => state().submitting)
@@ -300,7 +307,7 @@ function RunPermissionSingleBody(props: {
     <box width="100%" height="100%" flexDirection="column" backgroundColor={props.theme.surface}>
       <box
         flexDirection="column"
-        gap={1}
+        gap={compact() ? 0 : 1}
         paddingLeft={1}
         paddingRight={2}
         paddingTop={1}
@@ -475,7 +482,7 @@ function RunPermissionSingleBody(props: {
           flexDirection={narrow() ? "column" : "row"}
           flexShrink={0}
           backgroundColor={props.theme.pane}
-          gap={1}
+          gap={compact() ? 0 : 1}
           paddingTop={1}
           paddingLeft={2}
           paddingRight={3}

@@ -8,7 +8,7 @@
 // All state comes from the parent RunFooter through SolidJS signals.
 // The view itself is stateless except for derived memos.
 /** @jsxImportSource @opentui/solid */
-import { useTerminalDimensions } from "@opentui/solid"
+import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import "opentui-spinner/solid"
 import { createColors, createFrames } from "@slopcode-ai/tui/ui/spinner"
@@ -23,13 +23,14 @@ import {
   RunSubagentSelectBody,
   RunVariantSelectBody,
 } from "./footer.command"
-import { FOOTER_PANEL_MIN_ROWS, FOOTER_PERMISSION_MIN_ROWS, footerMenuRows } from "./footer.height"
+import { footerMenuRows, footerPanelMinimum } from "./footer.height"
 import { FOOTER_MENU_ROWS, RunFooterMenu } from "./footer.menu"
 import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState } from "./footer.prompt"
 import { RunPermissionBody } from "./footer.permission"
 import { RunQuestionBody } from "./footer.question"
 import { footerWidthPolicy } from "./footer.width"
+import { questionSingle } from "./question.shared"
 import {
   SLOPCODE_BASE_MODE,
   formatKeyBindings,
@@ -121,8 +122,13 @@ type RunFooterViewProps = {
 export { TEXTAREA_MIN_ROWS, TEXTAREA_MAX_ROWS } from "./footer.prompt"
 
 export function RunFooterView(props: RunFooterViewProps) {
+  const renderer = useRenderer()
   const term = useTerminalDimensions()
   const width = createMemo(() => term().width)
+  const height = createMemo(() => {
+    term()
+    return renderer.height
+  })
   const responsive = createMemo(() => footerWidthPolicy(width()))
   const active = createMemo<FooterView>(() => props.view?.() ?? { type: "prompt" })
   const subagent = createMemo<FooterSubagentState>(() => {
@@ -137,8 +143,8 @@ export function RunFooterView(props: RunFooterViewProps) {
   })
   const [route, setRoute] = createSignal<FooterPromptRoute>({ type: "composer" })
   const [subagentMenuRows, setSubagentMenuRows] = createSignal(RUN_SUBAGENT_PANEL_ROWS)
-  const commandRows = createMemo(() => footerMenuRows(term().height, RUN_COMMAND_LIST_ROWS))
-  const subagentRows = createMemo(() => footerMenuRows(term().height, RUN_SUBAGENT_LIST_ROWS))
+  const commandRows = createMemo(() => footerMenuRows(height(), RUN_COMMAND_LIST_ROWS))
+  const subagentRows = createMemo(() => footerMenuRows(height(), RUN_SUBAGENT_LIST_ROWS))
   const queuedPrompts = createMemo(() => props.queuedPrompts?.() ?? [])
   const skills = createMemo(() => (props.commands() ?? []).filter((item) => item.source === "skill"))
   const prompt = createMemo(() => active().type === "prompt" && route().type === "composer")
@@ -160,9 +166,14 @@ export function RunFooterView(props: RunFooterViewProps) {
       modeling() ||
       varianting(),
   )
-  const panelMinimum = createMemo(() =>
-    active().type === "permission" ? FOOTER_PERMISSION_MIN_ROWS : FOOTER_PANEL_MIN_ROWS,
-  )
+  const panelMinimum = createMemo(() => {
+    const view = active()
+    return footerPanelMinimum({
+      type: view.type === "permission" || view.type === "question" ? view.type : "panel",
+      narrow: responsive().dialog.narrow,
+      single: view.type === "question" ? questionSingle(view.request) : undefined,
+    })
+  })
   const selected = createMemo(() => {
     const current = route()
     return current.type === "subagent" ? current.sessionID : undefined
@@ -641,7 +652,7 @@ export function RunFooterView(props: RunFooterViewProps) {
       gap={0}
       padding={0}
     >
-      <Show when={(panel() || inspecting()) && term().height >= panelMinimum()}>
+      <Show when={(panel() || inspecting()) && height() >= panelMinimum()}>
         <box width="100%" height={1} flexShrink={0} backgroundColor="transparent" />
       </Show>
 

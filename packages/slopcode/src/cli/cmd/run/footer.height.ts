@@ -3,6 +3,16 @@ export const FOOTER_PANEL_CHROME_ROWS = 7
 export const FOOTER_PANEL_MIN_ROWS = FOOTER_PANEL_CHROME_ROWS + 1
 export const FOOTER_PERMISSION_MIN_ROWS = FOOTER_PANEL_MIN_ROWS + 2
 
+export function footerPanelMinimum(input: {
+  type: "panel" | "permission" | "question"
+  narrow: boolean
+  single?: boolean
+}) {
+  if (input.type === "permission") return FOOTER_PERMISSION_MIN_ROWS
+  if (input.type === "question" && input.narrow && input.single === false) return FOOTER_PANEL_MIN_ROWS + 1
+  return FOOTER_PANEL_MIN_ROWS
+}
+
 export function footerHeightPolicy(input: { terminal: number; preferred: number; minimum: number }) {
   const terminal = Number.isFinite(input.terminal) ? Math.max(0, Math.floor(input.terminal)) : 0
   const preferred = Number.isFinite(input.preferred) ? Math.max(0, Math.floor(input.preferred)) : 0
