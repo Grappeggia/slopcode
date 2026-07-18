@@ -675,8 +675,8 @@ export const layer = Layer.effect(
       const official = (() => {
         const targets = {
           openai: "https://api.openai.com/v1",
-          slopcode: "https://slopcode.dev/zen/v1",
-          "slopcode-go": "https://slopcode.dev/zen/go/v1",
+          slopcode: "https://www.slopcode.dev/zen/v1",
+          "slopcode-go": "https://www.slopcode.dev/zen/go/v1",
         } as const
         const target = targets[resolved.model.provider as keyof typeof targets]
         if (!target || resolved.model.route.endpoint.path !== "/responses" || resolved.model.route.endpoint.query)

@@ -818,8 +818,8 @@ describe("OpenAI Responses route", () => {
   it.effect("preserves explicit caching on canonical managed endpoints", () =>
     Effect.gen(function* () {
       for (const item of [
-        { provider: "slopcode", baseURL: "https://slopcode.dev/zen/v1" },
-        { provider: "slopcode-go", baseURL: "https://slopcode.dev/zen/go/v1" },
+        { provider: "slopcode", baseURL: "https://www.slopcode.dev/zen/v1" },
+        { provider: "slopcode-go", baseURL: "https://www.slopcode.dev/zen/go/v1" },
       ]) {
         const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
           LLM.request({

@@ -6,5 +6,11 @@
       "destination": "/docs/",
       "permanent": false
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/zen/:path*",
+      "destination": "https://opencode.ai/zen/:path*"
+    }
   ]
 }

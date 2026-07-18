@@ -45,7 +45,7 @@ describe("GoogleVertexPlugin", () => {
           provider.api = {
             type: "aisdk",
             package: "@ai-sdk/openai-compatible",
-            url: "https://slopcode.ai/zen/v1",
+            url: "https://www.slopcode.dev/zen/v1",
           }
         }),
       )

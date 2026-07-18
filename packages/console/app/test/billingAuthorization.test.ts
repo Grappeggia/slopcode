@@ -80,7 +80,7 @@ function zenRequest(runtime: HandlerRuntime) {
   return useTestDatabase(() =>
     handler(
       {
-        request: new Request("https://slopcode.ai/zen/v1/chat/completions", {
+        request: new Request("https://www.slopcode.dev/zen/v1/chat/completions", {
           method: "POST",
           headers: {
             authorization: "Bearer sk-zen",

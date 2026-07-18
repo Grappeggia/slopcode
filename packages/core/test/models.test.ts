@@ -188,8 +188,8 @@ describe("ModelsDev Service", () => {
       expect(result["slopcode-go"]?.models).toBeDefined()
       expect(result.slopcode?.models["gpt-5.6"]?.provider).toEqual({ npm: "@ai-sdk/openai" })
       expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider).toEqual({ npm: "@ai-sdk/openai" })
-      expect(result.slopcode?.api).toBe("https://slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.api).toBe("https://slopcode.dev/zen/go/v1")
+      expect(result.slopcode?.api).toBe("https://www.slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.api).toBe("https://www.slopcode.dev/zen/go/v1")
       expect(Object.keys(result.openai?.models ?? {}).sort()).toEqual([
         "gpt-5.6",
         "gpt-5.6-luna",
@@ -255,10 +255,10 @@ describe("ModelsDev Service", () => {
         ModelsDev.Service.use((service) => service.get()),
       )
 
-      expect(result.slopcode?.api).toBe("https://slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.api).toBe("https://slopcode.dev/zen/go/v1")
-      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe("https://slopcode.dev/zen/go/v1")
+      expect(result.slopcode?.api).toBe("https://www.slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.api).toBe("https://www.slopcode.dev/zen/go/v1")
+      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/go/v1")
       expect((yield* Ref.get(state)).calls).toEqual([])
     }),
   )
@@ -279,10 +279,10 @@ describe("ModelsDev Service", () => {
         () => Effect.sync(() => (Flag.SLOPCODE_DISABLE_MODELS_FETCH = true)),
       )
 
-      expect(result.slopcode?.api).toBe("https://slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.api).toBe("https://slopcode.dev/zen/go/v1")
-      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe("https://slopcode.dev/zen/go/v1")
+      expect(result.slopcode?.api).toBe("https://www.slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.api).toBe("https://www.slopcode.dev/zen/go/v1")
+      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/go/v1")
       expect((yield* Ref.get(state)).calls).toHaveLength(1)
     }),
   )
@@ -311,8 +311,8 @@ describe("ModelsDev Service", () => {
       yield* Effect.promise(() => rm(file, { force: true }))
 
       expect(Object.keys(result).sort()).toEqual(["slopcode", "slopcode-go"])
-      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://slopcode.dev/zen/v1")
-      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe("https://slopcode.dev/zen/go/v1")
+      expect(result.slopcode?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/v1")
+      expect(result["slopcode-go"]?.models["gpt-5.6"]?.provider?.api).toBe("https://www.slopcode.dev/zen/go/v1")
     }),
   )
 

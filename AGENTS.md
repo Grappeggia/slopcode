@@ -125,8 +125,8 @@ The codebase supports two OpenCode model tiers:
 
 | Tier     | Provider ID   | API Endpoint                    | Needs Auth?                          |
 | -------- | ------------- | ------------------------------- | ------------------------------------ |
-| **Free** | `slopcode`    | `https://slopcode.ai/zen/v1`    | No (auto-injects `apiKey: "public"`) |
-| **Go**   | `slopcode-go` | `https://slopcode.ai/zen/go/v1` | Yes (`SLOPCODE_API_KEY`)             |
+| **Free** | `slopcode`    | `https://www.slopcode.dev/zen/v1`    | No (auto-injects `apiKey: "public"`) |
+| **Go**   | `slopcode-go` | `https://www.slopcode.dev/zen/go/v1` | Yes (`SLOPCODE_API_KEY`)             |
 
 **Free models** (`big-pickle`, `glm-4.7-free`, etc.) appear automatically without any key. The `SlopcodePlugin` (`packages/core/src/plugin/provider/slopcode.ts`) strips paid models and sets `apiKey: "public"` when no key is present.
 

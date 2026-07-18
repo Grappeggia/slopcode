@@ -172,14 +172,14 @@ describe("SessionRunnerModel", () => {
       name: "Slopcode free",
       providerID: "slopcode",
       enabled: "custom",
-      url: "https://slopcode.dev/zen/v1",
+      url: "https://www.slopcode.dev/zen/v1",
       codex: false,
     },
     {
       name: "Slopcode Go",
       providerID: "slopcode-go",
       enabled: "custom",
-      url: "https://slopcode.dev/zen/go/v1",
+      url: "https://www.slopcode.dev/zen/go/v1",
       codex: false,
     },
   ] as const

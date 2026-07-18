@@ -816,11 +816,11 @@ http://localhost:4096
 http://localhost:4096/doc
 https://app.example.com
 https://AZURE_COGNITIVE_SERVICES_RESOURCE_NAME.cognitiveservices.azure.com/
-https://slopcode.dev/zen/v1/chat/completions
-https://slopcode.dev/zen/v1/messages
-https://slopcode.dev/zen/v1/models/gemini-3-flash
-https://slopcode.dev/zen/v1/models/gemini-3-pro
-https://slopcode.dev/zen/v1/responses
+https://www.slopcode.dev/zen/v1/chat/completions
+https://www.slopcode.dev/zen/v1/messages
+https://www.slopcode.dev/zen/v1/models/gemini-3-flash
+https://www.slopcode.dev/zen/v1/models/gemini-3-pro
+https://www.slopcode.dev/zen/v1/responses
 https://RESOURCE_NAME.openai.azure.com/
 laravel/pint
 log/

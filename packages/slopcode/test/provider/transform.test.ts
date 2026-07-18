@@ -2704,7 +2704,7 @@ describe("ProviderTransform.variants", () => {
       providerID: "slopcode-go",
       api: {
         id: "glm-5",
-        url: "https://slopcode.ai/zen/go/v1",
+        url: "https://www.slopcode.dev/zen/go/v1",
         npm: "@ai-sdk/openai-compatible",
       },
       capabilities: { reasoning: true },

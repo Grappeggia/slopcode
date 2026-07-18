@@ -37,8 +37,8 @@ export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 const GPT5_6 = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
 const OFFICIAL = {
   openai: "https://api.openai.com/v1",
-  slopcode: "https://slopcode.dev/zen/v1",
-  "slopcode-go": "https://slopcode.dev/zen/go/v1",
+  slopcode: "https://www.slopcode.dev/zen/v1",
+  "slopcode-go": "https://www.slopcode.dev/zen/go/v1",
 } as const
 
 const eligibleRoute = (model: Provider.Model, auth?: Auth.Info, provider?: Provider.Info) => {
