@@ -68,6 +68,20 @@ function renderQuestion(request: QuestionRequest, width = 48, height = 12, repli
   )
 }
 
+async function click(app: Awaited<ReturnType<typeof testRender>>, id: string) {
+  const item = app.renderer.root.findDescendantById(id)
+  if (!item) throw new Error(`expected mouse target ${id}`)
+  app.renderer.pause()
+  try {
+    const frame = app.renderer.frameId
+    await app.mockMouse.pressDown(item.x + 1, item.y)
+    await app.mockMouse.release(item.x + 1, item.y)
+    expect(app.renderer.frameId).toBe(frame)
+  } finally {
+    app.renderer.resume()
+  }
+}
+
 test("direct single permission content scrolls without changing its action", async () => {
   const replies: PermissionReply[] = []
   const app = await renderPermission({ requests: [permission()], replies })
@@ -356,6 +370,88 @@ test("direct offscreen digit cannot submit before its row renders", async () => 
     expect(replies).toEqual([{ requestID: "que-offscreen-digit-reply", answers: [["LAST SAFE REPLY"]] }])
   } finally {
     if (paused) app.renderer.resume()
+    app.renderer.destroy()
+  }
+})
+
+test("direct visible ordinary option activates with one mouse click", async () => {
+  const replies: QuestionReply[] = []
+  const request = {
+    id: "que-mouse-option",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: "Choose one visible answer.",
+        header: "Mouse",
+        custom: false,
+        options: [
+          { label: "Primary", description: "The initially selected answer." },
+          { label: "SECOND VISIBLE ANSWER", description: "A visible non-selected answer." },
+        ],
+      },
+    ],
+  } satisfies QuestionRequest
+  const app = await renderQuestion(request, 80, 12, replies)
+
+  try {
+    await app.waitForFrame((frame) => frame.includes("SECOND VISIBLE ANSWER"))
+    await click(app, "run-question-que-mouse-option-0-1")
+    expect(replies).toEqual([{ requestID: "que-mouse-option", answers: [["SECOND VISIBLE ANSWER"]] }])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct visible multi-select option toggles with one mouse click", async () => {
+  const request = {
+    id: "que-mouse-multi",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: "Choose visible answers.",
+        header: "Multi",
+        multiple: true,
+        custom: false,
+        options: [
+          { label: "Primary", description: "The initially selected answer." },
+          { label: "SECOND VISIBLE TOGGLE", description: "A visible non-selected answer." },
+        ],
+      },
+    ],
+  } satisfies QuestionRequest
+  const app = await renderQuestion(request, 80, 12)
+
+  try {
+    await app.waitForFrame((frame) => frame.includes("SECOND VISIBLE TOGGLE"))
+    await click(app, "run-question-que-mouse-multi-0-1")
+    await app.waitForFrame((frame) => frame.includes("[✓] SECOND VISIBLE TOGGLE"))
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct visible custom row edits with one mouse click", async () => {
+  const request = {
+    id: "que-mouse-custom",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: "Choose or write one visible answer.",
+        header: "Custom",
+        custom: true,
+        options: [{ label: "Provided", description: "The initially selected answer." }],
+      },
+    ],
+  } satisfies QuestionRequest
+  const app = await renderQuestion(request, 80, 12)
+
+  try {
+    await app.waitForFrame((frame) => frame.includes("Type your own answer"))
+    await click(app, "run-question-que-mouse-custom-0-1")
+    await app.waitFor(() => app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+  } finally {
+    app.renderer.currentFocusedRenderable?.blur()
+    app.renderer.currentFocusedEditor?.blur()
     app.renderer.destroy()
   }
 })

@@ -127,7 +127,8 @@ export function RunQuestionBody(props: {
 
   createEffect(() => {
     const id = target()
-    if (id) follow(id)
+    if (!id || (exposed.has(id) && shown(state().selected))) return
+    follow(id)
   })
 
   const setTab = (tab: number) => {
