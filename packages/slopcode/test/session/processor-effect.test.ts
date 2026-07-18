@@ -28,6 +28,8 @@ import { SessionEvent } from "@slopcode-ai/core/session/event"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
 import { LLMEvent } from "@slopcode-ai/llm"
 import { Snapshot } from "@/snapshot"
+import type { LanguageModelV3, LanguageModelV3StreamPart } from "@ai-sdk/provider"
+import { ProviderTest } from "../fake/provider"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -185,6 +187,35 @@ const env = LayerNode.buildLayer(LayerNode.group([root, LayerNode.make(TestLLMSe
 
 const it = testEffect(env)
 
+const coldModel = ProviderTest.model({ id: ref.modelID, providerID: ref.providerID })
+const language = {
+  specificationVersion: "v3",
+  provider: "test",
+  modelId: "test-model",
+  supportedUrls: {},
+  doGenerate() {
+    throw new Error("unexpected generate")
+  },
+  async doStream() {
+    return {
+      stream: new ReadableStream<LanguageModelV3StreamPart>({
+        start(controller) {
+          controller.enqueue({ type: "stream-start", warnings: [] })
+          controller.enqueue({
+            type: "finish",
+            finishReason: { unified: "stop", raw: "stop" },
+            usage: {
+              inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+              outputTokens: { total: 0, text: 0, reasoning: 0 },
+            },
+          })
+          controller.close()
+        },
+      }),
+    }
+  },
+} satisfies LanguageModelV3
+
 let cold:
   | {
       track: () => Effect.Effect<string | undefined>
@@ -205,20 +236,10 @@ const coldSnapshot = Layer.succeed(
     diffFull: () => Effect.succeed([]),
   }),
 )
-const coldProvider = Layer.succeed(
-  Provider.Service,
-  Provider.Service.of({
-    list: () => Effect.succeed({}),
-    getProvider: () => Effect.die("unexpected provider lookup"),
-    getModel: () => Effect.die("unexpected model lookup"),
-    getLanguage: (model) =>
-      Effect.suspend(() => cold?.language(model) ?? Effect.die("missing cold-path provider test")),
-    closest: () => Effect.succeed(undefined),
-    getSmallModel: () => Effect.succeed(undefined),
-    getSmallModelForProvider: () => Effect.succeed(undefined),
-    defaultModel: () => Effect.die("unexpected default model lookup"),
-  }),
-)
+const coldProvider = ProviderTest.fake({
+  model: coldModel,
+  getLanguage: (model) => Effect.suspend(() => cold?.language(model) ?? Effect.die("missing cold-path provider test")),
+}).layer
 const coldIt = testEffect(
   LayerNode.buildLayer(root, {
     replacements: [
@@ -303,6 +324,28 @@ function createInput(model: Provider.Model) {
   }
 }
 
+function processInput(model: Provider.Model, input?: SessionV1.User): LLM.StreamInput {
+  const sessionID = input?.sessionID ?? SessionID.make("ses_processor_create")
+  return {
+    user:
+      input ??
+      ({
+        id: MessageID.make("msg_processor_parent"),
+        sessionID,
+        role: "user",
+        time: { created: 0 },
+        agent: "build",
+        model: ref,
+      } satisfies SessionV1.User),
+    sessionID,
+    model,
+    agent: agent(),
+    system: [],
+    messages: [],
+    tools: {},
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -342,7 +385,58 @@ coldIt.effect("session.processor starts snapshot and provider preload concurrent
   }),
 )
 
-coldIt.effect("session.processor ignores provider preload failure while waiting for snapshot", () =>
+coldIt.effect("session.processor retries provider lookup during process after preload failure", () =>
+  provideTmpdirInstance((dir) =>
+    Effect.gen(function* () {
+      const processors = yield* SessionProcessor.Service
+      const session = yield* Session.Service
+      const snapshotStarted = yield* Deferred.make<void>()
+      const providerStarted = yield* Deferred.make<void>()
+      const snapshotRelease = yield* Deferred.make<void>()
+      const model = coldModel
+      const calls = { value: 0 }
+      const chat = yield* session.create({})
+      const parent = yield* user(chat.id, "retry provider")
+      const msg = yield* assistant(chat.id, parent.id, dir)
+      cold = {
+        track: () =>
+          Deferred.succeed(snapshotStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(snapshotRelease)),
+            Effect.as("snapshot"),
+          ),
+        language: () => {
+          calls.value += 1
+          if (calls.value > 1) return Effect.succeed(language)
+          return Deferred.succeed(providerStarted, undefined).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new Provider.ModelNotFoundError({
+                  providerID: ref.providerID,
+                  modelID: ref.modelID,
+                }),
+              ),
+            ),
+          )
+        },
+      }
+
+      const create = yield* processors
+        .create({ assistantMessage: msg, sessionID: chat.id, model })
+        .pipe(Effect.forkChild)
+      yield* Effect.all([Deferred.await(snapshotStarted), Deferred.await(providerStarted)], {
+        concurrency: "unbounded",
+      })
+      expect(create.pollUnsafe()).toBeUndefined()
+      yield* Deferred.succeed(snapshotRelease, undefined)
+      const handle = yield* Fiber.join(create)
+      expect(handle.message.id).toBe(msg.id)
+      expect(yield* handle.process(processInput(model, parent))).toBe("continue")
+      expect(calls.value).toBe(2)
+    }),
+  ),
+)
+
+coldIt.effect("session.processor preserves preload interruption and returns no handle", () =>
   Effect.gen(function* () {
     const processors = yield* SessionProcessor.Service
     const snapshotStarted = yield* Deferred.make<void>()
@@ -355,17 +449,7 @@ coldIt.effect("session.processor ignores provider preload failure while waiting 
           Effect.andThen(Deferred.await(snapshotRelease)),
           Effect.as("snapshot"),
         ),
-      language: () =>
-        Deferred.succeed(providerStarted, undefined).pipe(
-          Effect.andThen(
-            Effect.fail(
-              new Provider.ModelNotFoundError({
-                providerID: ref.providerID,
-                modelID: ref.modelID,
-              }),
-            ),
-          ),
-        ),
+      language: () => Deferred.succeed(providerStarted, undefined).pipe(Effect.andThen(Effect.interrupt)),
     }
 
     const create = yield* processors.create(createInput(model)).pipe(Effect.forkChild)
@@ -374,7 +458,9 @@ coldIt.effect("session.processor ignores provider preload failure while waiting 
     })
     expect(create.pollUnsafe()).toBeUndefined()
     yield* Deferred.succeed(snapshotRelease, undefined)
-    expect((yield* Fiber.join(create)).message.id).toBe(MessageID.make("msg_processor_create"))
+    const exit = yield* Fiber.await(create)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) expect(Cause.hasInterrupts(exit.cause)).toBe(true)
   }),
 )
 

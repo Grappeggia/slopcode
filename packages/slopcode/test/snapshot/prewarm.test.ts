@@ -5,7 +5,7 @@ import { CrossSpawnSpawner } from "@slopcode-ai/core/cross-spawn-spawner"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "@/config/config"
 import { Snapshot } from "@/snapshot"
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Layer, Scope } from "effect"
 import path from "path"
 import { disposeAllInstances, provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -23,6 +23,7 @@ const settings = [
   "index.threads=true",
   "core.untrackedCache=true",
 ]
+type Command = { args: readonly string[]; gitdir?: string }
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -43,6 +44,34 @@ function build(appProcess: AppProcess.Interface, fs: FSUtil.Interface) {
     )
     return Context.get(yield* Layer.buildWithScope(Layer.fresh(layer), scope), Snapshot.Service)
   })
+}
+
+function commandIndex(args: readonly string[]) {
+  for (let i = 0; i < args.length; ) {
+    if (args[i] === "-c" || args[i] === "--git-dir" || args[i] === "--work-tree") {
+      i += 2
+      continue
+    }
+    return i
+  }
+  return -1
+}
+
+const command = (args: readonly string[]) => args[commandIndex(args)]
+
+function privateCommands(commands: Command[], gitdir: string) {
+  return commands.filter((item) => item.gitdir === gitdir || item.args[item.args.indexOf("--git-dir") + 1] === gitdir)
+}
+
+function expectTuning(item: Command) {
+  const index = commandIndex(item.args)
+  expect(index).toBeGreaterThan(0)
+  const options = item.args.slice(0, index)
+  for (const setting of settings) {
+    const at = options.indexOf(setting)
+    expect(at).toBeGreaterThan(0)
+    expect(options[at - 1]).toBe("-c")
+  }
 }
 
 const tree = (gitdir: string, hash: string) =>
@@ -67,7 +96,7 @@ it.live("prewarms setup in the background and tracks fresh state after it finish
     const fs = yield* FSUtil.Service
     const started = yield* Deferred.make<void>()
     const release = yield* Deferred.make<void>()
-    const commands: Array<{ args: readonly string[]; gitdir?: string }> = []
+    const commands: Command[] = []
     const appProcess = AppProcess.Service.of({
       ...real,
       run: (command, options) => {
@@ -86,25 +115,31 @@ it.live("prewarms setup in the background and tracks fresh state after it finish
 
     yield* snapshot.init().pipe(provideInstance(dir))
     yield* Deferred.await(started)
-    expect(commands.some((item) => item.args.includes("add") || item.args.includes("write-tree"))).toBe(false)
-
-    const tracking = yield* snapshot.track().pipe(provideInstance(dir), Effect.forkChild)
-    yield* Effect.yieldNow
-    expect(tracking.pollUnsafe()).toBeUndefined()
-    yield* fs.writeFileString(path.join(dir, "after-setup.txt"), "fresh")
+    expect(command(commands.at(-1)!.args)).toBe("init")
     yield* Deferred.succeed(release, undefined)
 
-    const hash = yield* Fiber.join(tracking)
+    // cleanup acquires the same semaphore, so its return proves setup completed.
+    yield* snapshot.cleanup().pipe(provideInstance(dir))
+    const setup = commands.slice()
+    expect(setup.map((item) => command(item.args))).not.toContain("add")
+    expect(setup.map((item) => command(item.args))).not.toContain("diff-files")
+    expect(setup.map((item) => command(item.args))).not.toContain("ls-files")
+    expect(setup.map((item) => command(item.args))).not.toContain("write-tree")
+
+    yield* fs.writeFileString(path.join(dir, "after-setup.txt"), "fresh")
+    const hash = yield* snapshot.track().pipe(provideInstance(dir))
+
     expect(hash).toBeTruthy()
     const gitdir = commands.find((item) => item.gitdir)?.gitdir
     expect(gitdir).toBeTruthy()
     expect(yield* tree(gitdir!, hash!)).toContain("after-setup.txt")
     expect(commands.some((item) => item.args.includes("config"))).toBe(false)
 
-    for (const item of commands.filter(
-      (item) => item.gitdir === gitdir || item.args[item.args.indexOf("--git-dir") + 1] === gitdir,
-    )) {
-      for (const setting of settings) expect(item.args).toContain(setting)
+    const privateGit = privateCommands(commands, gitdir!)
+    for (const item of privateGit) expectTuning(item)
+    const categories = new Set(privateGit.map((item) => command(item.args)))
+    for (const category of ["init", "gc", "diff-files", "ls-files", "add", "write-tree"]) {
+      expect(categories).toContain(category)
     }
   }),
 )
@@ -162,39 +197,38 @@ it.live("keeps source excludes live and skips identical private exclude writes",
   }),
 )
 
-it.live("isolates background setup errors so track can retry authoritatively", () =>
+it.live("retries setup after partial initialization before authoritative track", () =>
   Effect.gen(function* () {
     const dir = yield* tmpdirScoped({ git: true })
     const real = yield* AppProcess.Service
-    const fs = yield* FSUtil.Service
+    const realFs = yield* FSUtil.Service
     const failed = yield* Deferred.make<void>()
     const attempts = { value: 0 }
-    const appProcess = AppProcess.Service.of({
-      ...real,
-      run: (command, options) => {
-        const std = ChildProcess.isStandardCommand(command) ? command : undefined
-        if (std?.command !== "git" || !std.options.env?.GIT_DIR || !std.args.includes("init")) {
-          return real.run(command, options)
+    const target = { value: undefined as string | undefined }
+    const fs = FSUtil.Service.of({
+      ...realFs,
+      writeFileString: (file, content, options) => {
+        if (file.endsWith(path.join("objects", "info", "alternates")) && !file.startsWith(path.join(dir, ".git"))) {
+          target.value = file
+          attempts.value += 1
+          if (attempts.value === 1) {
+            return Deferred.succeed(failed, undefined).pipe(
+              Effect.andThen(Effect.die("partial snapshot setup failure")),
+            )
+          }
         }
-        attempts.value += 1
-        if (attempts.value > 1) return real.run(command, options)
-        return Deferred.succeed(failed, undefined).pipe(
-          Effect.as({
-            command: "git init",
-            exitCode: 1,
-            stdout: Buffer.from(""),
-            stderr: Buffer.from("setup failed"),
-            stdoutTruncated: false,
-            stderrTruncated: false,
-          } satisfies AppProcess.RunResult),
-        )
+        return realFs.writeFileString(file, content, options)
       },
     })
-    const snapshot = yield* build(appProcess, fs)
+    const snapshot = yield* build(real, fs)
 
     yield* snapshot.init().pipe(provideInstance(dir))
     yield* Deferred.await(failed)
+    expect(target.value).toBeTruthy()
+    const gitdir = path.resolve(target.value!, "../../..")
+    expect(yield* realFs.exists(path.join(gitdir, "HEAD"))).toBe(true)
     expect(yield* snapshot.track().pipe(provideInstance(dir))).toBeTruthy()
     expect(attempts.value).toBe(2)
+    expect(yield* realFs.exists(path.join(gitdir, "info", "exclude"))).toBe(true)
   }),
 )
