@@ -235,7 +235,16 @@ test("direct question only acts on a visible selected answer after content revie
     expect(app.captureCharFrame()).toContain("Read this long prompt from the beginning")
     expect(app.captureCharFrame()).not.toContain("FIRST ACTIONABLE ANSWER")
 
-    app.mockInput.pressEnter()
+    app.renderer.pause()
+    try {
+      const frame = app.renderer.frameId
+      app.mockInput.pressEnter()
+      app.mockInput.pressEnter()
+      expect(app.renderer.frameId).toBe(frame)
+      expect(replies).toEqual([])
+    } finally {
+      app.renderer.resume()
+    }
     await app.renderOnce()
     expect(replies).toEqual([])
     expect(app.captureCharFrame()).toContain("FIRST ACTIONABLE ANSWER")
@@ -258,6 +267,99 @@ test("direct question only acts on a visible selected answer after content revie
   }
 })
 
+test("direct digit activation waits for an offscreen answer to render", async () => {
+  const request = {
+    id: "que-visible-digit",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: Array.from(
+          { length: 36 },
+          (_, index) => `Review digit constraint ${index + 1} before continuing.`,
+        ).join(" "),
+        header: "Digits",
+        multiple: true,
+        custom: false,
+        options: Array.from({ length: 8 }, (_, index) => ({
+          label: index === 0 ? "FIRST VISIBLE TOGGLE" : index === 7 ? "LAST OFFSCREEN TOGGLE" : `Toggle ${index + 1}`,
+          description: `Description for toggle ${index + 1}.`,
+        })),
+      },
+    ],
+  } satisfies QuestionRequest
+  const app = await renderQuestion(request, 80, 12)
+
+  try {
+    await app.waitForFrame((frame) => frame.includes("FIRST VISIBLE TOGGLE"))
+    app.mockInput.pressKey("1")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("[✓] FIRST VISIBLE TOGGLE")
+
+    app.mockInput.pressKey("HOME")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).not.toContain("LAST OFFSCREEN TOGGLE")
+
+    app.mockInput.pressKey("8")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("[ ] LAST OFFSCREEN TOGGLE")
+
+    app.mockInput.pressKey("8")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("[✓] LAST OFFSCREEN TOGGLE")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct offscreen digit cannot submit before its row renders", async () => {
+  const replies: QuestionReply[] = []
+  const request = {
+    id: "que-offscreen-digit-reply",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: Array.from(
+          { length: 36 },
+          (_, index) => `Review reply constraint ${index + 1} before continuing.`,
+        ).join(" "),
+        header: "Reply",
+        custom: false,
+        options: Array.from({ length: 8 }, (_, index) => ({
+          label: index === 0 ? "FIRST REPLY" : index === 7 ? "LAST SAFE REPLY" : `Reply ${index + 1}`,
+          description: `Description for reply ${index + 1}.`,
+        })),
+      },
+    ],
+  } satisfies QuestionRequest
+  const app = await renderQuestion(request, 80, 12, replies)
+  let paused = false
+
+  try {
+    await app.waitForFrame((frame) => frame.includes("FIRST REPLY"))
+    app.mockInput.pressKey("HOME")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).not.toContain("LAST SAFE REPLY")
+
+    app.renderer.pause()
+    paused = true
+    const frame = app.renderer.frameId
+    app.mockInput.pressKey("8")
+    app.mockInput.pressKey("8")
+    expect(app.renderer.frameId).toBe(frame)
+    expect(replies).toEqual([])
+
+    app.renderer.resume()
+    paused = false
+    await app.waitForFrame((output) => output.includes("LAST SAFE REPLY"))
+    app.mockInput.pressKey("8")
+    await app.waitFor(() => replies.length === 1)
+    expect(replies).toEqual([{ requestID: "que-offscreen-digit-reply", answers: [["LAST SAFE REPLY"]] }])
+  } finally {
+    if (paused) app.renderer.resume()
+    app.renderer.destroy()
+  }
+})
+
 test("direct custom answer textarea owns arrows home and end", async () => {
   const request = {
     id: "que-editor-keys",
@@ -276,6 +378,7 @@ test("direct custom answer textarea owns arrows home and end", async () => {
   try {
     await app.renderOnce()
     app.mockInput.pressKey("ARROW_DOWN")
+    await app.waitForFrame((frame) => frame.includes("Type your own answer"))
     app.mockInput.pressEnter()
     await app.waitFor(() => app.renderer.currentFocusedEditor instanceof TextareaRenderable)
     const area = app.renderer.currentFocusedEditor as TextareaRenderable

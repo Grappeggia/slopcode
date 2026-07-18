@@ -13,9 +13,9 @@
 // All state logic lives in question.shared.ts as a pure state machine.
 // This component just renders it and dispatches keyboard events.
 /** @jsxImportSource @opentui/solid */
-import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
-import { For, Show, createEffect, createMemo, createSignal } from "solid-js"
+import { CliRenderEvents, type ScrollBoxRenderable, type TextareaRenderable } from "@opentui/core"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import type { QuestionRequest } from "@slopcode-ai/sdk/v2"
 import {
   createQuestionBodyState,
@@ -50,6 +50,7 @@ export function RunQuestionBody(props: {
   onReply: (input: QuestionReply) => void | Promise<void>
   onReject: (input: QuestionReject) => void | Promise<void>
 }) {
+  const renderer = useRenderer()
   const dims = useTerminalDimensions()
   const [state, setState] = createSignal(createQuestionBodyState(props.request.id))
   const single = createMemo(() => questionSingle(props.request))
@@ -81,8 +82,27 @@ export function RunQuestionBody(props: {
   const context = createMemo(() => `${props.request.id}:${state().tab}`)
   const target = createMemo(() => (confirm() ? undefined : row(state().tab, state().selected)))
   let generation = 0
+  const exposed = new Set<string>()
+
+  const shown = (selected: number) => {
+    const item = scroll?.content.findDescendantById(row(state().tab, selected))
+    if (!scroll || !item) return false
+    return item.y >= scroll.viewport.y && item.y < scroll.viewport.y + scroll.viewport.height
+  }
+
+  const expose = () => {
+    exposed.clear()
+    if (confirm()) return
+    Array.from({ length: questionTotal(props.request, state()) }, (_, selected) => selected)
+      .filter(shown)
+      .forEach((selected) => exposed.add(row(state().tab, selected)))
+  }
+
+  renderer.on(CliRenderEvents.FRAME, expose)
+  onCleanup(() => renderer.off(CliRenderEvents.FRAME, expose))
 
   const follow = (id: string) => {
+    exposed.clear()
     const current = ++generation
     const run = () => {
       if (current === generation && target() === id) scroll?.scrollChildIntoView(id)
@@ -100,6 +120,7 @@ export function RunQuestionBody(props: {
 
   createEffect(() => {
     context()
+    exposed.clear()
     generation++
     scroll?.scrollTo(0)
   })
@@ -153,11 +174,17 @@ export function RunQuestionBody(props: {
     void beginReply(next.reply)
   }
 
-  const choose = (selected: number) => {
+  const activate = (selected: number) => {
     const base = state()
     const cur = questionSetSelected(base, selected)
+    const id = row(base.tab, selected)
+    if (!exposed.has(id) || !shown(selected)) {
+      setState(cur)
+      follow(id)
+      return
+    }
     const next = questionSelect(cur, props.request)
-    follow(row(base.tab, selected))
+    follow(id)
     if (next.state !== base) {
       setState(next.state)
     }
@@ -173,30 +200,8 @@ export function RunQuestionBody(props: {
     setState((prev) => questionSetSelected(prev, selected))
   }
 
-  const visible = () => {
-    const cur = state()
-    const item = scroll?.content.findDescendantById(row(cur.tab, cur.selected))
-    if (!scroll || !item) return false
-    if (item.y < scroll.viewport.y || item.y >= scroll.viewport.y + scroll.viewport.height) {
-      follow(item.id)
-      return false
-    }
-    return true
-  }
-
   const select = () => {
-    if (!visible()) return
-    const cur = state()
-    const next = questionSelect(cur, props.request)
-    if (next.state !== cur) {
-      setState(next.state)
-    }
-
-    if (!next.reply) {
-      return
-    }
-
-    void beginReply(next.reply)
+    activate(state().selected)
   }
 
   const submit = () => {
@@ -209,6 +214,7 @@ export function RunQuestionBody(props: {
 
   const scrollContent = (name: string, lines: boolean) => {
     if (name === "home" || name === "end") {
+      exposed.clear()
       generation++
       scroll?.scrollTo(name === "home" ? 0 : scroll.scrollHeight)
       return true
@@ -225,6 +231,7 @@ export function RunQuestionBody(props: {
               ? 1
               : undefined
     if (amount === undefined) return false
+    exposed.clear()
     generation++
     scroll?.scrollBy(amount)
     return true
@@ -289,7 +296,7 @@ export function RunQuestionBody(props: {
     const max = Math.min(total, 9)
     const digit = Number(event.name)
     if (!Number.isNaN(digit) && digit >= 1 && digit <= max) {
-      choose(digit - 1)
+      activate(digit - 1)
       event.preventDefault()
       return
     }
@@ -475,7 +482,7 @@ export function RunQuestionBody(props: {
                           }}
                           onMouseUp={() => {
                             if (!disabled()) {
-                              choose(index())
+                              activate(index())
                             }
                           }}
                         >
@@ -522,7 +529,7 @@ export function RunQuestionBody(props: {
                       }}
                       onMouseUp={() => {
                         if (!disabled()) {
-                          choose(info()?.options.length ?? 0)
+                          activate(info()?.options.length ?? 0)
                         }
                       }}
                     >
