@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import { RGBA, ScrollBoxRenderable, TextareaRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { PermissionRequest, QuestionRequest } from "@slopcode-ai/sdk/v2"
+import { Show, createSignal } from "solid-js"
 import { RunPermissionBody } from "@/cli/cmd/run/footer.permission"
 import { RunQuestionBody } from "@/cli/cmd/run/footer.question"
 import { RUN_THEME_FALLBACK } from "@/cli/cmd/run/theme"
@@ -79,6 +80,33 @@ async function click(app: Awaited<ReturnType<typeof testRender>>, id: string) {
     expect(app.renderer.frameId).toBe(frame)
   } finally {
     app.renderer.resume()
+  }
+}
+
+function holdFrames() {
+  const request = globalThis.requestAnimationFrame
+  const cancel = globalThis.cancelAnimationFrame
+  const callbacks = new Map<number, Parameters<typeof requestAnimationFrame>[0]>()
+  let id = 0
+  globalThis.requestAnimationFrame = (callback) => {
+    const next = ++id
+    callbacks.set(next, callback)
+    return next
+  }
+  globalThis.cancelAnimationFrame = (frame) => {
+    callbacks.delete(frame)
+  }
+  return {
+    count: () => callbacks.size,
+    flush() {
+      const pending = [...callbacks.values()]
+      callbacks.clear()
+      pending.forEach((callback) => callback(performance.now()))
+    },
+    restore() {
+      globalThis.requestAnimationFrame = request
+      globalThis.cancelAnimationFrame = cancel
+    },
   }
 }
 
@@ -289,6 +317,202 @@ test("direct question re-reveals selection after shrink without ending manual re
     expect(app.captureCharFrame()).toContain("BEGIN MANUAL REVIEW")
     expect(app.captureCharFrame()).not.toContain("RESIZE TARGET ANSWER")
   } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct question keeps a previously rendered first answer visible after narrowing", async () => {
+  const request = {
+    id: "que-resize-first",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: Array.from({ length: 12 }, (_, index) => `Review first-answer constraint ${index + 1}.`).join(" "),
+        header: "First",
+        custom: false,
+        options: [
+          { label: "FIRST RESIZE ANSWER", description: "Keep this selected answer visible after relayout." },
+          { label: "Second answer", description: "A second answer for selection context." },
+        ],
+      },
+    ],
+  } satisfies QuestionRequest
+  const app = await renderQuestion(request, 100, 18)
+
+  try {
+    await app.waitForFrame((frame) => frame.includes("FIRST RESIZE ANSWER"))
+    app.resize(42, 9)
+    await app.waitForFrame((frame) => frame.includes("FIRST RESIZE ANSWER"))
+    expect(app.captureCharFrame()).toContain("FIRST RESIZE ANSWER")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct question preserves a programmatically reviewed viewport across resize", async () => {
+  const request = {
+    id: "que-resize-programmatic-review",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: "PROGRAMMATIC REVIEW START",
+        header: "Review",
+        custom: false,
+        options: Array.from({ length: 12 }, (_, index) => ({
+          label: index === 10 ? "PROGRAMMATIC HIDDEN SELECTION" : `Programmatic option ${index + 1}`,
+          description: `Programmatic review detail ${index + 1} that wraps after narrowing.`,
+        })),
+      },
+    ],
+  } satisfies QuestionRequest
+  const app = await renderQuestion(request, 100, 18)
+
+  try {
+    await app.renderOnce()
+    Array.from({ length: 10 }).forEach(() => app.mockInput.pressKey("ARROW_DOWN"))
+    await app.waitForFrame((frame) => frame.includes("PROGRAMMATIC HIDDEN SELECTION"))
+    await app.renderOnce()
+    await app.renderOnce()
+    const body = scroll(app.renderer.root)
+    if (!body) throw new Error("expected question scrollbox")
+
+    body.scrollTo(0)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("Programmatic option 1")
+    expect(app.captureCharFrame()).not.toContain("PROGRAMMATIC HIDDEN SELECTION")
+
+    app.resize(42, 9)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("Programmatic option 1")
+    expect(app.captureCharFrame()).not.toContain("PROGRAMMATIC HIDDEN SELECTION")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct question cancels deferred resize follow when unmounted", async () => {
+  const request = {
+    id: "que-resize-cleanup",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: "Choose an answer before cleanup.",
+        header: "Cleanup",
+        custom: false,
+        options: Array.from({ length: 9 }, (_, index) => ({
+          label: index === 7 ? "QUESTION CLEANUP TARGET" : `Cleanup answer ${index + 1}`,
+          description: `Cleanup detail ${index + 1} that wraps in the narrow layout.`,
+        })),
+      },
+    ],
+  } satisfies QuestionRequest
+  const [visible, setVisible] = createSignal(true)
+  const app = await testRender(
+    () => (
+      <box width="100%" height="100%">
+        <Show when={visible()}>
+          <RunQuestionBody request={request} theme={RUN_THEME_FALLBACK.footer} onReply={() => {}} onReject={() => {}} />
+        </Show>
+      </box>
+    ),
+    { width: 100, height: 18, kittyKeyboard: true },
+  )
+  let held: ReturnType<typeof holdFrames> | undefined
+
+  try {
+    await app.renderOnce()
+    Array.from({ length: 7 }).forEach(() => app.mockInput.pressKey("ARROW_DOWN"))
+    await app.waitForFrame((frame) => frame.includes("QUESTION CLEANUP TARGET"))
+    const body = scroll(app.renderer.root)
+    if (!body) throw new Error("expected question scrollbox")
+    const find = body.content.findDescendantById.bind(body.content)
+    let disposed = false
+    let stale = 0
+    body.content.findDescendantById = (id) => {
+      if (disposed) stale++
+      return find(id)
+    }
+    held = holdFrames()
+
+    app.resize(42, 9)
+    await app.renderOnce()
+    expect(held.count()).toBeGreaterThan(0)
+    setVisible(false)
+    disposed = true
+    await app.renderOnce()
+
+    held.flush()
+    held.flush()
+    expect(stale).toBe(0)
+  } finally {
+    held?.restore()
+    app.renderer.destroy()
+  }
+})
+
+test("direct forecast cancels deferred resize follow when reply unmounts it", async () => {
+  const requests = Array.from({ length: 10 }, (_, index) =>
+    permission({
+      id: `cleanup-per-${index}`,
+      permission: `cleanup-tool-${index}`,
+      patterns: [`cleanup-pattern-${index}`],
+      always: [`cleanup-pattern-${index}`],
+      kind: "forecast",
+      batchID: "pmb-cleanup",
+      batchSize: 10,
+      reason: `cleanup forecast reason ${index}`,
+    }),
+  )
+  const [visible, setVisible] = createSignal(true)
+  const app = await testRender(
+    () => (
+      <box width="100%" height="100%">
+        <Show when={visible()}>
+          <RunPermissionBody
+            requests={requests}
+            scope="project"
+            theme={RUN_THEME_FALLBACK.footer}
+            block={RUN_THEME_FALLBACK.block}
+            onReply={() => {}}
+            onBatchReply={() => {
+              setVisible(false)
+            }}
+          />
+        </Show>
+      </box>
+    ),
+    { width: 100, height: 18, kittyKeyboard: true },
+  )
+  let held: ReturnType<typeof holdFrames> | undefined
+
+  try {
+    await app.renderOnce()
+    Array.from({ length: 7 }).forEach(() => app.mockInput.pressKey("ARROW_DOWN"))
+    await app.waitForFrame((frame) => frame.includes("cleanup forecast reason 7"))
+    const body = scroll(app.renderer.root)
+    if (!body) throw new Error("expected forecast scrollbox")
+    const follow = body.scrollChildIntoView.bind(body)
+    let disposed = false
+    let stale = 0
+    body.scrollChildIntoView = (id) => {
+      if (disposed) stale++
+      follow(id)
+    }
+    held = holdFrames()
+
+    app.resize(42, 9)
+    await app.renderOnce()
+    await Bun.sleep(0)
+    expect(held.count()).toBeGreaterThan(0)
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+    disposed = true
+
+    held.flush()
+    held.flush()
+    expect(stale).toBe(0)
+  } finally {
+    held?.restore()
     app.renderer.destroy()
   }
 })

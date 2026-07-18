@@ -13,7 +13,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import type { PermissionRequest } from "@slopcode-ai/sdk/v2"
 import { errorMessage } from "@slopcode-ai/tui/util/error"
 import {
@@ -556,18 +556,43 @@ function RunPermissionBatchBody(props: {
   const context = createMemo(() => `${props.requests[0]?.batchID ?? props.requests[0]?.id}:${state().stage}`)
   const focused = createMemo(() => [state().stage, props.requests[state().focused]?.id] as const)
   let scroll: ScrollBoxRenderable | undefined
+  let disposed = false
+  let generation = 0
+  const frames = new Set<number>()
 
   const row = (id: string) => `run-permission-${id}`
+  const defer = (fn: () => void) => {
+    if (disposed) return
+    let frame: number | undefined
+    let complete = false
+    frame = requestAnimationFrame(() => {
+      complete = true
+      if (frame !== undefined) frames.delete(frame)
+      if (!disposed) fn()
+    })
+    if (!complete && frame !== undefined) frames.add(frame)
+  }
   const follow = (id: string) => {
+    if (disposed) return
+    const current = ++generation
     const run = () => {
-      if (focused()[1] === id) scroll?.scrollChildIntoView(row(id))
+      const body = scroll
+      if (disposed || current !== generation || focused()[1] !== id || !body || body.isDestroyed) return
+      body.scrollChildIntoView(row(id))
     }
     run()
-    requestAnimationFrame(() => {
+    defer(() => {
       run()
-      requestAnimationFrame(run)
+      defer(run)
     })
   }
+  onCleanup(() => {
+    disposed = true
+    generation++
+    frames.forEach(cancelAnimationFrame)
+    frames.clear()
+    scroll = undefined
+  })
 
   createEffect(() => {
     const list = options()
@@ -591,7 +616,7 @@ function RunPermissionBatchBody(props: {
     dims()
     renderer.height
     const id = focused()[1]
-    if (id) queueMicrotask(() => follow(id))
+    if (id) queueMicrotask(() => !disposed && follow(id))
   })
 
   const submit = async (reply: PermissionBatchReply) => {

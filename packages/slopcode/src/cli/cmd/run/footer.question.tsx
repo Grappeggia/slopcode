@@ -93,53 +93,87 @@ export function RunQuestionBody(props: {
   const target = createMemo(() => (confirm() ? undefined : row(state().tab, state().selected)))
   let generation = 0
   let layout = ""
-  let reviewing = false
+  let disposed = false
   let resize: { id: string; generation: number } | undefined
+  let rendered: { layout: string; id: string | undefined; visible: boolean } | undefined
+  let prior: typeof rendered
+  const frames = new Set<number>()
   const exposed = new Set<string>()
+  const geometry = () => `${dims().width}:${dims().height}:${height()}`
 
   const shown = (selected: number) => {
-    const item = scroll?.content.findDescendantById(row(state().tab, selected))
-    if (!scroll || !item) return false
-    return item.y >= scroll.viewport.y && item.y < scroll.viewport.y + scroll.viewport.height
+    const body = scroll
+    if (!body || body.isDestroyed) return false
+    const item = body.content.findDescendantById(row(state().tab, selected))
+    if (!item) return false
+    return item.y >= body.viewport.y && item.y < body.viewport.y + body.viewport.height
   }
 
   const expose = () => {
+    if (disposed) return
     exposed.clear()
     if (confirm()) return
     Array.from({ length: questionTotal(props.request, state()) }, (_, selected) => selected)
       .filter(shown)
       .forEach((selected) => exposed.add(row(state().tab, selected)))
+    const id = target()
+    const next = { layout: geometry(), id, visible: Boolean(id && exposed.has(id)) }
+    if (rendered?.layout !== next.layout) prior = rendered
+    rendered = next
     const pending = resize
     resize = undefined
-    if (!pending || reviewing || generation !== pending.generation || target() !== pending.id) return
+    if (!pending || generation !== pending.generation || target() !== pending.id) return
     if (!exposed.has(pending.id)) follow(pending.id)
   }
 
   const reveal = (id: string) => {
-    const item = scroll?.content.findDescendantById(id)
-    if (!scroll || !item) return
-    if (item.y < scroll.viewport.y) {
-      scroll.scrollBy(item.y - scroll.viewport.y)
+    const body = scroll
+    if (!body || body.isDestroyed) return
+    const item = body.content.findDescendantById(id)
+    if (!item) return
+    if (item.y < body.viewport.y) {
+      body.scrollBy(item.y - body.viewport.y)
       return
     }
-    const bottom = scroll.viewport.y + scroll.viewport.height
-    if (item.y >= bottom) scroll.scrollBy(item.y - bottom + 1)
+    const bottom = body.viewport.y + body.viewport.height
+    if (item.y >= bottom) body.scrollBy(item.y - bottom + 1)
+  }
+
+  const defer = (fn: () => void) => {
+    if (disposed) return
+    let frame: number | undefined
+    let complete = false
+    frame = requestAnimationFrame(() => {
+      complete = true
+      if (frame !== undefined) frames.delete(frame)
+      if (!disposed) fn()
+    })
+    if (!complete && frame !== undefined) frames.add(frame)
   }
 
   renderer.on(CliRenderEvents.FRAME, expose)
-  onCleanup(() => renderer.off(CliRenderEvents.FRAME, expose))
+  onCleanup(() => {
+    disposed = true
+    generation++
+    resize = undefined
+    frames.forEach(cancelAnimationFrame)
+    frames.clear()
+    renderer.off(CliRenderEvents.FRAME, expose)
+    area = undefined
+    scroll = undefined
+  })
 
   const follow = (id: string) => {
-    reviewing = false
+    if (disposed) return
     exposed.clear()
     const current = ++generation
     const run = () => {
-      if (current === generation && target() === id) reveal(id)
+      if (!disposed && current === generation && target() === id) reveal(id)
     }
     run()
-    requestAnimationFrame(() => {
+    defer(() => {
       run()
-      requestAnimationFrame(run)
+      defer(run)
     })
   }
 
@@ -149,19 +183,28 @@ export function RunQuestionBody(props: {
 
   createEffect(() => {
     context()
-    reviewing = false
     exposed.clear()
     generation++
     scroll?.scrollTo(0)
   })
 
   createEffect(() => {
-    const next = `${dims().width}:${dims().height}:${height()}`
+    const next = geometry()
     const resized = layout !== "" && layout !== next
     layout = next
     const id = target()
     if (resized) {
-      resize = !reviewing && state().selected > 0 && id ? { id, generation } : undefined
+      const before = rendered?.layout === next ? prior : rendered
+      if (!id || before?.id !== id || !before.visible) {
+        resize = undefined
+        return
+      }
+      if (rendered?.layout === next) {
+        resize = undefined
+        if (!rendered.visible) follow(id)
+        return
+      }
+      resize = { id, generation }
       return
     }
     if (!id || (exposed.has(id) && shown(state().selected))) return
@@ -252,7 +295,6 @@ export function RunQuestionBody(props: {
 
   const scrollContent = (name: string, lines: boolean) => {
     if (name === "home" || name === "end") {
-      reviewing = true
       exposed.clear()
       generation++
       scroll?.scrollTo(name === "home" ? 0 : scroll.scrollHeight)
@@ -270,7 +312,6 @@ export function RunQuestionBody(props: {
               ? 1
               : undefined
     if (amount === undefined) return false
-    reviewing = true
     exposed.clear()
     generation++
     scroll?.scrollBy(amount)
@@ -390,10 +431,10 @@ export function RunQuestionBody(props: {
     <box width="100%" height="100%" flexDirection="column">
       <box
         flexDirection="column"
-        gap={compact() ? 0 : 1}
+        gap={narrow() ? 0 : 1}
         paddingLeft={1}
         paddingRight={3}
-        paddingTop={1}
+        paddingTop={compact() ? 0 : 1}
         flexGrow={1}
         flexShrink={1}
         backgroundColor={props.theme.surface}
@@ -491,7 +532,7 @@ export function RunQuestionBody(props: {
                 item.scrollTo(0)
               }}
             >
-              <box width="100%" flexDirection="column" gap={1}>
+              <box width="100%" flexDirection="column" gap={narrow() ? 0 : 1}>
                 <box flexShrink={0}>
                   <text fg={props.theme.text} wrapMode="word">
                     {info()?.question}
