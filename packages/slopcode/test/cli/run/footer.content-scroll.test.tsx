@@ -1,12 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { RGBA, ScrollBoxRenderable, type Renderable } from "@opentui/core"
+import { RGBA, ScrollBoxRenderable, TextareaRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { PermissionRequest, QuestionRequest } from "@slopcode-ai/sdk/v2"
 import { RunPermissionBody } from "@/cli/cmd/run/footer.permission"
 import { RunQuestionBody } from "@/cli/cmd/run/footer.question"
 import { RUN_THEME_FALLBACK } from "@/cli/cmd/run/theme"
-import type { PermissionReply } from "@/cli/cmd/run/types"
+import type { PermissionReply, QuestionReply } from "@/cli/cmd/run/types"
 
 function scroll(root: Renderable): ScrollBoxRenderable | undefined {
   if (root instanceof ScrollBoxRenderable) return root
@@ -50,11 +50,18 @@ function renderPermission(input: {
   )
 }
 
-function renderQuestion(request: QuestionRequest, width = 48, height = 12) {
+function renderQuestion(request: QuestionRequest, width = 48, height = 12, replies?: QuestionReply[]) {
   return testRender(
     () => (
       <box width={width} height={height}>
-        <RunQuestionBody request={request} theme={RUN_THEME_FALLBACK.footer} onReply={() => {}} onReject={() => {}} />
+        <RunQuestionBody
+          request={request}
+          theme={RUN_THEME_FALLBACK.footer}
+          onReply={(reply) => {
+            replies?.push(reply)
+          }}
+          onReject={() => {}}
+        />
       </box>
     ),
     { width, height, kittyKeyboard: true },
@@ -193,6 +200,115 @@ test("direct question selection follows wrapped options through the custom row",
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("Choose the safest deployment")
   } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct question only acts on a visible selected answer after content review", async () => {
+  const replies: QuestionReply[] = []
+  const request = {
+    id: "que-visible-action",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: Array.from(
+          { length: 36 },
+          (_, index) =>
+            `${index === 0 ? "Read this long prompt from the beginning." : `Review deployment constraint ${index} before continuing.`}`,
+        ).join(" "),
+        header: "Action",
+        custom: false,
+        options: Array.from({ length: 8 }, (_, index) => ({
+          label: index === 0 ? "FIRST ACTIONABLE ANSWER" : `Review option ${index + 1}`,
+          description: `Description for answer ${index + 1}.`,
+        })),
+      },
+    ],
+  } satisfies QuestionRequest
+  const app = await renderQuestion(request, 80, 12, replies)
+
+  try {
+    await app.waitForFrame((frame) => frame.includes("FIRST ACTIONABLE ANSWER"))
+
+    app.mockInput.pressKey("HOME")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("Read this long prompt from the beginning")
+    expect(app.captureCharFrame()).not.toContain("FIRST ACTIONABLE ANSWER")
+
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+    expect(replies).toEqual([])
+    expect(app.captureCharFrame()).toContain("FIRST ACTIONABLE ANSWER")
+
+    app.mockInput.pressKey("END")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("Review option 8")
+    expect(app.captureCharFrame()).not.toContain("FIRST ACTIONABLE ANSWER")
+
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+    expect(replies).toEqual([])
+    expect(app.captureCharFrame()).toContain("FIRST ACTIONABLE ANSWER")
+
+    app.mockInput.pressEnter()
+    await app.waitFor(() => replies.length === 1)
+    expect(replies).toEqual([{ requestID: "que-visible-action", answers: [["FIRST ACTIONABLE ANSWER"]] }])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("direct custom answer textarea owns arrows home and end", async () => {
+  const request = {
+    id: "que-editor-keys",
+    sessionID: "ses-1",
+    questions: [
+      {
+        question: "Provide a custom answer.",
+        header: "Custom",
+        custom: true,
+        options: [{ label: "Provided", description: "Use the provided answer." }],
+      },
+    ],
+  } satisfies QuestionRequest
+  const app = await renderQuestion(request, 80, 14)
+
+  try {
+    await app.renderOnce()
+    app.mockInput.pressKey("ARROW_DOWN")
+    app.mockInput.pressEnter()
+    await app.waitFor(() => app.renderer.currentFocusedEditor instanceof TextareaRenderable)
+    const area = app.renderer.currentFocusedEditor as TextareaRenderable
+    const body = scroll(app.renderer.root)
+    if (!body) throw new Error("expected question scrollbox")
+
+    area.setText("alpha\nbeta\ngamma")
+    await app.renderOnce()
+    area.cursorOffset = area.plainText.length
+    const top = body.scrollTop
+
+    app.mockInput.pressKey("HOME")
+    await app.renderOnce()
+    expect(area.cursorOffset).toBe(0)
+    expect(body.scrollTop).toBe(top)
+
+    app.mockInput.pressKey("END")
+    await app.renderOnce()
+    expect(area.cursorOffset).toBe(area.plainText.length)
+    expect(body.scrollTop).toBe(top)
+
+    app.mockInput.pressKey("ARROW_UP")
+    await app.renderOnce()
+    expect(area.logicalCursor.row).toBe(1)
+    expect(body.scrollTop).toBe(top)
+
+    app.mockInput.pressKey("ARROW_DOWN")
+    await app.renderOnce()
+    expect(area.logicalCursor.row).toBe(2)
+    expect(body.scrollTop).toBe(top)
+  } finally {
+    app.renderer.currentFocusedRenderable?.blur()
+    app.renderer.currentFocusedEditor?.blur()
     app.renderer.destroy()
   }
 })

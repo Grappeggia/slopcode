@@ -79,6 +79,20 @@ export function RunQuestionBody(props: {
   let scroll: ScrollBoxRenderable | undefined
   const row = (tab: number, selected: number) => `run-question-${props.request.id}-${tab}-${selected}`
   const context = createMemo(() => `${props.request.id}:${state().tab}`)
+  const target = createMemo(() => (confirm() ? undefined : row(state().tab, state().selected)))
+  let generation = 0
+
+  const follow = (id: string) => {
+    const current = ++generation
+    const run = () => {
+      if (current === generation && target() === id) scroll?.scrollChildIntoView(id)
+    }
+    run()
+    requestAnimationFrame(() => {
+      run()
+      requestAnimationFrame(run)
+    })
+  }
 
   createEffect(() => {
     setState((prev) => questionSync(prev, props.request.id))
@@ -86,7 +100,13 @@ export function RunQuestionBody(props: {
 
   createEffect(() => {
     context()
+    generation++
     scroll?.scrollTo(0)
+  })
+
+  createEffect(() => {
+    const id = target()
+    if (id) follow(id)
   })
 
   const setTab = (tab: number) => {
@@ -96,7 +116,7 @@ export function RunQuestionBody(props: {
   const move = (dir: -1 | 1) => {
     const next = questionMove(state(), props.request, dir)
     setState(next)
-    scroll?.scrollChildIntoView(row(next.tab, next.selected))
+    follow(row(next.tab, next.selected))
   }
 
   const beginReply = async (input: QuestionReply) => {
@@ -137,7 +157,7 @@ export function RunQuestionBody(props: {
     const base = state()
     const cur = questionSetSelected(base, selected)
     const next = questionSelect(cur, props.request)
-    scroll?.scrollChildIntoView(row(base.tab, selected))
+    follow(row(base.tab, selected))
     if (next.state !== base) {
       setState(next.state)
     }
@@ -153,7 +173,19 @@ export function RunQuestionBody(props: {
     setState((prev) => questionSetSelected(prev, selected))
   }
 
+  const visible = () => {
+    const cur = state()
+    const item = scroll?.content.findDescendantById(row(cur.tab, cur.selected))
+    if (!scroll || !item) return false
+    if (item.y < scroll.viewport.y || item.y >= scroll.viewport.y + scroll.viewport.height) {
+      follow(item.id)
+      return false
+    }
+    return true
+  }
+
   const select = () => {
+    if (!visible()) return
     const cur = state()
     const next = questionSelect(cur, props.request)
     if (next.state !== cur) {
@@ -177,6 +209,7 @@ export function RunQuestionBody(props: {
 
   const scrollContent = (name: string, lines: boolean) => {
     if (name === "home" || name === "end") {
+      generation++
       scroll?.scrollTo(name === "home" ? 0 : scroll.scrollHeight)
       return true
     }
@@ -192,6 +225,7 @@ export function RunQuestionBody(props: {
               ? 1
               : undefined
     if (amount === undefined) return false
+    generation++
     scroll?.scrollBy(amount)
     return true
   }
