@@ -9,7 +9,7 @@ import type { FatalRendererError, ServerReadyData, TitlebarTheme } from "../prel
 import { runDesktopMenuAction } from "./desktop-menu-actions"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
 import { guardIpc } from "./security"
-import { getStore, removeStoreFileIfEmpty } from "./store"
+import { getStore, removeStoreFileIfEmpty, runStoreOperation } from "./store"
 import { openExternalURL, openLocalFileURL, getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
@@ -97,14 +97,14 @@ export function registerIpcHandlers(deps: Deps) {
     }
   })
   ipc.handle("store-set", (_event: IpcMainInvokeEvent, name: string, key: string, value: string) => {
-    getStore(name).set(key, value)
+    return runStoreOperation(name, () => getStore(name).set(key, value))
   })
   ipc.handle("store-delete", async (_event: IpcMainInvokeEvent, name: string, key: string) => {
-    getStore(name).delete(key)
+    await runStoreOperation(name, () => getStore(name).delete(key))
     await removeStoreFileIfEmpty(name)
   })
   ipc.handle("store-clear", async (_event: IpcMainInvokeEvent, name: string) => {
-    getStore(name).clear()
+    await runStoreOperation(name, () => getStore(name).clear())
     await removeStoreFileIfEmpty(name)
   })
   ipc.handle("store-keys", (_event: IpcMainInvokeEvent, name: string) => {

@@ -5,8 +5,10 @@ import { rmSync } from "node:fs"
 import { join } from "node:path"
 import { SETTINGS_STORE } from "./store-keys"
 import { deleteStoreFileIfEmpty } from "./store-cleanup"
+import { createStoreOperationQueue } from "./store-operations"
 
 const cache = new Map<string, Store>()
+const queue = createStoreOperationQueue()
 
 // We cannot instantiate the electron-store at module load time because
 // module import hoisting causes this to run before app.setPath("userData", ...)
@@ -25,10 +27,16 @@ export function getStore(name = SETTINGS_STORE) {
   return next
 }
 
-export async function removeStoreFileIfEmpty(name: string) {
-  const store = cache.get(name)
-  if (store && Object.keys(store.store).length > 0) return
-  if (await deleteStoreFileIfEmpty(electron.app.getPath("userData"), name)) cache.delete(name)
+export function runStoreOperation<T>(name: string, operation: () => T | PromiseLike<T>) {
+  return queue(name, operation)
+}
+
+export function removeStoreFileIfEmpty(name: string) {
+  return runStoreOperation(name, async () => {
+    const store = cache.get(name)
+    if (store && Object.keys(store.store).length > 0) return
+    if (await deleteStoreFileIfEmpty(electron.app.getPath("userData"), name)) cache.delete(name)
+  })
 }
 
 export function removeStoreFile(name: string) {
