@@ -2,15 +2,21 @@ import {
   canOpenExternalUrl,
   detectAndroidCapabilities,
   getAndroidBridge,
+  parseDeepLinkMessage,
   parsePermission,
+  parseSupportedDeepLinks,
   parseStringArray,
   type AndroidNativeBridge,
 } from "./bridge"
 import {
+  clearRemoteWorkspace,
   readRemoteWorkspaceSecret,
   readRemoteWorkspaceState,
+  readRemoteWorkspace,
+  writeRemoteWorkspaceRecord,
   writeRemoteWorkspaceSecret,
   writeRemoteWorkspaceState,
+  type RemoteServerSelection,
   type RemoteWorkspaceState,
   type RemoteWorkspaceSecret,
 } from "./remote-workspace-state"
@@ -24,7 +30,6 @@ type AsyncStorage = {
 }
 
 const APP_STORAGE = "slopcode.android.app.dat"
-const deepLinkEvent = "slopcode:deep-link"
 type Bridge = AndroidNativeBridge | null | undefined
 
 function secureStorage(bridge: Bridge = getAndroidBridge()): AndroidSecureStorage | undefined {
@@ -84,22 +89,26 @@ export function appStorage(bridge: Bridge = getAndroidBridge()) {
   })
 }
 
-export async function readInitialWorkspaceState(bridge: Bridge = getAndroidBridge()) {
+export async function readInitialWorkspaceState(
+  bridge: Bridge = getAndroidBridge(),
+): Promise<{ state: RemoteWorkspaceState; secret?: RemoteWorkspaceSecret }> {
   const secure = secureStorage(bridge)
-  if (!secure) return { state: { version: 1 } as RemoteWorkspaceState }
-  return {
-    state: await readRemoteWorkspaceState(secure),
-    secret: await readRemoteWorkspaceSecret(secure),
-  }
+  if (!secure) return { state: { version: 1 }, secret: undefined }
+  return readRemoteWorkspace(secure)
 }
 
-export async function persistServerUrl(url?: string, bridge: Bridge = getAndroidBridge()) {
+export async function persistServerSelection(selection?: RemoteServerSelection, bridge: Bridge = getAndroidBridge()) {
   const secure = secureStorage(bridge)
   if (!secure) return
+  if (!selection) {
+    await clearRemoteWorkspace(secure)
+    return
+  }
   const state = await readRemoteWorkspaceState(secure)
   await writeRemoteWorkspaceState(secure, {
     ...state,
-    serverUrl: url,
+    serverUrl: selection.url,
+    serverSelection: selection,
     savedAt: new Date().toISOString(),
   })
 }
@@ -117,8 +126,7 @@ export async function persistRemoteWorkspace(
 ) {
   const secure = secureStorage(bridge)
   if (!secure) throw new Error("Android secure storage is unavailable")
-  await writeRemoteWorkspaceState(secure, state)
-  await writeRemoteWorkspaceSecret(secure, secret)
+  await writeRemoteWorkspaceRecord(secure, state, secret)
 }
 
 export type AndroidWorkspaceBootstrap = Awaited<ReturnType<typeof readInitialWorkspaceState>>
@@ -133,15 +141,14 @@ export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
     notificationPermission: async () => parsePermission(await bridge?.notificationPermission().catch(() => "prompt")),
     requestNotificationPermission: async () =>
       parsePermission(await bridge?.requestNotificationPermission().catch(() => "prompt")),
-    deepLinks: async () => parseStringArray(await bridge?.consumeDeepLinks().catch(() => [])),
+    deepLinks: async () => parseSupportedDeepLinks(await bridge?.consumeDeepLinks().catch(() => [])),
     subscribeDeepLinks(listener: (hrefs: string[]) => void) {
       const handler = (event: Event) => {
-        const detail = (event as CustomEvent<{ urls?: string[] }>).detail
-        const urls = detail?.urls?.filter((item): item is string => typeof item === "string") ?? []
+        const urls = parseDeepLinkMessage((event as MessageEvent).data)
         if (urls.length > 0) listener(urls)
       }
-      window.addEventListener(deepLinkEvent, handler as EventListener)
-      return () => window.removeEventListener(deepLinkEvent, handler as EventListener)
+      window.addEventListener("message", handler)
+      return () => window.removeEventListener("message", handler)
     },
     openLink(url: string) {
       if (!canOpenExternalUrl(url)) return
@@ -162,8 +169,5 @@ export async function shellBridge(bridge: Bridge = getAndroidBridge()) {
       const value = await bridge?.scanQrPairing().catch(() => null)
       return typeof value === "string" && value ? value : null
     },
-    remoteSend: capabilities.remoteTransport && native
-      ? async (payload: string) => String(await native.remoteSend(payload))
-      : undefined,
   }
 }

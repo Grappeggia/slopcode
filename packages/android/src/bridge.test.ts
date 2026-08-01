@@ -3,7 +3,9 @@ import {
   canOpenExternalUrl,
   detectAndroidCapabilities,
   getAndroidBridge,
+  parseDeepLinkMessage,
   parsePermission,
+  parseSupportedDeepLinks,
   parseStringArray,
 } from "./bridge"
 
@@ -46,7 +48,7 @@ describe("android bridge capability detection", () => {
       qrPairing: false,
       notifications: true,
       deepLinks: true,
-      remoteTransport: true,
+      remoteTransport: false,
     })
   })
 
@@ -66,6 +68,19 @@ describe("android bridge parsing helpers", () => {
     expect(parseStringArray('["one","two",3]')).toEqual(["one", "two"])
     expect(parseStringArray(["one", "two", 3])).toEqual(["one", "two"])
     expect(parseStringArray("oops")).toEqual([])
+  })
+
+  test("accepts only bounded structured Slopcode deep links", () => {
+    expect(parseSupportedDeepLinks(["slopcode://open-project?directory=%2Fa", "https://evil.example"])).toEqual([
+      "slopcode://open-project?directory=%2Fa",
+    ])
+    expect(parseSupportedDeepLinks(["slopcode://open-project?directory=/a&token=secret"])).toEqual([])
+    expect(
+      parseDeepLinkMessage(
+        JSON.stringify({ type: "slopcode.deep-links", urls: ["slopcode://new-session?directory=/a&prompt=hi"] }),
+      ),
+    ).toEqual(["slopcode://new-session?directory=/a&prompt=hi"])
+    expect(parseDeepLinkMessage(JSON.stringify({ type: "other", urls: ["slopcode://open-project?directory=/a"] }))).toEqual([])
   })
 
   test("normalizes notification permission values", () => {

@@ -113,7 +113,7 @@ class MainActivity : AppCompatActivity() {
     val links = buildList {
       intent?.dataString?.takeIf(String::isNotBlank)?.let(::add)
       intent?.getStringExtra("notification_href")?.takeIf(String::isNotBlank)?.let(::add)
-    }
+    }.take(MAX_INTENT_LINKS)
     if (links.isEmpty()) return
     links.forEach(bridge::enqueueDeepLink)
     if (flush) bridge.flushDeepLinks()
@@ -127,5 +127,6 @@ class MainActivity : AppCompatActivity() {
     private const val TRUSTED_ORIGIN = "https://appassets.androidplatform.net"
     private const val TRUSTED_PATH_PREFIX = "/site/"
     private const val NOTIFICATION_PERMISSION_REQUEST = 1001
+    private const val MAX_INTENT_LINKS = 2
   }
 }

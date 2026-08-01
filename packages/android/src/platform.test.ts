@@ -43,10 +43,6 @@ function native(permission: NotificationPermission = "granted", result: Notifica
       calls.push("show")
     },
     consumeDeepLinks: async () => [],
-    remoteSend: async () => {
-      calls.push("remote")
-      return "ok"
-    },
     openLink: async () => false,
   } satisfies AndroidNativeBridge
   return { bridge, calls, values }
@@ -108,6 +104,6 @@ test("does not expose remote transport when native configuration is absent", asy
   const shell = await shellBridge(fake.bridge)
 
   expect(shell.capabilities.remoteTransport).toBeFalse()
-  expect(shell.remoteSend).toBeUndefined()
+  expect("remoteSend" in shell).toBeFalse()
   expect(fake.calls).not.toContain("remote")
 })

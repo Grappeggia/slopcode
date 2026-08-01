@@ -43,7 +43,6 @@ export type AndroidNativeBridge = {
   requestNotificationPermission(): Promise<unknown>
   showNotification(title: string, description?: string, href?: string): Promise<unknown>
   consumeDeepLinks(): Promise<unknown>
-  remoteSend(payload: string): Promise<unknown>
   openLink(url: string): Promise<unknown>
 }
 
@@ -112,7 +111,6 @@ export function getAndroidBridge(target: Pick<Window, "SlopcodeAndroid"> = typeo
     requestNotificationPermission: () => call("requestNotificationPermission"),
     showNotification: (title, description, href) => call("showNotification", title, description, href),
     consumeDeepLinks: () => call("consumeDeepLinks"),
-    remoteSend: (payload) => call("remoteSend", payload),
     openLink: (url) => call("openLink", url),
   } satisfies AndroidNativeBridge
 
@@ -135,14 +133,51 @@ export async function detectAndroidCapabilities(bridge = getAndroidBridge()): Pr
     qrPairing: enabled(raw.qrPairing),
     notifications: enabled(raw.notifications) || fallback.notifications,
     deepLinks: enabled(raw.deepLinks) || fallback.deepLinks,
-    remoteTransport: enabled(raw.remoteTransport),
+    remoteTransport: false,
   }
 }
+
+const MAX_STRING_ARRAY_ITEMS = 64
+const MAX_STRING_ARRAY_ITEM_LENGTH = 16 * 1024
 
 export function parseStringArray(value: unknown) {
   const parsed = typeof value === "string" ? parseJson<unknown>(value, []) : value
   if (!Array.isArray(parsed)) return []
-  return parsed.filter((item): item is string => typeof item === "string")
+  return parsed
+    .filter((item): item is string => typeof item === "string" && item.length <= MAX_STRING_ARRAY_ITEM_LENGTH)
+    .slice(0, MAX_STRING_ARRAY_ITEMS)
+}
+
+function supportedDeepLink(value: unknown) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 8 * 1024) return false
+  try {
+    const url = new URL(value)
+    if (url.protocol !== "slopcode:" || url.username || url.password || url.hash) return false
+    if (url.hostname !== "open-project" && url.hostname !== "new-session") return false
+    if (url.port || (url.pathname !== "" && url.pathname !== "/")) return false
+    const directory = url.searchParams.getAll("directory")
+    if (directory.length !== 1 || !directory[0] || directory[0].length > 4 * 1024) return false
+    if (!directory[0].startsWith("/") || /[\u0000\r\n]/.test(directory[0])) return false
+    const allowed = url.hostname === "new-session" ? new Set(["directory", "prompt"]) : new Set(["directory"])
+    for (const key of url.searchParams.keys()) if (!allowed.has(key)) return false
+    if (url.hostname === "new-session") {
+      const prompt = url.searchParams.getAll("prompt")
+      if (prompt.length > 1 || (prompt[0] && prompt[0].length > 16 * 1024)) return false
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function parseSupportedDeepLinks(value: unknown) {
+  return parseStringArray(value).filter(supportedDeepLink)
+}
+
+export function parseDeepLinkMessage(value: unknown) {
+  const parsed = typeof value === "string" ? parseJson<unknown>(value, null) : value
+  if (!isRecord(parsed) || parsed.type !== "slopcode.deep-links") return []
+  return parseSupportedDeepLinks(parsed.urls)
 }
 
 export function parsePermission(value: unknown) {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AndroidSecureStorage } from "./types"
 import {
+  readRemoteWorkspace,
   normalizeHttpsUrl,
   normalizeRemoteWorkspaceState,
   readRemoteWorkspaceSecret,
@@ -113,6 +114,11 @@ describe("remote workspace state persistence", () => {
     await expect(readRemoteWorkspaceState(storage)).resolves.toEqual({
       version: 1,
       serverUrl: "https://remote.example.test",
+      serverSelection: {
+        url: "https://remote.example.test",
+        workspaceID: "wrk_remote123",
+        directory: "/srv/slopcode",
+      },
       workspace: {
         version: "v1",
         pairingId: "pair_demo123",
@@ -151,9 +157,12 @@ describe("remote workspace state persistence", () => {
       username: "slopcode",
       password: "secret",
     })
-    expect(storage.values.get("slopcode.android.remote.dat:remote.workspace")!).not.toContain("ABC123")
-    expect(storage.values.get("slopcode.android.remote.dat:remote.workspace")!).not.toContain("capability")
-    expect(storage.values.get("slopcode.android.remote.dat:remote.workspace.secret")!).toContain("secret")
+    const raw = storage.values.get("slopcode.android.remote.dat:remote.workspace.v2")!
+    expect(raw).not.toContain("ABC123")
+    expect(raw).not.toContain("capability")
+    expect(raw).toContain("secret")
+    expect(storage.values.has("slopcode.android.remote.dat:remote.workspace")).toBeFalse()
+    expect(storage.values.has("slopcode.android.remote.dat:remote.workspace.secret")).toBeFalse()
   })
 
   test("drops invalid payloads, insecure urls, and unknown fields without throwing", async () => {
@@ -183,6 +192,26 @@ describe("remote workspace state persistence", () => {
     await expect(readRemoteWorkspaceState(storage)).resolves.toEqual({ version: 1 })
     await expect(readRemoteWorkspaceSecret(storage)).resolves.toBeUndefined()
     expect(storage.values.has("slopcode.android.remote.dat:remote.workspace")).toBeFalse()
+  })
+
+  test("discards a credential when its origin or pairing no longer matches", async () => {
+    const storage = memoryStorage()
+    await storage.setItem(
+      "slopcode.android.remote.dat",
+      "remote.workspace.v2",
+      JSON.stringify({
+        version: 1,
+        state: {
+          version: 1,
+          serverUrl: "https://new.example.test",
+          workspace: { version: "v1", pairingId: "pair_new" },
+        },
+        secret: { username: "slopcode", password: "old", origin: "https://old.example.test", pairingId: "pair_old" },
+      }),
+    )
+
+    await expect(readRemoteWorkspace(storage)).resolves.toEqual({ state: { version: 1 }, secret: undefined })
+    expect(storage.values.size).toBe(0)
   })
 
   test("removes empty state instead of persisting blank shells", async () => {

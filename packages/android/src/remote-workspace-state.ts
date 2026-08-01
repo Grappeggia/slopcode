@@ -37,15 +37,34 @@ export type RemoteWorkspaceSecret = {
   password: string
 }
 
+export type RemoteServerSelection = {
+  url: string
+  workspaceID?: string
+  directory?: string
+}
+
 export type RemoteWorkspaceState = {
   version: 1
   serverUrl?: string
+  serverSelection?: RemoteServerSelection
   workspace?: RemoteWorkspaceRecord
   savedAt?: string
 }
 
-const STATE_KEY = "remote.workspace"
-const SECRET_KEY = "remote.workspace.secret"
+type StoredSecret = RemoteWorkspaceSecret & {
+  origin: string
+  pairingId?: string
+}
+
+type StoredRemoteWorkspace = {
+  version: 1
+  state: RemoteWorkspaceState
+  secret?: StoredSecret
+}
+
+const RECORD_KEY = "remote.workspace.v2"
+const LEGACY_STATE_KEY = "remote.workspace"
+const LEGACY_SECRET_KEY = "remote.workspace.secret"
 const NAMESPACE = "slopcode.android.remote.dat"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -57,6 +76,19 @@ function text(value: unknown) {
   const trimmed = value.trim()
   if (!trimmed) return
   return trimmed
+}
+
+function workspaceID(value: unknown) {
+  const next = text(value)
+  if (!next || !/^wrk[a-zA-Z0-9._:-]+$/.test(next)) return
+  return next
+}
+
+function absolutePath(value: unknown) {
+  const next = text(value)
+  if (!next || !next.startsWith("/") || next.includes("\\") || next.includes("\u0000")) return
+  if (next.includes("//") || next.split("/").some((part) => part === "." || part === "..")) return
+  return next
 }
 
 function mode(value: unknown) {
@@ -125,8 +157,8 @@ function normalizeWorkspace(value: unknown) {
     id: text(value.id),
     name: text(value.name),
     mode: mode(value.mode),
-    directory: text(value.directory),
-    remoteDirectory: text(value.remoteDirectory),
+    directory: absolutePath(value.directory),
+    remoteDirectory: absolutePath(value.remoteDirectory),
     ssh: normalizeSsh(value.ssh),
   } satisfies NonNullable<RemoteWorkspaceRecord["workspace"]>)
   if (!record) return
@@ -165,60 +197,175 @@ export function normalizeRemoteWorkspaceSecret(value: unknown): RemoteWorkspaceS
   }
 }
 
+function normalizeStoredSecret(value: unknown): StoredSecret | undefined {
+  if (!isRecord(value)) return
+  const secret = normalizeRemoteWorkspaceSecret(value)
+  const origin = normalizeHttpsUrl(value.origin)
+  if (!secret || !origin) return
+  return {
+    ...secret,
+    origin,
+    pairingId: text(value.pairingId),
+  }
+}
+
+function normalizeServerSelection(value: unknown, serverUrl?: string): RemoteServerSelection | undefined {
+  if (!isRecord(value)) return
+  const url = normalizeHttpsUrl(value.url)
+  if (!url || (serverUrl && url !== serverUrl)) return
+  const id = value.workspaceID === undefined ? undefined : workspaceID(value.workspaceID)
+  const directory = value.directory === undefined ? undefined : absolutePath(value.directory)
+  if (value.workspaceID !== undefined && !id) return
+  if (value.directory !== undefined && !directory) return
+  return clean({ url, workspaceID: id, directory }) as RemoteServerSelection
+}
+
 export function normalizeRemoteWorkspaceState(value: unknown): RemoteWorkspaceState {
   if (!isRecord(value)) return { version: 1 }
+  const serverUrl = normalizeHttpsUrl(value.serverUrl)
+  const selection = normalizeServerSelection(value.serverSelection, serverUrl)
+  const selectedUrl = selection?.url ?? serverUrl
   return {
     version: 1,
-    serverUrl: normalizeHttpsUrl(value.serverUrl),
+    serverUrl: selectedUrl,
+    serverSelection:
+      selection ??
+      (selectedUrl
+        ? {
+            url: selectedUrl,
+            workspaceID: workspaceID(
+              isRecord(value.workspace) && isRecord(value.workspace.workspace) ? value.workspace.workspace.id : undefined,
+            ),
+            directory:
+              isRecord(value.workspace) && isRecord(value.workspace.workspace)
+                ? absolutePath(value.workspace.workspace.remoteDirectory ?? value.workspace.workspace.directory)
+                : undefined,
+          }
+        : undefined),
     workspace: normalizeWorkspaceRecord(value.workspace ?? value.pairing),
     savedAt: text(value.savedAt),
   }
 }
 
-export async function readRemoteWorkspaceState(storage: AndroidSecureStorage) {
-  const raw = await storage.getItem(NAMESPACE, STATE_KEY)
-  if (!raw) return { version: 1 } satisfies RemoteWorkspaceState
+function initialState() {
+  return { version: 1 } as RemoteWorkspaceState
+}
+
+async function clearLegacy(storage: AndroidSecureStorage) {
+  await storage.removeItem(NAMESPACE, LEGACY_STATE_KEY)
+  await storage.removeItem(NAMESPACE, LEGACY_SECRET_KEY)
+}
+
+export async function clearRemoteWorkspace(storage: AndroidSecureStorage) {
+  await storage.removeItem(NAMESPACE, RECORD_KEY)
+  await clearLegacy(storage)
+}
+
+function bound(secret: StoredSecret, state: RemoteWorkspaceState) {
+  return (
+    !!state.serverUrl &&
+    secret.origin === state.serverUrl &&
+    (!secret.pairingId || secret.pairingId === state.workspace?.pairingId)
+  )
+}
+
+export async function readRemoteWorkspace(storage: AndroidSecureStorage) {
+  const raw = await storage.getItem(NAMESPACE, RECORD_KEY)
+  if (!raw) {
+    await clearLegacy(storage)
+    return { state: initialState(), secret: undefined }
+  }
+
   try {
     const value = JSON.parse(raw)
-    const next = normalizeRemoteWorkspaceState(value)
-    if (isRecord(value) && text(value.serverUrl) && !next.serverUrl) {
-      await storage.removeItem(NAMESPACE, STATE_KEY)
-      return { version: 1 } satisfies RemoteWorkspaceState
+    if (!isRecord(value) || value.version !== 1 || !isRecord(value.state)) throw new Error("Invalid remote record")
+    const state = normalizeRemoteWorkspaceState(value.state)
+    const rawUrl = text(value.state.serverUrl)
+    if (rawUrl && (!normalizeHttpsUrl(rawUrl) || normalizeHttpsUrl(rawUrl) !== state.serverUrl)) {
+      throw new Error("Invalid remote server URL")
     }
-    return next
+    if (value.state.serverSelection !== undefined && !normalizeServerSelection(value.state.serverSelection, normalizeHttpsUrl(rawUrl))) {
+      throw new Error("Invalid remote server selection")
+    }
+    const secret = value.secret === undefined ? undefined : normalizeStoredSecret(value.secret)
+    if (value.secret !== undefined && (!secret || !bound(secret, state))) throw new Error("Mismatched remote secret")
+    await clearLegacy(storage)
+    return { state, secret: secret ? { username: secret.username, password: secret.password } : undefined }
   } catch {
-    return { version: 1 } satisfies RemoteWorkspaceState
+    await clearRemoteWorkspace(storage)
+    return { state: initialState(), secret: undefined }
   }
+}
+
+export async function readRemoteWorkspaceState(storage: AndroidSecureStorage) {
+  return (await readRemoteWorkspace(storage)).state
 }
 
 export async function readRemoteWorkspaceSecret(storage: AndroidSecureStorage) {
-  const raw = await storage.getItem(NAMESPACE, SECRET_KEY)
-  if (!raw) return
-  try {
-    return normalizeRemoteWorkspaceSecret(JSON.parse(raw))
-  } catch {
+  return (await readRemoteWorkspace(storage)).secret
+}
+
+export async function writeRemoteWorkspaceRecord(
+  storage: AndroidSecureStorage,
+  state: RemoteWorkspaceState,
+  secret?: RemoteWorkspaceSecret,
+) {
+  const next = normalizeRemoteWorkspaceState(state)
+  const rawUrl = text(state.serverUrl)
+  if (rawUrl && (!normalizeHttpsUrl(rawUrl) || normalizeHttpsUrl(rawUrl) !== next.serverUrl)) {
+    await clearRemoteWorkspace(storage)
+    throw new Error("Remote server URL must be HTTPS without credentials, query, or fragment")
+  }
+  if (state.serverSelection !== undefined && !normalizeServerSelection(state.serverSelection, normalizeHttpsUrl(rawUrl))) {
+    await clearRemoteWorkspace(storage)
+    throw new Error("Remote server selection is invalid")
+  }
+  const normalized = normalizeRemoteWorkspaceSecret(secret)
+  if (secret !== undefined && !normalized) {
+    await clearRemoteWorkspace(storage)
+    throw new Error("Remote credential record is invalid")
+  }
+  if (normalized && !next.serverUrl) {
+    await clearRemoteWorkspace(storage)
+    throw new Error("Remote credentials require an exact HTTPS server origin")
+  }
+  if (!next.serverUrl && !next.workspace && !next.savedAt && !next.serverSelection) {
+    await clearRemoteWorkspace(storage)
     return
   }
+  const stored: StoredRemoteWorkspace = {
+    version: 1,
+    state: next,
+    secret: normalized
+      ? {
+          ...normalized,
+          origin: next.serverUrl!,
+          pairingId: next.workspace?.pairingId,
+        }
+      : undefined,
+  }
+  await storage.setItem(NAMESPACE, RECORD_KEY, JSON.stringify(stored))
+  await clearLegacy(storage)
 }
 
 export async function writeRemoteWorkspaceState(storage: AndroidSecureStorage, state: RemoteWorkspaceState) {
+  const current = await readRemoteWorkspace(storage)
   const next = normalizeRemoteWorkspaceState(state)
-  if (text(state.serverUrl) && !next.serverUrl) {
-    await storage.removeItem(NAMESPACE, STATE_KEY)
-    throw new Error("Remote server URL must be HTTPS without credentials, query, or fragment")
-  }
-  if (!next.serverUrl && !next.workspace && !next.savedAt) {
-    await storage.removeItem(NAMESPACE, STATE_KEY)
-    return
-  }
-  await storage.setItem(NAMESPACE, STATE_KEY, JSON.stringify(next))
+  const secret = current.secret && current.state.serverUrl === next.serverUrl && current.state.workspace?.pairingId === next.workspace?.pairingId
+    ? current.secret
+    : undefined
+  await writeRemoteWorkspaceRecord(storage, state, secret)
 }
 
 export async function writeRemoteWorkspaceSecret(storage: AndroidSecureStorage, secret?: RemoteWorkspaceSecret) {
-  const next = normalizeRemoteWorkspaceSecret(secret)
-  if (!next) {
-    await storage.removeItem(NAMESPACE, SECRET_KEY)
+  if (!secret || !normalizeRemoteWorkspaceSecret(secret)) {
+    await clearRemoteWorkspace(storage)
     return
   }
-  await storage.setItem(NAMESPACE, SECRET_KEY, JSON.stringify(next))
+  const current = await readRemoteWorkspace(storage)
+  if (!current.state.serverUrl) {
+    await clearRemoteWorkspace(storage)
+    return
+  }
+  await writeRemoteWorkspaceRecord(storage, current.state, secret)
 }

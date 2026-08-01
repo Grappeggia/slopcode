@@ -9,7 +9,7 @@ import {
 } from "@slopcode-ai/app"
 import "@slopcode-ai/app/index.css"
 import pkg from "../package.json"
-import { appStorage, persistServerUrl, readInitialWorkspaceState, shellBridge } from "./platform"
+import { appStorage, persistServerSelection, readInitialWorkspaceState, shellBridge } from "./platform"
 import { RemoteConnect } from "./remote-connect"
 
 export async function mountAndroidApp() {
@@ -21,6 +21,27 @@ export async function mountAndroidApp() {
     render(() => <RemoteConnect onConnected={() => window.location.reload()} />, root)
     return
   }
+  const selection =
+    initial.state.serverSelection ??
+    ({
+      url: initial.state.serverUrl,
+      workspaceID: initial.state.workspace?.workspace?.id,
+      directory: initial.state.workspace?.workspace?.remoteDirectory ?? initial.state.workspace?.workspace?.directory,
+    } as const)
+  const server = {
+    type: "http",
+    authToken: !!initial.secret?.password,
+    http: {
+      url: selection.url,
+      username: initial.secret?.username,
+      password: initial.secret?.password,
+      workspaceID: selection.workspaceID,
+      directory: selection.directory,
+    },
+    displayName: initial.state.workspace?.workspace?.name ?? initial.state.workspace?.host?.name,
+    label: initial.state.workspace?.workspace?.mode,
+  } satisfies ServerConnection.Http
+  const serverKey = ServerConnection.key(server)
   const platform: Platform = {
     platform: "android",
     version: pkg.version,
@@ -30,10 +51,13 @@ export async function mountAndroidApp() {
     restart: async () => window.location.reload(),
     notify: shell.notify,
     storage: appStorage(),
-    getDefaultServer: async () =>
-      initial.state.serverUrl ? ServerConnection.Key.make(initial.state.serverUrl) : null,
+    getDefaultServer: async () => serverKey,
     setDefaultServer: async (key: ServerConnection.Key | null) => {
-      await persistServerUrl(key ?? undefined)
+      if (key === null) {
+        await persistServerSelection()
+        return
+      }
+      if (key === serverKey) await persistServerSelection(selection)
     },
     android: {
       capabilities: shell.capabilities,
@@ -51,34 +75,16 @@ export async function mountAndroidApp() {
             subscribe: shell.subscribeDeepLinks,
           }
         : undefined,
-      remoteTransport: shell.remoteSend ? { send: shell.remoteSend } : undefined,
     },
   }
-
-  const server =
-    initial.state.serverUrl &&
-    ({
-      type: "http",
-      authToken: !!initial.secret?.password,
-      http: {
-        url: initial.state.serverUrl,
-        username: initial.secret?.username,
-        password: initial.secret?.password,
-        workspaceID: initial.state.workspace?.workspace?.id,
-        directory:
-          initial.state.workspace?.workspace?.remoteDirectory ?? initial.state.workspace?.workspace?.directory,
-      },
-      displayName: initial.state.workspace?.workspace?.name ?? initial.state.workspace?.host?.name,
-      label: initial.state.workspace?.workspace?.mode,
-    } satisfies ServerConnection.Http)
 
   render(
     () => (
       <PlatformProvider value={platform}>
         <AppBaseProviders>
           <AppInterface
-            defaultServer={ServerConnection.Key.make(initial.state.serverUrl ?? "local")}
-            servers={server ? [server] : undefined}
+            defaultServer={serverKey}
+            servers={[server]}
             router={HashRouter}
           />
         </AppBaseProviders>
