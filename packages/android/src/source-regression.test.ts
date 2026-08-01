@@ -33,12 +33,17 @@ describe("android security source regressions", () => {
     expect(bridge).toContain('"requestNotificationPermission" -> requestNotificationPermission { state ->')
   })
 
-  test("persists notification request state so denied stays denied after the first prompt", async () => {
+  test("detects notification denial across upgrades without misclassifying fresh installs", async () => {
     const bridge = await Bun.file(`${root}/app/src/main/java/dev/slopcode/android/AndroidBridge.kt`).text()
 
     expect(bridge).toContain('getSharedPreferences("slopcode.permission"')
     expect(bridge).toContain('state.getBoolean("notification_requested", false)')
-    expect(bridge).toContain('return if (notificationRequested()) "denied" else "prompt"')
+    expect(bridge).toContain("activity.shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS)")
+    expect(bridge).toContain("NotificationManagerCompat.from(activity).areNotificationsEnabled()")
+    expect(bridge).toContain("info.lastUpdateTime > info.firstInstallTime")
+    expect(bridge).toContain('if (requested || rationale) return "denied"')
+    expect(bridge).toContain('if (!enabled && upgraded) return "denied"')
+    expect(bridge).toContain("Android 13+ keeps notifications off for fresh installs until the first grant")
     expect(bridge).toContain('state.edit().putBoolean("notification_requested", true).apply()')
   })
 })

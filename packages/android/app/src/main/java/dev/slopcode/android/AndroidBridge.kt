@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.webkit.WebView
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.webkit.JavaScriptReplyProxy
@@ -48,12 +49,30 @@ class AndroidBridge(
 
   private fun notificationRequested() = state.getBoolean("notification_requested", false)
 
+  @Suppress("DEPRECATION")
+  private fun upgradedInstall() = runCatching {
+    val info = activity.packageManager.getPackageInfo(activity.packageName, 0)
+    info.lastUpdateTime > info.firstInstallTime
+  }.getOrDefault(false)
+
+  private fun permissionState(granted: Boolean, requested: Boolean, rationale: Boolean, enabled: Boolean, upgraded: Boolean): String {
+    if (granted) return "granted"
+    if (requested || rationale) return "denied"
+    if (!enabled && upgraded) return "denied"
+    return "prompt"
+  }
+
   private fun permissionState(): String {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return "granted"
-    if (activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
-      return "granted"
-    }
-    return if (notificationRequested()) "denied" else "prompt"
+    return permissionState(
+      activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
+      notificationRequested(),
+      activity.shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS),
+      NotificationManagerCompat.from(activity).areNotificationsEnabled(),
+      // Android 13+ keeps notifications off for fresh installs until the first grant, so only
+      // treat disabled notifications as an upgrade denial when this install has actually been updated.
+      upgradedInstall(),
+    )
   }
 
   private fun remoteBaseUrl(): URL? {
