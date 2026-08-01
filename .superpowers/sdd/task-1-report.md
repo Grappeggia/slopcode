@@ -56,3 +56,25 @@ Result:
 ## Concerns
 
 - The envelope `data` fields intentionally stay generic in this task. Concrete per-message payload schemas can layer on top of these contracts in later tasks without changing the transport envelope shape.
+
+## Review fixes
+
+- Exported the remote contracts from the package root by adding `packages/protocol/src/index.ts` and a `"."` package export while preserving the existing `./remote` subpath export.
+- Made both workspace variants exact at runtime so excess mode-specific keys are rejected instead of silently stripped during decoding.
+- Added regression coverage for:
+  - public root imports from `@slopcode-ai/protocol`
+  - a hybrid `mode: "local"` payload that incorrectly includes `remoteDirectory` and `ssh`
+
+## Fix validation
+
+Run from `packages/protocol`:
+
+```sh
+bun test test/remote.test.ts test/public-root.test.ts
+bun run typecheck
+```
+
+Result:
+
+- `bun test test/remote.test.ts test/public-root.test.ts`: 5 pass, 0 fail
+- `bun run typecheck`: passed

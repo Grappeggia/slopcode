@@ -130,6 +130,23 @@ describe("remote protocol contracts", () => {
 
     await expect(
       Effect.runPromise(
+        Schema.decodeUnknownEffect(RemoteWorkspace)({
+          id: "wrk_local-2",
+          name: "slopcode",
+          mode: "local",
+          directory: "/Users/marcos/src/slopcode",
+          remoteDirectory: "/srv/slopcode",
+          ssh: {
+            host: "build-box.internal",
+            port: 22,
+            user: "marcos",
+          },
+        }),
+      ),
+    ).rejects.toThrow()
+
+    await expect(
+      Effect.runPromise(
         Schema.decodeUnknownEffect(RemoteEnvelope)({
           version: "v1",
           kind: "response",

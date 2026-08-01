@@ -1,8 +1,12 @@
 import { AbsolutePath, PositiveInt, Workspace } from "@slopcode-ai/schema"
-import { Schema } from "effect"
+import { Schema, SchemaParser } from "effect"
 
 const Text = Schema.Trim.pipe(Schema.check(Schema.isNonEmpty()))
 const Port = PositiveInt.check(Schema.isLessThanOrEqualTo(65535))
+const exact = <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>
+  Schema.declareConstructor<S["Type"], S["Encoded"]>()([], () => (u, _ast, options) =>
+    SchemaParser.decodeUnknownEffect(schema, { ...options, onExcessProperty: "error" })(u),
+  )
 
 export const RemoteVersion = Schema.Literal("v1").annotate({ identifier: "RemoteV1.Version" })
 export type RemoteVersion = typeof RemoteVersion.Type
@@ -76,23 +80,25 @@ export const RemoteSshProfile = Schema.Struct({
 export type RemoteSshProfile = typeof RemoteSshProfile.Type
 export type RemoteSshProfileEncoded = typeof RemoteSshProfile.Encoded
 
-export const RemoteWorkspaceLocal = Schema.Struct({
+const RemoteWorkspaceLocalShape = Schema.Struct({
   id: Workspace.ID,
   name: Text,
   mode: Schema.Literal("local"),
   directory: AbsolutePath,
-}).annotate({ identifier: "RemoteV1.WorkspaceLocal" })
+})
+export const RemoteWorkspaceLocal = exact(RemoteWorkspaceLocalShape).annotate({ identifier: "RemoteV1.WorkspaceLocal" })
 export type RemoteWorkspaceLocal = typeof RemoteWorkspaceLocal.Type
 export type RemoteWorkspaceLocalEncoded = typeof RemoteWorkspaceLocal.Encoded
 
-export const RemoteWorkspaceSsh = Schema.Struct({
+const RemoteWorkspaceSshShape = Schema.Struct({
   id: Workspace.ID,
   name: Text,
   mode: Schema.Literal("ssh"),
   directory: AbsolutePath,
   remoteDirectory: AbsolutePath,
   ssh: RemoteSshProfile,
-}).annotate({ identifier: "RemoteV1.WorkspaceSsh" })
+})
+export const RemoteWorkspaceSsh = exact(RemoteWorkspaceSshShape).annotate({ identifier: "RemoteV1.WorkspaceSsh" })
 export type RemoteWorkspaceSsh = typeof RemoteWorkspaceSsh.Type
 export type RemoteWorkspaceSshEncoded = typeof RemoteWorkspaceSsh.Encoded
 
