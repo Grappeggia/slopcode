@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
+import { migrateClosedTabs, nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
 import { migrateTabs } from "./tab-migration"
 import type { SessionTab, Tab } from "./tabs"
 import type { ServerConnection } from "./server"
+import { createTabController } from "./tab-controller"
+import { tabHref } from "./tab-route"
 
 const server = "local\nhttp://localhost:4096" as ServerConnection.Key
+const remote = "https://remote.example.test" as ServerConnection.Key
 
 function sessionTab(sessionId: string): SessionTab {
   return { type: "session", server, sessionId, dirBase64: "L3RtcA" }
@@ -45,5 +48,42 @@ describe("closed tab stack", () => {
     expect(nextTabAfterClose(tabs, 1, false)).toBeUndefined()
     expect(nextTabAfterClose(tabs, 1, true)).toEqual(sessionTab("c"))
     expect(nextTabAfterClose([sessionTab("a")], 0, true)).toBeNull()
+  })
+
+  test("controller keeps a server-matched legacy route active when another server has the same session path", () => {
+    const tabs = [sessionTab("a"), { ...sessionTab("a"), server: remote }]
+    const controller = createTabController({
+      activeServer: () => server,
+      servers: () => [server, remote],
+      location: () => ({ pathname: "/L3RtcA/session/a", search: "" }),
+    })
+
+    expect(controller.remove(tabs, 1).next).toBeUndefined()
+    expect(controller.remove(tabs, 0).next).toEqual(tabs[1])
+  })
+
+  test("controller reopens canonical session tabs and discards entries for removed servers", () => {
+    const controller = createTabController({
+      activeServer: () => server,
+      servers: () => [server],
+      location: () => ({ pathname: "/", search: "" }),
+    })
+    const closed: ClosedTab[] = [
+      { tab: { ...sessionTab("removed"), server: remote }, index: 0 },
+      { tab: sessionTab("open"), index: 0 },
+    ]
+
+    expect(migrateClosedTabs(closed, server, new Set([server]))).toEqual([{ tab: sessionTab("open"), index: 0 }])
+
+    const reopened = controller.reopen([], closed)
+    expect(reopened.entry?.tab).toEqual(sessionTab("open"))
+    expect(reopened.tabs).toEqual([sessionTab("open")])
+    expect(reopened.closed).toEqual([])
+    expect(tabHref(reopened.entry!.tab)).toContain("/server/")
+
+    const stale = controller.reopen([], [{ tab: { ...sessionTab("removed"), server: remote }, index: 0 }])
+    expect(stale.entry).toBeUndefined()
+    expect(stale.tabs).toEqual([])
+    expect(stale.closed).toEqual([])
   })
 })

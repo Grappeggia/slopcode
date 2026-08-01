@@ -9,8 +9,10 @@ import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { usePlatform } from "./platform"
 import { uuid } from "@/utils/uuid"
 import { SessionTabsRemovedDetail } from "@/components/titlebar-session-events"
-import { nextTabAfterClose, pushClosedTab, removeClosedTabs, takeClosedTab, type ClosedTab } from "./closed-tabs"
+import { migrateClosedTabs, pruneClosedTabs, removeClosedTabs, type ClosedTab } from "./closed-tabs"
+import { createTabController } from "./tab-controller"
 import { migrateTabs } from "./tab-migration"
+import { draftHref, tabHref } from "./tab-route"
 
 export type SessionTab = {
   type: "session"
@@ -29,108 +31,7 @@ export type DraftTab = {
 
 export type Tab = SessionTab | DraftTab
 
-export type DraftRequest = {
-  sessionID: string
-  sessionDirectory: string
-  prompt: Prompt
-  context: (ContextItem & { key: string })[]
-  agent: string
-  model: { providerID: string; modelID: string }
-  variant?: string
-}
-
-export type DraftSnapshot = {
-  prompt: Prompt
-  cursor: number | undefined
-  context: (ContextItem & { key: string })[]
-  mode: "normal" | "shell"
-  worktree: string
-}
-
-export type DraftSubmission = {
-  directory: string
-  worktree: string
-  creating?: boolean
-  session?: Session
-  autoAccept?: boolean
-  autoAccepted?: boolean
-  accepted?: boolean
-  finalizing?: boolean
-  abandoned?: boolean
-  dispose?: () => void
-  cleanedSessionID?: string
-  cleanedMessageID?: string
-  lastMessageID?: string
-  delivery?: {
-    messageID: string
-    request: DraftRequest
-    snapshot: DraftSnapshot
-    prepared: PreparedPrompt
-    sending: boolean
-  }
-}
-
-export function draftSubmissionOwner(server: ServerConnection.Key, draftID: string | undefined, directory: string) {
-  return `${server}\n${draftID ? `draft:${draftID}` : `legacy:${directory}`}`
-}
-
-export function createDraftSubmissionStore() {
-  const state = new Map<string, DraftSubmission>()
-  const [version, setVersion] = createSignal(0)
-  const touch = () => setVersion((value) => value + 1)
-  const invalidate = (owner: string) => {
-    const current = state.get(owner)
-    if (!current) return false
-    const dispose = current.dispose
-    current.dispose = undefined
-    dispose?.()
-    state.delete(owner)
-    touch()
-    return true
-  }
-  const release = (owner: string) => {
-    const current = state.get(owner)
-    if (!current) return false
-    current.dispose = undefined
-    state.delete(owner)
-    touch()
-    return true
-  }
-  return {
-    get(owner: string) {
-      version()
-      return state.get(owner)
-    },
-    set(owner: string, value: DraftSubmission) {
-      state.set(owner, value)
-      touch()
-      return value
-    },
-    touch,
-    clear: invalidate,
-    release,
-    clearDraft(server: ServerConnection.Key, draftID: string) {
-      invalidate(draftSubmissionOwner(server, draftID, ""))
-    },
-    releaseDraft(server: ServerConnection.Key, draftID: string) {
-      release(draftSubmissionOwner(server, draftID, ""))
-    },
-    clearServer(server: ServerConnection.Key) {
-      const prefix = `${server}\n`
-      let removed = false
-      for (const owner of [...state.keys()]) {
-        if (!owner.startsWith(prefix)) continue
-        removed = invalidate(owner) || removed
-      }
-      return removed
-    },
-  }
-}
-
-export const draftHref = (draftID: string) => `/new-session?draftId=${encodeURIComponent(draftID)}`
-
-export const tabHref = (tab: Tab) =>
-  tab.type === "draft" ? draftHref(tab.draftID) : `/${tab.dirBase64}/session/${tab.sessionId}`
+export { draftHref, tabHref }
 
 export const tabKey = (tab: Tab) => (tab.type === "draft" ? `draft:${tab.draftID}` : `${tab.server}\n${tabHref(tab)}`)
 
@@ -156,11 +57,23 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       },
       createStore<Tab[]>([]),
     )
-    const [closed, setClosed, , closedReady] = persisted(Persist.global("tabs.closed"), createStore<ClosedTab[]>([]))
+    const [closed, setClosed, , closedReady] = persisted(
+      {
+        ...Persist.global("tabs.closed"),
+        migrate: (value: unknown) =>
+          migrateClosedTabs(value, fallback, new Set(server.list.map(ServerConnection.key))),
+      },
+      createStore<ClosedTab[]>([]),
+    )
 
     const params = useParams()
     const navigate = useNavigate()
     const location = useLocation()
+    const controller = createTabController({
+      activeServer: () => server.key,
+      servers: () => server.list.map(ServerConnection.key),
+      location: () => location,
+    })
 
     const closing = new Set<string>()
     const submission = createDraftSubmissionStore()
@@ -185,6 +98,13 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       setStore((tabs) => tabs.filter((tab) => servers.has(tab.server)))
     })
 
+    createEffect(() => {
+      if (!closedReady()) return
+      const servers = new Set(server.list.map(ServerConnection.key))
+      if (closed.every((entry) => servers.has(entry.tab.server))) return
+      setClosed((stack) => pruneClosedTabs(stack, servers))
+    })
+
     const navigateTab = (tab: Tab) => {
       const href = tabHref(tab)
       if (tab.server === server.key) {
@@ -198,12 +118,11 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
     }
 
     const removeTab = (index: number) => {
-      const tab = store[index]
+      const result = controller.remove(store, index)
+      const tab = result.tab
       if (!tab) return
       const key = tabKey(tab)
       const draftID = tab.type === "draft" ? tab.draftID : undefined
-      const active = `${location.pathname}${location.search}` === tabHref(tab)
-      const next = nextTabAfterClose(store, index, active)
       closing.add(key)
       void startTransition(() => {
         setStore(
@@ -211,8 +130,8 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
             tabs.splice(index, 1)
           }),
         )
-        if (next === null) navigate("/")
-        if (next) navigateTab(next)
+        if (result.next === null) navigate("/")
+        if (result.next) navigateTab(result.next)
       }).finally(() => closing.delete(key))
       if (draftID) removeDraftPersisted(draftID)
     }
@@ -270,7 +189,7 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
       closeTab(index: number) {
         const tab = store[index]
         if (!tab) return
-        if (tab.type === "session") updateClosed((stack) => pushClosedTab(stack, tab, index))
+        if (tab.type === "session") updateClosed((stack) => controller.close(store, stack, index).closed)
         removeTab(index)
       },
       reopenClosedTab() {
@@ -278,19 +197,12 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
           void closedReady.promise?.then(() => actions.reopenClosedTab())
           return
         }
-        const result = takeClosedTab(closed, store)
-        if (result.stack.length === closed.length) return
-        setClosed(() => result.stack)
+        const result = controller.reopen(store, closed)
+        if (result.closed.length !== closed.length) setClosed(() => result.closed)
         const entry = result.entry
         if (!entry) return
-        const index = Math.min(entry.index, store.length)
         void startTransition(() => {
-          setStore(
-            produce((tabs) => {
-              if (tabs.some((tab) => tabKey(tab) === tabKey(entry.tab))) return
-              tabs.splice(index, 0, entry.tab)
-            }),
-          )
+          setStore(() => result.tabs)
           navigateTab(entry.tab)
         })
       },

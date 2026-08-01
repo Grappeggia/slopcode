@@ -12,13 +12,40 @@ export function pushClosedTab(stack: ClosedTab[], tab: Tab, index: number): Clos
   return [...stack, { tab: { ...tab }, index }].slice(-CLOSED_TAB_LIMIT)
 }
 
-export function takeClosedTab(stack: ClosedTab[], tabs: Tab[]): { entry?: ClosedTab; stack: ClosedTab[] } {
+export function takeClosedTab(
+  stack: ClosedTab[],
+  tabs: Tab[],
+  servers?: ReadonlySet<SessionTab["server"]>,
+): { entry?: ClosedTab; stack: ClosedTab[] } {
   const remaining = [...stack]
   while (remaining.length) {
     const entry = remaining.pop()
+    if (entry && servers && !servers.has(entry.tab.server)) continue
     if (entry && !isOpen(tabs, entry.tab)) return { entry, stack: remaining }
   }
   return { stack: remaining }
+}
+
+export function migrateClosedTabs(
+  value: unknown,
+  fallback: SessionTab["server"],
+  servers: ReadonlySet<SessionTab["server"]>,
+): ClosedTab[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap<ClosedTab>((entry) => {
+    if (!entry || typeof entry !== "object" || !("tab" in entry) || !("index" in entry)) return []
+    if (!Number.isInteger(entry.index) || entry.index < 0 || !entry.tab || typeof entry.tab !== "object") return []
+    const tab = entry.tab
+    if (tab.type !== "session" || typeof tab.sessionId !== "string" || typeof tab.dirBase64 !== "string") return []
+    if ("server" in tab && typeof tab.server !== "string") return []
+    const server = ("server" in tab ? tab.server : fallback) as SessionTab["server"]
+    if (!servers.has(server)) return []
+    return [{ tab: { type: "session", server, sessionId: tab.sessionId, dirBase64: tab.dirBase64 }, index: entry.index }]
+  })
+}
+
+export function pruneClosedTabs(stack: ClosedTab[], servers: ReadonlySet<SessionTab["server"]>) {
+  return stack.filter((entry) => servers.has(entry.tab.server))
 }
 
 export function removeClosedTabs(stack: ClosedTab[], server: SessionTab["server"], sessionIDs: string[]) {
