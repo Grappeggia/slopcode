@@ -67,131 +67,156 @@ describe("buildSshExecArgs", () => {
 })
 
 describe("buildSshTunnelArgs", () => {
-  test("uses a fixed loopback TCP port instead of a replaceable socket path", () => {
+  test("uses app-owned loopback TCP with SSH stdio forwarding", () => {
     const target = normalizeSshTarget(fixtureTarget())
-    const args = buildSshTunnelArgs(target, "/tmp/known_hosts", 4311, 4310)
-    const forward = args[args.indexOf("-L") + 1]
+    const args = buildSshTunnelArgs(target, "/tmp/known_hosts", 4310)
+    const forward = args[args.indexOf("-W") + 1]
 
-    expect(forward).toBe("127.0.0.1:4311:127.0.0.1:4310")
-    expect(forward).not.toContain("127.0.0.1:0")
+    expect(forward).toBe("127.0.0.1:4310")
+    expect(args).not.toContain("-L")
+    expect(args).not.toContain("0")
     expect(forward).not.toContain("/")
-    expect(args).not.toContain("StreamLocalBindUnlink=yes")
+    expect(args.join(" ")).not.toContain("\\")
   })
 
   test("rejects invalid forwarding ports before spawning SSH", () => {
     const target = normalizeSshTarget(fixtureTarget())
 
-    expect(() => buildSshTunnelArgs(target, "/tmp/known_hosts", 0, 4310)).toThrow("between 1 and 65535")
-    expect(() => buildSshTunnelArgs(target, "/tmp/known_hosts", 4311, 65_536)).toThrow("between 1 and 65535")
+    expect(() => buildSshTunnelArgs(target, "/tmp/known_hosts", 0)).toThrow("between 1 and 65535")
+    expect(() => buildSshTunnelArgs(target, "/tmp/known_hosts", 65_536)).toThrow("between 1 and 65535")
   })
 })
 
 describe("openSshTunnel", () => {
-  test("keeps the loopback proxy port owned and pipes through fixed TCP forwarding", async () => {
-    const forwardPort = await allocateTestPort()
-    const upstream = createServer((socket) => socket.on("data", (chunk) => socket.write(chunk)))
-    const child = new FakeTunnelChild()
+  test("binds the app-owned proxy before per-connection SSH stdio forwarding", async () => {
+    const remotePort = await allocateTestPort()
+    const child = new TunnelChild()
     let spawned: string[] = []
 
-    try {
-      await listen(upstream, forwardPort)
-      const tunnel = openSshTunnel(
-        ["-L", `127.0.0.1:${forwardPort}:127.0.0.1:4310`],
-        forwardPort,
-        ((_, args) => {
-          spawned = args
-          queueMicrotask(() => child.stderr.write(`debug1: Local forwarding listening on 127.0.0.1 port ${forwardPort}.\n`))
-          return child as unknown as ReturnType<typeof spawn>
-        }) as typeof spawn,
-      )
-      const port = await tunnel.port
+    const tunnel = openSshTunnel(
+      ["-W", `127.0.0.1:${remotePort}`],
+      remotePort,
+      ((_, args) => {
+        spawned = args
+        return child as unknown as ReturnType<typeof spawn>
+      }) as typeof spawn,
+    )
+    const port = await tunnel.port
 
-      expect(spawned).toContain("-L")
-      expect(spawned[spawned.indexOf("-L") + 1]).toBe(`127.0.0.1:${forwardPort}:127.0.0.1:4310`)
-      expect(spawned.join(" ")).not.toContain("127.0.0.1:0")
-      expect(await canBind(port)).toBe(false)
+    expect(spawned).toHaveLength(0)
+    expect(await canBind(port)).toBe(false)
 
-      const client = createConnection(port, "127.0.0.1")
-      await onceConnected(client)
-      client.write("ping")
-      expect(await read(client)).toBe("ping")
-      client.destroy()
+    const client = createConnection(port, "127.0.0.1")
+    await onceConnected(client)
+    client.write("ping")
+    expect(await read(client)).toBe("ping")
+    expect(spawned).toEqual(["-W", `127.0.0.1:${remotePort}`])
+    expect(spawned).not.toContain("-L")
+    expect(spawned.join(" ")).not.toContain(":0")
 
-      const exited = onceExit(child)
-      await tunnel.stop()
-      await exited
-      expect(await canBind(port)).toBe(true)
-    } finally {
-      await close(upstream)
-    }
+    const stopping = tunnel.stop()
+    const second = tunnel.stop()
+    expect(stopping).toBe(second)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(child.killCalls).toBe(1)
+    expect(await canBind(port)).toBe(true)
+    let complete = false
+    void stopping.then(() => {
+      complete = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(complete).toBe(false)
+
+    child.finish()
+    await stopping
+    expect(complete).toBe(true)
   })
 
-  test("does not use a competing loopback listener when SSH cannot claim the forward port", async () => {
-    const forwardPort = await allocateTestPort()
+  test("keeps the remote target port out of the local listener race", async () => {
+    const remotePort = await allocateTestPort()
     let connections = 0
     const attacker = createServer((socket) => {
       connections += 1
       socket.destroy()
     })
-    const child = new ControlledTunnelChild()
 
     try {
-      await listen(attacker, forwardPort)
-      const tunnel = openSshTunnel(
-        ["-L", `127.0.0.1:${forwardPort}:127.0.0.1:4310`],
-        forwardPort,
-        ((_, args) => {
-          expect(args[args.indexOf("-L") + 1]).toBe(`127.0.0.1:${forwardPort}:127.0.0.1:4310`)
-          queueMicrotask(() => child.finish(255))
-          return child as unknown as ReturnType<typeof spawn>
-        }) as typeof spawn,
-      )
+      await listen(attacker, remotePort)
+      const tunnel = openSshTunnel(["-W", `127.0.0.1:${remotePort}`], remotePort, (() => {
+        throw new Error("SSH should not spawn without an accepted app connection")
+      }) as typeof spawn)
+      const port = await tunnel.port
 
-      await expect(tunnel.port).rejects.toThrow("before local forwarding readiness")
+      expect(port).not.toBe(remotePort)
+      expect(await canBind(remotePort)).toBe(false)
       await tunnel.stop()
       expect(connections).toBe(0)
     } finally {
-      child.finish(255)
       await close(attacker)
     }
   })
 
-  test("awaits child termination and makes repeated tunnel stops share cleanup", async () => {
-    const forwardPort = await allocateTestPort()
-    const upstream = createServer((socket) => socket.on("data", (chunk) => socket.write(chunk)))
-    const child = new ControlledTunnelChild()
+  test("retries deterministic proxy bind collisions before exposing the port", async () => {
+    let attempts = 0
+    const tunnel = openSshTunnel(
+      ["-W", "127.0.0.1:4312"],
+      4312,
+      (() => {
+        throw new Error("SSH should not spawn before a client connects")
+      }) as typeof spawn,
+      (handler) => {
+        attempts += 1
+        if (attempts === 1) return new CollisionServer() as unknown as Server
+        return createServer(handler)
+      },
+    )
 
-    try {
-      await listen(upstream, forwardPort)
-      const tunnel = openSshTunnel(
-        ["-L", `127.0.0.1:${forwardPort}:127.0.0.1:4310`],
-        forwardPort,
-        ((_, args) => {
-          queueMicrotask(() => child.ready(forwardPort))
-          return child as unknown as ReturnType<typeof spawn>
-        }) as typeof spawn,
-      )
-      const port = await tunnel.port
-      let complete = false
-      const stopping = tunnel.stop()
-      const first = stopping.then(() => {
+    const port = await tunnel.port
+    expect(attempts).toBe(2)
+    expect(await canBind(port)).toBe(false)
+    await tunnel.stop()
+  })
+
+  test("does not treat a child error as termination and escalates before resolving", async () => {
+    const child = new TunnelChild()
+    const tunnel = openSshTunnel(["-W", "127.0.0.1:4310"], 4310, (() => child as unknown as ReturnType<typeof spawn>) as typeof spawn)
+    const port = await tunnel.port
+    const errors: Error[] = []
+    tunnel.onError((error) => errors.push(error))
+    const client = createConnection(port, "127.0.0.1")
+    await onceConnected(client)
+    child.emit("error", new Error("spawn failed"))
+
+    let complete = false
+    const stopping = tunnel.stop().then(
+      () => {
         complete = true
-      })
-      const second = tunnel.stop()
+      },
+      () => {
+        complete = true
+      },
+    )
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(complete).toBe(false)
+    expect(child.killSignals).toEqual([undefined, "SIGKILL"])
+    expect(errors.at(-1)?.message).toContain("spawn error")
+    expect(errors.at(-1)?.message).toContain("spawn failed")
 
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      expect(stopping).toBe(second)
-      expect(child.killCalls).toBe(1)
-      expect(await canBind(port)).toBe(true)
-      expect(complete).toBe(false)
+    child.finish()
+    await stopping
+  })
 
-      child.finish()
-      await first
-      expect(complete).toBe(true)
-    } finally {
-      child.finish()
-      await close(upstream)
-    }
+  test("rejects bounded cleanup when child termination is never confirmed", async () => {
+    const child = new TunnelChild()
+    child.killError = new Error("permission denied")
+    const tunnel = openSshTunnel(["-W", "127.0.0.1:4311"], 4311, (() => child as unknown as ReturnType<typeof spawn>) as typeof spawn)
+    const port = await tunnel.port
+    const client = createConnection(port, "127.0.0.1")
+    await onceConnected(client)
+
+    await expect(tunnel.stop()).rejects.toThrow("kill failed: permission denied")
+    expect(child.killSignals).toEqual([undefined, "SIGKILL"])
+    child.finish()
   })
 })
 
@@ -442,7 +467,7 @@ describe("createSshRemoteHostService", () => {
     expect(hostKeyCleaned).toBe(true)
   })
 
-  test("waits for SSH to own a dynamically allocated local port before health", async () => {
+  test("uses the proxy-owned loopback port without allocating a fixed local port", async () => {
     const assigned = deferred<number>()
     const opened = deferred<void>()
     let allocations = 0
@@ -503,12 +528,12 @@ describe("createSshRemoteHostService", () => {
     const pending = service.ensureWorkspace(fixtureTarget())
     await opened.promise
 
-    expect(allocations).toBe(2)
-    const forward = args[args.indexOf("-L") + 1]
-    expect(forward).toBe(`127.0.0.1:${forwardPort}:127.0.0.1:4310`)
-    expect(forward).not.toContain("127.0.0.1:0")
+    expect(allocations).toBe(1)
+    const forward = args[args.indexOf("-W") + 1]
+    expect(forward).toBe("127.0.0.1:4310")
+    expect(args).not.toContain("-L")
+    expect(forwardPort).toBe(4310)
     expect(ownedPort).toBeGreaterThan(0)
-    expect(forwardPort).toBeGreaterThan(0)
     expect(healthUrl).toBeUndefined()
 
     assigned.resolve(4321)
@@ -1126,33 +1151,51 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-class FakeTunnelChild extends EventEmitter {
-  readonly stderr = new PassThrough()
-
-  kill() {
-    this.emit("exit", null, "SIGTERM")
-    return true
-  }
-}
-
-class ControlledTunnelChild extends EventEmitter {
+class TunnelChild extends EventEmitter {
+  readonly stdin = new PassThrough()
+  readonly stdout = new PassThrough()
   readonly stderr = new PassThrough()
   killCalls = 0
+  killSignals: Array<NodeJS.Signals | undefined> = []
+  killError: Error | undefined
   exited = false
 
-  kill() {
-    this.killCalls += 1
-    return true
+  constructor() {
+    super()
+    this.stdin.on("data", (chunk: Buffer) => this.stdout.write(chunk))
   }
 
-  ready(port: number) {
-    this.stderr.write(`debug1: Local forwarding listening on 127.0.0.1 port ${port}.\n`)
+  kill(signal?: NodeJS.Signals) {
+    this.killCalls += 1
+    this.killSignals.push(signal)
+    if (this.killError) throw this.killError
+    return true
   }
 
   finish(code: number | null = null) {
     if (this.exited) return
     this.exited = true
     this.emit("exit", code, null)
+  }
+}
+
+class CollisionServer extends EventEmitter {
+  listening = false
+
+  listen() {
+    queueMicrotask(() => {
+      this.emit("error", Object.assign(new Error("proxy busy"), { code: "EADDRINUSE" }))
+    })
+    return this
+  }
+
+  close(callback?: (error?: Error) => void) {
+    callback?.()
+    return this
+  }
+
+  address() {
+    return null
   }
 }
 
@@ -1173,10 +1216,6 @@ function onceConnected(socket: ReturnType<typeof createConnection>) {
     socket.once("connect", resolve)
     socket.once("error", reject)
   })
-}
-
-function onceExit(child: FakeTunnelChild) {
-  return new Promise<void>((resolve) => child.once("exit", () => resolve()))
 }
 
 function read(socket: ReturnType<typeof createConnection>) {

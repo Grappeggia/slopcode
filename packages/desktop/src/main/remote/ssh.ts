@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { spawn, type ChildProcess } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { createConnection, createServer, type Server, type Socket } from "node:net"
@@ -76,7 +76,7 @@ type Deps = {
   allocatePort: () => Promise<number>
   uuid: () => string
   runSsh: (args: string[], script: string, timeoutMs: number, signal?: AbortSignal) => Promise<CommandResult>
-  openTunnel: (args: string[], forwardPort: number) => TunnelProcess
+  openTunnel: (args: string[], remotePort: number) => TunnelProcess
   health: (url: string, password: string, signal?: AbortSignal) => Promise<boolean>
   validateRemoteDirectory: (
     url: string,
@@ -93,6 +93,8 @@ const SSH_SCRIPT_TIMEOUT_MS = 15_000
 const SSH_HEALTH_TIMEOUT_MS = 30_000
 const SSH_TUNNEL_CLEANUP_TIMEOUT_MS = 2_000
 const SSH_TUNNEL_FORCE_KILL_DELAY_MS = 250
+const SSH_PROXY_BIND_ATTEMPTS = 3
+const SSH_PROXY_RETRY_DELAY_MS = 25
 
 export function normalizeSshTarget(target: DesktopSshTarget): NormalizedSshTarget {
   const decodedHost = decodeHost(target.host)
@@ -160,18 +162,14 @@ export function buildSshExecArgs(target: NormalizedSshTarget, knownHostsPath: st
 export function buildSshTunnelArgs(
   target: NormalizedSshTarget,
   knownHostsPath: string,
-  localPort: number,
   remotePort: number,
 ) {
-  requirePort("SSH local tunnel port", localPort)
   requirePort("SSH remote tunnel port", remotePort)
   return [
     ...buildSshBaseArgs(target, knownHostsPath),
-    "-N",
     "-T",
-    "-v",
-    "-L",
-    `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
+    "-W",
+    `127.0.0.1:${remotePort}`,
     target.authority,
   ]
 }
@@ -245,11 +243,13 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
     if (active.get(target.id) !== item) return
     if (generations.get(target.id) !== generation) return
     active.delete(target.id)
-    const cleanup = queue(target.id, async () => {
-      await item.cleanup().catch(() => undefined)
-    })
+    const cleanup = queue(target.id, item.cleanup)
     fail(target, error.message, [item.state.password])
-    void cleanup.catch(() => undefined)
+    void cleanup.catch((cleanupError) => {
+      if (generations.get(target.id) === generation) {
+        fail(target, errorMessage(cleanupError), [item.state.password])
+      }
+    })
   }
 
   const start = async (target: NormalizedSshTarget, signal: AbortController, generation: number) => {
@@ -311,17 +311,17 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
       const remote = parseBootstrap(bootstrap)
       remotePassword = remote.password
       assertLive(signal.signal, generations, target.id, generation)
-      const localPort = await deps.allocatePort()
-      assertLive(signal.signal, generations, target.id, generation)
       tunnel = deps.openTunnel(
-        buildSshTunnelArgs(target, hostKey.path, localPort, remote.port),
-        localPort,
+        buildSshTunnelArgs(target, hostKey.path, remote.port),
+        remote.port,
       )
       tunnel.onExit((code, exitSignal) => {
         reportTunnelFailure(new Error(`SSH tunnel exited (code=${code ?? "null"} signal=${exitSignal ?? "null"})`))
       })
       tunnel.onError(reportTunnelFailure)
-      const closeTunnel = () => tunnel?.stop()
+      const closeTunnel = () => {
+        void tunnel?.stop().catch(reportTunnelFailure)
+      }
       const abort = abortRace(signal.signal)
       signal.signal.addEventListener("abort", closeTunnel, { once: true })
 
@@ -354,9 +354,10 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         } satisfies DesktopRemoteReady
 
         const teardown = once(async () => {
-          await tunnel?.stop().catch(() => undefined)
-          await stopRemote().catch(() => undefined)
-          await cleanup().catch(() => undefined)
+          const results = await Promise.allSettled([tunnel?.stop(), stopRemote()])
+          const errors = results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : []))
+          if (errors.length) throw new Error(errors.join("; "))
+          await cleanup()
         })
         item = {
           state,
@@ -375,10 +376,17 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         abort.dispose()
       }
     } catch (error) {
-      await tunnel?.stop().catch(() => undefined)
-      await stopStartup().catch(() => undefined)
-      await cleanup().catch(() => undefined)
-      const next = signal.signal.aborted && !isAbortError(error) ? abortError() : error
+      const results = await Promise.allSettled([tunnel?.stop(), stopStartup()])
+      const errors = results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : []))
+      if (!errors.length) {
+        try {
+          await cleanup()
+        } catch (cleanupError) {
+          errors.push(errorMessage(cleanupError))
+        }
+      }
+      const original = signal.signal.aborted && !isAbortError(error) ? abortError() : error
+      const next = errors.length ? new Error(`${errorMessage(original)}; ${errors.join("; ")}`) : original
       if (isAbortError(next)) throw next
       const message = next instanceof Error ? next.message : String(next)
       if (generations.get(target.id) === generation) fail(target, message, [requestedPassword, remotePassword])
@@ -422,8 +430,25 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
     return queue(id, async () => {
       if (active.get(id) === item) active.delete(id)
       const state = states.get(id)
-      if (state?.kind !== "stopped" && state) stopped(state)
-      if (item) await item.cleanup().catch(() => undefined)
+      if (item) {
+        try {
+          await item.cleanup()
+        } catch (error) {
+          if (state) {
+            emit({
+              kind: "failed",
+              id: state.id,
+              host: state.host,
+              workspace: state.workspace,
+              message: redact(errorMessage(error), [item.state.password]),
+            })
+          }
+          throw error
+        }
+        if (state?.kind !== "stopped" && state) stopped(state)
+      } else if (state?.kind !== "stopped" && state) {
+        stopped(state)
+      }
       if (running) await running.promise.catch(() => undefined)
     })
   }
@@ -989,6 +1014,111 @@ async function materializeHostKey(hostKey: DesktopSshHostKey): Promise<Materiali
   }
 }
 
+type ProcessExit = {
+  code: number | null
+  signal: NodeJS.Signals | null
+}
+
+type ProcessRecord = {
+  child: ChildProcess
+  errors: Error[]
+  ended: boolean
+  exit?: ProcessExit
+  termination: Promise<void>
+  stop?: Promise<void>
+}
+
+type ProxyFactory = (handler: (client: Socket) => void) => Server
+
+type TunnelConnection = {
+  client: Socket
+  process: ProcessRecord
+  closed: boolean
+}
+
+function observeProcess(child: ChildProcess): ProcessRecord {
+  let resolveTermination!: () => void
+  const record: ProcessRecord = {
+    child,
+    errors: [],
+    ended: false,
+    termination: new Promise<void>((resolve) => {
+      resolveTermination = resolve
+    }),
+  }
+  const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (record.ended) return
+    record.ended = true
+    record.exit = { code, signal }
+    resolveTermination()
+  }
+  child.once("exit", finish)
+  child.once("close", finish)
+  child.on("error", (error) => record.errors.push(error))
+  return record
+}
+
+function requestKill(record: ProcessRecord, signal: NodeJS.Signals | undefined, label: string) {
+  try {
+    if (!record.child.kill(signal)) record.errors.push(new Error(`${label} kill returned false`))
+  } catch (error) {
+    record.errors.push(new Error(`${label} kill failed: ${errorMessage(error)}`))
+  }
+}
+
+async function forceProcess(record: ProcessRecord, label: string, spawnProcess: typeof spawn) {
+  if (process.platform !== "win32" || !record.child.pid) {
+    requestKill(record, "SIGKILL", `${label} SIGKILL`)
+    return
+  }
+
+  let taskkill: ProcessRecord
+  try {
+    taskkill = observeProcess(
+      spawnProcess("taskkill", ["/PID", String(record.child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      }),
+    )
+  } catch (error) {
+    record.errors.push(new Error(`${label} taskkill spawn failed: ${errorMessage(error)}`))
+    return
+  }
+
+  if (!(await bounded(taskkill.termination, SSH_TUNNEL_FORCE_KILL_DELAY_MS))) {
+    requestKill(taskkill, "SIGKILL", `${label} taskkill`)
+    if (!(await bounded(taskkill.termination, SSH_TUNNEL_FORCE_KILL_DELAY_MS))) {
+      record.errors.push(new Error(`${label} taskkill termination was not confirmed`))
+    }
+    return
+  }
+  if (taskkill.errors.length) {
+    record.errors.push(new Error(`${label} taskkill failed: ${processErrors(taskkill)}`))
+    return
+  }
+  if (taskkill.exit?.code !== 0) {
+    record.errors.push(new Error(`${label} taskkill exited with code ${taskkill.exit?.code ?? "null"}`))
+  }
+}
+
+function terminateProcess(record: ProcessRecord, label: string, spawnProcess: typeof spawn = spawn) {
+  if (record.stop) return record.stop
+  record.stop = (async () => {
+    if (record.ended) return
+    requestKill(record, undefined, label)
+    if (await bounded(record.termination, SSH_TUNNEL_FORCE_KILL_DELAY_MS)) return
+    await forceProcess(record, label, spawnProcess)
+    if (await bounded(record.termination, SSH_TUNNEL_CLEANUP_TIMEOUT_MS - SSH_TUNNEL_FORCE_KILL_DELAY_MS)) return
+    throw new Error(`${label} termination was not confirmed after kill escalation${processErrors(record)}`)
+  })()
+  return record.stop
+}
+
+function processErrors(record: ProcessRecord) {
+  if (!record.errors.length) return ""
+  return ` (${record.errors.map(errorMessage).join("; ")})`
+}
+
 function runSsh(args: string[], script: string, timeoutMs: number, signal?: AbortSignal) {
   return new Promise<CommandResult>((resolve, reject) => {
     if (signal?.aborted) {
@@ -996,159 +1126,105 @@ function runSsh(args: string[], script: string, timeoutMs: number, signal?: Abor
       return
     }
 
-    const child = spawn("ssh", args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    })
+    let child: ChildProcess
+    try {
+      child = spawn("ssh", args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      })
+    } catch (error) {
+      reject(new Error(`ssh spawn failed: ${errorMessage(error)}`))
+      return
+    }
+    const process = observeProcess(child)
     let stdout = ""
     let stderr = ""
-    let done = false
-    const finish = (next: () => void) => {
-      if (done) return
-      done = true
-      clearTimeout(timeout)
+    let settled = false
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const finish = () => {
+      if (timeout) clearTimeout(timeout)
       signal?.removeEventListener("abort", abort)
-      next()
     }
-    const abort = () =>
-      finish(() => {
-        child.kill()
-        reject(signal?.reason instanceof Error ? signal.reason : abortError())
+    const rejectAfterStop = async (reason: Error) => {
+      if (settled) return
+      settled = true
+      finish()
+      try {
+        await terminateProcess(process, "ssh command")
+        reject(reason)
+      } catch (error) {
+        reject(new Error(`${reason.message}; ${errorMessage(error)}`))
+      }
+    }
+    const abort = () => {
+      void rejectAfterStop(signal?.reason instanceof Error ? signal.reason : abortError())
+    }
+    const onTermination = () => {
+      if (settled) return
+      settled = true
+      finish()
+      if (process.errors.length) {
+        reject(new Error(`ssh process spawn error: ${processErrors(process).slice(2)}`))
+        return
+      }
+      resolve({
+        code: process.exit?.code ?? null,
+        signal: process.exit?.signal ?? null,
+        stdout,
+        stderr,
       })
-    const timeout = setTimeout(() => {
-      child.kill()
-      finish(() => reject(new Error(`ssh ${args.join(" ")} timed out after ${timeoutMs}ms`)))
-    }, timeoutMs)
-
-    child.stdout.setEncoding("utf8")
-    child.stderr.setEncoding("utf8")
-    child.stdout.on("data", (chunk: string) => {
+    }
+    child.stdout?.setEncoding("utf8")
+    child.stderr?.setEncoding("utf8")
+    child.stdout?.on("data", (chunk: string) => {
       stdout += chunk
     })
-    child.stderr.on("data", (chunk: string) => {
+    child.stderr?.on("data", (chunk: string) => {
       stderr += chunk
     })
-    child.once("error", (error) => {
-      finish(() => reject(error))
-    })
-    child.once("close", (code, signal) => {
-      finish(() => resolve({ code, signal, stdout, stderr }))
-    })
+    void process.termination.then(onTermination)
     signal?.addEventListener("abort", abort, { once: true })
-    child.stdin.end(script)
+    timeout = setTimeout(() => {
+      void rejectAfterStop(new Error(`ssh ${args.join(" ")} timed out after ${timeoutMs}ms`))
+    }, timeoutMs)
+    try {
+      child.stdin?.end(script)
+    } catch (error) {
+      void rejectAfterStop(new Error(`ssh stdin failed: ${errorMessage(error)}`))
+    }
   })
 }
 
-export function openSshTunnel(args: string[], forwardPort: number, spawnProcess: typeof spawn = spawn): TunnelProcess {
-  requirePort("SSH local tunnel port", forwardPort)
-  const child = spawnProcess("ssh", args, {
-    stdio: ["ignore", "ignore", "pipe"],
-    windowsHide: true,
-  })
+export function openSshTunnel(
+  args: string[],
+  remotePort: number,
+  spawnProcess: typeof spawn = spawn,
+  makeProxy: ProxyFactory = proxyServer,
+): TunnelProcess {
+  requirePort("SSH remote tunnel port", remotePort)
   let resolvePort!: (port: number) => void
   let rejectPort!: (error: Error) => void
   let ready = false
   let failure: Error | undefined
-  let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined
+  let exit: ProcessExit | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
-  let outputBuffer = ""
-  let proxyPort: number | undefined
-  let forwardReady = false
+  let proxy: Server | undefined
+  let binding = false
   let stopping = false
   let stopPromise: Promise<void> | undefined
-  let childFinished = false
-  const clients = new Set<Socket>()
+  const processes = new Set<ProcessRecord>()
+  const connections = new Set<TunnelConnection>()
   const exits = new Set<(code: number | null, signal: NodeJS.Signals | null) => void>()
   const errors = new Set<(error: Error) => void>()
   const port = new Promise<number>((resolve, reject) => {
     resolvePort = resolve
     rejectPort = reject
   })
-  const proxy = createServer((client) => {
-    if (stopping || !ready) {
-      client.destroy()
-      return
-    }
-    clients.add(client)
-    const upstream = createConnection({ host: "127.0.0.1", port: forwardPort })
-    clients.add(upstream)
-    let closed = false
-    const close = () => {
-      if (closed) return
-      closed = true
-      clients.delete(client)
-      clients.delete(upstream)
-      client.destroy()
-      upstream.destroy()
-    }
-    client.once("error", close)
-    client.once("close", close)
-    upstream.once("error", close)
-    upstream.once("close", close)
-    client.pipe(upstream)
-    upstream.pipe(client)
-  })
-  const waitForChild = () => {
-    if (childFinished) return Promise.resolve()
-    return new Promise<void>((resolve) => {
-      const done = () => {
-        childFinished = true
-        child.removeListener("exit", done)
-        child.removeListener("close", done)
-        child.removeListener("error", done)
-        resolve()
-      }
-      child.once("exit", done)
-      child.once("close", done)
-      child.once("error", done)
-    })
-  }
-  const closeProxy = () => {
-    if (!proxy.listening) return Promise.resolve()
-    return new Promise<void>((resolve) => {
-      let done = false
-      const finish = () => {
-        if (done) return
-        done = true
-        resolve()
-      }
-      try {
-        proxy.close(finish)
-        const server = proxy as Server & { closeAllConnections?: () => void }
-        server.closeAllConnections?.()
-      } catch {
-        finish()
-      }
-    })
-  }
-  const terminateChild = async () => {
-    if (!childFinished) {
-      const done = waitForChild()
-      try {
-        child.kill()
-      } catch {}
-      await bounded(done, SSH_TUNNEL_FORCE_KILL_DELAY_MS)
-    }
-    if (!childFinished) {
-      const done = waitForChild()
-      try {
-        child.kill("SIGKILL")
-      } catch {}
-      await bounded(done, SSH_TUNNEL_CLEANUP_TIMEOUT_MS - SSH_TUNNEL_FORCE_KILL_DELAY_MS)
-    }
-  }
-  const stopResources = async () => {
-    if (timer) clearTimeout(timer)
-    for (const socket of clients) socket.destroy()
-    clients.clear()
-    await Promise.all([bounded(closeProxy(), SSH_TUNNEL_CLEANUP_TIMEOUT_MS), terminateChild()])
-  }
-  const stop = () => {
-    if (stopPromise) return stopPromise
-    stopping = true
-    if (!ready && !failure) rejectPort(new Error("SSH tunnel stopped before local forwarding readiness"))
-    stopPromise = Promise.resolve().then(stopResources)
-    return stopPromise
+
+  const notifyExit = (next: ProcessExit) => {
+    exit = next
+    for (const cb of exits) cb(next.code, next.signal)
+    exits.clear()
   }
   const fail = (error: unknown) => {
     const next = error instanceof Error ? error : new Error(String(error))
@@ -1160,64 +1236,171 @@ export function openSshTunnel(args: string[], forwardPort: number, spawnProcess:
     errors.clear()
     void stop().catch(() => undefined)
   }
-  const assign = () => {
-    if (ready || failure || proxyPort === undefined || !forwardReady) return
-    ready = true
-    if (timer) clearTimeout(timer)
-    resolvePort(proxyPort)
+  const closeConnection = (connection: TunnelConnection) => {
+    if (connection.closed) return
+    connection.closed = true
+    connections.delete(connection)
+    connection.client.destroy()
+    connection.process.child.stdin?.end()
+    void terminateProcess(connection.process, "SSH forwarding child", spawnProcess).catch(fail)
   }
-  const output = (chunk: string) => {
-    outputBuffer += chunk
-    const match = /Local forwarding listening on [^\r\n]*\bport ([0-9]+)\./i.exec(outputBuffer)
-    if (match) {
-      const port = Number(match[1])
-      if (port !== forwardPort) {
-        fail(new Error(`SSH reported unexpected local forwarding port ${port}`))
-        return
-      }
-      forwardReady = true
-      assign()
-    }
-    if (outputBuffer.length > 4_096) outputBuffer = outputBuffer.slice(-4_096)
-  }
-  proxy.once("error", fail)
-  proxy.once("listening", () => {
-    const address = proxy.address()
-    if (
-      typeof address !== "object" ||
-      !address ||
-      address.address !== "127.0.0.1" ||
-      !Number.isInteger(address.port) ||
-      address.port < 1 ||
-      address.port > 65_535
-    ) {
-      fail(new Error("SSH tunnel proxy did not bind to loopback"))
+  const onConnection = (client: Socket) => {
+    if (stopping || !ready) {
+      client.destroy()
       return
     }
-    proxyPort = address.port
-    assign()
-  })
-  child.stderr.setEncoding("utf8")
-  child.stderr.on("data", output)
-  child.once("error", () => {
-    childFinished = true
-  })
-  child.once("close", () => {
-    childFinished = true
-  })
-  child.once("error", fail)
-  child.once("exit", (code, signal) => {
-    childFinished = true
-    exit = { code, signal }
-    if (!ready && !failure && !stopping) {
-      fail(new Error(`SSH tunnel exited before local forwarding readiness (code=${code ?? "null"} signal=${signal ?? "null"})`))
+
+    let child: ChildProcess
+    try {
+      child = spawnProcess("ssh", args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      })
+    } catch (error) {
+      client.destroy()
+      fail(new Error(`SSH forwarding child spawn failed: ${errorMessage(error)}`))
+      return
     }
-    if (ready && !stopping) void stop().catch(() => undefined)
-    for (const cb of exits) cb(code, signal)
-    exits.clear()
-  })
-  timer = setTimeout(() => fail(new Error("SSH tunnel did not report local forwarding readiness")), SSH_SCRIPT_TIMEOUT_MS)
-  proxy.listen(0, "127.0.0.1")
+    const process = observeProcess(child)
+    const connection: TunnelConnection = { client, process, closed: false }
+    processes.add(process)
+    connections.add(connection)
+    child.on("error", (error) => {
+      fail(new Error(`SSH forwarding child spawn error: ${errorMessage(error)}`))
+    })
+    child.stderr?.resume()
+    if (!child.stdin || !child.stdout) {
+      fail(new Error("SSH forwarding child did not expose stdio"))
+      closeConnection(connection)
+      return
+    }
+    client.once("error", () => closeConnection(connection))
+    client.once("close", () => closeConnection(connection))
+    client.pipe(child.stdin)
+    child.stdout.pipe(client)
+    void process.termination.then(() => {
+      processes.delete(process)
+      if (connection.closed || stopping) return
+      connection.closed = true
+      connections.delete(connection)
+      client.destroy()
+      const next = process.exit ?? { code: null, signal: null }
+      notifyExit(next)
+      fail(new Error(`SSH forwarding child exited (code=${next.code ?? "null"} signal=${next.signal ?? "null"})`))
+    })
+  }
+  const closeProxy = () => {
+    const server = proxy
+    if (!server) return Promise.resolve()
+    if (!server.listening && !binding) return Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
+      let done = false
+      const finish = (error?: unknown) => {
+        if (done) return
+        done = true
+        if (error && errorCode(error) !== "ERR_SERVER_NOT_RUNNING") reject(error)
+        else resolve()
+      }
+      const closeListening = () => {
+        try {
+          server.close((error) => finish(error))
+          const next = server as Server & { closeAllConnections?: () => void }
+          next.closeAllConnections?.()
+        } catch (error) {
+          finish(error)
+        }
+      }
+      if (server.listening) {
+        closeListening()
+        return
+      }
+      server.once("listening", closeListening)
+      server.once("close", () => finish())
+      server.once("error", finish)
+    })
+  }
+  const stopResources = async () => {
+    if (timer) clearTimeout(timer)
+    let proxyProblem: string | undefined
+    const closingProxy = closeProxy().catch((error) => {
+      proxyProblem = `SSH tunnel proxy close failed: ${errorMessage(error)}`
+    })
+    for (const connection of [...connections]) closeConnection(connection)
+    const problems: string[] = []
+    if (!(await bounded(closingProxy, SSH_TUNNEL_CLEANUP_TIMEOUT_MS))) {
+      problems.push("SSH tunnel proxy close was not confirmed")
+    }
+    if (proxyProblem) problems.push(proxyProblem)
+    const records = [...processes]
+    const results = await Promise.allSettled(
+      records.map((record) => terminateProcess(record, "SSH forwarding child", spawnProcess)),
+    )
+    problems.push(
+      ...results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : [])),
+    )
+    if (problems.length) throw new Error(problems.join("; "))
+  }
+  const stop = () => {
+    if (stopPromise) return stopPromise
+    stopping = true
+    if (!ready && !failure) rejectPort(new Error("SSH tunnel stopped before loopback proxy readiness"))
+    stopPromise = Promise.resolve().then(stopResources)
+    return stopPromise
+  }
+  const listenProxy = (server: Server) =>
+    new Promise<void>((resolve, reject) => {
+      const failed = (error: Error) => {
+        server.removeListener("listening", listening)
+        reject(error)
+      }
+      const listening = () => {
+        server.removeListener("error", failed)
+        resolve()
+      }
+      server.once("listening", listening)
+      server.once("error", failed)
+      try {
+        server.listen(0, "127.0.0.1")
+      } catch (error) {
+        failed(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
+  const bindProxy = async () => {
+    for (let attempt = 0; attempt < SSH_PROXY_BIND_ATTEMPTS; attempt += 1) {
+      if (stopping) return
+      const server = makeProxy(onConnection)
+      proxy = server
+      binding = true
+      try {
+        await listenProxy(server)
+        binding = false
+        if (stopping) return
+        const address = server.address()
+        if (
+          typeof address !== "object" ||
+          !address ||
+          address.address !== "127.0.0.1" ||
+          !Number.isInteger(address.port) ||
+          address.port < 1 ||
+          address.port > 65_535
+        ) {
+          throw new Error("SSH tunnel proxy did not bind to loopback")
+        }
+        ready = true
+        if (timer) clearTimeout(timer)
+        resolvePort(address.port)
+        server.once("error", fail)
+        return
+      } catch (error) {
+        binding = false
+        await closeServer(server).catch(() => undefined)
+        if (!isRetryableBindError(error) || attempt === SSH_PROXY_BIND_ATTEMPTS - 1) throw error
+        await delay(SSH_PROXY_RETRY_DELAY_MS)
+      }
+    }
+  }
+  timer = setTimeout(() => fail(new Error("SSH tunnel loopback proxy did not become ready")), SSH_SCRIPT_TIMEOUT_MS)
+  void bindProxy().catch(fail)
   return {
     port,
     stop,
@@ -1232,15 +1415,56 @@ export function openSshTunnel(args: string[], forwardPort: number, spawnProcess:
   }
 }
 
-function bounded(task: Promise<void>, timeoutMs: number) {
-  return new Promise<void>((resolve) => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const finish = () => {
-      if (timer) clearTimeout(timer)
-      resolve()
+function proxyServer(handler: (client: Socket) => void) {
+  return createServer(handler)
+}
+
+function closeServer(server: Server) {
+  if (!server.listening) return Promise.resolve()
+  return new Promise<void>((resolve, reject) => {
+    try {
+      server.close((error) => (error ? reject(error) : resolve()))
+      const next = server as Server & { closeAllConnections?: () => void }
+      next.closeAllConnections?.()
+    } catch (error) {
+      if (errorCode(error) === "ERR_SERVER_NOT_RUNNING") resolve()
+      else reject(error)
     }
-    timer = setTimeout(finish, timeoutMs)
-    void task.then(finish, finish)
+  })
+}
+
+function isRetryableBindError(error: unknown) {
+  return errorCode(error) === "EADDRINUSE" || errorCode(error) === "EADDRNOTAVAIL"
+}
+
+function errorCode(error: unknown) {
+  if (error && typeof error === "object" && "code" in error && typeof error.code === "string") return error.code
+  return undefined
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
+function bounded(task: Promise<void>, timeoutMs: number) {
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (result: boolean) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(result)
+    }
+    timer = setTimeout(() => finish(false), timeoutMs)
+    void task.then(
+      () => finish(true),
+      () => finish(true),
+    )
   })
 }
 
