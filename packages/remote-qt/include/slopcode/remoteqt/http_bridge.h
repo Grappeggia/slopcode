@@ -2,6 +2,7 @@
 
 #include <slopcode/remoteqt/frame.h>
 
+#include <QHash>
 #include <QPointer>
 #include <QSet>
 #include <QObject>
@@ -38,6 +39,7 @@ signals:
 private:
   void dispatch(const Frame &request);
   void reject(const Frame &request, const QString &code, const QString &message, bool retryable = false);
+  void consume(QNetworkReply *reply);
   void finish(QNetworkReply *reply, const Frame &request);
 
   RemoteSession &session_;
@@ -45,6 +47,9 @@ private:
   QJsonObject target_;
   Authorizer authorizer_;
   QSet<QNetworkReply *> replies_;
+  QHash<QNetworkReply *, QByteArray> bodies_;
+  QSet<QNetworkReply *> oversized_;
+  QSet<QNetworkReply *> finishing_;
   bool stopping_ = false;
 };
 

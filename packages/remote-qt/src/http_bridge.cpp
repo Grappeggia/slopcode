@@ -13,9 +13,44 @@ namespace slopcode::remoteqt {
 namespace {
 
 constexpr int kMaxBodyBytes = 64 * 1024;
+constexpr int kMaxErrorBytes = 2 * 1024;
 constexpr int kMaxHeaderCount = 64;
 constexpr int kMaxHeaderNameBytes = 128;
 constexpr int kMaxHeaderValueBytes = 8 * 1024;
+
+bool continuation(unsigned char byte)
+{
+  return (byte & 0xc0) == 0x80;
+}
+
+QString boundedUtf8(const QString &message)
+{
+  const QByteArray bytes = message.toUtf8();
+  if (bytes.size() <= kMaxErrorBytes) {
+    return message;
+  }
+
+  qsizetype end = kMaxErrorBytes;
+  while (end > 0 && continuation(static_cast<unsigned char>(bytes.at(end - 1)))) {
+    --end;
+  }
+  if (end < kMaxErrorBytes) {
+    qsizetype start = end;
+    while (start > 0 && continuation(static_cast<unsigned char>(bytes.at(start - 1)))) {
+      --start;
+    }
+    if (start == 0 || (static_cast<unsigned char>(bytes.at(start - 1)) & 0x80) == 0) {
+      end = start;
+    } else {
+      const unsigned char lead = static_cast<unsigned char>(bytes.at(start - 1));
+      const int width = (lead & 0xe0) == 0xc0 ? 2 : (lead & 0xf0) == 0xe0 ? 3 : 4;
+      if (start - 1 + width > end) {
+        end = start - 1;
+      }
+    }
+  }
+  return QString::fromUtf8(bytes.constData(), end);
+}
 
 bool unsafeHeader(const QByteArray &name)
 {
@@ -62,9 +97,34 @@ QJsonObject encode(const QByteArray &body)
                      {QStringLiteral("data"), QString::fromLatin1(body.toBase64())}};
 }
 
-QJsonObject headers(const QNetworkReply &reply)
+bool headerName(const QByteArray &name)
 {
-  QJsonObject result;
+  if (name.isEmpty() || name.size() > kMaxHeaderNameBytes) {
+    return false;
+  }
+  for (const unsigned char byte : name) {
+    const bool alpha = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z');
+    const bool digit = byte >= '0' && byte <= '9';
+    const bool punctuation = QByteArrayLiteral("!#$%&'*+-.^_`|~").contains(static_cast<char>(byte));
+    if (!alpha && !digit && !punctuation) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool hasControl(const QByteArray &value)
+{
+  for (const unsigned char byte : value) {
+    if (byte <= 0x1f || (byte >= 0x7f && byte <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool headers(const QNetworkReply &reply, QJsonObject *result, QString *error)
+{
   QSet<QByteArray> names;
   int bytes = 0;
   for (const QNetworkReply::RawHeaderPair &header : reply.rawHeaderPairs()) {
@@ -72,18 +132,37 @@ QJsonObject headers(const QNetworkReply &reply)
     const QByteArray value = header.second;
     const QByteArray normalized = name.toLower();
     const QString text = QString::fromUtf8(value);
-    if (result.size() == kMaxHeaderCount || name.isEmpty() || name.size() > kMaxHeaderNameBytes ||
-        value.size() > kMaxHeaderValueBytes || text.toUtf8() != value || names.contains(normalized) || unsafeHeader(name)) {
+    if (unsafeHeader(name)) {
       continue;
+    }
+    if (!headerName(name) || value.size() > kMaxHeaderValueBytes || text.toUtf8() != value || hasControl(value)) {
+      if (error != nullptr) {
+        *error = QStringLiteral("local Slopcode response contains an invalid HTTP header");
+      }
+      return false;
+    }
+    if (names.contains(normalized)) {
+      continue;
+    }
+    if (names.size() == kMaxHeaderCount || bytes > kMaxHeaderCount * (kMaxHeaderNameBytes + kMaxHeaderValueBytes) -
+                                                   name.size() - value.size()) {
+      if (error != nullptr) {
+        *error = QStringLiteral("local Slopcode response headers exceed RemoteV1 bounds");
+      }
+      return false;
     }
     names.insert(normalized);
     bytes += name.size() + value.size();
-    if (bytes > kMaxHeaderCount * (kMaxHeaderNameBytes + kMaxHeaderValueBytes)) {
-      break;
-    }
-    result.insert(QString::fromLatin1(name), text);
+    result->insert(QString::fromLatin1(name), text);
   }
-  return result;
+  return true;
+}
+
+bool contentLengthTooLarge(const QNetworkReply &reply)
+{
+  bool ok = false;
+  const qint64 length = reply.header(QNetworkRequest::ContentLengthHeader).toLongLong(&ok);
+  return ok && length > kMaxBodyBytes;
 }
 
 bool sameTarget(const QJsonObject &left, const QJsonObject &right)
@@ -156,7 +235,7 @@ void RemoteHttpBridge::dispatch(const Frame &request)
   if (!authorizer_(request, &error)) {
     reject(request,
            QStringLiteral("forbidden"),
-           error.isEmpty() ? QStringLiteral("pairing/proof authorization was rejected") : error.left(2 * 1024));
+           error.isEmpty() ? QStringLiteral("pairing/proof authorization was rejected") : boundedUtf8(error));
     return;
   }
   if (forwarder_.isNull()) {
@@ -183,12 +262,25 @@ void RemoteHttpBridge::dispatch(const Frame &request)
   if (reply == nullptr) {
     reject(request,
            QStringLiteral("internal"),
-           error.isEmpty() ? QStringLiteral("local Slopcode forwarding failed") : error.left(2 * 1024),
+           error.isEmpty() ? QStringLiteral("local Slopcode forwarding failed") : boundedUtf8(error),
            true);
     return;
   }
   replies_.insert(reply);
-  connect(reply, &QObject::destroyed, this, [this, reply]() { replies_.remove(reply); });
+  bodies_.insert(reply, QByteArray());
+  connect(reply, &QObject::destroyed, this, [this, reply]() {
+    replies_.remove(reply);
+    bodies_.remove(reply);
+    oversized_.remove(reply);
+    finishing_.remove(reply);
+  });
+  connect(reply, &QNetworkReply::readyRead, this, [this, reply]() { consume(reply); });
+  connect(reply, &QNetworkReply::downloadProgress, this, [this, reply](qint64 received, qint64 total) {
+    if (received > kMaxBodyBytes || total > kMaxBodyBytes) {
+      oversized_.insert(reply);
+      reply->abort();
+    }
+  });
   connect(reply, &QNetworkReply::finished, this, [this, reply, request]() { finish(reply, request); });
 }
 
@@ -203,57 +295,101 @@ void RemoteHttpBridge::reject(const Frame &request, const QString &code, const Q
     {QStringLiteral("requestDigest"), request.object.value(QStringLiteral("requestDigest"))},
     {QStringLiteral("target"), request.target},
     {QStringLiteral("code"), code},
-    {QStringLiteral("message"), message.left(2 * 1024)},
+    {QStringLiteral("message"), boundedUtf8(message)},
     {QStringLiteral("retryable"), retryable},
   };
   QString error;
   if (!session_.send(Frame(object), &error)) {
-    emit rejected(message);
+    emit rejected(boundedUtf8(message));
   }
+}
+
+void RemoteHttpBridge::consume(QNetworkReply *reply)
+{
+  if (stopping_ || !replies_.contains(reply)) {
+    return;
+  }
+  QByteArray &body = bodies_[reply];
+  const qint64 remaining = kMaxBodyBytes - body.size();
+  const qint64 available = reply->bytesAvailable();
+  if (available <= 0) {
+    return;
+  }
+  if (available > remaining) {
+    oversized_.insert(reply);
+    reply->abort();
+    return;
+  }
+  const QByteArray chunk = reply->read(available);
+  if (chunk.size() > remaining || reply->bytesAvailable() > 0) {
+    oversized_.insert(reply);
+    reply->abort();
+    return;
+  }
+  body.append(chunk);
 }
 
 void RemoteHttpBridge::finish(QNetworkReply *reply, const Frame &request)
 {
-  replies_.remove(reply);
+  if (!replies_.contains(reply) || finishing_.contains(reply)) {
+    return;
+  }
+  finishing_.insert(reply);
   if (stopping_) {
+    replies_.remove(reply);
+    finishing_.remove(reply);
     reply->deleteLater();
     return;
   }
-  const QByteArray body = reply->readAll();
-  if (reply->error() != QNetworkReply::NoError) {
-    reject(request, QStringLiteral("internal"), QStringLiteral("local Slopcode request failed"), true);
-  } else if (body.size() > kMaxBodyBytes) {
+  consume(reply);
+  const bool tooLarge = oversized_.remove(reply) || contentLengthTooLarge(*reply);
+  const QByteArray body = bodies_.value(reply);
+  replies_.remove(reply);
+  bodies_.remove(reply);
+  if (tooLarge) {
     reply->abort();
     reject(request, QStringLiteral("too_large"), QStringLiteral("local Slopcode response body exceeds RemoteV1 bounds"));
+  } else if (reply->error() != QNetworkReply::NoError) {
+    reject(request, QStringLiteral("internal"), QStringLiteral("local Slopcode request failed"), true);
   } else {
     const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (status < 100 || status > 599) {
       reject(request, QStringLiteral("internal"), QStringLiteral("local Slopcode response has no valid HTTP status"), true);
-      reply->deleteLater();
-      return;
-    }
-    QJsonObject object{
-      {QStringLiteral("version"), QStringLiteral("v1")},
-      {QStringLiteral("kind"), QStringLiteral("response")},
-      {QStringLiteral("type"), QStringLiteral("http.response")},
-      {QStringLiteral("requestID"), request.requestID},
-      {QStringLiteral("idempotencyKey"), request.idempotencyKey},
-      {QStringLiteral("requestDigest"), request.object.value(QStringLiteral("requestDigest"))},
-      {QStringLiteral("target"), request.target},
-      {QStringLiteral("status"), status},
-    };
-    const QJsonObject responseHeaders = headers(*reply);
-    if (!responseHeaders.isEmpty()) {
-      object.insert(QStringLiteral("headers"), responseHeaders);
-    }
-    if (!body.isEmpty()) {
-      object.insert(QStringLiteral("body"), encode(body));
-    }
-    QString error;
-    if (!session_.send(Frame(object), &error)) {
-      emit rejected(QStringLiteral("could not send local Slopcode response"));
+    } else {
+      QJsonObject object{
+        {QStringLiteral("version"), QStringLiteral("v1")},
+        {QStringLiteral("kind"), QStringLiteral("response")},
+        {QStringLiteral("type"), QStringLiteral("http.response")},
+        {QStringLiteral("requestID"), request.requestID},
+        {QStringLiteral("idempotencyKey"), request.idempotencyKey},
+        {QStringLiteral("requestDigest"), request.object.value(QStringLiteral("requestDigest"))},
+        {QStringLiteral("target"), request.target},
+        {QStringLiteral("status"), status},
+      };
+      QJsonObject responseHeaders;
+      QString error;
+      if (!headers(*reply, &responseHeaders, &error)) {
+        reject(request,
+               QStringLiteral("internal"),
+               error.isEmpty() ? QStringLiteral("local Slopcode response headers are invalid") : boundedUtf8(error),
+               true);
+      } else {
+        if (!responseHeaders.isEmpty()) {
+          object.insert(QStringLiteral("headers"), responseHeaders);
+        }
+        if (!body.isEmpty()) {
+          object.insert(QStringLiteral("body"), encode(body));
+        }
+        if (!session_.send(Frame(object), &error)) {
+          reject(request,
+                 QStringLiteral("internal"),
+                 error.isEmpty() ? QStringLiteral("could not send local Slopcode response") : boundedUtf8(error),
+                 true);
+        }
+      }
     }
   }
+  finishing_.remove(reply);
   reply->deleteLater();
 }
 

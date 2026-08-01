@@ -17,9 +17,12 @@
   restrictions. The bridge also excludes secret, hop-by-hop, and forwarding
   headers in both directions.
 - Implemented bounded `utf8` and `base64` RemoteV1 body conversion. Local
-  response bodies above 64 KiB, invalid status values, and local network
-  failures become bounded RemoteV1 error frames. Active replies are aborted
-  and scheduled for deletion when the bridge is destroyed.
+  response bodies above 64 KiB, invalid status values, malformed response
+  headers, and local network failures become bounded RemoteV1 error frames.
+  Reply data is consumed incrementally with progress/content-length aborts, so
+  `finish()` never performs an unbounded `readAll()`. Active replies are
+  aborted and scheduled for deletion when the bridge is destroyed. Error text
+  is truncated by UTF-8 byte length without splitting a code point.
 - Updated CMake and the Qt README. The README names the new bridge and
   precisely states that relay, pairing registry, challenge authority, and
   Ed25519 proof verification remain external injectable responsibilities.
@@ -35,9 +38,13 @@ Added `slopcode_remote_qt_http_bridge_test`, which uses a real TLS
 - configured-target mismatch rejection;
 - invalid request-digest rejection;
 - missing-authorizer fail-closed behavior;
+- UTF-8-byte-bounded authorizer error messages;
 - unsupported-body rejection before forwarding;
 - bounded error output after a local network failure; and
-- safe abort/cleanup of an in-flight local reply.
+- oversized response rejection before response-frame construction;
+- malformed local response-header fallback; and
+- safe abort/cleanup of an in-flight local reply, observed through the local
+  server socket disconnect rather than only the absence of a control frame.
 
 ## Verification performed
 

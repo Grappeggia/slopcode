@@ -169,7 +169,9 @@ public:
     QVERIFY(server_.listen(QHostAddress::LocalHost));
     connect(&server_, &QTcpServer::newConnection, this, [this]() {
       QTcpSocket *socket = server_.nextPendingConnection();
+      socket_ = socket;
       connect(socket, &QTcpSocket::readyRead, this, [this, socket]() { read(socket); });
+      connect(socket, &QTcpSocket::disconnected, this, [this]() { ++disconnects; });
       connect(socket, &QObject::destroyed, this, [this, socket]() { buffers_.remove(socket); });
     });
   }
@@ -177,8 +179,12 @@ public:
   QUrl url() const { return QUrl(QStringLiteral("http://127.0.0.1:%1/").arg(server_.serverPort())); }
   QList<QByteArray> requests;
   QByteArray body = QByteArrayLiteral("{\"ok\":true}");
+  QByteArray responseHeaders = QByteArrayLiteral(
+    "Content-Type: application/json\r\nX-Trace: local\r\nSet-Cookie: secret\r\n");
   bool close = false;
   bool hold = false;
+  int disconnects = 0;
+  QPointer<QTcpSocket> socket_;
 
 private:
   void read(QTcpSocket *socket)
@@ -204,7 +210,7 @@ private:
     if (hold) {
       return;
     }
-    socket->write(QByteArrayLiteral("HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nX-Trace: local\r\nSet-Cookie: secret\r\nContent-Length: ") +
+    socket->write(QByteArrayLiteral("HTTP/1.1 201 Created\r\n") + responseHeaders + QByteArrayLiteral("Content-Length: ") +
                   QByteArray::number(body.size()) + QByteArrayLiteral("\r\nConnection: close\r\n\r\n") + body);
     socket->disconnectFromHost();
   }
@@ -310,8 +316,11 @@ private slots:
   void rejectsMismatchedTarget();
   void rejectsInvalidDigest();
   void failsClosedWithoutAuthorizer();
+  void boundsUtf8AuthorizerError();
   void rejectsUnsupportedBody();
   void returnsBoundedNetworkError();
+  void rejectsOversizedResponse();
+  void rejectsMalformedResponseHeaders();
   void abortsInFlightReplyOnCleanup();
 };
 
@@ -396,6 +405,26 @@ void HttpBridgeTest::failsClosedWithoutAuthorizer()
   QCOMPARE(response(test.control).object.value(QStringLiteral("code")).toString(), QStringLiteral("unauthorized"));
 }
 
+void HttpBridgeTest::boundsUtf8AuthorizerError()
+{
+  Harness test;
+  test.bridge.setAuthorizer([](const Frame &, QString *error) {
+    if (error != nullptr) {
+      *error = QString(1'000, QChar(0x4e00));
+    }
+    return false;
+  });
+  test.control.send(request());
+
+  QTRY_COMPARE(test.control.frames.size(), 2);
+  QCOMPARE(test.http.requests.size(), 0);
+  const Frame frame = response(test.control);
+  QCOMPARE(frame.object.value(QStringLiteral("code")).toString(), QStringLiteral("forbidden"));
+  const QString message = frame.object.value(QStringLiteral("message")).toString();
+  QVERIFY(message.toUtf8().size() <= 2 * 1024);
+  QVERIFY(!message.contains(QChar::ReplacementCharacter));
+}
+
 void HttpBridgeTest::rejectsUnsupportedBody()
 {
   Harness test;
@@ -427,6 +456,37 @@ void HttpBridgeTest::returnsBoundedNetworkError()
   QCOMPARE(frame.object.value(QStringLiteral("requestID")), value.value(QStringLiteral("requestID")));
 }
 
+void HttpBridgeTest::rejectsOversizedResponse()
+{
+  Harness test;
+  test.http.body = QByteArray(64 * 1024 + 1, 'x');
+  const QJsonObject value = request();
+  test.control.send(value);
+
+  QTRY_COMPARE(test.http.requests.size(), 1);
+  QTRY_COMPARE(test.control.frames.size(), 2);
+  QCOMPARE(test.control.frames.size(), 2);
+  QCOMPARE(response(test.control).kind, FrameKind::Error);
+  QCOMPARE(response(test.control).object.value(QStringLiteral("code")).toString(), QStringLiteral("too_large"));
+  QTRY_VERIFY(test.http.disconnects > 0);
+}
+
+void HttpBridgeTest::rejectsMalformedResponseHeaders()
+{
+  Harness test;
+  test.http.responseHeaders.clear();
+  for (int index = 0; index < 65; ++index) {
+    test.http.responseHeaders += QByteArrayLiteral("X-Response-") + QByteArray::number(index) +
+                                 QByteArrayLiteral(": value\r\n");
+  }
+  test.control.send(request());
+
+  QTRY_COMPARE(test.http.requests.size(), 1);
+  QTRY_COMPARE(test.control.frames.size(), 2);
+  QCOMPARE(response(test.control).kind, FrameKind::Error);
+  QCOMPARE(response(test.control).object.value(QStringLiteral("code")).toString(), QStringLiteral("internal"));
+}
+
 void HttpBridgeTest::abortsInFlightReplyOnCleanup()
 {
   HttpServer http;
@@ -447,7 +507,7 @@ void HttpBridgeTest::abortsInFlightReplyOnCleanup()
   control.send(request());
   QTRY_COMPARE(http.requests.size(), 1);
   delete bridge;
-  QTest::qWait(50);
+  QTRY_VERIFY(http.disconnects > 0);
   QCOMPARE(control.frames.size(), 1);
 }
 
