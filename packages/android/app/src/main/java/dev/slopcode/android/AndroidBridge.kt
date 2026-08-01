@@ -3,7 +3,6 @@ package dev.slopcode.android
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -23,13 +22,14 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 
 class AndroidBridge(
-  private val context: Context,
+  private val activity: MainActivity,
   private val webView: WebView,
 ) {
   private val deepLinks = CopyOnWriteArrayList<String>()
+  private val permission = CopyOnWriteArrayList<(String) -> Unit>()
   private val channelId = "slopcode.android"
-  private val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-  private val key = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+  private val manager = activity.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as NotificationManager
+  private val key = MasterKey.Builder(activity).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
   private val io = Executors.newSingleThreadExecutor()
 
   init {
@@ -38,7 +38,7 @@ class AndroidBridge(
   }
 
   private fun prefs(namespace: String) = EncryptedSharedPreferences.create(
-    context,
+    activity,
     "slopcode.$namespace",
     key,
     EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
@@ -47,7 +47,7 @@ class AndroidBridge(
 
   private fun permissionState(): String {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return "granted"
-    return if (context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+    return if (activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
       "granted"
     else
       "prompt"
@@ -57,10 +57,21 @@ class AndroidBridge(
     val raw = BuildConfig.SLOPCODE_REMOTE_BASE_URL.trim()
     if (raw.isBlank()) return null
     val url = runCatching { URL(raw) }.getOrNull() ?: return null
-    if (url.protocol == "https") return url
-    val debugLoopback = BuildConfig.DEBUG && url.protocol == "http" && url.host in setOf("localhost", "127.0.0.1", "10.0.2.2")
-    if (debugLoopback) return url
-    return null
+    return url.takeIf { it.protocol == "https" }
+  }
+
+  private fun requestNotificationPermission(done: (String) -> Unit) {
+    val state = permissionState()
+    if (state == "granted" || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+      done(state)
+      return
+    }
+
+    webView.post {
+      permission += done
+      if (permission.size > 1) return@post
+      activity.requestNotificationPermission()
+    }
   }
 
   private fun requestId(payload: String?) =
@@ -183,7 +194,9 @@ class AndroidBridge(
       "storageLength" -> reply(replyProxy, bridgeResult(id, prefs(argText(args, 0) ?: "").all.size))
       "scanQrPairing" -> reply(replyProxy, bridgeResult(id, JSONObject.NULL))
       "notificationPermission" -> reply(replyProxy, bridgeResult(id, permissionState()))
-      "requestNotificationPermission" -> reply(replyProxy, bridgeResult(id, permissionState()))
+      "requestNotificationPermission" -> requestNotificationPermission { state ->
+        reply(replyProxy, bridgeResult(id, state))
+      }
       "showNotification" -> {
         showNotification(argText(args, 0) ?: "", argText(args, 1), argText(args, 2))
         reply(replyProxy, bridgeResult(id))
@@ -203,18 +216,18 @@ class AndroidBridge(
   fun showNotification(title: String, description: String?, href: String?) {
     if (permissionState() != "granted") return
 
-    val intent = Intent(context, MainActivity::class.java).apply {
+    val intent = Intent(activity, MainActivity::class.java).apply {
       addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
       if (!href.isNullOrBlank()) putExtra("notification_href", href)
     }
     val pending = PendingIntent.getActivity(
-      context,
+      activity,
       href?.hashCode() ?: title.hashCode(),
       intent,
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
-    val notification = NotificationCompat.Builder(context, channelId)
+    val notification = NotificationCompat.Builder(activity, channelId)
       .setContentTitle(title)
       .setContentText(description ?: "")
       .setSmallIcon(android.R.drawable.stat_notify_more)
@@ -257,9 +270,16 @@ class AndroidBridge(
     val uri = safeExternalUri(url) ?: return false
     val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     return runCatching {
-      context.startActivity(intent)
+      activity.startActivity(intent)
       true
     }.getOrDefault(false)
+  }
+
+  fun onNotificationPermissionResult(granted: Boolean) {
+    val state = if (granted) "granted" else "denied"
+    val callbacks = permission.toList()
+    permission.clear()
+    callbacks.forEach { it(state) }
   }
 
   companion object {

@@ -7,6 +7,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -18,6 +19,9 @@ import androidx.webkit.WebViewFeature
 class MainActivity : AppCompatActivity() {
   private lateinit var webView: WebView
   private lateinit var bridge: AndroidBridge
+  private val notifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    bridge.onNotificationPermissionResult(granted)
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     installSplashScreen()
@@ -88,6 +92,10 @@ class MainActivity : AppCompatActivity() {
       setOf(TRUSTED_ORIGIN),
       bridge.listener(),
     )
+  }
+
+  fun requestNotificationPermission() {
+    notifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
   }
 
   private fun handleIntent(intent: Intent?, flush: Boolean) {

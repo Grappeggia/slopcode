@@ -17,12 +17,19 @@ describe("android security source regressions", () => {
 
   test("uses the origin-restricted WebView bridge and blocks cleartext by default", async () => {
     const activity = await Bun.file(`${root}/app/src/main/java/dev/slopcode/android/MainActivity.kt`).text()
+    const bridge = await Bun.file(`${root}/app/src/main/java/dev/slopcode/android/AndroidBridge.kt`).text()
     const manifest = await Bun.file(`${root}/app/src/main/AndroidManifest.xml`).text()
 
     expect(activity).toContain("WebViewCompat.addWebMessageListener")
     expect(activity).toContain("setOf(TRUSTED_ORIGIN)")
     expect(activity).toContain("shouldOverrideUrlLoading")
+    expect(activity).toContain("ActivityResultContracts.RequestPermission()")
     expect(activity).not.toContain("addJavascriptInterface(")
     expect(manifest).not.toContain('android:usesCleartextTraffic="true"')
+    expect(bridge).toContain('return url.takeIf { it.protocol == "https" }')
+    expect(bridge).not.toContain("10.0.2.2")
+    expect(bridge).not.toContain("127.0.0.1")
+    expect(bridge).not.toContain("localhost")
+    expect(bridge).toContain('"requestNotificationPermission" -> requestNotificationPermission { state ->')
   })
 })
