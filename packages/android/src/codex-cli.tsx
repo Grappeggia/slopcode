@@ -187,6 +187,7 @@ export async function promptRemoteAgent(input: RemoteAgentPromptInput, fetcher: 
 
   const endpoint = new URL(`${serverUrl}/remote/agent/prompt`)
   endpoint.searchParams.set("workspace", workspace)
+  endpoint.searchParams.set("path", remoteDirectory)
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   let response: Response

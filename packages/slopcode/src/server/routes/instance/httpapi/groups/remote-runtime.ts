@@ -4,7 +4,6 @@ import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import {
   WorkspaceRoutingMiddleware,
-  WorkspaceRoutingQuery,
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
 import { ApiNotFoundError, ForbiddenError, InvalidRequestError, ServiceUnavailableError } from "../errors"
@@ -43,6 +42,11 @@ export const RemoteAgentPrompt = Schema.Struct({
     .check(Schema.isMaxLength(MAX_CODEX_PROMPT_LENGTH))
     .check(Schema.isPattern(/^[^\0]*$/)),
   config: Schema.optional(RemoteAgentConfig),
+})
+
+export const RemoteAgentPromptQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  path: Schema.optional(BoundedPath),
 })
 
 export const RemoteFolderEntry = Schema.Struct({
@@ -86,16 +90,16 @@ export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
           }),
         ),
         HttpApiEndpoint.post("prompt", RemoteRuntimePaths.prompt, {
-          query: WorkspaceRoutingQuery,
+          query: RemoteAgentPromptQuery,
           payload: RemoteAgentPrompt,
           success: described(RemoteAgentResult, "Selected agent CLI result"),
-          error: [InvalidRequestError, ServiceUnavailableError],
+          error: [InvalidRequestError, ForbiddenError, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "remote.agent.prompt",
             summary: "Run a selected agent CLI prompt",
             description:
-              "Run the fixed Codex or OpenCode CLI executable selected by the caller in the current instance directory with bounded output and allowlisted configuration.",
+              "Run the fixed Codex or OpenCode CLI executable selected by the caller in a bounded folder within the current authenticated instance directory with bounded output and allowlisted configuration.",
           }),
         ),
       )
@@ -113,6 +117,7 @@ export const RemoteRuntimeApi = HttpApi.make("remote-runtime")
 export type RemoteAgentConfig = typeof RemoteAgentConfig.Type
 export type RemoteAgent = typeof RemoteAgent.Type
 export type RemoteAgentPrompt = typeof RemoteAgentPrompt.Type
+export type RemoteAgentPromptQuery = typeof RemoteAgentPromptQuery.Type
 export type RemoteBrowseQuery = typeof RemoteBrowseQuery.Type
 export type RemoteBrowseResult = typeof RemoteBrowseResult.Type
 export type RemoteAgentResult = typeof RemoteAgentResult.Type

@@ -22,6 +22,7 @@ describe("Android remote agent session", () => {
     const endpoint = new URL(request!.url)
     expect(endpoint.pathname).toBe("/remote/agent/prompt")
     expect(endpoint.searchParams.get("workspace")).toBe("wrk_remote_mac")
+    expect(endpoint.searchParams.get("path")).toBe(input.directory)
     expect(request?.init?.method).toBe("POST")
     expect(request?.init?.redirect).toBe("error")
     expect(request?.init?.credentials).toBe("omit")
@@ -56,6 +57,7 @@ describe("Android remote agent session", () => {
     const endpoint = new URL(request!.url)
     expect(endpoint.pathname).toBe("/remote/agent/prompt")
     expect(endpoint.searchParams.get("workspace")).toBe(input.workspaceID)
+    expect(endpoint.searchParams.get("path")).toBe(input.directory)
     expect(JSON.parse(String(request?.init?.body))).toEqual({
       agent: "opencode-cli",
       prompt: input.prompt,

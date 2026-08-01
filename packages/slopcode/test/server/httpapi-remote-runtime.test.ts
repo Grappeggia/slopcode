@@ -10,7 +10,7 @@ import {
   MAX_REMOTE_ENTRIES,
   RemoteRuntimePaths,
 } from "../../src/server/routes/instance/httpapi/groups/remote-runtime"
-import { buildAgentCommand, runAgentPrompt } from "../../src/server/routes/instance/httpapi/handlers/remote-runtime"
+import { buildAgentCommand, resolveRemoteFolder, runAgentPrompt } from "../../src/server/routes/instance/httpapi/handlers/remote-runtime"
 import { workspaceProxyURL } from "../../src/server/shared/workspace-routing"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
@@ -172,6 +172,33 @@ describe("remote runtime HttpApi", () => {
     expect(result.searchParams.get("path")).toBe("/root/src")
     expect(result.searchParams.get("workspace")).toBeNull()
     expect(result.searchParams.get("directory")).toBeNull()
+
+    const prompt = workspaceProxyURL(
+      "https://remote.example/base",
+      new URL("http://local.example/remote/agent/prompt?workspace=ws_1&directory=%2Froot&path=%2Froot%2Fsrc"),
+    )
+    expect(prompt.pathname).toBe("/base/remote/agent/prompt")
+    expect(prompt.searchParams.get("path")).toBe("/root/src")
+    expect(prompt.searchParams.get("workspace")).toBeNull()
+    expect(prompt.searchParams.get("directory")).toBeNull()
+  })
+
+  test("resolves an agent folder only within the authenticated instance root", async () => {
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    await using outside = await tmpdir({ config: { formatter: false, lsp: false } })
+    await mkdir(path.join(tmp.path, "src"))
+    await writeFile(path.join(tmp.path, "file.txt"), "file")
+
+    await expect(Effect.runPromise(resolveRemoteFolder({ root: tmp.path, current: path.join(tmp.path, "src") }))).resolves.toEqual({
+      root: tmp.path,
+      current: path.join(tmp.path, "src"),
+    })
+    await expect(Effect.runPromise(resolveRemoteFolder({ root: tmp.path, current: outside.path }))).rejects.toThrow(
+      "outside the instance directory",
+    )
+    await expect(
+      Effect.runPromise(resolveRemoteFolder({ root: tmp.path, current: path.join(tmp.path, "file.txt") })),
+    ).rejects.toBeDefined()
   })
 })
 

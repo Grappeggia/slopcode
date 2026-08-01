@@ -14,6 +14,7 @@ import {
   RemoteAgent,
   RemoteAgentConfig,
   RemoteAgentPrompt,
+  RemoteAgentPromptQuery,
   RemoteBrowseResult,
   RemoteRuntimeApi,
 } from "../groups/remote-runtime"
@@ -170,6 +171,24 @@ export const browseRemoteFolder = Effect.fn("RemoteRuntime.browse")(function* (i
   readonly root: string
   readonly current: string
 }) {
+  const resolved = yield* resolveRemoteFolder(input)
+  const entries = yield* Effect.tryPromise({
+    try: () => listEntries(resolved.root, resolved.current),
+    catch: (error) => filesystemError(error, "the requested folder is unavailable"),
+  })
+  const parent = resolved.current === resolved.root ? undefined : path.posix.dirname(resolved.current)
+  return {
+    root: resolved.root,
+    current: resolved.current,
+    ...(parent && isWithin(resolved.root, parent) ? { parent } : {}),
+    entries,
+  } satisfies typeof RemoteBrowseResult.Type
+})
+
+export const resolveRemoteFolder = Effect.fn("RemoteRuntime.resolveFolder")(function* (input: {
+  readonly root: string
+  readonly current: string
+}) {
   if (!path.posix.isAbsolute(input.current) || input.current.includes("\0")) {
     return yield* new InvalidRequestError({ message: "path must be an absolute POSIX path", field: "path" })
   }
@@ -196,18 +215,7 @@ export const browseRemoteFolder = Effect.fn("RemoteRuntime.browse")(function* (i
   if (Buffer.byteLength(root) > MAX_REMOTE_PATH_LENGTH || Buffer.byteLength(current) > MAX_REMOTE_PATH_LENGTH) {
     return yield* new ServiceUnavailableError({ message: "folder path is too long" })
   }
-
-  const entries = yield* Effect.tryPromise({
-    try: () => listEntries(root, current),
-    catch: (error) => filesystemError(error, "the requested folder is unavailable"),
-  })
-  const parent = current === root ? undefined : path.posix.dirname(current)
-  return {
-    root,
-    current,
-    ...(parent && isWithin(root, parent) ? { parent } : {}),
-    entries,
-  } satisfies typeof RemoteBrowseResult.Type
+  return { root, current }
 })
 
 export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "remote-runtime", (handlers) =>
@@ -218,12 +226,19 @@ export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "rem
       return yield* browseRemoteFolder({ root: instance.directory, current: ctx.query.path ?? instance.directory })
     })
 
-    const prompt = Effect.fn("RemoteRuntimeHttpApi.prompt")(function* (ctx: { payload: RemoteAgentPrompt }) {
+    const prompt = Effect.fn("RemoteRuntimeHttpApi.prompt")(function* (ctx: {
+      query: typeof RemoteAgentPromptQuery.Type
+      payload: RemoteAgentPrompt
+    }) {
       const instance = yield* InstanceRef
       if (!instance) return yield* new ServiceUnavailableError({ message: "instance context unavailable" })
+      const folder = yield* resolveRemoteFolder({
+        root: instance.directory,
+        current: ctx.query.path ?? instance.directory,
+      })
       return yield* runAgentPrompt({
         agent: ctx.payload.agent,
-        directory: instance.directory,
+        directory: folder.current,
         prompt: ctx.payload.prompt,
         config: ctx.payload.config,
       })
