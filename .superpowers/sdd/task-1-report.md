@@ -1,64 +1,58 @@
-# Task 1 Report: app shell and routing parity
+# Task 1 Report: shared remote protocol contracts
 
 ## Status
 
-DONE_WITH_CONCERNS
+DONE
 
-## Implemented parity slice
+## Scope completed
 
-- Added canonical server-keyed session route helpers and the `/server/:serverKey/session/:id` route. It validates the encoded server key, resolves the session against that server, selects it, and safely redirects into the fork's existing directory-keyed session shell.
-- Hardened persisted tab migration, including legacy tab entries that lack a server key.
-- Added persistent closed-session tab history, background-tab-safe close behavior, and `mod+shift+t` reopen support. Archived/removed sessions and removed servers are pruned from the closed-tab history.
-- Preserved the existing SlopCode shell, `@slopcode-ai` imports, provider behavior, Free/Go model handling, Zen endpoints, and the current v2/legacy layout selection and migration logic.
+- Added a new top-level protocol module at `packages/protocol/src/remote.ts`.
+- Defined versioned runtime-validated remote schemas for:
+  - version and mode
+  - device and host
+  - SSH profile
+  - local and SSH workspace variants
+  - capability and pairing
+  - acknowledgement
+  - request, response, event, and error envelopes
+- Included the required transport fields:
+  - request IDs
+  - event cursors
+  - idempotency keys
+  - acknowledgements
+  - explicit `remoteDirectory` for SSH workspaces
+- Exported the contracts through `@slopcode-ai/protocol` as a first-class top-level module via `src/remote.ts`.
+- Added focused Bun tests in `packages/protocol/test/remote.test.ts` covering valid inputs, invalid inputs, and JSON string round trips.
 
-## Tests
+## Schema notes
 
-Run from `packages/app`:
+- The transport version is fixed to `"v1"`.
+- Workspace contracts are a discriminated union:
+  - `mode: "local"` requires `directory`
+  - `mode: "ssh"` requires `directory`, `remoteDirectory`, and `ssh`
+- Envelope payloads remain schema-validated at the envelope layer while keeping `data` open for later task-specific payload contracts.
+- JSON helpers were added for both workspaces and envelopes using `Schema.fromJsonString(...)`.
+
+## Files changed
+
+- `packages/protocol/src/remote.ts`
+- `packages/protocol/test/remote.test.ts`
+- `.superpowers/sdd/task-1-report.md`
+
+## Validation
+
+Run from `packages/protocol`:
 
 ```sh
-bun test --preload ./happydom.ts ./src/utils/session-route.test.ts ./src/context/tabs.test.ts
+bun test
 bun run typecheck
 ```
 
-Result: 9 focused tests passed; app typecheck passed.
+Result:
 
-## Self-review
+- `bun test`: 6 pass, 0 fail
+- `bun run typecheck`: passed
 
-- Verified invalid or stale server-route resolution returns to home without allowing a stale request to override newer navigation.
-- Verified closing a background tab does not navigate, while a closed active session selects the adjacent tab or home.
-- Verified reopened tabs preserve their prior index when possible and do not duplicate an already-open session.
-- `git diff --check -- packages/app` passed.
+## Concerns
 
-## Review fix wave
-
-- Canonical session tabs now use server-keyed hrefs, while the controller still recognizes legacy directory routes for compatibility.
-- Background-tab activity compares the complete server/session identity; closed-tab migration and reopen prune unknown servers safely.
-- Added `createTabController` coverage for cross-server duplicate session paths, canonical reopen behavior, and stale-server entries.
-
-Validation from `packages/app`:
-
-```text
-11 pass, 0 fail — bun test --preload ./happydom.ts ./src/context/tabs.test.ts ./src/utils/session-route.test.ts
-tsgo -b — passed
-git diff --check -- packages/app — passed
-```
-
-## Critical route review fix
-
-- Canonical session links now retain both the encoded server key and `SessionTab.dirBase64`: `/server/:serverKey/:dir/session/:id`.
-- The canonical route selects the validated server and renders the existing directory layout/session route, so all legacy session consumers receive `params.dir`.
-- The former `/server/:serverKey/session/:id` endpoint is retained as a guarded compatibility resolver: it fetches the session directory, redirects to the canonical URL, returns home for malformed, unknown, missing, or failed targets, and ignores stale lookups.
-
-The route contract is tested as a shared route constant used by the app registration; this proves the canonical route includes `:dir` without requiring a full Solid shell render. Helper coverage also verifies canonical tab URLs and compatibility redirects preserve the server and encode the directory.
-
-Validation from `packages/app`:
-
-```text
-13 pass, 0 fail — bun test --preload ./happydom.ts ./src/utils/session-route.test.ts ./src/context/tabs.test.ts
-tsgo -b — passed
-git diff --check -- packages/app — passed
-```
-
-## Concerns / remaining gap
-
-This intentionally does not wholesale adopt the reference's incompatible new persistent shell, direct target-session content renderer, or full selected-server provider remount architecture. Server-keyed deep links resolve through the existing directory-keyed shell after fetching the target session, and existing v2/legacy home/layout selection remains in place. A later parity task can introduce the reference shell only after its missing dependent components are adapted to the SlopCode fork.
+- The envelope `data` fields intentionally stay generic in this task. Concrete per-message payload schemas can layer on top of these contracts in later tasks without changing the transport envelope shape.
