@@ -10,6 +10,11 @@
     "build:android": "./gradlew :app:assembleDebug",
     "build": "bun run build:web && bun run build:android"
   },
+  "dependencies": {
+    "@slopcode-ai/app": "workspace:*",
+    "@solidjs/router": "catalog:",
+    "solid-js": "catalog:"
+  },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",

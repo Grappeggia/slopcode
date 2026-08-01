@@ -1,0 +1,81 @@
+import { HashRouter } from "@solidjs/router"
+import { render } from "solid-js/web"
+import {
+  AppBaseProviders,
+  AppInterface,
+  type Platform,
+  PlatformProvider,
+  ServerConnection,
+} from "@slopcode-ai/app"
+import "@slopcode-ai/app/index.css"
+import pkg from "../package.json"
+import { appStorage, persistServerUrl, readInitialWorkspaceState, shellBridge } from "./platform"
+
+export async function mountAndroidApp() {
+  const root = document.getElementById("root")
+  if (!(root instanceof HTMLElement)) throw new Error("Android root not found")
+
+  const [shell, initial] = await Promise.all([shellBridge(), readInitialWorkspaceState()])
+  const platform: Platform = {
+    platform: "android",
+    version: pkg.version,
+    openLink: shell.openLink,
+    back: () => window.history.back(),
+    forward: () => window.history.forward(),
+    restart: async () => window.location.reload(),
+    notify: shell.notify,
+    storage: appStorage(),
+    getDefaultServer: async () =>
+      initial.state.serverUrl ? ServerConnection.Key.make(initial.state.serverUrl) : null,
+    setDefaultServer: async (key: ServerConnection.Key | null) => {
+      await persistServerUrl(key ?? undefined)
+    },
+    android: {
+      capabilities: shell.capabilities,
+      secureStorage: shell.secureStorage,
+      qrPairing: shell.capabilities.qrPairing ? { scan: shell.scanQrPairing } : undefined,
+      notifications: shell.capabilities.notifications
+        ? {
+            permission: shell.notificationPermission,
+            requestPermission: shell.requestNotificationPermission,
+          }
+        : undefined,
+      deepLinks: shell.capabilities.deepLinks
+        ? {
+            consume: shell.deepLinks,
+            subscribe: shell.subscribeDeepLinks,
+          }
+        : undefined,
+      remoteTransport: shell.remoteSend ? { send: shell.remoteSend } : undefined,
+    },
+  }
+
+  const server =
+    initial.state.serverUrl &&
+    ({
+      type: "http",
+      authToken: !!initial.secret?.password,
+      http: {
+        url: initial.state.serverUrl,
+        username: initial.secret?.username,
+        password: initial.secret?.password,
+      },
+      displayName: initial.state.workspace?.workspace?.name ?? initial.state.workspace?.host?.name,
+      label: initial.state.workspace?.workspace?.mode,
+    } satisfies ServerConnection.Http)
+
+  render(
+    () => (
+      <PlatformProvider value={platform}>
+        <AppBaseProviders>
+          <AppInterface
+            defaultServer={ServerConnection.Key.make(initial.state.serverUrl ?? "local")}
+            servers={server ? [server] : undefined}
+            router={HashRouter}
+          />
+        </AppBaseProviders>
+      </PlatformProvider>
+    ),
+    root,
+  )
+}

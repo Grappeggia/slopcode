@@ -6,18 +6,21 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
-import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.core.app.NotificationCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import androidx.webkit.JavaScriptReplyProxy
+import androidx.webkit.WebViewCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.Executors
 
 class AndroidBridge(
   private val context: Context,
@@ -27,6 +30,7 @@ class AndroidBridge(
   private val channelId = "slopcode.android"
   private val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
   private val key = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+  private val io = Executors.newSingleThreadExecutor()
 
   init {
     val channel = NotificationChannel(channelId, "SlopCode", NotificationManager.IMPORTANCE_DEFAULT)
@@ -49,18 +53,65 @@ class AndroidBridge(
       "prompt"
   }
 
-  private fun errorJson(payload: String?, code: String, message: String, retryable: Boolean): String {
-    val requestID = payload?.let {
+  private fun remoteBaseUrl(): URL? {
+    val raw = BuildConfig.SLOPCODE_REMOTE_BASE_URL.trim()
+    if (raw.isBlank()) return null
+    val url = runCatching { URL(raw) }.getOrNull() ?: return null
+    if (url.protocol == "https") return url
+    val debugLoopback = BuildConfig.DEBUG && url.protocol == "http" && url.host in setOf("localhost", "127.0.0.1", "10.0.2.2")
+    if (debugLoopback) return url
+    return null
+  }
+
+  private fun requestId(payload: String?) =
+    payload?.let {
       runCatching { JSONObject(it).optString("id") }.getOrNull()?.takeIf { value -> value.isNotBlank() }
     }
-    return JSONObject().apply {
+
+  private fun remoteError(payload: String?, code: String, message: String, retryable: Boolean): String =
+    JSONObject().apply {
       put("version", "v1")
       put("kind", "error")
-      if (requestID != null) put("requestID", requestID)
+      requestId(payload)?.let { put("requestID", it) }
       put("code", code)
       put("message", message)
       put("retryable", retryable)
     }.toString()
+
+  private fun bridgeError(id: String?, code: String, message: String) =
+    JSONObject().apply {
+      if (id != null) put("id", id)
+      put("ok", false)
+      put("code", code)
+      put("message", message)
+    }.toString()
+
+  private fun bridgeResult(id: String, result: Any? = JSONObject.NULL) =
+    JSONObject().apply {
+      put("id", id)
+      put("ok", true)
+      put("result", result)
+    }.toString()
+
+  private fun reply(proxy: JavaScriptReplyProxy, payload: String) {
+    webView.post {
+      proxy.postMessage(payload)
+    }
+  }
+
+  private fun request(message: String?): JSONObject? {
+    if (message.isNullOrBlank()) return null
+    return runCatching { JSONObject(message) }.getOrNull()
+  }
+
+  private fun argText(args: JSONArray, index: Int) = args.optString(index).takeIf(String::isNotBlank)
+
+  private fun safeExternalUri(url: String): Uri? {
+    val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return null
+    val scheme = uri.scheme?.lowercase() ?: return null
+    if (scheme !in setOf("https", "mailto", "tel")) return null
+    if ((scheme == "https") && uri.host.isNullOrBlank()) return null
+    return uri
   }
 
   fun enqueueDeepLink(url: String) {
@@ -74,7 +125,11 @@ class AndroidBridge(
     val payload = JSONArray(urls).toString().replace("\\", "\\\\").replace("'", "\\'")
     webView.post {
       webView.evaluateJavascript(
-        "window.dispatchEvent(new CustomEvent('slopcode:android-deep-link', { detail: { urls: JSON.parse('$payload') } }))",
+        """
+        window.__SLOPCODE__ = window.__SLOPCODE__ || {};
+        window.__SLOPCODE__.deepLinks = [...(window.__SLOPCODE__.deepLinks || []), ...JSON.parse('$payload')];
+        window.dispatchEvent(new CustomEvent('slopcode:deep-link', { detail: { urls: JSON.parse('$payload') } }));
+        """.trimIndent(),
         null,
       )
     }
@@ -86,50 +141,65 @@ class AndroidBridge(
     return urls
   }
 
-  @JavascriptInterface
-  fun capabilities(): String =
+  private fun capabilities() =
     JSONObject()
       .put("secureStorage", true)
       .put("qrPairing", false)
       .put("notifications", true)
       .put("deepLinks", true)
-      .put("remoteTransport", BuildConfig.SLOPCODE_REMOTE_BASE_URL.isNotBlank())
-      .toString()
+      .put("remoteTransport", remoteBaseUrl() != null)
 
-  @JavascriptInterface
-  fun storageGet(namespace: String, key: String): String? = prefs(namespace).getString(key, null)
+  fun listener() = WebViewCompat.WebMessageListener { _, message, sourceOrigin, isMainFrame, replyProxy ->
+    if (!isMainFrame || sourceOrigin.scheme != "https" || sourceOrigin.host != TRUSTED_HOST) {
+      reply(replyProxy, bridgeError(null, "untrusted_origin", "Bridge calls require the trusted local app origin"))
+      return@WebMessageListener
+    }
 
-  @JavascriptInterface
-  fun storageSet(namespace: String, key: String, value: String) {
-    prefs(namespace).edit().putString(key, value).apply()
+    val request = request(message.data)
+    val id = request?.optString("id")?.takeIf(String::isNotBlank)
+    val method = request?.optString("method")?.takeIf(String::isNotBlank)
+    if (id == null || method == null) {
+      reply(replyProxy, bridgeError(id, "invalid_request", "Malformed bridge request"))
+      return@WebMessageListener
+    }
+
+    val args = request.optJSONArray("args") ?: JSONArray()
+    when (method) {
+      "capabilities" -> reply(replyProxy, bridgeResult(id, capabilities()))
+      "storageGet" -> reply(replyProxy, bridgeResult(id, prefs(argText(args, 0) ?: "").getString(argText(args, 1) ?: "", null)))
+      "storageSet" -> {
+        prefs(argText(args, 0) ?: "").edit().putString(argText(args, 1) ?: "", argText(args, 2) ?: "").apply()
+        reply(replyProxy, bridgeResult(id))
+      }
+      "storageRemove" -> {
+        prefs(argText(args, 0) ?: "").edit().remove(argText(args, 1) ?: "").apply()
+        reply(replyProxy, bridgeResult(id))
+      }
+      "storageClear" -> {
+        prefs(argText(args, 0) ?: "").edit().clear().apply()
+        reply(replyProxy, bridgeResult(id))
+      }
+      "storageKeys" -> reply(replyProxy, bridgeResult(id, JSONArray(prefs(argText(args, 0) ?: "").all.keys.toList())))
+      "storageLength" -> reply(replyProxy, bridgeResult(id, prefs(argText(args, 0) ?: "").all.size))
+      "scanQrPairing" -> reply(replyProxy, bridgeResult(id, JSONObject.NULL))
+      "notificationPermission" -> reply(replyProxy, bridgeResult(id, permissionState()))
+      "requestNotificationPermission" -> reply(replyProxy, bridgeResult(id, permissionState()))
+      "showNotification" -> {
+        showNotification(argText(args, 0) ?: "", argText(args, 1), argText(args, 2))
+        reply(replyProxy, bridgeResult(id))
+      }
+      "consumeDeepLinks" -> reply(replyProxy, bridgeResult(id, JSONArray(consumeLinks())))
+      "remoteSend" -> {
+        val payload = argText(args, 0) ?: ""
+        io.execute {
+          reply(replyProxy, bridgeResult(id, remoteSend(payload)))
+        }
+      }
+      "openLink" -> reply(replyProxy, bridgeResult(id, openLink(argText(args, 0) ?: "")))
+      else -> reply(replyProxy, bridgeError(id, "unknown_method", "Unsupported bridge method"))
+    }
   }
 
-  @JavascriptInterface
-  fun storageRemove(namespace: String, key: String) {
-    prefs(namespace).edit().remove(key).apply()
-  }
-
-  @JavascriptInterface
-  fun storageClear(namespace: String) {
-    prefs(namespace).edit().clear().apply()
-  }
-
-  @JavascriptInterface
-  fun storageKeys(namespace: String): String = JSONArray(prefs(namespace).all.keys.toList()).toString()
-
-  @JavascriptInterface
-  fun storageLength(namespace: String): Int = prefs(namespace).all.size
-
-  @JavascriptInterface
-  fun scanQrPairing(): String? = null
-
-  @JavascriptInterface
-  fun notificationPermission(): String = permissionState()
-
-  @JavascriptInterface
-  fun requestNotificationPermission(): String = permissionState()
-
-  @JavascriptInterface
   fun showNotification(title: String, description: String?, href: String?) {
     if (permissionState() != "granted") return
 
@@ -155,13 +225,9 @@ class AndroidBridge(
     manager.notify((href ?: title).hashCode(), notification)
   }
 
-  @JavascriptInterface
-  fun consumeDeepLinks(): String = JSONArray(consumeLinks()).toString()
-
-  @JavascriptInterface
   fun remoteSend(payload: String): String {
-    val base = BuildConfig.SLOPCODE_REMOTE_BASE_URL.trim().trimEnd('/')
-    if (base.isBlank()) return errorJson(payload, "remote_not_configured", "Remote transport is not configured", false)
+    val base = remoteBaseUrl()?.toString()?.trimEnd('/')
+      ?: return remoteError(payload, "remote_not_configured", "Remote transport is not configured for HTTPS", false)
 
     val connection = (URL("$base/api/remote").openConnection() as HttpURLConnection).apply {
       requestMethod = "POST"
@@ -179,17 +245,24 @@ class AndroidBridge(
       val body = (if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream)?.bufferedReader()
         ?.use(BufferedReader::readText)
         ?.trim()
-      if (!body.isNullOrBlank()) body else errorJson(payload, "remote_empty_response", "Remote transport returned no body", true)
+      if (!body.isNullOrBlank()) body else remoteError(payload, "remote_empty_response", "Remote transport returned no body", true)
     }.getOrElse { error ->
-      errorJson(payload, "remote_request_failed", error.message ?: "Remote transport failed", true)
+      remoteError(payload, "remote_request_failed", error.message ?: "Remote transport failed", true)
     }.also {
       connection.disconnect()
     }
   }
 
-  @JavascriptInterface
-  fun openLink(url: String) {
-    val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    context.startActivity(intent)
+  fun openLink(url: String): Boolean {
+    val uri = safeExternalUri(url) ?: return false
+    val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    return runCatching {
+      context.startActivity(intent)
+      true
+    }.getOrDefault(false)
+  }
+
+  companion object {
+    private const val TRUSTED_HOST = "appassets.androidplatform.net"
   }
 }

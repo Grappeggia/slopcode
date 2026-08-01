@@ -3,6 +3,8 @@
   "compilerOptions": {
     "target": "ESNext",
     "module": "ESNext",
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
@@ -12,6 +14,10 @@
     "strict": true,
     "isolatedModules": true,
     "noEmit": true,
+    "paths": {
+      "@slopcode-ai/app": ["../app/node_modules/.ts-dist/src/index.d.ts"],
+      "@slopcode-ai/app/*": ["../app/node_modules/.ts-dist/src/*"]
+    },
     "types": ["vite/client", "bun"]
   },
   "include": ["src", "package.json", "vite.config.ts"],
