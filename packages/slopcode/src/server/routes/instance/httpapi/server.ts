@@ -1,4 +1,4 @@
-import { Config as EffectConfig, Context, Effect, Layer, Scope } from "effect"
+import { Config as EffectConfig, Context, Effect, Layer } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
 import { HttpClient, HttpMiddleware, HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
@@ -33,8 +33,7 @@ import { Instruction } from "@/session/instruction"
 import { LLM } from "@/session/llm"
 import { SessionProcessor } from "@/session/processor"
 import { SessionPrompt } from "@/session/prompt"
-import { SessionAutocomplete } from "@/session/autocomplete"
-import { SessionControl, sessionGraphNode, sessionNode } from "@/session/control"
+import { SessionControl } from "@/session/control"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionSideQuestion } from "@/session/side-question"
@@ -61,14 +60,9 @@ import { ModelsDev } from "@slopcode-ai/core/models-dev"
 import { Npm } from "@slopcode-ai/core/npm"
 import { ProjectV2 } from "@slopcode-ai/core/project"
 import { ProjectCopy } from "@slopcode-ai/core/project/copy"
-import { LocationServiceMap, node as locationServiceMapNode, withPluginHost } from "@slopcode-ai/core/location-layer"
-import { PluginPackage } from "@slopcode-ai/core/plugin/package"
 import { PtyTicket } from "@slopcode-ai/core/pty/ticket"
 import { Ripgrep } from "@slopcode-ai/core/ripgrep"
 import { SessionProjector } from "@slopcode-ai/core/session/projector"
-import { SessionRuntime } from "@slopcode-ai/core/session/runtime"
-import { SessionV2 } from "@slopcode-ai/core/session"
-import { SessionControl as CoreSessionControl } from "@slopcode-ai/core/session/control"
 import { lazy } from "@/util/lazy"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
@@ -103,8 +97,7 @@ import { questionHandlers } from "./handlers/question"
 import { sessionHandlers } from "./handlers/session"
 import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
-import { isolatedSessionServices, rawHandlers } from "@slopcode-ai/server/handlers"
-import { SessionGraph } from "@slopcode-ai/server/session-graph"
+import { handlers } from "@slopcode-ai/server/handlers"
 import { schemaErrorLayer as v2SchemaErrorLayer } from "@slopcode-ai/server/middleware/schema-error"
 import { workspaceHandlers } from "./handlers/workspace"
 import { remoteRuntimeHandlers } from "./handlers/remote-runtime"
@@ -262,7 +255,6 @@ const app = LayerNode.group([
   SessionRevert.node,
   SessionSummary.node,
   SessionPrompt.node,
-  SessionAutocomplete.node,
   SessionControl.node,
   SessionSideQuestion.node,
   Instruction.node,
@@ -291,102 +283,9 @@ const app = LayerNode.group([
   AppProcess.node,
 ])
 
-type Method = (...args: readonly unknown[]) => Effect.Effect<unknown, unknown, unknown>
-
-const lazyService = <A extends object>(load: Effect.Effect<A>) =>
-  new Proxy(
-    {},
-    {
-      get:
-        (_, key) =>
-        (...args: readonly unknown[]) =>
-          Effect.flatMap(load, (service) => {
-            const method = Reflect.get(service, key) as Method | undefined
-            if (typeof method !== "function") return Effect.die(`Unknown lazy Session service method: ${String(key)}`)
-            return Reflect.apply(method, service, args) as ReturnType<Method>
-          }),
-    },
-  ) as A
-
 export function createRoutes(
   corsOptions?: CorsOptions,
-  host?: Layer.Layer<PluginPackage.Host>,
-  observe?: (locations: Context.Service.Shape<typeof LocationServiceMap>) => void,
-  sessionGraphInitialized?: () => void,
-  replacements?: {
-    provider?: Layer.Layer<Provider.Service>
-  },
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
-  const locations = host ? withPluginHost(host) : LocationServiceMap.layer
-  const locationLayer = observe
-    ? Layer.effect(
-        LocationServiceMap,
-        Effect.gen(function* () {
-          const service = yield* LocationServiceMap
-          yield* Effect.sync(() => observe(service))
-          return service
-        }),
-      ).pipe(Layer.provide(locations))
-    : locations
-  const services = LayerNode.make(
-    Layer.mergeAll(
-      Database.defaultLayer,
-      EventV2.defaultLayer,
-      ProjectV2.defaultLayer,
-      SessionRuntime.defaultLayer,
-      locationLayer,
-    ),
-    [],
-  )
-  const database = LayerNode.make(Layer.effect(Database.Service, Database.Service), [services])
-  const events = LayerNode.make(Layer.effect(EventV2.Service, EventV2.Service), [services])
-  const projects = LayerNode.make(Layer.effect(ProjectV2.Service, ProjectV2.Service), [services])
-  const runtime = LayerNode.make(Layer.effect(SessionRuntime.Service, SessionRuntime.Service), [services])
-  const locationMap = LayerNode.make(Layer.effect(LocationServiceMap, LocationServiceMap), [services])
-  const graph = Layer.effect(
-    SessionGraph.Service,
-    Effect.gen(function* () {
-      const database = yield* Database.Service
-      const events = yield* EventV2.Service
-      const projects = yield* ProjectV2.Service
-      const runtime = yield* SessionRuntime.Service
-      const locations = yield* LocationServiceMap
-      const scope = yield* Scope.Scope
-      const dependencies = Layer.mergeAll(
-        Layer.succeed(Database.Service, database),
-        Layer.succeed(EventV2.Service, events),
-        Layer.succeed(ProjectV2.Service, projects),
-        Layer.succeed(SessionRuntime.Service, runtime),
-        Layer.succeed(LocationServiceMap, locations),
-      )
-      const sessions = isolatedSessionServices.pipe(Layer.provide(dependencies))
-      const actual = Layer.mergeAll(
-        sessions,
-        CoreSessionControl.layer.pipe(
-          Layer.provide(sessions),
-          Layer.provide(Layer.succeed(SessionRuntime.Service, runtime)),
-        ),
-      )
-      const load = yield* Effect.cached(
-        Effect.sync(() => sessionGraphInitialized?.()).pipe(
-          Effect.andThen(Layer.buildWithScope(actual, scope).pipe(Effect.provide(Context.empty()))),
-        ),
-      )
-      return SessionGraph.Service.of({
-        session: lazyService(Effect.map(load, (context) => Context.get(context, SessionV2.Service))),
-        control: lazyService(Effect.map(load, (context) => Context.get(context, CoreSessionControl.Service))),
-        runtime,
-      })
-    }),
-  )
-  const graphNode = LayerNode.make(graph, [database, events, projects, runtime, locationMap])
-  const lazySessionNode = LayerNode.make(
-    Layer.effect(
-      SessionV2.Service,
-      SessionGraph.Service.use((graph) => Effect.succeed(graph.session)),
-    ),
-    [graphNode],
-  )
   return Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,
@@ -406,21 +305,7 @@ export function createRoutes(
       MoveSession.defaultLayer,
       HttpServer.layerServices,
     ]),
-    Layer.provide(
-      LayerNode.buildLayer(app, {
-        replacements: [
-          LayerNode.replaceWithNode(Database.node, database),
-          LayerNode.replaceWithNode(EventV2.node, events),
-          LayerNode.replaceWithNode(ProjectV2.node, projects),
-          LayerNode.replaceWithNode(SessionRuntime.node, runtime),
-          LayerNode.replaceWithNode(locationServiceMapNode, locationMap),
-          LayerNode.replaceWithNode(sessionNode, lazySessionNode),
-          LayerNode.replaceWithNode(sessionGraphNode, graphNode),
-          ...(replacements?.provider ? [LayerNode.replace(Provider.node, replacements.provider)] : []),
-        ],
-      }),
-    ),
-    Layer.provide(locationLayer),
+    Layer.provide(LayerNode.buildLayer(app)),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provide(Observability.layer),
   ) as Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements>
@@ -428,21 +313,12 @@ export function createRoutes(
 
 export const routes = createRoutes()
 
-export function makeWebHandler(
-  host?: Layer.Layer<PluginPackage.Host>,
-  options?: {
-    readonly memoMap?: Layer.MemoMap
-    readonly observe?: (locations: Context.Service.Shape<typeof LocationServiceMap>) => void
-    readonly sessionGraphInitialized?: () => void
-  },
-) {
-  return HttpRouter.toWebHandler(createRoutes(undefined, host, options?.observe, options?.sessionGraphInitialized), {
+export const webHandler = lazy(() =>
+  HttpRouter.toWebHandler(routes, {
     disableLogger: true,
-    memoMap: options?.memoMap ?? memoMap,
+    memoMap,
     middleware: disposeMiddleware,
-  })
-}
-
-export const webHandler = lazy(() => makeWebHandler())
+  }),
+)
 
 export * as HttpApiApp from "./server"
