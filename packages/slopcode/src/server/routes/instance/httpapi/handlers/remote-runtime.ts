@@ -26,9 +26,9 @@ import {
   RemoteAgentPrompt,
   RemoteAgentPromptQuery,
   RemoteBrowseResult,
-  RemoteRuntimeApi,
   REMOTE_AGENT_VERSION_TIMEOUT,
 } from "../groups/remote-runtime"
+import { InstanceHttpApi } from "../api"
 import { ApiNotFoundError, ForbiddenError, InvalidRequestError, ServiceUnavailableError } from "../errors"
 
 const CODEX_FORCE_KILL_AFTER = Duration.seconds(2)
@@ -656,7 +656,7 @@ export const resolveRemoteFolder = Effect.fn("RemoteRuntime.resolveFolder")(func
   return { root, current }
 })
 
-export const remoteRuntimeHandlers = HttpApiBuilder.group(RemoteRuntimeApi, "remote-runtime", (handlers) =>
+export const remoteRuntimeHandlers = HttpApiBuilder.group(InstanceHttpApi, "remote-runtime", (handlers) =>
   Effect.gen(function* () {
     const browse = Effect.fn("RemoteRuntimeHttpApi.browse")(function* (ctx: {
       query: { path?: string; sshAuthority?: string; sshPort?: number }
