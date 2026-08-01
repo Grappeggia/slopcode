@@ -31,6 +31,9 @@ export const RemoteTransportLimits = {
   maxReplayBytes: 128 * 1024,
   maxStreamBytes: 16 * 1024 * 1024,
   maxStreamWindowBytes: 256 * 1024,
+  maxChallengeEntries: 1_024,
+  maxIdempotencyEntries: 4_096,
+  maxIdempotencyTtlMs: 10 * 60 * 1000,
   maxPathBytes: 4 * 1024,
   maxIdentifierBytes: 128,
   maxEventNameBytes: 128,
@@ -49,6 +52,10 @@ const noControl = (message: string) =>
   Schema.makeFilter<string>((value) => (/[\u0000-\u001f\u007f-\u009f]/.test(value) ? message : undefined))
 
 const jsonBytes = (value: unknown) => byteLength(JSON.stringify(value) ?? "")
+const boundedPositive = (value: number | undefined, fallback: number, max: number) =>
+  value === undefined || !Number.isFinite(value) ? fallback : Math.min(Math.max(value, 1), max)
+const boundedCount = (value: number | undefined, fallback: number, max: number) =>
+  Math.floor(boundedPositive(value, fallback, max))
 
 const boundedArray = <S extends Schema.Top>(schema: S, count: number, bytes: number, message: string) =>
   Schema.Array(schema).check(
@@ -302,15 +309,31 @@ const sameTarget = (left: RemoteTransportTarget, right: RemoteTransportTarget) =
   left.workspaceID === right.workspaceID &&
   left.remoteDirectory === right.remoteDirectory
 
-const canonicalize = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(canonicalize)
-  if (value === null || typeof value !== "object") return value
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .filter(([, item]) => item !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => [key, canonicalize(item)]),
-  )
+const compareBytes = (left: string, right: string) => {
+  const a = encoder.encode(left)
+  const b = encoder.encode(right)
+  const length = Math.min(a.length, b.length)
+  for (let index = 0; index < length; index++) {
+    if (a[index] !== b[index]) return a[index] - b[index]
+  }
+  return a.length - b.length
+}
+
+const canonicalJson = (value: unknown, arrayItem = false): string | undefined => {
+  if (value === undefined) return arrayItem ? "null" : undefined
+  if (value === null || typeof value !== "object") {
+    const result = JSON.stringify(value)
+    if (result === undefined) throw new Error("remote transport value is not canonicalizable")
+    return result
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item, true) ?? "null").join(",")}]`
+  }
+  const fields = Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined)
+    .sort(([left], [right]) => compareBytes(left, right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+  return `{${fields.join(",")}}`
 }
 
 /**
@@ -319,7 +342,7 @@ const canonicalize = (value: unknown): unknown => {
  * digests; peers must hash this exact representation, not a local serializer.
  */
 export const remoteTransportCanonicalJson = (value: unknown) => {
-  const result = JSON.stringify(canonicalize(value))
+  const result = canonicalJson(value)
   if (result === undefined) throw new Error("remote transport value is not canonicalizable")
   return result
 }
@@ -354,13 +377,16 @@ export const remoteTransportComputeTargetDigest = async (target: RemoteTransport
  * becoming circular.
  */
 export const remoteTransportRequestDigestInput = <T extends object>(request: T) => {
-  const input = Object.fromEntries(Object.entries(request).filter(([key]) => key !== "requestDigest")) as Record<
-    string,
-    unknown
-  >
+  const input = Object.entries(request).reduce<Record<string, unknown>>((result, [key, value]) => {
+    if (key !== "requestDigest") result[key] = value
+    return result
+  }, {})
   const auth = input.auth
   if (auth !== null && typeof auth === "object" && !Array.isArray(auth)) {
-    input.auth = Object.fromEntries(Object.entries(auth).filter(([key]) => key !== "proof"))
+    input.auth = Object.entries(auth).reduce<Record<string, unknown>>((result, [key, value]) => {
+      if (key !== "proof") result[key] = value
+      return result
+    }, {})
   }
   return input
 }
@@ -390,19 +416,46 @@ export const remoteTransportIdempotencyBinding = (
     requestDigest,
   })
 
+export type RemoteTransportIdempotencyState = "in-flight" | "completed"
+
 export type RemoteTransportIdempotencyClaim =
-  | Readonly<{ status: "accepted"; replay: boolean }>
+  | Readonly<{ status: "accepted"; replay: boolean; state: RemoteTransportIdempotencyState }>
   | Readonly<{ status: "conflict"; requestDigest: RemoteTransportRequestDigest }>
   | Readonly<{ status: "invalid-digest"; expected: string }>
+  | Readonly<{ status: "target-mismatch" }>
+  | Readonly<{ status: "capacity" }>
 
 export type RemoteTransportIdempotencyStore = Readonly<{
   /** This operation must be implemented as one atomic compare-and-set. */
   claim: (
     sessionID: string,
-    target: RemoteTransportTarget,
+    registeredTarget: RemoteTransportTarget,
     idempotencyKey: RemoteTransportIdempotencyKey,
     requestDigest: RemoteTransportRequestDigest,
+    now?: number,
   ) => RemoteTransportIdempotencyClaim
+  /** Marks an in-flight claim complete while retaining its replay binding. */
+  complete: (
+    sessionID: string,
+    registeredTarget: RemoteTransportTarget,
+    idempotencyKey: RemoteTransportIdempotencyKey,
+    requestDigest: RemoteTransportRequestDigest,
+    now?: number,
+  ) => boolean
+  /** Releases only an in-flight claim so a failed request can be retried. */
+  release: (
+    sessionID: string,
+    registeredTarget: RemoteTransportTarget,
+    idempotencyKey: RemoteTransportIdempotencyKey,
+    requestDigest: RemoteTransportRequestDigest,
+    now?: number,
+  ) => boolean
+  prune: (now?: number) => void
+}>
+
+export type RemoteTransportIdempotencyStoreOptions = Readonly<{
+  maxEntries?: number
+  ttlMs?: number
 }>
 
 /**
@@ -410,20 +463,54 @@ export type RemoteTransportIdempotencyStore = Readonly<{
  * should implement the same claim operation with a transactional unique key
  * on (sessionID, target, idempotencyKey).
  */
-export const createRemoteTransportIdempotencyStore = (): RemoteTransportIdempotencyStore => {
-  const records = new Map<string, RemoteTransportRequestDigest>()
+export const createRemoteTransportIdempotencyStore = (
+  options: RemoteTransportIdempotencyStoreOptions = {},
+): RemoteTransportIdempotencyStore => {
+  const maxEntries = boundedCount(options.maxEntries, RemoteTransportLimits.maxIdempotencyEntries, RemoteTransportLimits.maxIdempotencyEntries)
+  const ttlMs = boundedPositive(options.ttlMs, RemoteTransportLimits.maxIdempotencyTtlMs, RemoteTransportLimits.maxIdempotencyTtlMs)
+  const records = new Map<
+    string,
+    {
+      digest: RemoteTransportRequestDigest
+      state: RemoteTransportIdempotencyState
+      expiresAt: number
+    }
+  >()
+  const key = (sessionID: string, target: RemoteTransportTarget, idempotencyKey: RemoteTransportIdempotencyKey) =>
+    remoteTransportCanonicalJson({ sessionID, target, idempotencyKey })
+  const prune = (now: number) => {
+    for (const [id, record] of records) if (record.expiresAt <= now) records.delete(id)
+  }
   return {
-    claim: (sessionID, target, idempotencyKey, requestDigest) => {
-      const key = remoteTransportCanonicalJson({ sessionID, target, idempotencyKey })
-      const previous = records.get(key)
+    claim: (sessionID, target, idempotencyKey, requestDigest, now = Date.now()) => {
+      prune(now)
+      const id = key(sessionID, target, idempotencyKey)
+      const previous = records.get(id)
       if (previous !== undefined) {
-        return previous === requestDigest
-          ? { status: "accepted", replay: true }
-          : { status: "conflict", requestDigest: previous }
+        return previous.digest === requestDigest
+          ? { status: "accepted", replay: true, state: previous.state }
+          : { status: "conflict", requestDigest: previous.digest }
       }
-      records.set(key, requestDigest)
-      return { status: "accepted", replay: false }
+      if (records.size >= maxEntries) return { status: "capacity" }
+      records.set(id, { digest: requestDigest, state: "in-flight", expiresAt: now + ttlMs })
+      return { status: "accepted", replay: false, state: "in-flight" }
     },
+    complete: (sessionID, target, idempotencyKey, requestDigest, now = Date.now()) => {
+      prune(now)
+      const record = records.get(key(sessionID, target, idempotencyKey))
+      if (record === undefined || record.digest !== requestDigest || record.state !== "in-flight") return false
+      record.state = "completed"
+      return true
+    },
+    release: (sessionID, target, idempotencyKey, requestDigest, now = Date.now()) => {
+      prune(now)
+      const id = key(sessionID, target, idempotencyKey)
+      const record = records.get(id)
+      if (record === undefined || record.digest !== requestDigest || record.state !== "in-flight") return false
+      records.delete(id)
+      return true
+    },
+    prune: (now = Date.now()) => prune(now),
   }
 }
 
@@ -434,11 +521,30 @@ export const remoteTransportClaimIdempotency = async <
     requestDigest: RemoteTransportRequestDigest
     target: RemoteTransportTarget
   },
->(store: RemoteTransportIdempotencyStore, sessionID: string, request: T) => {
+>(store: RemoteTransportIdempotencyStore, sessionID: string, registeredTarget: RemoteTransportTarget, request: T, now?: number) => {
+  if (!sameTarget(request.target, registeredTarget)) return { status: "target-mismatch" } as const
   const expected = await remoteTransportComputeRequestDigest(request)
   if (request.requestDigest !== expected) return { status: "invalid-digest", expected } as const
-  return store.claim(sessionID, request.target, request.idempotencyKey, request.requestDigest)
+  return store.claim(sessionID, registeredTarget, request.idempotencyKey, request.requestDigest, now)
 }
+
+export const remoteTransportCompleteIdempotency = (
+  store: RemoteTransportIdempotencyStore,
+  sessionID: string,
+  registeredTarget: RemoteTransportTarget,
+  idempotencyKey: RemoteTransportIdempotencyKey,
+  requestDigest: RemoteTransportRequestDigest,
+  now?: number,
+) => store.complete(sessionID, registeredTarget, idempotencyKey, requestDigest, now)
+
+export const remoteTransportReleaseIdempotency = (
+  store: RemoteTransportIdempotencyStore,
+  sessionID: string,
+  registeredTarget: RemoteTransportTarget,
+  idempotencyKey: RemoteTransportIdempotencyKey,
+  requestDigest: RemoteTransportRequestDigest,
+  now?: number,
+) => store.release(sessionID, registeredTarget, idempotencyKey, requestDigest, now)
 
 const Base64Url = text(512, "base64url value is too large").check(
   Schema.isPattern(/^[A-Za-z0-9_-]+$/),
@@ -547,9 +653,69 @@ const eventFields = {
   cursor: Schema.optional(RemoteTransportEventCursor),
 }
 
+/**
+ * v1 strict semantics are negotiated explicitly. An updated peer must not
+ * silently fall back to a legacy proof, frame, or upload interpretation.
+ */
+export const RemoteTransportFeature = Schema.Literals([
+  "proof.ed25519.v1",
+  "frame.bounds.v1",
+  "http.upload.v1",
+])
+export type RemoteTransportFeature = typeof RemoteTransportFeature.Type
+
+const requiredFeatures: ReadonlyArray<RemoteTransportFeature> = [
+  "proof.ed25519.v1",
+  "frame.bounds.v1",
+  "http.upload.v1",
+]
+const featureList = boundedArray(
+  RemoteTransportFeature,
+  requiredFeatures.length,
+  RemoteTransportLimits.maxArrayBytes,
+  "remote transport feature list is too large",
+).check(
+  Schema.makeFilter((value) =>
+    new Set(value).size === value.length ? undefined : "remote transport feature list contains duplicates",
+  ),
+)
+
+export const RemoteTransportCapabilities = exact(
+  Schema.Struct({
+    offered: featureList,
+    required: featureList,
+  }),
+).check(
+  Schema.makeFilter((value) =>
+    requiredFeatures.every((feature) => value.required.includes(feature) && value.offered.includes(feature))
+      ? undefined
+      : "strict v1 capabilities are required",
+  ),
+).annotate({ identifier: "RemoteTransportV1.Capabilities" })
+export type RemoteTransportCapabilities = typeof RemoteTransportCapabilities.Type
+
+export const RemoteTransportAcceptedCapabilities = exact(
+  Schema.Struct({ accepted: featureList }),
+).check(
+  Schema.makeFilter((value) =>
+    requiredFeatures.every((feature) => value.accepted.includes(feature))
+      ? undefined
+      : "strict v1 capabilities were not negotiated",
+  ),
+).annotate({ identifier: "RemoteTransportV1.AcceptedCapabilities" })
+export type RemoteTransportAcceptedCapabilities = typeof RemoteTransportAcceptedCapabilities.Type
+
+export const remoteTransportCapabilitiesMatch = (
+  offered: RemoteTransportCapabilities,
+  accepted: RemoteTransportAcceptedCapabilities,
+) =>
+  accepted.accepted.every((feature) => offered.offered.includes(feature)) &&
+  offered.required.every((feature) => accepted.accepted.includes(feature))
+
 const sessionOpenShape = Schema.Struct({
   ...requestFields,
   type: Schema.Literal("session.open"),
+  capabilities: RemoteTransportCapabilities,
   auth: RemoteTransportSessionAuth,
 })
 export const RemoteTransportSessionOpen = exact(sessionOpenShape)
@@ -582,11 +748,12 @@ export const remoteTransportSessionProofTranscript = (open: RemoteTransportSessi
     targetDigest: open.auth.targetDigest,
     pairingID: open.auth.pairingID,
     challenge: open.auth.challenge,
+    capabilities: open.capabilities,
   })
 
-export const remoteTransportSessionAuthMatches = async (
+const remoteTransportSessionAuthScopeMatches = async (
   open: RemoteTransportSessionOpen,
-  registeredTarget: RemoteTransportTarget = open.target,
+  registeredTarget: RemoteTransportTarget,
 ) =>
   sameTarget(open.target, registeredTarget) &&
   sameTarget(open.auth.target, registeredTarget) &&
@@ -600,8 +767,15 @@ export const remoteTransportChallengeIsFresh = (
 ) => challenge.issuedAt <= now && now < challenge.expiresAt
 
 export type RemoteTransportChallengeStore = Readonly<{
+  /** Checks exact server issuance and freshness without consuming the challenge. */
+  check: (challenge: RemoteTransportChallenge, now?: number) => boolean
   /** This operation must atomically compare, validate, and consume a challenge. */
   consume: (challenge: RemoteTransportChallenge, now?: number) => boolean
+}>
+
+export type RemoteTransportChallengeStoreOptions = Readonly<{
+  maxEntries?: number
+  ttlMs?: number
 }>
 
 export type RemoteTransportChallengeIssuer = RemoteTransportChallengeStore &
@@ -610,15 +784,32 @@ export type RemoteTransportChallengeIssuer = RemoteTransportChallengeStore &
   }>
 
 /**
- * Creates a process-local challenge store with an atomic consume operation.
+ * Creates a bounded process-local challenge store with an atomic consume operation.
  * A multi-process server should replace consume with a transactional
  * compare-and-delete keyed by challenge ID and the complete challenge value.
  */
-export const createRemoteTransportChallengeStore = (): RemoteTransportChallengeIssuer => {
+export const createRemoteTransportChallengeStore = (
+  options: RemoteTransportChallengeStoreOptions = {},
+): RemoteTransportChallengeIssuer => {
+  const maxEntries = boundedCount(options.maxEntries, RemoteTransportLimits.maxChallengeEntries, RemoteTransportLimits.maxChallengeEntries)
+  const ttlMs = boundedPositive(options.ttlMs, 60_000, 5 * 60 * 1000)
   const pending = new Map<string, RemoteTransportChallenge>()
+  const prune = (now: number) => {
+    for (const [id, challenge] of pending) if (!remoteTransportChallengeIsFresh(challenge, now)) pending.delete(id)
+  }
+  const matches = (challenge: RemoteTransportChallenge, now: number) => {
+    const stored = pending.get(challenge.id)
+    return (
+      stored !== undefined &&
+      remoteTransportCanonicalJson(stored) === remoteTransportCanonicalJson(challenge) &&
+      remoteTransportChallengeIsFresh(stored, now)
+    )
+  }
   return {
-    issue: (now = Date.now(), ttlMs = 60_000) => {
-      const expiresAt = now + Math.min(Math.max(ttlMs, 1), 5 * 60 * 1000)
+    issue: (now = Date.now(), requestedTtlMs = ttlMs) => {
+      prune(now)
+      if (pending.size >= maxEntries) throw new Error("remote transport challenge store is full")
+      const expiresAt = now + boundedPositive(requestedTtlMs, ttlMs, 5 * 60 * 1000)
       const challenge = Schema.decodeUnknownSync(RemoteTransportChallenge)({
         issuer: "server",
         id: `chl_${remoteTransportEncodeBase64Url(globalThis.crypto.getRandomValues(new Uint8Array(18)))}`,
@@ -630,14 +821,13 @@ export const createRemoteTransportChallengeStore = (): RemoteTransportChallengeI
       pending.set(challenge.id, challenge)
       return challenge
     },
+    check: (challenge, now = Date.now()) => {
+      prune(now)
+      return matches(challenge, now)
+    },
     consume: (challenge, now = Date.now()) => {
-      const stored = pending.get(challenge.id)
-      if (stored === undefined) return false
-      if (remoteTransportCanonicalJson(stored) !== remoteTransportCanonicalJson(challenge)) return false
-      if (!remoteTransportChallengeIsFresh(stored, now)) {
-        pending.delete(challenge.id)
-        return false
-      }
+      prune(now)
+      if (!matches(challenge, now)) return false
       pending.delete(challenge.id)
       return true
     },
@@ -659,14 +849,30 @@ export const remoteTransportVerifySessionProof = async (
   challenges: RemoteTransportChallengeStore,
   now = Date.now(),
 ) => {
-  if (!(await remoteTransportSessionAuthMatches(open, registeredTarget))) return false
-  if (!challenges.consume(open.auth.challenge, now)) return false
+  if (!(await remoteTransportSessionAuthScopeMatches(open, registeredTarget))) return false
+  if (!challenges.check(open.auth.challenge, now)) return false
   const signature = remoteTransportDecodeBase64Url(open.auth.proof.signature)
   if (signature === undefined || signature.byteLength !== 64) return false
   const transcript = encoder.encode(remoteTransportSessionProofTranscript(open))
-  if (typeof verifier === "function") return await verifier(transcript, signature)
-  if (verifier.type !== "public" || verifier.algorithm.name !== "Ed25519") return false
-  return globalThis.crypto.subtle.verify("Ed25519", verifier, signature, transcript)
+  const verified =
+    typeof verifier === "function"
+      ? await verifier(transcript, signature)
+      : verifier.type === "public" && verifier.algorithm.name === "Ed25519"
+        ? await globalThis.crypto.subtle.verify("Ed25519", verifier, signature, transcript)
+        : false
+  return verified && challenges.consume(open.auth.challenge, now)
+}
+
+/** Fails closed unless a registered target, verifier, and challenge store are supplied. */
+export const remoteTransportSessionAuthMatches = async (
+  open: RemoteTransportSessionOpen,
+  registeredTarget?: RemoteTransportTarget,
+  verifier?: RemoteTransportPublicKeyVerifier,
+  challenges?: RemoteTransportChallengeStore,
+  now = Date.now(),
+) => {
+  if (registeredTarget === undefined || verifier === undefined || challenges === undefined) return false
+  return remoteTransportVerifySessionProof(open, registeredTarget, verifier, challenges, now)
 }
 
 export const RemoteTransportSessionClose = exact(
@@ -684,6 +890,7 @@ export const RemoteTransportSessionOpened = exact(
     ...responseFields,
     type: Schema.Literal("session.opened"),
     sessionID: SessionID,
+    capabilities: RemoteTransportAcceptedCapabilities,
   }),
 ).annotate({ identifier: "RemoteTransportV1.SessionOpened" })
 export type RemoteTransportSessionOpened = typeof RemoteTransportSessionOpened.Type
@@ -760,7 +967,7 @@ export const RemoteTransportHttpUpload = exact(
     path: HttpPath,
     query: Schema.optional(RemoteTransportQuery),
     headers: Schema.optional(RemoteTransportHeaders),
-    contentLength: Schema.optional(UploadLength),
+    contentLength: UploadLength,
   }),
 ).annotate({ identifier: "RemoteTransportV1.HttpUpload" })
 export type RemoteTransportHttpUpload = typeof RemoteTransportHttpUpload.Type
@@ -951,11 +1158,13 @@ export type RemoteTransportStreamState = Readonly<{
   windowBytes: number
   maxBytes: number
   maxWindowBytes: number
+  expectedBytes?: number
 }>
 
 export const remoteTransportCreateStreamState = (
   maxBytes = RemoteTransportLimits.maxStreamBytes,
   maxWindowBytes = RemoteTransportLimits.maxStreamWindowBytes,
+  expectedBytes?: number,
 ): RemoteTransportStreamState => ({
   nextSequence: 0,
   final: false,
@@ -963,9 +1172,14 @@ export const remoteTransportCreateStreamState = (
   windowBytes: 0,
   maxBytes: Math.min(maxBytes, RemoteTransportLimits.maxStreamBytes),
   maxWindowBytes: Math.min(maxWindowBytes, RemoteTransportLimits.maxStreamWindowBytes),
+  expectedBytes: expectedBytes === undefined ? undefined : Math.min(expectedBytes, RemoteTransportLimits.maxStreamBytes),
 })
 
 export const RemoteTransportInitialStreamState = remoteTransportCreateStreamState()
+
+export const remoteTransportCreateUploadStreamState = (
+  upload: Pick<RemoteTransportHttpUpload, "contentLength">,
+) => remoteTransportCreateStreamState(RemoteTransportLimits.maxStreamBytes, RemoteTransportLimits.maxStreamWindowBytes, upload.contentLength)
 
 /**
  * Advances a stream only for the next sequence number. Once a final chunk is
@@ -978,14 +1192,22 @@ export const remoteTransportAdvanceStream = (
 ) => {
   if (state.final || chunk.sequence !== state.nextSequence) return undefined
   const bytes = bodyByteLength(chunk.chunk)
-  if (state.totalBytes + bytes > state.maxBytes || state.windowBytes + bytes > state.maxWindowBytes) return undefined
+  const totalBytes = state.totalBytes + bytes
+  if (
+    totalBytes > state.maxBytes ||
+    (state.expectedBytes !== undefined && totalBytes > state.expectedBytes) ||
+    state.windowBytes + bytes > state.maxWindowBytes ||
+    (chunk.final && state.expectedBytes !== undefined && totalBytes !== state.expectedBytes)
+  )
+    return undefined
   return {
     nextSequence: state.nextSequence + 1,
     final: chunk.final,
-    totalBytes: state.totalBytes + bytes,
+    totalBytes,
     windowBytes: state.windowBytes + bytes,
     maxBytes: state.maxBytes,
     maxWindowBytes: state.maxWindowBytes,
+    expectedBytes: state.expectedBytes,
   } satisfies RemoteTransportStreamState
 }
 
@@ -995,7 +1217,8 @@ export const remoteTransportAcknowledgeStream = (state: RemoteTransportStreamSta
   return { ...state, windowBytes: state.windowBytes - bytes } satisfies RemoteTransportStreamState
 }
 
-export const remoteTransportStreamComplete = (state: RemoteTransportStreamState) => state.final
+export const remoteTransportStreamComplete = (state: RemoteTransportStreamState) =>
+  state.final && (state.expectedBytes === undefined || state.totalBytes === state.expectedBytes)
 
 export const RemoteTransportPtyClose = exact(
   Schema.Struct({
@@ -1184,7 +1407,7 @@ export const RemoteTransportEvent = Schema.Union([
 ]).annotate({ identifier: "RemoteTransportV1.Event" })
 export type RemoteTransportEvent = typeof RemoteTransportEvent.Type
 
-export const RemoteTransportFrame = Schema.Union([
+const remoteTransportFrameSchema = Schema.Union([
   RemoteTransportSessionOpen,
   RemoteTransportSessionClose,
   RemoteTransportHttpRequest,
@@ -1210,7 +1433,14 @@ export const RemoteTransportFrame = Schema.Union([
   RemoteTransportApprovalNotification,
   RemoteTransportQuestionNotification,
   RemoteTransportError,
-]).annotate({ identifier: "RemoteTransportV1.Frame" })
+]).check(
+  Schema.makeFilter((value) =>
+    jsonBytes(value) <= RemoteTransportLimits.maxFrameBytes
+      ? undefined
+      : "remote transport decoded frame exceeds the UTF-8 byte limit",
+  ),
+)
+export const RemoteTransportFrame = remoteTransportFrameSchema.annotate({ identifier: "RemoteTransportV1.Frame" })
 export type RemoteTransportFrame = typeof RemoteTransportFrame.Type
 export type RemoteTransportFrameEncoded = typeof RemoteTransportFrame.Encoded
 
