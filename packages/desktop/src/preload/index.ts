@@ -58,6 +58,10 @@ const api: ElectronAPI = {
     install: () => ipcRenderer.invoke("updater-install"),
   },
   consumeInitialDeepLinks: () => ipcRenderer.invoke("consume-initial-deep-links"),
+  isFirstLaunchOnboardingPending: () => ipcRenderer.invoke("is-first-launch-onboarding-pending"),
+  finishFirstLaunchOnboarding: (createDefaultProject) =>
+    ipcRenderer.invoke("finish-first-launch-onboarding", createDefaultProject),
+  isOldLayoutEligible: () => ipcRenderer.invoke("is-old-layout-eligible"),
   getDefaultServerUrl: () => ipcRenderer.invoke("get-default-server-url"),
   setDefaultServerUrl: (url) => ipcRenderer.invoke("set-default-server-url", url),
   getDisplayBackend: () => ipcRenderer.invoke("get-display-backend"),
@@ -90,6 +94,7 @@ const api: ElectronAPI = {
   releasePickedFiles: (token) => ipcRenderer.invoke("release-picked-files", token),
   saveFilePicker: (opts) => ipcRenderer.invoke("save-file-picker", opts),
   openLink: (url) => ipcRenderer.send("open-link", url),
+  openLocalFile: (url) => ipcRenderer.send("open-local-file", url),
   openPath: (path, app) => ipcRenderer.invoke("open-path", path, app),
   readClipboardImage: () => ipcRenderer.invoke("read-clipboard-image"),
   showNotification: (title, body) => ipcRenderer.send("show-notification", title, body),

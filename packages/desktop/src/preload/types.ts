@@ -47,6 +47,9 @@ export type ElectronAPI = {
   wslServers: WslServersAPI
   updater: UpdaterAPI
   consumeInitialDeepLinks: () => Promise<string[]>
+  isFirstLaunchOnboardingPending: () => Promise<boolean>
+  finishFirstLaunchOnboarding: (createDefaultProject: boolean) => Promise<string | null>
+  isOldLayoutEligible: () => Promise<boolean>
   getDefaultServerUrl: () => Promise<string | null>
   setDefaultServerUrl: (url: string | null) => Promise<void>
   getDisplayBackend: () => Promise<LinuxDisplayBackend | null>
@@ -80,6 +83,7 @@ export type ElectronAPI = {
   releasePickedFiles: (token: string) => Promise<void>
   saveFilePicker: (opts?: { title?: string; defaultPath?: string }) => Promise<string | null>
   openLink: (url: string) => void
+  openLocalFile: (url: string) => void
   openPath: (path: string, app?: string) => Promise<void>
   readClipboardImage: () => Promise<{ buffer: ArrayBuffer; width: number; height: number } | null>
   showNotification: (title: string, body?: string) => void

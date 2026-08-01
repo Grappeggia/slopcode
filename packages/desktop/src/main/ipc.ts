@@ -6,12 +6,11 @@ import type { IpcMainEvent, IpcMainInvokeEvent } from "electron"
 import type { DesktopMenuAction } from "@slopcode-ai/app/desktop-menu"
 
 import type { FatalRendererError, ServerReadyData, TitlebarTheme } from "../preload/types"
-import { safeExternalUrl } from "../security"
 import { runDesktopMenuAction } from "./desktop-menu-actions"
 import { assertAttachmentBudget, createPickedFileAuthorizations } from "./attachment-picker"
 import { guardIpc } from "./security"
-import { getStore } from "./store"
-import { getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
+import { getStore, removeStoreFileIfEmpty } from "./store"
+import { openExternalURL, openLocalFileURL, getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
 
@@ -40,6 +39,9 @@ type Deps = {
   setBackgroundColor: (color: string) => void
   exportDebugLogs: () => Promise<string>
   recordFatalRendererError: (error: FatalRendererError) => Promise<void> | void
+  isFirstLaunchOnboardingPending: () => Promise<boolean> | boolean
+  finishFirstLaunchOnboarding: (createDefaultProject: boolean) => Promise<string | null> | string | null
+  isOldLayoutEligible: () => Promise<boolean> | boolean
 }
 
 export function registerIpcHandlers(deps: Deps) {
@@ -53,6 +55,11 @@ export function registerIpcHandlers(deps: Deps) {
   ipc.handle("set-default-server-url", (_event: IpcMainInvokeEvent, url: string | null) =>
     deps.setDefaultServerUrl(url),
   )
+  ipc.handle("is-first-launch-onboarding-pending", () => deps.isFirstLaunchOnboardingPending())
+  ipc.handle("finish-first-launch-onboarding", (_event: IpcMainInvokeEvent, createDefaultProject: boolean) =>
+    deps.finishFirstLaunchOnboarding(createDefaultProject),
+  )
+  ipc.handle("is-old-layout-eligible", () => deps.isOldLayoutEligible())
   ipc.handle("get-display-backend", () => deps.getDisplayBackend())
   ipc.handle("set-display-backend", (_event: IpcMainInvokeEvent, backend: string | null) =>
     deps.setDisplayBackend(backend),
@@ -94,9 +101,11 @@ export function registerIpcHandlers(deps: Deps) {
   })
   ipc.handle("store-delete", (_event: IpcMainInvokeEvent, name: string, key: string) => {
     getStore(name).delete(key)
+    void removeStoreFileIfEmpty(name)
   })
   ipc.handle("store-clear", (_event: IpcMainInvokeEvent, name: string) => {
     getStore(name).clear()
+    void removeStoreFileIfEmpty(name)
   })
   ipc.handle("store-keys", (_event: IpcMainInvokeEvent, name: string) => {
     const store = getStore(name)
@@ -167,8 +176,11 @@ export function registerIpcHandlers(deps: Deps) {
   )
 
   ipc.on("open-link", (_event: IpcMainEvent, value: unknown) => {
-    const url = safeExternalUrl(value)
-    if (url) void shell.openExternal(url)
+    if (typeof value === "string") openExternalURL(value)
+  })
+
+  ipc.on("open-local-file", (_event: IpcMainEvent, value: unknown) => {
+    if (typeof value === "string") openLocalFileURL(value)
   })
 
   ipc.handle("open-path", async (_event: IpcMainInvokeEvent, path: string, app?: string) => {

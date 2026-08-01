@@ -2,13 +2,18 @@ import windowState from "electron-window-state"
 import { resolveThemeVariant } from "@slopcode-ai/ui/theme/resolve"
 import type { DesktopTheme } from "@slopcode-ai/ui/theme/types"
 import oc2ThemeJson from "../../../ui/src/theme/themes/oc-2.json"
+import { randomUUID } from "node:crypto"
+import { rmSync } from "node:fs"
 import { app, BrowserWindow, dialog, net, nativeImage, nativeTheme, protocol, shell } from "electron"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { TitlebarTheme } from "../preload/types"
 import { exportDebugLogs, write as writeLog } from "./logging"
-import { getStore } from "./store"
-import { PINCH_ZOOM_ENABLED_KEY } from "./store-keys"
+import { getStore, removeStoreFile } from "./store"
+import { PINCH_ZOOM_ENABLED_KEY, WINDOW_IDS_KEY } from "./store-keys"
+import { resolveExternalURL, resolveLocalFilePath } from "./external-url"
+import { createWindowRegistry } from "./window-registry"
+import { safeWindowURL } from "./window-state"
 import { createUnresponsiveSampler } from "./unresponsive"
 import { ipcAuthorization, isTrustedRendererUrl, protectWindow } from "./security"
 
@@ -40,17 +45,30 @@ protocol.registerSchemesAsPrivileged([
 
 let backgroundColor: string | undefined
 let relaunchHandler = () => {
+  setAppQuitting()
   app.relaunch()
   app.exit(0)
 }
 const titlebarThemes = new WeakMap<BrowserWindow, Partial<TitlebarTheme>>()
 const pinchZoomEnabled = new WeakMap<BrowserWindow, boolean>()
+const registry = createWindowRegistry<BrowserWindow>({
+  read: () => getStore().get(WINDOW_IDS_KEY),
+  write: (ids) => getStore().set(WINDOW_IDS_KEY, ids),
+  cleanup: (id) => {
+    rmSync(join(app.getPath("userData"), windowStateFile(id)), { force: true })
+    removeStoreFile(windowDataFile(id))
+  },
+})
 const titlebarHeight = 40
 const maxZoomLevel = 10
 const minZoomLevel = 0.2
 
 export function setRelaunchHandler(handler: () => void) {
   relaunchHandler = handler
+}
+
+export function setAppQuitting(quitting = true) {
+  registry.setQuitting(quitting)
 }
 
 export function setBackgroundColor(color: string) {
@@ -112,14 +130,28 @@ export function getPinchZoomEnabled() {
   return getStore().get(PINCH_ZOOM_ENABLED_KEY) === true
 }
 
+export function getLastFocusedWindow() {
+  const focused = BrowserWindow.getFocusedWindow()
+  if (focused) return focused
+  const win = registry.lastFocused()
+  if (!win || win.isDestroyed()) return null
+  return win
+}
+
+export function restoreMainWindows() {
+  const ids = registry.persisted()
+  return (ids.length ? ids : [randomUUID()]).map((id) => createMainWindow(id))
+}
+
 export function setDockIcon() {
   if (process.platform !== "darwin") return
   const icon = nativeImage.createFromPath(join(iconsDir(), "dock.png"))
   if (!icon.isEmpty()) app.dock?.setIcon(icon)
 }
 
-export function createMainWindow() {
+export function createMainWindow(id: string = randomUUID()) {
   const state = windowState({
+    file: windowStateFile(id),
     defaultWidth: 1280,
     defaultHeight: 800,
   })
@@ -158,7 +190,7 @@ export function createMainWindow() {
     },
   })
 
-  protectWindow(win, (url) => shell.openExternal(url), dev)
+  protectWindow(win, openExternalURL, dev)
   allowRendererPermissions(win)
   wireWindowRecovery(win, "main")
 
@@ -169,6 +201,7 @@ export function createMainWindow() {
   })
 
   state.manage(win)
+  registerWindow(win, id)
   loadWindow(win, "index.html", dev)
   wireZoom(win)
 
@@ -177,6 +210,41 @@ export function createMainWindow() {
   })
 
   return win
+}
+
+export function openExternalURL(value: string) {
+  const url = resolveExternalURL(value)
+  if (!url) {
+    writeLog("window", "blocked external target", { url: value }, "warn")
+    return
+  }
+  void shell.openExternal(url)
+}
+
+export function openLocalFileURL(value: string) {
+  const path = resolveLocalFilePath(value)
+  if (!path) {
+    writeLog("window", "blocked local file target", { url: value }, "warn")
+    return
+  }
+  void shell.openPath(path).then((error) => {
+    if (error) writeLog("window", "failed to open local file", { path, error }, "error")
+  })
+}
+
+function registerWindow(win: BrowserWindow, id: string) {
+  registry.register(id, win)
+  win.on("focus", () => registry.focused(id))
+  win.on("session-end", () => registry.setQuitting())
+  win.on("closed", () => registry.closed(id))
+}
+
+function windowStateFile(id: string) {
+  return `window-state-${id.replace(/[^a-zA-Z0-9._-]/g, "-")}.json`
+}
+
+function windowDataFile(id: string) {
+  return `slopcode.window.${id.replace(/[^a-zA-Z0-9._-]/g, "-")}.dat`
 }
 
 export function registerRendererProtocol() {
@@ -290,7 +358,7 @@ function wireWindowRecovery(win: BrowserWindow, name: string) {
         errorCode,
         errorDescription,
         validatedURL,
-        currentURL: win.webContents.getURL(),
+        currentURL: safeWindowURL(win),
         isMainFrame,
       },
       "error",
@@ -315,7 +383,7 @@ function wireWindowRecovery(win: BrowserWindow, name: string) {
     writeLog(
       "window",
       "renderer process gone",
-      { window: name, currentURL: win.webContents.getURL(), details },
+      { window: name, currentURL: safeWindowURL(win), details },
       "error",
     )
     void show(
@@ -325,12 +393,12 @@ function wireWindowRecovery(win: BrowserWindow, name: string) {
     )
   })
   win.on("unresponsive", () => {
-    writeLog("window", "renderer unresponsive", { window: name, currentURL: win.webContents.getURL() }, "error")
+    writeLog("window", "renderer unresponsive", { window: name, currentURL: safeWindowURL(win) }, "error")
     sampler.start()
     void show("SlopCode is not responding", "You can relaunch the app, open the logs, or keep waiting.", true)
   })
   win.on("responsive", () => {
-    writeLog("window", "renderer responsive", { window: name, currentURL: win.webContents.getURL() }, "error")
+    writeLog("window", "renderer responsive", { window: name, currentURL: safeWindowURL(win) }, "error")
     sampler.stopAndFlush()
   })
   win.webContents.on("console-message", (_event, level, message, line, sourceId) => {

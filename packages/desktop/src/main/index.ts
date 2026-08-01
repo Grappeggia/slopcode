@@ -29,7 +29,10 @@ import {
 import { setupAutoUpdater, showUpdaterDialog } from "./updater"
 import {
   createMainWindow,
+  getLastFocusedWindow,
   registerRendererProtocol,
+  restoreMainWindows,
+  setAppQuitting,
   setRelaunchHandler,
   setBackgroundColor,
   setDockIcon,
@@ -38,6 +41,14 @@ import { createWslServersController } from "./wsl/servers"
 import { registerWslIpcHandlers } from "./wsl/ipc"
 import { spawnWslSidecar } from "./wsl/sidecar"
 import { migrate } from "./migrate"
+import { cleanupStoreFiles } from "./store-cleanup"
+import {
+  finishFirstLaunchOnboarding,
+  initializeOldLayoutEligibility,
+  isFirstLaunchOnboardingPending,
+  isOldLayoutEligible,
+} from "./onboarding"
+import { safeWebContentsURL } from "./window-state"
 
 const APP_NAMES: Record<string, string> = {
   dev: "SlopCode Dev",
@@ -70,7 +81,8 @@ function useEnvProxy() {
 function emitDeepLinks(urls: string[]) {
   if (urls.length === 0) return
   pendingDeepLinks.push(...urls)
-  if (mainWindow) sendDeepLinks(mainWindow, urls)
+  const win = getLastFocusedWindow() ?? mainWindow
+  if (win) sendDeepLinks(win, urls)
 }
 
 async function killSidecar() {
@@ -195,8 +207,9 @@ const main = Effect.gen(function* () {
       emitDeepLinks(urls)
     }
     if (mainWindow) {
-      mainWindow.show()
-      mainWindow.focus()
+      const win = getLastFocusedWindow() ?? mainWindow
+      win?.show()
+      win?.focus()
     }
   })
 
@@ -207,6 +220,7 @@ const main = Effect.gen(function* () {
   })
 
   app.on("before-quit", () => {
+    setAppQuitting()
     void stopSidecars()
   })
 
@@ -219,7 +233,7 @@ const main = Effect.gen(function* () {
   })
 
   app.on("render-process-gone", (_event, webContents, details) => {
-    writeLog("window", "app render process gone", { url: webContents.getURL(), details }, "error")
+    writeLog("window", "app render process gone", { url: safeWebContentsURL(webContents), details }, "error")
   })
 
   setRelaunchHandler(() => {
@@ -228,6 +242,7 @@ const main = Effect.gen(function* () {
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
+      setAppQuitting()
       void stopSidecars().finally(() => app.exit(0))
     })
   }
@@ -237,6 +252,19 @@ const main = Effect.gen(function* () {
   yield* Effect.promise(() => app.whenReady())
 
   if (!TEST_ONBOARDING) migrate()
+  initializeOldLayoutEligibility(app.getPath("userData"))
+  yield* Effect.promise(() => cleanupStoreFiles(app.getPath("userData"))).pipe(
+    Effect.tap((result) =>
+      Effect.sync(() => {
+        if (result.deleted.length) logger.log("cleaned scoped store files", { scanned: result.scanned, count: result.deleted.length })
+      }),
+    ),
+    Effect.catch((error) =>
+      Effect.sync(() => {
+        logger.warn("failed to clean scoped store files", error)
+      }),
+    ),
+  )
   app.setAsDefaultProtocolClient("slopcode")
   registerRendererProtocol()
   setDockIcon()
@@ -256,6 +284,9 @@ const main = Effect.gen(function* () {
     consumeInitialDeepLinks: () => pendingDeepLinks.splice(0),
     getDefaultServerUrl: () => getDefaultServerUrl(),
     setDefaultServerUrl: (url) => setDefaultServerUrl(url),
+    isFirstLaunchOnboardingPending,
+    finishFirstLaunchOnboarding,
+    isOldLayoutEligible,
     getDisplayBackend: async () => null,
     setDisplayBackend: async () => undefined,
     parseMarkdown: async (markdown) => parseMarkdown(markdown),
@@ -347,11 +378,12 @@ const main = Effect.gen(function* () {
 
   yield* Fiber.await(loadingTask)
 
-  mainWindow = createMainWindow()
-  if (mainWindow) {
+  const windows = restoreMainWindows()
+  mainWindow = windows[0] ?? null
+  if (windows.length) {
     createMenu({
       trigger: (id) => {
-        const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+        const win = getLastFocusedWindow() ?? mainWindow
         if (win) sendMenuCommand(win, id)
       },
       checkForUpdates: () => {
@@ -362,6 +394,9 @@ const main = Effect.gen(function* () {
       },
     })
   }
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createMainWindow()
+  })
 })
 
 Effect.runFork(main)
