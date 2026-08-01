@@ -5,6 +5,8 @@ import type { Target } from "@/control-plane/types"
 import { Workspace } from "@/control-plane/workspace"
 import { WorkspaceAdapterRuntime } from "@/control-plane/workspace-adapter-runtime"
 import { Service as RemotePairingService } from "../remote-pairing"
+import type { PairingScope } from "../remote-pairing"
+import { Project } from "@/project/project"
 import * as Fence from "@/server/shared/fence"
 import { getWorkspaceRouteSessionID, workspaceProxyURL } from "@/server/shared/workspace-routing"
 import { Session } from "@/session/session"
@@ -65,11 +67,7 @@ function selectedWorkspaceID(
   return parseWorkspaceID(workspaceParam) ?? InvalidWorkspaceID
 }
 
-function selectedDirectory(
-  request: HttpServerRequest.HttpServerRequest,
-  url: URL,
-  sessionDirectory?: string,
-): string {
+function selectedDirectory(request: HttpServerRequest.HttpServerRequest, url: URL, sessionDirectory?: string): string {
   return (
     sessionDirectory ||
     url.searchParams.get("directory") ||
@@ -98,6 +96,24 @@ function resolveTarget(workspace: Workspace.Info): Effect.Effect<Target> {
   return WorkspaceAdapterRuntime.target(workspace)
 }
 
+function resolvePairingScope(
+  request: HttpServerRequest.HttpServerRequest,
+  url: URL,
+  workspace: Workspace.Info | void,
+  session: Session.Info | undefined,
+): Effect.Effect<PairingScope | undefined, never, Project.Service> {
+  if (session) return Effect.succeed({ projectID: session.projectID, directory: session.directory })
+  if (workspace?.directory) return Effect.succeed({ projectID: workspace.projectID, directory: workspace.directory })
+  const directory = selectedDirectory(request, url)
+  return Project.Service.use((service) =>
+    service.fromDirectory(directory).pipe(
+      Effect.map(({ project }) => ({ projectID: project.id, directory })),
+      Effect.catch(() => Effect.succeed(undefined)),
+      Effect.catchDefect(() => Effect.succeed(undefined)),
+    ),
+  )
+}
+
 function proxyRemote(
   client: HttpClient.HttpClient,
   request: HttpServerRequest.HttpServerRequest,
@@ -107,7 +123,7 @@ function proxyRemote(
   sync: boolean,
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, never, Socket.WebSocketConstructor | Workspace.Service> {
   return Effect.gen(function* () {
-  if (sync && !(yield* Workspace.Service.use((svc) => svc.isSyncing(workspaceID)))) {
+    if (sync && !(yield* Workspace.Service.use((svc) => svc.isSyncing(workspaceID)))) {
       return HttpServerResponse.text(`broken sync connection for workspace: ${workspaceID}`, {
         status: 503,
         contentType: "text/plain; charset=utf-8",
@@ -115,7 +131,9 @@ function proxyRemote(
     }
     const proxyURL = workspaceProxyURL(target.url, url)
     const headers = request.headers as Record<string, string>
-    if (headers["upgrade"]?.toLowerCase() === "websocket") return yield* HttpApiProxy.websocket(request, proxyURL)
+    if (headers["upgrade"]?.toLowerCase() === "websocket") {
+      return yield* HttpApiProxy.websocket(request, proxyURL, target.headers)
+    }
     const response = yield* HttpApiProxy.http(client, proxyURL, target.headers, request)
     const fence = Fence.parse(new Headers(response.headers))
     if (fence) {
@@ -136,7 +154,7 @@ function proxyRemote(
 function planRequest(
   request: HttpServerRequest.HttpServerRequest,
   session?: Session.Info,
-): Effect.Effect<RequestPlan, never, Workspace.Service | RemotePairingService> {
+): Effect.Effect<RequestPlan, never, Workspace.Service | RemotePairingService | Project.Service> {
   return Effect.gen(function* () {
     const url = requestURL(request)
     const envWorkspaceID = configuredWorkspaceID()
@@ -157,15 +175,21 @@ function planRequest(
     }
 
     if (workspaceID && !envWorkspaceID) {
-      const selected: SelectedPlan = yield* RemotePairingService.use((service) => service.target(workspaceID)).pipe(
-        Effect.map((selected): SelectedPlan => ({ _tag: "Selected", selected })),
-        Effect.catchTag("RemotePairing.TargetUnavailableError", (error) =>
-          Effect.succeed<SelectedPlan>({
-            _tag: "Response",
-            response: HttpServerResponse.text(error.message, { status: 409, contentType: "text/plain; charset=utf-8" }),
-          }),
-        ),
-      )
+      const scope = yield* resolvePairingScope(request, url, workspace, session)
+      const selected: SelectedPlan = scope
+        ? yield* RemotePairingService.use((service) => service.target(workspaceID, scope)).pipe(
+            Effect.map((selected): SelectedPlan => ({ _tag: "Selected", selected })),
+            Effect.catchTag("RemotePairing.TargetUnavailableError", (error) =>
+              Effect.succeed<SelectedPlan>({
+                _tag: "Response",
+                response: HttpServerResponse.text(error.message, {
+                  status: 409,
+                  contentType: "text/plain; charset=utf-8",
+                }),
+              }),
+            ),
+          )
+        : { _tag: "Selected", selected: undefined }
       if (selected._tag === "Response") return selected
       if (selected.selected) {
         if (selected.selected.target.type === "remote") {
@@ -209,7 +233,8 @@ function routeWorkspace<E>(
     return Effect.succeed(HttpServerResponse.text("Invalid workspace query parameter", { status: 400 }))
   }
   if (plan._tag === "MissingWorkspace") return Effect.succeed(missingWorkspaceResponse(plan.workspaceID))
-  if (plan._tag === "Remote") return proxyRemote(client, plan.request, plan.workspaceID, plan.target, plan.url, plan.sync)
+  if (plan._tag === "Remote")
+    return proxyRemote(client, plan.request, plan.workspaceID, plan.target, plan.url, plan.sync)
   return effect.pipe(
     Effect.provideService(
       RouteLocationContext,
@@ -230,6 +255,7 @@ function routeHttpApiWorkspace<E>(
   | Session.Service
   | Workspace.Service
   | RemotePairingService
+  | Project.Service
   | HttpServerRequest.HttpServerRequest
   | Socket.WebSocketConstructor
 > {
@@ -255,6 +281,7 @@ export const serverWorkspaceRoutingLayer = Layer.effect(
     const makeWebSocket = yield* Socket.WebSocketConstructor
     const workspace = yield* Workspace.Service
     const session = yield* Session.Service
+    const project = yield* Project.Service
     const pairings = yield* RemotePairingService
     const client = yield* HttpClient.HttpClient
     return RouteLocationMiddleware.of((effect) =>
@@ -262,6 +289,7 @@ export const serverWorkspaceRoutingLayer = Layer.effect(
         Effect.provideService(Socket.WebSocketConstructor, makeWebSocket),
         Effect.provideService(Workspace.Service, workspace),
         Effect.provideService(Session.Service, session),
+        Effect.provideService(Project.Service, project),
         Effect.provideService(RemotePairingService, pairings),
       ),
     )

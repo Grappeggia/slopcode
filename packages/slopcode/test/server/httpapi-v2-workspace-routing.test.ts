@@ -31,6 +31,7 @@ import {
 import * as Socket from "effect/unstable/socket/Socket"
 import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
 import { RouteLocationContext, RouteLocationMiddleware } from "@slopcode-ai/server/middleware/route-location"
+import { RemoteTargetCapabilityHeader } from "../../../protocol/src/remote"
 
 const workspaceLayer = workspaceLayerWithRuntimeFlags({ experimentalWorkspaces: true })
 
@@ -172,9 +173,13 @@ const echoWebSocket = (request: HttpServerRequest.HttpServerRequest) =>
     const write = yield* socket.writer
     yield* socket
       .runRaw((message) => write(`echo:${String(message)}`), {
-        onOpen: write(`protocol:${request.headers["sec-websocket-protocol"] ?? "none"}`).pipe(
-          Effect.catch(() => Effect.void),
-        ),
+        onOpen: Effect.all(
+          [
+            write(`protocol:${request.headers["sec-websocket-protocol"] ?? "none"}`),
+            write(`capability:${request.headers[RemoteTargetCapabilityHeader] ?? "none"}`),
+          ],
+          { concurrency: "unbounded", discard: true },
+        ).pipe(Effect.catch(() => Effect.void)),
       })
       .pipe(Effect.catch(() => Effect.void))
     return HttpServerResponse.empty()
@@ -412,6 +417,7 @@ describe.serial("shared /api workspace routing middleware", () => {
         projectID: project.project.id,
         type: "remote-v2-pty-target",
         url: `${remoteUrl}/base`,
+        headers: { [RemoteTargetCapabilityHeader]: "pty-secret" },
       })
 
       yield* serveServerProbe
@@ -428,6 +434,7 @@ describe.serial("shared /api workspace routing middleware", () => {
       const write = yield* socket.writer
 
       expect(yield* Queue.take(messages)).toBe("protocol:chat")
+      expect(yield* Queue.take(messages)).toBe("capability:pty-secret")
       yield* write("hello")
       expect(yield* Queue.take(messages)).toBe("echo:hello")
     })),

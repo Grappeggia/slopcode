@@ -15,25 +15,84 @@ import {
   RemoteWorkspaceSsh,
   RemoteWorkspaceTargetInput,
 } from "../../../../../../protocol/src/remote"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schema, Semaphore } from "effect"
+import path from "node:path"
 import os from "node:os"
 
-const RemotePairingStore = Schema.Struct({
-  version: Schema.Literal("v1"),
+const StoredTarget = Schema.Struct({
+  pairingID: RemotePairingID,
+  hostID: Schema.String,
+  workspace: RemoteWorkspace,
+  target: RemoteTarget,
+}).annotate({ identifier: "RemotePairing.StoredTarget" })
+
+const StoredScope = Schema.Struct({
+  projectID: Schema.String,
+  directory: Schema.String,
   pairings: Schema.Array(RemotePairing),
-  targets: Schema.Array(RemoteWorkspaceTargetInput),
+  targets: Schema.Array(StoredTarget),
   selectedPairingID: Schema.optional(RemotePairingID),
+}).annotate({ identifier: "RemotePairing.Scope" })
+
+const RemotePairingStore = Schema.Struct({
+  version: Schema.Literal("v2"),
+  revision: Schema.Number,
+  scopes: Schema.Array(StoredScope),
 }).annotate({ identifier: "RemotePairingStore" })
 
 type PairingStore = typeof RemotePairingStore.Type
-type WorkspaceID = typeof RemoteWorkspace.Type["id"]
+type ScopeState = typeof StoredScope.Type
+type WorkspaceID = (typeof RemoteWorkspace.Type)["id"]
+
+export type PairingScope = {
+  readonly projectID: string
+  readonly directory: string
+}
 
 function emptyStore(): PairingStore {
   return {
-    version: "v1",
+    version: "v2",
+    revision: 0,
+    scopes: [],
+  }
+}
+
+function normalizeScope(scope: PairingScope): PairingScope {
+  return {
+    projectID: scope.projectID,
+    directory: path.resolve(scope.directory),
+  }
+}
+
+function scopeKey(scope: PairingScope) {
+  const normalized = normalizeScope(scope)
+  return `${normalized.projectID}\u0000${normalized.directory}`
+}
+
+function emptyScope(scope: PairingScope): ScopeState {
+  const normalized = normalizeScope(scope)
+  return {
+    projectID: normalized.projectID,
+    directory: normalized.directory,
     pairings: [],
     targets: [],
     selectedPairingID: undefined,
+  }
+}
+
+function findScope(store: PairingStore, scope: PairingScope) {
+  const key = scopeKey(scope)
+  return store.scopes.find((item) => scopeKey(item) === key)
+}
+
+function putScope(store: PairingStore, next: ScopeState) {
+  const key = scopeKey(next)
+  const scopes = store.scopes.filter((item) => scopeKey(item) !== key)
+  if (next.pairings.length || next.targets.length || next.selectedPairingID) scopes.push(next)
+  return {
+    ...store,
+    revision: store.revision + 1,
+    scopes,
   }
 }
 
@@ -44,23 +103,17 @@ const decodeRemotePairedHost = Schema.decodeUnknownSync(RemotePairedHost)
 const decodeRemoteTarget = Schema.decodeUnknownSync(RemoteTarget)
 const decodeRemoteWorkspace = Schema.decodeUnknownSync(RemoteWorkspace)
 const decodeRemoteWorkspaceSsh = Schema.decodeUnknownSync(RemoteWorkspaceSsh)
-const decodeRemoteWorkspaceTargetInput = Schema.decodeUnknownSync(RemoteWorkspaceTargetInput)
 const decodePairingStore = (input: string): PairingStore => {
   try {
     return Schema.decodeUnknownSync(RemotePairingStore)(JSON.parse(input))
   } catch {
-    try {
-      return {
-        ...emptyStore(),
-        pairings: Schema.decodeUnknownSync(Schema.Array(RemotePairing))(JSON.parse(input)),
-      }
-    } catch {
-      return emptyStore()
-    }
+    // Older stores did not carry instance ownership. Treat them as unusable
+    // instead of making an unscoped capability available after an upgrade.
+    return emptyStore()
   }
 }
 const remotePairingIntegrationID = Schema.decodeUnknownSync(IntegrationSchema.ID)("remote.pairing")
-type WorkspaceMode = typeof RemoteWorkspace.Type["mode"]
+type WorkspaceMode = (typeof RemoteWorkspace.Type)["mode"]
 
 export class SshValidationPendingError extends Schema.TaggedErrorClass<SshValidationPendingError>()(
   "RemotePairing.SshValidationPendingError",
@@ -133,7 +186,14 @@ function workspaceTarget(workspace: typeof RemoteWorkspace.Type) {
 }
 
 function sameWorkspace(left: typeof RemoteWorkspace.Type, right: typeof RemoteWorkspace.Type) {
-  if (left.id !== right.id || left.mode !== right.mode || left.directory !== right.directory || left.name !== right.name) return false
+  if (
+    left.id !== right.id ||
+    left.mode !== right.mode ||
+    left.directory !== right.directory ||
+    left.name !== right.name
+  ) {
+    return false
+  }
   if (left.mode === "local" && right.mode === "local") return true
   if (left.mode === "ssh" && right.mode === "ssh") {
     return (
@@ -148,11 +208,16 @@ function sameWorkspace(left: typeof RemoteWorkspace.Type, right: typeof RemoteWo
 
 function requireRegisteredTarget(
   pairing: typeof RemotePairing.Type,
-  store: PairingStore,
+  scope: ScopeState,
 ): typeof RemoteTarget.Type | TargetUnavailableError {
   const local = workspaceTarget(pairing.workspace)
   if (local) return local
-  const found = store.targets.find((target) => sameWorkspace(target.workspace, pairing.workspace))
+  const found = scope.targets.find(
+    (target) =>
+      target.pairingID === pairing.id &&
+      target.hostID === pairing.host.id &&
+      sameWorkspace(target.workspace, pairing.workspace),
+  )
   if (found) return found.target
   return new TargetUnavailableError({
     message: "Remote workspace target must be registered by an authenticated desktop supervisor before selection",
@@ -165,22 +230,33 @@ export type ResolvedTarget = {
 }
 
 export interface Interface {
-  readonly hosts: () => Effect.Effect<ReadonlyArray<typeof RemotePairedHost.Type>>
-  readonly create: (input: typeof RemotePairingCreateInput.Type) => Effect.Effect<typeof RemotePairing.Type>
-  readonly revoke: (pairingID: typeof RemotePairingID.Type) => Effect.Effect<boolean>
+  readonly hosts: (scope: PairingScope) => Effect.Effect<ReadonlyArray<typeof RemotePairedHost.Type>>
+  readonly create: (
+    input: typeof RemotePairingCreateInput.Type,
+    scope: PairingScope,
+  ) => Effect.Effect<typeof RemotePairing.Type>
+  readonly revoke: (pairingID: typeof RemotePairingID.Type, scope: PairingScope) => Effect.Effect<boolean>
   readonly registerTarget: (
     input: typeof RemoteWorkspaceTargetInput.Type,
+    scope: PairingScope,
   ) => Effect.Effect<void, TargetRegistrationError>
   readonly select: (
     input: typeof RemoteWorkspaceSelectInput.Type,
+    scope: PairingScope,
   ) => Effect.Effect<typeof RemotePairingRecord.Type | undefined, TargetUnavailableError>
-  readonly target: (workspaceID: WorkspaceID) => Effect.Effect<ResolvedTarget | undefined, TargetUnavailableError>
+  readonly target: (
+    workspaceID: WorkspaceID,
+    scope: PairingScope,
+  ) => Effect.Effect<ResolvedTarget | undefined, TargetUnavailableError>
   readonly validateSsh: (
     workspace: typeof RemoteWorkspaceSsh.Type,
+    scope: PairingScope,
   ) => Effect.Effect<typeof RemoteWorkspaceSsh.Type, SshValidationPendingError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@slopcode/RemotePairing") {}
+
+const mutationLock = Semaphore.makeUnsafe(1)
 
 export const layer = Layer.effect(
   Service,
@@ -193,26 +269,34 @@ export const layer = Layer.effect(
       return { credential: stored, store: decodePairingStore(stored.value.key) }
     })
 
-    const save = Effect.fn("RemotePairing.save")(function* (store: PairingStore) {
-      const stored = yield* load()
-      if (store.pairings.length === 0 && store.targets.length === 0 && !store.selectedPairingID) {
-        if (stored.credential) yield* credential.remove(stored.credential.id)
+    const save = Effect.fn("RemotePairing.save")(function* (
+      stored: typeof Credential.Stored.Type | undefined,
+      store: PairingStore,
+    ) {
+      if (store.scopes.length === 0) {
+        if (stored) yield* credential.remove(stored.id)
+        return
+      }
+      const value = new Credential.Key({
+        type: "key",
+        key: JSON.stringify(store),
+      })
+      if (stored) {
+        yield* credential.update(stored.id, { label: "remote-pairings", value })
         return
       }
       yield* credential.create({
         integrationID: remotePairingIntegrationID,
         label: "remote-pairings",
-        value: new Credential.Key({
-          type: "key",
-          key: JSON.stringify(store),
-        }),
+        value,
       })
     })
 
-    const hosts = Effect.fn("RemotePairing.hosts")(function* () {
-      const pairings = (yield* load()).store.pairings
+    const hosts = Effect.fn("RemotePairing.hosts")(function* (scope: PairingScope) {
+      const state = findScope((yield* load()).store, scope)
+      if (!state) return []
       const grouped = new Map<string, Array<typeof RemotePairingRecord.Type>>()
-      for (const pairing of pairings) {
+      for (const pairing of state.pairings) {
         const next = redact(pairing)
         grouped.set(next.host.id, [...(grouped.get(next.host.id) ?? []), next])
       }
@@ -224,95 +308,160 @@ export const layer = Layer.effect(
       )
     })
 
-    const create = Effect.fn("RemotePairing.create")(function* (input: typeof RemotePairingCreateInput.Type) {
-      const stored = yield* load()
-      const existing = stored.store.pairings.find(
-        (pairing) => pairing.device.id === input.device.id && pairing.workspace.id === input.workspace.id,
+    const create = Effect.fn("RemotePairing.create")(function* (
+      input: typeof RemotePairingCreateInput.Type,
+      scope: PairingScope,
+    ) {
+      return yield* mutationLock.withPermit(
+        Effect.gen(function* () {
+          const stored = yield* load()
+          const current = findScope(stored.store, scope) ?? emptyScope(scope)
+          const existing = current.pairings.find(
+            (pairing) => pairing.device.id === input.device.id && sameWorkspace(pairing.workspace, input.workspace),
+          )
+          const next = decodeRemotePairing({
+            version: "v1",
+            id: existing?.id ?? pairingID(),
+            code: pairingCode(),
+            device: Schema.decodeUnknownSync(RemoteDevice)(input.device),
+            host: existing?.host ?? host(input.workspace.mode),
+            workspace: decodeRemoteWorkspace(input.workspace),
+            capability: input.capability ?? capability(input.workspace.mode),
+          })
+          const selectedPairingID = current.selectedPairingID === next.id ? next.id : current.selectedPairingID
+          yield* save(
+            stored.credential,
+            putScope(stored.store, {
+              ...current,
+              pairings: [...current.pairings.filter((pairing) => pairing.id !== next.id), next],
+              selectedPairingID,
+            }),
+          )
+          return next
+        }),
       )
-      const next = decodeRemotePairing({
-        version: "v1",
-        id: existing?.id ?? pairingID(),
-        code: pairingCode(),
-        device: Schema.decodeUnknownSync(RemoteDevice)(input.device),
-        host: existing?.host ?? host(input.workspace.mode),
-        workspace: decodeRemoteWorkspace(input.workspace),
-        capability: input.capability ?? capability(input.workspace.mode),
-      })
-      const selected = stored.store.selectedPairingID === next.id ? next.id : stored.store.selectedPairingID
-      yield* save({
-        ...stored.store,
-        pairings: [...stored.store.pairings.filter((pairing) => pairing.id !== next.id), next],
-        selectedPairingID: selected,
-      })
-      return next
     })
 
-    const revoke = Effect.fn("RemotePairing.revoke")(function* (pairingID: typeof RemotePairingID.Type) {
-      const stored = yield* load()
-      const removed = stored.store.pairings.find((pairing) => pairing.id === pairingID)
-      const pairings = stored.store.pairings.filter((pairing) => pairing.id !== pairingID)
-      if (pairings.length === stored.store.pairings.length) return false
-      const selectedPairingID = stored.store.selectedPairingID === pairingID ? undefined : stored.store.selectedPairingID
-      const targets = removed
-        ? stored.store.targets.filter((target) => target.workspace.id !== removed.workspace.id && target.pairingID !== pairingID)
-        : stored.store.targets
-      yield* save({ ...stored.store, pairings, selectedPairingID, targets })
-      return true
+    const revoke = Effect.fn("RemotePairing.revoke")(function* (
+      pairingID: typeof RemotePairingID.Type,
+      scope: PairingScope,
+    ) {
+      return yield* mutationLock.withPermit(
+        Effect.gen(function* () {
+          const stored = yield* load()
+          const current = findScope(stored.store, scope)
+          if (!current) return false
+          const pairings = current.pairings.filter((pairing) => pairing.id !== pairingID)
+          if (pairings.length === current.pairings.length) return false
+          yield* save(
+            stored.credential,
+            putScope(stored.store, {
+              ...current,
+              pairings,
+              targets: current.targets.filter((target) => target.pairingID !== pairingID),
+              selectedPairingID: current.selectedPairingID === pairingID ? undefined : current.selectedPairingID,
+            }),
+          )
+          return true
+        }),
+      )
     })
 
     const registerTarget = Effect.fn("RemotePairing.registerTarget")(function* (
       input: typeof RemoteWorkspaceTargetInput.Type,
+      scope: PairingScope,
     ) {
-      const stored = yield* load()
-      const pairing = input.pairingID
-        ? stored.store.pairings.find((item) => item.id === input.pairingID)
-        : stored.store.pairings.find((item) => item.workspace.id === input.workspace.id)
-      if (input.pairingID && !pairing) {
-        return yield* new TargetRegistrationError({
-          message: `Remote pairing not found: ${input.pairingID}`,
-        })
-      }
-      if (pairing && !sameWorkspace(pairing.workspace, input.workspace)) {
-        return yield* new TargetRegistrationError({
-          message: "Registered remote target must match the exact paired workspace selection",
-        })
-      }
-      const target = decodeRemoteWorkspaceTargetInput({
-        pairingID: input.pairingID,
-        workspace: input.workspace,
-        target: input.target,
-      })
-      yield* save({
-        ...stored.store,
-        targets: [...stored.store.targets.filter((item) => item.workspace.id !== target.workspace.id), target],
-      })
+      return yield* mutationLock.withPermit(
+        Effect.gen(function* () {
+          if (!input.pairingID) {
+            return yield* new TargetRegistrationError({
+              message: "Remote target registration requires an exact pairing ID",
+            })
+          }
+          const stored = yield* load()
+          const current = findScope(stored.store, scope)
+          if (!current) {
+            return yield* new TargetRegistrationError({
+              message: `Remote pairing not found: ${input.pairingID}`,
+            })
+          }
+          const pairing = current.pairings.find((item) => item.id === input.pairingID)
+          if (!pairing) {
+            return yield* new TargetRegistrationError({
+              message: `Remote pairing not found: ${input.pairingID}`,
+            })
+          }
+          if (!sameWorkspace(pairing.workspace, input.workspace)) {
+            return yield* new TargetRegistrationError({
+              message: "Registered remote target must match the exact paired workspace selection",
+            })
+          }
+          const target = Schema.decodeUnknownSync(RemoteTarget)(input.target)
+          const next: ScopeState = {
+            ...current,
+            targets: [
+              ...current.targets.filter(
+                (item) =>
+                  !(
+                    item.pairingID === pairing.id &&
+                    item.hostID === pairing.host.id &&
+                    sameWorkspace(item.workspace, pairing.workspace)
+                  ),
+              ),
+              {
+                pairingID: pairing.id,
+                hostID: pairing.host.id,
+                workspace: pairing.workspace,
+                target,
+              },
+            ],
+          }
+          yield* save(stored.credential, putScope(stored.store, next))
+        }),
+      )
     })
 
-    const select = Effect.fn("RemotePairing.select")(function* (input: typeof RemoteWorkspaceSelectInput.Type) {
-      const stored = yield* load()
-      const pairing = stored.store.pairings.find((item) => item.id === input.pairingID)
-      if (!pairing) return undefined
-      const target = requireRegisteredTarget(pairing, stored.store)
-      if (target instanceof TargetUnavailableError) return yield* target
-      yield* save({ ...stored.store, selectedPairingID: pairing.id })
-      return redact(pairing)
+    const select = Effect.fn("RemotePairing.select")(function* (
+      input: typeof RemoteWorkspaceSelectInput.Type,
+      scope: PairingScope,
+    ) {
+      return yield* mutationLock.withPermit(
+        Effect.gen(function* () {
+          const stored = yield* load()
+          const current = findScope(stored.store, scope)
+          const pairing = current?.pairings.find((item) => item.id === input.pairingID)
+          if (!pairing || !current) return undefined
+          const target = requireRegisteredTarget(pairing, current)
+          if (target instanceof TargetUnavailableError) return yield* target
+          yield* save(stored.credential, putScope(stored.store, { ...current, selectedPairingID: pairing.id }))
+          return redact(pairing)
+        }),
+      )
     })
 
-    const target = Effect.fn("RemotePairing.target")(function* (workspaceID: WorkspaceID) {
-      const stored = yield* load()
-      const pairing = stored.store.selectedPairingID
-        ? stored.store.pairings.find((item) => item.id === stored.store.selectedPairingID)
+    const target = Effect.fn("RemotePairing.target")(function* (workspaceID: WorkspaceID, scope: PairingScope) {
+      const state = findScope((yield* load()).store, scope)
+      const pairing = state?.selectedPairingID
+        ? state.pairings.find((item) => item.id === state.selectedPairingID)
         : undefined
-      if (!pairing || pairing.workspace.id !== workspaceID) return undefined
-      const active = requireRegisteredTarget(pairing, stored.store)
+      if (!state || !pairing || pairing.workspace.id !== workspaceID) return undefined
+      const active = requireRegisteredTarget(pairing, state)
       if (active instanceof TargetUnavailableError) return yield* active
       return { pairing: redact(pairing), target: active }
     })
 
-    const validateSsh = Effect.fn("RemotePairing.validateSsh")(function* (workspace: typeof RemoteWorkspaceSsh.Type) {
+    const validateSsh = Effect.fn("RemotePairing.validateSsh")(function* (
+      workspace: typeof RemoteWorkspaceSsh.Type,
+      scope: PairingScope,
+    ) {
       decodeRemoteWorkspaceSsh(workspace)
-      const found = (yield* load()).store.targets.find((target) => sameWorkspace(target.workspace, workspace))
-      if (found) return workspace
+      const state = findScope((yield* load()).store, scope)
+      const pairing = state?.pairings.find(
+        (item) =>
+          sameWorkspace(item.workspace, workspace) &&
+          !(requireRegisteredTarget(item, state) instanceof TargetUnavailableError),
+      )
+      if (pairing) return workspace
       return yield* new SshValidationPendingError({
         message: "SSH workspace must be validated by an authenticated desktop supervisor target before selection",
       })

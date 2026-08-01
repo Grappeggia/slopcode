@@ -80,6 +80,19 @@ describe("workspaceProxyURL", () => {
     expect(result.searchParams.get("keep")).toBe("yes")
   })
 
+  test("removes client credentials from forwarded query params", () => {
+    const url = new URL(
+      "http://localhost/config?auth_token=a&access_token=b&client_id=c&client_secret=d&api_key=e&keep=yes",
+    )
+    const result = workspaceProxyURL("http://remote:8080/base", url)
+    expect(result.searchParams.get("auth_token")).toBeNull()
+    expect(result.searchParams.get("access_token")).toBeNull()
+    expect(result.searchParams.get("client_id")).toBeNull()
+    expect(result.searchParams.get("client_secret")).toBeNull()
+    expect(result.searchParams.get("api_key")).toBeNull()
+    expect(result.searchParams.get("keep")).toBe("yes")
+  })
+
   test("preserves hash from request", () => {
     const url = new URL("http://localhost/page#section")
     const result = workspaceProxyURL("http://remote:8080", url)

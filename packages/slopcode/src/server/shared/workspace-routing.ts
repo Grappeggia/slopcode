@@ -38,5 +38,12 @@ export function workspaceProxyURL(target: string | URL, requestURL: URL) {
   proxyURL.searchParams.delete("directory")
   proxyURL.searchParams.delete("location[workspace]")
   proxyURL.searchParams.delete("location[directory]")
+  for (const key of [...proxyURL.searchParams.keys()]) {
+    if (isClientCredentialQuery(key)) proxyURL.searchParams.delete(key)
+  }
   return proxyURL
+}
+
+function isClientCredentialQuery(key: string) {
+  return /(?:^|[_-])(auth|access|refresh|id|client|api|token|secret|password|passwd|credential)(?:$|[_-])/i.test(key)
 }

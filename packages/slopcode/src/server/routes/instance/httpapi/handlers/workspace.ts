@@ -36,6 +36,11 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
     const workspace = yield* Workspace.Service
     const pairings = yield* RemotePairingService
 
+    const remoteScope = Effect.fn("WorkspaceHttpApi.remoteScope")(function* () {
+      const instance = yield* InstanceState.context
+      return { projectID: instance.project.id, directory: instance.directory }
+    })
+
     const adapters = Effect.fn("WorkspaceHttpApi.adapters")(function* () {
       const instance = yield* InstanceState.context
       return yield* Effect.sync(() => listAdapters(instance.project.id))
@@ -114,7 +119,7 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
     })
 
     const remoteHosts = Effect.fn("WorkspaceHttpApi.remoteHosts")(function* () {
-      return yield* pairings.hosts()
+      return yield* pairings.hosts(yield* remoteScope())
     })
 
     const remotePairing = Effect.fn("WorkspaceHttpApi.remotePairing")(function* (ctx: {
@@ -123,11 +128,11 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
       const payload = yield* Schema.decodeUnknownEffect(RemotePairingCreateInput)(ctx.payload).pipe(
         Effect.mapError(() => new HttpApiError.BadRequest({})),
       )
-      return yield* pairings.create(payload)
+      return yield* pairings.create(payload, yield* remoteScope())
     })
 
     const remotePairingRemove = Effect.fn("WorkspaceHttpApi.remotePairingRemove")(function* (ctx) {
-      yield* pairings.revoke(ctx.params.pairingID)
+      yield* pairings.revoke(ctx.params.pairingID, yield* remoteScope())
     })
 
     const remoteSshValidate = Effect.fn("WorkspaceHttpApi.remoteSshValidate")(function* (ctx: {
@@ -136,7 +141,7 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
       const payload = yield* Schema.decodeUnknownEffect(RemoteWorkspaceSsh)(ctx.payload).pipe(
         Effect.mapError(() => new HttpApiError.BadRequest({})),
       )
-      return yield* pairings.validateSsh(payload).pipe(
+      return yield* pairings.validateSsh(payload, yield* remoteScope()).pipe(
         Effect.mapError(
           (error) =>
             new ApiWorkspaceRemoteSshValidationError({
@@ -150,7 +155,7 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
     const remoteSelect = Effect.fn("WorkspaceHttpApi.remoteSelect")(function* (ctx: {
       payload: typeof RemoteWorkspaceSelectInput.Type
     }) {
-      return yield* pairings.select(ctx.payload).pipe(
+      return yield* pairings.select(ctx.payload, yield* remoteScope()).pipe(
         Effect.mapError(
           (error) =>
             new ApiWorkspaceRemoteSelectError({
@@ -175,7 +180,7 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
       const payload = yield* Schema.decodeUnknownEffect(RemoteWorkspaceTargetInput)(ctx.payload).pipe(
         Effect.mapError(() => new HttpApiError.BadRequest({})),
       )
-      yield* pairings.registerTarget(payload).pipe(
+      yield* pairings.registerTarget(payload, yield* remoteScope()).pipe(
         Effect.mapError(
           (error) =>
             new ApiWorkspaceRemoteTargetError({

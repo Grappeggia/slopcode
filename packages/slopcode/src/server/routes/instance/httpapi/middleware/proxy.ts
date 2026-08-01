@@ -3,6 +3,7 @@ import { Effect, Stream } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { WebSocketTracker } from "../websocket-tracker"
+import { WebSocket as WebSocketClient } from "ws"
 
 function requestBody(request: HttpServerRequest.HttpServerRequest) {
   if (request.method === "GET" || request.method === "HEAD") return HttpBody.empty
@@ -14,13 +15,25 @@ function requestBody(request: HttpServerRequest.HttpServerRequest) {
 export function websocket(
   request: HttpServerRequest.HttpServerRequest,
   target: string | URL,
+  extra?: HeadersInit,
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, never, Socket.WebSocketConstructor> {
   return Effect.scoped(
     Effect.gen(function* () {
       const inbound = yield* Effect.orDie(request.upgrade)
+      const makeWebSocket = yield* Socket.WebSocketConstructor
       const outbound = yield* Socket.makeWebSocket(ProxyUtil.websocketTargetURL(target), {
         protocols: ProxyUtil.websocketProtocols(request.headers),
-      })
+      }).pipe(
+        Effect.provideService(
+          Socket.WebSocketConstructor,
+          extra
+            ? (url, protocols) =>
+                new WebSocketClient(url, protocols, {
+                  headers: Object.fromEntries(new Headers(ProxyUtil.headers({}, extra))),
+                }) as unknown as globalThis.WebSocket
+            : makeWebSocket,
+        ),
+      )
       const writeInbound = yield* inbound.writer
       const writeOutbound = yield* outbound.writer
       const closeSocket = (socket: Socket.Socket, write: (event: Socket.CloseEvent) => Effect.Effect<void, unknown>) =>

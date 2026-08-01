@@ -293,16 +293,44 @@ describe.serial("remote pairing HttpApi", () => {
           })
           expect(selectAfter.status).toBe(200)
 
-          const routedV2 = await requestWith(app, `/api/location?workspace=${sshWorkspaceID()}`, remoteTmp.path, {
-            headers: {
-              authorization: auth(),
-              cookie: "session=keep-local",
-              [RemoteTargetCapabilityHeader]: "client-forged",
-              "x-slopcode-remote-supervisor-token": "client-forged-supervisor",
+          const unauthenticatedRoutes = [
+            `/api/location?workspace=${sshWorkspaceID()}&auth_token=client-secret`,
+            `/api/event?workspace=${sshWorkspaceID()}`,
+            `/api/session/ses_remote_security/message?workspace=${sshWorkspaceID()}`,
+            `/api/pty/pty_remote/connect?workspace=${sshWorkspaceID()}&cursor=-1`,
+            `/pty/pty_remote/connect?workspace=${sshWorkspaceID()}&cursor=-1`,
+          ]
+          for (const route of unauthenticatedRoutes) {
+            const response = await requestWith(
+              app,
+              route,
+              remoteTmp.path,
+              route.includes("/pty/") ? { headers: { upgrade: "websocket", connection: "Upgrade" } } : undefined,
+            )
+            expect(response.status).toBe(401)
+          }
+
+          const routedV2 = await requestWith(
+            app,
+            `/api/location?workspace=${sshWorkspaceID()}&auth_token=${encodeURIComponent(Buffer.from("slopcode:secret").toString("base64"))}&client_id=client&client_secret=secret&api_key=key&keep=yes`,
+            remoteTmp.path,
+            {
+              headers: {
+                authorization: auth(),
+                cookie: "session=keep-local",
+                [RemoteTargetCapabilityHeader]: "client-forged",
+                "x-slopcode-remote-supervisor-token": "client-forged-supervisor",
+              },
             },
-          })
+          )
           expect(routedV2.status).toBe(200)
           expect(await routedV2.json()).toEqual({ proxied: true, path: "/bridge/api/location" })
+          const routedURL = new URL(proxied[0]!.url)
+          expect(routedURL.searchParams.get("auth_token")).toBeNull()
+          expect(routedURL.searchParams.get("client_id")).toBeNull()
+          expect(routedURL.searchParams.get("client_secret")).toBeNull()
+          expect(routedURL.searchParams.get("api_key")).toBeNull()
+          expect(routedURL.searchParams.get("keep")).toBe("yes")
 
           const routedV1 = await requestWith(app, `/config?workspace=${sshWorkspaceID()}`, remoteTmp.path, {
             headers: { authorization: auth() },
@@ -329,7 +357,7 @@ describe.serial("remote pairing HttpApi", () => {
 
           expect(proxied).toEqual([
             {
-              url: `http://127.0.0.1:${remote.port}/bridge/api/location`,
+              url: `http://127.0.0.1:${remote.port}/bridge/api/location?keep=yes`,
               capability: "secret",
               authorization: null,
               cookie: null,
@@ -350,4 +378,134 @@ describe.serial("remote pairing HttpApi", () => {
     }
   })
 
+  test.serial("scopes active pairings and serializes target mutations", async () => {
+    Flag.SLOPCODE_EXPERIMENTAL_WORKSPACES = true
+    await using first = await tmpdir({ git: true })
+    await using second = await tmpdir({ git: true })
+
+    await withSupervisorToken(() =>
+      withAuthEnv(async () => {
+        const app = handler()
+        const workspace = {
+          id: sshWorkspaceID(),
+          name: "Remote SSH",
+          mode: "ssh",
+          directory: first.path,
+          remoteDirectory: "/srv/project",
+          ssh: {
+            host: "example.test",
+            port: 22,
+            user: "marcos",
+          },
+        }
+        const create = (deviceID: string) =>
+          requestWith(app, WorkspacePaths.remotePairing, first.path, {
+            method: "POST",
+            headers: {
+              authorization: auth(),
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              device: {
+                id: deviceID,
+                name: deviceID,
+                platform: "android",
+                arch: "arm64",
+                version: "15",
+              },
+              workspace,
+            }),
+          })
+        const target = (pairingID: string, capability: string) =>
+          requestWith(app, WorkspacePaths.remoteTarget, first.path, {
+            method: "POST",
+            headers: {
+              authorization: auth(),
+              "content-type": "application/json",
+              "x-slopcode-remote-supervisor-token": "supervisor-secret",
+            },
+            body: JSON.stringify({
+              pairingID,
+              workspace,
+              target: {
+                type: "remote",
+                url: "http://127.0.0.1:1/bridge",
+                headers: { [RemoteTargetCapabilityHeader]: capability },
+              },
+            }),
+          })
+
+        const [firstResponse, secondResponse] = await Promise.all([create("dev_scope_a"), create("dev_scope_b")])
+        expect(firstResponse.status).toBe(200)
+        expect(secondResponse.status).toBe(200)
+        const firstPairing = await firstResponse.json()
+        const secondPairing = await secondResponse.json()
+        expect(firstPairing.id).not.toBe(secondPairing.id)
+
+        const otherScope = await requestWith(app, WorkspacePaths.remoteHosts, second.path, {
+          headers: { authorization: auth() },
+        })
+        expect(otherScope.status).toBe(200)
+        expect(await otherScope.json()).toEqual([])
+
+        expect(
+          (
+            await requestWith(app, WorkspacePaths.remoteSelect, first.path, {
+              method: "POST",
+              headers: { authorization: auth(), "content-type": "application/json" },
+              body: JSON.stringify({ pairingID: secondPairing.id }),
+            })
+          ).status,
+        ).toBe(409)
+        expect((await target(firstPairing.id, "first-secret")).status).toBe(204)
+        expect(
+          (
+            await requestWith(app, WorkspacePaths.remoteSelect, first.path, {
+              method: "POST",
+              headers: { authorization: auth(), "content-type": "application/json" },
+              body: JSON.stringify({ pairingID: secondPairing.id }),
+            })
+          ).status,
+        ).toBe(409)
+        expect((await target(secondPairing.id, "second-secret")).status).toBe(204)
+        expect(
+          (
+            await requestWith(app, WorkspacePaths.remoteSelect, first.path, {
+              method: "POST",
+              headers: { authorization: auth(), "content-type": "application/json" },
+              body: JSON.stringify({ pairingID: secondPairing.id }),
+            })
+          ).status,
+        ).toBe(200)
+
+        expect(
+          (
+            await requestWith(
+              app,
+              WorkspacePaths.remotePairingRemove.replace(":pairingID", firstPairing.id),
+              first.path,
+              { method: "DELETE", headers: { authorization: auth() } },
+            )
+          ).status,
+        ).toBe(204)
+        expect(
+          (
+            await requestWith(app, WorkspacePaths.remoteSelect, first.path, {
+              method: "POST",
+              headers: { authorization: auth(), "content-type": "application/json" },
+              body: JSON.stringify({ pairingID: secondPairing.id }),
+            })
+          ).status,
+        ).toBe(200)
+
+        const concurrent = await Promise.all([create("dev_scope_c"), create("dev_scope_d")])
+        expect(concurrent.map((response) => response.status)).toEqual([200, 200])
+        const listed = await requestWith(app, WorkspacePaths.remoteHosts, first.path, {
+          headers: { authorization: auth() },
+        })
+        const pairings = (await listed.json()).flatMap((host: { pairings: unknown[] }) => host.pairings)
+        expect(pairings).toHaveLength(3)
+      }),
+    )
+  })
 })

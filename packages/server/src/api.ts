@@ -47,6 +47,6 @@ export const Api = HttpApi.make("server")
       description: "Experimental HttpApi surface for selected instance routes.",
     }),
   )
-  .middleware(Authorization)
   .middleware(RouteLocationMiddleware)
+  .middleware(Authorization)
   .middleware(SchemaErrorMiddleware)
