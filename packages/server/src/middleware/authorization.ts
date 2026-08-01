@@ -40,11 +40,13 @@ function credentialFromRequest(request: HttpServerRequest.HttpServerRequest) {
 
 function ticketMayBypassAuth(url: URL, request: HttpServerRequest.HttpServerRequest) {
   if (!hasPtyConnectTicketURL(url)) return false
+  // A workspace target keeps its routing identity in process env, but that is
+  // not a client-supplied workspace selector. The PTY handler still consumes
+  // the ticket against its exact PTY/directory/workspace scope.
   if (
     url.searchParams.get("workspace") ||
     url.searchParams.get("location[workspace]") ||
-    request.headers["x-slopcode-workspace"] ||
-    process.env.SLOPCODE_WORKSPACE_ID
+    request.headers["x-slopcode-workspace"]
   ) {
     return false
   }
