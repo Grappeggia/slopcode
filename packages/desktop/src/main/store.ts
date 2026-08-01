@@ -26,6 +26,8 @@ export function getStore(name = SETTINGS_STORE) {
 }
 
 export async function removeStoreFileIfEmpty(name: string) {
+  const store = cache.get(name)
+  if (store && Object.keys(store.store).length > 0) return
   if (await deleteStoreFileIfEmpty(electron.app.getPath("userData"), name)) cache.delete(name)
 }
 

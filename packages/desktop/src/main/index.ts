@@ -251,8 +251,8 @@ const main = Effect.gen(function* () {
 
   yield* Effect.promise(() => app.whenReady())
 
-  if (!TEST_ONBOARDING) migrate()
   initializeOldLayoutEligibility(app.getPath("userData"))
+  if (!TEST_ONBOARDING) migrate()
   yield* Effect.promise(() => cleanupStoreFiles(app.getPath("userData"))).pipe(
     Effect.tap((result) =>
       Effect.sync(() => {
@@ -395,7 +395,8 @@ const main = Effect.gen(function* () {
     })
   }
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createMainWindow()
+    if (BrowserWindow.getAllWindows().length !== 0) return
+    mainWindow = restoreMainWindows()[0] ?? null
   })
 })
 

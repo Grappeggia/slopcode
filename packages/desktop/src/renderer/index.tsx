@@ -29,6 +29,7 @@ import { handleLinkClick } from "./links"
 import "./styles.css"
 import { Splash } from "@slopcode-ai/ui/logo"
 import { useTheme } from "@slopcode-ai/ui/theme/context"
+import { DesktopFirstLaunchOnboarding } from "./onboarding"
 
 const root = document.getElementById("root")
 if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
@@ -210,7 +211,7 @@ const createPlatform = (): Platform => {
 
       const notification = new Notification(title, {
         body: description ?? "",
-        icon: "https://slopcode.ai/favicon-96x96-v3.png",
+        icon: "https://slopcode.dev/favicon-96x96-v3.png",
       })
       notification.onclick = () => {
         void window.api.showWindow()
@@ -358,6 +359,7 @@ render(() => {
         <Show when={effectiveDefaultServer()} keyed>
           {(key) => (
             <AppInterface defaultServer={key} servers={servers()} router={MemoryRouter}>
+              <DesktopFirstLaunchOnboarding />
               <Inner />
             </AppInterface>
           )}

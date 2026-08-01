@@ -99,13 +99,13 @@ export function registerIpcHandlers(deps: Deps) {
   ipc.handle("store-set", (_event: IpcMainInvokeEvent, name: string, key: string, value: string) => {
     getStore(name).set(key, value)
   })
-  ipc.handle("store-delete", (_event: IpcMainInvokeEvent, name: string, key: string) => {
+  ipc.handle("store-delete", async (_event: IpcMainInvokeEvent, name: string, key: string) => {
     getStore(name).delete(key)
-    void removeStoreFileIfEmpty(name)
+    await removeStoreFileIfEmpty(name)
   })
-  ipc.handle("store-clear", (_event: IpcMainInvokeEvent, name: string) => {
+  ipc.handle("store-clear", async (_event: IpcMainInvokeEvent, name: string) => {
     getStore(name).clear()
-    void removeStoreFileIfEmpty(name)
+    await removeStoreFileIfEmpty(name)
   })
   ipc.handle("store-keys", (_event: IpcMainInvokeEvent, name: string) => {
     const store = getStore(name)

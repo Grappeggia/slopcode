@@ -11,6 +11,12 @@ describe("external URL resolution", () => {
     expect(resolveExternalURL("javascript:alert(1)")).toBeUndefined()
   })
 
+  test("rejects ambiguous or credential-bearing targets", () => {
+    expect(resolveExternalURL(" https://example.com")).toBeUndefined()
+    expect(resolveExternalURL("https://example.com\n")).toBeUndefined()
+    expect(resolveExternalURL("https://user:pass@example.com")).toBeUndefined()
+  })
+
   test("resolves local file URLs only", () => {
     const path = resolve("example.html")
     expect(resolveLocalFilePath(pathToFileURL(path).href)).toBe(path)
