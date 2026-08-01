@@ -61,7 +61,6 @@ type MaterializedHostKey = {
 type RunningWorkspace = {
   state: DesktopRemoteReady
   tunnel: TunnelProcess
-  owned: boolean
   stopRemote: () => Promise<void>
   cleanup: () => Promise<void>
 }
@@ -174,8 +173,8 @@ export function buildSshBootstrapScript(target: NormalizedSshTarget, port: numbe
   return bootstrapScript(target, port, password)
 }
 
-export function buildSshStopScript(target: NormalizedSshTarget) {
-  return stopScript(target)
+export function buildSshStopScript(target: NormalizedSshTarget, password?: string) {
+  return stopScript(target, password)
 }
 
 export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRemoteHostService {
@@ -238,8 +237,8 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
       })
       let cleanup = async () => {}
       let stopRemote = async () => {}
+      let stopStartup = async () => {}
       let tunnel: TunnelProcess | undefined
-      let owned = false
 
       try {
         const hostKey = await deps.materializeHostKey(target.hostKey)
@@ -257,6 +256,8 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         const requestedPort = await deps.allocatePort()
         assertLive(signal.signal, generations, target.id, generation)
         const requestedPassword = deps.uuid()
+        stopStartup = () =>
+          deps.runSsh(execArgs, stopScript(target, requestedPassword), SSH_SCRIPT_TIMEOUT_MS).then(() => undefined)
         const bootstrap = await deps.runSsh(
           execArgs,
           bootstrapScript(target, requestedPort, requestedPassword),
@@ -265,7 +266,6 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         )
         assertLive(signal.signal, generations, target.id, generation)
         const remote = parseBootstrap(bootstrap)
-        owned = !remote.attached
         const localPort = await deps.allocatePort()
         assertLive(signal.signal, generations, target.id, generation)
         tunnel = deps.openTunnel(buildSshTunnelArgs(target, hostKey.path, localPort, remote.port))
@@ -299,7 +299,6 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         const item = {
           state,
           tunnel,
-          owned,
           stopRemote,
           cleanup,
         } satisfies RunningWorkspace
@@ -317,7 +316,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         return state
       } catch (error) {
         tunnel?.stop()
-        if (owned) await stopRemote().catch(() => undefined)
+        await stopStartup().catch(() => undefined)
         await cleanup().catch(() => undefined)
         if (isAbortError(error)) throw error
         const message = error instanceof Error ? error.message : String(error)
@@ -345,7 +344,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
     if (state?.kind !== "stopped" && state) stopped(state)
     if (item) {
       item.tunnel.stop()
-      if (item.owned) await item.stopRemote().catch(() => undefined)
+      await item.stopRemote().catch(() => undefined)
       await item.cleanup().catch(() => undefined)
     }
     if (running) await running.promise.catch(() => undefined)
@@ -552,16 +551,24 @@ function withDeps(opts: Partial<Deps>): Deps {
   }
 }
 
-function stopScript(target: NormalizedSshTarget) {
+function stopScript(target: NormalizedSshTarget, password?: string) {
   return [
     "set -eu",
     `key=${quote(target.stateKey)}`,
+    ...(password ? [`expected_password=${quote(password)}`] : []),
     'state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/slopcode"',
     'state_file="$state_dir/desktop-ssh-server-$key.env"',
     'if [ ! -f "$state_file" ]; then',
     "  exit 0",
     "fi",
     ' . "$state_file"',
+    ...(password
+      ? [
+          'if [ "${PASSWORD:-}" != "$expected_password" ]; then',
+          "  exit 0",
+          "fi",
+        ]
+      : []),
     'rm -f "$state_file"',
     'if [ -n "${PID:-}" ]; then',
     '  kill "$PID" 2>/dev/null || true',

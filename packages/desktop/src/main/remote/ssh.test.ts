@@ -85,6 +85,7 @@ describe("SSH workspace scripts", () => {
     const second = normalizeSshTarget(fixtureTarget({ remoteDirectory: "/srv/other" }))
     const bootstrap = buildSshBootstrapScript(first, 4200, "secret")
     const stop = buildSshStopScript(first)
+    const guardedStop = buildSshStopScript(first, "secret")
 
     expect(first.stateKey).not.toBe(second.stateKey)
     expect(bootstrap).toContain(`key='${first.stateKey}'`)
@@ -92,6 +93,8 @@ describe("SSH workspace scripts", () => {
     expect(bootstrap).toContain('log_file="$state_dir/desktop-ssh-server-$key.log"')
     expect(stop).toContain(`key='${first.stateKey}'`)
     expect(stop).toContain('state_file="$state_dir/desktop-ssh-server-$key.env"')
+    expect(guardedStop).toContain("expected_password='secret'")
+    expect(guardedStop).toContain('if [ "${PASSWORD:-}" != "$expected_password" ]; then')
     expect(bootstrap).toContain("cd \"$dir\"")
     expect(bootstrap).toContain('DIRECTORY="$dir"')
     expect(stop).not.toContain("/srv/slopcode")
@@ -246,14 +249,111 @@ describe("createSshRemoteHostService", () => {
     expect(cleanups).toBe(1)
     expect(runs).toHaveLength(2)
     expect(runs[0]).toContain("nohup env")
+    expect(runs[1]).toContain("expected_password='00000000-0000-4000-8000-000000000003'")
     expect(runs[1]).toContain(`key='${workspaceStateKey(id)}'`)
     expect(runs[1]).toContain('state_file="$state_dir/desktop-ssh-server-$key.env"')
     expect(service.getState(id)?.kind).toBe("stopped")
   })
 
+  test("stops an attached ready workspace explicitly", async () => {
+    const remote = createRemoteMachine({
+      state: {
+        port: 4204,
+        password: "attached-secret",
+      },
+    })
+    let stops = 0
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4104,
+      uuid: () => "00000000-0000-4000-8000-000000000005",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => undefined,
+      }),
+      runSsh: remote.runSsh,
+      openTunnel: () => ({
+        stop: () => {
+          stops += 1
+        },
+        onExit: () => undefined,
+      }),
+      health: async () => true,
+      validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
+    })
+
+    const ready = await service.ensureWorkspace(fixtureTarget())
+    await service.stopWorkspace(ready.id)
+
+    expect(ready.attached).toBe(true)
+    expect(stops).toBe(1)
+    expect(remote.remote.state).toBeUndefined()
+    expect(remote.remote.stops).toBe(1)
+    expect(remote.runs).toHaveLength(2)
+    expect(remote.runs[1]).not.toContain("expected_password=")
+    expect(service.getState(ready.id)?.kind).toBe("stopped")
+  })
+
+  test("does not stop an attached server when startup fails after attach", async () => {
+    const remote = createRemoteMachine({
+      state: {
+        port: 4205,
+        password: "attached-secret",
+      },
+    })
+    let stops = 0
+    let cleanups = 0
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4105,
+      uuid: () => "00000000-0000-4000-8000-000000000006",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => {
+          cleanups += 1
+        },
+      }),
+      runSsh: remote.runSsh,
+      openTunnel: () => ({
+        stop: () => {
+          stops += 1
+        },
+        onExit: () => undefined,
+      }),
+      health: async () => true,
+      validateRemoteDirectory: async () => {
+        throw new Error("validation failed")
+      },
+    })
+
+    const target = fixtureTarget()
+    const id = normalizeSshTarget(target).id
+    await expect(service.ensureWorkspace(target)).rejects.toThrow("validation failed")
+
+    expect(stops).toBe(2)
+    expect(cleanups).toBe(1)
+    expect(remote.remote.state).toEqual({
+      port: 4205,
+      password: "attached-secret",
+    })
+    expect(remote.remote.stops).toBe(0)
+    expect(remote.runs).toHaveLength(2)
+    expect(remote.runs[1]).toContain("expected_password='00000000-0000-4000-8000-000000000006'")
+    expect(service.getState(id)).toEqual({
+      kind: "failed",
+      id,
+      host: target.host,
+      workspace: normalizeSshTarget(target).workspace,
+      message: "validation failed",
+    })
+  })
+
   test("does not stop an attached server when startup is cancelled during health checks", async () => {
     const events: string[] = []
-    const runs: string[] = []
+    const remote = createRemoteMachine({
+      state: {
+        port: 4203,
+        password: "attached-secret",
+      },
+    })
     const gate = deferred<void>()
     let stops = 0
     let cleanups = 0
@@ -266,16 +366,7 @@ describe("createSshRemoteHostService", () => {
           cleanups += 1
         },
       }),
-      runSsh: async (_args, script, _timeoutMs, signal) => {
-        runs.push(script)
-        if (signal?.aborted) throw signal.reason
-        return {
-          code: 0,
-          signal: null,
-          stdout: '{"attached":true,"port":4203,"username":"slopcode","password":"secret"}\n',
-          stderr: "",
-        }
-      },
+      runSsh: remote.runSsh,
       openTunnel: () => ({
         stop: () => {
           if (stops) return
@@ -307,8 +398,59 @@ describe("createSshRemoteHostService", () => {
     expect(events).toEqual(["validating", "starting", "stopped"])
     expect(stops).toBe(1)
     expect(cleanups).toBe(1)
-    expect(runs).toHaveLength(1)
-    expect(runs[0]).toContain('printf \'{"attached":true,"port":%s,"username":"slopcode","password":"%s"}\\n\' "$PORT" "$PASSWORD"')
+    expect(remote.remote.state).toEqual({
+      port: 4203,
+      password: "attached-secret",
+    })
+    expect(remote.remote.stops).toBe(0)
+    expect(remote.runs).toHaveLength(2)
+    expect(remote.runs[0]).toContain('printf \'{"attached":true,"port":%s,"username":"slopcode","password":"%s"}\\n\' "$PORT" "$PASSWORD"')
+    expect(remote.runs[1]).toContain("expected_password='00000000-0000-4000-8000-000000000004'")
+    expect(service.getState(id)?.kind).toBe("stopped")
+  })
+
+  test("cleans launched bootstrap state on abort before bootstrap JSON is parsed", async () => {
+    const remote = createRemoteMachine({ abortAfterLaunch: true })
+    const events: string[] = []
+    let cleanups = 0
+    let tunnels = 0
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4106,
+      uuid: () => "00000000-0000-4000-8000-000000000007",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => {
+          cleanups += 1
+        },
+      }),
+      runSsh: remote.runSsh,
+      openTunnel: () => {
+        tunnels += 1
+        return {
+          stop: () => undefined,
+          onExit: () => undefined,
+        }
+      },
+      health: async () => true,
+      validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
+    })
+
+    const target = fixtureTarget()
+    const id = normalizeSshTarget(target).id
+    const unsubscribe = service.subscribe((event) => events.push(event.state.kind))
+    const pending = service.ensureWorkspace(target)
+    await remote.launched.promise
+    await service.stopWorkspace(id)
+    unsubscribe()
+
+    await expect(pending).rejects.toThrow("aborted")
+    expect(events).toEqual(["validating", "starting", "stopped"])
+    expect(cleanups).toBe(1)
+    expect(tunnels).toBe(0)
+    expect(remote.remote.state).toBeUndefined()
+    expect(remote.remote.stops).toBe(1)
+    expect(remote.runs).toHaveLength(2)
+    expect(remote.runs[1]).toContain("expected_password='00000000-0000-4000-8000-000000000007'")
     expect(service.getState(id)?.kind).toBe("stopped")
   })
 })
@@ -358,4 +500,91 @@ function deferred<T>() {
     reject = rej
   })
   return { promise, resolve, reject }
+}
+
+function createRemoteMachine(
+  opts: {
+    state?: {
+      port: number
+      password: string
+    }
+    abortAfterLaunch?: boolean
+  } = {},
+) {
+  const runs: string[] = []
+  const launched = deferred<void>()
+  const remote = {
+    state: opts.state,
+    starts: 0,
+    stops: 0,
+  }
+
+  return {
+    runs,
+    launched,
+    remote,
+    runSsh: async (_args: string[], script: string, _timeoutMs: number, signal?: AbortSignal) => {
+      runs.push(script)
+
+      if (script.includes("nohup env")) {
+        if (remote.state) {
+          return {
+            code: 0,
+            signal: null,
+            stdout: `{"attached":true,"port":${remote.state.port},"username":"slopcode","password":"${remote.state.password}"}\n`,
+            stderr: "",
+          }
+        }
+
+        remote.starts += 1
+        remote.state = {
+          port: Number(match(script, /^PORT=(\d+)$/m)),
+          password: match(script, /^PASSWORD='([^']+)'$/m),
+        }
+        launched.resolve()
+        if (opts.abortAfterLaunch) {
+          return await new Promise((_, reject) => {
+            if (signal?.aborted) {
+              reject(testAbortError())
+              return
+            }
+            signal?.addEventListener("abort", () => reject(testAbortError()), { once: true })
+          })
+        }
+        return {
+          code: 0,
+          signal: null,
+          stdout: `{"attached":false,"port":${remote.state.port},"username":"slopcode","password":"${remote.state.password}"}\n`,
+          stderr: "",
+        }
+      }
+
+      const expected = matchOptional(script, /^expected_password='([^']+)'$/m)
+      if (remote.state && (!expected || remote.state.password === expected)) {
+        remote.state = undefined
+        remote.stops += 1
+      }
+      if (signal?.aborted) throw signal.reason
+      return {
+        code: 0,
+        signal: null,
+        stdout: "",
+        stderr: "",
+      }
+    },
+  }
+}
+
+function match(value: string, pattern: RegExp) {
+  const result = pattern.exec(value)?.[1]
+  if (result) return result
+  throw new Error(`Missing ${pattern}`)
+}
+
+function matchOptional(value: string, pattern: RegExp) {
+  return pattern.exec(value)?.[1]
+}
+
+function testAbortError() {
+  return Object.assign(new Error("SSH workspace start aborted"), { name: "AbortError" })
 }
