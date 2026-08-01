@@ -1,0 +1,20 @@
+{
+  "name": "@slopcode-ai/android",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "test": "bun test src",
+    "build:web": "vite build",
+    "build:android": "./gradlew :app:assembleDebug",
+    "build": "bun run build:web && bun run build:android"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}
