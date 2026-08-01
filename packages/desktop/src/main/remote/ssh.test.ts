@@ -250,6 +250,67 @@ describe("createSshRemoteHostService", () => {
     expect(runs[1]).toContain('state_file="$state_dir/desktop-ssh-server-$key.env"')
     expect(service.getState(id)?.kind).toBe("stopped")
   })
+
+  test("does not stop an attached server when startup is cancelled during health checks", async () => {
+    const events: string[] = []
+    const runs: string[] = []
+    const gate = deferred<void>()
+    let stops = 0
+    let cleanups = 0
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4103,
+      uuid: () => "00000000-0000-4000-8000-000000000004",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => {
+          cleanups += 1
+        },
+      }),
+      runSsh: async (_args, script, _timeoutMs, signal) => {
+        runs.push(script)
+        if (signal?.aborted) throw signal.reason
+        return {
+          code: 0,
+          signal: null,
+          stdout: '{"attached":true,"port":4203,"username":"slopcode","password":"secret"}\n',
+          stderr: "",
+        }
+      },
+      openTunnel: () => ({
+        stop: () => {
+          if (stops) return
+          stops += 1
+        },
+        onExit: () => undefined,
+      }),
+      health: async (_url, _password, signal) => {
+        gate.resolve()
+        await new Promise<boolean>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true })
+        })
+        return false
+      },
+      validateRemoteDirectory: async () => {
+        throw new Error("validation should not run after cancellation")
+      },
+    })
+
+    const target = fixtureTarget()
+    const id = normalizeSshTarget(target).id
+    const unsubscribe = service.subscribe((event) => events.push(event.state.kind))
+    const pending = service.ensureWorkspace(target)
+    await gate.promise
+    await service.stopWorkspace(id)
+    unsubscribe()
+
+    await expect(pending).rejects.toThrow("aborted")
+    expect(events).toEqual(["validating", "starting", "stopped"])
+    expect(stops).toBe(1)
+    expect(cleanups).toBe(1)
+    expect(runs).toHaveLength(1)
+    expect(runs[0]).toContain('printf \'{"attached":true,"port":%s,"username":"slopcode","password":"%s"}\\n\' "$PORT" "$PASSWORD"')
+    expect(service.getState(id)?.kind).toBe("stopped")
+  })
 })
 
 function fixtureTarget(

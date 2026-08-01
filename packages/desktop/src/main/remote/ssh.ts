@@ -61,6 +61,7 @@ type MaterializedHostKey = {
 type RunningWorkspace = {
   state: DesktopRemoteReady
   tunnel: TunnelProcess
+  owned: boolean
   stopRemote: () => Promise<void>
   cleanup: () => Promise<void>
 }
@@ -238,7 +239,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
       let cleanup = async () => {}
       let stopRemote = async () => {}
       let tunnel: TunnelProcess | undefined
-      let booted = false
+      let owned = false
 
       try {
         const hostKey = await deps.materializeHostKey(target.hostKey)
@@ -264,7 +265,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         )
         assertLive(signal.signal, generations, target.id, generation)
         const remote = parseBootstrap(bootstrap)
-        booted = true
+        owned = !remote.attached
         const localPort = await deps.allocatePort()
         assertLive(signal.signal, generations, target.id, generation)
         tunnel = deps.openTunnel(buildSshTunnelArgs(target, hostKey.path, localPort, remote.port))
@@ -298,6 +299,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         const item = {
           state,
           tunnel,
+          owned,
           stopRemote,
           cleanup,
         } satisfies RunningWorkspace
@@ -315,7 +317,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         return state
       } catch (error) {
         tunnel?.stop()
-        if (booted) await stopRemote().catch(() => undefined)
+        if (owned) await stopRemote().catch(() => undefined)
         await cleanup().catch(() => undefined)
         if (isAbortError(error)) throw error
         const message = error instanceof Error ? error.message : String(error)
@@ -343,7 +345,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
     if (state?.kind !== "stopped" && state) stopped(state)
     if (item) {
       item.tunnel.stop()
-      await item.stopRemote().catch(() => undefined)
+      if (item.owned) await item.stopRemote().catch(() => undefined)
       await item.cleanup().catch(() => undefined)
     }
     if (running) await running.promise.catch(() => undefined)
