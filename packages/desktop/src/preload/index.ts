@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { ElectronAPI, WslServersEvent } from "./types"
+import type { DesktopRemotePublicEvent, ElectronAPI, WslServersEvent } from "./types"
 import type { UpdaterState } from "@slopcode-ai/app/updater"
 
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
@@ -36,6 +36,22 @@ const api: ElectronAPI = {
     addServer: (distro) => ipcRenderer.invoke("wsl-servers-add", distro),
     removeServer: (id) => ipcRenderer.invoke("wsl-servers-remove", id),
     startServer: (id) => ipcRenderer.invoke("wsl-servers-start", id),
+  },
+  remote: {
+    validate: (target) => ipcRenderer.invoke("remote-validate", target),
+    ensure: (target) => ipcRenderer.invoke("remote-ensure", target),
+    getState: (id) => ipcRenderer.invoke("remote-get-state", id),
+    stop: (id) => ipcRenderer.invoke("remote-stop", id),
+    stopAll: () => ipcRenderer.invoke("remote-stop-all"),
+    subscribe: async (cb) => {
+      const handler = (_event: unknown, event: DesktopRemotePublicEvent) => cb(event)
+      ipcRenderer.on("remote-state", handler)
+      await ipcRenderer.invoke("remote-subscribe")
+      return () => {
+        ipcRenderer.removeListener("remote-state", handler)
+        void ipcRenderer.invoke("remote-unsubscribe")
+      }
+    },
   },
   updater: {
     subscribe: async (cb) => {

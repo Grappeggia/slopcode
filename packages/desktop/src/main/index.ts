@@ -49,6 +49,7 @@ import {
   isOldLayoutEligible,
 } from "./onboarding"
 import { safeWebContentsURL } from "./window-state"
+import { createSshRemoteHostService } from "./remote"
 
 const APP_NAMES: Record<string, string> = {
   dev: "SlopCode Dev",
@@ -66,6 +67,7 @@ const jsCallStackFeature = "DocumentPolicyIncludeJSCallStacksInCrashReports"
 let logger: ReturnType<typeof initLogging>
 let mainWindow: BrowserWindow | null = null
 let server: SidecarListener | null = null
+const remoteHost = createSshRemoteHostService()
 
 const pendingDeepLinks: string[] = []
 
@@ -165,6 +167,7 @@ const main = Effect.gen(function* () {
   )
   const stopSidecars = async () => {
     await killSidecar()
+    await remoteHost.stopAll()
     wslServers.stopAll()
   }
   const relaunch = () => {
@@ -287,6 +290,7 @@ const main = Effect.gen(function* () {
     isFirstLaunchOnboardingPending,
     finishFirstLaunchOnboarding,
     isOldLayoutEligible,
+    remote: remoteHost,
     getDisplayBackend: async () => null,
     setDisplayBackend: async () => undefined,
     parseMarkdown: async (markdown) => parseMarkdown(markdown),

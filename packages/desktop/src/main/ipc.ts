@@ -14,6 +14,12 @@ import { assertRendererStoreName } from "./store-name"
 import { openExternalURL, openLocalFileURL, getPinchZoomEnabled, setPinchZoomEnabled, setTitlebar, updateTitlebar } from "./windows"
 import type { UpdaterController } from "./updater-controller"
 import { createUpdaterSubscriptions } from "./updater-subscriptions"
+import {
+  DesktopWorkspaceID,
+  publicRemoteState,
+  type DesktopRemoteHostService,
+  type DesktopSshTarget,
+} from "./remote"
 
 const pickerFilters = (ext?: string[]) => {
   if (!ext || ext.length === 0) return undefined
@@ -43,10 +49,12 @@ type Deps = {
   isFirstLaunchOnboardingPending: () => Promise<boolean> | boolean
   finishFirstLaunchOnboarding: (createDefaultProject: boolean) => Promise<string | null> | string | null
   isOldLayoutEligible: () => Promise<boolean> | boolean
+  remote: DesktopRemoteHostService
 }
 
 export function registerIpcHandlers(deps: Deps) {
   const updaterSubscriptions = createUpdaterSubscriptions()
+  const remoteSubscriptions = new Map<number, () => void>()
   app.once("will-quit", updaterSubscriptions.clear)
 
   ipc.handle("kill-sidecar", () => deps.killSidecar())
@@ -61,6 +69,38 @@ export function registerIpcHandlers(deps: Deps) {
     deps.finishFirstLaunchOnboarding(createDefaultProject),
   )
   ipc.handle("is-old-layout-eligible", () => deps.isOldLayoutEligible())
+  ipc.handle("remote-get-state", (_event: IpcMainInvokeEvent, id: string) => {
+    const state = deps.remote.getState(DesktopWorkspaceID.make(id))
+    return state ? publicRemoteState(state) : undefined
+  })
+  ipc.handle("remote-validate", (_event: IpcMainInvokeEvent, target: DesktopSshTarget) =>
+    deps.remote.validateWorkspace(target),
+  )
+  ipc.handle("remote-ensure", (_event: IpcMainInvokeEvent, target: DesktopSshTarget) =>
+    deps.remote.ensureWorkspace(target),
+  )
+  ipc.handle("remote-stop", (_event: IpcMainInvokeEvent, id: string) => deps.remote.stopWorkspace(DesktopWorkspaceID.make(id)))
+  ipc.handle("remote-stop-all", () => deps.remote.stopAll())
+  ipc.handle("remote-subscribe", (event) => {
+    remoteSubscriptions.get(event.sender.id)?.()
+    const unsubscribe = deps.remote.subscribe((remoteEvent) => {
+      if (event.sender.isDestroyed()) {
+        remoteSubscriptions.delete(event.sender.id)
+        unsubscribe()
+        return
+      }
+      event.sender.send("remote-state", { type: remoteEvent.type, state: publicRemoteState(remoteEvent.state) })
+    })
+    remoteSubscriptions.set(event.sender.id, unsubscribe)
+    event.sender.once("destroyed", () => {
+      remoteSubscriptions.delete(event.sender.id)
+      unsubscribe()
+    })
+  })
+  ipc.handle("remote-unsubscribe", (event) => {
+    remoteSubscriptions.get(event.sender.id)?.()
+    remoteSubscriptions.delete(event.sender.id)
+  })
   ipc.handle("get-display-backend", () => deps.getDisplayBackend())
   ipc.handle("set-display-backend", (_event: IpcMainInvokeEvent, backend: string | null) =>
     deps.setDisplayBackend(backend),

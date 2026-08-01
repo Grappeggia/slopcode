@@ -1,6 +1,14 @@
 import type { DesktopMenuAction } from "@slopcode-ai/app/desktop-menu"
 import type { WslServersPlatform } from "@slopcode-ai/app/wsl/types"
 import type { UpdaterState } from "@slopcode-ai/app/updater"
+import type {
+  DesktopRemotePublicEvent,
+  DesktopRemotePublicState,
+  DesktopRemoteReady,
+  DesktopSshTarget,
+  DesktopRemoteValidation,
+} from "../main/remote"
+export type { DesktopRemotePublicEvent } from "../main/remote"
 export type {
   WslDistroProbe,
   WslInstalledDistro,
@@ -28,6 +36,15 @@ export type UpdaterAPI = {
   install: () => Promise<void>
 }
 
+export type RemoteAPI = {
+  validate: (target: DesktopSshTarget) => Promise<DesktopRemoteValidation>
+  ensure: (target: DesktopSshTarget) => Promise<DesktopRemoteReady>
+  getState: (id: string) => Promise<DesktopRemotePublicState | undefined>
+  stop: (id: string) => Promise<void>
+  stopAll: () => Promise<void>
+  subscribe: (cb: (event: DesktopRemotePublicEvent) => void) => Promise<() => void>
+}
+
 export type LinuxDisplayBackend = "wayland" | "auto"
 export type TitlebarTheme = {
   mode: "light" | "dark"
@@ -45,6 +62,7 @@ export type ElectronAPI = {
   installCli: () => Promise<string>
   awaitInitialization: () => Promise<ServerReadyData>
   wslServers: WslServersAPI
+  remote: RemoteAPI
   updater: UpdaterAPI
   consumeInitialDeepLinks: () => Promise<string[]>
   isFirstLaunchOnboardingPending: () => Promise<boolean>

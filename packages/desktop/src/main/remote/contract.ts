@@ -69,6 +69,21 @@ export type DesktopRemoteEvent = {
   state: DesktopRemoteState
 }
 
+export type DesktopRemotePublicState =
+  | Exclude<DesktopRemoteState, DesktopRemoteReady>
+  | Omit<DesktopRemoteReady, "password">
+
+export type DesktopRemotePublicEvent = {
+  type: "state"
+  state: DesktopRemotePublicState
+}
+
+export function publicRemoteState(state: DesktopRemoteState): DesktopRemotePublicState {
+  if (state.kind !== "ready") return state
+  const { password: _password, ...publicState } = state
+  return publicState
+}
+
 export type DesktopRemoteReady = Extract<DesktopRemoteState, { kind: "ready" }>
 
 export type DesktopRemoteHostService = {
