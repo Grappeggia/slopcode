@@ -1,4 +1,4 @@
-import { AbsolutePath, PositiveInt, Workspace } from "@slopcode-ai/schema"
+import { AbsolutePath, PositiveInt, Workspace } from "@opencode-ai/schema"
 import { Schema, SchemaGetter, SchemaParser } from "effect"
 import {
   RemoteEventCursor,

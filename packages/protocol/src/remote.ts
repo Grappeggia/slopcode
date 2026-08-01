@@ -1,4 +1,4 @@
-import { AbsolutePath, PositiveInt, Workspace } from "@slopcode-ai/schema"
+import { AbsolutePath, PositiveInt, Workspace } from "@opencode-ai/schema"
 import { Schema, SchemaParser, Struct } from "effect"
 
 const Text = Schema.Trim.pipe(Schema.check(Schema.isNonEmpty()))
