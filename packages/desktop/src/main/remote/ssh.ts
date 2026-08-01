@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { mkdtempSync, rmSync } from "node:fs"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
-import { createConnection, createServer, type Socket } from "node:net"
+import { createConnection, createServer, type Server, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import path, { posix } from "node:path"
 import { RemoteHost, RemoteWorkspaceSsh } from "@slopcode-ai/protocol"
@@ -44,7 +43,7 @@ type CommandResult = {
 
 type TunnelProcess = {
   port: Promise<number>
-  stop: () => void
+  stop: () => Promise<void>
   onExit: (cb: (code: number | null, signal: NodeJS.Signals | null) => void) => void
   onError: (cb: (error: Error) => void) => void
 }
@@ -77,7 +76,7 @@ type Deps = {
   allocatePort: () => Promise<number>
   uuid: () => string
   runSsh: (args: string[], script: string, timeoutMs: number, signal?: AbortSignal) => Promise<CommandResult>
-  openTunnel: (args: string[], socketPath: string) => TunnelProcess
+  openTunnel: (args: string[], forwardPort: number) => TunnelProcess
   health: (url: string, password: string, signal?: AbortSignal) => Promise<boolean>
   validateRemoteDirectory: (
     url: string,
@@ -92,6 +91,8 @@ const decodeHost = Schema.decodeUnknownSync(RemoteHost)
 const decodeWorkspace = Schema.decodeUnknownSync(RemoteWorkspaceSsh)
 const SSH_SCRIPT_TIMEOUT_MS = 15_000
 const SSH_HEALTH_TIMEOUT_MS = 30_000
+const SSH_TUNNEL_CLEANUP_TIMEOUT_MS = 2_000
+const SSH_TUNNEL_FORCE_KILL_DELAY_MS = 250
 
 export function normalizeSshTarget(target: DesktopSshTarget): NormalizedSshTarget {
   const decodedHost = decodeHost(target.host)
@@ -159,21 +160,18 @@ export function buildSshExecArgs(target: NormalizedSshTarget, knownHostsPath: st
 export function buildSshTunnelArgs(
   target: NormalizedSshTarget,
   knownHostsPath: string,
-  localSocket: string,
+  localPort: number,
   remotePort: number,
 ) {
-  if (!path.isAbsolute(localSocket) || /[\0\r\n]/.test(localSocket)) {
-    throw new Error("SSH tunnel socket must be an absolute path")
-  }
+  requirePort("SSH local tunnel port", localPort)
+  requirePort("SSH remote tunnel port", remotePort)
   return [
     ...buildSshBaseArgs(target, knownHostsPath),
-    "-o",
-    "StreamLocalBindUnlink=yes",
     "-N",
     "-T",
     "-v",
     "-L",
-    `${localSocket}:127.0.0.1:${remotePort}`,
+    `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`,
     target.authority,
   ]
 }
@@ -247,12 +245,11 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
     if (active.get(target.id) !== item) return
     if (generations.get(target.id) !== generation) return
     active.delete(target.id)
-    item.tunnel.stop()
-    void queue(target.id, async () => {
-      await item.stopRemote().catch(() => undefined)
+    const cleanup = queue(target.id, async () => {
       await item.cleanup().catch(() => undefined)
-      if (generations.get(target.id) === generation) fail(target, error.message, [item.state.password])
-    }).catch(() => undefined)
+    })
+    fail(target, error.message, [item.state.password])
+    void cleanup.catch(() => undefined)
   }
 
   const start = async (target: NormalizedSshTarget, signal: AbortController, generation: number) => {
@@ -266,7 +263,6 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
       workspace: target.workspace,
     })
     let cleanup = async () => {}
-    let cleanupTunnel = async () => {}
     let stopRemote = async () => {}
     let stopStartup = async () => {}
     let tunnel: TunnelProcess | undefined
@@ -315,11 +311,11 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
       const remote = parseBootstrap(bootstrap)
       remotePassword = remote.password
       assertLive(signal.signal, generations, target.id, generation)
-      const tunnelDir = createTunnelDirectory()
-      cleanupTunnel = once(tunnelDir.cleanup)
+      const localPort = await deps.allocatePort()
+      assertLive(signal.signal, generations, target.id, generation)
       tunnel = deps.openTunnel(
-        buildSshTunnelArgs(target, hostKey.path, tunnelDir.socketPath, remote.port),
-        tunnelDir.socketPath,
+        buildSshTunnelArgs(target, hostKey.path, localPort, remote.port),
+        localPort,
       )
       tunnel.onExit((code, exitSignal) => {
         reportTunnelFailure(new Error(`SSH tunnel exited (code=${code ?? "null"} signal=${exitSignal ?? "null"})`))
@@ -357,14 +353,16 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
           attached: remote.attached,
         } satisfies DesktopRemoteReady
 
+        const teardown = once(async () => {
+          await tunnel?.stop().catch(() => undefined)
+          await stopRemote().catch(() => undefined)
+          await cleanup().catch(() => undefined)
+        })
         item = {
           state,
           tunnel,
           stopRemote,
-          cleanup: async () => {
-            await cleanupTunnel().catch(() => undefined)
-            await cleanup().catch(() => undefined)
-          },
+          cleanup: teardown,
         }
 
         assertLive(signal.signal, generations, target.id, generation)
@@ -372,17 +370,13 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         active.set(target.id, item)
         emit(state)
         return state
-      } catch (error) {
-        tunnel.stop()
-        throw error
       } finally {
         signal.signal.removeEventListener("abort", closeTunnel)
         abort.dispose()
       }
     } catch (error) {
-      tunnel?.stop()
+      await tunnel?.stop().catch(() => undefined)
       await stopStartup().catch(() => undefined)
-      await cleanupTunnel().catch(() => undefined)
       await cleanup().catch(() => undefined)
       const next = signal.signal.aborted && !isAbortError(error) ? abortError() : error
       if (isAbortError(next)) throw next
@@ -429,11 +423,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
       if (active.get(id) === item) active.delete(id)
       const state = states.get(id)
       if (state?.kind !== "stopped" && state) stopped(state)
-      if (item) {
-        item.tunnel.stop()
-        await item.stopRemote().catch(() => undefined)
-        await item.cleanup().catch(() => undefined)
-      }
+      if (item) await item.cleanup().catch(() => undefined)
       if (running) await running.promise.catch(() => undefined)
     })
   }
@@ -523,6 +513,11 @@ function requireToken(label: string, value: string, pattern: RegExp) {
   return next
 }
 
+function requirePort(label: string, value: number) {
+  if (!Number.isInteger(value) || value < 1 || value > 65_535) throw new Error(`${label} must be between 1 and 65535`)
+  return value
+}
+
 function requireLine(label: string, value: string) {
   const next = value.trim()
   if (!next) throw new Error(`Missing ${label}`)
@@ -560,7 +555,9 @@ function parseBootstrap(result: CommandResult): BootstrapResult {
     throw new Error("SSH bootstrap returned an unexpected payload")
   }
 
-  return parsed as BootstrapResult
+  const parsedResult = parsed as BootstrapResult
+  requirePort("SSH remote tunnel port", parsedResult.port)
+  return parsedResult
 }
 
 async function waitForHealth(check: () => Promise<boolean>, signal: AbortSignal) {
@@ -975,14 +972,6 @@ function allocatePort() {
   })
 }
 
-function createTunnelDirectory() {
-  const directory = mkdtempSync(path.join(tmpdir(), "slopcode-ssh-tunnel-"))
-  return {
-    socketPath: path.join(directory, "forward.sock"),
-    cleanup: () => rm(directory, { recursive: true, force: true }),
-  }
-}
-
 async function materializeHostKey(hostKey: DesktopSshHostKey): Promise<MaterializedHostKey> {
   if (hostKey.kind === "known_hosts") {
     return {
@@ -1050,7 +1039,8 @@ function runSsh(args: string[], script: string, timeoutMs: number, signal?: Abor
   })
 }
 
-export function openSshTunnel(args: string[], socketPath: string, spawnProcess: typeof spawn = spawn): TunnelProcess {
+export function openSshTunnel(args: string[], forwardPort: number, spawnProcess: typeof spawn = spawn): TunnelProcess {
+  requirePort("SSH local tunnel port", forwardPort)
   const child = spawnProcess("ssh", args, {
     stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
@@ -1063,7 +1053,10 @@ export function openSshTunnel(args: string[], socketPath: string, spawnProcess: 
   let timer: ReturnType<typeof setTimeout> | undefined
   let outputBuffer = ""
   let proxyPort: number | undefined
-  let stopped = false
+  let forwardReady = false
+  let stopping = false
+  let stopPromise: Promise<void> | undefined
+  let childFinished = false
   const clients = new Set<Socket>()
   const exits = new Set<(code: number | null, signal: NodeJS.Signals | null) => void>()
   const errors = new Set<(error: Error) => void>()
@@ -1072,8 +1065,12 @@ export function openSshTunnel(args: string[], socketPath: string, spawnProcess: 
     rejectPort = reject
   })
   const proxy = createServer((client) => {
+    if (stopping || !ready) {
+      client.destroy()
+      return
+    }
     clients.add(client)
-    const upstream = createConnection(socketPath)
+    const upstream = createConnection({ host: "127.0.0.1", port: forwardPort })
     clients.add(upstream)
     let closed = false
     const close = () => {
@@ -1091,41 +1088,109 @@ export function openSshTunnel(args: string[], socketPath: string, spawnProcess: 
     client.pipe(upstream)
     upstream.pipe(client)
   })
-  const closeResources = () => {
-    if (stopped) return
-    stopped = true
+  const waitForChild = () => {
+    if (childFinished) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        childFinished = true
+        child.removeListener("exit", done)
+        child.removeListener("close", done)
+        child.removeListener("error", done)
+        resolve()
+      }
+      child.once("exit", done)
+      child.once("close", done)
+      child.once("error", done)
+    })
+  }
+  const closeProxy = () => {
+    if (!proxy.listening) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        resolve()
+      }
+      try {
+        proxy.close(finish)
+        const server = proxy as Server & { closeAllConnections?: () => void }
+        server.closeAllConnections?.()
+      } catch {
+        finish()
+      }
+    })
+  }
+  const terminateChild = async () => {
+    if (!childFinished) {
+      const done = waitForChild()
+      try {
+        child.kill()
+      } catch {}
+      await bounded(done, SSH_TUNNEL_FORCE_KILL_DELAY_MS)
+    }
+    if (!childFinished) {
+      const done = waitForChild()
+      try {
+        child.kill("SIGKILL")
+      } catch {}
+      await bounded(done, SSH_TUNNEL_CLEANUP_TIMEOUT_MS - SSH_TUNNEL_FORCE_KILL_DELAY_MS)
+    }
+  }
+  const stopResources = async () => {
     if (timer) clearTimeout(timer)
-    proxy.close()
     for (const socket of clients) socket.destroy()
     clients.clear()
-    rmSync(socketPath, { force: true })
-    child.kill()
+    await Promise.all([bounded(closeProxy(), SSH_TUNNEL_CLEANUP_TIMEOUT_MS), terminateChild()])
+  }
+  const stop = () => {
+    if (stopPromise) return stopPromise
+    stopping = true
+    if (!ready && !failure) rejectPort(new Error("SSH tunnel stopped before local forwarding readiness"))
+    stopPromise = Promise.resolve().then(stopResources)
+    return stopPromise
   }
   const fail = (error: unknown) => {
     const next = error instanceof Error ? error : new Error(String(error))
-    if (failure) return
+    if (failure || stopping) return
     failure = next
     if (timer) clearTimeout(timer)
     rejectPort(next)
     for (const cb of errors) cb(next)
     errors.clear()
-    closeResources()
+    void stop().catch(() => undefined)
   }
   const assign = () => {
-    if (ready || failure || proxyPort === undefined) return
+    if (ready || failure || proxyPort === undefined || !forwardReady) return
     ready = true
     if (timer) clearTimeout(timer)
     resolvePort(proxyPort)
   }
   const output = (chunk: string) => {
     outputBuffer += chunk
-    if (outputBuffer.includes(`Local forwarding listening on path ${socketPath}`)) assign()
+    const match = /Local forwarding listening on [^\r\n]*\bport ([0-9]+)\./i.exec(outputBuffer)
+    if (match) {
+      const port = Number(match[1])
+      if (port !== forwardPort) {
+        fail(new Error(`SSH reported unexpected local forwarding port ${port}`))
+        return
+      }
+      forwardReady = true
+      assign()
+    }
     if (outputBuffer.length > 4_096) outputBuffer = outputBuffer.slice(-4_096)
   }
   proxy.once("error", fail)
   proxy.once("listening", () => {
     const address = proxy.address()
-    if (typeof address !== "object" || !address || address.address !== "127.0.0.1") {
+    if (
+      typeof address !== "object" ||
+      !address ||
+      address.address !== "127.0.0.1" ||
+      !Number.isInteger(address.port) ||
+      address.port < 1 ||
+      address.port > 65_535
+    ) {
       fail(new Error("SSH tunnel proxy did not bind to loopback"))
       return
     }
@@ -1134,21 +1199,28 @@ export function openSshTunnel(args: string[], socketPath: string, spawnProcess: 
   })
   child.stderr.setEncoding("utf8")
   child.stderr.on("data", output)
+  child.once("error", () => {
+    childFinished = true
+  })
+  child.once("close", () => {
+    childFinished = true
+  })
   child.once("error", fail)
   child.once("exit", (code, signal) => {
+    childFinished = true
     exit = { code, signal }
-    if (!ready) fail(new Error(`SSH tunnel exited before Unix socket readiness (code=${code ?? "null"} signal=${signal ?? "null"})`))
+    if (!ready && !failure && !stopping) {
+      fail(new Error(`SSH tunnel exited before local forwarding readiness (code=${code ?? "null"} signal=${signal ?? "null"})`))
+    }
+    if (ready && !stopping) void stop().catch(() => undefined)
     for (const cb of exits) cb(code, signal)
     exits.clear()
   })
-  timer = setTimeout(() => fail(new Error("SSH tunnel did not report Unix socket readiness")), SSH_SCRIPT_TIMEOUT_MS)
+  timer = setTimeout(() => fail(new Error("SSH tunnel did not report local forwarding readiness")), SSH_SCRIPT_TIMEOUT_MS)
   proxy.listen(0, "127.0.0.1")
   return {
     port,
-    stop: () => {
-      if (!ready && !failure) rejectPort(new Error("SSH tunnel stopped before Unix socket readiness"))
-      closeResources()
-    },
+    stop,
     onExit: (cb) => {
       if (exit) cb(exit.code, exit.signal)
       else exits.add(cb)
@@ -1158,6 +1230,18 @@ export function openSshTunnel(args: string[], socketPath: string, spawnProcess: 
       else errors.add(cb)
     },
   }
+}
+
+function bounded(task: Promise<void>, timeoutMs: number) {
+  return new Promise<void>((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = () => {
+      if (timer) clearTimeout(timer)
+      resolve()
+    }
+    timer = setTimeout(finish, timeoutMs)
+    void task.then(finish, finish)
+  })
 }
 
 async function validateRemoteDirectory(
