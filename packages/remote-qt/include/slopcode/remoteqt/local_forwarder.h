@@ -31,6 +31,12 @@ public:
                              const QByteArray &body = QByteArray(),
                              const Headers &headers = Headers(),
                              QString *error = nullptr);
+  QNetworkReply *forwardHTTPWithQuery(const QByteArray &method,
+                                      const QString &path,
+                                      const QString &query,
+                                      const QByteArray &body = QByteArray(),
+                                      const Headers &headers = Headers(),
+                                      QString *error = nullptr);
   QWebSocket *forwardWebSocket(const QString &path,
                                const Headers &headers = Headers(),
                                QString *error = nullptr);
@@ -38,8 +44,9 @@ public:
   static bool validateLoopbackURL(const QUrl &url, QString *error = nullptr);
 
 private:
-  bool makeURL(const QString &path, QUrl *url, QString *error) const;
+  bool makeURL(const QString &path, const QString &query, QUrl *url, QString *error) const;
   static bool validatePath(const QString &path, QString *error);
+  static bool validateQuery(const QString &query, QString *error);
   static bool applyHeaders(QNetworkRequest &request, const Headers &headers, QString *error);
 
   QUrl baseURL_;

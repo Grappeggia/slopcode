@@ -25,10 +25,7 @@ public:
 
   explicit RemoteSession(QObject *parent = nullptr);
 
-  // The token is copied only into the in-memory TLS handshake request. It is
-  // never serialized as a RemoteV1 frame, URL query, or log message.
   bool connectTo(const QUrl &endpoint,
-                 const QByteArray &sessionToken,
                  const QSslConfiguration &tls = QSslConfiguration::defaultConfiguration(),
                  QString *error = nullptr);
   void disconnectFromHost();
@@ -54,6 +51,7 @@ private:
   State state_ = State::Disconnected;
   QString textBuffer_;
   qsizetype textBytes_ = 0;
+  QJsonObject offeredCapabilities_;
   bool closingForError_ = false;
 };
 

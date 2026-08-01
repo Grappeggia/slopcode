@@ -28,33 +28,25 @@ bool validEndpoint(const QUrl &endpoint, QString *error)
   return true;
 }
 
-bool validToken(const QByteArray &token, QString *error)
-{
-  if (token.isEmpty() || token.trimmed() != token || token.contains('\r') || token.contains('\n')) {
-    if (error != nullptr) {
-      *error = QStringLiteral("a runtime session token is required");
-    }
-    return false;
-  }
-  return true;
-}
-
 } // namespace
 
 RemoteSession::RemoteSession(QObject *parent)
   : QObject(parent)
   , socket_(new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this))
 {
+  socket_->setMaxAllowedIncomingMessageSize(kMaxFrameBytes);
   connect(socket_, &QWebSocket::connected, this, [this]() {
     closingForError_ = false;
     textBuffer_.clear();
     textBytes_ = 0;
+    offeredCapabilities_ = {};
     setState(State::Connected);
     emit connected();
   });
   connect(socket_, &QWebSocket::disconnected, this, [this]() {
     textBuffer_.clear();
     textBytes_ = 0;
+    offeredCapabilities_ = {};
     if (!closingForError_) {
       setState(State::Disconnected);
     }
@@ -78,7 +70,6 @@ RemoteSession::RemoteSession(QObject *parent)
 }
 
 bool RemoteSession::connectTo(const QUrl &endpoint,
-                              const QByteArray &sessionToken,
                               const QSslConfiguration &tls,
                               QString *error)
 {
@@ -88,7 +79,7 @@ bool RemoteSession::connectTo(const QUrl &endpoint,
     }
     return false;
   }
-  if (!validEndpoint(endpoint, error) || !validToken(sessionToken, error)) {
+  if (!validEndpoint(endpoint, error)) {
     return false;
   }
 
@@ -98,13 +89,11 @@ bool RemoteSession::connectTo(const QUrl &endpoint,
 
   QNetworkRequest request(endpoint);
   request.setSslConfiguration(configuration);
-  QByteArray authorization = QByteArrayLiteral("Bearer ") + sessionToken;
-  request.setRawHeader(QByteArrayLiteral("Authorization"), authorization);
-  authorization.fill('\0');
 
   closingForError_ = false;
   textBuffer_.clear();
   textBytes_ = 0;
+  offeredCapabilities_ = {};
   setState(State::Connecting);
   socket_->open(request);
   return true;
@@ -132,6 +121,9 @@ bool RemoteSession::send(const Frame &frame, QString *error)
   if (bytes.isEmpty()) {
     return false;
   }
+  if (frame.object.value(QStringLiteral("type")).toString() == QStringLiteral("session.open")) {
+    offeredCapabilities_ = frame.object.value(QStringLiteral("capabilities")).toObject();
+  }
   socket_->sendTextMessage(QString::fromUtf8(bytes));
   return true;
 }
@@ -153,6 +145,7 @@ void RemoteSession::failClosed(const QString &message)
   closingForError_ = true;
   textBuffer_.clear();
   textBytes_ = 0;
+  offeredCapabilities_ = {};
   setState(State::Failed);
   emit protocolError(message);
   emit failed(message);
@@ -182,6 +175,21 @@ void RemoteSession::handleTextFrame(const QString &fragment, bool isLastFrame)
   if (!result) {
     failClosed(result.error);
     return;
+  }
+  if (result.frame->type == QStringLiteral("session.open")) {
+    failClosed(QStringLiteral("reference adapter cannot verify Ed25519 session proofs"));
+    return;
+  }
+  if (result.frame->type == QStringLiteral("session.opened")) {
+    QString capabilityError;
+    if (offeredCapabilities_.isEmpty() ||
+        !remoteTransportCapabilitiesMatch(offeredCapabilities_,
+                                          result.frame->object.value(QStringLiteral("capabilities")).toObject(),
+                                          &capabilityError)) {
+      failClosed(capabilityError.isEmpty() ? QStringLiteral("session capabilities were not negotiated") : capabilityError);
+      return;
+    }
+    offeredCapabilities_ = {};
   }
   emit frameReceived(*result.frame);
 }

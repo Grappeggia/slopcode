@@ -1,7 +1,9 @@
 #pragma once
 
+#include <QByteArray>
 #include <QObject>
 #include <QProcess>
+#include <QStringList>
 #include <QTemporaryFile>
 
 #include <optional>
@@ -65,12 +67,12 @@ signals:
   void stopped();
 
 private:
-  bool allocateLocalPort(QString *error);
   void cleanupKnownHosts();
   void setState(SshState state);
   void failClosed(const QString &message);
   void handleRemoteStarted();
   void handleTunnelStarted();
+  void handleTunnelOutput();
   void handleProcessError(QProcess::ProcessError error);
   void handleRemoteFinished(int exitCode, QProcess::ExitStatus status);
   void handleTunnelFinished(int exitCode, QProcess::ExitStatus status);
@@ -80,6 +82,7 @@ private:
   QTemporaryFile pinnedKnownHosts_;
   std::optional<SshTarget> target_;
   QString knownHostsPath_;
+  QByteArray tunnelError_;
   quint16 localPort_ = 0;
   SshState state_ = SshState::Stopped;
 };

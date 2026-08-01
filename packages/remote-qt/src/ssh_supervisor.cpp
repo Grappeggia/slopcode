@@ -3,9 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QHostAddress>
 #include <QRegularExpression>
-#include <QTcpServer>
 
 namespace slopcode::remoteqt {
 namespace {
@@ -25,7 +23,13 @@ bool fail(QString *error, const QString &message)
 
 bool hasControl(const QString &value)
 {
-  return value.contains(QChar::Null) || value.contains(QChar::CarriageReturn) || value.contains(QChar::LineFeed);
+  for (const QChar character : value) {
+    const ushort code = character.unicode();
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool absolutePath(const QString &path, const QString &label, QString *error)
@@ -88,6 +92,9 @@ bool validateTarget(const SshTarget &target, QString *error)
   if (target.port == 0 || target.remotePort == 0) {
     return fail(error, QStringLiteral("SSH and remote server ports are required"));
   }
+  if (target.localPort != 0) {
+    return fail(error, QStringLiteral("localPort must be zero; ssh must allocate it atomically"));
+  }
   if (!validateRemoteFolder(target.remoteFolder, error)) {
     return false;
   }
@@ -117,7 +124,7 @@ bool validateTarget(const SshTarget &target, QString *error)
   return true;
 }
 
-QString shellQuote(const QString &value)
+QString shellQuote(QString value)
 {
   return QStringLiteral("'") + value.replace(QStringLiteral("'"), QStringLiteral("'\"'\"'")) + QStringLiteral("'");
 }
@@ -163,29 +170,21 @@ QStringList baseArguments(const SshTarget &target, const QString &knownHostsPath
   return arguments;
 }
 
-quint16 allocatePort(QString *error)
-{
-  QTcpServer server;
-  if (!server.listen(QHostAddress::LocalHost, 0)) {
-    fail(error, QStringLiteral("could not allocate a loopback port"));
-    return 0;
-  }
-  const quint16 port = server.serverPort();
-  server.close();
-  return port;
-}
-
 } // namespace
 
 bool validateRemoteFolder(const QString &folder, QString *error)
 {
-  if (folder.isEmpty() || hasControl(folder) || !folder.startsWith('/')) {
+  if (folder.isEmpty() || folder.toUtf8().size() > 4 * 1024 || hasControl(folder) || !folder.startsWith('/') ||
+      folder.contains('\\') || folder.contains(QStringLiteral("//"))) {
     return fail(error, QStringLiteral("remote folder must be an absolute POSIX path"));
   }
 
-  const QStringList segments = folder.split('/', Qt::SkipEmptyParts);
+  if (folder == QStringLiteral("/")) {
+    return true;
+  }
+  const QStringList segments = folder.mid(1).split('/', Qt::KeepEmptyParts);
   for (const QString &segment : segments) {
-    if (segment == QStringLiteral(".") || segment == QStringLiteral("..")) {
+    if (segment.isEmpty() || segment == QStringLiteral(".") || segment == QStringLiteral("..")) {
       return fail(error, QStringLiteral("remote folder may not contain dot traversal segments"));
     }
   }
@@ -207,16 +206,16 @@ QStringList buildSshTunnelArguments(const SshTarget &target,
                                     quint16 localPort,
                                     QString *error)
 {
-  if (localPort == 0) {
-    fail(error, QStringLiteral("loopback forwarding port is required"));
+  if (localPort != 0) {
+    fail(error, QStringLiteral("the SSH tunnel must request an OS-assigned loopback port"));
     return {};
   }
   QStringList arguments = baseArguments(target, knownHostsPath, error);
   if (arguments.isEmpty()) {
     return {};
   }
-  arguments << QStringLiteral("-N") << QStringLiteral("-T") << QStringLiteral("-L")
-            << QStringLiteral("127.0.0.1:") + QString::number(localPort) + QStringLiteral(":127.0.0.1:") +
+  arguments << QStringLiteral("-v") << QStringLiteral("-N") << QStringLiteral("-T") << QStringLiteral("-L")
+            << QStringLiteral("127.0.0.1:0:127.0.0.1:") +
                  QString::number(target.remotePort)
             << authority(target);
   return arguments;
@@ -255,6 +254,7 @@ SshTargetSupervisor::SshTargetSupervisor(QObject *parent)
   tunnelProcess_.setProcessChannelMode(QProcess::SeparateChannels);
   connect(&remoteProcess_, &QProcess::started, this, &SshTargetSupervisor::handleRemoteStarted);
   connect(&tunnelProcess_, &QProcess::started, this, &SshTargetSupervisor::handleTunnelStarted);
+  connect(&tunnelProcess_, &QProcess::readyReadStandardError, this, &SshTargetSupervisor::handleTunnelOutput);
   connect(&remoteProcess_, &QProcess::errorOccurred, this, &SshTargetSupervisor::handleProcessError);
   connect(&tunnelProcess_, &QProcess::errorOccurred, this, &SshTargetSupervisor::handleProcessError);
   connect(&remoteProcess_, &QProcess::finished, this, &SshTargetSupervisor::handleRemoteFinished);
@@ -298,11 +298,8 @@ bool SshTargetSupervisor::start(const SshTarget &target, QString *error)
     knownHostsPath_ = target.knownHostsPath;
   }
 
-  if (target.localPort == 0 && !allocateLocalPort(error)) {
-    cleanupKnownHosts();
-    return false;
-  }
-  localPort_ = target.localPort == 0 ? localPort_ : target.localPort;
+  localPort_ = 0;
+  tunnelError_.clear();
   QStringList execArguments = buildSshExecArguments(target, knownHostsPath_, error);
   if (execArguments.isEmpty()) {
     cleanupKnownHosts();
@@ -341,15 +338,10 @@ void SshTargetSupervisor::stop()
     }
   }
   target_.reset();
+  tunnelError_.clear();
   localPort_ = 0;
   cleanupKnownHosts();
   emit stopped();
-}
-
-bool SshTargetSupervisor::allocateLocalPort(QString *error)
-{
-  localPort_ = allocatePort(error);
-  return localPort_ != 0;
 }
 
 void SshTargetSupervisor::cleanupKnownHosts()
@@ -416,6 +408,32 @@ void SshTargetSupervisor::handleTunnelStarted()
   if (state_ != SshState::Starting || !target_.has_value()) {
     return;
   }
+  handleTunnelOutput();
+}
+
+void SshTargetSupervisor::handleTunnelOutput()
+{
+  if (state_ != SshState::Starting || !target_.has_value()) {
+    return;
+  }
+  tunnelError_.append(tunnelProcess_.readAllStandardError());
+  if (tunnelError_.size() > 32 * 1024) {
+    tunnelError_.remove(0, tunnelError_.size() - 32 * 1024);
+  }
+
+  static const QRegularExpression listening(
+    QStringLiteral(R"(Local forwarding listening on 127\.0\.0\.1 port ([1-9][0-9]{0,4})\.)"));
+  const QRegularExpressionMatch match = listening.match(QString::fromUtf8(tunnelError_));
+  if (!match.hasMatch()) {
+    return;
+  }
+  bool ok = false;
+  const quint32 port = match.captured(1).toUInt(&ok);
+  if (!ok || port == 0 || port > 65535) {
+    failClosed(QStringLiteral("SSH reported an invalid loopback forwarding port"));
+    return;
+  }
+  localPort_ = static_cast<quint16>(port);
   setState(SshState::Ready);
   emit ready(localPort_, target_->remotePort);
 }

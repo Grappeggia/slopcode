@@ -11,7 +11,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Network WebSockets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Network WebSockets)
 
 add_library(slopcode_remote_qt STATIC
   include/slopcode/remoteqt/frame.h
@@ -41,7 +41,7 @@ target_link_libraries(slopcode-remote-qt-reference PRIVATE slopcode_remote_qt Qt
 
 if(SLOPCODE_REMOTE_QT_BUILD_TESTS)
   enable_testing()
-  find_package(Qt6 6.4 REQUIRED COMPONENTS Test)
+  find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
 
   add_executable(slopcode_remote_qt_parser_test tests/frame_test.cpp)
   target_link_libraries(slopcode_remote_qt_parser_test PRIVATE slopcode_remote_qt Qt6::Test)

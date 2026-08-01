@@ -26,10 +26,9 @@ int main(int argc, char **argv)
     return 0;
   }
 
-  const QByteArray token = qgetenv("SLOPCODE_REMOTE_SESSION_TOKEN");
   RemoteSession session;
   QString error;
-  if (!session.connectTo(QUrl(parser.value(endpointOption)), token, QSslConfiguration::defaultConfiguration(), &error)) {
+  if (!session.connectTo(QUrl(parser.value(endpointOption)), QSslConfiguration::defaultConfiguration(), &error)) {
     qCritical().noquote() << error;
     return 2;
   }

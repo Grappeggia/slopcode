@@ -1,20 +1,15 @@
-# Slopcode Qt Remote Host Reference
+# Slopcode Qt RemoteV1 reference adapter
 
-This is a bounded Qt 6 host adapter slice for the Android remote mode. It is a
-reusable reference library, not an internet relay and not a production-complete
-remote implementation. It deliberately stops at transport validation, an SSH
-target supervisor, and explicit local-server forwarding hooks.
+This package is a bounded Qt 6.5+ reference adapter for a Slopcode remote
+host. It validates and encodes the final discriminated RemoteV1 JSON contract,
+supervises a strict SSH connection, and provides narrowly scoped loopback
+forwarding hooks. It is not a production relay, pairing service, or complete
+remote-agent implementation.
 
 ## Build
 
-Dependencies:
-
-- Qt 6.4 or newer: Core, Network, WebSockets, and Test
-- CMake 3.21 or newer
-- A C++20 compiler
-- OpenSSH `ssh` at runtime for the SSH supervisor
-
-From the repository root:
+Dependencies are Qt 6.5 or newer (Core, Network, WebSockets, and Test), CMake
+3.21 or newer, a C++20 compiler, and OpenSSH at runtime for the SSH supervisor.
 
 ```sh
 cmake -S packages/remote-qt -B /tmp/slopcode-remote-qt-build -G Ninja \
@@ -23,96 +18,108 @@ cmake --build /tmp/slopcode-remote-qt-build
 ctest --test-dir /tmp/slopcode-remote-qt-build --output-on-failure
 ```
 
-The reference host executable connects only when given an endpoint and a
-runtime environment token:
+The reference executable accepts only a `wss://` endpoint. Authentication is
+an application frame; no bearer header, environment token, URL credential, or
+runtime secret is created by this package.
 
-```sh
-SLOPCODE_REMOTE_SESSION_TOKEN='runtime-only-token' \
-  /tmp/slopcode-remote-qt-build/slopcode-remote-qt-reference \
-  --endpoint wss://control.example.invalid/remote
-```
+## Final wire contract
 
-The token is put in the TLS WebSocket `Authorization` header by
-`RemoteSession::connectTo`. It is not accepted in a frame, URL query, or
-checked-in configuration. Do not pass it as a command-line argument.
-
-## Frame contract
-
-The transport accepts one UTF-8 JSON object per text message. The envelope has
-exactly these required keys:
+Every text message is one UTF-8 JSON object no larger than 256 KiB. There is no
+generic `payload`, URL, loopback, or bearer envelope. Request, response, and
+stream frames carry the exact scoped target and request binding fields:
 
 ```json
 {
   "version": "v1",
   "kind": "request",
-  "requestID": "req_example-1",
+  "type": "session.open",
+  "requestID": "req_open_1",
+  "idempotencyKey": "idem_open_1",
+  "requestDigest": "<64 lowercase hex characters>",
   "target": {
-    "type": "remote",
-    "url": "http://127.0.0.1:43123"
+    "hostID": "hst_desktop",
+    "pairingID": "pair_android",
+    "workspaceID": "wrk_slopcode",
+    "remoteDirectory": "/srv/slopcode"
   },
-  "payload": { "operation": "health" }
+  "capabilities": {
+    "offered": ["proof.ed25519.v1", "frame.bounds.v1", "http.upload.v1"],
+    "required": ["proof.ed25519.v1", "frame.bounds.v1", "http.upload.v1"]
+  },
+  "auth": {
+    "method": "pairing-signature",
+    "pairingID": "pair_android",
+    "target": {
+      "hostID": "hst_desktop",
+      "pairingID": "pair_android",
+      "workspaceID": "wrk_slopcode",
+      "remoteDirectory": "/srv/slopcode"
+    },
+    "targetDigest": "<64 lowercase hex characters>",
+    "challenge": {
+      "issuer": "server",
+      "id": "chl_example",
+      "nonce": "<canonical base64url nonce>",
+      "issuedAt": 1700000000000,
+      "expiresAt": 1700000060000,
+      "oneTime": true
+    },
+    "proof": {
+      "algorithm": "ed25519",
+      "encoding": "base64url",
+      "signature": "<canonical unpadded base64url Ed25519 signature>"
+    }
+  }
 }
 ```
 
-`kind` is one of `request`, `response`, `event`, or `error`. `requestID` must
-match `req_[A-Za-z0-9._:-]+`. The bounded target shapes are the conceptual
-RemoteV1 forms `local + absolute directory` and `remote + explicit loopback
-HTTP(S) URL`; target fields are also checked for unknown keys. A target may
-carry non-sensitive string headers, but authorization, token, password,
-identity, private-key, secret, and similar fields are rejected.
+The three capability names are mandatory and are negotiated strictly. Body
+values are `{ "encoding": "utf8" | "base64", "data": "..." }`; regular
+HTTP bodies and response bodies are limited to 64 KiB, while
+`http.upload`/`http.upload.chunk` use ordered chunks with a declared
+`contentLength`, a 16 MiB aggregate limit, and a 256 KiB flow-control window.
+HTTP paths, queries, headers, metadata, PTY arguments, replay events, IDs,
+duplicate JSON keys, nesting, and object/array sizes are bounded as specified
+by `packages/protocol/src/remote-transport.ts`.
 
-The parser rejects invalid JSON, duplicate object keys, unknown envelope or
-target fields, wrong versions/kinds/IDs, non-loopback remote URLs, credential
-material, binary WebSocket messages, and frames over 256 KiB. The WebSocket
-session closes with a protocol error after a rejected frame and does not echo
-the offending content.
+The adapter implements canonical UTF-8 JSON key ordering, SHA-256 digest and
+session-proof-transcript helpers, plus process-local idempotency and
+stream-state helpers. It does not
+implement the production Ed25519 public-key verifier, pairing registry,
+one-time challenge authority, or multi-process relay. Consequently,
+`RemoteSession` rejects an incoming `session.open` after shape validation with
+a protocol error; integrating code must verify the registered target,
+request/target digests, challenge consumption, and Ed25519 transcript before
+dispatching it. A syntactically valid proof is never treated as authenticated
+by this reference adapter.
 
-## SSH supervisor
+## SSH and local forwarding
 
-`SshTargetSupervisor` starts two `QProcess` instances with `program() ==
-"ssh"` and `QStringList` arguments:
+The SSH supervisor validates an absolute normalized POSIX remote folder, uses
+argv-only `QProcess` execution, disables password and keyboard-interactive
+authentication, and requires strict host-key checking through either a caller
+supplied `known_hosts` file or one pinned runtime key. The tunnel asks OpenSSH
+for the port atomically with:
 
-- the server process uses `-T <user@host> sh -se` and receives a small,
-  shell-quoted start script on standard input;
-- the tunnel process uses `-N -T -L
-  127.0.0.1:<local>:127.0.0.1:<remote>`;
-- `BatchMode`, password and keyboard-interactive authentication are disabled;
-- strict host checking uses either a caller-supplied absolute `known_hosts`
-  file or a runtime temporary file containing one validated pinned public key;
-- an optional absolute identity path is passed to `ssh` at runtime, never in a
-  RemoteV1 frame.
+```text
+-L 127.0.0.1:0:127.0.0.1:<remote-port>
+```
 
-The remote folder must be an absolute POSIX path without `.` or `..`
-traversal segments or control characters. The default remote command is
-`slopcode serve --hostname 127.0.0.1 --port <remote-port>`. `Ready` means the
-two local SSH processes have started; the caller should still perform its own
-health check through `LocalSlopcodeForwarder`.
+It parses OpenSSH's assigned `127.0.0.1` listening port before emitting
+`ready`; it never performs a listen/close/reuse port allocation.
 
-Stopping terminates both SSH processes and removes a temporary pinned
-`known_hosts` file. No SSH password or password prompt path exists in this
-slice.
+`LocalSlopcodeForwarder` accepts numeric loopback HTTP(S) origins only,
+disables proxies, permits only the RemoteV1 HTTP methods, applies header and
+body bounds, rejects secret/hop-by-hop/forwarding headers, and manually
+revalidates every redirect against the same loopback origin and safe path or
+query. It is a forwarding hook, not a transparent proxy or remote dispatch
+layer.
 
-## Local forwarding hooks and boundaries
+## Verification status and intentional limits
 
-`LocalSlopcodeForwarder` accepts only an explicit loopback HTTP(S) base URL and
-offers `forwardHTTP()` and `forwardWebSocket()` methods. They return the
-caller-owned `QNetworkReply` or `QWebSocket`; they do not implement a generic
-proxy, relay, reconnect policy, remote target registration, or server health
-policy. Paths must remain relative to the configured loopback origin, and
-`Host`/`Content-Length` headers are not caller-overridable.
-
-Intentional TODO/error boundaries for a future integration include pairing and
-host registration, RemoteV1 operation dispatch, authenticated local-server
-request policy, remote command discovery, tunnel health/backoff, reconnect and
-resume semantics, and Android/UI lifecycle integration. Those belong in the
-existing protocol, server, Android, or desktop layers and are intentionally not
-changed here.
-
-## Verification status
-
-The deterministic Qt Test source covers valid frames, unknown fields, version,
-kind and request ID failures, unsafe targets/payloads, duplicate keys, the
-256 KiB limit, and encode/decode round trips. Qt 6 is not installed or
-discoverable in the current development environment, so CMake configuration
-and the Qt test executable were not run here; the expected first failure is
-`find_package(Qt6 ...)` until the dependencies above are installed.
+The Qt tests cover the discriminated frame variants, strict capabilities,
+auth/proof shape, duplicate keys, limits, paths/queries/headers, replay
+bindings, stream state, SSH dynamic-port arguments, and forwarding policy.
+Qt 6.5 is not discoverable in the current development environment, so the Qt
+CMake configure/build/test executable cannot run here until the dependency is
+installed; static scope and whitespace checks are still run before commits.
