@@ -1,6 +1,9 @@
 import { spawn, spawnSync } from "node:child_process"
 import { EventEmitter } from "node:events"
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { createConnection, createServer, type Server } from "node:net"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { PassThrough } from "node:stream"
 import { describe, expect, test } from "bun:test"
 import {
@@ -177,7 +180,23 @@ describe("openSshTunnel", () => {
     await tunnel.stop()
   })
 
-  test("does not treat a child error as termination and escalates before resolving", async () => {
+  test("fails the global tunnel when proxy creation fails", async () => {
+    const tunnel = openSshTunnel(
+      ["-W", "127.0.0.1:4314"],
+      4314,
+      (() => {
+        throw new Error("SSH should not spawn")
+      }) as typeof spawn,
+      () => {
+        throw new Error("proxy spawn failed")
+      },
+    )
+
+    await expect(tunnel.port).rejects.toThrow("proxy spawn failed")
+    await tunnel.stop()
+  })
+
+  test("keeps child error local and escalates before resolving cleanup", async () => {
     const child = new TunnelChild()
     const tunnel = openSshTunnel(["-W", "127.0.0.1:4310"], 4310, (() => child as unknown as ReturnType<typeof spawn>) as typeof spawn)
     const port = await tunnel.port
@@ -199,11 +218,42 @@ describe("openSshTunnel", () => {
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(complete).toBe(false)
     expect(child.killSignals).toEqual([undefined, "SIGKILL"])
-    expect(errors.at(-1)?.message).toContain("spawn error")
-    expect(errors.at(-1)?.message).toContain("spawn failed")
+    expect(errors).toHaveLength(0)
 
     child.finish()
     await stopping
+  })
+
+  test("keeps the global proxy alive after one connection child exits normally", async () => {
+    const first = new TunnelChild()
+    const second = new TunnelChild()
+    let spawned = 0
+    const tunnel = openSshTunnel(
+      ["-W", "127.0.0.1:4313"],
+      4313,
+      (() => {
+        spawned += 1
+        return (spawned === 1 ? first : second) as unknown as ReturnType<typeof spawn>
+      }) as typeof spawn,
+    )
+
+    try {
+      const port = await tunnel.port
+      const firstClient = createConnection(port, "127.0.0.1")
+      await onceConnected(firstClient)
+      first.finish(0)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(await canBind(port)).toBe(false)
+
+      const secondClient = createConnection(port, "127.0.0.1")
+      await onceConnected(secondClient)
+      expect(spawned).toBe(2)
+      secondClient.destroy()
+    } finally {
+      second.finish()
+      await tunnel.stop().catch(() => undefined)
+    }
   })
 
   test("rejects bounded cleanup when child termination is never confirmed", async () => {
@@ -465,6 +515,100 @@ describe("createSshRemoteHostService", () => {
     releaseTunnelStop.resolve()
     await stopping
     expect(hostKeyCleaned).toBe(true)
+  })
+
+  test("runs recoverable host-key cleanup even when tunnel and remote cleanup fail", async () => {
+    let cleanups = 0
+    let remoteStops = 0
+    const service = createSshRemoteHostService({
+      allocatePort: async () => 4110,
+      uuid: () => "00000000-0000-4000-8000-000000000016",
+      materializeHostKey: async () => ({
+        path: "/tmp/known_hosts",
+        cleanup: async () => {
+          cleanups += 1
+          if (cleanups === 1) throw new Error("known_hosts busy")
+        },
+      }),
+      runSsh: async (_args, script) => {
+        if (script.includes("nohup sh -se <<'EOF'")) {
+          return {
+            code: 0,
+            signal: null,
+            stdout: '{"attached":false,"port":4210,"username":"slopcode","password":"secret"}\n',
+            stderr: "",
+          }
+        }
+        remoteStops += 1
+        throw new Error("remote cleanup failed")
+      },
+      openTunnel: () => ({
+        port: Promise.resolve(4110),
+        stop: async () => {
+          throw new Error("tunnel cleanup failed")
+        },
+        onExit: () => undefined,
+        onError: () => undefined,
+      }),
+      health: async () => true,
+      validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
+    })
+
+    const ready = await service.ensureWorkspace(fixtureTarget())
+    await expect(service.stopWorkspace(ready.id)).rejects.toThrow("tunnel cleanup failed")
+
+    expect(cleanups).toBe(2)
+    expect(remoteStops).toBe(1)
+    expect(service.getState(ready.id)?.kind).toBe("failed")
+  })
+
+  test("waits for ssh close and stdio drain before parsing command output", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "slopcode-ssh-command-test-"))
+    const ssh = path.join(dir, "ssh")
+    const previousPath = process.env.PATH
+    await writeFile(
+      ssh,
+      [
+        "#!/usr/bin/env bun",
+        'import { spawn } from "node:child_process"',
+        "process.stdin.resume()",
+        "process.stdin.on(\"end\", () => {",
+        '  process.stdout.write(\'{"attached":false,"port":4211,"username":"slopcode","password":"secret"}\\n\')',
+        '  spawn("sh", ["-c", "sleep 0.12; printf drained >&2"], { stdio: ["ignore", "ignore", process.stderr] })',
+        "  process.exit(0)",
+        "})",
+      ].join("\n"),
+      "utf8",
+    )
+    await chmod(ssh, 0o700)
+    process.env.PATH = `${dir}:${previousPath ?? ""}`
+
+    try {
+      const service = createSshRemoteHostService({
+        allocatePort: async () => 4115,
+        uuid: () => "00000000-0000-4000-8000-000000000017",
+        materializeHostKey: async () => ({
+          path: "/tmp/known_hosts",
+          cleanup: async () => undefined,
+        }),
+        openTunnel: () => ({
+          port: Promise.resolve(4115),
+          stop: async () => undefined,
+          onExit: () => undefined,
+          onError: () => undefined,
+        }),
+        health: async () => true,
+        validateRemoteDirectory: async (_url, _password, directory) => ({ directory }),
+      })
+      const started = Date.now()
+      const ready = await service.ensureWorkspace(fixtureTarget())
+
+      expect(Date.now() - started).toBeGreaterThanOrEqual(80)
+      await service.stopWorkspace(ready.id)
+    } finally {
+      process.env.PATH = previousPath
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   test("uses the proxy-owned loopback port without allocating a fixed local port", async () => {

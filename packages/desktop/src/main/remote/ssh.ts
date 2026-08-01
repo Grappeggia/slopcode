@@ -95,6 +95,9 @@ const SSH_TUNNEL_CLEANUP_TIMEOUT_MS = 2_000
 const SSH_TUNNEL_FORCE_KILL_DELAY_MS = 250
 const SSH_PROXY_BIND_ATTEMPTS = 3
 const SSH_PROXY_RETRY_DELAY_MS = 25
+const SSH_HOST_KEY_CLEANUP_ATTEMPTS = 3
+const SSH_HOST_KEY_CLEANUP_TIMEOUT_MS = 500
+const SSH_HOST_KEY_CLEANUP_RETRY_DELAY_MS = 25
 
 export function normalizeSshTarget(target: DesktopSshTarget): NormalizedSshTarget {
   const decodedHost = decodeHost(target.host)
@@ -247,7 +250,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
     fail(target, error.message, [item.state.password])
     void cleanup.catch((cleanupError) => {
       if (generations.get(target.id) === generation) {
-        fail(target, errorMessage(cleanupError), [item.state.password])
+        fail(target, `${error.message}; cleanup: ${errorMessage(cleanupError)}`, [item.state.password])
       }
     })
   }
@@ -284,7 +287,7 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
 
     try {
       const hostKey = await deps.materializeHostKey(target.hostKey)
-      cleanup = once(hostKey.cleanup)
+      cleanup = once(() => cleanupResource(hostKey.cleanup))
       assertLive(signal.signal, generations, target.id, generation)
 
       emit({
@@ -354,10 +357,23 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         } satisfies DesktopRemoteReady
 
         const teardown = once(async () => {
-          const results = await Promise.allSettled([tunnel?.stop(), stopRemote()])
-          const errors = results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : []))
+          const errors: string[] = []
+          try {
+            const results = await Promise.allSettled([
+              Promise.resolve().then(() => tunnel?.stop()),
+              Promise.resolve().then(stopRemote),
+            ])
+            errors.push(
+              ...results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : [])),
+            )
+          } finally {
+            try {
+              await cleanup()
+            } catch (error) {
+              errors.push(errorMessage(error))
+            }
+          }
           if (errors.length) throw new Error(errors.join("; "))
-          await cleanup()
         })
         item = {
           state,
@@ -376,9 +392,16 @@ export function createSshRemoteHostService(opts: Partial<Deps> = {}): DesktopRem
         abort.dispose()
       }
     } catch (error) {
-      const results = await Promise.allSettled([tunnel?.stop(), stopStartup()])
-      const errors = results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : []))
-      if (!errors.length) {
+      const errors: string[] = []
+      try {
+        const results = await Promise.allSettled([
+          Promise.resolve().then(() => tunnel?.stop()),
+          Promise.resolve().then(stopStartup),
+        ])
+        errors.push(
+          ...results.flatMap((result) => (result.status === "rejected" ? [errorMessage(result.reason)] : [])),
+        )
+      } finally {
         try {
           await cleanup()
         } catch (cleanupError) {
@@ -1007,7 +1030,16 @@ async function materializeHostKey(hostKey: DesktopSshHostKey): Promise<Materiali
 
   const dir = await mkdtemp(path.join(tmpdir(), "slopcode-ssh-known-hosts-"))
   const file = path.join(dir, "known_hosts")
-  await writeFile(file, `${hostKey.value}\n`, "utf8")
+  try {
+    await writeFile(file, `${hostKey.value}\n`, "utf8")
+  } catch (error) {
+    try {
+      await cleanupResource(() => rm(dir, { recursive: true, force: true }))
+    } catch (cleanupError) {
+      throw new Error(`${errorMessage(error)}; ${errorMessage(cleanupError)}`)
+    }
+    throw error
+  }
   return {
     path: file,
     cleanup: async () => rm(dir, { recursive: true, force: true }),
@@ -1025,6 +1057,7 @@ type ProcessRecord = {
   ended: boolean
   exit?: ProcessExit
   termination: Promise<void>
+  close: Promise<void>
   stop?: Promise<void>
 }
 
@@ -1034,10 +1067,12 @@ type TunnelConnection = {
   client: Socket
   process: ProcessRecord
   closed: boolean
+  error?: Error
 }
 
 function observeProcess(child: ChildProcess): ProcessRecord {
   let resolveTermination!: () => void
+  let resolveClose!: () => void
   const record: ProcessRecord = {
     child,
     errors: [],
@@ -1045,17 +1080,44 @@ function observeProcess(child: ChildProcess): ProcessRecord {
     termination: new Promise<void>((resolve) => {
       resolveTermination = resolve
     }),
+    close: new Promise<void>((resolve) => {
+      resolveClose = resolve
+    }),
   }
-  const finish = (code: number | null, signal: NodeJS.Signals | null) => {
+  const exit = (code: number | null, signal: NodeJS.Signals | null) => {
+    record.exit ??= { code, signal }
     if (record.ended) return
     record.ended = true
-    record.exit = { code, signal }
     resolveTermination()
   }
-  child.once("exit", finish)
-  child.once("close", finish)
+  const close = (code: number | null, signal: NodeJS.Signals | null) => {
+    record.exit ??= { code, signal }
+    resolveClose()
+    if (record.ended) return
+    record.ended = true
+    resolveTermination()
+  }
+  child.once("exit", exit)
+  child.once("close", close)
   child.on("error", (error) => record.errors.push(error))
   return record
+}
+
+function streamDrain(stream: NodeJS.ReadableStream | null | undefined, closed: Promise<void>) {
+  if (!stream) return Promise.resolve()
+  if ("readableEnded" in stream && stream.readableEnded) return Promise.resolve()
+  return Promise.race([
+    closed,
+    new Promise<void>((resolve) => {
+      const done = () => {
+        stream.removeListener("end", done)
+        stream.removeListener("close", done)
+        resolve()
+      }
+      stream.once("end", done)
+      stream.once("close", done)
+    }),
+  ])
 }
 
 function requestKill(record: ProcessRecord, signal: NodeJS.Signals | undefined, label: string) {
@@ -1159,7 +1221,12 @@ function runSsh(args: string[], script: string, timeoutMs: number, signal?: Abor
     const abort = () => {
       void rejectAfterStop(signal?.reason instanceof Error ? signal.reason : abortError())
     }
-    const onTermination = () => {
+    const onTermination = async () => {
+      await Promise.all([
+        process.close,
+        streamDrain(child.stdout, process.close),
+        streamDrain(child.stderr, process.close),
+      ])
       if (settled) return
       settled = true
       finish()
@@ -1206,7 +1273,6 @@ export function openSshTunnel(
   let rejectPort!: (error: Error) => void
   let ready = false
   let failure: Error | undefined
-  let exit: ProcessExit | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let proxy: Server | undefined
   let binding = false
@@ -1214,18 +1280,12 @@ export function openSshTunnel(
   let stopPromise: Promise<void> | undefined
   const processes = new Set<ProcessRecord>()
   const connections = new Set<TunnelConnection>()
-  const exits = new Set<(code: number | null, signal: NodeJS.Signals | null) => void>()
   const errors = new Set<(error: Error) => void>()
   const port = new Promise<number>((resolve, reject) => {
     resolvePort = resolve
     rejectPort = reject
   })
 
-  const notifyExit = (next: ProcessExit) => {
-    exit = next
-    for (const cb of exits) cb(next.code, next.signal)
-    exits.clear()
-  }
   const fail = (error: unknown) => {
     const next = error instanceof Error ? error : new Error(String(error))
     if (failure || stopping) return
@@ -1258,7 +1318,6 @@ export function openSshTunnel(
       })
     } catch (error) {
       client.destroy()
-      fail(new Error(`SSH forwarding child spawn failed: ${errorMessage(error)}`))
       return
     }
     const process = observeProcess(child)
@@ -1266,11 +1325,12 @@ export function openSshTunnel(
     processes.add(process)
     connections.add(connection)
     child.on("error", (error) => {
-      fail(new Error(`SSH forwarding child spawn error: ${errorMessage(error)}`))
+      connection.error = new Error(`SSH forwarding child spawn error: ${errorMessage(error)}`)
+      closeConnection(connection)
     })
     child.stderr?.resume()
     if (!child.stdin || !child.stdout) {
-      fail(new Error("SSH forwarding child did not expose stdio"))
+      connection.error = new Error("SSH forwarding child did not expose stdio")
       closeConnection(connection)
       return
     }
@@ -1284,9 +1344,6 @@ export function openSshTunnel(
       connection.closed = true
       connections.delete(connection)
       client.destroy()
-      const next = process.exit ?? { code: null, signal: null }
-      notifyExit(next)
-      fail(new Error(`SSH forwarding child exited (code=${next.code ?? "null"} signal=${next.signal ?? "null"})`))
     })
   }
   const closeProxy = () => {
@@ -1404,10 +1461,7 @@ export function openSshTunnel(
   return {
     port,
     stop,
-    onExit: (cb) => {
-      if (exit) cb(exit.code, exit.signal)
-      else exits.add(cb)
-    },
+    onExit: () => undefined,
     onError: (cb) => {
       if (failure) cb(failure)
       else errors.add(cb)
@@ -1448,6 +1502,42 @@ function errorMessage(error: unknown) {
 
 function delay(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
+type BoundedResult = {
+  completed: boolean
+  error?: Error
+}
+
+function boundedResult(task: Promise<void>, timeoutMs: number) {
+  return new Promise<BoundedResult>((resolve) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (result: BoundedResult) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(result)
+    }
+    timer = setTimeout(() => finish({ completed: false }), timeoutMs)
+    void task.then(
+      () => finish({ completed: true }),
+      (error) => finish({ completed: true, error: error instanceof Error ? error : new Error(String(error)) }),
+    )
+  })
+}
+
+async function cleanupResource(task: () => Promise<void>) {
+  const errors: string[] = []
+  for (let attempt = 0; attempt < SSH_HOST_KEY_CLEANUP_ATTEMPTS; attempt += 1) {
+    const result = await boundedResult(Promise.resolve().then(task), SSH_HOST_KEY_CLEANUP_TIMEOUT_MS)
+    if (result.completed && !result.error) return
+    errors.push(result.error?.message ?? "cleanup timed out")
+    if (attempt + 1 < SSH_HOST_KEY_CLEANUP_ATTEMPTS) await delay(SSH_HOST_KEY_CLEANUP_RETRY_DELAY_MS)
+  }
+  throw new Error(
+    `SSH host-key cleanup failed after ${SSH_HOST_KEY_CLEANUP_ATTEMPTS} attempts: ${errors.at(-1) ?? "unknown error"}`,
+  )
 }
 
 function bounded(task: Promise<void>, timeoutMs: number) {
